@@ -1325,6 +1325,48 @@ void main() {
       expect(swarm.commands('project.create'), hasLength(1));
     });
 
+    // Guide's second review: a deadline is judged only from a read that
+    // came back, never from the last one held.
+    for (final (state, ago) in [
+      ('waiting', const Duration(minutes: 11)),
+      ('creating', const Duration(minutes: 6)),
+    ]) {
+      test('$state past its deadline, with the Swarm not answering, is not '
+          'given up: it says so and keeps the request', () async {
+        swarm.creationAgo = ago;
+        final steps = SwarmNewProjectSteps.of(reader);
+        await expectLater(run(steps), throwsA(isA<SwarmRepositoryWaiting>()));
+        if (state == 'creating') {
+          swarm.finishCreation(made(), 'creating');
+          await reader.refresh();
+        }
+        // Made on GitHub meanwhile, while the phone's reads fail.
+        swarm.finishCreation(
+          made(),
+          'created',
+          repositoryUrl: 'https://github.com/autonomous-ai/notes-app',
+          reachable: true,
+        );
+        swarm.unreadable = true;
+        await expectLater(
+          run(steps),
+          throwsA(
+            isA<SwarmRepositoryFailure>().having(
+              (f) => f.line,
+              'line',
+              swarmRepositoryUnchecked,
+            ),
+          ),
+        );
+        expect(steps.creationAt, swarm.creationAt);
+        expect(swarm.repositoryRequests, hasLength(1));
+        swarm.unreadable = false;
+        await run(steps);
+        expect(swarm.commands('lead.start'), hasLength(1));
+        expect(swarm.repositoryRequests, hasLength(1));
+      });
+    }
+
     test(
       'GitHub that did not open is said, and opens again on asking',
       () async {
@@ -1349,8 +1391,10 @@ void main() {
       ValueNotifier<String?>? account,
       SwarmUpload upload = refuseSwarmUpload,
       bool settle = true,
+      Size screen = const Size(390, 844),
+      double textScale = 1,
     }) async {
-      tester.view.physicalSize = const Size(1170, 2532);
+      tester.view.physicalSize = screen * 3;
       tester.view.devicePixelRatio = 3;
       addTearDown(tester.view.reset);
       final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
@@ -1368,8 +1412,11 @@ void main() {
       addTearDown(host.dispose);
       await tester.pumpWidget(
         MaterialApp(
-          builder: (context, child) =>
-              SwarmScope(notifier: host, child: child!),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: TextScaler.linear(textScale)),
+            child: SwarmScope(notifier: host, child: child!),
+          ),
           onGenerateRoute: (_) => CupertinoPageRoute<void>(
             builder: (_) => SwarmPage(now: () => newProjectNow),
           ),
@@ -3282,6 +3329,56 @@ void main() {
         expect(opened[0], opened[1]);
         expect(find.text(swarmRepositoryOpenFailed), findsNothing);
       });
+
+      // Guide's second review: on a short phone at 200% text with the longest
+      // name and owner, the ways out while waiting can still be reached.
+      for (final opens in [true, false]) {
+        testWidgets(
+          'waiting on a 320 point phone at 200% text with the '
+          'longest name and owner (GitHub ${opens ? 'opened' : 'not opened'}) '
+          'keeps Open GitHub, Check again and Start over in reach',
+          (tester) async {
+            swarmOpenGitHub = (uri) async {
+              opened.add(uri);
+              return opens;
+            };
+            final swarm = NewProjectSwarm()..ownerState = 'ready';
+            await pump(
+              tester,
+              [swarm],
+              screen: const Size(320, 568),
+              textScale: 2,
+            );
+            await openNewProject(tester);
+            await pickMachine(tester, 'mac-1');
+            await toNewRepository(tester);
+            await tap(tester, 'swarm-new-repo-owner');
+            await tester.enterText(key('swarm-new-repo-other-owner'), 'W' * 39);
+            await tap(tester, 'swarm-new-repo-other-use');
+            await name(tester, 'W' * 100);
+            await tap(tester, 'swarm-new-repo-use');
+            await tap(tester, 'swarm-new-project-create');
+            expect(tester.takeException(), isNull);
+            expect(swarm.repositoryRequests, hasLength(1));
+            for (final k in [
+              'swarm-new-project-open-github',
+              'swarm-new-project-check-again',
+              'swarm-new-project-start-over',
+            ]) {
+              await tester.ensureVisible(key(k));
+              await tester.pumpAndSettle();
+              expect(
+                tester.getRect(key(k)).bottom,
+                lessThanOrEqualTo(568),
+                reason: '$k on screen',
+              );
+            }
+            await tap(tester, 'swarm-new-project-open-github');
+            expect(opened, hasLength(2));
+            expect(tester.takeException(), isNull);
+          },
+        );
+      }
 
       testWidgets('too many organization checks: the choice stays, and it '
           'says to try again in a minute', (tester) async {
