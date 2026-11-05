@@ -117,6 +117,15 @@ describe('the built-in PM schedule', () => {
     expect(text).toContain('follow the instructions and say so')
   })
 
+  // Ken, 11-05: River's own script started Poplar on Gray.local at 14:01 and waited in the foreground until the start failed
+  // at 14:09; for 6.5 minutes no person's message was read. The CLI's start returns in about 20 s; the wait was the PM's.
+  it('tells the coordinator to run a start in the background and keep answering people', () => {
+    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
+    expect(text).toContain('while a command runs you read no one\'s messages')
+    expect(text).toContain('as one background command when your tool has them (Claude Code: run_in_background)')
+    expect(text).toContain('Never wait for a start in a loop in the foreground')
+  })
+
   it('keeps the instructions short, and counts what a person had to repeat in the nightly reflection', () => {
     expect(PM_SCHEDULE_TEXT).toContain('past 150 lines')
     expect(PM_SCHEDULE_TEXT).toContain('is a repeat')
