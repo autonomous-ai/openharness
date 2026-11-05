@@ -10,14 +10,15 @@
  * The owner cannot look inside the team account's home, so the team daemon reports what it finds (installed, signed in)
  * in its status file, as it starts and every minute after, and `harness team status` reads it there.
  */
-import { accessSync, constants } from 'node:fs'
+import { accessSync, constants, lstatSync, readFileSync } from 'node:fs'
 import { userInfo } from 'node:os'
-import { join, win32 } from 'node:path'
+import { join, posix, win32 } from 'node:path'
 import { engineAccount, type EngineAccount } from '../lib/engineAccount.js'
 import { env } from '../config/env.js'
 import { readTeamConfig, type TeamConfig } from './config.js'
 import { receiveTeamModel } from './modelHandoff.js'
 import { TEAM_USER } from './layout.js'
+import type { EngineCopy } from './script.js'
 import { readTeamStatus, writeTeamStatus, type TeamStatus } from './privacy.js'
 import { teamRelayed } from './relay.js'
 
@@ -36,6 +37,44 @@ export const TEAM_ENGINES: readonly TeamEngineInfo[] = [
   { engine: 'claude', name: 'Claude Code', packageName: '@anthropic-ai/claude-code', signIn: 'claude' },
   { engine: 'codex', name: 'Codex', packageName: '@openai/codex', signIn: 'codex login --device-auth' },
 ]
+
+/** Where else an owner's npm puts global packages on a Mac: Homebrew's Node, on Apple silicon and on Intel. */
+export const SYSTEM_NPM_PREFIXES = ['/opt/homebrew', '/usr/local'] as const
+
+/**
+ * The owner's own installed Claude Code and Codex, for setup to copy into the team account instead of downloading them
+ * again (#3169: npm was 4 min 18 s of a 4 min 35 s setup on this Mac; the copy 2.3 s). Read as the owner, before the
+ * password. Each engine from the first place that has it as npm leaves it: Harness's own prefix (`~/.local`,
+ * lib/engineInstall.ts), the Harness Node's, then [prefixes] (Homebrew's). Only a real folder holding that package by name,
+ * with its command where its package.json says: an `npm link` to a source checkout is the owner's work, not an install.
+ * An engine found nowhere is left to npm.
+ */
+export function ownerEngineCopies(input: { home: string; nodeRuntimeDir: string | null; prefixes?: readonly string[] }): EngineCopy[] {
+  const prefixes = [join(input.home, '.local'), ...input.nodeRuntimeDir ? [input.nodeRuntimeDir] : [], ...input.prefixes ?? SYSTEM_NPM_PREFIXES]
+  const copies: EngineCopy[] = []
+  for (const { engine, packageName } of TEAM_ENGINES) {
+    for (const prefix of prefixes) {
+      const copy = installedPackage(join(prefix, 'lib', 'node_modules', packageName), packageName, engine)
+      if (copy) { copies.push(copy); break }
+    }
+  }
+  return copies
+}
+
+function installedPackage(dir: string, packageName: string, bin: string): EngineCopy | null {
+  try {
+    if (!lstatSync(dir).isDirectory()) return null
+    const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { name?: unknown; bin?: unknown }
+    if (manifest.name !== packageName) return null
+    const named = typeof manifest.bin === 'string' ? manifest.bin
+      : manifest.bin && typeof manifest.bin === 'object' ? (manifest.bin as Record<string, unknown>)[bin] : undefined
+    if (typeof named !== 'string') return null
+    const binPath = posix.normalize(named)
+    if (binPath.startsWith('../') || binPath.startsWith('/') || binPath === '..' || !/^[A-Za-z0-9_][A-Za-z0-9_./-]*$/.test(binPath)) return null
+    accessSync(join(dir, binPath), constants.X_OK)
+    return { packageName, dir, bin, binPath }
+  } catch { return null }
+}
 
 /** [relayed]: not signed in itself, it spends the owner's subscription through the owner's relay (team/relay.ts). */
 export interface EngineReadiness { installed: boolean; signedIn: boolean | null; relayed?: boolean }
