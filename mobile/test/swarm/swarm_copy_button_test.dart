@@ -33,7 +33,12 @@ void main() {
         .setMockMethodCallHandler(SystemChannels.platform, null),
   );
 
-  Widget row(String id, String text, {bool inThread = false}) => MaterialApp(
+  Widget row(
+    String id,
+    String text, {
+    bool inThread = false,
+    List<Map<String, dynamic>> attachments = const [],
+  }) => MaterialApp(
     home: Scaffold(
       body: ListView(
         children: [
@@ -43,6 +48,7 @@ void main() {
               'conversationId': 'g1',
               'text': text,
               'sequence': 1,
+              'attachments': attachments,
               'author': {'kind': 'agent', 'id': 'agent-lead', 'name': 'Lead'},
               'createdAt': DateTime.utc(2026, 11, 2).toIso8601String(),
             }),
@@ -225,5 +231,34 @@ void main() {
     await tester.pump();
     expect(find.bySemanticsLabel('Copied'), findsOneWidget);
     semantics.dispose();
+  });
+
+  // A voice message's text is its words, which are never handed over: it
+  // plays only (anh Dee, 2026-11-04; #3335 review).
+  testWidgets('a voice message offers Reply but no Copy', (tester) async {
+    await tester.pumpWidget(
+      row(
+        'm1',
+        'the words',
+        attachments: [
+          {
+            'id': 'v1',
+            'name': 'Voice message.wav',
+            'mime': 'audio/wav',
+            'size': 64044,
+            'url': 'https://cdn.example.test/v1/Voice_message.wav',
+            'voice': {
+              'durationMs': 2000,
+              'waveform': List.filled(48, 9),
+              'transcribed': true,
+            },
+          },
+        ],
+      ),
+    );
+    expect(find.text('Reply'), findsOneWidget);
+    expect(find.text('Copy'), findsNothing);
+    expect(find.byIcon(LucideIcons.copy), findsNothing);
+    expect(copied, isEmpty);
   });
 }
