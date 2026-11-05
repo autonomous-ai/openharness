@@ -372,9 +372,11 @@ describe('a project\'s own empty folder, for a project with no repository (#3211
     const scratch = await realpath(await mkdtemp(join(tmpdir(), 'swarm-empty-folder-')))
     try { await body(join(scratch, 'swarm-projects', 'tab')) } finally { await rm(scratch, { recursive: true, force: true }) }
   }
-  it('makes it once, as a git folder with no remote and no commit, and finds it again', async () => withRoot(async root => {
+  it('makes it once, its owner\'s alone, as a git folder with no remote and no commit, and finds it again', async () => withRoot(async root => {
     const folder = await prepareEmptyProjectFolder(root, 'project-a')
     expect(folder).toBe(join(root, 'project-a'))
+    // Its owner's alone, as the work in it is (security review 1 of #3137, Minor).
+    expect((await lstat(folder)).mode & 0o777).toBe(0o700)
     expect((await lstat(join(folder, '.git'))).isDirectory()).toBe(true)
     expect(execFileSync('git', ['remote'], { cwd: folder, encoding: 'utf8' })).toBe('')
     await writeFile(join(folder, 'notes.md'), 'kept')
