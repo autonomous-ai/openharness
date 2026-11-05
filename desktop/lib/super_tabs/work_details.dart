@@ -188,7 +188,8 @@ Future<void> _record(
 
 /// A check's line (Dee, #3394): a verdict counts only at the pull request
 /// head it read, so a pass names that head, and a check whose verdicts all
-/// stopped counting at a newer head says so. Verdicts from before heads read
+/// stopped counting says why: a newer head, no head named, or its pull
+/// request's head not read yet. Verdicts on a task with no watched head read
 /// as they did (backend checkVerdicts.ts).
 String superTabCheckLabel(Map<String, dynamic> check) {
   final verdicts = (check['verdicts'] as List? ?? const [])
@@ -208,10 +209,15 @@ String superTabCheckLabel(Map<String, dynamic> check) {
   }
   if (verdicts.any((v) => v['stale'] == null)) return 'Not verified';
   final stale = verdicts.lastWhere(
-    (v) => v['head'] is String && v['stale'] is String,
+    (v) => v['stale'] is String,
     orElse: () => const {},
   );
-  return stale.isEmpty
-      ? 'Not verified'
-      : 'Stale: read ${short(stale['head'])}, PR is at ${short(stale['stale'])}';
+  if (stale.isEmpty) return 'Not verified';
+  final read = stale['head'] is String
+      ? 'read ${short(stale['head'])}'
+      : 'no head named';
+  final now = (stale['stale'] as String).isEmpty
+      ? 'PR head not read yet'
+      : 'PR is at ${short(stale['stale'])}';
+  return 'Stale: $read, $now';
 }
