@@ -209,14 +209,8 @@ class SuperTabAgent {
       },
       crewAsleep = row['asleep'] != null,
       confidential = row['confidential'] == true,
-      crew = SuperTabCrew.fromJson(row['crew']),
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
-
-  /// Set on a crew member (backend model.ts `Agent.crew`, tasks #3397 and
-  /// #3400): the server hands it work in its lane. Null on every other agent
-  /// and from an older server.
-  final SuperTabCrew? crew;
 
   /// Set by its contributor or its project's Lead; null draws its pattern.
   final SuperTabAvatarPicture? avatar;
@@ -306,37 +300,6 @@ class SuperTabAgent {
   final bool buddyNarrow;
   final Map<String, dynamic> configuration;
   String get engine => configuration['engine'] as String? ?? '';
-}
-
-/// What makes an agent a crew member (backend model.ts `Agent.crew`): the
-/// role it fills, the lane it takes work in, if any, and when and by whom it
-/// joined.
-class SuperTabCrew {
-  const SuperTabCrew({
-    required this.role,
-    required this.at,
-    required this.by,
-    this.lane,
-  });
-  final String role, by;
-  final String? lane;
-  final DateTime at;
-
-  /// Null for anything but a crew record with a role.
-  static SuperTabCrew? fromJson(Object? value) {
-    if (value is! Map) return null;
-    final role = value['role'];
-    if (role is! String) return null;
-    final lane = value['lane'];
-    return SuperTabCrew(
-      role: role,
-      lane: lane is String && lane.trim().isNotEmpty ? lane : null,
-      at: DateTime.fromMillisecondsSinceEpoch(
-        (value['at'] is num ? value['at'] as num : 0).toInt(),
-      ),
-      by: value['by'] is String ? value['by'] as String : '',
-    );
-  }
 }
 
 /// What makes an agent a thread session: its thread's root and the sequence

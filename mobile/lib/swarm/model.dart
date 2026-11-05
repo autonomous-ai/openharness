@@ -213,7 +213,6 @@ class SuperTabAgent {
       },
       crewAsleep = row['asleep'] != null,
       confidential = row['confidential'] == true,
-      crew = SuperTabCrew.fromJson(row['crew']),
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
 
   /// `swarm` for a person's one Buddy for the whole Swarm, as the desktop's model reads it; null otherwise.
@@ -284,11 +283,6 @@ class SuperTabAgent {
   /// whose computer runs it may watch it, but every member watches the current Product Manager, view only
   /// (backend projects.ts `watchClosed`, terminal_unavailable.dart `superTabTerminalPrivate`).
   final bool confidential;
-
-  /// Set on a crew member (backend model.ts `Agent.crew`, tasks #3397 and
-  /// #3400; desktop model.dart): the server hands it work in its lane. Null on
-  /// every other agent and from an older server.
-  final SuperTabCrew? crew;
   // Keep the legacy default for callers while allowing group-based roster ownership.
   final bool hasProjectId;
   final String? displayName;
@@ -310,37 +304,6 @@ class SuperTabAgent {
   final SuperTabBuddySessionOf? buddySession;
   final Map<String, dynamic> configuration;
   String get engine => configuration['engine'] as String? ?? '';
-}
-
-/// What makes an agent a crew member (backend model.ts `Agent.crew`; desktop
-/// model.dart): the role it fills, the lane it takes work in, if any, and when
-/// and by whom it joined.
-class SuperTabCrew {
-  const SuperTabCrew({
-    required this.role,
-    required this.at,
-    required this.by,
-    this.lane,
-  });
-  final String role, by;
-  final String? lane;
-  final DateTime at;
-
-  /// Null for anything but a crew record with a role.
-  static SuperTabCrew? fromJson(Object? value) {
-    if (value is! Map) return null;
-    final role = value['role'];
-    if (role is! String) return null;
-    final lane = value['lane'];
-    return SuperTabCrew(
-      role: role,
-      lane: lane is String && lane.trim().isNotEmpty ? lane : null,
-      at: DateTime.fromMillisecondsSinceEpoch(
-        (value['at'] is num ? value['at'] as num : 0).toInt(),
-      ),
-      by: value['by'] is String ? value['by'] as String : '',
-    );
-  }
 }
 
 /// A thread session's thread and starting sequence (desktop model.dart).

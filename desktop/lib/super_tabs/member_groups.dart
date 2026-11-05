@@ -43,7 +43,15 @@ typedef SuperTabUnassignedEntry = ({SuperTabTaskEntry entry, String? lane});
 
 /// The heading of [agent]'s column: its name, then its lane when it has one.
 String superTabMemberHeading(SuperTabAgent agent) =>
-    [agent.displayName ?? agent.name, ?agent.crew?.lane].join(' · ');
+    [agent.displayName ?? agent.name, ?_laneName(agent.crewLane)].join(' · ');
+
+/// [lane] as the lane table names it (the crew mark keeps it in lower case).
+String? _laneName(String? lane) => lane == null
+    ? null
+    : _laneOrder.firstWhere(
+        (name) => name.toLowerCase() == lane.toLowerCase(),
+        orElse: () => lane,
+      );
 
 /// Work on [task] that is still on (backend model.ts `activeWork`).
 bool _active(SuperTabConversation task) => const {
@@ -88,7 +96,9 @@ superTabMemberGroups({
   final tasks = [for (final e in open.values) e.task!];
   final members = [
     for (final agent in agents)
-      if (agent.crew != null && agent.projectId == projectId && !agent.isBuddy)
+      if (agent.crewRole != null &&
+          agent.projectId == projectId &&
+          !agent.isBuddy)
         SuperTabMemberColumn(
           agent: agent,
           inHand: [
