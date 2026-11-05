@@ -41,6 +41,10 @@ describe('the built-in template', () => {
     expect(TEMPLATE_WORKFLOW).toContain("That is the PM's part until the Engineer reports.")
     expect(TEMPLATE_WORKFLOW).toContain('The PM opens no task to hold, batch, triage or list work')
     expect(TEMPLATE_WORKFLOW).toContain('adds a review step to its task')
+    // Task #3401: the server opens a ready pull request's steps from the files it changes; the Engineer opens them only
+    // where it opened none.
+    expect(TEMPLATE_WORKFLOW).toContain('2. When the pull request is ready, the server opens its review steps from the files it changes')
+    expect(TEMPLATE_WORKFLOW).toContain('Where it opened none, the Engineer adds a review step to its task')
     expect(TEMPLATE_WORKFLOW).toContain('it adds no new step for a second round')
     expect(TEMPLATE_WORKFLOW).toContain('run `mine`')
     expect(TEMPLATE_WORKFLOW).toContain('read `task GROUP`')

@@ -1,6 +1,7 @@
 import 'identity.dart' show superTabPersonName;
 import 'live_card_model.dart';
 import 'profile_model.dart';
+import 'pulse.dart';
 
 export 'profile_model.dart';
 
@@ -208,6 +209,13 @@ class SuperTabAgent {
         _ => null,
       },
       crewAsleep = row['asleep'] != null,
+      crewAsleepSince = switch (row['asleep']) {
+        {'since': final num since} => DateTime.fromMillisecondsSinceEpoch(
+          since.toInt(),
+        ),
+        _ => null,
+      },
+      crewMoving = row['movedTo'] != null,
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
@@ -255,6 +263,13 @@ class SuperTabAgent {
 
   /// A crew member put to sleep on purpose (task #3398): its session is closed and nothing reopens it.
   final bool crewAsleep;
+
+  /// Since when it sleeps (backend crewKeep.ts `asleep.since`): its idle hours on its machine's row (task #3412). Null
+  /// when awake, or when the server sent no time.
+  final DateTime? crewAsleepSince;
+
+  /// A crew member on its way to another machine (backend `movedTo`, task #3398): its new session takes over there.
+  final bool crewMoving;
 
   /// Its session is closed on its machine and someone chose to keep the agent: the backend removes every other closed
   /// agent from the list (backend closedAgents.ts), so this one is shown as closed, never as Idle.
@@ -794,6 +809,7 @@ class SuperTabSnapshot {
       ]),
       activityDigest = row['activityDigest'] as String?,
       remindersDigest = row['remindersDigest'] as String?,
+      _pulses = SuperTabPulse.readAll(row['pulse']),
       chatSettings = Map.unmodifiable({
         if (row['chatSettings'] case final Map settings)
           for (final MapEntry(:key, :value) in settings.entries)
@@ -940,6 +956,11 @@ class SuperTabSnapshot {
   /// Which reminders the reader has set and when each is due, as a digest that moves when one is set, replaced or
   /// cleared; null from a backend before reminders (superTabs/reminders.ts).
   final String? remindersDigest;
+
+  /// [projectId]'s board pulse (task #3384); null from a server before it,
+  /// or when its pulse could not be read.
+  SuperTabPulse? pulseOf(String projectId) => _pulses[projectId];
+  final Map<String, SuperTabPulse> _pulses;
 
   /// The reader's own notification setting by conversation (backend chatSettings.ts); a chat not listed is at
   /// [SuperTabNotify.mentions]. Never another person's.

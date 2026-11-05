@@ -40,6 +40,8 @@ export interface Audience { people: Array<{ id: string; generation: string }> }
 export type GroupView = Omit<Conversation, 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'> & {
   /** When it shipped (ms): its first Done; absent until it has. Nothing else of its ledger is sent. */
   shippedAt?: number
+  /** Why a held task is held, or `none` for a hold from before reasons; absent when it is not held (heldReason.ts heldView). */
+  held?: import('../heldReason.js').HeldView
 }
   & { messageSeq: number; dormant?: true; audience?: Audience
     /** A Buddy chat's owner, in place of its audience (read/views.ts groupView). */
@@ -61,6 +63,8 @@ export interface ProgressView {
 /** Values that change without a part changing (time, or several parts). Recomputed in full on every response;
  *  clients overlay it on the parts. */
 export interface Derived {
+  /** The board's pulse of each project the reader sees (pulse.ts, task #3384), by project id. Absent from an older backend. */
+  pulse?: Record<string, import('../pulse.js').Pulse>
   /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
   /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
   agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null; roleName: string }>

@@ -39,6 +39,8 @@ export const PUSH_ORIGIN_PERMISSIONS = { contents: 'read', pull_requests: 'read'
 export const PULL_WATCH_PERMISSIONS = { pull_requests: 'read', checks: 'read', metadata: 'read' } as const
 /** The watch's answers kept for conditional reads: an unchanged one comes back 304, which GitHub's rate limit does not count. */
 const WATCH_KEPT = 2000
+/** Pages of 100 a pull request's file list reads: GitHub lists at most 3,000 files. */
+const PULL_FILES_PAGES = 30
 const PUSH_ORIGINS_KEPT = 1000
 const PUSH_UNKNOWN_MS = 60_000
 export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
@@ -446,6 +448,13 @@ export class GitHubApp {
     throw new GitHubAppError('GITHUB_UNAVAILABLE', `GitHub could not create a token for ${repository.fullName}.`, 502)
   }
 
+  /** One call with an installation [token] this server minted (the merge train's, github/train.ts): its status and JSON body.
+   *  Throws [GitHubAppError] GITHUB_UNAVAILABLE when GitHub does not answer. */
+  async installationCall(token: string, method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> | unknown[] }> {
+    const answer = await this.call(method, path, `Bearer ${token}`, body)
+    return { status: answer.status, body: answer.body }
+  }
+
   /** Ends [token] at once (DELETE /installation/token, authorised by the token itself). One GitHub already ended reads as
    *  done. */
   async revoke(token: string): Promise<void> {
@@ -643,6 +652,35 @@ export class GitHubApp {
         comments: list(comments).filter(comment => typeof comment.id === 'number').map(comment => ({ id: comment.id as number,
           login: login(comment.user), association: text(comment.author_association) || 'NONE', body: text(comment.body), url: text(comment.html_url) })),
       }
+    } catch (error) {
+      if (error instanceof GitHubAppError) return null
+      throw error
+    }
+  }
+
+  /**
+   * The files pull request [number] changes, read with the watch's read-only token (task #3401: its review steps are planned
+   * from them): GET /pulls/{n}/files, 100 a page. A renamed file is listed under its old name too, so moving a file out of a
+   * sensitive path still counts as changing it. Null when GitHub cannot say, or when the list may be cut at GitHub's 3,000.
+   */
+  async pullRequestFiles(repository: GitHubRepository, number: number, token: string): Promise<Array<{ filename: string }> | null> {
+    const names = new Set<string>()
+    const text = (value: unknown) => typeof value === 'string' && value ? value : undefined
+    try {
+      for (let page = 1; page <= PULL_FILES_PAGES; page++) {
+        const answer = await this.call('GET', `/repos/${repository.owner}/${repository.name}/pulls/${number}/files?per_page=100&page=${page}`, `Bearer ${token}`)
+        if (answer.status !== 200 || !Array.isArray(answer.body)) return null
+        for (const file of answer.body as Array<Record<string, unknown>>) {
+          const filename = text(file.filename)
+          if (!filename) return null
+          names.add(filename)
+          const previous = text(file.previous_filename)
+          if (previous) names.add(previous)
+        }
+        if (answer.body.length < 100) return [...names].map(filename => ({ filename }))
+      }
+      // A full last page: GitHub lists at most 3,000 files, so more may exist.
+      return null
     } catch (error) {
       if (error instanceof GitHubAppError) return null
       throw error

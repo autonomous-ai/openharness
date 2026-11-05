@@ -4,6 +4,8 @@ import { createSuperTab, type Actor, type AgentConfiguration, type CommandEffect
 import { SHIP_KIND } from './ship.js'
 import { TASK_LINE_KIND } from './taskLine.js'
 
+const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
+
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'dee@example.com' }
 const config: AgentConfiguration = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
 const PR = 'https://github.com/example/app/pull/7'
@@ -30,7 +32,7 @@ function fixture() {
   const task = (id: string) => state.conversations.find(c => c.id === id)!
   const status = (id: string, worker: string, value: 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped', result: string | null = null,
     extra: Record<string, unknown> = {}) =>
-    run({ type: 'work.status', conversationId: id, assignmentId: task(id).assignment!.id, status: value, result, ...extra } as Command, as(worker))
+    run({ type: 'work.status', conversationId: id, assignmentId: task(id).assignment!.id, status: value, result, ...(value === 'blocked' || value === 'needs_human' ? { hold: HOLD } : {}), ...extra } as Command, as(worker))
   const lines = (effects: CommandEffects) => effects.messages.filter(m => m.source?.kind === TASK_LINE_KIND)
   return { run, add, as, group, request, task, status, lines, pm, get state() { return state } }
 }

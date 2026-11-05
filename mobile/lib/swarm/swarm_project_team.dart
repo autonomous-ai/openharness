@@ -15,6 +15,7 @@ import 'swarm_chat_agents.dart';
 import 'swarm_instructions_page.dart';
 import 'swarm_leaderboard.dart';
 import 'swarm_project_tasks.dart';
+import 'swarm_pulse.dart';
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
@@ -238,7 +239,8 @@ class SwarmProjectTeamSheet extends StatelessWidget {
 
 /// A project's Team, as Swarm Home C draws it (Tony, 2026-10-30) to Dee's
 /// rules (2026-10-29), one row shape for its agents ([SwarmMemberRow]). On
-/// top its open tasks, in the Tasks tab's rows: what waits on the person,
+/// top the project's board pulse ([SwarmPulseStrip]) where the server sends
+/// one, then its open tasks, in the Tasks tab's rows: what waits on the person,
 /// then the work going on ([swarmProjectTasks]) — the first [workShown], and
 /// a row that shows the rest in place — each opening its chat ([onOpen]).
 /// Then its agents, each in its state with the task it holds, the most urgent
@@ -355,6 +357,8 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
         final work = folds && !_allWork
             ? working.take(SwarmProjectTeam.workShown)
             : working;
+        // The board pulse on top, from a server that sends it.
+        final pulse = snapshot.pulseOf(project.id) != null;
         return RefreshIndicator(
           onRefresh: reader.refresh,
           child: ListView(
@@ -367,11 +371,17 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
               MediaQuery.paddingOf(context).bottom + AppSpace.xl,
             ),
             children: [
+              if (pulse)
+                SwarmPulseStrip(
+                  reader: reader,
+                  projectId: project.id,
+                  onOpen: widget.onOpen,
+                ),
               if (tasks.waiting.isNotEmpty) ...[
-                const SwarmCaption(
+                SwarmCaption(
                   'Waiting on you',
-                  key: ValueKey('swarm-team-waiting-caption'),
-                  first: true,
+                  key: const ValueKey('swarm-team-waiting-caption'),
+                  first: !pulse,
                 ),
                 SwarmGroup(
                   children: [
@@ -392,7 +402,7 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
                 SwarmCaption(
                   'Working on',
                   key: const ValueKey('swarm-team-working-caption'),
-                  first: tasks.waiting.isEmpty,
+                  first: !pulse && tasks.waiting.isEmpty,
                 ),
               if (working.isEmpty && tasks.waiting.isEmpty)
                 Padding(

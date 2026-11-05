@@ -1,3 +1,4 @@
+import { pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
 import { applyPushOrigin, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import { crewMoveFailed, takeOverCrewMember, wakeCrewMember } from './crewKeep.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
@@ -17,7 +18,9 @@ import {
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
-import { endSteps, stepEndedRows, isStep, taskOwner } from './steps.js'
+import { endSteps, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
+import { reviewPlan, stepBrief, stepCheck, type PlannedStep, type StepKind } from './reviewTable.js'
+import { reviewerCandidates } from './reviewerPick.js'
 import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
@@ -26,6 +29,7 @@ import { projectRulesSchema, rulesDiff, rulesEqual, SEED_RULES, type ProjectRule
 import { accessRefusal, changeAccess, expireAccess, taskAccess } from './machineAccess.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
+import { checkReason, heldReason, missingReason } from './heldReason.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
 import { BACK_WITH_YOU, pickUp, reopenHanded } from './handed.js'
@@ -280,8 +284,11 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
   // A task's place in its project's Next up (taskQueue.ts): `after` the open task it goes right after, null for the top, absent
   // to stay; `notBefore` a day it should not start before, null to clear.
-  z.object({ type: z.literal('work.queue'), conversationId: id, after: id.nullable().optional(), notBefore: day.nullable().optional() }).strict()
-    .refine(c => c.after !== undefined || c.notBefore !== undefined, 'Give the task a place (after) or a not-before date.'),
+  // A not-before date holds the task, so it carries its reason (heldReason.ts); a date without one is refused when it is applied.
+  z.object({ type: z.literal('work.queue'), conversationId: id, after: id.nullable().optional(), notBefore: day.nullable().optional(),
+    hold: heldReason.optional() }).strict()
+    .refine(c => c.after !== undefined || c.notBefore !== undefined, 'Give the task a place (after) or a not-before date.')
+    .refine(c => c.hold === undefined || typeof c.notBefore === 'string', 'A hold reason goes with a not-before date.'),
   // The Lead's record that a request's pull request merged (leaderboard/record.ts recordMerged); `mergedAt` for a backfill.
   // `fixes`: the merged PR this one fixes, for its model's fixes after merge (leaderboard/record.ts recordFix).
   z.object({ type: z.literal('conversation.merged'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL),
@@ -405,7 +412,10 @@ export const commandSchema = z.discriminatedUnion('type', [
     // A worker's question for one named person, opened as a decision (decisions.ts); the result is the question.
     ask: decisionChoices.extend({ personId: id }).strict().optional(),
     // Its session's token totals by model, read by its host as it finishes (Done, Stopped): the attempt's end (costs/attempts.ts).
-    tokens: tokensByModelSchema.optional() }).strict(),
+    tokens: tokensByModelSchema.optional(),
+    // Why it waits, for blocked and needs_human (heldReason.ts); a status without one is refused when it is applied.
+    hold: heldReason.optional() }).strict()
+    .refine(c => c.hold === undefined || c.status === 'blocked' || c.status === 'needs_human', 'A hold reason goes with blocked or needs_human.'),
   z.object({ type: z.literal('work.cancel'), conversationId: id, assignmentId: id, reason }).strict(),
   // `lostAt` names the loss being resumed (Assignment.lost.at): one task can be lost to a limit, resumed and lost again.
   z.object({ type: z.literal('work.resume'), conversationId: id, assignmentId: id, lostAt: z.number().int().nonnegative().safe() }).strict(),
@@ -562,8 +572,9 @@ export interface CommandContext {
   instructions?: { revision: number; text: string; at?: number } | null
   /** For `instructions.save`: the messages it names as approvals, loaded by id in this tab by the store (ruleGuard.ts). */
   approvals?: ApprovalRow[]
-  /** For `rules.set`: the project's newest stored rules revision, read by the store; null when none is saved yet, which is
-   *  the seed at revision 0 (policyStore.ts). Unread (undefined), nothing is saved. */
+  /** For `rules.set`, and for a task's Ready whose pull request files were read (its review table plans the steps, #3401):
+   *  the project's newest stored rules revision, read by the store; null when none is saved yet, which is the seed at
+   *  revision 0 (policyStore.ts). Unread (undefined), nothing is saved. */
   projectRules?: { revision: number; rules: ProjectRules } | null
   /** For `note.add` and `note.remove`: the project's stored notes, expired ones too, read by the store (instructions.ts). */
   notes?: PmNote[]
@@ -613,6 +624,9 @@ export interface CommandContext {
   pushOrigin?: PushOrigin
   /** The pull requests [pushOrigin] read, as the store read them; none for a branch. A clean read clears only a mark it covered (teamWritten.ts). */
   pushOriginPulls?: string[]
+  /** The files a Ready for review's task changes in its pull requests, and the head they were read at, read before the command
+   *  (store.ts pullRequestFilesFor): `files` null when GitHub could not say. Absent with nothing to read: no step opens then. */
+  pullRequestFiles?: { urls: string[]; head: string | null; files: string[] | null; heads?: Array<{ url: string; head: string | null }> }
   /** Whether the Harness GitHub App reaches the project's repository, read before an agent.start or work.assign (store.ts repositoryReachFor). */
   repositoryReach?: RepositoryReach
   /** The person's role in the Swarm's Workspace, read by the store for invitations (workspaces.ts); absent outside a Workspace. */
@@ -906,6 +920,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   let sender: Author | undefined
   try { sender = author(effects.state, actor) } catch { sender = undefined }
   syncTaskLines(original, effects, sender, stableId(original.id, actorKey(actor), context.operationId))
+  // Every open group is loaded for a command (parts/load.ts): the board's pulse is worked out on it (pulse.ts), for the project
+  // of the conversation the command names when it names one (it moves no other), else for every project.
+  recordPulse(effects.state, context.now, pulseProjectOf(effects.state, input))
   return effects
 }
 
@@ -1596,6 +1613,134 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   const fenceLost = (group: Conversation, assignmentId: string) => {
     if (actor.kind === 'agent' && group.lostAttempt?.id === assignmentId && group.lostAttempt.agentId === actor.agentId) {
       fail('ASSIGNMENT_LOST', 'This task was lost and moved on, so your status and results for it are no longer accepted. Stop working on it.')
+    }
+  }
+
+  /** Every check work.assign makes before [worker] takes [group]'s work, throwing its refusal; nothing changes here, so a
+   *  caller trying candidates in turn (openReviewSteps) catches the refusal and tries the next. */
+  const assignRefusal = (group: Conversation, worker: Agent) => {
+    if (state.starts?.some(s => s.poolGeneration && !s.poolSettled && s.request.machineId === worker.machineId && s.harnessId === worker.harnessId)) {
+      fail('START_PENDING', 'Wait for the host to finish this agent’s launch and model selection.')
+    }
+    if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
+    if (activeWork(group)) fail('WORK_ACTIVE', 'The current assignment must finish or be reconciled before reassignment.')
+    // Before anything changes: a task given to a closed session is lost at once, and its agent then stays listed until the
+    // task is handed on (closedAgents.ts removeClosedAgents). Without a task it leaves on its machine's next report.
+    // A crew member on its way to another machine takes work once there; an asleep one wakes for it, in place (crewKeep.ts),
+    // so its session is not closed (assignTo wakes it).
+    if (worker.movedTo) fail('CREW_MOVING', `${worker.displayName ?? worker.name} is moving to another machine. Assign it once it has moved.`)
+    if (!worker.asleep && sessionClosed(state, worker, context.now)) {
+      fail('AGENT_CLOSED', `${worker.displayName ?? worker.name}'s session was closed. Start a new agent for this task.`)
+    }
+    projectChatJoin(group, worker.id, worker.displayName ?? worker.name)
+    assignable(worker)
+    sameProject(state, group, worker)
+    const home = groupProject(state, group)
+    // A teammate's agent on a personal machine keeps what it has; it takes no new task for another person's project.
+    requireTeamWork(state, worker.machineId, worker.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines, taskAccess(group))
+    // And what the task needs to reach, where it runs (machineAccess.ts): an assignment is held to it as a start is.
+    const unreached = accessRefusal(state, worker.machineId, home, taskAccess(group))
+    if (unreached) failTeamWork(unreached)
+    requireRepositoryReach(state, onTeamAccount(state, worker), worker.machineOwnerId, home, context.repositoryReach)
+    // Team-written code runs only in a Team account (teamWritten.ts, audit H2).
+    pushedRefusal(group, worker)
+    requireTeamWrittenAccount(state, group, worker)
+    if (worker.workDecision === 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
+    // A handed task does not occupy its Engineer (#3399 handed.ts): it may take this.
+    if (state.conversations.some(c => occupiesAgent(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
+  }
+  /** [worker] takes [group]'s work as assignment [assignmentId], after assignRefusal let it: what work.assign writes, and its
+   *  brief to the worker. */
+  const assignTo = (group: Conversation, worker: Agent, assignmentId: string) => {
+    // An asleep crew member wakes for it: its host reopens the session in place (crewKeep.ts).
+    wakeCrewMember(worker, context.now)
+    // A Team agent's work marks the task (teamWritten.ts, audit H2).
+    marking(group, () => markTeamWritten(state, group, worker))
+    delete worker.workDecision
+    delete worker.releaseId
+    // Any assignment, an agent's or a person's, takes a worker that lost its task back into routing (model.ts lostTask).
+    delete worker.lostTask
+    if (!group.agentIds.includes(worker.id)) group.agentIds.push(worker.id)
+    // A step's agent works in its task's chat, where its owner and the other steps' agents are (task steps design).
+    const owning = isStep(group) ? state.conversations.find(c => c.id === group.reviewOf) : undefined
+    if (owning && !owning.agentIds.includes(worker.id) && joinsProject(state, owning, worker.id)) owning.agentIds.push(worker.id)
+    rememberAttempt(group)
+    group.assignment = { id: assignmentId, agentId: worker.id, status: 'working', configuration: structuredClone(worker.configuration),
+      execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId }, result: null }
+    renewLease(group.assignment, context.now)
+    leadActed(group.id, 'assign')
+    recordRun(state, group, group.assignment, worker, context.now)
+    const others = othersWorkNotice(state, group, worker, context.now, ENGINE_NAMES[worker.configuration.engine] ?? worker.configuration.engine)
+    if (others) effects.messages.push({ id: stableId(assignmentId, 'others-work-notice'), conversationId: others.conversationId, author: sender,
+      replyTo: null, recipients: [], source: { kind: 'others-work-notice', machineId: others.machineId }, text: others.text })
+    group.checks.forEach(c => { c.evidence = null; c.passedBy = null; delete c.verdicts })
+    // The brief (a task with none: its title), and its acceptance checks when it has some: checks are information. Then
+    // whom this task's pull requests are for, from its own requester (projects.ts requestedByLine).
+    const requestedBy = requestedByLine(state, groupProject(state, group), group, worker)
+    message(group.id, [group.brief || group.title,
+      ...group.checks.length ? [`Acceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`] : [],
+      ...requestedBy ? [requestedBy] : []].join('\n\n'), [worker.id], null, SYSTEM_ROW, undefined, undefined, undefined, assignmentId)
+    const news = assignedNotice(state, group, sender, assignmentId)
+    if (news) effects.messages.push(news)
+  }
+  /** The kind of a step already open on a task, by its name, so a step its Engineer opened is reused, not doubled. */
+  const stepKind = (step: Conversation): StepKind | null => {
+    const name = stepName(step)
+    return /security/i.test(name) ? 'security' : /test/i.test(name) ? 'test' : /review|read/i.test(name) ? 'review' : null
+  }
+  /** A new step [planned] of [task], opened as conversation.create opens one with `reviewOf` and `step`. */
+  const openStep = (task: Conversation, planned: PlannedStep, read: NonNullable<CommandContext['pullRequestFiles']>) => {
+    const project = groupProject(state, task)
+    const leadId = conversation(state, project.leadConversationId).leadId
+    const id = stableId(operationId, 'review-step', planned.name)
+    const number = nextConversationNumber(state)
+    state.groupCounter = number
+    const pulls = read.heads ?? read.urls.map((url, i) => ({ url, head: i === 0 ? read.head : null }))
+    const brief = stepBrief(planned, { number: task.number ?? number, title: task.title, pulls })
+    state.conversations.push({ id, ...(state.projects ? { projectId: project.id } : {}), number, title: planned.name, leadId,
+      agentIds: leadId ? [leadId] : [], archived: false, brief, reviewOf: task.id,
+      // A step keeps its task's mark, as conversation.create's does (teamWritten.ts stepMark).
+      ...stepMark(state, task), step: planned.name,
+      assignment: null, lastMessageSequence: 0, checks: storedChecks([{ description: stepCheck(planned), independent: true }], id) })
+    const step = state.conversations.at(-1)!
+    message(id, brief, [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(id, 'brief'))
+    bindTaskCard(step, effects.messages.at(-1)!)
+    return step
+  }
+  /**
+   * A handed task's review steps (task #3401): the steps its changed files need (reviewTable.ts), each one already open of
+   * that name or kind reused (Workflow 3: the same step for a second round), the rest opened; each not working is assigned to
+   * the first free agent reviewerPick.ts ranks that work.assign's checks let through, its last agent first. A step still
+   * working is left with its agent, who hears this Ready (liveness.ts revisionReady). Nothing is refused: a step nobody may
+   * take stays open, and the PM hears it once.
+   */
+  const openReviewSteps = (task: Conversation, read: NonNullable<CommandContext['pullRequestFiles']>) => {
+    const existing = stepsOf(state, task.id).filter(step => !step.archived)
+    const taken = new Set<string>(), unassigned: string[] = []
+    for (const planned of reviewPlan(read.files, context.projectRules?.rules)) {
+      const free = (step: Conversation) => !taken.has(step.id)
+      let step = existing.find(s => free(s) && stepName(s) === planned.name) ?? existing.find(s => free(s) && stepKind(s) === planned.kind)
+      if (step) taken.add(step.id)
+      if (step && activeWork(step)) continue
+      // A step whose every check passed at this very head keeps its verdict: a repeated Ready (a CI rerun) asks nothing again.
+      if (step && read.head && step.checks.length && step.checks.every(check => check.passedBy
+        && (check.verdicts ?? []).some(verdict => verdict.passed && (verdict as { head?: string }).head === read.head))) continue
+      step ??= openStep(task, planned, read)
+      const previous = step.assignment?.agentId
+      const ranked = reviewerCandidates(state, task, planned.kind, read.head, context.now)
+      const ordered = [...ranked.filter(a => a.id === previous), ...ranked.filter(a => a.id !== previous)]
+      const target = step
+      const worker = ordered.find(candidate => {
+        try { assignRefusal(target, candidate); return true } catch (error) { if (error instanceof SuperTabError) return false; throw error }
+      })
+      if (worker) assignTo(step, worker, stableId(operationId, 'review-step-assign', step.id))
+      else unassigned.push(planned.name)
+    }
+    const leadId = conversation(state, groupProject(state, task).leadConversationId).leadId
+    if (unassigned.length && leadId) {
+      message(task.id, `No free reviewer for ${unassigned.join(', ')} of #${task.number}: no agent of this project is free, never built it, `
+        + 'runs a model at least as strong as its engineer and off the grid, and gave no verdict at this head. The step waits open: start or free one, '
+        + 'and assign it.', [leadId], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(operationId, 'review-unassigned'))
     }
   }
 
@@ -2339,6 +2484,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('INVALID_REQUEST', 'A request message opens a task of its own: leave out proposalMessageId, reviewOf and audience.', 400)
       }
       const request = command.requestMessageId ? requestOf(state, project, context.request) : undefined
+      if (request) settleRequest(state, project, actor.kind === 'agent' ? actor.agentId : null, request.messageId)
       const requesterId = command.requesterId ? requester(state, project, command.requesterId)
         : proposalRequester(state, project, proposal?.personId) ?? request?.personId ?? (actor.kind === 'person' ? actor.userId : undefined)
       // An agent's task says its goal, when it is done, its priority and who asked (taskContract.ts, task #3389). A step and a
@@ -2434,8 +2580,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         }
         for (const [groupId, rank] of placeAfter(siblings, task.id, command.after)) conversation(state, groupId).queueRank = rank
       }
-      if (command.notBefore === null) delete task.notBefore
-      else if (command.notBefore !== undefined) task.notBefore = command.notBefore
+      if (command.notBefore === null) { delete task.notBefore; delete task.hold }
+      else if (command.notBefore !== undefined) {
+        if (!command.hold) missingReason()
+        checkReason(state, task, command.hold, context.now)
+        task.notBefore = command.notBefore
+        task.hold = command.hold
+      }
       break
     }
     case 'work.priority': {
@@ -3394,6 +3545,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
       }
       result.changed = react(group, command.messageId, command.on, context.reaction)
+      if (actor.kind === 'agent') settleReaction(state, group, actor.agentId, command.messageId, command.emoji, command.on)
       // A reaction is how an agent acknowledges (ACK_ONLY refuses the post), so it settles the agent's delivery of that message.
       if (actor.kind === 'agent' && command.on) effects.settles = { messageId: command.messageId, agentId: actor.agentId }
       break
@@ -3405,6 +3557,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     case 'message.delete':
       Object.assign(result, { changed: true }, deleteMessage(open(state, command.conversationId), actor, command.messageId, context.messageChange))
+      settleDeleted(open(state, command.conversationId), command.messageId)
       break
     case 'member.avatar':
       setMemberAvatar(state, actor, command.avatar, context.avatarUpload)
@@ -3581,6 +3734,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Its project on the row itself, so the row hides once its person loses that project (buddySessions.ts lostProjectRow).
       if (session?.inSession) Object.assign(effects.messages.at(-1)!, { buddySession: true, ...(session.project ? { buddyProject: session.project } : {}) })
       recordPost(state, group, actor, { replyTo: command.replyTo ?? command.answers ?? null, text, reply: context.reply, openTags: context.openTags }, context.now)
+      // What the PM owes (pulse.ts): a person's message that reached it, settled by its answer in the message's place.
+      if (!command.agentOnly) {
+        const sent = effects.messages.find(m => m.id === operationId)!
+        const root = command.replyTo && context.reply && !context.reply.agentOnly ? context.reply.thread ?? context.reply.id : null
+        if (actor.kind === 'person') owe(state, group, { id: sent.id, author: sent.author, recipients, thread: root, source: sent.source }, context.now)
+        else settleReply(state, group, actor.agentId, { answers: command.answers ?? null, thread: root })
+      }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       // A verdict is usually a post to the Engineer: its own step then waits for the new revision (liveness.ts waitingForRevision).
       if (actor.kind === 'agent') toldEngineer(state, group, actor.agentId, recipients, text, context.now)
@@ -3723,38 +3883,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'work.assign': {
       chatOnly(command.conversationId)
       projectChatWork(command.conversationId)
-      const target = agent(state, command.agentId)
-      if (state.starts?.some(s => s.poolGeneration && !s.poolSettled && s.request.machineId === target.machineId && s.harnessId === target.harnessId)) {
-        fail('START_PENDING', 'Wait for the host to finish this agent’s launch and model selection.')
-      }
       const group = open(state, command.conversationId)
-      if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
-      if (activeWork(group)) fail('WORK_ACTIVE', 'The current assignment must finish or be reconciled before reassignment.')
       const worker = agent(state, command.agentId)
-      // Before anything changes: a task given to a closed session is lost at once, and its agent then stays listed until the
-      // task is handed on (closedAgents.ts removeClosedAgents). Without a task it leaves on its machine's next report.
-      // A crew member on its way to another machine takes work once there; an asleep one wakes for it, in place (crewKeep.ts).
-      if (worker.movedTo) fail('CREW_MOVING', `${worker.displayName ?? worker.name} is moving to another machine. Assign it once it has moved.`)
-      const woke = wakeCrewMember(worker, context.now)
-      if (!woke && sessionClosed(state, worker, context.now)) {
-        fail('AGENT_CLOSED', `${worker.displayName ?? worker.name}'s session was closed. Start a new agent for this task.`)
-      }
-      projectChatJoin(group, worker.id, worker.displayName ?? worker.name)
-      assignable(worker)
-      sameProject(state, group, worker)
+      assignRefusal(group, worker)
       const home = groupProject(state, group)
-      // A teammate's agent on a personal machine keeps what it has; it takes no new task for another person's project.
-      requireTeamWork(state, worker.machineId, worker.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines, taskAccess(group))
-      // And what the task needs to reach, where it runs (machineAccess.ts): an assignment is held to it as a start is.
-      const unreached = accessRefusal(state, worker.machineId, home, taskAccess(group))
-      if (unreached) failTeamWork(unreached)
-      requireRepositoryReach(state, onTeamAccount(state, worker), worker.machineOwnerId, home, context.repositoryReach)
-      // Team-written code runs only in a Team account, and a Team agent's work marks the task (teamWritten.ts, audit H2).
-      pushedRefusal(group, worker)
-      requireTeamWrittenAccount(state, group, worker)
-      marking(group, () => markTeamWritten(state, group, worker))
-      if (worker.workDecision === 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
-      if (state.conversations.some(c => occupiesAgent(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
       // An older client assigns in a custom role: kept for older readers, and the role name it means for a worker without
       // one (instructions.ts legacyRoleName). No command reads the role.
       if (command.roleId) {
@@ -3762,24 +3894,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const roleName = worker.roleName ? undefined : legacyRoleName(home, { roleId: command.roleId })
         if (roleName) worker.roleName = roleName
       }
-      delete worker.workDecision
-      delete worker.releaseId
-      // Any assignment, an agent's or a person's, takes a worker that lost its task back into routing (model.ts lostTask).
-      delete worker.lostTask
-      if (!group.agentIds.includes(worker.id)) group.agentIds.push(worker.id)
-      // A step's agent works in its task's chat, where its owner and the other steps' agents are (task steps design).
-      const owning = isStep(group) ? state.conversations.find(c => c.id === group.reviewOf) : undefined
-      if (owning && !owning.agentIds.includes(worker.id) && joinsProject(state, owning, worker.id)) owning.agentIds.push(worker.id)
-      rememberAttempt(group)
-      group.assignment = { id: operationId, agentId: worker.id, status: 'working', configuration: structuredClone(worker.configuration),
-        execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId }, result: null }
-      renewLease(group.assignment, context.now)
-      leadActed(group.id, 'assign')
-      recordRun(state, group, group.assignment, worker, context.now)
-      const others = othersWorkNotice(state, group, worker, context.now, ENGINE_NAMES[worker.configuration.engine] ?? worker.configuration.engine)
-      if (others) effects.messages.push({ id: stableId(operationId, 'others-work-notice'), conversationId: others.conversationId, author: sender,
-        replyTo: null, recipients: [], source: { kind: 'others-work-notice', machineId: others.machineId }, text: others.text })
-      group.checks.forEach(c => { c.evidence = null; c.passedBy = null; delete c.verdicts })
+      assignTo(group, worker, operationId)
       result.assignmentId = operationId
       let routeNote: { id: string; text: string; source: Record<string, unknown> } | null = null
       if (command.routeDecisionId) {
@@ -3794,14 +3909,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           source: { kind: 'route-override', decisionId: decision.id, by: 'lead' } }
         else if (routed) routeNote = { id: stableId(operationId, 'route'), ...routed }
       }
-      // The brief (a task with none: its title), and its acceptance checks when it has some: checks are information. Then
-      // whom this task's pull requests are for, from its own requester (projects.ts requestedByLine).
-      const requestedBy = requestedByLine(state, home, group, worker)
-      message(group.id, [group.brief || group.title,
-        ...group.checks.length ? [`Acceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`] : [],
-        ...requestedBy ? [requestedBy] : []].join('\n\n'), [worker.id], null, SYSTEM_ROW)
-      const news = assignedNotice(state, group, sender, operationId)
-      if (news) effects.messages.push(news)
       if (routeNote) effects.messages.push({ id: routeNote.id, conversationId: group.id, author: sender,
         text: routeNote.text, replyTo: null, recipients: [], source: bookkeeping(group.id, routeNote.source) })
       break
@@ -3814,6 +3921,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!activeWork(group)) fail('ATTEMPT_CLOSED', 'Assign a new attempt to continue this work.')
       if (command.status === 'stopped' && !context.confirmedStopped) fail('STOP_UNCONFIRMED', 'Wait for the execution host to confirm the stop.')
       if (assignment.status === 'reconciling' && command.status !== 'stopped') fail('RECONCILING', 'Reconcile the previous assignment before continuing.')
+      const holding = command.status === 'blocked' || command.status === 'needs_human'
+      // Staged (review of #3215): a client from before reasons sends none, so blocked and needs_human take it for now and show
+      // "no reason"; a reason that is sent is still checked. The refusal follows once the CLI sends one.
+      if (holding && command.hold) checkReason(state, group, command.hold, context.now)
       let asked: string | undefined
       if (command.ask) {
         if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {
@@ -3841,6 +3952,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       pickUp(assignment)
       if (command.ask) assignment.askedOf = command.ask.personId
       else if (command.status !== 'needs_human') delete assignment.askedOf
+      // Why it waits lasts as long as the wait: the next status clears it.
+      if (holding) assignment.hold = command.hold
+      else delete assignment.hold
       recordStatus(group, assignment, previous, context.now, changed ? operationId : null, asked)
       if (['done', 'stopped'].includes(command.status)) finishWorker(state, assignment.agentId)
       // Finished work shows the worker recovered from a task it lost before.
@@ -3872,8 +3986,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const asked = !command.ask ? '' : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${agentWrittenNameOf(state, person(state, command.ask.personId).id)}.`
         // The status set, on the row: a Done waits for the coordinator's next digest, what needs someone does not (store.ts writeMessages).
         message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}${asked}`, recipients, null, { ...SYSTEM_ROW, status: command.status })
-        // The server opens no review by itself: the agent whose work is ready opens and assigns it, as the project's instructions
-        // say (project instructions, phase 4). When no machine the project may use can start either engine, or soon none
+        // The server opens a task's review steps when its pull request's files were read (openReviewSteps, below); when
+        // they were not, the agent whose work is ready opens and assigns them (project instructions, phase 4). When no machine the project may use can start either engine, or soon none
         // will, the project's coordinator hears it once, in its chat (reviewCapacity.ts).
         const short = command.status === 'review' && !group.reviewOf ? reviewCapacityNotice(state, group, context.now, (machineId, contributorId) =>
           !teamWorkCheck(state, machineId, contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)) : null
@@ -3890,6 +4004,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)], groupRepositoryUrl(state, group))
         }
       }
+      // A task's Ready hands it over: the server opens its review steps from the files it changes (task #3401).
+      if (command.status === 'review' && !isStep(group) && context.pullRequestFiles) openReviewSteps(group, context.pullRequestFiles)
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       // The time it waited for its review never counts, whoever moved it on.
       if (waited && activeWork(group) && !waitingForReview(assignment)) restartQuietTime(assignment, context.now)

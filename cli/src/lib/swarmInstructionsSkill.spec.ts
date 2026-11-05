@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 // Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
 vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => 'peer' }))
 
-import { SWARM_TOOLS_SKILL } from './swarmTools.js'
+import { swarmToolsSheet } from './swarmToolSheets.js'
 import { prepareSwarmSkill } from './swarmSkills.js'
 import { instructionsSkillText, recordProjectSkillsNotice, refreshProjectSkills, type ProjectDoc } from './swarmInstructionsSkill.js'
 
@@ -25,8 +25,8 @@ const doc = (over: Partial<ProjectDoc> = {}): ProjectDoc =>
 const q = (path: string) => JSON.stringify(path)
 
 /** A dev session launched by this release at LAUNCHED_AT: its role file, its tools skill and the tools record. */
-function launched(key = 'session') {
-  const workspace = fixture(), saved = { role: 'dev' as const, key }
+function launched(key = 'session', role: 'dev' | 'lead' = 'dev') {
+  const workspace = fixture(), saved = { role, key }
   const { file } = prepareSwarmSkill(workspace, saved)
   const skills = dirname(dirname(file)), tools = join(skills, 'swarm-tools', 'SKILL.md')
   utimesSync(join(dirname(tools), 'version.json'), new Date(LAUNCHED_AT), new Date(LAUNCHED_AT))
@@ -69,8 +69,8 @@ describe('the project instructions skill', () => {
     const refresh = refreshProjectSkills(workspace, saved, atLaunch)!
     expect(refresh).toMatchObject({ tools, instructions, owed: false, change: 0 })
     expect(refresh.version).toMatch(/^[0-9a-f]{64}$/)
-    expect(readFileSync(tools, 'utf8')).toBe(SWARM_TOOLS_SKILL)
-    const state = { tools: sha(SWARM_TOOLS_SKILL), doc: sha(instructionsSkillText(atLaunch)), revision: 1, roleName: 'Tester', change: 0 }
+    expect(readFileSync(tools, 'utf8')).toBe(swarmToolsSheet('tester'))
+    const state = { tools: sha(swarmToolsSheet('tester')), doc: sha(instructionsSkillText(atLaunch)), revision: 1, roleName: 'Tester', change: 0 }
     expect(JSON.parse(readFileSync(join(dirname(instructions), 'version.json'), 'utf8'))).toEqual({ ...state, told: state })
     // Each later pass with the same document leaves everything as it is.
     expect(refreshProjectSkills(workspace, saved, atLaunch)).toEqual(refresh)
@@ -86,7 +86,7 @@ describe('the project instructions skill', () => {
     expect(refresh).toMatchObject({ owed: true, change: 1,
       notice: `The project's instructions changed: Reviews run on Opus. Before your next step, read ${q(instructions)} again and work by it.` })
     expect(readFileSync(instructions, 'utf8')).toBe(instructionsSkillText(after))
-    expect(readFileSync(tools, 'utf8')).toBe(SWARM_TOOLS_SKILL)
+    expect(readFileSync(tools, 'utf8')).toBe(swarmToolsSheet('tester'))
     recordProjectSkillsNotice(workspace, saved, refresh)
     expect(refreshProjectSkills(workspace, saved, after)).toMatchObject({ owed: false, change: 1 })
     // A tools text changed since the launch as well: one notice, both parts.
@@ -118,7 +118,7 @@ describe('the project instructions skill', () => {
     const refresh = refreshProjectSkills(workspace, saved, doc())!
     expect(refresh).toMatchObject({ owed: true, change: 1,
       notice: `Harness updated your swarm-tools skill. Before your next step, read ${q(tools)} again and work by it.` })
-    expect(readFileSync(tools, 'utf8')).toBe(SWARM_TOOLS_SKILL)
+    expect(readFileSync(tools, 'utf8')).toBe(swarmToolsSheet('tester'))
     expect(readFileSync(instructions, 'utf8')).toBe(instructionsSkillText(doc()))
     recordProjectSkillsNotice(workspace, saved, refresh)
     expect(refreshProjectSkills(workspace, saved, doc())).toMatchObject({ owed: false, change: 1 })
@@ -177,7 +177,7 @@ describe('the project instructions skill', () => {
     const refresh = refreshProjectSkills(workspace, saved, doc())!
     expect(refresh).toMatchObject({ tools, instructions, owed: true, change: 1,
       notice: `Harness now gives you two skills in place of your swarm-dev skill: ${q(tools)}, Harness's Swarm commands, and ${q(instructions)}, this project's instructions and your role in them. Before your next step, read both and work by them.` })
-    expect(readFileSync(tools, 'utf8')).toBe(SWARM_TOOLS_SKILL)
+    expect(readFileSync(tools, 'utf8')).toBe(swarmToolsSheet('tester'))
     expect(readFileSync(instructions, 'utf8')).toBe(instructionsSkillText(doc()))
     // Its role file stays, for an old backend.
     expect(readFileSync(file, 'utf8')).toBe(role)
@@ -202,7 +202,7 @@ describe('the project instructions skill', () => {
     const refresh = refreshProjectSkills(workspace, saved, doc({ roleName: 'Reviewer' }))!
     expect(refresh).toMatchObject({ owed: true, change: 1,
       notice: `You are now this project's Reviewer. Harness updated your swarm-tools skill. Before your next step, read ${q(instructions)} and ${q(tools)} again and work by them.` })
-    expect(readFileSync(tools, 'utf8')).toBe(SWARM_TOOLS_SKILL)
+    expect(readFileSync(tools, 'utf8')).toBe(swarmToolsSheet('tester'))
     expect(readFileSync(instructions, 'utf8')).toContain('You are this project\'s Reviewer. Ken is the project\'s coordinator.')
     // A save and a role change before the notice is recorded: one notice, its parts in order.
     expect(refreshProjectSkills(workspace, saved, doc({ roleName: 'Reviewer', revision: 2, summary: 'Reviews run on Opus' }))).toMatchObject({ owed: true, change: 2,
@@ -279,9 +279,45 @@ describe('the built-in PM schedule', () => {
   })
 
   it('a launch that printed it owes nothing extra', () => {
-    const { workspace, saved, instructions } = launched()
+    // The coordinator is launched with the PM sheet, so the refresh changes none of its files but the instructions.
+    const { workspace, saved, instructions } = launched('session', 'lead')
     const refresh = refreshProjectSkills(workspace, saved, doc({ roleName: 'PM', coordinator: true, builtIn: BUILT_IN }))!
     expect(refresh).toMatchObject({ owed: false, change: 0 })
     expect(readFileSync(instructions, 'utf8')).toContain(BUILT_IN)
+  })
+
+  // Task #3448: a session reads the tools its role uses. The launch knows an agent only as an agent (the Engineer sheet, which
+  // holds every other agent sheet's lines) and the coordinator as the PM; the host's refresh knows the project role's name.
+  it('swaps the Engineer sheet a launch wrote for the role\'s, and says nothing, as every role\'s sheet is within it', () => {
+    const engineer = swarmToolsSheet('engineer').split('\n')
+    for (const [role, name] of [['reviewer', 'Reviewer'], ['tester', 'Tester'], ['guide', 'Guide']] as const) {
+      const { workspace, saved, tools } = launched(`swap-${role}`)
+      expect(readFileSync(tools, 'utf8')).toBe(swarmToolsSheet('engineer'))
+      const refresh = refreshProjectSkills(workspace, saved, doc({ roleName: name }))!
+      expect(readFileSync(tools, 'utf8'), role).toBe(swarmToolsSheet(role))
+      expect(refresh, role).toMatchObject({ owed: false, change: 0 })
+      expect(swarmToolsSheet(role).split('\n').filter(l => !l.startsWith('description:')).every(l => engineer.includes(l)), role).toBe(true)
+    }
+    // An Engineer, or a role the sheets do not know, keeps what it launched with.
+    for (const name of ['Engineer', 'Integrator']) {
+      const { workspace, saved, tools } = launched(`keep-${name}`)
+      expect(refreshProjectSkills(workspace, saved, doc({ roleName: name }))).toMatchObject({ owed: false, change: 0 })
+      expect(readFileSync(tools, 'utf8')).toBe(swarmToolsSheet('engineer'))
+    }
+  })
+
+  it('keeps the PM sheet for the coordinator, and tells a change of role after the first install', () => {
+    const workspace = fixture(), saved = { role: 'lead' as const, key: 'pm' }
+    const { file } = prepareSwarmSkill(workspace, saved)
+    const tools = join(dirname(dirname(file)), 'swarm-tools', 'SKILL.md')
+    utimesSync(join(dirname(tools), 'version.json'), new Date(LAUNCHED_AT), new Date(LAUNCHED_AT))
+    expect(readFileSync(tools, 'utf8')).toBe(swarmToolsSheet('pm'))
+    expect(refreshProjectSkills(workspace, saved, doc({ roleName: 'PM', coordinator: true }))).toMatchObject({ owed: false, change: 0 })
+    expect(readFileSync(tools, 'utf8')).toBe(swarmToolsSheet('pm'))
+    // The same session, once renamed Reviewer by the project, is told its tools changed, as any later change is.
+    const renamed = refreshProjectSkills(workspace, saved, doc({ roleName: 'Reviewer', coordinator: false }))!
+    expect(readFileSync(tools, 'utf8')).toBe(swarmToolsSheet('reviewer'))
+    expect(renamed.owed).toBe(true)
+    expect(renamed.notice).toContain('Harness updated your swarm-tools skill.')
   })
 })
