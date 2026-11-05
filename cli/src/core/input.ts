@@ -312,6 +312,20 @@ export function createInput(deps: InputDeps) {
       releaseInput()
     }
   }
+  // A held delivery is retried by the backend every second; it is the same message, so the receive is
+  // logged once per delivery id instead of once per attempt. Bounded: an id that has scrolled out is
+  // logged again rather than remembered for the life of the daemon.
+  const loggedDeliveries = new Set<string>()
+  const firstReceipt = (deliveryId: string | undefined): boolean => {
+    if (!deliveryId) return true
+    if (loggedDeliveries.has(deliveryId)) return false
+    loggedDeliveries.add(deliveryId)
+    if (loggedDeliveries.size > 256) {
+      const oldest = loggedDeliveries.values().next().value
+      if (oldest !== undefined) loggedDeliveries.delete(oldest)
+    }
+    return true
+  }
   const submitAgent = (id: string, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): void => {
     const record = resolve(id)
     const sessionId = record?.sessionId ?? id
@@ -321,10 +335,11 @@ export function createInput(deps: InputDeps) {
     // per-engine adaptation happens here — an unknown slash command would otherwise land as a visible
     // error in the user's terminal instead of running their turn.
     const adapted = adaptSlashCommand(content, engine)
-    if (adapted !== content) {
+    const log = firstReceipt(deliveryId)
+    if (log && adapted !== content) {
       console.log(`[msg] ${sid(sessionId)} slash-command adapted for engine=${engine}`)
     }
-    console.log(`[msg] ${sid(sessionId)} recv · engine=${engine} · bytes=${Buffer.byteLength(adapted, 'utf8')}`)
+    if (log) console.log(`[msg] ${sid(sessionId)} recv · engine=${engine} · bytes=${Buffer.byteLength(adapted, 'utf8')}`)
     const target = record?.agentId ?? sessionId
     if (receipt) input.submit(target, adapted, deliveryId, inputContext, receipt)
     else if (inputContext) input.submit(target, adapted, deliveryId, inputContext)

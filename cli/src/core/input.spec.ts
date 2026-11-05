@@ -702,6 +702,20 @@ describe('createInput', () => {
     ])
     expect(log.mock.calls.flat().filter((line) => String(line).includes('slash-command adapted'))).toHaveLength(1)
   })
+
+  it('logs a held delivery once, not once for every retry of the same delivery id', () => {
+    const inputs = createInput(deps().deps)
+    vi.spyOn(inputs.input, 'submit').mockImplementation(() => {})
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    // The backend retries a held delivery every second under the same id.
+    inputs.submitAgent('s1', 'hello', 'd1')
+    inputs.submitAgent('s1', 'hello', 'd1')
+    inputs.submitAgent('s1', 'hello', 'd2')
+    // A person's own message has no delivery id and is logged every time, as before.
+    inputs.submitAgent('s1', 'typed')
+
+    expect(log.mock.calls.flat().filter((line) => String(line).includes(' recv · '))).toHaveLength(3)
+  })
 })
 
 describe('message', () => {

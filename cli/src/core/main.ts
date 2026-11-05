@@ -47,7 +47,7 @@ import { VERSION } from '../version.js'
 import { isLocalOnly, withoutUpdate } from '../lib/cardUpdate.js'
 import { elapsedSecondsOf } from '../lib/footerTimer.js'
 import { sqlitePreflightMessage } from '../lib/sqliteAvailability.js'
-import { warmLoginShellEnvironment } from '../lib/loginShellEnv.js'
+import { loginShellCaptureLine, warmLoginShellEnvironment } from '../lib/loginShellEnv.js'
 import { enableOffThreadExec } from '../lib/offThreadExec.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
@@ -675,10 +675,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   {
     const t0 = Date.now()
     void loginShellEnvPromise.then((captured) => {
-      const count = Object.keys(captured).length
-      console.log(count
-        ? `[env] read ${count} variables from the login shell in ${Date.now() - t0}ms (engine one-shots only)`
-        : '[env] could not read a login shell environment — engine one-shots use the daemon environment only')
+      const line = loginShellCaptureLine(Object.keys(captured).length, Date.now() - t0)
+      if (line) console.log(line)
     })
   }
 
