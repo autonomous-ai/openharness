@@ -17,7 +17,10 @@ import { TRAIN_BRANCH_PREFIX, TRAIN_CI_CHECK } from '../superTabs/mergeTrain/con
 export const TRAIN_PERMISSIONS = { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read' } as const
 
 export class TrainReadError extends Error {
-  constructor(readonly call: string, readonly status: number) { super(`GitHub answered ${call} with HTTP ${status}, not what the train expects`) }
+  /** [reason]: GitHub's own message when it gave one, on one line, cut short: what an Engineer is told of a refused merge. */
+  constructor(readonly call: string, readonly status: number, readonly reason: string | null = null) {
+    super(`GitHub answered ${call} with HTTP ${status}, not what the train expects`)
+  }
 }
 
 /** A pull request as the train reads it. */
@@ -32,6 +35,8 @@ export interface TrainPull {
   mergeable: boolean | null
   head: string
   headRef: string
+  /** The repository its branch is in, `owner/name` in lower case: another one for a fork's pull request. */
+  headRepository: string
   base: string
   labels: string[]
 }
@@ -39,14 +44,17 @@ export interface TrainPull {
 export type TrainCall = (method: string, path: string, body?: unknown) => Promise<{ status: number; body: unknown }>
 
 export interface TrainGitHub {
+  /** `owner/name`, lower case. */
+  readonly repository: string
   mainHead(): Promise<string>
   openPulls(): Promise<TrainPull[]>
   pull(number: number): Promise<TrainPull>
   files(number: number): Promise<string[]>
   ciRequired(sha: string): Promise<'success' | 'failure' | 'pending' | null>
   createBranch(name: string, sha: string): Promise<void>
-  /** Merges [sha] into the train's [branch]: the new merge commit, or `conflict`. */
-  mergeInto(branch: string, sha: string, message: string): Promise<{ sha: string } | 'conflict'>
+  /** Merges [sha] into the train's [branch]: the new merge commit, `conflict`, or `already` when the branch (which starts at
+   *  main) holds it already. */
+  mergeInto(branch: string, sha: string, message: string): Promise<{ sha: string } | 'conflict' | 'already'>
   openPull(branch: string, title: string, body: string): Promise<TrainPull>
   /** Squash-merges pull request [number] only if its head is still [sha]: the commit on main. */
   squash(number: number, sha: string, title: string, message: string): Promise<{ sha: string }>
@@ -73,7 +81,10 @@ export function trainGitHub(call: TrainCall, repository: string): TrainGitHub {
       if (error instanceof GitHubAppError) throw new TrainReadError(`${method} ${path}`, 0)
       throw error
     })
-    if (!statuses.includes(answer.status)) throw new TrainReadError(`${method} ${path}`, answer.status)
+    if (!statuses.includes(answer.status)) {
+      const said = text(object(answer.body).message)
+      throw new TrainReadError(`${method} ${path}`, answer.status, said ? said.replace(/\s+/g, ' ').trim().slice(0, 300) : null)
+    }
     return answer
   }
   const sha = (value: unknown, what: string): string => {
@@ -90,10 +101,12 @@ export function trainGitHub(call: TrainCall, repository: string): TrainGitHub {
       || typeof body.draft !== 'boolean' || !text(body.html_url) || !text(head.ref) || !text(into.ref)) throw new TrainReadError(what, 200)
     const mergeable = body.mergeable === true || body.mergeable === false ? body.mergeable : null
     return { number: body.number, url: text(body.html_url)!, state, merged: body.merged === true, draft: body.draft, title: text(body.title) ?? '',
-      body: text(body.body) ?? '', mergeable, head: sha(head.sha, what), headRef: text(head.ref)!, base: text(into.ref)!,
+      body: text(body.body) ?? '', mergeable, head: sha(head.sha, what), headRef: text(head.ref)!,
+      headRepository: (text(object(head.repo).full_name) ?? '').toLowerCase(), base: text(into.ref)!,
       labels: Array.isArray(body.labels) ? body.labels.map(label => text(object(label).name)).filter((n): n is string => !!n) : [] }
   }
   return {
+    repository: repository.toLowerCase(),
     async mainHead() {
       const answer = object((await expect('GET', '/git/ref/heads/main', [200])).body), target = object(answer.object)
       if (answer.ref !== 'refs/heads/main' || target.type !== 'commit') throw new TrainReadError('main', 200)
@@ -144,8 +157,9 @@ export function trainGitHub(call: TrainCall, repository: string): TrainGitHub {
     },
     async mergeInto(branch, head, message) {
       own(branch, 'merge')
-      const answer = await expect('POST', '/merges', [201, 409], { base: branch, head: sha(head, 'merge head'), commit_message: message })
+      const answer = await expect('POST', '/merges', [201, 204, 409], { base: branch, head: sha(head, 'merge head'), commit_message: message })
       if (answer.status === 409) return 'conflict'
+      if (answer.status === 204) return 'already'
       const body = object(answer.body), merged = sha(body.sha, 'merge')
       // Always a merge commit of its own, with the member as its second parent: never the member's commit itself.
       if (merged === head || !Array.isArray(body.parents) || body.parents.length !== 2) throw new TrainReadError('merge: not a merge commit', 201)

@@ -58,8 +58,9 @@ export async function runMergeTrain(deps: MergeTrainDeps, memories: TrainMemorie
         ran++
         // One line a pass that did something or could not read (ENGINEERING.md 6): counts only, never a link or a title.
         if ('off' in line) continue
-        if (line.unreadable) logger.warn('[merge-train] pass', { tabId: project.tabId, projectId: project.projectId, ...line })
-        else if (line.built || line.merged || line.closed) logger.info('[merge-train] pass', { tabId: project.tabId, projectId: project.projectId, ...line })
+        if (line.unrecorded) logger.error('[merge-train] merges not recorded on their tasks: record them by hand with conversation.merged', { tabId: project.tabId, projectId: project.projectId, ...line })
+        else if (line.unreadable || line.refused) logger.warn('[merge-train] pass', { tabId: project.tabId, projectId: project.projectId, ...line })
+        else if (line.built || line.merged || line.closed || line.split) logger.info('[merge-train] pass', { tabId: project.tabId, projectId: project.projectId, ...line })
       } finally { await github.done() }
     } catch (error) {
       logger.warn('[merge-train] project skipped', { tabId: project.tabId, projectId: project.projectId, error: error instanceof Error ? error.message : String(error) })

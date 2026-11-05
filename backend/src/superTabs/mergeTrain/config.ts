@@ -18,8 +18,11 @@ export const TRAIN_CI_TIMEOUT_MS = 90 * 60_000
 /** The most projects one pass walks, the most recently active first (ENGINEERING.md 4: no read grows without a bound). */
 export const TRAIN_PROJECTS = 50
 
-/** Paths that change nothing a build or test runs: their pull requests merge on their own, with no batch. */
-export const FAST_LANE: readonly RegExp[] = [/^docs\//, /\.md$/i, /^scripts\//]
+/** Paths that change nothing a build or test runs: their pull requests merge on their own, with no batch. Not scripts/: it
+ *  holds the CI planner and release scripts, which run (review 2 of #3226). */
+export const FAST_LANE: readonly RegExp[] = [/^docs\//, /\.md$/i]
+/** Paths the train's token may not change (it has no `workflows` permission): GitHub would refuse the merge. */
+export const NOT_MERGEABLE_BY_TOKEN = /^\.github\/workflows\//
 
 /**
  * Where each area of the review table lives in the repository, by the table's own area names (task #3393's seed). Until the

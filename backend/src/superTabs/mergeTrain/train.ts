@@ -13,7 +13,7 @@
  * merged, as its tip no longer matches.
  */
 import { TrainReadError, type TrainGitHub, type TrainPull } from '../../github/train.js'
-import { TRAIN_BRANCH_PREFIX, TRAIN_CI_TIMEOUT_MS, TRAIN_MAX_BATCH } from './config.js'
+import { NOT_MERGEABLE_BY_TOKEN, TRAIN_BRANCH_PREFIX, TRAIN_CI_TIMEOUT_MS, TRAIN_MAX_BATCH } from './config.js'
 import { eligible, headReads, laneOf, requiredReads, splitRed, type Ineligible, type ReviewTable, type TrainTask } from './plan.js'
 
 /** A task's linked pull request, as the Swarm holds it: what headReads reads. */
@@ -38,7 +38,7 @@ export interface TrainMemory { batches: Map<number, Batch>; failed: Set<string>;
 export const newTrainMemory = (): TrainMemory => ({ batches: new Map(), failed: new Set(), splits: [] })
 
 export interface TrainRules { enabled: boolean; reviews?: ReviewTable }
-export type TrainPassLine = { off: true } | { candidates: number; unreadable: number; built: number; merged: number; split: number; closed: number }
+export type TrainPassLine = { off: true } | { candidates: number; unreadable: number; built: number; merged: number; split: number; closed: number; refused: number; unrecorded: number }
 
 const short = (sha: string) => sha.slice(0, 12)
 /** A batch's label: the day and time it was built, in UTC ("11-05 train-1510"). */
@@ -51,7 +51,7 @@ interface Read { member: Member; verdict: { ok: true } | { ok: false; why: Ineli
 export async function trainPass(input: { projectId: string; github: TrainGitHub; swarm: TrainSwarm; memory: TrainMemory; now: number; rules: TrainRules }): Promise<TrainPassLine> {
   const { projectId, github, swarm, memory, now, rules } = input
   if (!rules.enabled) return { off: true }
-  const line = { candidates: 0, unreadable: 0, built: 0, merged: 0, split: 0, closed: 0 }
+  const line = { candidates: 0, unreadable: 0, built: 0, merged: 0, split: 0, closed: 0, refused: 0, unrecorded: 0 }
   const prefix = `${TRAIN_BRANCH_PREFIX}${projectId}/`
   let main: string, open: TrainPull[]
   try {
@@ -89,8 +89,19 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
   const tellRed = (member: Member) => swarm.tell(member.taskId, member.url, `train-red:${member.head}`,
     `CI failed for your pull request #${member.number} in the merge train, on its own with main (head ${member.head.slice(0, 7)}): fix it and push. The train takes it again at its new head. ${member.url}`)
 
+  // Batches are pull requests from this repository's own train branches: a fork's pull request may take any branch name, and
+  // closing it would delete the live batch's branch here (review 2 of #3226). A fork's is never touched.
+  const ours = open.filter(p => p.headRef.startsWith(prefix) && p.headRepository === github.repository)
+  // A batch no longer open (closed by a person, or its branch deleted) is forgotten, or the train would wait on it for good.
+  for (const [number, batch] of memory.batches) {
+    if (ours.some(p => p.number === number)) continue
+    memory.batches.delete(number)
+    line.closed++
+    await github.deleteBranch(batch.branch).catch(error => { if (!(error instanceof TrainReadError)) throw error; line.unreadable++ })
+  }
+
   // Finish the open batches.
-  for (const pull of open.filter(p => p.headRef.startsWith(prefix))) {
+  for (const pull of ours) {
     const batch = memory.batches.get(pull.number)
     try {
       if (!batch || batch.tip !== pull.head) {
@@ -124,13 +135,30 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
       if (!still) { await closeBatch(batch.number, batch.branch, 'a pull request in it changed or is no longer approved at its head'); continue }
       // The form main's batches use, which the release watch reads (task #3405): the originals before the batch's own number.
       const title = `Merge batch ${batchLabel(batch.startedAt)}: ${batch.members.map(m => `#${m.number}`).join(' ')} (#${batch.number})`
-      const { sha } = await github.squash(batch.number, batch.tip, title, batch.members.map(m => `* ${m.title} (#${m.number})`).join('\n'))
+      let sha: string
+      try {
+        ({ sha } = await github.squash(batch.number, batch.tip, title, batch.members.map(m => `* ${m.title} (#${m.number})`).join('\n')))
+      } catch (error) {
+        // GitHub refused the merge itself (branch protection, a permission): trying again refuses again, so the batch closes and
+        // its pull requests wait for a new head; each Engineer hears GitHub's reason (review 2 of #3226). No answer is retried.
+        if (!(error instanceof TrainReadError) || ![403, 405, 409, 422].includes(error.status)) throw error
+        await closeBatch(batch.number, batch.branch, 'GitHub refused to merge it')
+        line.refused++
+        for (const member of batch.members) {
+          memory.failed.add(`${member.url}@${member.head}`)
+          await swarm.tell(member.taskId, member.url, `train-refused:${member.head}`,
+            `GitHub refused to merge your pull request #${member.number} in the merge train (head ${member.head.slice(0, 7)}): ${error.reason ?? `HTTP ${error.status}`}. Merge it by hand, or push a change that fixes this. ${member.url}`)
+        }
+        continue
+      }
       memory.batches.delete(batch.number)
       main = sha
-      // Merged now, whatever GitHub answers next: every member's merge is recorded first, then each original is closed.
+      // Merged now, whatever happens next: each member's merge is recorded on its own, then each original is closed.
       for (const member of batch.members) {
-        await swarm.merged(member.taskId, member.url, now)
-        line.merged++
+        try {
+          await swarm.merged(member.taskId, member.url, now)
+          line.merged++
+        } catch { line.unrecorded++ }
       }
       for (const member of batch.members) {
         await github.comment(member.number, `Merged into main in ${sha} by the merge train, in batch ${batch.url}.`)
@@ -157,6 +185,9 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
       else if (!verdict.ok && verdict.why === 'reads') {
         await swarm.tell(member.taskId, member.url, `train-reads:${member.head}`,
           `Your pull request #${member.number} needs ${found.required} passed reviews at its head (${member.head.slice(0, 7)}) before the merge train takes it; it has ${found.reads}. ${member.url}`)
+      } else if (verdict.ok && member.files.some(file => NOT_MERGEABLE_BY_TOKEN.test(file))) {
+        await swarm.tell(member.taskId, member.url, `train-workflows:${member.head}`,
+          `Your pull request #${member.number} changes CI workflows, which the merge train cannot merge: merge it by hand. ${member.url}`)
       } else if (verdict.ok) reads.push(found)
     } catch (error) {
       if (!(error instanceof TrainReadError)) throw error
@@ -190,6 +221,8 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
       for (const member of group) {
         const merged = await github.mergeInto(branch, member.head, `Merge #${member.number} into the merge train's batch`)
         if (merged === 'conflict') { await tellConflict(swarm, member); continue }
+        // In main already (merged by hand meanwhile): nothing of it to batch.
+        if (merged === 'already') continue
         tip = merged.sha
         members.push(member)
       }

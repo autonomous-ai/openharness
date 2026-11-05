@@ -56,8 +56,8 @@ For product names, terminology, and visible copy, follow the
     branch from main, squash-merges it when its CI is green and the heads are
     unchanged, closes the originals with a link and records the merges. A red batch
     splits by component; a PR red on its own, or one that conflicts, gets a message
-    in its task: fix and push, or merge main once. Docs and scripts merge on their own
-    green CI. Never push to a `harness-train/` branch. Add the `hold` label to keep a
+    in its task: fix and push, or merge main once. Docs merge on their own green CI;
+    a CI workflow change is merged by hand. Never push to a `harness-train/` branch. Add the `hold` label to keep a
     PR out; the rules' `mergeTrain.enabled` is the kill switch. Hand merges still work.
   - Merge by hand with `make merge-pr ARGS="N --reviewed-head SHA --reviewed-base SHA --merge"`.
     It verifies automatic `ci/required` evidence and directly squash-merges the

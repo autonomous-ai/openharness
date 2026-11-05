@@ -36,8 +36,14 @@ restart) is closed and rebuilt, never merged, so a hand merge, a restart or a pu
   deletion) need two (`REVIEW_AREAS`, erring wide). Every other open step (a test) must have passed at the head too.
 - Two PRs that change the same file never share a batch (task #3401's rule: a combination read only where files are
   shared): the later one waits and runs on top of the first once it merged.
-- The fast lane merges docs/scripts PRs on their own green CI only while no code batch is open, so it never moves main
-  under a batch in CI.
+- The fast lane merges docs-only PRs (docs/, *.md) on their own green CI only while no code batch is open, so it never
+  moves main under a batch in CI. scripts/ batches: it holds the CI planner and release scripts (review 2).
+- Review 2 of #3226: only pull requests from this repository's own `harness-train/` branches are batches (a fork's is never
+  touched); a batch no longer open is forgotten; a squash GitHub refuses closes the batch and tells each Engineer GitHub's
+  reason; a PR changing `.github/workflows/` stays out (the token has no `workflows`); each merge is recorded on its own.
+- Known window: between the last read of main and the squash, a hand merge of seconds could let a batch merge on a main its
+  CI did not see. GitHub's "require branches to be up to date before merging" closes it on GitHub's side; the train's
+  squash then fails and the batch rebuilds.
 - People can still merge by hand; the train sees it as main moving or a member closing, and rebuilds.
 - Two security reviews before merge: this is the first server write to main.
 - Swarm code stays out of cli/src/core. Temp files only in mktemp -d folders.
