@@ -133,7 +133,8 @@ export async function prepareEmptyProjectFolder(root: string, projectId: string,
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })): Promise<string> {
   await mkdir(root, { recursive: true })
   const folder = join(root, projectId)
-  await mkdir(folder).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error })
+  // Its owner's alone, as the work in it is (security review 1 of #3137).
+  await mkdir(folder, { mode: 0o700 }).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error })
   const found = await lstat(folder)
   if (!found.isDirectory() || await realpath(folder) !== join(await realpath(root), projectId)) throw new Error(NOT_OWN_FOLDER)
   const git = await lstat(join(folder, '.git')).catch(error => {
