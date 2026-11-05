@@ -536,6 +536,9 @@ void main() {
         skip: const {
           'lib/super_tabs/attachment_upload.dart',
           'lib/super_tabs/avatar_upload.dart',
+          // A Decisions prompt row reads its agent's screen only off the web
+          // (prompt_lines.dart `web`): the web refuses terminal reads.
+          'lib/super_tabs/prompt_lines.dart',
         },
       );
       // The walk finds what it should, so a broken walk cannot pass.
