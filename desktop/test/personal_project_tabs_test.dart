@@ -3,10 +3,12 @@
 // starts an agent gets its own desk tab, the one link from tab to project on
 // every computer.
 import 'dart:convert';
-import 'dart:ui' show Rect;
+import 'dart:io' show Platform;
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/pane_arrangement.dart';
@@ -16,9 +18,15 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/launch.dart';
 import 'package:harness/super_tabs/personal_projects.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
+import 'package:harness/widgets/desktop_workspace_tab.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 
+import 'support/capture.dart';
 import 'super_tab_launch_test.dart'
     show SuperTabLaunchFixture, tabId, withCoordinator;
+
+/// Set to a folder to write the PR's pictures there.
+final _shots = Platform.environment['PROJECT_TABS_SHOTS'];
 
 /// The desk's id rule (backend `lib/desk.ts`).
 final _deskId = RegExp(r'^[A-Za-z0-9_-]{1,64}$');
@@ -154,7 +162,115 @@ bool _started(SuperTabLaunchFixture f) =>
     f.connection.calls.any((c) => c.$1 == 'agent_create');
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
+  setUpAll(() => loadCaptureFonts(_shots));
+
+  for (final brightness in Brightness.values) {
+    testWidgets('pictures: a project tab beside ordinary tabs, and a full '
+        'desk, in ${brightness.name}', (tester) async {
+      if (_shots == null) return;
+      final previous = grid.AppTheme.brightness.value;
+      grid.AppTheme.brightness.value = brightness;
+      addTearDown(() => grid.AppTheme.brightness.value = previous);
+      tester.view.devicePixelRatio = 2;
+      // The tab strip first: a window as tall as the strip.
+      tester.view.physicalSize = const Size(1440, 80);
+      addTearDown(tester.view.reset);
+      final f = SuperTabLaunchFixture();
+      final api = await tester.runAsync(() async {
+        f.app.machineStates['m']!.agents = [
+          _agent('c1', remote: 'https://github.com/acme/web', cwd: '/w/web'),
+        ];
+        _tab(f.app, 'desk-code', [_pane('m', 'c1')], name: 'web');
+        final api = await _withApi(f);
+        final box = await _boxIn(f, api.chat);
+        expect(await box.create(), NewHarnessOutcome.created);
+        return api;
+      });
+      final tabs = [
+        for (final s in f.app.swarms)
+          if (!s.isSuperTab && s.kind == 'harness') s.name,
+      ];
+      expect(tabs, containsAll(['web', 'api']));
+      final shortcuts = ValueNotifier(false);
+      addTearDown(shortcuts.dispose);
+      Widget strip(List<String> names, String selected) => Container(
+        height: 40,
+        color: grid.AppPalette.panelBg,
+        child: Row(
+          children: [
+            for (final name in names)
+              SizedBox(
+                width: 180,
+                child: DesktopWorkspaceTab(
+                  id: name,
+                  label: name,
+                  selected: name == selected,
+                  showShortcuts: shortcuts,
+                  onSelect: () {},
+                  onClose: () {},
+                ),
+              ),
+          ],
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: grid.buildAppTheme(brightness: brightness),
+          home: Scaffold(
+            body: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                strip(['Personal', ...tabs], 'Personal'),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await captureWindow(tester, _shots, 'project-tab-${brightness.name}');
+      tester.view.physicalSize = const Size(1800, 1100);
+
+      // The api tab holds 9, and the desk 24: the next start has nowhere.
+      f.app.swarms
+          .firstWhere((t) => t.id == personalProjectTabId(api!.project))
+          .panes
+          .addAll([for (var i = 0; i < 8; i++) _pane('m', 'more-$i')]);
+      _fillDesk(f, 24);
+      final full = await tester.runAsync(() async {
+        final box = await _boxIn(f, api!.chat);
+        expect(await box.create(), NewHarnessOutcome.failed);
+        return box;
+      });
+      expect(full!.error, kTabsFullMessage);
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: grid.buildAppTheme(brightness: brightness),
+          home: Scaffold(
+            body: SizedBox(
+              width: 900,
+              height: 550,
+              child: NewHarnessForm(
+                controller: full,
+                onClose: () {},
+                onCreated: () {},
+                desktop: true,
+                embedded: true,
+              ),
+            ),
+          ),
+        ),
+      );
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      await captureWindow(tester, _shots, 'tabs-full-${brightness.name}');
+      await tester.pumpWidget(const SizedBox());
+      f.app.superTabs.dispose();
+      await tester.pump();
+    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+  }
 
   group('a project tab id', () {
     test('is made from the project id alone and fits the desk', () {
