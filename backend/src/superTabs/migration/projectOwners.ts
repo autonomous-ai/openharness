@@ -20,8 +20,9 @@ const TRANSACTION = { maxWait: 5_000, timeout: 60_000 }
 export interface ProjectOwnersReport {
   apply: boolean
   swarms: number
-  /** Projects whose owner, still in the Swarm, got their membership. */
-  filled: number
+  /** Projects whose owner, still in the Swarm, got their membership: an owner who left and came back before the deploy is
+   *  filled at their new membership (nothing stored tells them apart), so each is listed to be checked. Ids only. */
+  filled: Array<{ tabId: string; projectId: string; ownerId: string }>
   /** Projects that passed on: to a member's or the Swarm owner's id, or '' when nobody owns them now. Ids only, never names. */
   handovers: Array<{ tabId: string; projectId: string; from: string; to: string }>
   skipped: string[]
@@ -30,14 +31,15 @@ export interface ProjectOwnersReport {
 
 /** What settling [state]'s projects would change, on a copy: [state] is left as it was. A Swarm from before projects has
  *  one, the Swarm owner's, who never leaves: nothing to do. */
-export function ownersPlan(state: SuperTabState): { projects: SwarmProject[]; filled: number; handovers: Array<{ projectId: string; from: string; to: string }>; changed: boolean } {
-  if (!state.projects) return { projects: [], filled: 0, handovers: [], changed: false }
+export function ownersPlan(state: SuperTabState): { projects: SwarmProject[]; filled: Array<{ projectId: string; ownerId: string }>; handovers: Array<{ projectId: string; from: string; to: string }>; changed: boolean } {
+  if (!state.projects) return { projects: [], filled: [], handovers: [], changed: false }
   const copy = structuredClone(state)
   const unfilled = new Set(copy.projects!.filter(p => p.ownerGeneration === undefined).map(p => p.id))
   const handovers = settleOwners(copy)
   const moved = new Set(handovers.map(h => h.projectId))
-  const filled = copy.projects!.filter(p => unfilled.has(p.id) && !moved.has(p.id) && p.ownerGeneration !== undefined).length
-  return { projects: copy.projects!, filled, handovers, changed: filled > 0 || handovers.length > 0 }
+  const filled = copy.projects!.filter(p => unfilled.has(p.id) && !moved.has(p.id) && p.ownerGeneration !== undefined)
+    .map(p => ({ projectId: p.id, ownerId: p.ownerId }))
+  return { projects: copy.projects!, filled, handovers, changed: filled.length > 0 || handovers.length > 0 }
 }
 
 /** Settles one Swarm's projects in [tx], writing its head guarded by the version it read: a command in between wins, and the
@@ -55,7 +57,7 @@ async function settleSwarm(tx: Transaction, tabId: string, apply: boolean) {
 }
 
 export async function migrateProjectOwners(db: PrismaClient, opts: { apply: boolean }): Promise<ProjectOwnersReport> {
-  const report: ProjectOwnersReport = { apply: opts.apply, swarms: 0, filled: 0, handovers: [], skipped: [], failed: [] }
+  const report: ProjectOwnersReport = { apply: opts.apply, swarms: 0, filled: [], handovers: [], skipped: [], failed: [] }
   const rows = await db.superTab.findMany({ select: { id: true, format: true }, orderBy: { id: 'asc' } })
   for (const row of rows) {
     if (row.format !== 2) { report.skipped.push(row.id); continue }
@@ -64,7 +66,7 @@ export async function migrateProjectOwners(db: PrismaClient, opts: { apply: bool
       const plan = opts.apply
         ? await swarmTransaction(db, tx => settleSwarm(tx, row.id, true), TRANSACTION)
         : await settleSwarm(db as unknown as Transaction, row.id, false)
-      report.filled += plan.filled
+      report.filled.push(...plan.filled.map(f => ({ tabId: row.id, ...f })))
       report.handovers.push(...plan.handovers.map(h => ({ tabId: row.id, ...h })))
     } catch (error) {
       report.failed.push({ tabId: row.id, error: error instanceof Error ? error.message : String(error) })

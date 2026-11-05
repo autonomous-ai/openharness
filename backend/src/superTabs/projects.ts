@@ -190,6 +190,20 @@ export function settleOwners(state: SuperTabState): Array<{ projectId: string; f
   return changed
 }
 
+/** Adds [member] to the Swarm by any way in (invitation, link, domain or Workspace join): its projects are settled first, so
+ *  a project from before ownerGeneration whose owner left is never matched to them again (security reviews of #3082). */
+export function admitPerson(state: SuperTabState, member: Person): void {
+  settleOwners(state)
+  state.people.push(member)
+}
+
+/** Takes the people [leaving] out of the Swarm (a removal, a leave, a restore that keeps out those the Workspace lost), and
+ *  passes their projects on (settleOwners). */
+export function dismissPeople(state: SuperTabState, leaving: ReadonlySet<string>): void {
+  state.people = state.people.filter(p => !leaving.has(p.id))
+  settleOwners(state)
+}
+
 /** Whose active work other projects' Leads see and are alerted about. A private project's work stays with its own people. */
 export const sharedWithLeads = (project: SwarmProject): boolean => project.visibility !== 'private'
 

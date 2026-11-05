@@ -46,7 +46,7 @@ import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged }
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, setTimeZone, statusSchema, type AvatarUpload } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
 import { namedDefault } from './catalog.js'
-import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, onTeamAccount, ownsProject, settleOwners, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, onTeamAccount, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing, sessionClosed } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
@@ -881,7 +881,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const lost = new Set((context.workspaceLost ?? []).filter(id => id !== state.ownerId))
     if (lost.size) {
       const emails = new Set(state.people.filter(p => lost.has(p.id)).map(p => p.email))
-      state.people = state.people.filter(p => !lost.has(p.id))
+      dismissPeople(state, lost)
       state.invitations = state.invitations.filter(i => !emails.has(i.email))
     }
     result.restored = true
@@ -897,8 +897,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const existing = state.people.find(p => p.id === actor.userId)
     if (!existing) {
       // A project from before ownerGeneration whose owner left is settled before they come back, never matched to them again.
-      settleOwners(state)
-      state.people.push({ id: actor.userId, email: invite.email, role: invite.role, generation: invite.id })
+      admitPerson(state, { id: actor.userId, email: invite.email, role: invite.role, generation: invite.id })
     }
     state.invitations = state.invitations.filter(i => i.id !== invite.id)
     // Back on purpose: auto-join may add them again if they leave and the owner invites them once more (spec, Leaving is final).
@@ -3196,9 +3195,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       for (const target of state.agents.filter(a => a.contributorId === member.id || a.buddyOf?.personId === member.id)) {
         if (state.agents.some(a => a.id === target.id)) removeAgent(target)
       }
-      state.people = state.people.filter(p => p.id !== member.id)
       // Their projects pass to a remaining member, or are nobody's: rejoining gives none of them back (task #3073).
-      settleOwners(state)
+      dismissPeople(state, new Set([member.id]))
       state.invitations = state.invitations.filter(i => i.email !== member.email)
       // Leaving, or being removed, is final for auto-join: only an invitation or a link brings them back (spec 2026-11-03).
       state.autoJoinDeclined = declinedWith(state, member.id)
