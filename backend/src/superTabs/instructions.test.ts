@@ -257,19 +257,19 @@ describe('instructions.save', () => {
     const stored = { instructions: { revision: 1, text: '# Rules\n\n- Opus builds.\n- Haiku reviews.' } }
     const effects = f.run(save(1, '# Rules\n\n- Opus builds.\n- Sonnet reviews.\n- Tests run first.'), owner, stored)
     expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', source: { kind: 'instructions', projectId: 'lead', revision: 2 },
-      text: 'owner changed the instructions: Reviews run on Opus.\n\n```diff\n- - Haiku reviews.\n+ - Sonnet reviews.\n+ - Tests run first.\n```' })])
+      text: 'owner changed the instructions: Reviews run on Opus.\n\nIn Rules:\nRemoved: Haiku reviews.\nAdded: Sonnet reviews.\nAdded: Tests run first.' })])
     // The summary never stands in for the change: a summary claiming a rule shows the lines the text really holds.
     const claimed = f.run(save(2, '# Rules\n\n- Opus builds.\n- Sonnet reviews.\n- Tests run first.\n- Ship daily.', { summary: 'Added the Haiku ban' }),
       owner, { instructions: { revision: 2, text: '# Rules\n\n- Opus builds.\n- Sonnet reviews.\n- Tests run first.' } })
-    expect(claimed.messages[0]!.text).toBe('owner changed the instructions: Added the Haiku ban.\n\n```diff\n+ - Ship daily.\n```')
+    expect(claimed.messages[0]!.text).toBe('owner changed the instructions: Added the Haiku ban.\n\nIn Rules:\nAdded: Ship daily.')
   })
 
-  it('shows 12 lines of a long change and how many more, and says when the earlier revision could not be read', () => {
+  it('shows 12 items of a long change and how many more, and says when the earlier revision could not be read', () => {
     const f = fixture()
     const rules = Array.from({ length: 30 }, (_, i) => `- Rule ${i + 1}.`)
     const long = f.run(save(1, ['# Rules', ...rules].join('\n')), owner, { instructions: { revision: 1, text: '# Rules' } }).messages[0]!.text
-    expect(long).toBe(['owner changed the instructions: Reviews run on Opus.', '', '```diff', ...rules.slice(0, 12).map(r => `+ ${r}`), '```', '',
-      'and 18 more lines.'].join('\n'))
+    expect(long).toBe(['owner changed the instructions: Reviews run on Opus.', '', 'In Rules:', ...rules.slice(0, 12).map(r => `Added: ${r.slice(2)}`), '',
+      'and 18 more changes.'].join('\n'))
     // The store reads the current revision for every save (store.ts); one it could not read is said, never shown as no change.
     expect(f.run(save(2, 'Other.'), owner, { instructions: null }).messages[0]!.text)
       .toBe('owner changed the instructions: Reviews run on Opus.\n\nThe earlier revision could not be read, so the change is not shown.')
