@@ -297,9 +297,10 @@ describe('Phone push: a thread sounds once until it is read (task #3248)', () =>
     await send(s.tabId, s.web, 'Peer answers', peer, first)
     // Another thread of the owner's has no unread reply yet: it sounds.
     expect(await sent(() => send(s.tabId, s.web, 'Peer answers there', peer, other))).toEqual([{ to: owner.sub, kind: 'reply', quiet: false }])
-    // Outsider, tagged in the first thread now, hears of its next reply with sound: the unread replies are the owner's.
+    // Outsider is tagged in the first thread (peer, who only replied there, hears nothing); outsider then hears of its next
+    // reply with sound: the unread replies are the owner's.
     expect(await sent(() => run(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Outsider, look', replyTo: first, recipientIds: [], mentions: [outsider.sub] })))
-      .toEqual([{ to: outsider.sub, kind: 'mention', quiet: false }, { to: peer.sub, kind: 'reply', quiet: false }])
+      .toEqual([{ to: outsider.sub, kind: 'mention', quiet: false }])
     expect((await sent(() => send(s.tabId, s.web, 'Peer once more', peer, first))).sort((a, b) => a.to.localeCompare(b.to)))
       .toEqual([{ to: owner.sub, kind: 'reply', quiet: true }, { to: outsider.sub, kind: 'reply', quiet: false }].sort((a, b) => a.to.localeCompare(b.to)))
   })
