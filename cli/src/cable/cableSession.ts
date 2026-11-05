@@ -929,8 +929,6 @@ export class CableSession {
     /** The chat on this dial's face for that agent's Swarm project as the person began to speak: the words go there or
      *  nowhere, and a Buddy chat's never reach a terminal (review of #2146). */
     swarmFace?: SwarmFace;
-    /** The words are said from the dial's own Swarm face, not for a Lead's terminal tile: only these may start its thread. */
-    onFace?: true;
     /** That Lead runs on another machine: named by its Swarm id, it has no terminal here. */
     swarmRemote?: true } | null = null
   private voiceSearch?: SelectionCommand
@@ -1827,7 +1825,6 @@ export class CableSession {
         this.voice = {
           agentId,
           ...(swarmFace ? { swarmFace } : {}),
-          ...(dialFace ? { onFace: true as const } : {}),
           ...((swarmFace && agentId && !this.swarmLeadHere(agentId)) || swarmId ? { swarmRemote: true } : {}),
           cmd: str('cmd'),
           lang: str('lang') ?? this.host.voiceLang(),
@@ -2445,10 +2442,10 @@ export class CableSession {
       const state = this.voiceDraft.create({ agentId: recipient, name: `${face.project} · ${face.name}`, text: transcript,
         context: 'Swarm chat',
         submit: async words => {
-          const [chat] = this.sayArgs(face, turn.onFace)
-          const said = await say(recipient, turn.cmd ? `/${turn.cmd} ${words}` : words, chat, face.id, true, ...(this.swarmThread ? [this.sayOptions(face, turn.onFace)!] as const : []))
+          const [chat] = this.sayArgs(face)
+          const said = await say(recipient, turn.cmd ? `/${turn.cmd} ${words}` : words, chat, face.id, true, ...(this.swarmThread ? [this.sayOptions(face)!] as const : []))
             .catch((): SaidOnCard => ({ said: false }))
-          if (said.said) { this.threadStarted(said); return { ok: true } }
+          if (said.said) return { ok: true }
           return { ok: false, error: said.refused?.message ?? (face.kind === 'buddy' ? 'Could not reach your Buddy. Try again.' : 'Could not reach the Swarm. Try again.') }
         } })
       if (!state.ok) { await reply({ t: 'voice.error', message: state.error }); return }
@@ -2482,14 +2479,13 @@ export class CableSession {
     // refused post for a read-only Chat with PM was typed into the PM's terminal.
     if (turn.agentId && !carried && !selection?.ok && this.host.swarmSay) {
       const face = turn.swarmFace
-      const said = await this.host.swarmSay(agentId, instruction, ...this.sayArgs(face, turn.onFace)).catch((err: Error): SaidOnCard => {
+      const said = await this.host.swarmSay(agentId, instruction, ...this.sayArgs(face)).catch((err: Error): SaidOnCard => {
         this.log(`cable: voice → Swarm chat of ${agentId.slice(0, 8)} failed (${err?.message ?? err})`)
         return { said: false }
       })
       if (!current()) return
       if (said.said) {
         this.log(`cable: voice → Swarm chat of ${agentId.slice(0, 8)}`)
-        this.threadStarted(said)
         await reply({ t: 'voice.transcript', routeId: '', text: transcript, agentId, agentName, needsConfirm: false })
         return
       }
@@ -2892,22 +2888,22 @@ export class CableSession {
   }
 
   /** The extra arguments of words spoken to a Swarm Lead: the dial's chat flag, and the chat they were spoken to. */
-  private sayArgs(face: SwarmFace | undefined, onFace?: true): [chat?: CardChat, chatId?: string, reviewed?: boolean, options?: SayOptions] {
+  private sayArgs(face: SwarmFace | undefined): [chat?: CardChat, chatId?: string, reviewed?: boolean, options?: SayOptions] {
     // A chat flag with no id means "the chat open on the desktop" to the Swarm service: a Pro sends neither unless its words
     // were for the face chat it showed (voiceFaceOf), and then names that chat.
     if (this.seqOn && !face) return []
     const [chat] = this.chatFlag()
     if (chat === undefined) return []
-    const options = this.sayOptions(face, onFace)
+    const options = this.sayOptions(face)
     if (options) return [chat, face?.id, false, options]
     return face ? [chat, face.id] : [chat]
   }
 
-  /** A swarmThread dial's words are held to the thread on the face as the person began to speak (none included), and may start
-   *  its thread only when spoken from the face (spec 2026-11-03-dial-thread-face). */
-  private sayOptions(face: SwarmFace | undefined, onFace?: true): SayOptions | undefined {
+  /** A swarmThread dial's words are held to the thread on the face as the person began to speak (none included). They never
+   *  start a thread: the face stays where it was when the person spoke (Diego, 2026-11-05: it jumped into the new thread). */
+  private sayOptions(face: SwarmFace | undefined): SayOptions | undefined {
     if (!this.swarmThread) return undefined
-    return { ...(face ? { thread: face.thread?.root ?? null } : {}), ...(onFace ? { threaded: true } : {}) }
+    return face ? { thread: face.thread?.root ?? null } : {}
   }
 
   /** The extra argument a swarmChat dial's requests carry ('buddy' for a swarmBuddy dial's); none for any other device, whose
@@ -3190,13 +3186,6 @@ export class CableSession {
     this.picked = { key: this.focusedKey, at: Date.now() }
     if (chat) this.host.superTabSelected?.(tab, projectId, chat)
     else this.host.superTabSelected?.(tab, projectId)
-  }
-
-  /** Words said on a swarmThread dial that started its thread: the window opens it beside the chat, with no project pick. */
-  private threadStarted(said: SaidOnCard): void {
-    if (!said.said || !said.thread || !this.swarmThread) return
-    this.lastRecapGet = null
-    this.host.superTabThread?.(said.thread.tabId, said.thread.conversationId, said.thread.root)
   }
 
   /** The dial left the thread on its face: the cards forget it, and the window closes its thread pane (the project stays). */

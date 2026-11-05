@@ -54,6 +54,14 @@ describe('idle agents', () => {
     expect(target(state).idleNoticedAt).toBe(at + 2 * MINUTE)
   })
 
+  // Task #3397: a crew member stands by between tasks; the coordinator is not told to stop it.
+  it('never tells of a crew member, and tells of the same agent off the crew', () => {
+    const crew = swarm({ agents: [worker({ crew: { role: 'Engineer', at: START, by: 'p' } })], groups: [] })
+    expect(idleNotices(crew, 'lead', at, new Set())).toEqual([])
+    delete target(crew).crew
+    expect(idleNotices(crew, 'lead', at, new Set())).toEqual([expect.objectContaining({ text: 'Rowan has had no open task for 15 minutes.' })])
+  })
+
   it('never tells of a Buddy, the coordinator, an agent with a delivery waiting or one in a task with active work', () => {
     const buddy = swarm({ agents: [worker({ buddyOf: { personId: 'p', generation: 'g' } })], groups: [] })
     expect(idleNotices(buddy, 'lead', at, new Set())).toEqual([])
