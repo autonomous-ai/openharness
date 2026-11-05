@@ -132,9 +132,10 @@ describe('agent tokens', () => {
     expect(one.token).not.toBe(two.token)
     // Each token twice, as the agent's entry and among its task's minted tokens, both sealed.
     expect(stored).toHaveLength(4)
+    // The tokens and task ids themselves: sealed output is base64url, which holds "ghs_" by chance about once in 1,500 runs
+    // (it failed CI on #3221 at 7fe77c682 that way).
     for (const value of stored) {
-      expect(value).not.toContain('ghs_')
-      expect(value).not.toContain('attempt')
+      for (const secret of [one.token, two.token, 'attempt-1', 'attempt-2']) expect(value).not.toContain(secret)
     }
   })
 
