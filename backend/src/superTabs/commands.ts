@@ -43,6 +43,7 @@ import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { deleteMessage, editMessage, type MessageChangeTarget } from './messageEdits.js'
 import { githubRepository } from '../github/repository.js'
 import { shippedAt } from './ship.js'
+import { notePendingRelease } from './releases.js'
 import { syncTaskLines } from './taskLine.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
@@ -2416,6 +2417,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const shippedAt = group.ledger?.shippedAt, linked = group.pullRequestUrls?.includes(pullRequestUrl)
       appendPullRequestUrls(group, [pullRequestUrl], repositoryUrl)
       recordMerged(group, mergedAt)
+      // On its project's release list, for the next verified release to mark it shipped (releases.ts, task #3405). A Swarm from
+      // before projects keeps no list: its one project is not stored.
+      if (state.projects) notePendingRelease(groupProject(state, group), group, pullRequestUrl, mergedAt)
       // Like a Slack app's update: the card shows the merge, and the line goes in the card's thread, once per pull request.
       // Without a card yet, the group's first ship or a new link still says so, and the line becomes the card. A fix of an
       // earlier merge says so once more.
