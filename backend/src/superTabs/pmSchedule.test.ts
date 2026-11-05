@@ -244,7 +244,8 @@ describe('the built-in wake\'s jobs for what people teach the coordinator', () =
   it('tells the coordinator an account any project\'s PM runs on keeps that PM running for its week', () => {
     const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
     expect(text).toContain('Never ask anyone about quota or whose account to use: pick by Routing and go.')
-    expect(text).toContain('An account the route notes as running a PM, yours or another project\'s, takes no new work while it has less than 20% of its weekly quota left')
+    // Task #3222: the share the route's note names, measured from what the PM spends, not a flat 20%.
+    expect(text).toContain('An account the route notes as running a PM, yours or another project\'s, takes no new work while it has less of its weekly quota left than the share that note says it keeps for that PM (20% until its daily spend is measured)')
     // Review of #3134: a project copied before this keeps an older line about its own PM's account; this one still holds.
     expect(text).toContain('even where an older Routing line in your instructions says otherwise')
     expect(text).not.toContain('except work that account\'s owner asks for')
