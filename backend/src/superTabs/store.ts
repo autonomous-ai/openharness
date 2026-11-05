@@ -65,7 +65,7 @@ import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachin
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
 import type { MachineRename } from './machineRenames.js'
-import { movableEntry, otherAccountsOnComputer, sameComputerKey, type ComputerMove, type ComputerSignIn, type MachineKeys } from './computerMoves.js'
+import { otherAccountsOnComputer, sameComputerKey, type ComputerMove, type ComputerSignIn, type LeftMove, type MachineKeys } from './computerMoves.js'
 import { activeMachineKeysOf } from '../lib/deviceKeyLog.js'
 import { commitParts, indexesOf, machineContentChanged, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
@@ -4357,9 +4357,10 @@ export class SuperTabStore {
    * Another account's sign-in on a computer (computerMoves.ts, #3122): each Swarm with an entry of the computer's previous
    * accounts moves it to [signIn]'s machine, by the store-only machine.moved run as that entry's owner. One Swarm at a time;
    * one that fails is logged and left to the next connect. With [write] false (the cleanup's dry run) nothing is written, and
-   * each entry is decided as machine.moved decides (computerMoves.ts movableEntry). The moves made, or that would be.
+   * each entry is decided as the write decides it (wouldMove). The moves made, or that would be; [left] gets each entry the
+   * Swarm refused to move, with its refusal's code, in both.
    */
-  async computerSignedIn(signIn: ComputerSignIn, { write = true }: { write?: boolean } = {}): Promise<ComputerMove[]> {
+  async computerSignedIn(signIn: ComputerSignIn, { write = true, left }: { write?: boolean; left?: LeftMove[] } = {}): Promise<ComputerMove[]> {
     const others = await otherAccountsOnComputer(this.db, signIn)
     if (!others.length) return []
     const to = await this.db.machine.findFirst({ where: { machineId: signIn.machineId, userId: signIn.ownerId, autonomousEnv: signIn.autonomousEnv, ...machineAlive },
@@ -4378,23 +4379,40 @@ export class SuperTabStore {
       const user: AuthUser = { sub: from.userId, email: person.email, autonomousEnv: signIn.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
       const move = { from: from.machineId, fromOwner: from.userId, to: signIn.machineId, toOwner: signIn.ownerId }
       for (const tabId of await machineSwarms(this.db, signIn.autonomousEnv, from.machineId, MACHINE_RENAME_SWARMS)) {
+        const movedTo = { machineId: signIn.machineId, ownerId: signIn.ownerId }
         try {
-          if (!write) {
-            const swarm = await this.db.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-            if (!swarm || swarm.deletedAt) continue
-            const { state } = await loadRow(this.db as unknown as Transaction, requireParts(swarm))
-            if (movableEntry(state, from.machineId, from.userId, { machineId: signIn.machineId, ownerId: signIn.ownerId }, this.now())) moves.push({ tabId, ...move })
-            continue
-          }
-          const done = await this.executeOnce(user, tabId, { operationId: `computer-move-${randomUUID()}`, command: { type: 'machine.moved', machineId: from.machineId } },
-            undefined, undefined, false, { movedTo: { machineId: signIn.machineId, ownerId: signIn.ownerId } })
-          if (done.result.moved) moves.push({ tabId, ...move })
+          const moved = write
+            ? (await this.executeOnce(user, tabId, { operationId: `computer-move-${randomUUID()}`, command: { type: 'machine.moved', machineId: from.machineId } },
+              undefined, undefined, false, { movedTo })).result.moved === true
+            : await this.wouldMove(user, tabId, from.machineId, movedTo)
+          if (moved) moves.push({ tabId, ...move })
         } catch (error) {
-          logger.warn('[swarm] a computer move did not reach a Swarm', { tabId, machineId: from.machineId, code: error instanceof SuperTabError ? error.code : 'unknown' })
+          const code = error instanceof SuperTabError ? error.code : 'unknown'
+          left?.push({ tabId, ...move, code })
+          logger.warn('[swarm] a computer move did not reach a Swarm', { tabId, machineId: from.machineId, code })
         }
       }
     }
     return moves
+  }
+
+  /**
+   * Whether machine.moved, run by the store as [user] for [movedTo], moves [user]'s entry [machineId] in Swarm [tabId]: the
+   * checks executeOnce makes for it, in its order (the Swarm loaded for [user], their access to it and their membership, the
+   * move read from both account rows), then the command itself on a copy. Nothing is written and no transaction is opened, so
+   * the read-only login runs it. It throws the refusal the write meets. The cleanup's dry run read the entry alone, and on prod
+   * listed a move the write then refused (task #3227).
+   */
+  private async wouldMove(user: AuthUser, tabId: string, machineId: string, movedTo: { machineId: string; ownerId: string }): Promise<boolean> {
+    const reader = this.db as unknown as Transaction
+    const command: Command = { type: 'machine.moved', machineId }
+    const first = await this.load(reader, user, tabId, namedFor(command))
+    const { state: original } = await this.ensure(reader, first, await this.moreNamed(reader, tabId, first.state, command, user.sub))
+    const actor = await this.actor(reader, user, original)
+    author(original, actor)
+    const context: CommandContext = { operationId: `computer-move-${randomUUID()}`, now: this.now(),
+      computerMove: actor.kind === 'person' ? await this.computerMove(reader, original, actor.userId, machineId, movedTo) : undefined }
+    return applyCommand(cloneData(original), actor, command, context).result.moved === true
   }
 
   /** The move [ownerId]'s entry [machineId] makes to [to], read from both account rows in this transaction: the same computer,

@@ -27,6 +27,10 @@ export async function otherAccountsOnComputer(db: Reader, { computerId, ownerId,
  *  [toOwner]'s [to]. Ids only, so the cleanup's output names what Ken's go covers and what each owner may add back. */
 export interface ComputerMove { tabId: string; from: string; fromOwner: string; to: string; toOwner: string }
 
+/** A move the Swarm refused, dry run and write alike, with the refusal's code (WORKSPACE_ACCESS_REVOKED, NOT_FOUND, ...): what
+ *  the cleanup leaves, and why, so its dry run says what the write will not do (task #3227). Ids and a code only. */
+export interface LeftMove extends ComputerMove { code: string }
+
 /**
  * The entry of [ownerId]'s machine [machineId] that a sign-in of [to] on the same computer moves, or none: the computer's own
  * entry (not a Team account's), not being removed, still [ownerId]'s, and not reporting, since two live accounts on one
@@ -96,7 +100,7 @@ export async function teamCleanupPending(db: Reader & Pick<Prisma.TransactionCli
 }
 
 /** What the one-time cleanup found: each computer with live rows of two or more accounts, the one seen last, and the others. */
-export interface CleanUp { computers: Array<{ signedIn: { machineId: string; ownerId: string }; others: string[] }>; moves: ComputerMove[] }
+export interface CleanUp { computers: Array<{ signedIn: { machineId: string; ownerId: string }; others: string[] }>; moves: ComputerMove[]; left: LeftMove[] }
 
 /**
  * The one-time cleanup of computers listed under two accounts before moves existed (Scholes, 11-05: MacBooks-MacBook-Pro-7 three
@@ -105,7 +109,7 @@ export interface CleanUp { computers: Array<{ signedIn: { machineId: string; own
  * false it writes nothing and lists the moves the write would make, decided the same way. Safe to run again: an entry moved
  * is gone, and nothing else is written.
  */
-export async function cleanUpComputers(db: Reader, store: { computerSignedIn(signIn: ComputerSignIn, options: { write: boolean }): Promise<ComputerMove[]> },
+export async function cleanUpComputers(db: Reader, store: { computerSignedIn(signIn: ComputerSignIn, options: { write: boolean; left: LeftMove[] }): Promise<ComputerMove[]> },
   autonomousEnv: string,
   { write }: { write: boolean }): Promise<CleanUp> {
   const groups = await db.machine.aggregateRaw({ pipeline: [
@@ -113,15 +117,17 @@ export async function cleanUpComputers(db: Reader, store: { computerSignedIn(sig
     { $group: { _id: '$computerId', accounts: { $addToSet: '$userId' }, rows: { $push: { machineId: '$machineId', userId: '$userId', seen: '$lastSeenAt' } } } },
     { $match: { 'accounts.1': { $exists: true } } }],
   options: { hint: { computerId: 1, userId: 1 } } }) as unknown as Array<{ _id: string; rows: Array<{ machineId: string; userId: string; seen?: { $date: string } | null }> }>
-  const result: CleanUp = { computers: [], moves: [] }
+  const result: CleanUp = { computers: [], moves: [], left: [] }
   for (const group of groups) {
     const seen = (row: (typeof group.rows)[number]) => row.seen ? Date.parse(row.seen.$date) : 0
     const [last, next] = [...group.rows].sort((a, b) => seen(b) - seen(a))
     if (!last || !seen(last) || (next && seen(next) === seen(last))) continue
     result.computers.push({ signedIn: { machineId: last.machineId, ownerId: last.userId },
       others: group.rows.filter(row => row.userId !== last.userId).map(row => row.machineId) })
-    // The dry run decides as the write does, so what it lists is what the write moves.
-    result.moves.push(...await store.computerSignedIn({ machineId: last.machineId, ownerId: last.userId, computerId: group._id, autonomousEnv }, { write }))
+    // The dry run decides as the write does, through the same checks, so what it lists is what the write moves, and what it
+    // leaves the write leaves for the same reason.
+    result.moves.push(...await store.computerSignedIn({ machineId: last.machineId, ownerId: last.userId, computerId: group._id, autonomousEnv },
+      { write, left: result.left }))
   }
   return result
 }
