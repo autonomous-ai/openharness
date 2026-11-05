@@ -255,8 +255,9 @@ const shownLine = (said: string): string | null => {
   if (!marker) return null
   const after = said.slice(marker.index! + marker[0].length)
   // A pair of the same kind, with no curly opener inside (security review 2 of #3055): a mixed or nested quote must not end
-  // the line early. Anything after the closing quote is the Buddy's private talk, never part of the consent.
-  const quoted = /^\s*(?:“([^“”]*)”|"([^"]*)")/u.exec(after)
+  // the line early. A missing closing quote must not consume later private lines when another quote appears there.
+  // Anything after the closing quote is the Buddy's private talk, never part of the consent.
+  const quoted = /^\s*(?:“([^“”\r\n\u0085\u2028\u2029]*)”|"([^"\r\n\u0085\u2028\u2029]*)")/u.exec(after)
   return quoted ? comparable(quoted[1] ?? quoted[2]!) : ''
 }
 
