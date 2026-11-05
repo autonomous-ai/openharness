@@ -186,6 +186,10 @@ describe('settleReleases', () => {
     expect(step).toMatchObject({ projectId: 'p1', number: 21, title: 'Release Desktop and Web', priority: 'P1', assignment: null, archived: false })
     expect(step.agentIds).toEqual(['lead', 'ship'])
     expect(step.brief).toContain('#12 Task 12')
+    // River, 11-05: the task contract (#3389) holds for the step the Swarm opens: a check, a priority, and why nobody asked.
+    expect(step.checks).toEqual([expect.objectContaining({ description: expect.stringContaining('verified'), independent: false, evidence: null, passedBy: null })])
+    expect(step.ledger).toEqual({ askedAt: T, noRequesterReason: 'scheduled release' })
+    expect(outcome.messages[0]!.text).toContain('No requester: scheduled release')
     expect(ledgerOf(state).steps).toEqual({ desktop: { groupId: step.id, at: T }, web: { groupId: step.id, at: T } })
     expect(outcome.messages).toEqual([expect.objectContaining({ conversationId: step.id, recipients: ['ship'], source: { kind: 'release' } })])
     expect(settleReleases(state, 'p1', noFacts, T + 5 * MINUTE).opened).toBeNull()
