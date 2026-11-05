@@ -78,6 +78,12 @@ import { placeAfter, queueSiblings } from './taskQueue.js'
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 /** The most steps a task lists (Conversation.stepIds): production's most was 14 (2026-11-05). */
 const STEPS_LISTED = 200
+/** [task] lists its new step [id], so a new head of its pull request re-derives the step's checks even once it is dormant
+ *  (#3394), however the step opened (conversation.create, or a Ready's review steps). A task from before lists none until its
+ *  PR watch looks its dormant steps up (review of #3218, round 3): listing only this one would hide those. */
+function listStep(task: Conversation, id: string): void {
+  if (task.stepIds) task.stepIds = [...task.stepIds, id].slice(-STEPS_LISTED)
+}
 /** A route override's reason when its agent gave none: following another candidate needs none (project instructions). */
 const NO_REASON = 'No reason given.'
 /** What a pick-less route's only candidate is chosen for, when its start gives no reason (task #2901). */
@@ -1710,6 +1716,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       ...stepMark(state, task), step: planned.name,
       assignment: null, lastMessageSequence: 0, checks: storedChecks([{ description: stepCheck(planned), independent: true }], id) })
     const step = state.conversations.at(-1)!
+    listStep(task, id)
     message(id, brief, [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(id, 'brief'))
     bindTaskCard(step, effects.messages.at(-1)!)
     return step
@@ -2523,13 +2530,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         checks: storedChecks(command.checks, operationId),
       })
       recordAsked(state.conversations.at(-1)!, requesterId, context.now)
-      // Its task lists it, so a new head of the task's pull request re-derives its checks even once it is dormant (#3394). A
-      // task from before lists none until its PR watch looks its dormant steps up (review of #3218, round 3): listing only
-      // this one would hide those.
-      if (command.reviewOf) {
-        const reviewedTask = conversation(state, command.reviewOf)
-        if (reviewedTask.stepIds) reviewedTask.stepIds = [...reviewedTask.stepIds, operationId].slice(-STEPS_LISTED)
-      }
+      if (command.reviewOf) listStep(conversation(state, command.reviewOf), operationId)
       // The reason stands only where nobody is named, and is shown in the task's first row beside its goal.
       const noRequester = !requesterId && actor.kind === 'agent' ? command.noRequesterReason : undefined
       if (noRequester && state.conversations.at(-1)!.ledger) state.conversations.at(-1)!.ledger!.noRequesterReason = noRequester
