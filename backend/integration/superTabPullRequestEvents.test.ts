@@ -329,6 +329,19 @@ describe('pull request events', () => {
       expect(kept[f.PR]).toMatchObject({ head: H, base: 'main', patch: 'p-main-backdoor' })
     })
 
+    // Security review of #3218 (Warden2, round 4), Important 1: the same head against another base branch is another diff.
+    it('a verdict at its head stops counting when the pull request is retargeted, and counts again back on its base', async () => {
+      const { f, read } = await reviewed()
+      f.patches.set(`${HEAD}@evil`, 'p-evil')
+      f.pulls.set(f.PR, f.pull({ base: 'evil' }))
+      await f.pass()
+      for (const check of await read()) expect(check.passedBy).toBeNull()
+      f.patches.set(`${HEAD}@main`, 'p1')
+      f.pulls.set(f.PR, f.pull({ base: 'main' }))
+      await f.pass()
+      for (const check of await read()) expect(check.passedBy).not.toBeNull()
+    })
+
     // Review of #3218 (Ledger, round 3), Important 2: links added later can move a reviewed pull request out of the watch;
     // its head is then no longer read, so its verdicts stop counting, on the task and its steps, though no head was left.
     it('a verdict stops counting once its pull request leaves the links watched', async () => {

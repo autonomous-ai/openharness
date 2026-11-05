@@ -163,3 +163,30 @@ describe('the links a task is watched for', () => {
     expect(Object.keys(heads)).toHaveLength(HEADS_KEPT)
   })
 })
+
+// Security review of #3218 (Warden2, round 4), Important 1: a reviewer reads the pull request's diff against its base branch.
+// Read at X against a branch holding other code, then retargeted to main at the same X, X's diff is that code too.
+describe('a verdict and the base branch it was read against', () => {
+  const on = (head: string, patch: string | null, base: string): PullRequestHeads => ({ [PR]: { head, patch, at: 1, base } })
+
+  it('counts at its head only against the base it was read against', () => {
+    const c = check()
+    recordCheckVerdict(c, verdict('agent:r', true, A), undefined, on(A, 'p-evil', 'evil'))
+    expect(c.verdicts![0]).toMatchObject({ head: A, patch: 'p-evil', base: 'evil' })
+    expect(c.passedBy).toBe('agent:r')
+    refreshChecks([c], PR, { head: A, patch: 'p-evil', at: 1, base: 'evil' }, on(A, 'p-main', 'main'))
+    expect(c.passedBy).toBeNull()
+    expect(c.verdicts![0]!.stale).toBe(A)
+    refreshChecks([c], PR, { head: A, patch: 'p-main', at: 1, base: 'main' }, on(A, 'p-evil', 'evil'))
+    expect(c.passedBy).toBe('agent:r')
+  })
+
+  it('learns the base its head was first seen at, never a later one', () => {
+    const c = check()
+    recordCheckVerdict(c, verdict('agent:r', true, A), undefined, at(A, null))
+    expect(c.verdicts![0]).not.toHaveProperty('base')
+    refreshChecks([c], PR, { head: A, patch: null, at: 1, base: 'evil' }, on(A, 'p-main', 'main'))
+    expect(c.verdicts![0]!.base).toBe('evil')
+    expect(c.passedBy).toBeNull()
+  })
+})
