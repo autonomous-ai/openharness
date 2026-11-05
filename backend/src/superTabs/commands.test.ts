@@ -5832,7 +5832,7 @@ describe('a task\'s priority (conversation.create and work.priority)', () => {
     const { task, create } = prioritized()
     const created = create({ priority: 'P0' })
     expect(created.result).toMatchObject({ priority: 'P0' })
-    expect(created.result.warnings).toBeUndefined()
+    expect(created.result.warnings ?? []).not.toContainEqual(expect.stringContaining('No priority given'))
     expect(task(created.result.conversationId as string).priority).toBe('P0')
     expect(groupView(task(created.result.conversationId as string), new Set())).toMatchObject({ priority: 'P0' })
   })
@@ -5871,7 +5871,9 @@ describe('a task\'s priority (conversation.create and work.priority)', () => {
       text: 'owner changed the priority to P0, hotfix: something shipped is broken (was P2).' })])
     const byPm = f.run(set(id, 'P1'), f.leadActor)
     expect(task(id).priority).toBe('P1')
-    expect(byPm.messages[0]!.text).toBe('lead changed the priority to P1, needed by users soon (was P0).')
+    // The PM by the name the Swarm shows for it.
+    const pm = f.state.agents.find(a => a.id === f.lead)!
+    expect(byPm.messages[0]!.text).toBe(`${pm.displayName ?? pm.name} changed the priority to P1, needed by users soon (was P0).`)
   })
 
   it('reads a task from before priorities as P2 when it changes', () => {

@@ -16,7 +16,7 @@ const conversation: Required<Conversation> = {
   task: { goal: '', changes: '', constraints: '', owns: [] }, reviewOf: 'r', teamWritten: true, step: 'Review', reviewStamp: { assignmentId: 'w', handoff: 1 }, checks: [], assignment, lastMessageSequence: 0, lastMainSequence: 0, lastPersonSequence: 0, heardAt: 0, pullRequestUrls: [], pullRequestEvents: {}, cards: {},
   messageSeq: 0, reportSeq: 0, dormant: false, lastActivityAt: '', audience: { people: [] }, lostAttempt: { id: 'w', agentId: 'a' }, reactionSeq: 0,
   requesterId: 'p', ledger: {}, proposals: [], buddyName: 'Sparky', buddySessions: [], buddyDownTold: true, liveness: { state: 'quiet', why: 'silent', since: 1 }, leadAction: { kind: 'post', at: 1 },
-  stepUp: { attempt: 2, floor: 2, reason: 'r', at: 1, carry: '' }, queueRank: 1.5, notBefore: '2026-12-04',
+  stepUp: { attempt: 2, floor: 2, reason: 'r', at: 1, carry: '' }, queueRank: 1.5, notBefore: '2026-12-04', priority: 'P0',
 }
 
 describe('the light conversation projection (parts/light.ts)', () => {
