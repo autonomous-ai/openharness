@@ -5,6 +5,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { BUDDY_NOT_HERE, BUDDY_START_AGAIN } from '../lib/swarmSkills.js'
 import { BuddyModelRequests, type BuddyModelRow } from './buddyModel.js'
 
 const GRID = 'swarm-0123456789ab'
@@ -76,6 +77,25 @@ describe('carrying out a Buddy\'s model request', () => {
       [{ error: 'AGENT_BUSY' }, 'Your Buddy is answering. Try again when it has finished'],
       [{ error: 'GRID_UNAVAILABLE', detail: '/Users/someone/secret path' }, "Mac Studio isn't serving DeepSeek 4.1 Flash now"],
       [{ error: 'RESPAWN_FAILED', detail: 'tmux: /private/path' }, 'its computer could not switch it (RESPAWN_FAILED)'],
+    ]
+    for (const [answer, error] of cases) {
+      const f = fixture({ answers: [answer] })
+      await f.runner.serve(main(), [thread('h-a')])
+      expect(f.frames).toHaveLength(1)
+      expect(f.posts).toEqual([{ asAgentId: 'buddy', type: 'buddy.modelResult', agentId: 'buddy', requestId: 'req1', ok: false, error }])
+    }
+  })
+
+  // Task #3256: a switch relaunches the Buddy, and the Buddy guard (lib/swarmSkills.ts prepareBuddyFolder) holds one started
+  // before its owner was recorded, or one not on its owner's machine. The launch reports SWARM_SKILL_FAILED with the guard's
+  // sentence as its detail (lib/launchOverrides.ts); its owner reads what to do, never the code or the detail.
+  it("says Start your Buddy again when the Buddy guard holds the relaunch, and never the guard's detail", async () => {
+    const held = (sentence: string) => ({ error: 'SWARM_SKILL_FAILED', detail: String(new Error(sentence)) })
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [held(BUDDY_START_AGAIN), 'Start your Buddy again to switch its model'],
+      [held(BUDDY_NOT_HERE), 'Your Buddy runs only on your own computer, signed in as you'],
+      [{ error: 'SWARM_SKILL_FAILED', detail: 'Error: EACCES /Users/someone/.claude' }, 'its computer could not switch it (SWARM_SKILL_FAILED)'],
+      [{ error: 'RESPAWN_FAILED', detail: String(new Error(BUDDY_START_AGAIN)) }, 'its computer could not switch it (RESPAWN_FAILED)'],
     ]
     for (const [answer, error] of cases) {
       const f = fixture({ answers: [answer] })
