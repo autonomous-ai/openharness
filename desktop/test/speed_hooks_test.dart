@@ -1,8 +1,11 @@
 import 'dart:typed_data';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/logging/app_log.dart';
+import 'package:harness/measurement/speed_marks.dart';
 import 'package:harness/super_tabs/attachment_viewer.dart';
+import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -73,6 +76,44 @@ void main() {
       await c.loadMessages('lead');
 
       expect(log.lines.where((l) => l.startsWith('messages ')), isEmpty);
+    });
+  });
+
+  group('first chat', () {
+    testWidgets('is marked once, when a chat row is built', (tester) async {
+      speedMarks.restart();
+      final server = ConversationServer()..append('hello');
+      final c = server.controller();
+      await c.refresh();
+      await tester.binding.setSurfaceSize(const Size(1100, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      expect(log.lines.where((l) => l.contains('first_chat_painted')), isEmpty);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Test Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      server.append('again');
+      await c.refresh();
+      await tester.pumpAndSettle();
+
+      expect(
+        log.lines.where((l) => l.contains('step=first_chat_painted')),
+        hasLength(1),
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
     });
   });
 
