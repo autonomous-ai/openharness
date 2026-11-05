@@ -2073,6 +2073,14 @@ class SuperTabController extends ChangeNotifier {
     (_messages[id] ?? const <SuperTabMessage>[]).where(_listed),
   );
 
+  /// What [messages] lists, newest first, read lazily from what is held: no
+  /// copy, so a caller that stops at the first it needs reads only that far.
+  /// For a read on every build (the Buddy bar's Start again, task #3256): a
+  /// copy of a long held history there made each rebuild slower. Read it
+  /// before the next change to what is held, as within one build.
+  Iterable<SuperTabMessage> newestFirst(String id) =>
+      (_messages[id] ?? const <SuperTabMessage>[]).reversed.where(_listed);
+
   static bool _listed(SuperTabMessage m) =>
       m.source['kind'] != 'update-request' &&
       !m.terminalPrompt &&

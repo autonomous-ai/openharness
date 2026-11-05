@@ -578,6 +578,11 @@ class SuperTabBuddyBar extends StatelessWidget {
   static const _heldSwitch =
       "Couldn't switch your Buddy: Start your Buddy again to switch its model";
 
+  /// How far back the bar looks for that line: one page of the chat. The read
+  /// runs on every build, so it is bounded (ENGINEERING.md 4); a refusal under
+  /// more newer messages than this offers nothing, and nothing is removed.
+  static const _heldSwitchReach = 100;
+
   /// Whether [agent]'s last switch failed because it must be started again:
   /// its newest system line in this chat says so, and no switch is under way.
   /// Its machine writes that line as the Buddy itself, so a later line (a
@@ -588,8 +593,9 @@ class SuperTabBuddyBar extends StatelessWidget {
   /// Only from the chat's newest messages (Guide's review of #3171): a window
   /// opened at an older read mark holds an older page, and the line that
   /// settled the switch may be among the newer ones it has not read. The
-  /// cheap checks come first, and the held rows are read from the end, so
-  /// the scan stops at this Buddy's newest system line.
+  /// cheap checks come first, and the held rows are read from the end without
+  /// a copy ([SuperTabController.newestFirst]), so the scan stops at this
+  /// Buddy's newest system line.
   bool _mustStartAgain(SuperTabController c, SuperTabAgent agent) {
     if (!chat.isSwarmBuddyChat || agent.modelRequest != null) return false;
     final conversation = c.snapshot?.conversation(chat.id);
@@ -598,11 +604,11 @@ class SuperTabBuddyBar extends StatelessWidget {
         c.awaitsNewest(chat.id)) {
       return false;
     }
-    final held = c.messages(chat.id);
+    final held = c.newestFirst(chat.id);
     final newest =
         conversation.lastMainSequence ?? conversation.lastMessageSequence;
-    if (held.isEmpty || held.last.sequence < newest) return false;
-    for (final m in held.reversed) {
+    if ((held.firstOrNull?.sequence ?? -1) < newest) return false;
+    for (final m in held.take(_heldSwitchReach)) {
       if (m.source['kind'] == 'system' && m.author['id'] == agent.id) {
         return m.text.startsWith(_heldSwitch);
       }
