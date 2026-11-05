@@ -4597,6 +4597,8 @@ export class SuperTabStore {
     })
   }
 
+  async runTimeChecks(_tabId: string): Promise<number> { return 0 }
+
   async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, SettledPullRequest>>, reviewOf?: string): Promise<boolean> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
