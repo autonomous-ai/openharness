@@ -95,7 +95,8 @@ export function allowedDrops(state: SuperTabState, project: SwarmProject, before
       ...refused.map(rule => `- "${cut(rule.text)}" (${rule.people.join(', ')}): ${WHY[rule.why]}`
         + (rule.movedTo ? ` (${rule.movedTo}): keep its line until it merges.` : '.')
         + (unknown(rule).length ? ` ${unknown(rule).join(', ')} is no member here, so the project's owner decides.` : '')),
-    ].join('\n'), 409, { dropped: refused.map(rule => ({ rule: rule.text, people: rule.people, why: rule.why })) })
+    ].join('\n'), 409, { dropped: refused.map(rule => ({ rule: rule.text, people: rule.people, why: rule.why,
+      ...rule.movedTo ? { movedTo: rule.movedTo } : {} })) })
   }
   return { told, rules: dropped }
 }

@@ -200,10 +200,14 @@ export function droppedRules(before: string, after: string, identify: (name: str
   const isFaithful = (s: Segment) => faithful.get(s) ?? faithful.set(s, faithfulTo(s, ids.get(s)!)).get(s)!
   // Each place's segments with who gave them: its attributions and the people it is known to hold. A rule moved there is
   // held to the same test as in the document: its words in order, with its people, and nothing else said in that segment.
-  const moves = places.map(place => ({ place, at: items(place.text).flatMap(i => segments(i.text))
-    .map(s => ({ s, who: new Set([...s.people.map(identify), ...place.people]) })) }))
-  const movedTo = (rule: Segment, people: string[]) => moves.find(({ at }) => at.some(({ s, who }) =>
-    people.every(p => who.has(p)) && contains(s.seq, rule.seq) && faithfulTo(s, who)))?.place
+  // Read only when a rule is not kept in the document, and a place that keeps it for good (the rules record, a merged task)
+  // wins over an open task that holds it too (review of #3220).
+  let moves: { place: RulePlace; at: { s: Segment; who: Set<string> }[] }[] | undefined
+  const movedTo = (rule: Segment, people: string[]) => {
+    moves ??= [...places].sort((a, b) => Number(a.open) - Number(b.open)).map(place => ({ place, at: items(place.text)
+      .flatMap(i => segments(i.text)).map(s => ({ s, who: new Set([...s.people.map(identify), ...place.people]) })) }))
+    return moves.find(({ at }) => at.some(({ s, who }) => people.every(p => who.has(p)) && contains(s.seq, rule.seq) && faithfulTo(s, who)))?.place
+  }
   const dropped: DroppedRule[] = []
   for (const { rule, people } of rules) {
     const theirs = flat.filter(s => people.every(p => ids.get(s)!.has(p)))
