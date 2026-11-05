@@ -82,9 +82,9 @@ describe('pmAccounts', () => {
       draft.machines!.push({ ...structuredClone(host), machineId: 'host-team', hostMachineId: 'host', spendDays: [day(1, 10, { teamWorker: 1 })] })
     })
     // 10 × 1/2, 10 × 1/2, 10 × 1/2 (the Team account's worker spent the other half of the last day).
-    expect(pmAccounts(s.state, owner).find(a => a.pm === (lead.displayName ?? lead.name))).toMatchObject({ daily: { share: 5, days: 3 }, resetsAt: reset })
+    expect(pmAccounts(s.state, owner, NOW).find(a => a.pm === (lead.displayName ?? lead.name))).toMatchObject({ daily: { share: 5, days: 3 }, resetsAt: reset })
     s.edit(draft => { draft.machines!.find(m => m.machineId === 'host')!.spendDays = [day(1, 10, { [lead.harnessId]: 1 })] })
-    const fewer = pmAccounts(s.state, owner).find(a => a.pm === (lead.displayName ?? lead.name))!
+    const fewer = pmAccounts(s.state, owner, NOW).find(a => a.pm === (lead.displayName ?? lead.name))!
     expect(fewer).not.toHaveProperty('daily')
     expect(fewer.resetsAt).toBe(reset)
   })

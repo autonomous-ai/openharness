@@ -12,6 +12,7 @@ import { publicReason, readsRawReason } from './startFailure.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
 import { visibleAccess } from './machineAccess.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { pmDailyShare, weeklyResetAt } from './pmSpend.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person {
@@ -561,11 +562,16 @@ export interface SwarmLocalModels {
 }
 /** An account a project's PM runs on (Ken, 11-05): its machine (a Mac's Harness Team account names that Mac too, whose
  *  subscription it spends) and engine. A project the reader may not read is "another project", its PM unnamed. */
-export interface PmAccount { machineId: string; hostMachineId?: string; engine: string; project: string; pm: string }
+export interface PmAccount { machineId: string; hostMachineId?: string; engine: string; project: string; pm: string
+  /** The points of its account's week this PM spends a day, over its last complete days (pmSpend.ts pmDailyShare); absent
+   *  until 3 are measured, when the route keeps the fixed 20% (task #3222). */
+  daily?: { share: number; days: number }
+  /** When the account's weekly window resets, as its last reading said (ms since the epoch); absent when it did not say. */
+  resetsAt?: number }
 
 /** Every project's PM account (PmAccount): a PM could drain the account another project's PM ran on, and the route, reading
  *  as an agent of one project, saw no other project's PM (review of #3134). */
-export function pmAccounts(state: SuperTabState, actor: Actor): PmAccount[] {
+export function pmAccounts(state: SuperTabState, actor: Actor, now = Date.now()): PmAccount[] {
   return projectsOf(state).flatMap(project => {
     const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
     const pm = leadId ? state.agents.find(a => a.id === leadId) : undefined
@@ -574,8 +580,14 @@ export function pmAccounts(state: SuperTabState, actor: Actor): PmAccount[] {
     const host = state.machines?.find(m => m.machineId === pm.machineId)?.hostMachineId
     // A public project is named to every project agent, as otherProjectsWork names it (sharedWithLeads).
     const readable = canReadProject(state, actor, project) || sharedWithLeads(project)
+    // One subscription: the PM's Mac and its Harness Team account (pmSpend.ts).
+    const mac = host ?? pm.machineId
+    const pools = (state.machines ?? []).filter(m => (m.hostMachineId ?? m.machineId) === mac)
+    const daily = pmDailyShare(pools, engine, pm.harnessId, now)
+    const resetsAt = pools.map(m => weeklyResetAt(m, engine)).find((at): at is number => at !== null)
     return [{ machineId: pm.machineId, ...(host ? { hostMachineId: host } : {}), engine,
-      project: readable ? project.name : 'another project', pm: readable ? pm.displayName ?? pm.name : 'its PM' }]
+      project: readable ? project.name : 'another project', pm: readable ? pm.displayName ?? pm.name : 'its PM',
+      ...(daily ? { daily } : {}), ...(resetsAt !== undefined ? { resetsAt } : {}) }]
   })
 }
 
@@ -1082,7 +1094,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // A project agent's route notes the accounts PMs run on, on machines it may see: after the Buddy's machines are gone.
   if (actor.kind === 'agent' && visible.machines?.length) {
     const machines = new Set(visible.machines.map(m => m.machineId))
-    visible.pmAccounts = pmAccounts(state, actor).filter(a => machines.has(a.machineId) || (a.hostMachineId !== undefined && machines.has(a.hostMachineId)))
+    visible.pmAccounts = pmAccounts(state, actor, now).filter(a => machines.has(a.machineId) || (a.hostMachineId !== undefined && machines.has(a.hostMachineId)))
   }
   return visible
 }
