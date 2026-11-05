@@ -90,6 +90,24 @@ These change the plan above where they differ.
   - The old agent removed by a take-over is not brought back when its machine returns, because `removeAgent` drops its
     restore record.
 
+### After the review (ReviewSleep, River)
+
+- **A moved member's task goes to the head of the list when the move is placed**, before the old session can lose it
+  (liveness loses it after 2 minutes offline, or when the old host closes the session). The task counts if it is
+  active, or if its machine took it from the member within the last hour (`lostTask`). The take-over also puts at the
+  head a task the old session lost after the move began.
+- **Members with no work stay put.** An asleep member never moves. An awake member with no work on a machine that went
+  offline (a laptop closed for the night) stays too. It moves once it holds work.
+- **Machine rules as data** (`crewRules.ts MACHINE_RULES`, by machine id) until the project rules record holds them:
+  - Ken's MacBook Pro takes no move on weekdays 07:30 to 09:30 and 18:00 to 21:00 Vietnam time;
+  - no Codex member moves to Diego's Mac.
+- **The Team-account facts** are read from the database only when some member needs another machine.
+- **A folder drop the removal refused** (work not committed or pushed) is tried again an hour later.
+- **Waits on #3222:** the keep-alive waits for a folder restore before it reopens, which builds on Keeper's crew
+  keep-alive in `host.ts`. This branch merges main once #3222 lands, then reruns the host tests.
+- **Platforms:** the backend runs on the server. The host code runs on macOS, Linux and Windows through core
+  close/resume and git (Git for Windows). It opens no window and starts no new long-lived process.
+
 ## Global Constraints
 
 - **Owns:** `backend/src/superTabs/`, `backend/src/worker.ts` (unchanged by this plan) and `cli/src/superTabs/`.
