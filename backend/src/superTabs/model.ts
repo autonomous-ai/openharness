@@ -259,6 +259,8 @@ export interface Assignment {
   leaseUntil?: number
   /** Its agent's last progress the lease saw, for the Lead's wake-up when it is lost. */
   progressAt?: number
+  /** When its crew member was told it had been 2 hours without progress (dispatch.ts crewClock): once per quiet spell. */
+  nudgedAt?: number
   /** While it needs a human: the person its agent asked (work.status with ask), whom its wait names (liveness.ts). */
   askedOf?: string
   /** When someone else's verdict found problems in a working hand-off of the older built-in skills, which then stops waiting
@@ -644,6 +646,8 @@ export const NOTICE_READERS = {
   // The Lead's wakes and requests, and the worker's "moved" line (liveness.ts, tidy.ts, projectUpdates.ts, digest.ts); two
   // projects changing the same code, to both their Leads in the Leads chat (commands.ts).
   'work-stalled': 'recipients', 'work-lost': 'recipients', 'work-resumed': 'recipients', 'idle-stop': 'recipients',
+  // A crew member's 2 hours without progress on its task, to that member (dispatch.ts crewClock, liveness.ts).
+  'crew-nudge': 'recipients',
   // An agent with no open task for 15 minutes, and a grid attempt's failed first review, told to the coordinator (tidy.ts
   // idleNotices, commands.ts work.check; project instructions, phase 4). `idle-stop` rows are from before.
   idle: 'recipients', 'review-failed': 'recipients',

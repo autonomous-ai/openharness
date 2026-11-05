@@ -6,7 +6,7 @@
  */
 import { isBuddy } from './buddies.js'
 import { sessionClosed } from './closedAgents.js'
-import { activeWork, type Agent, type Conversation, type SuperTabState } from './model.js'
+import { activeWork, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
 import { agentProjectId, projectOf } from './projects.js'
 import { queueOrder, queueSiblings } from './taskQueue.js'
 
@@ -67,6 +67,20 @@ export function laneOf(group: Pick<Conversation, 'lane' | 'task'>, lanes: readon
  *  from its last member for one pass. */
 export const returnReason = (lane: string | null): string => `no progress for 3 hours: back in the ${lane ?? 'project'} lane`
 const RETURN_PREFIX = 'no progress for 3 hours'
+
+/** What a crew member hears after 2 hours without progress on its task. */
+export const nudgeLine = (lane: string | null): string =>
+  `No progress on this task for 2 hours. Post where it stands, or set it blocked with why; at 3 hours it goes back to the ${lane ?? 'project'} lane.`
+
+/** The crew's clocks on [assignment] of [group], held by [worker] (liveness.ts): from its own last progress (its assignment,
+ *  status, check or post: `progressAt`), only while a crew member is working on a task. `nudge` after `nudgeAfterMs`, once
+ *  per spell of quiet; `return` after `returnAfterMs`. Waiting on a person, blocked or handed: no clock. */
+export function crewClock(group: Conversation, worker: Agent, assignment: Assignment, now: number, rules: DispatchRules): 'nudge' | 'return' | null {
+  const since = assignment.progressAt
+  if (!worker.crew || group.reviewOf || assignment.status !== 'working' || since === undefined) return null
+  if (now - since >= rules.returnAfterMs) return 'return'
+  return now - since >= rules.nudgeAfterMs && !(assignment.nudgedAt !== undefined && assignment.nudgedAt >= since) ? 'nudge' : null
+}
 
 /** A task its own Engineer handed over: ready for review (its own `review` status), still its own, its Engineer free for the
  *  next (task #3399, handed.ts; until that lands, the same rule here). A step's review status is not a hand-over. */

@@ -14,6 +14,7 @@ import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
 import { isStep } from './steps.js'
 import { endedReply } from './taskLine.js'
+import { crewClock, DISPATCH_RULES, laneOf, nudgeLine, returnReason } from './dispatch.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
@@ -310,6 +311,8 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
   // short burst of failures that recovers never gets here.
   if (worker.alerting?.includes('model')) return 'its model keeps failing'
   if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return null
+  // A crew member 3 hours without progress of its own puts its task back in its lane (task #3400), however busy its screen.
+  if (crewClock(group, worker, assignment, now, DISPATCH_RULES) === 'return') return returnReason(laneOf(group, DISPATCH_RULES.lanes))
   const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {
     const progress = lastProgress(state, worker, assignment)
@@ -345,6 +348,16 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
     text: `Your task "${group.title}" moved: ${reason}. Stop working on it; your status and results for it are no longer accepted.` }),
   // And its project chat's thread says Stuck, as no command saw the loss (task #2693).
   ...endedReply(state, group, stableId('task-line-lost', assignment.id, loss), sender)]
+}
+
+/** The crew members 2 hours without progress on their task hear it once in the task, from its PM (dispatch.ts crewClock). */
+function crewNudges(state: SuperTabState, now: number): MessageDraft[] {
+  return workerTasks(state).flatMap(({ group, assignment, worker }) => {
+    if (crewClock(group, worker, assignment, now, DISPATCH_RULES) !== 'nudge') return []
+    assignment.nudgedAt = now
+    return [reachable(state, { id: stableId('crew-nudge', assignment.id, String(now)), conversationId: group.id, author: writtenBy(state, leadOf(state, worker) ?? worker),
+      replyTo: null, recipients: [worker.id], text: nudgeLine(laneOf(group, DISPATCH_RULES.lanes)), source: { kind: 'crew-nudge', assignmentId: assignment.id } })]
+  })
 }
 
 /** Loses at once the tasks of the workers `which` picks that have a reason now: an agent that just reported a usage limit,
@@ -395,7 +408,7 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
  *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  const drafts = [...loseTasks(state, now), ...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now)]
+  const drafts = [...loseTasks(state, now), ...crewNudges(state, now), ...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now)]
   // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
   dropIdleBuddyMachines(state, now)
   return drafts
