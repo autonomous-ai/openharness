@@ -43,6 +43,7 @@ describe('SWARM_TOOLS_SKILL', () => {
     expect(section).toContain('The coordinator gets a post only when it is named: your status (done, needs_human, blocked) is how it hears your work')
     expect(section).not.toContain('reaches the project\'s coordinator')
     expect(section).toContain('its result says when it reached no agent.')
+    expect(section).toContain('notReached')
     expect(section).not.toContain('Nothing is dropped')
   })
   // Task #2901 (Ken, 2026-11-04): PMs took the route's top line against the project's Routing instructions.
