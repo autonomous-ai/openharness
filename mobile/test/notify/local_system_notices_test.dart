@@ -261,6 +261,30 @@ void main() {
       }
     }
 
+    test('Android: a stalled channel times out and leaves local notices working', () {
+      fakeAsync((clock) {
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        plugin.androidOnly = true;
+        plugin.android.holdQuiet = Completer<void>();
+        final log = _Log();
+        final previous = appLog;
+        appLog = log;
+        addTearDown(() => appLog = previous);
+        var finished = false;
+        unawaited(notices.requestPermission().then((_) => finished = true));
+        clock.elapse(const Duration(seconds: 9));
+        expect(finished, isFalse);
+        clock.elapse(const Duration(seconds: 1));
+        expect(finished, isTrue);
+        expect(log.warnings, ['notify: push channels not made']);
+        unawaited(notices.showSwarm(swarm));
+        clock.flushMicrotasks();
+        expect(plugin.shown, hasLength(1));
+        plugin.android.holdQuiet!.complete();
+        clock.flushMicrotasks();
+      });
+    });
+
     for (final channel in ['swarm-needs-you', 'swarm-quiet']) {
       test('Android: failure creating $channel is logged and local notices still work', () async {
         debugDefaultTargetPlatformOverride = TargetPlatform.android;
