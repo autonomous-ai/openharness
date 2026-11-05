@@ -172,13 +172,13 @@ void main() {
               .data,
       ];
       expect(tabs, ['Status', 'Workspace', 'Wallpaper', 'Terminal']);
-      // Workspace: the panes' shading, the tabs' names and the colour palette.
+      // Workspace: the theme, the panes' shading and the tabs' names.
       await tester.tap(find.byKey(const ValueKey('customize-appearance')));
       await tester.pumpAndSettle();
       expect(find.text('Fade inactive panes'), findsOneWidget);
       expect(find.text('Pane style'), findsOneWidget);
       expect(find.text('Auto rename'), findsOneWidget);
-      expect(find.text('Color palette'), findsOneWidget);
+      expect(find.text('Theme'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
@@ -772,7 +772,7 @@ void main() {
       }
       await tester.tap(find.byKey(const ValueKey('customize-appearance')));
       await tester.pumpAndSettle();
-      expect(find.text('Color palette'), findsOneWidget);
+      expect(find.text('Theme'), findsOneWidget);
       expect(find.byKey(const ValueKey('palette-graphite')), findsOneWidget);
       expect(find.byKey(const Key('appearance-ui-size-field')), findsNothing);
       expect(tester.takeException(), isNull);

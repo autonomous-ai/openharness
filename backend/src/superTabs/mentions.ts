@@ -158,7 +158,8 @@ export function checkMentions(state: SuperTabState, actor: Actor, group: Convers
   return ids
 }
 
-export async function writeMentions(tx: Tx, tabId: string, state: SuperTabState, messages: MessageDraft[], now: number): Promise<void> {
+/** Writes the tags `messages` carry, and answers the rows it wrote (push/notices.ts tells their phones). */
+export async function writeMentions(tx: Tx, tabId: string, state: SuperTabState, messages: MessageDraft[], now: number): Promise<MentionRow[]> {
   const data = messages.flatMap(message => (message.mentions ?? []).map(personId => ({
     id: stableId(tabId, message.id, personId), tabId, personId, projectId: state.conversations.find(c => c.id === message.conversationId)!.projectId ?? 'lead',
     conversationId: message.conversationId, messageId: message.id, authorAgentId: message.author.id,
@@ -166,6 +167,14 @@ export async function writeMentions(tx: Tx, tabId: string, state: SuperTabState,
   })))
   if (data.length) await tx.superTabMention.createMany({ data })
   await bringBackUnfollowed(tx, tabId, messages, now)
+  return data
+}
+type MentionRow = { id: string; personId: string; conversationId: string; messageId: string; holdUntil?: Date }
+
+/** Who tagged, as the inbox and a phone notice name them: a person by the name the Swarm shows for them (a person's name in a
+ *  message is their email, personNames.ts), an agent by its own. */
+export function taggerName(state: SuperTabState, author: { kind?: string; id?: string; name?: string; displayName?: string } | undefined): string {
+  return author?.kind === 'person' ? shownNameOf(state, author.id ?? '') ?? 'Someone' : author?.displayName ?? author?.name ?? 'Lead'
 }
 
 /** A tag in a thread reply puts the thread back on the tagged person's Threads page, as in Slack: their Unfollow of it is cleared
@@ -345,8 +354,7 @@ export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, 
   return tagged.map(({ row, group }) => {
     const message = messages.find(m => m.id === row.messageId)
     const author = message?.author as { kind?: string; name?: string; displayName?: string } | undefined
-    // A person's name in a message is their email: the inbox shows the name the Swarm shows for them (personNames.ts).
-    const authorName = author?.kind === 'person' ? shownNameOf(state, row.authorAgentId) ?? 'Someone' : author?.displayName ?? author?.name ?? 'Lead'
+    const authorName = taggerName(state, author && { ...author, id: row.authorAgentId })
     return { id: row.id, projectId: row.projectId, projectName: projectOf(state, group.projectId ?? 'lead').name,
       conversationId: row.conversationId, conversationTitle: group.title, messageId: row.messageId,
       leadId: row.authorAgentId, leadName: authorName, text: (message?.text ?? '').slice(0, 200),

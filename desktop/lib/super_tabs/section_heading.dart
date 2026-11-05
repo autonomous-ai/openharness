@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_theme.dart' as grid;
+
 import '../shared/theme/app_icons.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
@@ -162,7 +164,7 @@ class SuperTabSectionHeading extends StatelessWidget {
                                             ? AppIcons.chevronRight
                                             : AppIcons.chevronDown,
                                         size: AppIcons.inlineSize,
-                                        color: DesktopChrome.muted,
+                                        color: grid.SidebarInk.muted(context),
                                       ),
                                     ],
                                   ),

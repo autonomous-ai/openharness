@@ -110,7 +110,10 @@ describe('project instructions storage', () => {
     expect(second.json().error).toMatchObject({ code: 'INSTRUCTIONS_STALE', revision: 2, text: 'Reviews run on Opus.' })
     expect((await post(peer, tab, save(2, 'Reviews run on Opus.\nTests run on the Mac.', 'Tests run on the Mac'))).statusCode).toBe(200)
     const lines = (await store.messages(owner, tab, 'lead', {})).messages.filter(m => (m.source as { kind?: string } | null)?.kind === 'instructions')
-    expect(lines.map(m => m.text)).toEqual(['owner changed the instructions: Reviews run on Opus.', 'peer changed the instructions: Tests run on the Mac.'])
+    // Each line shows what its save really changed against the stored revision before it (#3021): the first replaced the template.
+    expect(lines.map(m => m.text)).toEqual([expect.stringMatching(/^owner changed the instructions: Reviews run on Opus\.\n\nRemoved section: Project instructions\n[^]*\n\nand \d+ more changes\.$/),
+      // Its text adds a line to the same paragraph (no blank line), so the paragraph shows whole, as it was and as it is.
+      'peer changed the instructions: Tests run on the Mac.\n\nRemoved: Reviews run on Opus.\nAdded: Reviews run on Opus. Tests run on the Mac.'])
     expect((await db.superTabInstructions.findFirstOrThrow({ where: { tabId: tab, projectId: 'lead' } })).revision).toBe(3)
   })
 
@@ -249,6 +252,98 @@ describe('reading the instructions', () => {
     await run(tab, { type: 'project.sharing', projectId: secret, visibility: 'private', memberIds: [] })
     expect((await store.read(owner, tab)).state.agents.some(a => a.id === helper)).toBe(true)
     expect((await asBuddy()).statusCode).toBe(404)
+  })
+
+  // Task #3024 (Leo, 11-05): his Buddy, asked which of lamp's rules its PM skipped, could not read lamp's instructions. A Buddy
+  // reads the instructions of every project its person reads, a session of one project's included, as they would read them;
+  // nothing else widens.
+  describe('a Buddy reads the instructions of every project its person reads (task #3024)', () => {
+    /** peer's Buddy in [conversationId], at peer's membership; `swarm` makes it their one Buddy for the whole Swarm. */
+    async function peersBuddy(tab: string, conversationId: string, swarm = false) {
+      const helper = (await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId: randomUUID(),
+        name: 'Helper', configuration: config, lead: false })).result.agentId as string
+      const row = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: helper } })
+      const people = (await store.read(owner, tab)).state.people
+      await db.swarmAgent.update({ where: { id: row.id }, data: { data: { ...row.data as object,
+        buddyOf: { personId: peer.sub, generation: people.find(p => p.id === peer.sub)!.generation }, ...(swarm ? { buddyScope: 'swarm' } : {}) } } })
+      return helper
+    }
+    /** A Swarm whose first project has a document, peer in it, and two more projects: Lamp, which peer reads, and Secret, which
+     *  peer does not. */
+    async function swarmOfThree() {
+      const { tab, lead } = await withLead()
+      await invite(tab)
+      await run(tab, save(1, 'Reviews run on Opus.', 'Reviews run on Opus'))
+      await run(tab, { type: 'note.add', projectId: 'lead', text: 'Not machine A.', askedBy: peer.sub }, host, lead)
+      const lamp = (await run(tab, { type: 'project.create', name: 'Lamp', visibility: 'private', brief: '' })).result.projectId as string
+      await run(tab, { type: 'project.sharing', projectId: lamp, visibility: 'private', memberIds: [peer.sub] })
+      await run(tab, save(1, 'Tag the builder\'s owner.', 'Tag owners', lamp))
+      const secret = (await run(tab, { type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })).result.projectId as string
+      await run(tab, save(1, 'Only the owner reads this.', 'Owner only', secret))
+      const chatOf = async (projectId: string) => (await store.read(owner, tab)).state.projects!.find(p => p.id === projectId)!.leadConversationId
+      return { tab, lamp, secret, lampChat: await chatOf(lamp) }
+    }
+
+    it('reads, as a session of one project, another project its person reads: the text alone, as its person reads it', async () => {
+      const { tab, lamp, lampChat } = await swarmOfThree()
+      // A Buddy of Lamp's chat reads the first project's instructions too, as peer does.
+      const helper = await peersBuddy(tab, lampChat)
+      const asPeer = await get(peer, doc(tab, 'lead'))
+      const asBuddy = await get(host, doc(tab, 'lead', helper))
+      expect(asBuddy.statusCode, asBuddy.body).toBe(200)
+      expect(asBuddy.json().data).toMatchObject({ projectId: 'lead', revision: 2, text: asPeer.json().data.text, hash: asPeer.json().data.hash })
+      expect(asBuddy.json().data.text).toBe('Reviews run on Opus.')
+      // Never more than the document: not the coordinator's notes, nor the PM's built-in schedule.
+      expect(asBuddy.json().data).not.toHaveProperty('notes')
+      expect(asBuddy.json().data).not.toHaveProperty('builtIn')
+      // Its own project's, as before.
+      expect((await get(host, doc(tab, lamp, helper))).json().data).toMatchObject({ revision: 2, text: 'Tag the builder\'s owner.' })
+    })
+
+    it('reads, as its person\'s one Buddy, each project they read', async () => {
+      const { tab, lamp } = await swarmOfThree()
+      const helper = await peersBuddy(tab, 'lead', true)
+      for (const [projectId, text] of [['lead', 'Reviews run on Opus.'], [lamp, 'Tag the builder\'s owner.']] as const) {
+        const answer = await get(host, doc(tab, projectId, helper))
+        expect(answer.statusCode, answer.body).toBe(200)
+        expect(answer.json().data).toMatchObject({ projectId, revision: 2, text })
+        expect(answer.json().data).not.toHaveProperty('notes')
+      }
+    })
+
+    it('reads nothing of a project its person cannot read, in the words of one that does not exist', async () => {
+      const { tab, lamp, secret, lampChat } = await swarmOfThree()
+      for (const helper of [await peersBuddy(tab, lampChat), await peersBuddy(tab, 'lead', true)]) {
+        const [hidden, missing] = await Promise.all([secret, 'no-such-project'].map(projectId => get(host, doc(tab, projectId, helper))))
+        expect(hidden!.statusCode, hidden!.body).toBe(404)
+        expect(hidden!.json()).toMatchObject({ success: false, error: { code: 'NOT_FOUND' } })
+        expect(hidden!.body).toBe(missing!.body)
+      }
+      // Once peer leaves Lamp, a Buddy of another project reads none of Lamp's either.
+      const elsewhere = await peersBuddy(tab, 'lead')
+      expect((await get(host, doc(tab, lamp, elsewhere))).statusCode).toBe(200)
+      await run(tab, { type: 'project.sharing', projectId: lamp, visibility: 'private', memberIds: [] })
+      expect((await get(host, doc(tab, lamp, elsewhere))).statusCode).toBe(404)
+    })
+
+    it('still saves nothing, adds no note and reads no history, in its own project or another', async () => {
+      const { tab, lamp, lampChat } = await swarmOfThree()
+      for (const helper of [await peersBuddy(tab, lampChat), await peersBuddy(tab, 'lead', true)]) {
+        for (const projectId of ['lead', lamp]) {
+          await expect(run(tab, save(2, 'A Buddy\'s text.', 'Buddy', projectId), host, helper)).rejects.toMatchObject({ code: 'BUDDY_FORBIDDEN' })
+          await expect(run(tab, { type: 'instructions.save', projectId, baseRevision: 2, text: 'A Buddy\'s text.', summary: 'Buddy', askedBy: peer.sub }, host, helper))
+            .rejects.toMatchObject({ code: 'BUDDY_FORBIDDEN' })
+          await expect(run(tab, { type: 'note.add', projectId, text: 'A Buddy\'s note.', askedBy: peer.sub }, host, helper)).rejects.toMatchObject({ code: 'BUDDY_FORBIDDEN' })
+          for (const url of [`${doc(tab, projectId)}/revisions?asAgentId=${helper}`, `${doc(tab, projectId)}/revisions/1?asAgentId=${helper}`]) {
+            expect((await get(host, url)).statusCode).toBe(404)
+          }
+        }
+      }
+      // Nothing it sent was written: both documents are where they were.
+      for (const [projectId, text] of [['lead', 'Reviews run on Opus.'], [lamp, 'Tag the builder\'s owner.']] as const) {
+        expect((await get(peer, doc(tab, projectId))).json().data).toMatchObject({ revision: 2, text })
+      }
+    })
   })
 })
 

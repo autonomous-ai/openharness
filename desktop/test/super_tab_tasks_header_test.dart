@@ -23,6 +23,10 @@ Future<SuperTabController> _showView(
   await tester.pumpWidget(
     MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.light),
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(disableAnimations: true),
+        child: child!,
+      ),
       home: Scaffold(
         body: SuperTabView(
           controller: c,

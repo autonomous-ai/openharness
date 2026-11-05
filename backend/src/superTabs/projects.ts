@@ -273,6 +273,18 @@ export function buddyPerson(state: SuperTabState, buddy: Agent, project: SwarmPr
   return person && canReadProject(state, { kind: 'person', userId: person.id, email: person.email }, project) ? person : undefined
 }
 
+/** The project whose instructions [buddy] reads for its person (task #3024): any project its person reads now, at the
+ *  membership they added it in, a Buddy of one project's included, so it can check a project's rules for them as they would
+ *  (Leo, 11-05: his Buddy could not read lamp's). This read alone: its other reads stay with its project. Refused in the words
+ *  of a project that does not exist. */
+export function buddyInstructionsProject(state: SuperTabState, actor: Actor, buddy: Agent, projectId: string): SwarmProject {
+  author(state, actor)
+  const project = projectOf(state, projectId)
+  if (actor.kind !== 'agent' || actor.agentId !== buddy.id || buddy.machineOwnerId !== actor.machineOwnerId || !isBuddy(buddy)
+    || !buddyPerson(state, buddy, project)) fail('NOT_FOUND', 'This project is unavailable.', 404)
+  return project
+}
+
 /** A private conversation's audience: each person a member who reads its project, captured at their generation. */
 export function audienceOf(state: SuperTabState, project: SwarmProject, personIds: string[]): NonNullable<Conversation['audience']> {
   return { people: [...new Set(personIds)].map(id => {
