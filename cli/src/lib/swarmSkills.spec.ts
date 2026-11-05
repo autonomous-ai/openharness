@@ -152,7 +152,7 @@ describe('built-in Swarm skills', () => {
   // named-owner section. Never ask about quota; only an account a PM runs on stops taking work, below 20% of its weekly quota.
   const quota = '## Quota\n'
     + '- Never ask anyone about quota or whose account to use: pick by your project\'s Routing and go. When no account fits, the work waits for the soonest reset, and the task says so.\n'
-    + '- An account any project\'s PM runs on (the route notes it) takes no new work while it has less than 20% of its weekly quota left. Every other account is used without asking.\n\n'
+    + '- An account any project\'s PM runs on takes no new work while it has less of its weekly quota left than the share the route\'s note says it keeps for that PM: the days to its weekly reset × what the PM spends a day, at least 5%, and 20% until 3 days are measured. Every other account is used without asking.\n\n'
   // Last in the Default Lead text, which has no red flags: after a blank line, ending the text.
   const requestsLast = `\n${requests.trimEnd()}\n`
   // The shared-machine rules (Ken, 2026-10-28): the Builder's and the Reviewer's alone, in both modes, in a section of their
@@ -457,7 +457,7 @@ describe('built-in Swarm skills', () => {
   it('tells each Lead, and no other role, never to ask about quota, and to keep an account a PM runs on below 20% free of new work', () => {
     for (const mode of ['orchestration', 'default'] as const) {
       const lead = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8')
-      for (const part of ['## Quota', 'Never ask anyone about quota or whose account to use', 'less than 20% of its weekly quota left', 'Every other account is used without asking']) expect(lead).toContain(part)
+      for (const part of ['## Quota', 'Never ask anyone about quota or whose account to use', 'less of its weekly quota left than the share the route\'s note says it keeps for that PM', 'the days to its weekly reset × what the PM spends a day', 'at least 5%, and 20% until 3 days are measured', 'Every other account is used without asking']) expect(lead).toContain(part)
       for (const gone of ['10% of its week', 'ask the person, with your recommendation', '## Spending a person']) expect(lead).not.toContain(gone)
       for (const role of ['dev', 'review', 'buddy'] as const) {
         expect(readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')).not.toContain('## Quota')
