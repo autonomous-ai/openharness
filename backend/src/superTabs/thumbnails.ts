@@ -88,6 +88,8 @@ async function thumbnailOf(bytes: Buffer): Promise<ImageFacts | null> {
   const meta = await input().metadata()
   if (!meta.format || !FORMATS.has(meta.format) || !positive(meta.width) || !positive(meta.height)) return null
   if (meta.width * meta.height > MAX_THUMB_PIXELS) return null
+  // An animated picture is left alone, as a GIF is: a thumbnail would be its first frame and stop it moving.
+  if ((meta.pages ?? 1) > 1) return null
   // EXIF orientation 5 to 8 turns the picture a quarter: what it shows is the other way round.
   const turned = (meta.orientation ?? 1) >= 5
   const width = turned ? meta.height : meta.width, height = turned ? meta.width : meta.height
