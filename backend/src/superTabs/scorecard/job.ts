@@ -64,6 +64,14 @@ export async function scorecardPlan(db: PrismaClient, now: number, log: Log = lo
   return { targets, failed }
 }
 
+/** Forgets the days no pass at `now` can be due for, in any zone (UTC±14 h): a long-lived worker keeps a few keys a project. */
+export function pruneCache(cache: ScorecardCache, now: number): void {
+  const oldest = daysBefore(new Date(now).toISOString().slice(0, 10), DAYS_BACK + 1)
+  const stale = (key: string) => (JSON.parse(key) as [string, string, string])[2] < oldest
+  for (const key of cache.settled) if (stale(key)) cache.settled.delete(key)
+  for (const key of cache.tries.keys()) if (stale(key)) cache.tries.delete(key)
+}
+
 /** The days of `target` a pass at `now` computes when they have no row: the ended ones of the last DAYS_BACK. */
 export function dueDays(target: Pick<ScorecardTarget, 'timeZone'>, now: number): string[] {
   const today = localNow(target.timeZone, now).date
@@ -85,6 +93,7 @@ export async function scorecardPass(db: PrismaClient, read: PrismaClient, now: n
   const pass: ScorecardPass = { stored: 0, already: 0, failed: 0, capped: 0 }
   if (!cache.plan || now - cache.readAt >= PLAN_EVERY_MS) {
     const { targets, failed } = await scorecardPlan(db, now, log)
+    pruneCache(cache, now)
     pass.failed += failed
     Object.assign(cache, { plan: failed ? null : targets, readAt: now })
     return run(targets)
