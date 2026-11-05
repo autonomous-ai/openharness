@@ -62,14 +62,9 @@ export const hasStep = (state: SuperTabState, group: Conversation, worker: Agent
   state.conversations.some(c => c.reviewOf === group.id && (c.assignment?.agentId === worker.id || c.agentIds.includes(worker.id)))
 
 /** Whether [sender] may name [named] in a post: not a main-account member of Team-written work, how a re-test or re-check is
- *  asked for, unless [sender] coordinates. */
+ *  asked for, unless [sender] coordinates. A post that names one it may not goes out without it (commands.ts message.send). */
 export const mayName = (state: SuperTabState, group: Conversation, sender: Agent, named: Agent): boolean =>
   coordinates(state, group, sender) || named.id === sender.id || !barredFromTeamWritten(state, group, named)
-
-/** Refuses an agent naming one it may not ([mayName]) with --to. */
-export function requireNameable(state: SuperTabState, group: Conversation, sender: Agent, named: Agent): void {
-  if (!mayName(state, group, sender, named)) failTeamWritten()
-}
 
 /** Everyone to tell when [group]'s task has just been marked, by the conversation that reaches them, each once: the main-account
  *  members of the task and of every step, finished steps included, as the workflow asks them again. Not the coordinator. */

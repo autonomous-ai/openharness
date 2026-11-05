@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/attachment_viewer.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/file_links.dart';
+import 'package:harness/super_tabs/image_cache.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -73,16 +74,16 @@ Future<Uint8List> _png(WidgetTester tester) async =>
 void main() {
   late List<Uri> drawn;
   late Map<String, Uint8List> pictures;
-  late ImageProvider Function(Uri) image;
+  late ImageProvider Function(AttachmentImage) image;
 
   setUp(() {
     drawn = [];
     pictures = {};
     image = attachmentImage;
     superTabFileClock = () => _now;
-    attachmentImage = (url) {
-      drawn.add(url);
-      return MemoryImage(pictures[url.toString()] ?? Uint8List(3));
+    attachmentImage = (picture) {
+      drawn.add(picture.url);
+      return MemoryImage(pictures[picture.url.toString()] ?? Uint8List(3));
     };
   });
   tearDown(() {
@@ -235,6 +236,76 @@ void main() {
         Uri.parse(_signed(_original)),
       ]);
       expect(find.text('photo.jpg can’t be shown here.'), findsNothing);
+      await close(tester, c);
+    });
+  });
+
+  // Task #3178 under #3177: the thumbnail and the original are two pictures
+  // of one file, kept apart on disk, and the placeholder has the picture's
+  // shape before anything loads.
+  group('the picture cache', () {
+    late List<Uri> fetched;
+    late Map<String, Uint8List> served;
+    late Future<Uint8List> Function(Uri url, {int? maxBytes}) fetcher;
+    late SuperTabImageCache cache;
+
+    setUp(() {
+      fetched = [];
+      served = {};
+      fetcher = attachmentFetcher;
+      cache = superTabImageCache;
+      superTabImageCache = SuperTabImageCache(MemoryImageShelf());
+      // The real loader, through the cache; only the download is faked.
+      attachmentImage = (picture) => picture;
+      attachmentFetcher = (url, {maxBytes}) async {
+        fetched.add(url);
+        final bytes = served[url.toString()];
+        if (bytes == null) return Completer<Uint8List>().future;
+        return bytes;
+      };
+    });
+    tearDown(() {
+      attachmentFetcher = fetcher;
+      superTabImageCache = cache;
+      PaintingBinding.instance.imageCache
+        ..clear()
+        ..clearLiveImages();
+    });
+
+    testWidgets('the viewer downloads the original, not the kept thumbnail', (
+      tester,
+    ) async {
+      served[_signed(_thumbKey)] = await _png(tester);
+      served[_signed(_original)] = await _png(tester);
+      final (_, c) = await show(tester, _picture());
+      expect(fetched, [Uri.parse(_signed(_thumbKey))]);
+
+      await tester.tap(inline);
+      await tester.pumpAndSettle();
+      await tester.runAsync(() => Future<void>.delayed(Durations.short2));
+      await tester.pumpAndSettle();
+
+      expect(fetched, [
+        Uri.parse(_signed(_thumbKey)),
+        Uri.parse(_signed(_original)),
+      ]);
+      await tester.tap(find.byKey(const ValueKey('super-image-close')));
+      await tester.pumpAndSettle();
+      await close(tester, c);
+    });
+
+    testWidgets('the placeholder has the shape the server sent', (
+      tester,
+    ) async {
+      // Nothing served: the thumbnail is still loading.
+      final (_, c) = await show(tester, _picture());
+
+      final placeholder = find.byKey(
+        const ValueKey('super-attachment-placeholder:p1'),
+      );
+      expect(placeholder, findsOneWidget);
+      // 4000 × 3000 shown at most 360 each way.
+      expect(tester.getSize(placeholder), const Size(360, 270));
       await close(tester, c);
     });
   });
