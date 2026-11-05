@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { cleanUpComputers, otherAccountsOnComputer } from '../src/superTabs/computerMoves.js'
+import { cleanUpComputers, otherAccountsOnComputer, teamCleanupPending } from '../src/superTabs/computerMoves.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { localReportMemory } from '../src/superTabs/machineReports.js'
 import type { Command } from '../src/superTabs/commands.js'
@@ -189,5 +189,26 @@ describe("a Mac whose owner's Team account is about to join", () => {
     const rows = reads(entries, 'machines', ['hostMachineId'])
     expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
     expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ userId: 1/)
+  })
+})
+
+describe("a Harness Team account's previous account's Swarm cleanup", () => {
+  it('is pending while a Swarm lists its Team machine for cleanup, read from the computer and cleanup indexes', async () => {
+    const TEAM_COMPUTER = '9'.repeat(32)
+    await db.machine.create({ data: { machineId: 'kelvin-team-c', userId: kelvin, computerId: TEAM_COMPUTER, sessionKind: 'team', hostMachineId: 'kelvin-mac',
+      apiKey: 'fixture-kelvin-team-c', managerId: '', autonomousEnv: 'prod', authMode: 'remote' } })
+    const tab = (await store.create(owner, randomUUID(), 'Cleanup')).id
+    // What a commit writes for a Swarm whose machineCleanups name that machine (parts/commit.ts): the index the read uses.
+    await db.superTab.update({ where: { id: tab }, data: { cleanupMachineIds: ['kelvin-team-c'] } })
+    expect(await teamCleanupPending(db, { computerId: TEAM_COMPUTER, userId: tt })).toBe(true)
+    // Its own account signing in again (a plain repair) waits on nothing of its own.
+    expect(await teamCleanupPending(db, { computerId: TEAM_COMPUTER, userId: kelvin })).toBe(false)
+    const entries = await profiled(db, () => teamCleanupPending(db, { computerId: TEAM_COMPUTER, userId: tt }))
+    const machines = reads(entries, 'machines', ['computerId'])
+    expect(machines[0]!.planSummary, JSON.stringify(plan(machines))).toMatch(/IXSCAN \{ computerId: 1, userId: 1 \}/)
+    const swarms = reads(entries, 'SuperTab', ['cleanupMachineIds'])
+    expect(swarms[0]!.planSummary, JSON.stringify(plan(swarms))).toMatch(/IXSCAN \{ autonomousEnv: 1, cleanupMachineIds: 1/)
+    await db.superTab.update({ where: { id: tab }, data: { cleanupMachineIds: [] } })
+    expect(await teamCleanupPending(db, { computerId: TEAM_COMPUTER, userId: tt })).toBe(false)
   })
 })
