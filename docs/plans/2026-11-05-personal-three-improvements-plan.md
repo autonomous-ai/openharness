@@ -24,9 +24,11 @@ Where Desktop prefers "this computer", the phone prefers the computer the person
 agent), the closest it can know. A repo is read as Desktop reads it: `repository` (an SSH alias's real repo, #2476)
 before `remote`. With no computer online the card shows the disabled button "Open Harness on your Mac to start".
 (3) `PersonalMachines.waiting` (desktop `super_tabs/personal_machines.dart`) gives each row a short reason ("machine
-is off", "not signed in to Harness", "needs a Harness update", "no Claude Code or Codex", "not answering", else
-"couldn't add") and `retry(c, machineId)` drops the machine's wait and syncs again (an offline one is asked to
-reconnect first). `PersonalMachineRows` draws "name · Couldn't join: reason [Try again]", the full reason on hover.
+is off", "not signed in to Harness", "needs a Harness update", "no Claude Code or Codex", "not answering", "still
+setting up"; a failure none of these fits reads just "Couldn't join") and `retry(c, machineId)` drops the machine's
+wait and syncs again (an offline one has the machines reconnected first). `PersonalMachineRows` draws
+"name · Couldn't join: reason [Try again]", the full reason on hover; a machine being asked reads "Adding", with no
+Try again.
 
 **Tech Stack:** Flutter (desktop/ and mobile/), widget tests with the existing fixtures
 (`desktop/test/super_tab_personal_projects_test.dart`, `desktop/test/super_tab_swarm_switcher_test.dart`,
@@ -76,10 +78,10 @@ reconnect first). `PersonalMachineRows` draws "name · Couldn't join: reason [Tr
 **Interfaces:**
 - Produces: `bool PersonalProjects.hidden(SuperTabController c, String projectId)`.
 
-- [ ] Failing test: closing every pane of a repo hides its project from the sidebar; reopening a pane shows it with
+- [x] Failing test: closing every pane of a repo hides its project from the sidebar; reopening a pane shows it with
   its chat's messages; a project shows while its machine hasn't listed agents; the open chat stays listed; a project
   made by hand stays listed.
-- [ ] Implement `hidden` and the sidebar filter; run the file's tests.
+- [x] Implement `hidden` and the sidebar filter; run the file's tests.
 
 ### Task 2: The phone's Start Lead picks what Desktop's card picks
 
@@ -104,7 +106,8 @@ reconnect first). `PersonalMachineRows` draws "name · Couldn't join: reason [Tr
 - Test: `desktop/test/super_tab_swarm_switcher_test.dart`
 
 **Interfaces:**
-- Changes: `PersonalMachineRow.status` becomes the few-word reason; `Future<void> PersonalMachines.retry(c, machineId)`.
+- Changes: `PersonalMachineRow.status` becomes the few-word reason and gains `canRetry`;
+  `Future<void> PersonalMachines.retry(c, machineId)`.
 
 - [ ] Failing tests: an offline row reads "Couldn't join: machine is off" with Try again; a refusal reads its short
   reason with the full one on hover; Try again asks again at once inside the wait and the row goes once it joined.
