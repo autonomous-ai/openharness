@@ -116,17 +116,21 @@ void main() {
     expect(r.swarm.commands, hasLength(1));
   });
 
-  test('says when it went without words past the daily limit', () async {
-    final r = rig();
-    r.swarm.routes['/api/super-tabs/$tab/attachments/'] = (_) =>
-        facts(transcribed: false, failure: 'limit');
-    final c = await open(r.reader);
-    expect(await c.sendVoice(take, 'en'), (
-      sent: true,
-      notice: swarmVoiceOverLimit,
-    ));
-    expect(r.swarm.commands, hasLength(1));
-  });
+  // A voice message plays only and never has words (anh Dee, 11-04), so
+  // one sent without them says nothing about words (River, 11-05).
+  for (final failure in [null, 'limit']) {
+    test(
+      'sent without words (${failure ?? 'not heard'}), it says nothing',
+      () async {
+        final r = rig();
+        r.swarm.routes['/api/super-tabs/$tab/attachments/'] = (_) =>
+            facts(transcribed: false, failure: failure);
+        final c = await open(r.reader);
+        expect(await c.sendVoice(take, 'en'), (sent: true, notice: null));
+        expect(r.swarm.commands, hasLength(1));
+      },
+    );
+  }
 
   test(
     'keeps the take and sends nothing when the read gets no answer',
