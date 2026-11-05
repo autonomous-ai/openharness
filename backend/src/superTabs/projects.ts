@@ -92,6 +92,23 @@ export interface SwarmProject {
   githubSeen?: GitHubSeen
   /** What its coordinator is called; reads give "Product Manager" when absent (instructions.ts coordinatorNameOf). */
   coordinatorName?: string
+  /** Its owner's last "New repository" from New Project (task #1788): asked, then what GitHub's sign-in made of it. The
+   *  app that asked starts the Product Manager in it once `created`; the next ask replaces it. */
+  repositoryCreation?: RepositoryCreation
+}
+
+/** A new repository asked for a project (store.ts startRepositoryCreation, finishRepositoryCreation). [at] (ms) and [by]
+ *  name the ask an outcome answers. */
+export interface RepositoryCreation {
+  owner: string
+  name: string
+  private: boolean
+  by: string
+  at: number
+  state: 'waiting' | 'created' | 'taken' | 'refused' | 'failed' | 'cancelled'
+  repositoryUrl?: string
+  reachable?: boolean
+  reason?: string
 }
 
 /** The GitHub access states a check records (github/projectAccess.ts): the others are no answer from GitHub. */

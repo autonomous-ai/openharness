@@ -43,7 +43,7 @@ import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
-import { accountOf, wordsOf, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type SwarmProject } from './projects.js'
+import { accountOf, wordsOf, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
@@ -3462,6 +3462,65 @@ export class SuperTabStore {
     if (!(GITHUB_SEEN as readonly string[]).includes(state)) return false
     const seen = state as GitHubSeen
     return this.moveGitHub(tabId, project => project.id === projectId && project.githubSeen !== seen, project => { project.githubSeen = seen })
+  }
+
+  /** [user] asks for a new repository for their project (task #1788): its owner only, a person, while it has no repository
+   *  address. Written on the project as `waiting`, replacing any earlier ask, so the apps show it. */
+  async startRepositoryCreation(user: AuthUser, tabId: string, projectId: string, ask: { owner: string; name: string; private: boolean }, at: number): Promise<void> {
+    this.personOnly(user)
+    await transaction(this.db, async tx => {
+      const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
+      const actor = await this.actor(tx, user, state)
+      if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person creates a project\'s repository.', 403)
+      const project = readProject(state, actor, projectId)
+      if (!ownsProject(state, actor.userId, project)) fail('PROJECT_OWNER_REQUIRED', 'Only the project owner can create its repository.', 403)
+      if (project.repository?.repositoryUrl) fail('PROJECT_REPOSITORY_SET', 'This project already shares another repository.', 409)
+      const stored = (state.projects ?? []).find(p => p.id === projectId)!
+      stored.repositoryCreation = { owner: ask.owner, name: ask.name, private: ask.private, by: actor.userId, at, state: 'waiting' }
+      stored.githubRevision = (stored.githubRevision ?? 0) + 1
+      await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
+    })
+  }
+
+  /** Refuses anyone but a person of [tabId] who may write there (a viewer reads only), for New Project's organization check. */
+  async requireWriter(user: AuthUser, tabId: string): Promise<void> {
+    this.personOnly(user)
+    const { state } = await this.readLoad(user, tabId)
+    author(state, await this.actor(this.db, user, state), true)
+  }
+
+  /** The project's waiting ask for a new repository, for GitHub's callback before it creates anything: null when there is
+   *  none or another one replaced it, 'gone' when the project or its Swarm is. */
+  async repositoryAsk(tabId: string, projectId: string, by: string, at: number): Promise<RepositoryCreation | null | 'gone'> {
+    const row = await this.db.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+    if (!row || row.deletedAt) return 'gone'
+    const { state } = await loadRow(this.db, requireParts(row), {})
+    const project = (state.projects ?? []).find(p => p.id === projectId)
+    if (!project) return 'gone'
+    const asked = project.repositoryCreation
+    return asked && asked.by === by && asked.at === at && asked.state === 'waiting' ? asked : null
+  }
+
+  /** What GitHub's sign-in made of the ask by [by] at [at]: written only over that same waiting ask, so a late or repeated
+   *  callback never overwrites a newer one ('stale'). 'gone' when the project or its Swarm is. */
+  async finishRepositoryCreation(tabId: string, projectId: string, by: string, at: number,
+    outcome: Pick<RepositoryCreation, 'state' | 'repositoryUrl' | 'reachable' | 'reason'>): Promise<'recorded' | 'stale' | 'gone'> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt) return 'gone'
+      const loaded = await loadRow(tx, requireParts(row), {})
+      const state = cloneData(loaded.state)
+      const project = (state.projects ?? []).find(p => p.id === projectId)
+      if (!project) return 'gone'
+      const asked = project.repositoryCreation
+      if (!asked || asked.by !== by || asked.at !== at || asked.state !== 'waiting') return 'stale'
+      project.repositoryCreation = { owner: asked.owner, name: asked.name, private: asked.private, by, at, state: outcome.state,
+        ...(outcome.repositoryUrl ? { repositoryUrl: outcome.repositoryUrl } : {}), ...(outcome.reachable === undefined ? {} : { reachable: outcome.reachable }),
+        ...(outcome.reason ? { reason: outcome.reason } : {}) }
+      project.githubRevision = (project.githubRevision ?? 0) + 1
+      await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
+      return 'recorded'
+    })
   }
 
   /** One state write moving the GitHub revision of the projects [moves] picks, re-read in its transaction; none picked
