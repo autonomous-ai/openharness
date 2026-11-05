@@ -193,7 +193,7 @@ describe('a sign-in remembered for 30 seconds per pod (#3041)', () => {
   it('signing out ends a remembered sign-in at once', async () => {
     const { token, refreshToken } = await signIn()
     await authenticateAccessToken(token)
-    await revokeHarnessSession(refreshToken)
+    await revokeHarnessSession(refreshToken!)
     await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
   })
 
@@ -209,7 +209,7 @@ describe('a sign-in remembered for 30 seconds per pod (#3041)', () => {
     await authenticateAccessToken(token)
     // The sign-out ran on another pod: only Redis and Mongo saw it.
     const remembered = harnessAuthCache.get(harnessTokenHash(token))
-    await revokeHarnessSession(refreshToken)
+    await revokeHarnessSession(refreshToken!)
     expect(harnessAuthCache.get(harnessTokenHash(token))).toBe(remembered)
     await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
   })
