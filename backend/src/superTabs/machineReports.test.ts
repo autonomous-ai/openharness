@@ -118,6 +118,14 @@ describe('when a full report\'s record still holds (task #3119)', () => {
     expect(recordHolds(record, now({ main: 10, hosted: 10, uncovered: 7 }))).toBe(true)
   })
 
+  it('ends when Redis lost the Swarm\'s stamps, or made them again since, though the record saw no host stamp yet', () => {
+    const early = { ...record, hosts: { host: 0, all: 0 } }
+    // Lost: every field reads 0.
+    expect(recordHolds(early, { main: 0, hosted: 0, uncovered: 0, host: 0, all: 0 })).toBe(false)
+    // Made again by a bump for another machine: every host's stamp starts with the hash.
+    expect(recordHolds(early, { main: 50, hosted: 50, uncovered: 0, host: 0, all: 49 })).toBe(false)
+  })
+
   it('holds a record of the release before only while the Swarm is unchanged', () => {
     const { hosts: _hosts, ...older } = record
     expect(recordHolds(older, now())).toBe(true)

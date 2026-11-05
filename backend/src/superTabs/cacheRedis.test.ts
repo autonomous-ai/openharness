@@ -144,6 +144,17 @@ describe.skipIf(!url)('redisStamps', () => {
     expect(after.hosted).toBe(after.main)
   })
 
+  it('starts every host\'s stamp with a hash made again, so no record from before it still holds', async () => {
+    const stamps = redisStamps(redis, bus), id = tab()
+    used.push(id)
+    await stamps.bump(id, ['main'], ['m1'])
+    await redis.del(`swarm:stamp:${id}`)
+    await stamps.bump(id, ['main'], ['m2'])
+    const after = await stamps.readHost(id, 'm1')
+    expect(after.host).toBe(0)
+    expect(after.all).toBeGreaterThan(0)
+  })
+
   it('tells the other processes which Swarm moved, and which stamps', async () => {
     const stamps = redisStamps(redis, bus), id = tab()
     used.push(id)
