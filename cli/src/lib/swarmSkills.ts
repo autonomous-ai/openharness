@@ -1,6 +1,6 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
-import { buddyLaunchFile, buddyOwnerOf, buddyReadsOf, revokeBuddyWide, signedInAccount } from './buddyGuard.js'
+import { buddyLaunchFile, buddyOwnerOf, buddyReadsOf, heldByOldGuard, revokeBuddyWide, signedInAccount } from './buddyGuard.js'
 import { isTeamAccount } from '../team/config.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
@@ -790,10 +790,8 @@ function prepareBuddyFolder(root: string, key: string): void {
   if (!owner) throw new Error(BUDDY_START_AGAIN)
   if (account && account !== owner) throw new Error(BUDDY_NOT_HERE)
   const claude = join(root, '.claude'), guard = join(claude, 'buddy-guard.mjs'), settings = join(claude, 'settings.local.json')
-  // Harness's lock, and nothing else: its settings named its guard by this folder's own path, which no commit can know
-  // (security review 2 of #2832). A project's own file of either name is left as it is.
-  const locked = isPlainFile(guard) && isPlainFile(settings) && readFileSync(settings, 'utf8').includes(guard)
-  if (locked) {
+  // Harness's lock, and nothing else (heldByOldGuard): a project's own file of either name is left as it is.
+  if (heldByOldGuard(root)) {
     rmSync(settings, { force: true })
     rmSync(guard, { force: true })
     const walk = (dir: string) => {
@@ -819,7 +817,6 @@ function prepareBuddyFolder(root: string, key: string): void {
 const BUDDY_NOT_HERE = 'A Buddy runs only on its owner\'s own machine, signed in as them. It is not started here.'
 /** Why a Buddy saved before its start recorded its owner is not relaunched: its owner starts it again, and that start checks. */
 const BUDDY_START_AGAIN = 'This Buddy was started before Harness checked its machine at each launch. Start your Buddy again.'
-const isPlainFile = (path: string) => { try { const stat = lstatSync(path); return stat.isFile() && !stat.isSymbolicLink() } catch { return false } }
 
 /** Which built-in text a session's skill file holds and of which mode, how many times the file was rewritten, and the text,
  * mode and rewrite its agent was last confirmed told about (the launch prompt is rewrite 0). A file from before this record

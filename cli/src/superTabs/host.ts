@@ -50,7 +50,8 @@ import { backend, ENDED_WORK, identifier, object, SuperTabHostError, within } fr
 import { parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill, wireRole, type CustomSwarmRole, type SkillRefresh, type SwarmSkill, type SwarmSkillGrant,
   type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { recordProjectSkillsNotice, refreshProjectSkills } from '../lib/swarmInstructionsSkill.js'
-import { artifactLinks, buddyLaunchOf, buddyReadsOf, forgetBuddyReads, grantBuddyWide, SentListsError, writeBuddyAccount } from '../lib/buddyGuard.js'
+import { artifactLinks, buddyLaunchOf, buddyReadsOf, forgetBuddyReads, grantBuddyWide, heldByOldGuard, listSentToOldGuard, SentListsError,
+  writeBuddyAccount } from '../lib/buddyGuard.js'
 import { authorName } from './personName.js'
 
 /** The skills of a group's project in a tab state: a group from before projects is in the first, and a project from before
@@ -1946,7 +1947,7 @@ export class SuperTabHost {
     // For this launch of the Buddy (its folder's launch id, lib/swarmSkills.ts): a relaunch makes a grant from before none.
     const launch = own?.onTheirMachine && buddySession?.cwd ? buddyLaunchOf(buddySession.cwd) : null
     const wide = !!own?.onTheirMachine && !own.narrow && !!signedIn && !!launch && signedIn === String(object(message.author).id)
-    const sent = key && own ? { key, session: entry.harnessId, links: own.onTheirMachine ? links : [] } : null
+    const sent = key && own ? { key, session: entry.harnessId, files: files.paths, links: own.onTheirMachine ? links : [] } : null
     const elsewhere = own && !own.onTheirMachine ? links : []
     // A person's one Buddy reads only the projects its person reads now: a project they lost leaves its folder before this
     // turn (buddyHome.ts; spec 2026-10-31-one-buddy-per-swarm, Access). A read that fails withholds the delivery, tried again.
@@ -1973,6 +1974,9 @@ export class SuperTabHost {
     // Granted only for a delivery still going ahead. A grant it cannot write does not deliver: the delivery is tried again.
     if (sent) {
       try {
+        // A Buddy launched before #2832 still runs that release's guard, which opens what its person sent only once listed (task
+        // #3159). Listed before the Buddy can read the message; for any other Buddy nothing is listed or hashed.
+        if (buddySession?.cwd && heldByOldGuard(buddySession.cwd)) listSentToOldGuard(buddyReadsOf(sent.key), sent)
         if (signedIn) writeBuddyAccount(signedIn)
         grantBuddyWide(buddyReadsOf(sent.key), wide ? { session: sent.session, wide: true, account: signedIn!, launch: launch! } : { session: sent.session, wide: false })
       } catch (error) { this.authorized.delete(id); throw error }
