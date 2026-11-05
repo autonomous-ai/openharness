@@ -50,7 +50,7 @@ SuperTabImageItem _item(
 );
 
 void main() {
-  late ImageProvider Function(Uri) original;
+  late ImageProvider Function(AttachmentImage) original;
   late Uint8List png;
 
   setUp(() => original = attachmentImage);
@@ -354,7 +354,8 @@ void main() {
           });
         }),
       ]);
-      attachmentImage = (url) {
+      attachmentImage = (picture) {
+        final url = picture.url;
         drawn.add(url);
         return MemoryImage(png);
       };
