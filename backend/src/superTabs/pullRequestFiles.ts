@@ -7,14 +7,13 @@ import { PULL_WATCH_PERMISSIONS, type GitHubApp } from '../github/app.js'
 import { githubRepository, type GitHubRepository } from '../github/repository.js'
 import { logger } from '../utils/logger.js'
 
-/** What this read needs of the app: the pull request's head from its watch read, and its files at that head (github/app.ts,
- *  #3394). An app without the files read yet reads nothing, so no step opens: until #3394 lands, Ready is as before. */
+/** What this read needs of the app: the pull request's head from its watch read, and its files (github/app.ts). */
 export interface PullRequestFilesApp {
   resolve: GitHubApp['resolve']
   createToken: GitHubApp['createToken']
   revoke: GitHubApp['revoke']
   watchPullRequest(repository: GitHubRepository, number: number, token: string): Promise<{ head: string } | null>
-  pullRequestFiles?(repository: GitHubRepository, number: number, token: string, head?: string): Promise<Array<{ filename: string }> | null>
+  pullRequestFiles(repository: GitHubRepository, number: number, token: string): Promise<Array<{ filename: string }> | null>
 }
 
 /** What the store gives a Ready's command: the pull requests read, the first one's head, and every file they change. */
@@ -32,7 +31,7 @@ export const projectPullRequestFiles = (app: PullRequestFilesApp) =>
       const match = PULL.exec(url)
       return match && match[1]!.toLowerCase() === repository.fullName.toLowerCase() ? [{ url, number: Number(match[2]) }] : []
     }).slice(0, MAX_PULLS)
-    if (!own.length || !app.pullRequestFiles) return null
+    if (!own.length) return null
     const read: PullRequestFilesRead = { urls: own.map(pull => pull.url), head: null, files: null }
     let token: string | null = null
     try {
@@ -41,10 +40,12 @@ export const projectPullRequestFiles = (app: PullRequestFilesApp) =>
       token = (await app.createToken(resolved.installation, resolved.repository, PULL_WATCH_PERMISSIONS)).token
       const files = new Set<string>()
       for (const [i, pull] of own.entries()) {
-        // The files at the head the watch read: a push in between reads as unreadable (github/app.ts, #3394).
+        // The files of the head the watch read: when a push moved it while they were listed, they read as unreadable.
         const watch = await app.watchPullRequest(resolved.repository, pull.number, token)
         if (i === 0) read.head = watch?.head ?? null
-        const changed = watch ? await app.pullRequestFiles(resolved.repository, pull.number, token, watch.head) : null
+        const listed = watch ? await app.pullRequestFiles(resolved.repository, pull.number, token) : null
+        const after = listed ? await app.watchPullRequest(resolved.repository, pull.number, token) : null
+        const changed = listed && after?.head === watch!.head ? listed : null
         if (!changed) return { ...read, files: null }
         for (const file of changed) files.add(file.filename)
       }
