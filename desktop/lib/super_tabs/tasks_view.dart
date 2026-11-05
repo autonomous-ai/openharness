@@ -382,8 +382,12 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     final id = task?.id ?? entry.proposal!.messageId;
     return SuperTabTaskCard(
       key: ValueKey('super-task-card-$id'),
-      title: task?.title ?? entry.proposal!.title,
+      // A legacy marker is the badge now: the title drops it.
+      title: task == null
+          ? entry.proposal!.title
+          : superTabTitlePriority(task.title).title,
       caption: _caption(entry, now),
+      priority: superTabEntryPriority(entry),
       needsYou: entry.needsYou,
       unread: task != null && widget.controller.unreadShown(task),
       activity: _activity(entry),
@@ -512,8 +516,17 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
 
   /// Puts [ordered]'s card at [to] in place and tells the server, which keeps
   /// the order for everyone. Refused, the card goes back and the bar says why.
+  /// A card moves only among those of its own priority (task #3117): one
+  /// dropped past them stops at the edge of its band.
   Future<void> _move(List<SuperTabTaskEntry> ordered, int from, int to) async {
-    if (from == to || to < 0 || to >= ordered.length) return;
+    if (to < 0 || to >= ordered.length) return;
+    final priority = superTabEntryPriority(ordered[from]);
+    final band = [
+      for (final (i, e) in ordered.indexed)
+        if (superTabEntryPriority(e) == priority) i,
+    ];
+    to = to.clamp(band.first, band.last);
+    if (from == to) return;
     final ids = [for (final e in ordered) e.task!.id];
     final id = ids.removeAt(from);
     ids.insert(to, id);
@@ -521,22 +534,31 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       _moving = ids;
       _moveError = null;
     });
-    // The column lifts what needs the reader, so its neighbours on screen are
-    // not its neighbours in the shared order: it goes right before the first
-    // card under it that is not lifted, or last (reviews of #2883).
+    // The column lifts what needs the reader, and sorts by priority, so its
+    // neighbours on screen are not its neighbours in the shared order: it
+    // goes right before the first card of its priority under it that is not
+    // lifted (reviews of #2883), or else right after the last of its priority
+    // in the queue.
+    final tasks = {for (final e in ordered) e.task!.id: e.task!};
     final queue = [
-      for (final task in superTabQueueOrder([for (final e in ordered) e.task!]))
+      for (final task in superTabQueueOrder(tasks.values))
         if (task.id != id) task.id,
     ];
+    bool peer(String other) => superTabTaskPriority(tasks[other]!) == priority;
     final lifted = {
       for (final e in ordered)
         if (e.needsYou) e.task!.id,
     };
     final below = ids
         .skip(to + 1)
-        .where((other) => !lifted.contains(other))
+        .where((other) => peer(other) && !lifted.contains(other))
         .firstOrNull;
-    final at = below == null ? queue.length : queue.indexOf(below);
+    final at = below != null
+        ? queue.indexOf(below)
+        : switch (queue.lastIndexWhere(peer)) {
+            -1 => queue.length,
+            final last => last + 1,
+          };
     final refused = await widget.controller.queueTask(
       id,
       after: at == 0 ? null : queue[at - 1],

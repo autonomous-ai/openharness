@@ -395,6 +395,7 @@ class SuperTabConversation {
             )
           : null,
       queueRank = (row['queueRank'] as num?)?.toDouble(),
+      priority = row['priority'] as String?,
       notBefore = DateTime.tryParse(row['notBefore'] as String? ?? ''),
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       lastPersonSequence = (row['lastPersonSequence'] as num?)?.toInt() ?? 0,
@@ -455,6 +456,11 @@ class SuperTabConversation {
   /// for the phone's Tasks view to come.
   final double? queueRank;
   final DateTime? notBefore;
+
+  /// A task's priority, `P0` to `P3`, as the server keeps it (backend
+  /// taskPriority.ts, task #3117); null on a step, a chat and a task from
+  /// before it. Read here for the phone's Tasks view to come.
+  final String? priority;
   String get label => number == null ? title : '#$number $title';
   final String? leadId;
   final List<String> agentIds;

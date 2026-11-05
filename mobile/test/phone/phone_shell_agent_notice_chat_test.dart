@@ -180,6 +180,7 @@ void main() {
           title: 'Nova',
           machine: 'Mac',
           body: 'News',
+          quiet: false,
         ));
         plugin.onResponse!(
           NotificationResponse(
