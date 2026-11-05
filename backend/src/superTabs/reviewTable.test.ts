@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { SEED_RULES, type ProjectRules } from './policy.js'
-import { reviewPlan, sharedFiles } from './reviewTable.js'
+import { reviewPlan, sharedFiles, stepBrief } from './reviewTable.js'
 
 const names = (files: string[] | null, rules?: ProjectRules) => reviewPlan(files, rules).map(step => step.name)
 
@@ -62,5 +62,16 @@ describe('sharedFiles', () => {
 
   it('counts a pull request whose files were not read as touching everything', () => {
     expect(sharedFiles([{ url: 'a', files: null }, { url: 'b', files: ['z.ts'] }])).toEqual([{ file: '*', urls: ['a', 'b'] }])
+  })
+})
+
+// Security review 2 of #3227 (Elm, minor): each pull request's own list was pinned to its own head; the brief says so.
+describe('stepBrief', () => {
+  it('names each pull request with its own head', () => {
+    const [step] = reviewPlan(['docs/a.md'])
+    const brief = stepBrief(step!, { number: 9, title: 'Fix', pulls: [
+      { url: 'https://github.com/acme/app/pull/7', head: 'abc1234'.padEnd(40, '0') },
+      { url: 'https://github.com/acme/app/pull/8', head: 'def5678'.padEnd(40, '0') }] })
+    expect(brief).toContain('https://github.com/acme/app/pull/7 at head abc1234, https://github.com/acme/app/pull/8 at head def5678')
   })
 })

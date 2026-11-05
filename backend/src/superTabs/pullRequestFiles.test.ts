@@ -19,7 +19,8 @@ describe('projectPullRequestFiles', () => {
   it('reads the head and the file names of the project\'s own pull requests, then revokes its token', async () => {
     const app = fakeApp({ 7: ['a.ts', 'b.ts'], 8: ['b.ts', 'c.ts'] }, { 7: 'abc1234', 8: 'def5678' })
     const read = await projectPullRequestFiles(app)(REPO, [`${REPO}/pull/7`, `${REPO}/pull/8`, 'https://github.com/other/repo/pull/9'])
-    expect(read).toEqual({ urls: [`${REPO}/pull/7`, `${REPO}/pull/8`], head: 'abc1234', files: ['a.ts', 'b.ts', 'c.ts'] })
+    expect(read).toEqual({ urls: [`${REPO}/pull/7`, `${REPO}/pull/8`], head: 'abc1234', files: ['a.ts', 'b.ts', 'c.ts'],
+      heads: [{ url: `${REPO}/pull/7`, head: 'abc1234' }, { url: `${REPO}/pull/8`, head: 'def5678' }] })
     expect(app.pullRequestFiles).toHaveBeenCalledTimes(2)
     expect(app.revoke).toHaveBeenCalledWith('read-token')
   })
