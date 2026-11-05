@@ -34,6 +34,8 @@ describe('a head that is a clean main merge', () => {
     expect(cleanMainMergeOf({ ...clean(), mergeSide: [...clean().mergeSide, file('app.ts', 'p2')] })).toBeNull()
     // A file main changed, left out of the merge.
     expect(cleanMainMergeOf({ ...clean(), mergeSide: [file('lib.ts', 'm2')] })).toBeNull()
+    // A file listed twice in the merge, standing for another main changed (security review of #3284, Minor 2).
+    expect(cleanMainMergeOf({ ...clean(), mergeSide: [file('lib.ts', 'm2'), file('lib.ts', 'm2')] })).toBeNull()
     // The same blob with another status (a removal kept, a rename made a copy).
     expect(cleanMainMergeOf({ ...clean(), mainSide: [file('old.ts', 'o1', 'removed')], mergeSide: [file('old.ts', 'o1', 'modified')] })).toBeNull()
   })
