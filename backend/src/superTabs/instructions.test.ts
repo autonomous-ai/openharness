@@ -793,7 +793,8 @@ describe('an instructions save may move a person\'s rule', () => {
     const { f, lead } = pm()
     const open = codeTask(f, quiet, false)
     const refused = refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))
-    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ rule: quiet, people: ['owner'], why: 'waiting' }] } })
+    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ rule: quiet, people: ['owner'], why: 'waiting',
+      movedTo: `task #${open.number}` }] } })
     expect(refused.message).toContain(`task #${open.number}`)
     expect(refused.message).toContain('until it merges')
     open.ledger = { ...open.ledger, mergedAt: 900, shippedAt: 900 }

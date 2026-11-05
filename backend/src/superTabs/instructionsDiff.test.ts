@@ -220,7 +220,21 @@ describe('droppedRules with moved rules', () => {
     expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [task(quiet.replace('18:00', '20:00'))])).toEqual([expect.objectContaining({ why: 'removed' })])
     expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [task(quiet.replace('time', 'time, unless the PM judges it urgent'))]))
       .toEqual([expect.objectContaining({ why: 'removed' })])
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [task(quiet.replace('No releases', 'Releases'))])).toEqual([expect.objectContaining({ why: 'removed' })])
     // A real drop, with nowhere it moved to.
     expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [])).toEqual([expect.objectContaining({ people: ['Ken'], why: 'removed' })])
+  })
+})
+
+describe('droppedRules with a rule in several places', () => {
+  const quiet = 'No releases between 18:00 and 09:00 Vietnam time (Ken, 2026-11-02).'
+  const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
+  // Review of #3220: an open task listed first hid the rules record that keeps the same rule.
+  it('counts a rule kept when any place keeps it, an open task listed first or not', () => {
+    const open = { text: `Changes:\n- ${quiet}`, people: [], where: 'task #12', open: true }
+    const record = { text: quiet, people: [], where: 'the rules record', open: false }
+    expect(droppedRules(doc(quiet), doc(), personKey, [open, record])).toEqual([])
+    expect(droppedRules(doc(quiet), doc(), personKey, [open, { ...open, where: 'task #13' }]))
+      .toEqual([expect.objectContaining({ why: 'waiting', movedTo: 'task #12' })])
   })
 })
