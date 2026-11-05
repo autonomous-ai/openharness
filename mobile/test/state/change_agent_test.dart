@@ -582,15 +582,12 @@ void main() {
     });
   });
 
-  test('a replacement report the machine refuses, or never answers, does not '
-      'undo the switch', () async {
-    for (final answer in <Map<String, dynamic> Function(Map<String, dynamic>)>[
-      (_) => throw refusal('UNSUPPORTED'),
-      (_) => throw const WsRequestTimeout('agent_handoff_complete'),
-      (_) => {'error': 'HANDOFF_UNAVAILABLE'},
-    ]) {
+  test(
+    'an older machine that has no replacement report: the switch is done',
+    () async {
       final rig = await rigWith([source()]);
-      rig.conn('m').answers['agent_handoff_complete'] = answer;
+      rig.conn('m').answers['agent_handoff_complete'] = (_) =>
+          throw refusal('UNSUPPORTED');
 
       final result = await finished(
         rig,
@@ -604,8 +601,52 @@ void main() {
         rig.conn('m').timeouts['agent_handoff_complete'],
         const Duration(seconds: 5),
       );
-    }
-  });
+    },
+  );
+
+  test(
+    'a replacement report refused or never answered is not the end of the '
+    'switch: it says so, and choosing again reports it, as the desktop does',
+    () async {
+      // Unreported, a Swarm Product Manager's machine never takes the new session in, and closes it
+      // once its time is up (cli superTabs/host.ts, SWITCH_ADOPT_MS): the switch would undo itself.
+      for (final answer
+          in <Map<String, dynamic> Function(Map<String, dynamic>)>[
+            (_) => throw const WsRequestTimeout('agent_handoff_complete'),
+            (_) => {'error': 'HANDOFF_UNAVAILABLE'},
+            (_) => throw refusal('LEAD_SWITCHING'),
+          ]) {
+        final rig = await rigWith([source()]);
+        rig.conn('m').answers['agent_handoff_complete'] = answer;
+
+        final first = await finished(
+          rig,
+          rig.app.changeAgent('m', 'a', 'codex'),
+        );
+
+        expect(
+          first.error,
+          'The new agent started. Choose it again to finish the switch.',
+        );
+
+        rig.conn('m').answers['agent_handoff_complete'] = (_) => {'ok': true};
+        final again = await finished(
+          rig,
+          rig.app.changeAgent('m', 'a', 'codex'),
+        );
+
+        expect(again.error, isNull);
+        expect(again.agentId, 'b');
+        expect(rig.app.agentChanging('m', 'a'), isFalse);
+        expect(
+          rig.conn('m').payloadsOf('agent_handoff_complete'),
+          hasLength(2),
+        );
+        expect(rig.conn('m').payloadsOf('agent_close'), hasLength(1));
+        expect(rig.conn('m').payloadsOf('agent_create'), hasLength(1));
+      }
+    },
+  );
 
   test('while the replacement is reported the switch is still on its way: '
       'choosing again joins it, and no second harness starts', () async {
