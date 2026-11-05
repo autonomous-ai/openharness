@@ -2833,37 +2833,47 @@ describe('a launched start whose engine stops on a screen', () => {
     expect(failures()).toEqual([])
   })
 
-  it('fails it at once on the trust question, with the question\'s words, and types nothing', async () => {
+  it('fails it at once on the trust question, naming it and its options, and types nothing', async () => {
     const { f, inputIfScreen, failures } = launched(TRUST, 'trust_open')
     await f.machine.tick()
     expect(inputIfScreen).not.toHaveBeenCalled()
     const [failure] = failures()
-    expect(failure?.error).toContain('Trust this folder?')
-    expect(failure?.error).toContain('1. Trust and continue')
+    expect(failure?.error).toBe('Its engine stopped on a folder trust question nobody here can answer (1. Trust and continue; 2. Quit).')
   })
 
   it('also when its own check already read the screen as needing a person', async () => {
     const { f, failures } = launched(TRUST, 'trust_open', { engine: 'codex', projectSettings: 'off' }, { ...waiting, needsPerson: true })
     await f.machine.tick()
-    expect(failures()[0]?.error).toContain('Trust this folder?')
+    expect(failures()[0]?.error).toContain('folder trust question')
   })
 
   it('fails, never answers, the restricted screen of a start that is not Team-written', async () => {
     const { f, inputIfScreen, failures } = launched(RESTRICTED, 'trust_open', { engine: 'codex' })
     await f.machine.tick()
     expect(inputIfScreen).not.toHaveBeenCalled()
-    expect(failures()[0]?.error).toContain('Open restricted')
+    expect(failures()[0]?.error).toBe('Its engine stopped on a folder trust question nobody here can answer (1. Open restricted; 2. Quit).')
   })
 
-  it('fails a Claude Code start held at its sign-in at once, with the link cut to its site', async () => {
-    const text = '  Select login method:\n\n  ❯ 1. Claude account with subscription\n    2. Anthropic Console account\n\n  https://claude.ai/oauth/authorize?code=true&client_id=abc&state=secret-state\n'
+  // Security review 2 of #3063: the whole screen in a reason carried what a terminal shows only its own session (a sign-in
+  // link's state, wrapped onto the next line; a device code; an account's email), and a malformed link threw before the
+  // failure was sent. Only the kind of screen and its option labels are told, and nothing that reads like a secret.
+  it('fails a Claude Code start held at its sign-in at once, telling only the kind of screen and its plain options', async () => {
+    const text = [
+      '  Select login method:', '',
+      '  ❯ 1. Claude account with subscription', '    2. Anthropic Console account', '    3. Use person@example.com',
+      '    4. Code ABCD-1234-EFGH', '    5. https://claude.ai/oauth/authorize?client_id=demo&', '',
+      '  https://auth.example/authorize?client_id=demo&', '  state=FAKE_STATE_123456', '  Paste code here: WXYZ-9876', '  https://[invalid',
+    ].join('\n')
     const { f, failures } = launched(text, 'sign_in_open', { engine: 'claude' })
     await f.machine.tick()
     const [failure] = failures()
-    expect(failure?.error).toContain('Select login method:')
-    expect(failure?.error).toContain('https://claude.ai')
-    expect(failure?.error).not.toContain('secret-state')
-    expect(failure!.error!.length).toBeLessThanOrEqual(600)
+    expect(failure?.error).toBe('Its engine stopped on a sign-in screen nobody here can answer (1. Claude account with subscription; 2. Anthropic Console account).')
+  })
+
+  it('still fails it at once on a screen with no options, and on one whose words cannot be read as links', async () => {
+    const { f, failures } = launched('  https://[invalid\n  Waiting for you to sign in', 'sign_in_open', { engine: 'codex' })
+    await f.machine.tick()
+    expect(failures()[0]?.error).toBe('Its engine stopped on a sign-in screen nobody here can answer.')
   })
 
   it.each([
