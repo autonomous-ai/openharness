@@ -282,6 +282,75 @@ describe('a task a Team agent worked on', () => {
   })
 })
 
+// Task #3554 (River, 11-06): #3462 and #3514 were marked Team-written though all their code was the main account's. The push read
+// covered every pull request link posted in the task or its steps (a Team reviewer's verdict, log lines), and a step's Team answer
+// marked its task. The mark rests on the task's own code: its brief, its assignment's results, its checks and its merge.
+describe('a task\'s Team-written mark rests on its own code', () => {
+  const REPO = 'https://github.com/acme/app', OWN = `${REPO}/pull/7`, TEAM_PR = `${REPO}/pull/99`
+  /** GitHub as the store asks it: only the Team agent's pull request was pushed by the bot. */
+  const github = () => vi.fn(async (_repository: string | null, urls: string[]) => urls.includes(TEAM_PR) ? 'team' as const : 'clean' as const)
+  const setup = async () => {
+    const f = await fixture()
+    const state = await storedState(f.tab)
+    state.projects!.find(p => p.id === 'lead')!.repository = { machineId: 'owner-host', cwd: '/repo', repositoryUrl: REPO }
+    await saveState(f.tab, state)
+    const read = github(), asked = new SuperTabStore(db, Date.now, undefined, { pushOrigin: read })
+    const exec = (command: Command, asAgentId?: string) => asked.execute(owner, f.tab, { operationId: randomUUID(), command }, asAgentId)
+    /** As the Team account's agent, from its Team machine. */
+    const execTeam = (command: Command, asAgentId: string) => asked.execute(team, f.tab, { operationId: randomUUID(), command }, asAgentId)
+    const agentOf = async (conversationId: string, name: string) => String((await run(f.tab, { type: 'agent.add', conversationId, machineId: 'owner-host',
+      harnessId: randomUUID(), name, configuration: config, lead: false })).result.agentId)
+    const task = String((await run(f.tab, { type: 'conversation.create', projectId: 'lead', title: 'Owner work', brief: 'Do it', checks: [] })).result.conversationId)
+    const ownBuilder = await agentOf(task, 'Owner Builder')
+    await exec({ type: 'work.assign', conversationId: task, agentId: ownBuilder })
+    const assignment = (await storedState(f.tab)).conversations.find(c => c.id === task)!.assignment!.id
+    // The builder's own pull request, as its status names it.
+    await exec({ type: 'work.status', conversationId: task, assignmentId: assignment, status: 'working', result: `Draft PR ${OWN}` }, ownBuilder)
+    /** A main-account agent of the project joining the task: the read River's handover of #3462 met. */
+    const join = async (name: string) => exec({ type: 'conversation.agent', conversationId: task, agentId: await agentOf('lead', name), present: true, lead: false })
+    const marked = async (id: string) => (await storedState(f.tab)).conversations.find(c => c.id === id)?.teamWritten === true
+    return { ...f, read, exec, execTeam, agentOf, join, task, ownBuilder, marked }
+  }
+
+  it('does not read a Team pull request someone linked in the task, and still reads the task\'s own', async () => {
+    const f = await setup()
+    await run(f.tab, { type: 'message.send', conversationId: f.task, text: `Log: CI on ${TEAM_PR} failed at step 3`, replyTo: null, recipientIds: [] })
+    await expect(f.join('Owner Builder 2')).resolves.toBeTruthy()
+    expect(f.read).toHaveBeenLastCalledWith(REPO, [OWN])
+    expect(await f.marked(f.task)).toBe(false)
+  })
+
+  it('marks a step for a Team pull request its reviewer linked, never the task, which a main-account agent still takes', async () => {
+    const f = await setup()
+    const review = String((await run(f.tab, { type: 'conversation.create', projectId: 'lead', title: 'Review', brief: 'Read it', reviewOf: f.task, step: 'Review', checks: [] })).result.conversationId)
+    // A Team-account reviewer, as #3462's were.
+    await f.exec({ type: 'work.assign', conversationId: review, agentId: f.builder })
+    const step = (await storedState(f.tab)).conversations.find(c => c.id === review)!
+    await run(f.tab, { type: 'message.send', conversationId: review, text: `Same bug as ${TEAM_PR}.`, replyTo: null, recipientIds: [] })
+    await f.execTeam({ type: 'work.status', conversationId: review, assignmentId: step.assignment!.id, status: 'review', result: 'Ready to merge: Yes' }, f.builder)
+    expect(await f.marked(review)).toBe(true)
+    expect(await f.marked(f.task)).toBe(false)
+    await expect(f.join('Owner Builder 2')).resolves.toBeTruthy()
+  })
+
+  it('still marks the task, and refuses the main account, when the bot pushed to its own pull request', async () => {
+    const f = await setup()
+    f.read.mockImplementation(async (_repository, urls) => urls.includes(OWN) ? 'team' : 'clean')
+    await expect(f.join('Owner Builder 2')).rejects.toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
+    expect(await f.marked(f.task)).toBe(true)
+  })
+
+  it('reads what a task from before recorded, links included: it loses no protection it had', async () => {
+    const f = await setup()
+    const state = await storedState(f.tab)
+    const legacy = state.conversations.find(c => c.id === f.task)!
+    delete (legacy as { codePullRequestUrls?: string[] }).codePullRequestUrls
+    legacy.pullRequestUrls = [OWN, TEAM_PR]
+    await saveState(f.tab, state)
+    await expect(f.join('Owner Builder 2')).rejects.toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
+  })
+})
+
 // Huy's groupme, 2026-11-05 (task #3266): a Team account start for a repository the Harness GitHub App is not on failed
 // twice on its machine and suspended Claude there. The store reads the project's GitHub access first and refuses it at once.
 describe('a start whose account cannot reach the project repository', () => {

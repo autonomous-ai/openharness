@@ -3,7 +3,7 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 import { LEAD_CAPABILITY } from './leadStart.js'
-import { TEAM_WRITTEN_STOP, TEAM_WRITTEN_WORK, teamWrittenTask } from './teamWritten.js'
+import { applyPushOrigin, TEAM_WRITTEN_STOP, TEAM_WRITTEN_WORK, teamWrittenTask } from './teamWritten.js'
 
 // Audit H2: a branch a Team agent wrote runs only in a Team account, whoever's project it is, so nothing the branch
 // carries runs with the main account's rights (docs/plans/2026-11-02-team-written-branch-plan.md).
@@ -440,5 +440,38 @@ describe('a task a Team agent worked on', () => {
     const f = swarm(), task = f.written(), stored = f.state.conversations.find(c => c.id === task)!
     delete stored.teamWritten
     expect(teamWrittenTask(f.state, stored)).toBe(true)
+  })
+})
+
+// Task #3554: a step's own links (a reviewer's verdict citing another pull request) are read for the step alone. The task is marked
+// only by the read of its own code, which the store passes beside the step's.
+describe('a step\'s push read', () => {
+  const OWN = 'https://github.com/acme/app/pull/7', OTHER = 'https://github.com/acme/app/pull/99'
+  const setup = () => {
+    const s = swarm()
+    const task = s.group(), step = s.group({ reviewOf: task, step: 'Review' } as Partial<Extract<Command, { type: 'conversation.create' }>>)
+    const find = (id: string) => s.state.conversations.find(c => c.id === id)!
+    return { s, task: () => find(task), step: () => find(step) }
+  }
+
+  it('marks only the step when its own links read Team and the task\'s code reads clean', () => {
+    const f = setup()
+    applyPushOrigin(f.s.state, f.step(), 'team', [OTHER, OWN], { origin: 'clean', pulls: [OWN] })
+    expect(f.step().teamWritten).toBe(true)
+    expect(f.task().teamWritten).toBeUndefined()
+  })
+
+  it('marks the task and the step when the task\'s own code reads Team', () => {
+    const f = setup()
+    applyPushOrigin(f.s.state, f.step(), 'team', [OWN], { origin: 'team', pulls: [OWN] })
+    expect(f.task().teamWritten).toBe(true)
+    expect(f.task().teamWrittenBy).toEqual({ kind: 'pushed', pulls: [OWN] })
+    expect(f.step().teamWritten).toBe(true)
+  })
+
+  it('marks the task as before when no read of its own code is given', () => {
+    const f = setup()
+    applyPushOrigin(f.s.state, f.step(), 'team', [OTHER])
+    expect(f.task().teamWritten).toBe(true)
   })
 })
