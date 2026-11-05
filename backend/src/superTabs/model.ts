@@ -40,6 +40,9 @@ export interface AgentConfiguration {
   contextWindow: number | null
   engineVersion: string | null
 }
+/** Why a crew member must leave its machine (crewKeep.ts). */
+export type CrewTrouble = 'offline' | 'signed-out' | 'quota' | 'disk'
+
 export interface Agent {
   id: string
   projectId?: string
@@ -114,6 +117,19 @@ export interface Agent {
   /** Its last task was lost (liveness.ts): routing leaves it out, even once that task is cancelled or reassigned, until it
    *  finishes a new task, a person assigns it work by hand, or its terminal is replaced (commands.ts). */
   lostTask?: { conversationId: string; assignmentId: string; reason: string; at: number; resumeAt?: string }
+  /** A crew member the Swarm put to sleep after an idle hour (crewKeep.ts): its host closes the session and keeps its folder;
+   *  work.assign clears it and the host reopens it in place. `folderDropped` once a cleanup rule removed its folder, so a
+   *  wake starts it fresh. Set only by the server. */
+  asleep?: { since: number; folderDropped?: boolean }
+  /** A crew member being moved off a failing machine (crewKeep.ts): its start on [machineId] takes over under the same name;
+   *  until then nothing is assigned to it and its old host closes the session. Set only by the server. */
+  movedTo?: { machineId: string; startId: string; reason: CrewTrouble; at: number }
+  /** The agent this crew member took over from on a move, so its history reads as one member. */
+  movedFrom?: { agentId: string; machineId: string; reason: CrewTrouble; at: number }
+  /** The machine whose start of this member's move failed, and when: not picked again for MOVE_REFUSED_WAIT_MS (crewKeep.ts). */
+  crewMoveRefused?: { machineId: string; at: number }
+  /** A move needed but no machine could take it: said once in the project chat until the trouble changes. */
+  crewStuck?: CrewTrouble
   /** A usage limit seen on its terminal; routing skips the agent until then. Shown as null once passed (terminal.ts). */
   limitedUntil?: string | null
   /** Terminal alert episodes in progress, so each one posts a single row (terminal.ts). */
@@ -186,6 +202,8 @@ export interface AgentStartRequest {
   buddyProjects?: Array<{ id: string; name: string; cwd: string }>
   /** The offered account selected for a destination PM switch. */
   profileId?: string
+  /** A crew member's move (crewKeep.ts): the agent its start takes over from once it runs. Written by the server alone. */
+  crewMoveOf?: string
   /** A bounded handoff note transferred from the source host, visible only in the destination host's start row. */
   handoffNote?: string
   handoffSourceAgentId?: string
