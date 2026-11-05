@@ -51,7 +51,7 @@ export function createSwarmAgents({ byAgent, stoppedIds, closeAgent, resumeAgent
       if (!resumeAgent) return { ok: false, error: 'UNSUPPORTED' }
       if (byAgent(agentId)) return { ok: true }
       if (!members.leads().has(agentId) || !stoppedIds().includes(agentId)) {
-        return { ok: false, error: 'NOT_A_LEAD', detail: 'Only a stopped Product Manager or crew member of a Swarm project is reopened.' }
+        return { ok: false, error: 'NOT_A_LEAD', detail: 'Only a stopped Product Manager of a Swarm project is reopened.' }
       }
       const reply = await resumeAgent(agentId)
       return reply.ok ? { ok: true } : { ok: false, error: reply.error, ...(reply.detail ? { detail: reply.detail } : {}) }
