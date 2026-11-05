@@ -196,7 +196,7 @@ describe('which messages to the coordinator are gathered', () => {
     const id = await f.write({ kind: 'idle' }, f.worker)
     await db.superTabDelivery.update({ where: { id: stableId(id, f.worker) }, data: { status: 'gathered' } })
     f.clock.now += 16 * MINUTE
-    await f.poll()
+    await f.timed.runTimeChecks(f.tab)
     const told = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => kindOf(m) === 'idle' && m.text.includes('no open task'))
     expect(told).toHaveLength(1)
   })
@@ -819,7 +819,7 @@ describe('a step\'s Stuck, skills notices and quiet alerts', () => {
       reviewOf: orphan })).result.conversationId)
     const reviewer = await f.add(step, 'test-host', 'Reviewer')
     const assignmentId = String((await f.execute({ type: 'work.assign', conversationId: step, agentId: reviewer })).result.assignmentId)
-    await f.execute({ type: 'work.status', conversationId: step, assignmentId, status: 'blocked', result: 'Needs the owner\'s account' }, host, reviewer)
+    await f.execute({ type: 'work.status', conversationId: step, assignmentId, status: 'blocked', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Needs the owner\'s account' }, host, reviewer)
     const row = await statusRow(f.tab, step, 'Stuck')
     expect(row.recipientIds).toEqual([f.lead])
     expect((await deliveryOf(row.id, f.lead)).status).toBe('queued')

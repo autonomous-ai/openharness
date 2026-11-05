@@ -361,9 +361,14 @@ async function prepareBaseLaunchOverrides(
   if (!source.gridLaunch) {
     const remembered = subscriptionModelLaunch(engine, source.subscriptionModel, (await deps.machine(engine)).opencodeMajor ?? null)
     // The flags it was launched with hold for that launch alone: reopened without them, a Product Manager launched on Opus at
-    // xhigh ran its engine's own default, the machine's last-used Claude Code model (task #3395, anh Dee 11-05).
-    const launched = !remembered && source.launchModel ? launchModelArgs(engine, source.launchModel) : []
-    const restored = remembered ?? (launched.length ? { env: {}, args: launched } : null)
+    // xhigh ran its engine's own default, the machine's last-used Claude Code model (task #3395, anh Dee 11-05). They outrank
+    // the model remembered when it left for a grid: that one is a model alone and stays after the move home, so ranked
+    // first a PM back from a grid lost its xhigh on every relaunch, and a later pick lost too (task #3449). A launch model
+    // that names no model keeps the remembered one beside its effort; an engine with no launch flags keeps the remembered one.
+    const launched = source.launchModel ? launchModelArgs(engine, source.launchModel) : []
+    const restored = !launched.length ? remembered
+      : source.launchModel?.model || !remembered ? { env: {}, args: launched }
+      : { ...remembered, args: [...remembered.args, ...launched] }
     // In the Harness Team account, an engine it has not signed in itself spends the owner's subscription through the
     // owner's relay, on every relaunch as on its first: Codex keeps the relay's provider per thread, so it is named again
     // here in place of its own login's (two `-c model_provider` would leave Codex to pick one).

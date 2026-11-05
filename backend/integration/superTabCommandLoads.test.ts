@@ -149,6 +149,9 @@ describe('a command in a Swarm with many awake conversations (#3146)', () => {
 
   it('reads none of them whole once this server has read them, only the conversation it writes', async () => {
     const f = await swarm(0, AWAKE)
+    // The awake ones were written straight to the database: the first post records their board pulse on the project chat
+    // (pulse.ts, task #3384), which the next command reads once, as it reads any part this server wrote.
+    await posted(f)
     await posted(f)
     const groups = (await profiled(db, () => posted(f))).filter(e => e.ns.endsWith('.SwarmGroup'))
     const examined = groups.reduce((n, e) => n + (e.docsExamined ?? 0), 0)

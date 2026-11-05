@@ -715,6 +715,13 @@ describe('createInput', () => {
     inputs.submitAgent('s1', 'typed')
 
     expect(log.mock.calls.flat().filter((line) => String(line).includes(' recv · '))).toHaveLength(3)
+    // The remembered ids are bounded: an id that has scrolled out is logged again rather than kept for the life
+    // of the daemon (256 ids, the backend's own retry window).
+    const before = log.mock.calls.flat().filter((line) => String(line).includes(' recv · ')).length
+    for (let i = 0; i < 256; i++) inputs.submitAgent('s1', 'held', `bulk-${i}`)
+    inputs.submitAgent('s1', 'hello', 'd1')
+    const after = log.mock.calls.flat().filter((line) => String(line).includes(' recv · ')).length
+    expect(after - before).toBe(257)
   })
 })
 

@@ -26,12 +26,13 @@
  * while anything is shared either way.
  */
 import { homedir } from 'node:os'
-import { isAbsolute, join, resolve } from 'node:path'
+import { isAbsolute, join, parse, resolve, sep, win32 } from 'node:path'
 import { readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import type { CoreApi, CorePorts, GuestLaunchInput, ServiceRequests } from '../core/api.js'
 import { createGuestAccounts, guestHomeRoot, guestWorkspaceFor, type SharedFolder } from '../lib/guestAccounts.js'
 import { guestHelperStatus, installGuestHelper, type GuestHelperInstallResult, type GuestHelperState } from '../lib/guestHelperInstall.js'
 import { createOwnerSubscriptions } from '../lib/ownerSubscriptions.js'
+import { createWindowsGuestAccounts } from '../lib/windows/windowsGuestAccounts.js'
 import { failed, type PortFailure, type ShareMember, type SharedMachinesPort, type SharePolicy,
   type SharedTrustPeer } from '../lib/sharedMachinesPort.js'
 import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
@@ -93,10 +94,25 @@ export function normalizeFolders(raw: unknown): SharedFolder[] | null {
     const { path, write } = (folder ?? {}) as { path?: unknown; write?: unknown }
     if (typeof path !== 'string' || !isAbsolute(path) || path.length > 4096 || /[\t\n\r\0]/.test(path) || typeof write !== 'boolean') return null
     const resolved = resolve(path)
-    if (resolved === '/' || folders.some((f) => f.path === resolved)) return null
+    if (resolved === parse(resolved).root || folders.some((f) => f.path === resolved)) return null
     folders.push({ path: resolved, write })
   }
   return folders
+}
+
+/** Whether two resolved paths name one folder on [platform]: Windows has one spelling per folder, so it ignores
+ *  case there (`c:\\programdata\\harnessguests` must not slip past the guests' root); POSIX paths are exact. */
+export function sameSharedPath(a: string, b: string, platform: NodeJS.Platform = process.platform): boolean {
+  return platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+/** Whether [path] is [root] or inside it, with Windows' one-spelling rule. */
+export function withinSharedPath(path: string, root: string, platform: NodeJS.Platform = process.platform): boolean {
+  if (sameSharedPath(path, root, platform)) return true
+  const separator = platform === 'win32' ? win32.sep : sep
+  return platform === 'win32'
+    ? path.toLowerCase().startsWith(`${root.toLowerCase()}${separator}`)
+    : path.startsWith(`${root}${separator}`)
 }
 
 /** The helper's own rules, said here first in words: a folder of the owner's, on this computer, never its whole
@@ -105,8 +121,11 @@ export function ownerFolderProblem(path: string, home = homedir(), guests = gues
   let info
   try { info = statSync(path) } catch { return `No such folder on this computer: ${path}` }
   if (!info.isDirectory()) return `Not a folder: ${path}`
-  if (resolve(path) === resolve(home)) return 'Your whole home folder cannot be shared. Choose a folder in it.'
-  if (path === guests || path.startsWith(`${guests}/`)) return `This folder belongs to someone you share with and can't be shared: ${path}`
+  if (sameSharedPath(resolve(path), resolve(home))) return 'Your whole home folder cannot be shared. Choose a folder in it.'
+  // The guests' own tree: their host homes and records, which the setup task owns (`\` or `/`, by platform).
+  const guestRoot = resolve(guests)
+  const resolved = resolve(path)
+  if (withinSharedPath(resolved, guestRoot)) return `This folder belongs to someone you share with and can't be shared: ${path}`
   if (uid !== undefined && info.uid !== uid) return `Only your own folders can be shared: ${path}`
   return null
 }
@@ -149,14 +168,18 @@ export function trustedKeys(local: LocalPolicy, remote: SharePolicy): SharedTrus
 
 const answerFailure = (f: PortFailure): Record<string, unknown> => ({ error: f.failed.code, message: f.failed.message })
 
-/** The real guests: OS accounts through the helper, the owner's sign-ins read where the engines keep them. */
-function machineGuests(log: (line: string) => void, file: string): GuestLaunches {
+/** The real guests: OS accounts through the setup task on Windows, the helper elsewhere, the owner's sign-ins
+ *  read where the engines keep them. Exported with its platform so a test proves both accounts' sides. */
+export function machineGuests(log: (line: string) => void, file: string, platform: NodeJS.Platform = process.platform): GuestLaunches {
   return createGuestLaunches({
-    accounts: createGuestAccounts(),
+    accounts: platform === 'win32'
+      ? createWindowsGuestAccounts({ ownerHome: process.env.USERPROFILE ?? homedir() })
+      : createGuestAccounts(),
     helperState: async () => (await guestHelperStatus()).state,
     folders: () => readPolicy(file).folders,
     startRelay: () => startSubscriptionRelay({ owner: createOwnerSubscriptions(), log: (line) => log(`relay · ${line}`) }),
     ...(process.env.LANG ? { lang: process.env.LANG } : {}),
+    platform,
     log: (line) => log(`guest ${line}`),
   })
 }

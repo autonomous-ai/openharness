@@ -17,7 +17,7 @@ const _id = r'[A-Za-z0-9_-]+';
 final _swarmRoute = RegExp(
   '^/api/super-tabs(?:'
   '|/list|/invitations|/deleted'
-  '|/$_tab/(?:parts|changes|commands|mentions|decisions|leaderboard|sharing'
+  '|/$_tab/(?:parts|changes|commands|mentions|decisions|leaderboard|scorecard|sharing'
   '|routing-policy|groups|groups/$_id|join|join/preview|native'
   '|activity|activity/read|threads|inbox|proposals'
   '|reminders'
@@ -29,7 +29,9 @@ final _swarmRoute = RegExp(
   '|threads/$_id/(?:read|follow)'
   '|messages/$_id/attachments/$_id|messages/$_id/reminder)'
   '|projects/$_id/(?:github|github/approve|github/repository'
-  '|instructions(?:/revisions(?:/[0-9]+)?)?)'
+  '|instructions(?:/revisions(?:/[0-9]+)?)?'
+  // The project's rules record, read in Project settings (#3393).
+  '|rules)'
   '|route-decisions/$_id|machines/$_id/removal(?:/v2)?)'
   r')(?:\?[A-Za-z0-9_=&%-]+)?$',
 );

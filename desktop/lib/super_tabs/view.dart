@@ -59,6 +59,7 @@ import 'dialog_scope.dart';
 import 'folder_zip.dart';
 import 'crew_panel.dart';
 import 'instructions_panel.dart';
+import 'project_rules.dart';
 import 'model.dart';
 import 'agent_details.dart';
 import 'identity.dart' show superTabMachineName;
@@ -209,6 +210,11 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The Swarm's page holding the main pane, if one does: Decisions,
   /// Mentions or Threads (anh Dee, 11-05, task #2996).
   SwarmPage? _page;
+
+  /// The need a notice opened Decisions for, lit there for a moment, and how
+  /// many times one was (task #3029): the same need opened again lights again.
+  String? _highlight;
+  int _highlightTurn = 0;
 
   /// Manage holds the main pane; [_manageTab] is which of its pages, but for
   /// Devices, which is the pane the view holds for it ([_devicesVisible]).
@@ -1793,6 +1799,13 @@ class _SuperTabViewState extends State<SuperTabView>
       }
       return;
     }
+    if (action == 'rules') {
+      final project = c.snapshot?.projectFor(group.id);
+      if (project != null) {
+        await showSuperTabProjectRules(context, c, project.id);
+      }
+      return;
+    }
     if (action == 'crew') {
       final project = c.snapshot?.projectFor(group.id);
       if (project != null) await showSuperTabCrew(context, c, project.id);
@@ -2037,6 +2050,9 @@ class _SuperTabViewState extends State<SuperTabView>
       _page = notice?.kind == SuperTabNoticeKind.mention
           ? SwarmPage.mentions
           : SwarmPage.decisions;
+      // Decisions lights the row it was opened for (task #3029).
+      _highlight = notice?.need?.id;
+      _highlightTurn++;
       _showManage = false;
       _showPullRequests = _showTasks = false;
     });
@@ -2398,10 +2414,14 @@ class _SuperTabViewState extends State<SuperTabView>
     if (_page == null) return;
     _page = null;
     c.select(id);
-    // A tag in a thread opens the thread; one in a thread reply shown only
-    // there is not in the chat to scroll to.
-    if (message.thread case final root?) {
-      c.openThread(root, at: message.inMainStream ? null : message.id);
+    // A tag in a thread reply opens the thread; one shown only there is not in
+    // the chat to scroll to. A top-level message is its own thread's root, but
+    // it has no thread to open: it is in the chat.
+    if (message.threadReply) {
+      c.openThread(
+        message.thread!,
+        at: message.inMainStream ? null : message.id,
+      );
       if (!message.inMainStream) return;
     }
     setState(() {
@@ -3421,6 +3441,7 @@ class _SuperTabViewState extends State<SuperTabView>
         _tasksSelectedId = id;
         _openThreadFromList(project.leadConversationId, id);
       },
+      onOpenMessage: (id, messageId) => unawaited(_openMessage(id, messageId)),
     );
   }
 
@@ -3887,6 +3908,8 @@ class _SuperTabViewState extends State<SuperTabView>
             repository?['cwd'] as String? ??
             'Not set',
       ),
+      // The project's numbers, read only (task #3393): every member reads them; the PM changes them when asked.
+      row('Project rules', 'rules'),
       // While the PM has a switch under way, there is nothing to ask for.
       if (editable &&
           c.snapshot?.maySwitchLead(project.id, c.accountId) == true &&
@@ -5749,6 +5772,8 @@ class _SuperTabViewState extends State<SuperTabView>
                           switch (_pageShown) {
                             SwarmPage.decisions => SuperTabDecisionsPage(
                               activity: SuperTabActivity.of(c),
+                              highlight: _highlight,
+                              highlightTurn: _highlightTurn,
                               onOpenConversation: _openConversation,
                               onOpenReminder: (reminder) =>
                                   unawaited(_openReminder(reminder)),

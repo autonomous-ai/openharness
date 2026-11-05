@@ -1,4 +1,11 @@
 import { OBSERVER_VALID_MS, publishObservers } from './observers.js'
+import { CrewFolders, crewRest, pruneBranches } from './crewFolders.js'
+/** How often a crew member's finished branch copies are pruned (crewFolders.ts). */
+const CREW_PRUNE_EVERY_MS = 60 * 60_000
+/** How long a folder drop the Swarm's removal refused waits before it is tried again. */
+const CREW_DROP_RETRY_MS = 60 * 60_000
+/** How long a folder restore that failed waits before it is tried again. */
+const CREW_RESTORE_RETRY_MS = 60_000
 import { ContributedMachines, uncommittedIn, type MachineDeps } from './machines.js'
 import { SwarmGrids } from './swarmGrids.js'
 import { retainContributions } from './retention.js'
@@ -7,7 +14,7 @@ import { CommandRetries, permanentRefusal } from './retries.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
 import { attachedFiles, attachmentsOf, formatSize, type FilesInFlight, type Relink } from './attachments.js'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import { BUDDY_HOME_MANIFEST, BUDDY_HOMES, buddyHomeDue, buddyHomeHoldsLost, buddyHomeRefreshing, pruneBuddyHome, refreshBuddyHome, removeBuddyHome, stopBuddyHomeRefresh } from './buddyHome.js'
@@ -207,6 +214,8 @@ export interface SuperTabHostOptions {
   machines?: Partial<MachineDeps>
   /** What carries out a Buddy's model switch here (superTabs/buddyModel.ts), for a spec. */
   buddyModels?: Pick<BuddyModelRequests, 'serve'>
+  /** What restarts a stuck Product Manager in its own pane, on the same session (watchLead), for a spec. */
+  restartLead?: (harnessId: string) => Promise<{ ok: true } | { ok: false; error: string }>
 }
 
 const defaultAgentCommand = (core: CoreApi, machineId: string) => agentCommandPrefix(core.daemon, machineId,
@@ -375,6 +384,10 @@ const LEAD_RETRY_MS = 5_000
 const LATE_REPLACEMENT_MS = 30 * 60_000
 const LEAD_RETRY_MAX_MS = 30 * 60_000
 const LEAD_REOPEN_WAIT_MS = 60_000
+/** How often a running Product Manager is checked for a hang (watchLead): its owed ask's time is in minutes. */
+const LEAD_WATCH_MS = 30_000
+/** How long a restart of a stuck Product Manager may take: the relaunch waits on the engine's command and its pane. */
+const LEAD_RESTART_TIMEOUT_MS = 60_000
 /** Prod 10-30: acknowledgements failed through two hours of SWARM_BUSY, past the backend's 10-minute claim quiet time
  *  (backend superTabs/deliverySettle.ts CLAIM_QUIET_MS), so its delivery pass ended claims the agents had in fact received and
  *  their senders saw Not sent. A typed delivery the backend ended is acknowledged again after 10 s, doubling to 5 minutes, for
@@ -438,11 +451,19 @@ export const BUDDY_SESSION_GONE_MS = 60_000
  *  idle time counts from the wake, so a Mac that slept through 30 minutes never ends a working session as it wakes (security
  *  review 1 of #2345). */
 export const BUDDY_SESSION_SLEEP_GAP_MS = 2 * 60_000
-const writeJournal = (file: string, journal: Journal) => {
+/** Saves [journal] whole, through a temporary file of its own: a fixed `.next` name let another writer's save move it away
+ *  first, and every save then failed (task #3514: Mac 3's Team host, 11-06, ENOENT on the rename). A save that fails leaves
+ *  no temporary file behind. */
+export const writeJournal = (file: string, journal: Journal) => {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-  const temporary = `${file}.next`
-  writeFileSync(temporary, JSON.stringify(journal), { mode: 0o600, flush: true })
-  renameSync(temporary, file)
+  const temporary = `${file}.${process.pid}.${randomUUID()}.next`
+  try {
+    writeFileSync(temporary, JSON.stringify(journal), { mode: 0o600, flush: true })
+    renameSync(temporary, file)
+  } catch (error) {
+    rmSync(temporary, { force: true })
+    throw error
+  }
 }
 
 /** Whether a message asks its reader something: then the answer goes to the one who asked. */
@@ -595,6 +616,11 @@ export class SuperTabHost {
   private missing = new Map<string, number>()
   /** Per Lead harness here: a reopen in progress, its failures, when the next may run, and the reason last logged. */
   private readonly keepAlives = new Map<string, { running: boolean; failures: number; retryAt: number; reason?: string }>()
+  /** Per Product Manager harness here (watchLead): when it was last checked, since when it has been in one turn, the owed ask
+   *  it was last restarted for, a check or restart in progress, and until when the keep-alive leaves its relaunch be. */
+  private readonly leadWatches = new Map<string, { checkedAt: number; workingSince?: number; restartedFor?: string; checking: boolean
+    restarting: boolean; settleUntil: number }>()
+  private readonly restartLead: (harnessId: string) => Promise<{ ok: true } | { ok: false; error: string }>
   /** Per session the backend ends: a close or acknowledgement in progress, how far it got, and when the next try may run. */
   private readonly endings = new Map<string, { running: boolean; closed: boolean; acked: boolean; failures: number; retryAt: number
     forgotten?: boolean; unforgotten?: string; scrub?: PurgeTarget | null; scrubbed?: true }>()
@@ -629,6 +655,15 @@ export class SuperTabHost {
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
+    // Through this machine's own daemon socket, as the apps and the relay recovery ask it (relayRecovery.ts): `agent_restart`
+    // relaunches the agent in its own pane on the same session, so it is never a second one.
+    this.restartLead = options.restartLead ?? (async harnessId => {
+      const local = await openDaemon({ dataDir: core.dataDir, port: core.daemon.port, machineId })
+      try {
+        const answer = await local.request('agent_restart', { agentId: harnessId }, LEAD_RESTART_TIMEOUT_MS)
+        return typeof answer.error === 'string' ? { ok: false, error: answer.error } : { ok: true }
+      } finally { local.close() }
+    })
     // Its pickups follow this host's delivery push lease: the server that pushes deliveries also says when a request waits.
     this.terminal = new TerminalHost(core, machineId, { now: this.now, log: this.log, pushes: () => this.now() < this.pushUntil,
       // Only a Team daemon reads a relay grant: on any other the recovery sees no grant and does nothing.
@@ -1167,14 +1202,38 @@ export class SuperTabHost {
         void this.releaseWorker(target)
         continue
       }
+      // A crew member the server put to sleep, is moving, or whose folder it dropped (backend crewKeep.ts): closed here once,
+      // its folder kept or dropped, and never kept alive. An awake one may need its dropped folder back before it reopens.
+      const rest = crewRest(target.agent as Parameters<typeof crewRest>[0])
+      const restKey = `${target.tabId}:${target.agent.harnessId}`
+      if (rest) {
+        // A drop the Swarm's removal refused (work not committed or pushed) is tried again an hour on (review of #3229).
+        if (rest === 'drop' && this.rested.get(restKey) === 'drop' && (this.dropRetry.get(restKey) ?? Infinity) <= this.now()) {
+          this.rested.delete(restKey)
+          this.dropRetry.delete(restKey)
+        }
+        void this.crewRest(target, rest)
+        continue
+      }
+      // Rested here, or dropped before this host restarted (its record is on disk): the folder comes back first.
+      // One restore at a time, and the keep-alive below waits for it, so the session reopens in its folder, not a missing one.
+      // A failed one waits CREW_RESTORE_RETRY_MS, so the keep-alive (which backs off itself) is never held back for good.
+      if (!this.restoring.has(restKey) && (this.restoreRetryAt.get(restKey) ?? 0) <= this.now() && (this.rested.delete(restKey)
+        || ((target.agent as { crew?: unknown }).crew && this.crewFolders().remembers(target.tabId, target.agent.harnessId)))) {
+        this.restoring.set(restKey, this.crewFolders().restore(target.tabId, target.agent.harnessId).catch(() => 'failed' as const)
+          .then(result => { if (result === 'failed') this.restoreRetryAt.set(restKey, this.now() + CREW_RESTORE_RETRY_MS); else this.restoreRetryAt.delete(restKey) })
+          .finally(() => { this.restoring.delete(restKey) }))
+      }
+      if ((target.agent as { crew?: unknown }).crew) this.pruneCrewBranches(target.tabId, target.agent.harnessId)
       if (row.lead === true || target.agent.switchLanded) {
         if (row.lead === true) leads.add(target.agent.harnessId)
         this.keepAlive(target.agent.harnessId)
+        if (row.lead === true) this.watchLead(target.agent.harnessId, row.owed)
         void this.leadSwitches.serve(target as unknown as SwitchRow).catch(error => this.log(`PM switch: ${error instanceof Error ? error.name : typeof error}`))
       } else if (isCrewRow(row)) {
         // A project's crew is kept alive as its PM is (task #3397): reopened in place, then told to continue its task.
         leads.add(target.agent.harnessId)
-        this.keepAlive(target.agent.harnessId, true)
+        if (!this.restoring.has(restKey)) this.keepAlive(target.agent.harnessId, true)
       }
       // Never adopt another live session as a replacement for the recorded harness.
       if (!this.core.agents.byAgent(target.agent.harnessId) || !this.core.agents.terminalAvailable(target.agent.harnessId)) continue
@@ -1287,6 +1346,7 @@ export class SuperTabHost {
     if (this.stopped) return
     // A Lead the roster no longer marks (its project deleted) is never reopened again.
     for (const [harnessId, state] of this.keepAlives) if (!leads.has(harnessId) && !state.running) this.keepAlives.delete(harnessId)
+    for (const [harnessId, watch] of this.leadWatches) if (!leads.has(harnessId) && !watch.checking && !watch.restarting) this.leadWatches.delete(harnessId)
     for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
     for (const deliveryId of this.unreadable) if (!seen.has(deliveryId)) this.unreadable.delete(deliveryId)
     for (const key of this.lists.keys()) if (!running.some(r => `list:${r.tabId}:${r.agent.id}` === key)) this.lists.delete(key)
@@ -1331,6 +1391,48 @@ export class SuperTabHost {
   /** The owner, 2026-10-23: the Lead of an active project stays alive. One whose session is gone (a machine restart, a
    *  kill) is reopened on its own conversation; nothing is typed into it, so no old input is replayed. A failure backs
    *  off, so an engine that cannot start never spins. */
+  /** Crew members closed for rest, by tab and harness, with what closed them: closed once per rest, and when one wakes, its
+   *  dropped folder comes back before its keep-alive reopens it (crewFolders.ts). */
+  private readonly rested = new Map<string, 'sleep' | 'drop' | 'moving'>()
+  /** A dropped folder being brought back, by the same key: its keep-alive waits for it (review of #3229). */
+  private readonly restoring = new Map<string, Promise<unknown>>()
+  /** When a failed folder restore is tried again, by the same key. */
+  private readonly restoreRetryAt = new Map<string, number>()
+  /** When a refused folder drop is tried again, by the same key. */
+  private readonly dropRetry = new Map<string, number>()
+  private crewFoldersInstance?: CrewFolders
+  private crewFolders(): CrewFolders {
+    return this.crewFoldersInstance ??= new CrewFolders({ dataDir: this.core.dataDir, machineId: this.machineId,
+      worktree: (tabId, harnessId) => this.contributed().worktreeOf(tabId, harnessId),
+      removeWorktree: (tabId, harnessId) => this.contributed().removeStoppedWorktree(tabId, harnessId), log: line => this.log(line) })
+  }
+  /** When each crew member's folder last had its finished branch copies pruned (crewFolders.ts pruneBranches): hourly. */
+  private readonly pruned = new Map<string, number>()
+  private pruneCrewBranches(tabId: string, harnessId: string): void {
+    const key = `${tabId}:${harnessId}`, now = this.now()
+    if (now - (this.pruned.get(key) ?? 0) < CREW_PRUNE_EVERY_MS) return
+    this.pruned.set(key, now)
+    const folder = this.contributed().worktreeOf(tabId, harnessId)?.path
+    if (folder) void pruneBranches(folder).then(gone => { if (gone.length) this.log(`Dropped ${gone.length} finished branch copies of a crew member`) },
+      () => this.log('Could not prune a crew member\'s branches'))
+  }
+  private async crewRest(row: HostAgent, rest: 'sleep' | 'drop' | 'moving'): Promise<void> {
+    const key = `${row.tabId}:${row.agent.harnessId}`
+    if (this.rested.get(key) === rest) return
+    this.rested.set(key, rest)
+    try {
+      if (this.core.agents.byAgent(row.agent.harnessId)) {
+        const closed = await this.core.agents.closeMember?.(row.agent.harnessId)
+        if (closed && 'error' in closed && closed.error) throw new Error(closed.error)
+      }
+      if (rest === 'drop' && await this.crewFolders().drop(row.tabId, row.agent.harnessId) === 'kept') this.dropRetry.set(key, this.now() + CREW_DROP_RETRY_MS)
+    } catch (error) {
+      // Tried again on the next roster: the server still says it rests.
+      this.rested.delete(key)
+      this.log(`Crew rest: ${error instanceof Error ? error.message.slice(0, 80) : typeof error}`)
+    }
+  }
+
   private keepAlive(harnessId: string, crew = false): void {
     const reopen = this.core.agents.keepLeadAlive
     if (!reopen) return
@@ -1338,6 +1440,10 @@ export class SuperTabHost {
     this.keepAlives.set(harnessId, state)
     if (state.running) return
     const now = this.now()
+    // Being restarted in its own pane (watchLead), its session reads as gone until the relaunch is up: reopening it then would
+    // run a second Product Manager beside it.
+    const watch = this.leadWatches.get(harnessId)
+    if (watch && (watch.restarting || now < watch.settleUntil)) return
     // Its owner switched its engine from its pane (leadSwitch.ts), stopping it once the stop went through.
     const switched = leadSwitchOf(this.core.dataDir, harnessId)
     if (this.core.agents.byAgent(harnessId)) {
@@ -1375,6 +1481,55 @@ export class SuperTabHost {
       state.retryAt = this.now() + LEAD_REOPEN_WAIT_MS
       delete state.reason
     })().catch(error => failed(error instanceof Error ? error.message : String(error))).finally(() => { state.running = false })
+  }
+
+  /**
+   * Task #3385 (anh Dee, 11-05): a Product Manager hung in one turn while five people's asks waited 3 to 10 hours, as the
+   * keep-alive reopens only one whose session is gone. Every LEAD_WATCH_MS, a running one that owes a person an answer
+   * past [owed]'s `restartAfterMs` (the server's number, backend timeChecks.ts), while it has been in one turn that long or its
+   * screen has not changed that long, is restarted in its own pane on the same session: never a second one, and the keep-alive
+   * leaves it be until its relaunch is up. Once per owed ask: a relaunched PM reads idle at its prompt before that ask is typed
+   * into it, so one the same ask hangs again is left to people, never restarted in a loop until the ask ages out (security
+   * review of #3213); a newer ask owed past its time may restart it again. Nothing during an engine switch or a reopen, checked
+   * again right before the restart, as either may begin while its turn is read.
+   */
+  private watchLead(harnessId: string, owed: unknown): void {
+    const watch = this.leadWatches.get(harnessId) ?? { checkedAt: -Infinity, checking: false, restarting: false, settleUntil: -Infinity }
+    this.leadWatches.set(harnessId, watch)
+    const now = this.now()
+    if (watch.checking || watch.restarting || now - watch.checkedAt < LEAD_WATCH_MS) return
+    // Not while its session is gone, a reopen runs or its engine is being switched: those are the keep-alive's and the switch's.
+    const heldElsewhere = () => !this.core.agents.byAgent(harnessId) || !!this.keepAlives.get(harnessId)?.running || !!leadSwitchOf(this.core.dataDir, harnessId)
+    if (heldElsewhere()) return
+    watch.checkedAt = now
+    watch.checking = true
+    const ask = object(owed)
+    const due = identifier(ask.messageId) && typeof ask.since === 'number' && Number.isFinite(ask.since)
+      && typeof ask.restartAfterMs === 'number' && ask.restartAfterMs > 0 ? { messageId: ask.messageId, since: ask.since, after: ask.restartAfterMs } : null
+    void (async () => {
+      const turn = (await this.core.agents.activity([harnessId]))[harnessId]
+      const at = this.now()
+      if (turn === 'idle') delete watch.workingSince
+      else if (turn === 'working') watch.workingSince ??= at
+      if (!due || turn === 'idle' || watch.restartedFor === due.messageId || at - due.since < due.after) return
+      const shown = this.terminal.progressOf([harnessId])[harnessId]
+      const inTurn = watch.workingSince !== undefined && at - watch.workingSince >= due.after
+      const frozen = typeof shown === 'number' && at - shown >= due.after
+      if (!inTurn && !frozen) return
+      if (heldElsewhere()) return
+      watch.restartedFor = due.messageId
+      watch.restarting = true
+      this.log(`Restarting the Product Manager ${harnessId.slice(0, 8)} in place: it owes an answer sent ${Math.round((at - due.since) / 60_000)} min ago and `
+        + `${inTurn ? `has been in one turn for ${Math.round((at - watch.workingSince!) / 60_000)} min` : `its screen has not changed for ${Math.round((at - shown!) / 60_000)} min`}.`)
+      try {
+        const result = await this.restartLead(harnessId)
+        if (!result.ok) this.log(`Could not restart the Product Manager ${harnessId.slice(0, 8)}: ${result.error}. Not tried again for this ask.`)
+      } finally {
+        delete watch.workingSince
+        watch.restarting = false
+        watch.settleUntil = this.now() + LEAD_REOPEN_WAIT_MS
+      }
+    })().catch(error => this.log(`Product Manager watch: ${error instanceof Error ? error.message : String(error)}`)).finally(() => { watch.checking = false })
   }
 
   /** The new session [switched] started, when it runs here: its native creation receipt is the switch's own change id. */
@@ -2011,9 +2166,15 @@ export class SuperTabHost {
         grantBuddyWide(buddyReadsOf(sent.key), wide ? { session: sent.session, wide: true, account: signedIn!, launch: launch! } : { session: sent.session, wide: false })
       } catch (error) { this.authorized.delete(id); throw error }
     }
-    // The durable intent must exist before the core can write. A thrown disk write must not deliver.
+    // The durable intent must exist before the core can write. A thrown disk write must not deliver, and leaves the delivery
+    // untyped, so the next pass types it: left 'submitting', it was reported interrupted and never typed (task #3514).
+    const before = entry.stage
     entry.stage = 'submitting'
-    this.persist()
+    try { this.persist() } catch (error) {
+      entry.stage = before
+      this.authorized.delete(id)
+      throw error
+    }
     this.active.add(id)
     const attached = [files.text, sent?.links.length ? ARTIFACT_LINKS(sent.links) : '', elsewhere.length ? LINKS_ELSEWHERE(elsewhere) : '']
       .filter(Boolean).join('\n\n')

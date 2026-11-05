@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { CrewFolders } from './crewFolders.js'
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -28,7 +29,7 @@ vi.mock('../lib/buddyGuard.js', async original => {
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
-import { backend, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { backend, writeJournal, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { ADDED_MAX } from './deliveryContext.js'
 import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
 import { TerminalHost } from './terminal.js'
@@ -1283,6 +1284,47 @@ describe('Super Tab native delivery handoff', () => {
     expect(t.saved().entries).toEqual({})
     await host.tick()
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+  })
+
+  // Task #3514: on 11-06 Mac 3's Team host failed to save its journal as it handed each delivery over (ENOENT on the rename of
+  // its temporary file). The delivery was left marked as being typed though nothing was typed, so the next pass reported it
+  // interrupted (uncertain) and it was never typed: 58 deliveries to idle agents in two hours.
+  it('types a delivery whose hand-over save failed on the next pass, never reporting it interrupted', async () => {
+    const t = setup()
+    let failOnce = true
+    const write = (file: string, journal: { entries: Record<string, { stage: string }> }) => {
+      if (failOnce && Object.values(journal.entries).some(e => e.stage === 'submitting')) {
+        failOnce = false
+        throw Object.assign(new Error(`ENOENT: no such file or directory, rename '${file}.next' -> '${file}'`), { code: 'ENOENT' })
+      }
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, JSON.stringify(journal))
+    }
+    const host = t.open({ write: write as never })
+    await host.tick()
+    // Nothing was typed, and the host said why.
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Could not hand delivery delivery'))
+    t.wait(1_500)
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.receipts).toEqual([])
+    t.event('delivered')
+    await host.tick()
+    expect(t.receipts).toEqual([expect.objectContaining({ uncertain: false, receipt: expect.stringContaining('delivered') })])
+  })
+
+  it('saves its journal through a temporary file of its own, never one another writer is using', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'super-tab-journal-')); roots.push(dir)
+    const file = join(dir, 'super-tabs', 'host-machine-1.json')
+    mkdirSync(dirname(file), { recursive: true })
+    // Another writer's save in progress: its temporary file at the shared name.
+    writeFileSync(`${file}.next`, 'theirs')
+    writeJournal(file, { version: 1, entries: {} } as never)
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ version: 1, entries: {} })
+    expect(readFileSync(`${file}.next`, 'utf8')).toBe('theirs')
+    // Its own temporary file does not stay behind.
+    expect(readdirSync(dirname(file)).sort()).toEqual(['host-machine-1.json', 'host-machine-1.json.next'])
   })
 
   it('does not type again after a crash between submission and its native acknowledgement', async () => {
@@ -5933,4 +5975,221 @@ describe('requests per idle agent and machine per minute while the server pushes
     expect(worker).toEqual({ lists: 0.2, pickups: 0 })
     expect(lead.lists).toBe(2)
   }, 60_000)
+})
+
+// Task #3385 (anh Dee, 11-05): a PM that hung in one turn left five people's asks unanswered for 3 to 10 hours, as the keep-alive
+// reopened only a PM whose session was gone. Its host now restarts it in place once it owes a person an answer past the time the
+// server gives and it has been in one turn that long, or its screen has not changed that long. Never a second PM.
+describe('a PM that stops answering', () => {
+  const MIN = 60_000
+  /** A PM row here that owes the message `m1`, sent at [since]. */
+  const owing = (since: number, restartAfterMs = 20 * MIN) => leadRow({ owed: { messageId: 'm1', since, restartAfterMs } })
+  function stuckFixture(rows: Record<string, unknown>[], activity: 'working' | 'idle' | 'unknown' = 'working') {
+    let release: (() => void) | null = null
+    const restartLead = vi.fn(async (_harnessId: string) => {
+      // The restart relaunches it in its own pane: its session reads as gone until the relaunch is up.
+      t.live(false)
+      await new Promise<void>(resolve => { release = resolve })
+      t.live(true)
+      return { ok: true as const }
+    })
+    const t = lifeFixture(rows, { restartLead })
+    t.live(true)
+    const turns = { activity }
+    t.core.agents.activity = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, turns.activity])))
+    return { ...t, restartLead, turns, finish: () => release?.() }
+  }
+
+  it('restarts a PM stuck in one turn while it owes an ask, once, in place, and never opens a second PM meanwhile', async () => {
+    // The host's clock starts at 0: the ask was sent then, and the PM's turn began.
+    const t = stuckFixture([owing(0)])
+    await t.poll()
+    await t.poll(19 * MIN)
+    expect(t.restartLead).not.toHaveBeenCalled()
+    await t.poll(MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(1)
+    expect(t.restartLead).toHaveBeenCalledWith('harness')
+    // Its session reads as gone while it relaunches: the keep-alive must not reopen another one beside it.
+    for (let i = 0; i < 6; i++) await t.poll(10_000)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    t.finish()
+    await t.poll(1_000)
+    // Still in one turn, still owing: once is enough. People see it from here, not a restart loop.
+    for (let i = 0; i < 6; i++) await t.poll(10 * MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(1)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Restarting the Product Manager'))
+  })
+
+  // SecAlder's security review of #3213, Important 1: a relaunched PM reads idle at its prompt before the owed ask is typed
+  // into it, so a guard that reset on idle restarted it every 21 minutes on the same ask until that ask aged out.
+  it('restarts once per owed ask: the same ask hanging it again after its restart is left to people, a new one is not', async () => {
+    const t = stuckFixture([owing(0)])
+    await t.poll()
+    await t.poll(21 * MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(1)
+    t.finish()
+    await t.poll(2 * MIN)
+    // Back at its prompt, then the same ask is typed into it and it hangs again.
+    t.turns.activity = 'idle'
+    await t.poll(MIN)
+    t.turns.activity = 'working'
+    for (let i = 0; i < 8; i++) await t.poll(10 * MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(1)
+    // That ask was answered; a newer one is owed past its time while the PM is still in that turn.
+    t.rows[0] = owing(60 * MIN)
+    t.rows[0]!.owed = { messageId: 'm2', since: 60 * MIN, restartAfterMs: 20 * MIN }
+    await t.poll(MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(2)
+  })
+
+  // Same review, Minor 2: a reopen that started while the turn was being read must hold the restart.
+  it('does not restart a PM whose reopen began while its turn was being read', async () => {
+    const t = stuckFixture([owing(0)])
+    await t.poll()
+    let read: ((value: Record<string, 'working'>) => void) | null = null
+    t.core.agents.activity = vi.fn(() => new Promise<Record<string, 'working'>>(resolve => { read = resolve }))
+    t.keepLeadAlive.mockImplementation(() => new Promise(() => {}))
+    await t.poll(21 * MIN)
+    expect(read).not.toBeNull()
+    // Its session reads as gone meanwhile: the keep-alive starts reopening it.
+    t.live(false)
+    await t.poll(1_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    t.live(true)
+    read!({ harness: 'working' })
+    await t.poll(0)
+    expect(t.restartLead).not.toHaveBeenCalled()
+  })
+
+  it('restarts a PM whose screen has not changed while it owes an ask, whatever its turn reads', async () => {
+    const t = stuckFixture([owing(0)], 'unknown')
+    // Its terminal shows the same screen on every read.
+    ;(t.core as { superTabs?: unknown }).superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn(),
+      screen: vi.fn(async () => ({ ok: true, text: 'Thinking about the batch', hold: null })) }
+    await t.poll()
+    await t.poll(19 * MIN)
+    expect(t.restartLead).not.toHaveBeenCalled()
+    await t.poll(2 * MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves alone an idle PM, a PM that owes nothing or not for long, and one that keeps ending its turns', async () => {
+    const idle = stuckFixture([owing(0)], 'idle')
+    await idle.poll()
+    await idle.poll(60 * MIN)
+    const none = stuckFixture([leadRow({ owed: null })])
+    await none.poll()
+    await none.poll(60 * MIN)
+    // Asked a minute ago: a PM deep in a long turn has not let anyone wait yet.
+    const fresh = stuckFixture([])
+    await fresh.poll()
+    await fresh.poll(30 * MIN)
+    fresh.rows.push(owing(29 * MIN))
+    await fresh.poll(MIN)
+    const busy = stuckFixture([owing(0)])
+    await busy.poll()
+    for (let i = 0; i < 6; i++) {
+      await busy.poll(10 * MIN)
+      busy.turns.activity = 'idle'
+      await busy.poll(MIN)
+      busy.turns.activity = 'working'
+    }
+    for (const t of [idle, none, fresh, busy]) expect(t.restartLead).not.toHaveBeenCalled()
+  })
+})
+
+// Task #3398: a crew member the server put to sleep, moved, or whose folder it dropped is closed on its host, once, and never
+// kept alive; an awake one is left to the keep-alive.
+describe('a crew member at rest', () => {
+  const crewRow = (agent: Record<string, unknown> = {}) => ({ tabId: 'tab', active: true,
+    agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', crew: { role: 'Engineer', at: 1, by: 'owner' }, ...agent } })
+  it('closes an asleep member\'s live session once, keeps its folder, and never reopens it', async () => {
+    const t = lifeFixture([crewRow({ asleep: { since: 1 } })])
+    t.live(true)
+    await t.poll()
+    await t.poll(1_000)
+    await t.poll(60_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+    expect(t.closeMember).toHaveBeenCalledWith('harness')
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+  })
+  it('closes a moving member and one whose folder is dropped; an awake member is not closed', async () => {
+    for (const agent of [{ movedTo: { machineId: 'mini', startId: 's', reason: 'offline', at: 1 } }, { asleep: { since: 1, folderDropped: true } }]) {
+      const t = lifeFixture([crewRow(agent)])
+      t.live(true)
+      await t.poll()
+      expect(t.closeMember).toHaveBeenCalledWith('harness')
+    }
+    const awake = lifeFixture([crewRow()])
+    awake.live(true)
+    await awake.poll()
+    expect(awake.closeMember).not.toHaveBeenCalled()
+  })
+  it('after a host restart, an awake member whose folder was dropped gets it back before it reopens (security review of #3229)', async () => {
+    const t = lifeFixture([crewRow()])
+    mkdirSync(join(t.core.dataDir, 'super-tabs'), { recursive: true })
+    writeFileSync(join(t.core.dataDir, 'super-tabs', 'crew-folders-machine-1.json'),
+      JSON.stringify({ version: 1, folders: [{ tabId: 'tab', harnessId: 'harness', path: '/nowhere/ada', source: '/nowhere/clone' }] }))
+    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockResolvedValue('restored')
+    await t.poll()
+    expect(restore).toHaveBeenCalledWith('tab', 'harness')
+    restore.mockRestore()
+  })
+  it('a folder drop the removal refused is tried again an hour later (review of #3229)', async () => {
+    const t = lifeFixture([crewRow({ asleep: { since: 1, folderDropped: true } })])
+    const drop = vi.spyOn(CrewFolders.prototype, 'drop').mockResolvedValue('kept')
+    await t.poll()
+    await t.poll(60_000)
+    expect(drop).toHaveBeenCalledTimes(1)
+    await t.poll(60 * 60_000)
+    expect(drop).toHaveBeenCalledTimes(2)
+    drop.mockRestore()
+  })
+  it('a woken member whose folder is coming back is not reopened until it is there (review of #3229)', async () => {
+    const t = lifeFixture([crewRow()])
+    mkdirSync(join(t.core.dataDir, 'super-tabs'), { recursive: true })
+    writeFileSync(join(t.core.dataDir, 'super-tabs', 'crew-folders-machine-1.json'),
+      JSON.stringify({ version: 1, folders: [{ tabId: 'tab', harnessId: 'harness', path: '/nowhere/ada', source: '/nowhere/clone' }] }))
+    let finish!: (value: 'restored') => void, back = false
+    // As the real restore does, a folder brought back is no longer remembered.
+    const remembers = vi.spyOn(CrewFolders.prototype, 'remembers').mockImplementation(() => !back)
+    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockImplementation(() => new Promise(resolve => { finish = value => { back = true; resolve(value) } }))
+    await t.poll()
+    await t.poll(10_000)
+    expect(restore).toHaveBeenCalledTimes(1)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    finish('restored')
+    await t.poll(10_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+    restore.mockRestore()
+    remembers.mockRestore()
+  })
+  it('a restore that keeps failing never holds the keep-alive back for good (review of #3229)', async () => {
+    const t = lifeFixture([crewRow()])
+    const remembers = vi.spyOn(CrewFolders.prototype, 'remembers').mockReturnValue(true)
+    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockResolvedValue('failed')
+    await t.poll()
+    await t.poll(10_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+    // Tried again after its wait, not on every roster.
+    const tries = restore.mock.calls.length
+    await t.poll(10_000)
+    expect(restore.mock.calls.length).toBe(tries)
+    await t.poll(60_000)
+    expect(restore.mock.calls.length).toBe(tries + 1)
+    restore.mockRestore()
+    remembers.mockRestore()
+  })
+  it('a member woken and put to sleep again is closed again', async () => {
+    const rows = [crewRow({ asleep: { since: 1 } })]
+    const t = lifeFixture(rows)
+    t.live(true)
+    await t.poll()
+    rows[0] = crewRow()
+    await t.poll(1_000)
+    rows[0] = crewRow({ asleep: { since: 2 } })
+    await t.poll(1_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(2)
+  })
 })

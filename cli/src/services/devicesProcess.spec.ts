@@ -305,6 +305,9 @@ describe('what the core tells the devices, reaching their port', () => {
     stop()
     h.event({ kind: 'notice', notice: { type: 'machines_changed', reason: 'renamed' } })
     expect(heard).toHaveLength(1)
+    // A notice that is not an object is nothing to hand on, not a listener's to explain.
+    for (const notice of [null, 'renamed', 7]) h.event({ kind: 'notice', notice })
+    expect(heard).toHaveLength(1)
   })
 
   it('is each kind of notice, read as the port takes it', () => {

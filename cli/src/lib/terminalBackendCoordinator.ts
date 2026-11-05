@@ -80,6 +80,9 @@ const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => {
 /** Resolves all terminal I/O through validated backend-scoped locators. */
 export class TerminalBackendCoordinator {
   private readonly byInstance = new Map<string, TerminalBackend>()
+  /** Backends added after construction (a guest's host, reached on demand): kept across `replaceBackends`, which
+   *  re-lists the configured hosts and must not drop them. */
+  private readonly added = new Set<TerminalBackend>()
   private readonly unknownRetryMs: readonly number[]
   private readonly sleep: (ms: number) => Promise<void>
   private changing: (agentId: string) => boolean = () => false
@@ -133,7 +136,22 @@ export class TerminalBackendCoordinator {
 
   replaceBackends(backends: readonly TerminalBackend[]): void {
     this.byInstance.clear()
-    for (const backend of backends) this.byInstance.set(backend.instanceId, backend)
+    for (const backend of [...backends, ...this.added]) this.byInstance.set(backend.instanceId, backend)
+  }
+
+  /**
+   * A backend reached after this daemon started (a guest's own host on Windows): its panes are routed and validated
+   * as the configured hosts' are, and it stays listed through any `replaceBackends`.
+   */
+  addBackend(backend: TerminalBackend): void {
+    this.added.add(backend)
+    this.byInstance.set(backend.instanceId, backend)
+  }
+
+  /** The backend is gone for good (its guest was removed): its panes are no longer this daemon's to route. */
+  removeBackend(backend: TerminalBackend): void {
+    this.added.delete(backend)
+    if (this.byInstance.get(backend.instanceId) === backend) this.byInstance.delete(backend.instanceId)
   }
 
   instances(): TerminalBackend[] {

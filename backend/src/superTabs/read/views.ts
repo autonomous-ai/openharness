@@ -4,13 +4,17 @@
  * in `derived`, so a part never changes without a new version (Lead's ruling).
  */
 import { machineSuspensionReason, suspendedEngines } from '../engineHealth.js'
+import { DISPATCH_RULES, laneOf } from '../dispatch.js'
 import { leadChoices } from '../leadStart.js'
+import { heldView } from '../heldReason.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
 import { agentForBuddy, agentWithoutMachine, groupForBuddy, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { availableSlots, slotCounter, machineTeamWork, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
+import { promptWaits } from '../promptWaits.js'
+import { storedPulse, type Pulse } from '../pulse.js'
 import { coordinatorNameOf, roleNameOf } from '../instructions.js'
 import { withAvatarView } from '../profile.js'
 import { swarmUsernames } from '../usernames.js'
@@ -65,12 +69,17 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
 /** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping or the
  *  leaderboard's (the leaderboard read sums it), except when it shipped. */
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
-  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
+  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, pulse: _pulse, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
   // A Buddy chat names its owner instead of an audience: an app from before Buddies takes a private chat of the reader
   // alone for their Chat with PM, and would send what they write for the PM to their Buddy instead (buddies.ts).
   const readers = isBuddyChat(group) ? { buddyOwnerId: audience!.people[0]!.id } : audience ? { audience } : {}
   const shippedAt = ledger?.shippedAt
-  return { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }), ...readers }
+  const held = heldView(group)
+  const view: GroupView = { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }),
+    ...(held ? { held } : {}), ...readers }
+  // A task's hand-out lane (dispatch.ts stampLane) is stored with it; only a task stored before that is worked out here.
+  if (group.handOutLane === undefined && group.task && !group.reviewOf && !group.kind && !audience) view.handOutLane = laneOf(group, DISPATCH_RULES.lanes)
+  return view
 }
 
 /** A conversation's whole data as the reader may see it: a task's requirement lists only the machines they see. */
@@ -96,8 +105,9 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const agentPart = part(parts.agents), groupPart = part(parts.groups), machinePart = part(parts.machines), startPart = part(parts.starts)
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
   // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts). The built-in
-  // schedule's slot is the coordinator poll's bookkeeping (pmSchedule.ts), like progress: no reader shows it.
-  if (head.projects) head.projects = head.projects.map(({ progress: _progress, schedule: _schedule, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
+  // schedule's slot is the coordinator poll's bookkeeping (pmSchedule.ts), like progress, and so is the release list (releases.ts):
+  // no reader shows them. What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
+  if (head.projects) head.projects = head.projects.map(({ progress: _progress, schedule: _schedule, releases: _releases, owed: _owed, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
   const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
   const buddy = isBuddyReader(state, actor)
@@ -126,6 +136,41 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
 export const progressView = (data: NonNullable<SwarmParts['progress'][number]['data']>): ProgressView =>
   ({ ...data, requestedAt: data.requestedAt ?? null })
 
+/** The board's pulse of each project the reader sees (pulse.ts, task #3384), as last recorded on its chat: the same from a full
+ *  read and from a change poll's light base, which keeps the project chats and their pulse (parts/light.ts). A project with
+ *  none recorded yet is left out, and the board draws no strip. Its lists name conversations: a project's reader reads every
+ *  one of them (none is private: pulse.ts counted), each checked again where it is loaded; a Buddy reads only its person's
+ *  own, so it gets the counts alone, the same on every read. */
+function pulses(state: SuperTabState, visible: SuperTabState, actor: Actor, buddy: boolean): Record<string, Pulse> | undefined {
+  if (!visible.projects?.length) return undefined
+  // One lookup by id for every listed conversation: a list names up to 50 per count (pulse.ts PULSE_LIST_MAX).
+  const groups = new Map(state.conversations.map(c => [c.id, c])), checked = new Map<string, boolean>()
+  const reads = (id: string) => {
+    const known = checked.get(id)
+    if (known !== undefined) return known
+    const group = groups.get(id)
+    const readable = !group || canReadGroup(state, actor, group)
+    checked.set(id, readable)
+    return readable
+  }
+  const out: Record<string, Pulse> = {}
+  for (const seen of visible.projects) {
+    const project = state.projects?.find(p => p.id === seen.id)
+    const pulse = project && storedPulse(state, project)
+    if (!pulse) continue
+    out[project.id] = buddy ? countsOnly(pulse) : { ...pulse,
+      asks: { ...pulse.asks, list: pulse.asks.list.filter(ask => reads(ask.conversationId)) },
+      nextUp: { ...pulse.nextUp, conversationIds: pulse.nextUp.conversationIds.filter(reads) },
+      lost: { ...pulse.lost, conversationIds: pulse.lost.conversationIds.filter(reads) },
+      held: { ...pulse.held, list: pulse.held.list.filter(hold => reads(hold.conversationId)) } }
+  }
+  return out
+}
+
+/** [pulse] without its lists: what a Buddy reader gets. */
+const countsOnly = (pulse: Pulse): Pulse => ({ ...pulse, asks: { ...pulse.asks, list: [] }, working: { ...pulse.working, agentIds: [] },
+  nextUp: { ...pulse.nextUp, conversationIds: [] }, lost: { ...pulse.lost, conversationIds: [] }, held: { ...pulse.held, list: [] } })
+
 function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now: number, extras: ReadExtras): Derived {
   // Where New Project's Product Manager would run on each teammate's machine, decided as its start decides (leadStart.ts).
   const leads = actor.kind === 'person' && state.people.find(p => p.id === actor.userId)?.role !== 'viewer'
@@ -144,7 +189,9 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
       teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const }, ...(version ? { clientVersion: version } : {}),
       ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(machineSuspended ? { machineSuspended } : {}), ...(leads[pool.machineId] ? { lead: leads[pool.machineId] } : {}) }] as const
   }
+  const pulse = pulses(state, visible, actor, isBuddyReader(state, actor))
   return {
+    ...(pulse ? { pulse } : {}),
     agents: Object.fromEntries(visible.agents.map(seen => [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,
       workDecision: seen.workDecision === 'awaiting' && state.agents.find(a => a.id === seen.id)!.workDecision !== 'awaiting' ? 'awaiting' as const : null,
       roleId: seen.roleId ?? null,
@@ -158,6 +205,8 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ...(actor.kind === 'person' && extras.mentionsDigest !== undefined ? { mentionsDigest: extras.mentionsDigest } : {}),
     ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.decisionsDigest !== undefined ? { decisionsDigest: extras.decisionsDigest } : {}),
+    // Its agents waiting at a prompt in their tasks, under Decisions (promptWaits.ts): from the live state, every read.
+    ...(actor.kind === 'person' ? { promptsWaiting: promptWaits(state, actor) } : {}),
     ...(actor.kind === 'person' && extras.activityDigest !== undefined ? { activityDigest: extras.activityDigest } : {}),
     ...(actor.kind === 'person' && extras.remindersDigest !== undefined ? { remindersDigest: extras.remindersDigest } : {}),
     threadSessions: true as const,

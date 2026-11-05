@@ -488,12 +488,17 @@ class SuperTabParts {
     if (_derived['decisionsDigest'] case final String digest) {
       state['decisionsDigest'] = digest;
     }
+    if (_derived['promptsWaiting'] case final List waiting) {
+      state['promptsWaiting'] = waiting;
+    }
     if (_derived['remindersDigest'] case final String digest) {
       state['remindersDigest'] = digest;
     }
     if (_derived['activityDigest'] case final String digest) {
       state['activityDigest'] = digest;
     }
+    // Each project's board pulse (backend superTabs/pulse.ts, task #3384).
+    if (_derived['pulse'] case final Map pulse) state['pulse'] = pulse;
     // Sent only where the server does not try Harness Team accounts yet.
     if (_derived['teamAccounts'] == false) state['teamAccounts'] = false;
     // Sent by a server that takes a thread reply's New session.

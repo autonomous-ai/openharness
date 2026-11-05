@@ -17,6 +17,7 @@ import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
+import { recordPulse } from '../src/superTabs/pulse.js'
 import { decisionsWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION } from '../src/superTabs/decisions.js'
 import { waitingMentions, waitingTagConversations } from '../src/superTabs/mentions.js'
 import { writeReadMark } from '../src/superTabs/readMarks.js'
@@ -43,7 +44,9 @@ const DAY = 86_400_000
 beforeAll(async () => {
   replica = await MongoMemoryReplSet.create({ binary: { version: '7.0.24', downloadDir: join(tmpdir(), 'harness-super-tab-mongodb-binaries') },
     replSet: { count: 1, ip: '127.0.0.1', storageEngine: 'wiredTiger' } })
-  const uri = replica.getUri(`swarm_read_test_${randomUUID().replaceAll('-', '_')}`)
+  // The driver's heartbeat (every ten seconds, two answers of about 745 bytes) is traffic the byte count of 'what a read costs' would
+  // take for a read's: this client asks once an hour instead. The one node never changes, so nothing here needs the heartbeat.
+  const uri = `${replica.getUri(`swarm_read_test_${randomUUID().replaceAll('-', '_')}`)}&heartbeatFrequencyMS=3600000`
   await promisify(execFile)(join(process.cwd(), 'node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'], {
     env: { ...process.env, DATABASE_URL: uri }, timeout: 60000,
   })
@@ -98,7 +101,8 @@ async function scene<T = void>(extra: (s: ReturnType<typeof swarm>, ids: { web: 
   })
   const more = extra(s, { web, done, lead, secret })
   // Stored before its removal: the Swarm-wide Leads conversation, with the Lead in it; no read sends it now (model.ts leadsRemoved).
-  s.edit(state => { storeOldLeads(state, [lead]) })
+  // The board's pulse as the commands that wrote this scene would have recorded it (pulse.ts), once its Leads are stored.
+  s.edit(state => { storeOldLeads(state, [lead]); recordPulse(state, MIGRATED) })
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
   await writeLegacySwarm(db, { state, revision: R, messages: [{ id: `${tabId}-m1`, conversationId: done, sequence: 5, text: 'Done',
@@ -107,6 +111,12 @@ async function scene<T = void>(extra: (s: ReturnType<typeof swarm>, ids: { web: 
   if (!report.ok) throw new Error(report.error)
   return { tabId, lead, worker, web, done, secretGroup, privateId, buddyId, secret, leads: state.leadsConversationId!, more }
 }
+/** [scene]'s project with its PM gone from the project chat: with no PM, a worker asks a person itself, as before (crewNeeds.ts,
+ *  task #3404). */
+const withoutPm = (s: ReturnType<typeof swarm>) => s.edit(state => {
+  const chat = state.conversations.find(c => c.id === 'lead')!
+  chat.agentIds = chat.agentIds.filter(id => id !== chat.leadId)
+})
 const get = async (url: string, as: AuthUser = owner) => {
   const response = await app.inject({ method: 'GET', url, headers: { authorization: `Bearer ${as.sub}` } })
   return { status: response.statusCode, body: response.json() as { data: any; error?: { code: string; message: string } } }
@@ -816,10 +826,10 @@ describe('decisions asked of one person (v2)', () => {
   })
 
   it('takes the person\'s one-tap answer once, and the answer reaches the asking worker and the Lead', async () => {
-    const s = await scene()
+    const s = await scene(withoutPm)
     clock = Date.now()
     const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
-    const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship to everyone?',
+    const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Ship to everyone?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'Turning it on' } }, owner, s.worker)
     expect(needs.status, JSON.stringify(needs.body)).toBe(200)
     const [open] = await decisions(s.tabId, peer)
@@ -914,10 +924,10 @@ describe('decisions asked of one person (v2)', () => {
   })
 
   it('takes an answer in a conversation that went quiet with its task still waiting, counts it on a fresh first load, and tells both agents', async () => {
-    const s = await scene()
+    const s = await scene(withoutPm)
     clock = Date.now()
     const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
-    await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship to everyone?',
+    await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Ship to everyone?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'Turning it on' } }, owner, s.worker)
     await writeGroup(s.tabId, s.web, Date.now(), group => { group.dormant = true })
     const first = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data
@@ -1249,7 +1259,7 @@ describe('decisions asked of one person (v2)', () => {
   })
 
   it('at the cap, a worker\'s needs-human update still records its status, tells the Lead and renews its lease, asking nothing new', async () => {
-    const s = await scene()
+    const s = await scene(withoutPm)
     clock = Date.now()
     const assignment = async () => (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment
     const assignmentId = (await assignment()).id as string
@@ -1257,7 +1267,7 @@ describe('decisions asked of one person (v2)', () => {
       projectId: 'lead', conversationId: s.web, assignmentId, personId: peer.sub, askerAgentId: s.worker, question: `Question ${i + 1}?`,
       options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release', createdAt: new Date() })) })
     const before = (await assignment()).leaseUntil as number
-    const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship how?',
+    const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Ship how?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
     expect(needs.status, JSON.stringify(needs.body)).toBe(200)
     const notAsked = `Not asked peer: 20 decisions you asked them are still open, and at most 20 can be. Wait for answers before asking more.`
@@ -1269,7 +1279,7 @@ describe('decisions asked of one person (v2)', () => {
     expect(notice).toMatchObject({ text: `Needs a human\n\nShip how?\n\n${notAsked}`, recipientIds: [s.lead] })
     expect(await db.superTabDecision.count({ where: { tabId: s.tabId, askerAgentId: s.worker } })).toBe(20)
     // A repeat of one still open is that decision again, so it is asked as before.
-    const repeat = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Question 1?',
+    const repeat = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Question 1?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
     expect(repeat.body.data.result.notAsked).toBeUndefined()
     expect((await db.superTabMessage.findFirst({ where: { tabId: s.tabId, conversationId: s.web }, orderBy: { sequence: 'desc' } }))!.text)
@@ -1292,7 +1302,7 @@ describe('decisions asked of one person (v2)', () => {
     expect(left.map(d => d.id)).toEqual(expect.arrayContaining(['recent', 'waiting']))
   })
 
-  it('keeps a decision of its own for another asker, another task, or other options with the same question text', async () => {
+  it('keeps a decision of its own for other options with the same question text, and a worker\'s goes to the PM', async () => {
     const s = await scene()
     clock = Date.now()
     const [lead] = (await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: [question('Ship how?')] }, owner, s.lead))
@@ -1300,14 +1310,15 @@ describe('decisions asked of one person (v2)', () => {
     const [other] = (await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub,
       questions: [{ ...question('Ship how?'), options: ['Today', 'Next week'] }] }, owner, s.lead)).body.data.result.decisionIds as string[]
     const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
-    expect((await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship how?',
+    expect((await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Ship how?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)).status).toBe(200)
     const open = await decisions(s.tabId, peer)
-    expect(open).toHaveLength(3)
-    expect(new Set([lead, other, ...open.map(d => d.id)]).size).toBe(3)
-    // The worker reads its own question, and its answer reaches it.
-    const [mine] = await decisions(s.tabId, owner, 'open', s.worker)
-    expect(mine).toMatchObject({ askerAgentId: s.worker, assignmentId, options: ['Behind a flag', 'To everyone'] })
+    // The worker's same question is the PM's crew need (crewNeeds.ts, task #3404): it opens nothing for peer.
+    expect(open).toHaveLength(2)
+    expect(new Set([lead, other, ...open.map(d => d.id)]).size).toBe(2)
+    expect(await decisions(s.tabId, owner, 'open', s.worker)).toEqual([])
+    const status = await db.superTabMessage.findFirst({ where: { tabId: s.tabId, conversationId: s.web }, orderBy: { sequence: 'desc' } })
+    expect(status).toMatchObject({ recipientIds: [s.lead], source: { status: 'needs_human', crewNeed: { agentId: s.worker, personIds: [peer.sub] } } })
   })
 
   it('counts an open decision in a quiet conversation on a change read, which loads only some conversations', async () => {
@@ -1420,16 +1431,36 @@ describe('what a read costs the database (group 3b)', () => {
     const out = ((await db.$runCommandRaw({ serverStatus: 1 })) as { network: { bytesOut: unknown } }).network.bytesOut
     return typeof out === 'number' ? out : Number((out as { $numberLong?: string; $numberInt?: string }).$numberLong ?? (out as { $numberInt?: string }).$numberInt)
   }
-  /** Waits until nothing else is reading or writing: what MongoDB sends in a tenth of a second (the first read's own answer
-   *  and whatever else lands meanwhile) is the same four times running. Earlier tests' background work (a command's notices
-   *  and wakes, a read a timed-out test left going) would otherwise land in the next test's count. */
+  /** The model calls this client has begun and not finished, and when it last began or finished one. A read that load holds
+   *  back sends nothing yet, so the byte count alone cannot tell it from quiet; the call itself can. Raw commands (the byte
+   *  count's own) carry no model and are left out. */
+  let running = 0, lastBusy = 0
+  /** A model call held back before it goes out, as CPU load holds one back: a test stalls a read with it and lets it go. */
+  let hold: Promise<void> | null = null
+  beforeAll(() => {
+    db.$use(async (params, next) => {
+      if (!params.model) return next(params)
+      running++
+      lastBusy = Date.now()
+      try {
+        if (hold) await hold
+        return await next(params)
+      } finally { running--; lastBusy = Date.now() }
+    })
+  })
+  /** Waits until nothing else is reading or writing: for four tenths of a second no model call began, ended or was running,
+   *  and what MongoDB sends in a tenth of a second (the first read's own answer and whatever else lands meanwhile) is the
+   *  same four times running. Earlier tests' background work (a command's notices and wakes, a read a timed-out test left
+   *  going, one that load has not let out yet) would otherwise land in the next test's count. */
   const quiet = async () => {
     let last = -1, steady = 0
     for (let tries = 0; tries < 300 && steady < 4; tries++) {
+      const windowStart = Date.now()
       const before = await sent()
       await new Promise(done => setTimeout(done, 100))
       const sentSince = await sent() - before
-      steady = sentSince === last ? steady + 1 : 0
+      const still = running === 0 && lastBusy < windowStart
+      steady = still && sentSince === last ? steady + 1 : 0
       last = sentSince
     }
     if (steady < 4) throw new Error('The database never went quiet: something keeps reading or writing.')
@@ -1454,10 +1485,36 @@ describe('what a read costs the database (group 3b)', () => {
   it('counts none of the reads an earlier test left running', async () => {
     const s = await scene(f => bulky(f))
     // What a test that ends before its own background work does: reads of the whole Swarm, still going into the next one.
-    const leftover = (async () => { for (let i = 0; i < 40; i++) await db.$transaction(tx => parts.loadAll(tx, s.tabId)) })()
+    let underway = () => {}
+    const begun = new Promise<void>(done => { underway = done })
+    const leftover = (async () => { for (let i = 0; i < 40; i++) { await db.$transaction(tx => parts.loadAll(tx, s.tabId)); underway() } })()
+    // A transaction that load has not started yet is no model call to see: wait until the reads are going, then for them to end.
+    await begun
     expect(await databaseBytes(() => new Promise(done => setTimeout(done, 200)))).toBeLessThan(1_000)
     await leftover
   })
+
+  it('counts none of the reads an earlier test left that had not reached the database yet', async () => {
+    const s = await scene(f => bulky(f))
+    // A read held back by load: it sends nothing until it is let go, so the database looks quiet while it is still coming.
+    let release = () => {}
+    hold = new Promise<void>(done => { release = done })
+    const letGo = () => { hold = null; release() }
+    const timer = setTimeout(letGo, 1_500)
+    const leftover = (async () => { for (let i = 0; i < 40; i++) await db.$transaction(tx => parts.loadAll(tx, s.tabId)) })()
+    try {
+      // The test's own call lets the held read go, the moment counting starts: a count that began while it was still held counts it.
+      expect(await databaseBytes(() => { letGo(); return new Promise(done => setTimeout(done, 200)) })).toBeLessThan(1_000)
+    } finally { clearTimeout(timer); letGo() }
+    await leftover
+  })
+
+  it('counts none of the driver\'s own heartbeat answers: an idle database sends nothing for longer than one heartbeat', async () => {
+    // The driver asks MongoDB how it is every ten seconds and the answer, two of them about 745 bytes each, lands in whatever window
+    // is open (1,490 bytes in the batch of 11-06): a window longer than the heartbeat period always holds a whole pair.
+    await scene()
+    expect(await databaseBytes(() => new Promise(done => setTimeout(done, 11_500)))).toBeLessThan(1_000)
+  }, 30_000)
 
   it('a Desktop change read with nothing changed loads a few tens of KB, not the Swarm', async () => {
     const s = await scene(f => bulky(f))
@@ -1502,9 +1559,12 @@ describe('what a read costs the database (group 3b)', () => {
     await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
       command: { type: 'message.send', conversationId: s.web, text: 'One post', replyTo: null, recipientIds: [] } })
     clock = Date.now()
-    let groups = 0
-    const bytes = await databaseBytes(async () => { groups = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer)).body.data.groups.length })
-    expect(groups).toBe(1)
+    let groups: string[] = []
+    const bytes = await databaseBytes(async () => {
+      groups = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer)).body.data.groups.map((g: { key: string }) => g.key)
+    })
+    // The task, and its project's chat: the post is an ask the PM now owes, which the board's pulse there counts (task #3384).
+    expect(groups.sort()).toEqual([s.web, 'lead'].sort())
     expect(bytes).toBeLessThan(30_000)
   })
 
@@ -1912,4 +1972,39 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
     })
   })
 })
+})
+
+// Task #3384, ReviewPulse2's review of #3209: a change poll reads only the light base (the project chats and running work, light
+// fields), so a pulse worked out at read time from it lost the asks and Next up a first load showed, and both apps replace
+// `derived` on each poll. Every read now sends the pulse recorded on the project's chat: the same on a first load and on every
+// change poll after it, whether nothing changed or something did, through the read cache or straight from the database.
+describe('the board pulse on a first load and the change polls after it (task #3384)', () => {
+  for (const cached of [true, false]) {
+    it(`is the same on every read, ${cached ? 'through the read cache' : 'straight from the database'}`, async () => {
+      const s = await scene(state => { state.group('Next task') })
+      const store = new SuperTabStore(db, () => clock, null, cached ? {} : { readCache: null })
+      const reads = new SwarmReads(store, { now: () => clock })
+      const ask = (as: AuthUser, text: string) => store.execute(as, s.tabId, { operationId: randomUUID(),
+        command: { type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] } as never })
+      clock = Date.now()
+      await ask(peer, 'Can the board show who works?')
+      const pulseOf = (derived: { pulse?: Record<string, unknown> }) => Object.values(derived.pulse ?? {}) as Array<{ asks: { count: number }; nextUp: { count: number } }>
+      const first = await reads.firstLoad(owner, s.tabId)
+      const [pilot] = pulseOf(first.derived)
+      expect(pilot?.asks.count).toBe(1)
+      expect(pilot?.nextUp.count).toBeGreaterThan(0)
+
+      clock = Date.now()
+      const quiet = await reads.changes(owner, s.tabId, first.cursor)
+      expect(quiet.reload).toBe(false)
+      expect((quiet as { derived: { pulse?: unknown } }).derived.pulse).toEqual(first.derived.pulse)
+
+      await ask(owner, 'And who is idle?')
+      clock = Date.now()
+      const changed = await reads.changes(owner, s.tabId, (quiet as { cursor: string }).cursor)
+      const full = await reads.firstLoad(owner, s.tabId)
+      expect(pulseOf(full.derived)[0]?.asks.count).toBe(2)
+      expect((changed as { derived: { pulse?: unknown } }).derived.pulse).toEqual(full.derived.pulse)
+    })
+  }
 })

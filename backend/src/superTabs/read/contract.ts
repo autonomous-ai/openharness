@@ -8,6 +8,7 @@
  */
 import type { Agent, AgentStart, Conversation, Person, SuperTabState, WorkStatus } from '../model.js'
 import type { ContributedMachine } from '../machines.js'
+import type { PromptWait } from '../promptWaits.js'
 
 export const READ_FORMAT = 2
 export type PartKind = 'head' | 'member' | 'agent' | 'group' | 'machine' | 'start' | 'progress'
@@ -37,8 +38,14 @@ export interface Audience { people: Array<{ id: string; generation: string }> }
 /** A conversation with its own message counter (`lastMessageSequence` and message sequences compare within one group).
  *  `dormant` is set only on a dormant group fetched on demand; `audience` only on a private conversation. */
 export type GroupView = Omit<Conversation, 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'> & {
+  /** A task's lane, as the crew dispatch hands it out (dispatch.ts laneOf: its PM's, else its owned paths'), null when no
+   *  lane owns its paths; absent on a chat or a step. From the group alone, so a change read's changed tasks keep every lane's
+   *  count whole on the reader's side (task #3400). Absent from an older backend. */
+  handOutLane?: string | null
   /** When it shipped (ms): its first Done; absent until it has. Nothing else of its ledger is sent. */
   shippedAt?: number
+  /** Why a held task is held, or `none` for a hold from before reasons; absent when it is not held (heldReason.ts heldView). */
+  held?: import('../heldReason.js').HeldView
 }
   & { messageSeq: number; dormant?: true; audience?: Audience
     /** A Buddy chat's owner, in place of its audience (read/views.ts groupView). */
@@ -60,6 +67,8 @@ export interface ProgressView {
 /** Values that change without a part changing (time, or several parts). Recomputed in full on every response;
  *  clients overlay it on the parts. */
 export interface Derived {
+  /** The board's pulse of each project the reader sees (pulse.ts, task #3384), by project id. Absent from an older backend. */
+  pulse?: Record<string, import('../pulse.js').Pulse>
   /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
   /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
   agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null; roleName: string }>
@@ -90,6 +99,9 @@ export interface Derived {
   decisionsWaiting?: number
   /** A person only: a digest of which decisions are open, moving when they change though the count may not. */
   decisionsDigest?: string
+  /** A person only: the task agents waiting at a prompt in their terminals for them (promptWaits.ts), shown under Decisions and
+   *  counted with them. Absent from an older backend, and for an agent. */
+  promptsWaiting?: PromptWait[]
   /** A person only: a digest of which of their Activity rows are unread (activity.ts), moving when one is written, read or
    *  removed. No count and no chat: the client reads its list again when it moves. Absent from an older backend. */
   activityDigest?: string
@@ -297,6 +309,9 @@ export interface HostAgentRow {
      *  reads again when it moves, as it does for `revision`. */
     builtInHash?: string } | null
   lead: boolean
+  /** A PM's own row: the oldest message a person sent it that it has not answered (timeChecks.ts owedAsk), and how long it may
+   *  owe one while it hangs before its host restarts it. Null on every other row, and while it owes nothing. */
+  owed: { messageId: string; since: number; restartAfterMs: number } | null
   /** New: lets the host decide what it may read without a full Swarm read. */
   leadsConversationId: string | null
   /** The conversation this agent leads, when it is a project's Product Manager. */

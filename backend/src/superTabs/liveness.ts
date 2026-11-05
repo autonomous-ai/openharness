@@ -1,3 +1,4 @@
+import { recordPulse } from './pulse.js'
 import { CREW_REOPEN_GRACE_MS, isCrew } from './crew.js'
 import { activeWork, forRecipients, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
@@ -15,6 +16,8 @@ import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
 import { isStep } from './steps.js'
 import { endedReply } from './taskLine.js'
+import { crewClock, DISPATCH_RULES, laneOf, nudgeLine, returnReason } from './dispatch.js'
+import { handed, pickUp, unclaimedAt, unclaimedReason } from './handed.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
@@ -232,7 +235,11 @@ function workerTasks(state: SuperTabState): Array<{ group: Conversation; assignm
 /** The worker's own status, check or message in its task's group renews its lease. A Reviewer or Tester checks and posts in
  *  the build's group, so there it renews its own linked task (reviewOf), never another agent's. */
 export function renewOwnTask(state: SuperTabState, group: Conversation, agentId: string, now: number): void {
-  if (activeWork(group) && group.assignment!.agentId === agentId) renewLease(group.assignment!, now)
+  if (activeWork(group) && group.assignment!.agentId === agentId) {
+    renewLease(group.assignment!, now)
+    // A task that came back to it (handed.ts, #3399) is picked up by its own progress there.
+    pickUp(group.assignment!)
+  }
   for (const linked of ownLinkedTasks(state, group, agentId)) renewLease(linked.assignment!, now)
 }
 
@@ -292,10 +299,13 @@ function limitReason(worker: Agent, now: number): string | null {
  *  or undefined when none can. Reports that keep its session running with progress no older can only move it later. */
 export function nextLossAt(state: SuperTabState, machineId: string): number | undefined {
   const steps = stepIndex(state)
-  const ends = workerTasks(state)
-    .filter(({ group, worker, assignment }) => worker.machineId === machineId && !waitingForReview(assignment) && !waitingForRevision(state, group)
+  const mine = workerTasks(state).filter(({ worker }) => worker.machineId === machineId)
+  const ends = [...mine
+    .filter(({ group, worker, assignment }) => !waitingForReview(assignment) && !waitingForRevision(state, group)
       && !waitingOnSteps(state, group, steps) && !waitingOnPerson(state, group, worker, assignment))
-    .map(({ group, assignment, worker }) => leaseEnd(group, assignment, reportRenewedAt(state, worker)))
+    .map(({ group, assignment, worker }) => leaseEnd(group, assignment, reportRenewedAt(state, worker))),
+  // A task back with its Engineer and not picked up leaves it then, whatever it waits on (handed.ts).
+  ...mine.map(({ assignment }) => unclaimedAt(assignment))]
     .filter((end): end is number => end !== undefined)
   return ends.length ? Math.min(...ends) : undefined
 }
@@ -307,18 +317,35 @@ const reopening = (worker: Agent, now: number): boolean => {
   return isCrew(worker) && !away.asleep && !away.movedTo && !!worker.downSince && now - Date.parse(worker.downSince) < CREW_REOPEN_GRACE_MS
 }
 
-/** Why a worker has lost its task now, or null while it still holds it. Only a machine that has reported can be offline. */
-function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number, steps: StepIndex): string | null {
+/** Why [worker] cannot work now: its session stopped (unless [closedOnPurpose]: asleep, task #3398; or, for a task it
+ *  [holds], a crew member its host is reopening, crew.ts), its machine offline, a usage limit, or its model failing. A task
+ *  its agent holds is lost for it (lostReason); the crew dispatch hands such a member nothing new (dispatch.ts freeCrew).
+ *  Only a machine that has reported can be offline. */
+export function unavailableReason(state: SuperTabState, worker: Agent, now: number, closedOnPurpose = false, holds = false): string | null {
   const pool = state.machines?.find(m => m.machineId === worker.machineId)
-  // A crew member's host reopens its session in place (crew.ts): it keeps its task for the reopen's grace.
-  if (pool?.observation?.stoppedHarnessIds.includes(worker.harnessId) && !reopening(worker, now)) return sessionStopped(pool.name)
+  if (!closedOnPurpose && pool?.observation?.stoppedHarnessIds.includes(worker.harnessId) && !(holds && reopening(worker, now))) return sessionStopped(pool.name)
   if (pool?.observation && now - pool.observation.receivedAt > OFFLINE_LOST_MS) return machineOffline(pool.name)
   const limited = limitReason(worker, now)
   if (limited) return limited
   // Its host alerts only after ten minutes of retries without an answer (cli superTabs/terminal.ts MODEL_WAIT_MS), so a
   // short burst of failures that recovers never gets here.
   if (worker.alerting?.includes('model')) return 'its model keeps failing'
+  return null
+}
+
+/** Why a worker has lost its task now, or null while it still holds it. */
+function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number, steps: StepIndex): string | null {
+  // A handed task waits on its Reviewers and CI, not on its Engineer, which may be down or at work elsewhere (task #3399).
+  if (handed(group)) return null
+  // A crew member its host is reopening keeps its task for the reopen's grace (crew.ts).
+  const gone = unavailableReason(state, worker, now, false, true)
+  if (gone) return gone
+  // Back with its Engineer and not picked up in time: anyone free in the lane takes it (handed.ts, #3399).
+  const unclaimed = unclaimedReason(assignment, now)
+  if (unclaimed) return unclaimed
   if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return null
+  // A crew member 3 hours without progress of its own puts its task back in its lane (task #3400), however busy its screen.
+  if (crewClock(group, worker, assignment, now, DISPATCH_RULES) === 'return') return returnReason(laneOf(group, DISPATCH_RULES.lanes))
   const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {
     const progress = lastProgress(state, worker, assignment)
@@ -354,6 +381,26 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
     text: `Your task "${group.title}" moved: ${reason}. Stop working on it; your status and results for it are no longer accepted.` }),
   // And its project chat's thread says Stuck, as no command saw the loss (task #2693).
   ...endedReply(state, group, stableId('task-line-lost', assignment.id, loss), sender)]
+}
+
+/** The crew members 2 hours without progress on their task hear it once in the task, from its PM (dispatch.ts crewClock). */
+function crewNudges(state: SuperTabState, now: number): MessageDraft[] {
+  // Most Swarms have no crew: one pass over the agents, nothing else. Then one pass over the work, the step index only for a
+  // task whose line is due (a measured 25% on the sweep at 2,000 tasks when it walked every task twice).
+  const crew = new Map(state.agents.filter(a => a.crew).map(a => [a.id, a]))
+  if (!crew.size) return []
+  let steps: StepIndex | undefined
+  return state.conversations.flatMap(group => {
+    const assignment = group.assignment, worker = assignment && crew.get(assignment.agentId)
+    if (!worker || !activeWork(group) || crewClock(group, worker, assignment, now, DISPATCH_RULES) !== 'nudge') return []
+    if (state.conversations.some(c => c.leadId === worker.id)) return []
+    steps ??= stepIndex(state)
+    // Waiting on others is no lack of progress: the waits that stop a loss stop the line too (lostReason).
+    if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return []
+    assignment.nudgedAt = now
+    return [reachable(state, { id: stableId('crew-nudge', assignment.id, String(now)), conversationId: group.id, author: writtenBy(state, leadOf(state, worker) ?? worker),
+      replyTo: null, recipients: [worker.id], text: nudgeLine(laneOf(group, DISPATCH_RULES.lanes)), source: { kind: 'crew-nudge', assignmentId: assignment.id } })]
+  })
 }
 
 /** Loses at once the tasks of the workers `which` picks that have a reason now: an agent that just reported a usage limit,
@@ -404,7 +451,7 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
  *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  const drafts = [...loseTasks(state, now), ...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now)]
+  const drafts = [...loseTasks(state, now), ...crewNudges(state, now), ...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now)]
   // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
   dropIdleBuddyMachines(state, now)
   return drafts
@@ -439,7 +486,10 @@ function unpurged(state: SuperTabState, now: number): MessageDraft[] {
  *  Lead's poll runs them, where the whole active Swarm is loaded and the one they wake is listening: a machine's reading
  *  loads only running work and must write no group (read/host.ts). */
 export function sweepForLead(state: SuperTabState, now: number): MessageDraft[] {
-  return [...sweepLiveness(state, now), ...recordTaskStates(state, now)]
+  const drafts = [...sweepLiveness(state, now), ...recordTaskStates(state, now)]
+  // Where the whole active Swarm is loaded, as for a command: a task lost here may leave Working at 0 (pulse.ts).
+  recordPulse(state, now)
+  return drafts
 }
 
 /** A task whose agent has reported nothing itself (a status, check or post) this long is quiet, and its Lead is woken to act

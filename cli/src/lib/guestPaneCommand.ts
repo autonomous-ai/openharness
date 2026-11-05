@@ -52,9 +52,17 @@ export interface GuestPaneInput {
   /** The owner's LANG, so the guest's terminal reads text as the owner's does. */
   lang?: string
   helperPath?: string
+  /** Where the pane is made; `process.platform` when absent. Windows has no helper: its pane is made by the guest's own host. */
+  platform?: NodeJS.Platform
 }
 
-/** The pane's argv and the variables to set on it (`tmux new-session -e`), which the helper passes on. */
+/**
+ * The pane's argv and the variables to set on it (`tmux new-session -e`), which the helper passes on.
+ *
+ * On Windows the pane is created by the guest's own `harness-pty` host (lib/windows/guestHostBackend.ts), so the
+ * process is already the guest's: there is no helper, no install check and no `sudo`, and the argv is the engine
+ * itself with the relay's variables. The engine must be installed for that account (the guest's own PATH).
+ */
 export function guestPaneCommand(input: GuestPaneInput): { argv: string[]; env: Record<string, string> } {
   const { account, engine, relayUrl, token } = input
   const helperPath = input.helperPath ?? GUEST_HELPER_PATH
@@ -69,6 +77,14 @@ export function guestPaneCommand(input: GuestPaneInput): { argv: string[]; env: 
     ...(engine === 'claude' ? claudeRelayEnv(relayUrl, token) : codexRelayEnv(token)),
   }
   const cwd = input.cwd ?? account.workspace
+  // The guest's own host makes this pane as the guest: the engine runs directly, and only the relay's
+  // variables travel with it (no helper, and nothing of the owner's).
+  if ((input.platform ?? process.platform) === 'win32') {
+    return {
+      argv: engineArgv,
+      env: engine === 'claude' ? claudeRelayEnv(relayUrl, token) : codexRelayEnv(token),
+    }
+  }
   const run = guestRunCommand(account.user, cwd, env, engineArgv, helperPath)
   return {
     argv: ['/bin/sh', '-c', GUEST_PANE_BOOTSTRAP, 'harness-guest', helperPath, account.user, cwd, engine, ...run.argv],

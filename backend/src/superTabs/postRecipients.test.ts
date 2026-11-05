@@ -9,6 +9,8 @@ import { REACHED_NO_AGENT, type Command } from './commands.js'
 import { agent } from './model.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 
+const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
+
 function setup() {
   const f = stepsFixture()
   const post = (by: string, on: string, text: string, recipientIds: string[] = [], reply?: { id: string; author: never }) =>
@@ -116,7 +118,7 @@ describe('an agent\'s thread reply', () => {
 describe('status still reaches the PM', () => {
   const status = (status: string, result: string | null) => {
     const f = stepsFixture()
-    const rows = f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status, result } as Command, f.as(f.dev)).messages
+    const rows = f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status, result, ...(status === 'blocked' || status === 'needs_human' ? { hold: HOLD } : {}) } as Command, f.as(f.dev)).messages
     return { f, rows: rows.filter(m => m.conversationId === f.task) }
   }
 
@@ -153,9 +155,13 @@ describe('the PM\'s deliveries in a fixture hour', () => {
     ]
     const asked = post(f.lead, f.task, 'Is the migration reversible?', [f.dev])[0]!
     rows.push(...post(f.dev, f.task, 'Yes.', [], { id: asked.id, author: asked.author as never }))
-    const agentPosts = rows.filter(m => m.author.kind === 'agent' && m.source?.kind !== 'system')
+    const agentPosts = rows.filter(m => m.author.kind === 'agent' && m.source?.kind !== 'system' && m.source?.kind !== 'crew-need')
     expect(agentPosts).toHaveLength(18)
     expect(agentPosts.filter(m => m.recipients.includes(f.lead))).toHaveLength(3)
+    // The Engineer's tag of the owner is the PM's crew need instead (crewNeeds.ts, task #3404): one more for the PM, and the
+    // owner is not tagged.
+    expect(rows.filter(m => m.source?.kind === 'crew-need').map(m => m.recipients)).toEqual([[f.lead]])
+    expect(rows.flatMap(m => m.mentions ?? [])).toEqual([])
   })
 })
 

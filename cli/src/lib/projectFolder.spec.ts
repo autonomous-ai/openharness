@@ -421,7 +421,8 @@ describe('the project clone of a large repository', () => {
     gitIn(dest, 'fetch', '-q', 'origin', 'feature')
     gitIn(dest, 'checkout', '-q', 'feature')
     expect(await readFile(join(dest, 'feature.txt'), 'utf8')).toBe('feature work\n')
-  })
+    // It runs a real git clone, which took over the default 5 s on a loaded CI runner.
+  }, 60_000)
 
   /** A stand-in for git at [root]/fake-git: [body] runs for `clone`; `config` succeeds. Its pid is written to [root]/pid. */
   async function fakeGit(body: string): Promise<string> {

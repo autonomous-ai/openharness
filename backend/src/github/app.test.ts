@@ -564,6 +564,30 @@ describe('who pushed a pull request, through the app', () => {
   })
 })
 
+// Task #3401: a task's Ready reads the files its pull request changes, and the server opens its review steps from them.
+describe('listing a pull request\'s files', () => {
+  it('lists every changed file across pages, a renamed file under both names, with the watch\'s read-only token', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    github.files.set('acme/app#12', [...Array.from({ length: 150 }, (_, i) => ({ filename: `src/f${i}.ts`, status: 'modified' })),
+      { filename: 'src/session.ts', status: 'renamed', previous_filename: 'src/auth.ts' }])
+    const listed = await app.pullRequestFiles(repo, 12, token)
+    expect(listed).toHaveLength(152)
+    expect(listed!.map(f => f.filename)).toEqual(expect.arrayContaining(['src/f0.ts', 'src/f149.ts', 'src/session.ts', 'src/auth.ts']))
+    expect(github.calls.filter(c => c.path === '/repos/acme/app/pulls/12/files')).toHaveLength(2)
+  })
+
+  it('says it cannot tell when GitHub fails, and when the list may stop at GitHub\'s 3,000 files', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    github.files.set('acme/app#12', Array.from({ length: 3000 }, (_, i) => ({ filename: `src/f${i}.ts`, status: 'modified' })))
+    expect(await app.pullRequestFiles(repo, 12, token)).toBeNull()
+    github.files.set('acme/app#12', [{ filename: 'a.ts', status: 'added' }])
+    github.control.pullsStatus = 500
+    expect(await app.pullRequestFiles(repo, 12, token)).toBeNull()
+  })
+})
+
 // Dee, #1891: a task's pull request is watched for its Engineer (superTabs/pullRequestEvents.ts), with what the app holds.
 describe('watching a pull request', () => {
   const HEAD = 'abc1234def5678'

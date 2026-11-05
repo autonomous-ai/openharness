@@ -2165,6 +2165,35 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await db.superTabDelivery.findUnique({ where: { id: delivery.id } }))!.status).toBe('cancelled')
   })
 
+  // Task #3399, security review of #3221: a handed task frees its Engineer for the next task, which takes the session's run
+  // record; when that one ends while the handed task is still open, the record goes back to it, so no other Swarm can assign
+  // the session while a No or red CI may bring that task back.
+  it('keeps the cross-tab fence on a handed task once the Engineer\'s next task ends', async () => {
+    const one = await fixture()
+    const two = await fixture()
+    const session = randomUUID()
+    const task = async (tab: string) => String((await run(tab, { type: 'conversation.create', title: 'Task', brief: 'Check the fixture.',
+      checks: [{ description: 'Test passes.', independent: true }] })).result.conversationId)
+    const handedTask = await task(one.tab), next = await task(one.tab), other = await task(two.tab)
+    const attach = (conversationId: string): Command => ({ type: 'agent.add', conversationId, machineId: 'test-host', harnessId: session,
+      name: 'Worker', configuration: config, lead: false })
+    const worker = (await run(one.tab, attach(handedTask))).result.agentId as string
+    await run(one.tab, { type: 'conversation.agent', conversationId: next, agentId: worker, present: true, lead: false })
+    await run(two.tab, attach(other))
+    const handed = (await run(one.tab, { type: 'work.assign', conversationId: handedTask, agentId: worker })).result.assignmentId as string
+    await run(one.tab, { type: 'work.status', conversationId: handedTask, assignmentId: handed, status: 'review', result: 'Ready for review: PR #7 at abc1234' }, host, worker)
+    const following = (await run(one.tab, { type: 'work.assign', conversationId: next, agentId: worker })).result.assignmentId as string
+    expect(await db.superTabRun.findUnique({ where: { id: worker } })).toMatchObject({ tabId: one.tab, assignmentId: following })
+    await expect(run(two.tab, { type: 'work.assign', conversationId: other, agentId: worker })).rejects.toMatchObject({ code: 'AGENT_BUSY' })
+    await run(one.tab, { type: 'work.status', conversationId: next, assignmentId: following, status: 'done', result: 'Merged PR #8' }, host, worker)
+    expect(await db.superTabRun.findUnique({ where: { id: worker } })).toMatchObject({ tabId: one.tab, assignmentId: handed })
+    await expect(run(two.tab, { type: 'work.assign', conversationId: other, agentId: worker })).rejects.toMatchObject({ code: 'AGENT_BUSY' })
+    // Its own end releases the session, as any task's does.
+    await run(one.tab, { type: 'work.status', conversationId: handedTask, assignmentId: handed, status: 'done', result: 'Merged PR #7' }, host, worker)
+    expect(await db.superTabRun.findUnique({ where: { id: worker } })).toBeNull()
+    await run(two.tab, { type: 'work.assign', conversationId: other, agentId: worker })
+  })
+
   it('holds a cross-tab assignment until host-confirmed stop and retains the previous attempt', async () => {
     const one = await fixture()
     const two = await fixture()
@@ -2424,9 +2453,9 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
     const row = async () => (await rosterRows(store, host, 'test-host')).find(t => t.tabId === tab && t.agent.id === worker)!
     expect(await row()).toMatchObject({ tabName: 'Pilot', attention: null })
-    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'blocked', result: 'No access to staging.' } as Command, host, worker)
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'blocked', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'No access to staging.' } as Command, host, worker)
     expect((await row()).attention).toEqual({ assignmentId, status: 'blocked', result: 'No access to staging.' })
-    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: null } as Command, host, worker)
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: null } as Command, host, worker)
     expect((await row()).attention).toEqual({ assignmentId, status: 'needs_human', result: null })
     await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null } as Command, host, worker)
     expect((await row()).attention).toBeNull()
@@ -4678,14 +4707,16 @@ describe('leaderboard credits written by the store (leaderboard/record.ts)', () 
     expect(await unblocks(tab, 'lead')).toEqual([expect.objectContaining({ personId: peer.sub, kind: 'decision', item: decisionId })])
   })
 
+  // In a project with no PM a worker asks a person itself, as before (crewNeeds.ts, task #3404).
   it('credits a worker\'s question asked again after it moved on once, when its decision is answered', async () => {
     const { tab } = await fixture()
     await invite(tab)
-    const group = (await run(tab, { type: 'conversation.create', title: 'Release', brief: 'Ship it.', checks: [{ description: 'Shipped.', independent: false }] })).result.conversationId as string
+    const quiet = (await run(tab, { type: 'project.create', name: 'Quiet', visibility: 'public', brief: '' })).result.projectId as string
+    const group = (await run(tab, { type: 'conversation.create', projectId: quiet, title: 'Release', brief: 'Ship it.', checks: [{ description: 'Shipped.', independent: false }] })).result.conversationId as string
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Builder', configuration: config, lead: false })).result.agentId as string
     const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
-    const ask = { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: 'Ship how?',
+    const ask = { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Ship how?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } } as Command
     await run(tab, ask, host, worker)
     await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null } as Command, host, worker)

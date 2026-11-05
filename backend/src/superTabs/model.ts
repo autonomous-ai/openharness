@@ -40,6 +40,9 @@ export interface AgentConfiguration {
   contextWindow: number | null
   engineVersion: string | null
 }
+/** Why a crew member must leave its machine (crewKeep.ts). */
+export type CrewTrouble = 'offline' | 'signed-out' | 'quota' | 'disk'
+
 export interface Agent {
   id: string
   projectId?: string
@@ -114,6 +117,19 @@ export interface Agent {
   /** Its last task was lost (liveness.ts): routing leaves it out, even once that task is cancelled or reassigned, until it
    *  finishes a new task, a person assigns it work by hand, or its terminal is replaced (commands.ts). */
   lostTask?: { conversationId: string; assignmentId: string; reason: string; at: number; resumeAt?: string }
+  /** A crew member the Swarm put to sleep after an idle hour (crewKeep.ts): its host closes the session and keeps its folder;
+   *  work.assign clears it and the host reopens it in place. `folderDropped` once a cleanup rule removed its folder, so a
+   *  wake starts it fresh. Set only by the server. */
+  asleep?: { since: number; folderDropped?: boolean }
+  /** A crew member being moved off a failing machine (crewKeep.ts): its start on [machineId] takes over under the same name;
+   *  until then nothing is assigned to it and its old host closes the session. Set only by the server. */
+  movedTo?: { machineId: string; startId: string; reason: CrewTrouble; at: number }
+  /** The agent this crew member took over from on a move, so its history reads as one member. */
+  movedFrom?: { agentId: string; machineId: string; reason: CrewTrouble; at: number }
+  /** The machine whose start of this member's move failed, and when: not picked again for MOVE_REFUSED_WAIT_MS (crewKeep.ts). */
+  crewMoveRefused?: { machineId: string; at: number }
+  /** A move needed but no machine could take it: said once in the project chat until the trouble changes. */
+  crewStuck?: CrewTrouble
   /** A usage limit seen on its terminal; routing skips the agent until then. Shown as null once passed (terminal.ts). */
   limitedUntil?: string | null
   /** Terminal alert episodes in progress, so each one posts a single row (terminal.ts). */
@@ -139,6 +155,10 @@ export interface Agent {
   /** Joined on a Harness Team account's machine: kept, so a machine row that went never brings back the rules of an
    *  ordinary machine (projects.ts teamSessionAccess, security re-review of #2089). */
   teamAccount?: true
+  /** A crew member woken by new work (crewTimes.ts startWake): when, and the task that woke it, until a machine reading shows
+   *  its session running again (`runningAt`, the first reading that did) and the wake's timing row is written (task #3462). Set
+   *  only by the server. */
+  crewWaking?: { at: number; conversationId: string; runningAt?: number }
 }
 /** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). A project session also
  *  names its project (buddies.ts; Dee, 10-31): it reads that project alone, and is the only Buddy that writes into it. */
@@ -186,6 +206,8 @@ export interface AgentStartRequest {
   buddyProjects?: Array<{ id: string; name: string; cwd: string }>
   /** The offered account selected for a destination PM switch. */
   profileId?: string
+  /** A crew member's move (crewKeep.ts): the agent its start takes over from once it runs. Written by the server alone. */
+  crewMoveOf?: string
   /** A bounded handoff note transferred from the source host, visible only in the destination host's start row. */
   handoffNote?: string
   handoffSourceAgentId?: string
@@ -259,8 +281,12 @@ export interface Assignment {
   leaseUntil?: number
   /** Its agent's last progress the lease saw, for the Lead's wake-up when it is lost. */
   progressAt?: number
+  /** When its crew member was told it had been 2 hours without progress (dispatch.ts crewClock): once per quiet spell. */
+  nudgedAt?: number
   /** While it needs a human: the person its agent asked (work.status with ask), whom its wait names (liveness.ts). */
   askedOf?: string
+  /** While it is blocked or needs a human: why it waits (heldReason.ts). Absent on a hold from before reasons. */
+  hold?: import('./heldReason.js').HeldReason
   /** When someone else's verdict found problems in a working hand-off of the older built-in skills, which then stops waiting
    *  for its review (liveness.ts waitingForReview). Its next status clears it. */
   reviewFoundAt?: number
@@ -274,6 +300,10 @@ export interface Assignment {
    *  never written since (phase 4: the server opens and counts no review), kept on older rows. */
   handoffs?: number
   verdicts?: ReviewVerdict[]
+  /** A handed task brought back to its Engineer (handed.ts reopenHanded): when, and why (a No verdict, red CI, a conflict).
+   *  Its Engineer's own status, check or post in the task picks it up and clears it; with none in REOPEN_OWNER_MS the task is
+   *  lost, so anyone free takes it (liveness.ts). The next status clears it too. */
+  reopened?: { at: number; why: string }
   /** Why and when it was lost (status `lost`); after a usage limit whose screen gave a reset time, when its own agent may
    *  take it back (work.resume) unless it was handed on first. */
   lost?: { reason: string; at: number; resumeAt?: string }
@@ -370,6 +400,10 @@ export interface Conversation {
   heardAt?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
+  /** Its pull requests the Swarm itself read as merged on GitHub in its project's repository, by link: when it read them
+   *  (store.ts archiveFinished). Unlike the merge record (conversation.merged, any agent's word), no command writes it; it
+   *  is what makes a person's rule moved into this task leave the instructions (ruleGuard.ts, #3392). */
+  mergeSeen?: Record<string, number>
   /** What its Engineer was already told of each linked pull request, newest first (pullRequestEvents.ts): absent until read. */
   pullRequestEvents?: Record<string, string[]>
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
@@ -403,6 +437,9 @@ export interface Conversation {
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
   ledger?: import('./leaderboard/record.js').GroupLedger
+  /** When a verified release carried its last recorded merge to people, and the release tags that did (releases.ts, task #3405):
+   *  the board's Shipped. Absent while a release it needs has not gone out, and on work merged before the server recorded it. */
+  released?: { at: number; tags: string[] }
   /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
   liveness?: TaskLiveness
   /** Its last step up from a cheaper model: written when a grid attempt's first review fails (commands.ts reviewFailed, goals
@@ -415,9 +452,25 @@ export interface Conversation {
   queueRank?: number
   /** The day (YYYY-MM-DD) its work should not start before, a promise the PM marks with work.queue. */
   notBefore?: string
+  /** Why its not-before date holds it (heldReason.ts), set with the date by work.queue. Absent on a hold from before reasons. */
+  hold?: import('./heldReason.js').HeldReason
   /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
    *  from before priorities, which reads as P2. */
   priority?: import('./taskPriority.js').TaskPriority
+  /** The lane its PM or a person put it in (dispatch.ts laneOf), set by work.lane, as the lane table writes it. Absent: its
+   *  owned paths choose. */
+  lane?: string
+  /** Its lane as the dispatch hands it out (dispatch.ts laneOf), stored when its paths or lane change (stampLane), so reads
+   *  only copy it. Absent on a chat, a step, and a task from before; null when no lane owns its paths. */
+  handOutLane?: string | null
+  /** The member it waits for, without active work (dispatch.ts): its builder, after another agent's failed check, red CI or a
+   *  merge conflict. The next assignment clears it. */
+  pin?: { agentId: string; why: 'findings' | 'ci' | 'conflict'; at: number }
+  /** What its project's PM owes here (pulse.ts): people's messages that reached it, not answered, reacted to or made a task
+   *  yet, at most MAX_OWED. Bookkeeping: readers get it counted in the pulse, never this list. */
+  owed?: import('./pulse.js').OwedAsk[]
+  /** On a project's chat: its project's pulse as last worked out (pulse.ts recordPulse), which every read sends in `derived`. */
+  pulse?: import('./pulse.js').Pulse
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */
@@ -645,6 +698,8 @@ export const NOTICE_READERS = {
   // The Lead's wakes and requests, and the worker's "moved" line (liveness.ts, tidy.ts, projectUpdates.ts, digest.ts); two
   // projects changing the same code, to both their Leads in the Leads chat (commands.ts).
   'work-stalled': 'recipients', 'work-lost': 'recipients', 'work-resumed': 'recipients', 'idle-stop': 'recipients',
+  // A crew member's 2 hours without progress on its task, to that member (dispatch.ts crewClock, liveness.ts).
+  'crew-nudge': 'recipients',
   // An agent with no open task for 15 minutes, and a grid attempt's failed first review, told to the coordinator (tidy.ts
   // idleNotices, commands.ts work.check; project instructions, phase 4). `idle-stop` rows are from before.
   idle: 'recipients', 'review-failed': 'recipients',
@@ -655,8 +710,12 @@ export const NOTICE_READERS = {
   'tidy-request': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
+  // A crew member's finished wake or move, timed for the daily scorecard (crewTimes.ts, task #3462): read by nobody.
+  'crew-timing': 'agent',
   // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
   'notice-digest': 'recipients',
+  // An agent's tag, ask or line to a person, routed to the PM instead (crewNeeds.ts): the PM's alone. Never gathered.
+  'crew-need': 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
   system: 'people',
   // A save of the project's instructions was posted in the project chat until #3132 (Dee and Ken, 11-05): the rows stored
@@ -680,6 +739,8 @@ export const NOTICE_READERS = {
   // Their one Buddy cannot start in a person's older project chat, told to them there once per outage (commands.ts buddyDownLine).
   'buddy-cannot-start': 'people',
   'auto-archive': 'people', native: 'people',
+  // A release step the Swarm opened for the Integrator, and its verified release's line (releases.ts, task #3405).
+  release: 'people',
   // The nightly routing reflection, for the project's people; never a Buddy's (buddies.ts routingRow).
   'routing-reflection': 'people',
   // No new agent can start, or soon none will, told to the coordinator; with none in the chat, people read it, tagging who can
@@ -768,8 +829,13 @@ export interface CommandEffects {
   /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
   /** `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>
+  /** An attempt the command closed for its gone builder (commands.ts conversation.merged, task #3510): the store closes its
+   *  attempt row as a builder's own done does. */
+  closedAssignment?: { assignmentId: string; outcome: 'done' }
   /** A project's new instructions revision, written outside the tab state by the store (instructions.ts). */
   instructions?: import('./instructions.js').InstructionsWrite
+  /** A project's new rules revision, written outside the tab state by the store (policyStore.ts). */
+  projectRules?: import('./policy.js').RulesWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
   /** Reactions the Swarm adds as a task's agent on the message that asked for it (taskLine.ts), written by the store as that
@@ -788,8 +854,16 @@ export class SuperTabError extends Error {
 export function fail(code: string, message: string, status = 409, details?: Record<string, unknown>): never { throw new SuperTabError(code, message, status, false, details) }
 export const stableId = (...parts: string[]): string => createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 24)
 export const actorKey = (actor: Actor): string => actor.kind === 'person' ? `person:${actor.userId}` : `agent:${actor.agentId}`
+/** The task is open: assigned, and its attempt not ended. A handed task (below) is open too: archive, steps, deletion and the
+ *  GitHub token hold all read this. Whether its agent is busy is occupiesAgent. */
 export const activeWork = (group: Conversation): boolean => !!group.assignment &&
   !['done', 'stopped', 'cancelled', 'lost'].includes(group.assignment.status)
+/** A task its Engineer handed over (task #3399, handed.ts): its pull request is ready for review, the status its Engineer sets
+ *  when it marks it ready. The task stays open and its Engineer keeps its push access, but the work waits on others, so the
+ *  Engineer is free for new work. A step's own Ready is its verdict, not a hand-over. */
+export const handed = (group: Conversation): boolean => !group.reviewOf && group.assignment?.status === 'review'
+/** Work in its agent's hands, which makes the agent busy: open and not handed over. Every "is this agent busy" check reads it. */
+export const occupiesAgent = (group: Conversation): boolean => activeWork(group) && !handed(group)
 
 /** What awaitingWorkers reads of the conversations, from one pass over them: the agents leading any conversation, those with
  *  active work, and each agent's assigned groups (not lost) in conversation order. Scanning every conversation per agent and
@@ -801,7 +875,8 @@ export function workerIndex(state: SuperTabState): WorkerIndex {
   for (const c of state.conversations) {
     if (c.leadId !== null) leaders.add(c.leadId)
     if (!c.assignment) continue
-    if (activeWork(c)) working.add(c.assignment.agentId)
+    // Busy with work in its hands; a task it handed over leaves it free (task #3399).
+    if (occupiesAgent(c)) working.add(c.assignment.agentId)
     // A lost task's agent did not finish it, even once the task is cancelled: it may be gone.
     if (c.assignment.lost) continue
     const groups = groupsByAgent.get(c.assignment.agentId)
@@ -817,7 +892,7 @@ export function awaitingWorkers(state: SuperTabState, projectId: string, index =
     if (index.leaders.has(a.id) || index.working.has(a.id)) return false
     const groups = index.groupsByAgent.get(a.id) ?? []
     return (a.projectId ?? groups.map(c => groupProject(state, c).id)[0] ?? 'lead') === projectId &&
-      (a.workDecision === 'awaiting' || (!a.workDecision && groups.some(c => !activeWork(c))))
+      (a.workDecision === 'awaiting' || (!a.workDecision && groups.some(c => !occupiesAgent(c))))
   })
 }
 /** A task's work ended: its worker is marked `awaiting`, whatever its kind. People see the mark; no command reads it, so
@@ -826,6 +901,8 @@ export function awaitingWorkers(state: SuperTabState, projectId: string, index =
 export function finishWorker(state: SuperTabState, workerId: string): void {
   const target = state.agents.find(a => a.id === workerId)
   if (!target || state.conversations.some(c => c.leadId === target.id) || target.workDecision === 'stop') return
+  // A handed task that ends while its Engineer works on its next one leaves that Engineer busy (task #3399).
+  if (state.conversations.some(c => occupiesAgent(c) && c.assignment!.agentId === target.id)) return
   target.workDecision = 'awaiting'
 }
 
@@ -1027,7 +1104,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     visible.conversations = visible.conversations.filter(c => canReadGroup(state, actor, c))
     // The status card is read exactly by those who read the project chat (projects.ts SwarmProject.status); without the chat
     // loaded, by nobody.
-    visible.projects = visible.projects.map(p => {
+    visible.projects = visible.projects.map(({ owed: _owed, ...p }) => {
+      // What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
       if (p.status === undefined) return p
       const chat = state.conversations.find(c => c.id === p.leadConversationId)
       if (chat && canReadGroup(state, actor, chat)) return p

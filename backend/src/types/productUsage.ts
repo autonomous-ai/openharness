@@ -173,7 +173,8 @@ export const LAUNCH_ERROR_CODES = [
   'stop_unconfirmed',
   // A guest on a machine shared with it (core/guestPolicy.ts, core/agents/guestCreate.ts, services/guestLaunches.ts).
   'guest_not_allowed', 'guest_unsupported', 'guest_harness', 'guest_unavailable', 'guest_helper_required',
-  'guest_engine_unsupported', 'guest_relay_failed', 'guest_folder_unavailable', 'guest_invalid', 'guest_helper_missing',
+  'guest_engine_unsupported', 'guest_engine_check_failed', 'guest_engine_install_failed', 'guest_host_unavailable',
+  'guest_relay_failed', 'guest_folder_unavailable', 'guest_invalid', 'guest_helper_missing',
   'guest_helper_not_authorized', 'guest_helper_failed',
   // The `setup` kind's own codes, named for a delete or restart refusal (cli/src/lib/productUsageSignals.ts).
   'tmux_unavailable', 'pty_host_unavailable', 'tmux_too_old_for_dsh', 'tmux_too_old_for_grid', 'engine_unavailable', 'native_launch_held',

@@ -25,6 +25,7 @@ import { GitHubAppError } from '../github/app.js'
 import { projectGitHubAccess } from '../github/projectAccess.js'
 import { projectCiLoad } from '../github/ciLoad.js'
 import { projectBranchOrigin, projectPushOrigin } from '../github/pushOrigin.js'
+import { projectPullRequestFiles } from '../superTabs/pullRequestFiles.js'
 import { githubSignIn, PrismaApprovals, readState, signState, stateSecret, type Approvals, type GitHubSignIn } from '../github/approvals.js'
 import type { GitHubRepository } from '../github/repository.js'
 import { githubRepository } from '../github/repository.js'
@@ -90,6 +91,7 @@ const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 const changesQuery = agentQuery.extend({ cursor, machines: z.literal('light').optional(),
   derivedEtag: z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/).optional() })
 const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS).default(DEFAULT_DAYS), asAgentId: id.optional() }).strict()
+const scorecardQuery = z.object({ projectId: id, scope: z.literal('all').optional() }).strict()
 const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional(), period: z.enum(PERIODS).optional(), scope: z.literal('all').optional() }).strict()
   .refine(query => query.week === undefined || query.period === undefined, 'Ask for a week or a period, not both.')
   .refine(query => query.scope === undefined || query.period !== undefined, 'All projects is read by period.')
@@ -260,6 +262,9 @@ async function productionStore(github: GitHubTokens | null, approvals: Approvals
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     // Older history pages and the costs report read the secondaries (lib/prisma.ts, task #2970).
     { replica: prismaSecondary,
+      // Free crew members get their next task from the 30-second sweep and right after the writes that free one (task #3400).
+      // Here, not in the worker: its work.assign reads the GitHub facts this store's hooks below give.
+      dispatch: true,
       // Thread replies and tags reach the phones of whoever they tell, while the app is closed (push/send.ts, task #2905).
       phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices) },
       // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
@@ -268,6 +273,8 @@ async function productionStore(github: GitHubTokens | null, approvals: Approvals
       // A team account has no git login of its own: without the app it takes no teammates' work.
       teamAccountsIdle: !github,
       ...(github ? { pushOrigin: projectPushOrigin(github.app), branchPushOrigin: projectBranchOrigin(github.app) } : {}),
+      // A task's Ready reads the files its pull requests change, and the server opens its review steps from them (task #3401).
+      ...(github ? { pullRequestFiles: projectPullRequestFiles(github.app) } : {}),
       // A start or assignment its account cannot reach the repository from is refused at once, by the read Project details
       // shows (task #3266): the token endpoint below would refuse it on the machine, after the start was queued.
       ...(github ? { repositoryReach: async (autonomousEnv: string, tabId: string, projectId: string, repositoryUrl: string) =>
@@ -675,6 +682,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof activityReadBody> }>('/api/super-tabs/:tabId/activity/read',
     { preHandler: [validateParams(tabParams), validateQuery(noQuery), validateBody(activityReadBody)] },
     (req, reply) => respond(reply, () => reads.markActivityRead(req.user!, req.params.tabId, req.body.through)))
+  // A project's daily scorecard (superTabs/scorecard), or every readable project's with scope=all.
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof scorecardQuery> }>('/api/super-tabs/:tabId/scorecard',
+    { preHandler: [validateParams(tabParams), validateQuery(scorecardQuery)] },
+    (req, reply) => respond(reply, () => reads.scorecard(req.user!, req.params.tabId, req.query.projectId, req.query.scope === 'all')))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week, req.query.period, req.query.scope === 'all')))
@@ -853,6 +864,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof revisionParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision',
     { preHandler: [validateParams(revisionParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.instructionRevision(req.user!, req.params.tabId, req.params.projectId, req.params.revision, req.query.asAgentId)))
+  // A project's rules record and its kept revisions (superTabs/policy.ts): shown to people, in no prompt.
+  app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/rules',
+    { preHandler: [validateParams(projectParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => store.projectRules(req.user!, req.params.tabId, req.params.projectId, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof decisionParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/route-decisions/:decisionId',
     { preHandler: [validateParams(decisionParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.routeDecision(req.user!, req.params.tabId, req.params.decisionId, req.query.asAgentId)))
