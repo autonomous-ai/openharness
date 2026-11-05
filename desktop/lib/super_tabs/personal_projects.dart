@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 
 import '../logging/app_log.dart';
 import '../state/app_state.dart';
+import '../state/pane_layout_store.dart';
 import '../state/swarm.dart';
 import '../state/terminal_pane.dart';
 import 'controller.dart';
@@ -142,20 +143,33 @@ String personalProjectTabId(String projectId, [int number = 1]) {
 
 final _projectTabIds = <String, String>{};
 
-final _projectTabId = RegExp(
-  r'^(project-[0-9a-f]{24})(?:-([2-9]|[1-9][0-9]+))?$',
-);
-
 /// [tabId] as a project tab: its first tab's id and its number (1 for the
 /// first), or null for any other tab.
 ({String base, int number})? personalProjectTabParts(String tabId) {
-  final match = _projectTabId.firstMatch(tabId);
+  final match = kProjectTabId.firstMatch(tabId);
   if (match == null) return null;
   final number = match.group(2);
   return (
     base: match.group(1)!,
     number: number == null ? 1 : int.parse(number),
   );
+}
+
+/// What the person reads when a start needs a tab and the desk is full
+/// (migration plan, Phase 1 item 2).
+const kTabsFullMessage =
+    'Your tabs are full (24). Close a tab to start another agent.';
+
+/// A project tab's name: the project's, then "api 2", "api 3", within the
+/// desk's 80 characters.
+String projectTabName(String projectName, int number) {
+  final suffix = number <= 1 ? '' : ' $number';
+  var name = projectName.trim();
+  if (name.isEmpty) name = kTabProjectName;
+  if (name.length + suffix.length > 80) {
+    name = name.substring(0, 80 - suffix.length).trimRight();
+  }
+  return '$name$suffix';
 }
 
 /// Whether [key] is the project key of a project tab's no-repo panes: their
@@ -292,6 +306,89 @@ class PersonalProjects extends ChangeNotifier {
     return c.snapshot!.projects
         .where((p) => personalProjectTabId(p.id) == base)
         .firstOrNull;
+  }
+
+  /// Project [projectId]'s own tabs here, by number.
+  List<(int, Swarm)> _tabsOf(String projectId) {
+    final base = personalProjectTabId(projectId);
+    return [
+      for (final tab in app.swarms)
+        if (!tab.isSuperTab && !tab.isUtility)
+          if (personalProjectTabParts(tab.id)
+              case (base: final b, :final number) when b == base)
+            (number, tab),
+    ]..sort((a, b) => a.$1.compareTo(b.$1));
+  }
+
+  /// A desk tab holds 9 harnesses (backend `DESK_MAX_PANES`); it drops a 10th
+  /// without an error.
+  static bool _hasRoom(Swarm tab) =>
+      tab.panes.where((p) => p.agentId != null).length <
+      PaneLayoutStore.maxPanes;
+
+  /// Why a start in Personal's [conversationId] (a new project's when
+  /// [newProject]) is refused before any agent runs, or null: its pane needs
+  /// a tab, and the desk holds [AppNotifier.deskMaxTabs] already (migration
+  /// plan, Phase 1 item 2). Never for another Swarm.
+  String? startRefusal(
+    String? tabId,
+    String? conversationId, {
+    bool newProject = false,
+  }) {
+    if (tabId == null || PersonalSwarm.of(app).id != tabId) return null;
+    final c = app.superTabs.peek(tabId);
+    if (c == null || !eligible(c)) return null;
+    final projectId = newProject || conversationId == null
+        ? null
+        : c.snapshot!.projectFor(conversationId)?.id;
+    if (projectId != null && _tabsOf(projectId).any((t) => _hasRoom(t.$2))) {
+      return null;
+    }
+    return app.deskTabCount >= AppNotifier.deskMaxTabs
+        ? kTabsFullMessage
+        : null;
+  }
+
+  /// Puts the pane of the agent just started from Personal's project
+  /// [projectId] in that project's own tab (migration plan, Phase 1 item 1),
+  /// so the phone and older Desktops see it: the first with room, else the
+  /// next, "api 2". The tab on screen stays. Nothing when the pane is in one
+  /// already, or when the desk filled up since the start was checked (said
+  /// in the log: the agent stays in its project).
+  Future<void> placeInProjectTab(
+    SuperTabController c,
+    String projectId,
+    String machineId,
+    String agentId,
+  ) async {
+    if (!eligible(c)) return;
+    final project = c.snapshot!.projectById(projectId);
+    if (project == null) return;
+    final tabs = _tabsOf(projectId);
+    bool holds(Swarm tab) =>
+        tab.panes.any((p) => p.machineId == machineId && p.agentId == agentId);
+    if (tabs.any((t) => holds(t.$2))) return;
+    var target = tabs.where((t) => _hasRoom(t.$2)).firstOrNull?.$2;
+    if (target == null) {
+      if (app.deskTabCount >= AppNotifier.deskMaxTabs) {
+        appLog.warn('super-tabs', 'Personal project tab not made: desk full');
+        return;
+      }
+      final number = tabs.isEmpty ? 1 : tabs.last.$1 + 1;
+      target = app.ensureBackgroundTab(
+        personalProjectTabId(projectId, number),
+        projectTabName(project.name, number),
+      );
+    }
+    await app.assignAgentToPane(
+      null,
+      machineId,
+      agentId,
+      swarmId: target.id,
+      autoTile: true,
+      focus: false,
+      intent: AttachIntent.automatic,
+    );
   }
 
   /// The tab all of [panes] come from, when they are exactly its panes: its

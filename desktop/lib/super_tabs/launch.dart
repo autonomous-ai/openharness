@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path/path.dart' as p;
 
 import '../core/first_task.dart';
+import '../logging/app_log.dart';
 import '../core/models.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
@@ -18,6 +19,7 @@ import 'controller.dart';
 import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
+import 'personal_projects.dart' show PersonalProjects;
 import 'launch_prompt.dart';
 import 'identity.dart' show superTabMachineName;
 import 'instructions_model.dart';
@@ -661,6 +663,7 @@ class SuperTabLaunch {
   /// the Swarm to start it on [LeadSwarmStart.machineId]. Each step keeps
   /// its receipt in the journal, so a retry repeats none of them.
   Future<void> startInSwarm(LeadSwarmStart start) async {
+    refuseFullDesk();
     checkAccount();
     saved['initialMessage'] = start.task;
     await _createProject(start.task);
@@ -817,8 +820,21 @@ class SuperTabLaunch {
     checkAccount();
   }
 
+  /// A Personal start whose pane would need a tab the full desk cannot hold
+  /// is refused here, before any agent runs (task #3099).
+  void refuseFullDesk() {
+    final refusal = PersonalProjects.of(app).startRefusal(
+      saved['tabId'] as String?,
+      saved['conversationId'] as String?,
+      newProject:
+          saved['newProject'] == true && saved['projectPrepared'] != true,
+    );
+    if (refusal != null) throw SuperTabFailure('TABS_FULL', refusal);
+  }
+
   Future<String> prepare(String machine, String task) async {
     checkAccount();
+    refuseFullDesk();
     if (app.stateOf(machine)?.belongsToOtherAccount == true) {
       throw const SuperTabFailure(
         'CONTRIBUTION_REQUIRED',
@@ -1098,6 +1114,20 @@ class SuperTabLaunch {
         tabId,
         saved['visibility'] == 'private' ? 'Swarm' : saved['title'] as String,
       );
+    }
+    // The pane goes to its project's own tab in Personal (task #3099). A
+    // failure there never undoes the join: the agent is in its project.
+    if (controller.snapshot?.projectFor(saved['conversationId'] as String)
+        case final project?) {
+      try {
+        await PersonalProjects.of(app)
+            .placeInProjectTab(controller, project.id, machine, harnessId);
+      } catch (error) {
+        appLog.warn(
+          'super-tabs',
+          'Personal project tab placement failed (${error.runtimeType})',
+        );
+      }
     }
     controller.select(saved['conversationId'] as String);
     await app.superTabs.storage.delete(key);

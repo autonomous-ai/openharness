@@ -14119,6 +14119,7 @@ class AppNotifier extends ChangeNotifier {
       // A Swarm's tab keeps the Swarm's name (task #2647).
       if (!tab.nameIsCustom &&
           !tab.isSuperTab &&
+          !tab.isProjectTab &&
           tab.titleMachineId == machine.machine.machineId &&
           tab.titleAgentId == agent.id) {
         final title = Swarm.titleFor(agent);
@@ -20361,6 +20362,7 @@ class AppNotifier extends ChangeNotifier {
     if (firstAgent &&
         !target.nameIsCustom &&
         !target.isSuperTab &&
+        !target.isProjectTab &&
         !target.isCompanions &&
         !target.isDevices) {
       final agent = machine.agents
@@ -21137,6 +21139,7 @@ class AppNotifier extends ChangeNotifier {
       if (firstAgent &&
           !target.nameIsCustom &&
           !target.isSuperTab &&
+          !target.isProjectTab &&
           pane.agentId != null) {
         final agent = machineStates[pane.machineId]?.agents
             .where((agent) => agent.id == pane.agentId)
@@ -21295,6 +21298,27 @@ class AppNotifier extends ChangeNotifier {
   /// Store tab, orchestrator tabs and an untouched New Tab are this window's.
   bool _deskTracks(Swarm swarm) =>
       swarm.kind == 'harness' && !isDraftSwarm(swarm.id);
+
+  /// The most tabs the desk keeps (backend `DESK_MAX_TABS`): it drops a 25th
+  /// without an error, so a caller that adds one checks first.
+  static const deskMaxTabs = 24;
+
+  /// How many of this window's tabs the desk holds.
+  int get deskTabCount => swarms.where(_deskTracks).length;
+
+  /// Tab [id] named [name], made in the background when it is not here yet:
+  /// the tab on screen stays, and the name is not the person's, so it may
+  /// follow what it is named after (a Personal project's own tab, task
+  /// #3099). It reaches the desk as any new tab does.
+  Swarm ensureBackgroundTab(String id, String name) {
+    final existing = swarms.where((s) => s.id == id).firstOrNull;
+    if (existing != null) return existing;
+    final swarm = Swarm(id: id, name: name, nameIsCustom: false);
+    swarms.add(swarm);
+    _persistLayout();
+    notifyListeners();
+    return swarm;
+  }
 
   /// `swarms` as the desk would hold them.
   List<DeskTab> _deskProjection() => [
