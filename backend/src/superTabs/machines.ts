@@ -487,9 +487,12 @@ export const ownAccountWork = (pool: Pick<ContributedMachine, 'ownAccountChoice'
 export const ownAccountNote = (pool: Pick<ContributedMachine, 'name'>, ownerName: string | undefined): string =>
   `${pool.name} runs teammates' work in ${ownerName ?? 'its owner'}'s own account.`
 
-/** What a start moved to [pool]'s Team account says, so it is never moved silently (task #2806). */
-export const movedToTeamAccount = (pool: Pick<ContributedMachine, 'name'>): string =>
-  `${pool.name} runs teammates' work in its Harness Team account. Its owner can change that in Manage > Machines.`
+/** What a start moved to [pool]'s Team account says, so it is never moved silently (task #2806). The owner's choice is kept
+ *  on each Swarm's own entry for the Mac, so it says which Swarm's to change (task #2993: Gray turned it on in another
+ *  Swarm). Team-written code moves whatever the owner chose, so that note names the code, not a setting that would not help. */
+export const movedToTeamAccount = (pool: Pick<ContributedMachine, 'name'>, teamWritten = false): string => teamWritten
+  ? `A Harness Team agent wrote this task's code, so it runs in the Harness Team account on ${pool.name}.`
+  : `${pool.name} runs teammates' work in its Harness Team account in this Swarm. Its owner can change that in this Swarm's Manage > Machines.`
 
 /** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. Not when its owner lets teammates'
@@ -581,17 +584,24 @@ export function recordAgentPresence(state: SuperTabState, machineId: string, run
 
 /** Why a start other than its own person's Buddy is refused on a Buddy-only machine: worded as for any machine outside the
  *  Swarm, so the refusal says nothing about whose it is or what runs there. */
-/** Harness cannot yet tell a Buddy's window from another agent's on Windows (security review of #2093). */
-export const BUDDY_WINDOWS_REFUSAL = 'A Buddy cannot run on a Windows machine yet. Pick one of your Macs or Linux machines.'
+/** A host that can tell a Buddy's window from another agent's on Windows (CLI callerPane.ts `windowsRunningPane`). An older one
+ *  cannot: a Buddy there refused every agent's Swarm command on that computer (security review of #2093). */
+export const WINDOWS_BUDDY_CAPABILITY = 'windowsBuddy'
+export const BUDDY_WINDOWS_REFUSAL = 'Update Harness on this Windows machine to run a Buddy on it, or pick another of your machines.'
+export const refusesWindowsBuddy = (pool: ContributedMachine): boolean => pool.observation?.resources.os === 'Windows'
+  && !pool.observation.capabilities?.includes(WINDOWS_BUDDY_CAPABILITY)
 export const NOT_SWARM_MACHINE = 'This machine is not one of the Swarm\'s machines.'
-/** Real machines only: a Mac's Harness Team account is that same Mac (Ken, 2026-11-04). It stays 32 until a machine's reading
- *  stops re-reading every machine; #2900 has what grows with the count. */
-const MAX_MACHINES = 32
-export const MACHINES_FULL_MESSAGE = `This Swarm is at its limit of ${MAX_MACHINES} machines. One has to be removed before another can be added.`
-/** Whether [state] can take another machine, or with [team] another Team account's entry: one for each machine at most. */
-export const machinesFull = (state: SuperTabState, team = false): boolean => team
-  ? (state.machines?.length ?? 0) >= 2 * MAX_MACHINES
-  : (state.machines ?? []).filter(m => !m.hostMachineId).length >= MAX_MACHINES
+/** The most machines one person adds to one Swarm (#2637, Ken, 2026-11-04). The Swarm-wide 32 dated from one 16 MB
+ *  document; each machine is its own part now. Team accounts' entries count apart, so a Mac's Team account never uses up
+ *  its owner's 20, and still have a bound. Review again when one Swarm passes 100 entries (plan 2026-11-04). */
+export const MACHINES_PER_PERSON = 20
+export const MACHINE_LIMIT_MESSAGE = `You have ${MACHINES_PER_PERSON} machines in this Swarm, the most one person can add. Remove one before adding another.`
+/** How many more machines [contributorId] may add to [state], or with [team] Team accounts' entries. Buddy-only records count
+ *  as the person's machines. The command's check and the host's join rows both read this, so they never disagree. */
+export const machineRoom = (state: SuperTabState, contributorId: string, { team = false } = {}): number =>
+  Math.max(0, MACHINES_PER_PERSON - (state.machines ?? []).filter(m => m.contributorId === contributorId && !!m.hostMachineId === team).length)
+export const machineLimitReached = (state: SuperTabState, contributorId: string, options: { team?: boolean } = {}): boolean =>
+  machineRoom(state, contributorId, options) === 0
 
 /** A Buddy-only machine with no Buddy left on it, running or starting, leaves: its host deletes the Swarm's folders there as
  *  for a removed machine, and no chat hears of it, since none ever saw it (Lead, 10-29). Run after every command (commands.ts)
@@ -786,7 +796,7 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (!pool) return null
   if (pool.buddyOnly && request.buddyOf?.personId !== pool.contributorId) fail('NOT_SWARM_MACHINE', NOT_SWARM_MACHINE, 403)
   // At its add and again at its launch: a Buddy-only machine is first read after its Buddy was asked for.
-  if (request.buddyOf && pool.observation?.resources.os === 'Windows') fail('BUDDY_WINDOWS', BUDDY_WINDOWS_REFUSAL, 403)
+  if (request.buddyOf && refusesWindowsBuddy(pool)) fail('BUDDY_WINDOWS', BUDDY_WINDOWS_REFUSAL, 403)
   if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
   if (start && start.poolGeneration !== pool.generation) fail('CONTRIBUTION_REVOKED', 'This machine contribution changed. Reconcile the original start.', 403)
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')

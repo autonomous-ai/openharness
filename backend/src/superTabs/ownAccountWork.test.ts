@@ -201,7 +201,8 @@ describe('teammates\' work in a Mac owner\'s own account', () => {
     expect(f.machine('gray-mac').ownAccountChoice).toEqual({ allowed: false, by: 'gray', at: new Date(NOW).toISOString() })
     const moved = f.start(f.group())
     expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team' })
-    expect(moved.result.moved).toBe('Gray\'s Mac runs teammates\' work in its Harness Team account. Its owner can change that in Manage > Machines.')
+    // The choice is per Swarm: the note says where this Swarm's is (task #2993: Gray turned it on in another Swarm).
+    expect(moved.result.moved).toBe('Gray\'s Mac runs teammates\' work in its Harness Team account in this Swarm. Its owner can change that in this Swarm\'s Manage > Machines.')
     expect(f.state.agents.find(a => a.id === (running as { agentId: string }).agentId)!.machineId).toBe('gray-mac')
   })
 
@@ -221,5 +222,24 @@ describe('teammates\' work in a Mac owner\'s own account', () => {
     const result = refusal(() => f.start(group))
     // Moved or refused, never run as Gray.
     expect(result === null ? f.state.starts!.at(-1)!.request.machineId : result.code).not.toBe('gray-mac')
+  })
+
+  it('says a Team-written start moved for its code, not for a choice its owner can change (task #2993)', () => {
+    const f = swarm()
+    f.choose(true)
+    const group = f.group()
+    Object.assign(f.state.conversations.find(c => c.id === group)!, { teamWritten: true })
+    const moved = f.start(group)
+    expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team' })
+    expect(moved.result.moved).toBe('A Harness Team agent wrote this task\'s code, so it runs in the Harness Team account on Gray\'s Mac.')
+  })
+
+  it('is kept per Swarm: turning it on in one Swarm leaves another Swarm\'s entry for the same Mac as it was (task #2993)', () => {
+    const ours = swarm(), theirs = swarm()
+    ours.choose(true)
+    expect(theirs.machine('gray-mac').ownAccountChoice).toBeUndefined()
+    const moved = theirs.start(theirs.group())
+    expect(theirs.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team' })
+    expect(moved.result.moved).toContain('in this Swarm\'s Manage > Machines')
   })
 })

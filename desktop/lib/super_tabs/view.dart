@@ -24,6 +24,7 @@ import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
 import '../shortcuts/app_keymap.dart' show KeymapRegion;
 import '../shortcuts/keymap.dart' show KeymapContext;
+import 'chat_find.dart';
 import 'chat_scroll.dart';
 import 'leaderboard/reader.dart';
 import 'jump_to_latest.dart';
@@ -147,7 +148,7 @@ class SuperTabView extends StatefulWidget {
   final SwarmLinkSwarms? linkSwarms;
 
   /// Makes the microphone the composers' mic records with
-  /// ([superTabVoiceRecorder]: macOS and the web); without it, no mic shows.
+  /// ([superTabVoiceRecorder]: macOS, Windows and the web); without it, no mic shows.
   final SuperTabVoiceRecorder Function()? voiceRecorder;
 
   @override
@@ -182,6 +183,10 @@ class _SuperTabViewState extends State<SuperTabView>
   /// requests does for a task.
   bool _showTasks = false;
 
+  /// The card the board shows selected (task #2948): the task or proposal
+  /// last opened from it, or the task whose chat the board was opened from.
+  String? _tasksSelectedId;
+
   bool _showNotifications = false;
 
   /// Manage holds the main pane; [_manageTab] is which of its pages, but for
@@ -206,6 +211,12 @@ class _SuperTabViewState extends State<SuperTabView>
   ({String conversationId, String messageId, double top})? _back;
   String? _lit;
   Timer? _litTimer;
+  // Find in the open chat (task #2826): the search, the conversation it is
+  // in, and the match last brought into view.
+  SuperTabChatFind? _find;
+  String? _findIn, _foundMatch;
+  final _findFocus = FocusNode(debugLabel: 'Find in chat');
+  final _threadFind = GlobalKey<SuperTabThreadPanelState>();
   bool _viewEnabled = true;
   bool _chatCovered = false;
   final _loadingOlder = <String>{};
@@ -423,6 +434,7 @@ class _SuperTabViewState extends State<SuperTabView>
       _jumpRequest++;
       _finding = null;
       _back = null;
+      _closeFind(refocus: false);
       _anchors.clear();
       _selected = null;
       _changed();
@@ -487,6 +499,7 @@ class _SuperTabViewState extends State<SuperTabView>
       if (_selected != null) _jumpRequest++;
       _finding = null;
       _back = null;
+      _closeFind(refocus: false);
       if (_anchors.remove(id) case final anchor?) {
         unawaited(_keepRow(id, anchor));
       }
@@ -925,6 +938,7 @@ class _SuperTabViewState extends State<SuperTabView>
         ...?region?.actions,
         'swarm.next_unread': () => _jumpUnread(1),
         'swarm.previous_unread': () => _jumpUnread(-1),
+        'swarm.find_in_chat': _findKey,
       },
       composing: region?.composing,
       keeps: region?.keeps,
@@ -999,6 +1013,10 @@ class _SuperTabViewState extends State<SuperTabView>
     _unregisterDial?.call();
     _dial.cancel();
     _litTimer?.cancel();
+    _find
+      ?..removeListener(_findMoved)
+      ..dispose();
+    _findFocus.dispose();
     _historyRetry?.cancel();
     _composer.dispose();
     _mentionIndex.dispose();
@@ -1500,6 +1518,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void _readEarlierNearTop(String id, ScrollMetrics metrics) {
     if (metrics.extentBefore > 400 ||
         _finding != null ||
+        _find?.reading != null ||
         _loadingOlder.contains(id) ||
         _olderFailed.contains(id) ||
         !c.hasOlder(id)) {
@@ -1822,7 +1841,6 @@ class _SuperTabViewState extends State<SuperTabView>
     // Activity on every platform (Lead, 10-31): the Mac's menu bar and Dock
     // still say what waits, and the sidebar lists it as Slack does.
     onNotifications: _openActivity,
-    needsHuman: (group) => _needsHuman(group).length,
     onSelect: (id) {
       setState(() => _showNotifications = _showManage = _showTasks = false);
       // Choosing a conversation leaves the Manage pane: its Devices page left
@@ -1850,8 +1868,10 @@ class _SuperTabViewState extends State<SuperTabView>
     return c.openBuddyChat(projectId);
   }
 
-  /// What the menu bar asked to open ([SuperTabController.openNotice]): a tag
-  /// at its message, a decision on the Notifications page where it is answered.
+  /// What the menu bar asked to open ([SuperTabController.openNotice]), as
+  /// its Activity row opens it (task #2914): a tag or a due reminder at its
+  /// message, an agent waiting in its chat with its terminal beside it, a
+  /// decision on the Notifications page where it is answered.
   void _takeNotice() {
     final request = c.noticeRequest;
     if (request == null || c.snapshot == null) return;
@@ -1862,11 +1882,24 @@ class _SuperTabViewState extends State<SuperTabView>
       _showManage = false;
       _showPullRequests = _showTasks = false;
     });
-    if (request.kind != 'mention') return;
-    final mention = SuperTabMentions.of(c).waiting
-        .where((m) => m.id == request.id)
+    final notice = SuperTabActivity.of(c).notices
+        .where((n) => n.kind.name == request.kind && n.id == request.id)
         .firstOrNull;
-    if (mention != null) unawaited(_openMention(mention));
+    switch (notice) {
+      case SuperTabNotice(:final mention?):
+        unawaited(_openMention(mention));
+      case SuperTabNotice(:final reminder?):
+        unawaited(_openReminder(reminder));
+      case SuperTabNotice(kind: SuperTabNoticeKind.agent, :final need?):
+        if (_openConversation(need.conversationId) && need.agentId != null) {
+          c.openAgentTerminal(
+            need.agentId!,
+            conversationId: need.conversationId,
+          );
+        }
+      case _:
+        break;
+    }
   }
 
   /// Shows Activity in the main pane, as its sidebar row does. [from] is the
@@ -2401,6 +2434,71 @@ class _SuperTabViewState extends State<SuperTabView>
     _focus.requestFocus();
   }
 
+  /// Cmd+F: the thread's find while the thread has focus, else the chat's.
+  void _findKey() {
+    if (_threadFind.currentState case final thread? when thread.focused) {
+      return thread.openFind();
+    }
+    _openFind();
+  }
+
+  void _openFind() {
+    final id = c.selectedId;
+    if (_find != null && _findIn == id) return _findFocus.requestFocus();
+    _closeFind(refocus: false);
+    final find = SuperTabChatFind(
+      rows: () => [
+        for (final entry in superTabTranscriptEntries(_shownMessages(id)))
+          if (entry.interruptions == 0) entry.message,
+      ],
+      hasOlder: () => c.hasOlder(id),
+      readOlder: () async {
+        final loaded = c.messages(id).length;
+        await _loadEarlier(id, keep: _find?.current);
+        return c.messages(id).length > loaded || !c.hasOlder(id);
+      },
+    )..addListener(_findMoved);
+    setState(() {
+      _find = find;
+      _findIn = id;
+    });
+  }
+
+  void _closeFind({bool refocus = true}) {
+    final find = _find;
+    if (find == null) return;
+    find
+      ..removeListener(_findMoved)
+      ..clear()
+      ..dispose();
+    _find = null;
+    _findIn = _foundMatch = null;
+    if (!mounted) return;
+    setState(() {});
+    if (refocus) _focus.requestFocus();
+  }
+
+  /// A new current match is brought into view, as a followed link is.
+  void _findMoved() {
+    final find = _find, id = _findIn;
+    if (find == null || id == null || !mounted) return;
+    final match = find.current;
+    setState(() {});
+    if (match == null || match == _foundMatch) return;
+    _foundMatch = match;
+    setState(() {
+      _target = match;
+      _scrollRequest++;
+      _jumpingToEnd = false;
+      _follow(id, false);
+    });
+    _revealTarget(
+      id,
+      0,
+      arrived: (row) => unawaited(Scrollable.ensureVisible(row, alignment: .3)),
+    );
+  }
+
   void _light(String messageId) {
     _litTimer?.cancel();
     setState(() => _lit = messageId);
@@ -2903,6 +3001,7 @@ class _SuperTabViewState extends State<SuperTabView>
       unawaited(c.select(project.leadConversationId));
     }
     setState(() {
+      if (group.id != project.leadConversationId) _tasksSelectedId = group.id;
       _showTasks = true;
       _showPullRequests = false;
     });
@@ -2937,9 +3036,15 @@ class _SuperTabViewState extends State<SuperTabView>
       project: project,
       storage: widget.app?.localStore,
       needsHuman: (g) => _needsHuman(g).length,
-      onOpenTask: (id) => unawaited(_openTask(id)),
-      onOpenProposal: (id) =>
-          _openThreadFromList(project.leadConversationId, id),
+      selectedId: _tasksSelectedId,
+      onOpenTask: (id) {
+        _tasksSelectedId = id;
+        unawaited(_openTask(id));
+      },
+      onOpenProposal: (id) {
+        _tasksSelectedId = id;
+        _openThreadFromList(project.leadConversationId, id);
+      },
     );
   }
 
@@ -3103,6 +3208,21 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ),
           if (group != null && !_devicesVisible && !_listViewHoldsThePane) ...[
+            if (!_terminalsVisible && !_showPullRequests && !_showTasks) ...[
+              fingerTarget(
+                enabled: _phone,
+                AppIconButton(
+                  key: const ValueKey('super-find-button'),
+                  icon: AppIcons.search,
+                  size: AppIcons.inlineSize,
+                  tooltip: 'Find in chat',
+                  selected: _find != null,
+                  color: DesktopChrome.muted,
+                  onPressed: _openFind,
+                ),
+              ),
+              const SizedBox(width: 4),
+            ],
             // A project's chat is where its header rests: the button back
             // to it shows only from another view (Quiet Swarm, screen 1).
             if (!restsOnChat ||
@@ -3843,6 +3963,7 @@ class _SuperTabViewState extends State<SuperTabView>
       images: () => _images(rows),
       thread: open.root,
       child: SuperTabThreadPanel(
+        key: _threadFind,
         controller: c,
         root: open.root,
         row: (message, grouped) =>
@@ -4152,6 +4273,8 @@ class _SuperTabViewState extends State<SuperTabView>
           _ => false,
         },
       );
+    // Find matches the rows as they are drawn now.
+    final search = _findIn == c.selectedId ? (_find?..refresh()) : null;
     Widget row(int index) {
       final entry = entries[index];
       final message = entry.message;
@@ -4187,7 +4310,8 @@ class _SuperTabViewState extends State<SuperTabView>
               child: KeyedSubtree(
                 key: message.id == _target ? _targetKey : null,
                 child: SuperTabMessageHighlight(
-                  on: message.id == _lit,
+                  on: message.id == _lit || message.id == search?.current,
+                  match: search?.matching.contains(message.id) ?? false,
                   child: pendingById.containsKey(message.id)
                       ? _outgoingRow(
                           pendingById[message.id]!,
@@ -4264,6 +4388,13 @@ class _SuperTabViewState extends State<SuperTabView>
         : null;
     return Column(
       children: [
+        if (search != null)
+          SuperTabFindBar(
+            key: ValueKey('super-find-$chatId'),
+            find: search,
+            focus: _findFocus,
+            onClose: _closeFind,
+          ),
         if (c.error != null && !unread)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
@@ -4952,7 +5083,7 @@ class _SuperTabViewState extends State<SuperTabView>
                             conversationId: chatId,
                             padding: const EdgeInsets.fromLTRB(
                               grid.AppDesktop.composerSide,
-                              0,
+                              grid.AppDesktop.controlGap,
                               grid.AppDesktop.composerSide,
                               grid.AppDesktop.controlGap,
                             ),

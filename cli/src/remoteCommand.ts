@@ -5,7 +5,7 @@
  * Typed in a tile, it lists the account's other machines, takes one with ↑/↓ and Enter, creates a
  * `terminal` agent there through the daemon's loopback socket (the daemon relays to the other machine
  * the way it does for the desktop), then asks the daemon to tell the window: `remote_terminal_handoff`
- * names this tile by its tmux pane — `$TMUX_PANE`, the one fact a shell has about itself — and the
+ * names this tile by its pane — `$TMUX_PANE`, or `$HARNESS_PANE` on Windows, the one fact a shell has about itself — and the
  * window swaps the tile to the new agent and ends this shell.
  *
  * Only a Harness tile qualifies. Another terminal app, or a tmux of the user's own, has no tile for
@@ -18,7 +18,7 @@ import { openLocalWs } from './lib/localTransport.js'
 import { env } from './config/env.js'
 import { emitKeypressEvents } from 'node:readline'
 import { WebSocket } from 'ws'
-import { TMUX_PANE_RE } from './lib/terminalHandoff.js'
+import { HANDOFF_PANE_RE } from './lib/terminalHandoff.js'
 
 export interface RemoteMachineChoice {
   machineId: string
@@ -40,7 +40,7 @@ export function orderForPicker(choices: RemoteMachineChoice[]): RemoteMachineCho
 }
 
 export interface RemoteCommandDeps {
-  /** `process.env.TMUX_PANE` — set by tmux in every pane, `%N`. */
+  /** The shell's own pane (`sendPane`): `%N` in tmux, `<instance>:%N` in a Windows pty host. */
   tmuxPane: string | undefined
   /** This machine's id, from the SSO session; null when not signed in. */
   localMachineId: string | null
@@ -287,8 +287,8 @@ async function linkNow(deps: RemoteCommandDeps, choice: RemoteMachineChoice): Pr
 /** Exit code: 0 when the tile was handed over (or the person cancelled), 1 otherwise. */
 export async function remoteCommand(deps: RemoteCommandDeps): Promise<number> {
   const { tmuxPane, output, error } = deps
-  if (!tmuxPane || !TMUX_PANE_RE.test(tmuxPane)) {
-    error('`harness remote` runs inside a Harness terminal tile (⌘⇧T, or New Harness ▸ Terminal).')
+  if (!tmuxPane || !HANDOFF_PANE_RE.test(tmuxPane)) {
+    error('`harness remote` runs inside a Harness terminal tile (New Harness ▸ Terminal).')
     error('Open one and run it there.')
     return 1
   }

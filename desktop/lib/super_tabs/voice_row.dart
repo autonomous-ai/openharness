@@ -13,17 +13,19 @@ import '../widgets/desktop_chrome.dart';
 import 'voice_length.dart';
 import 'voice_take.dart';
 
-/// Where macOS lets a person give Harness the microphone.
-final superTabMicrophoneSettings = Uri.parse(
-  'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
+/// Where this computer lets a person give Harness the microphone.
+Uri get superTabMicrophoneSettings => Uri.parse(
+  defaultTargetPlatform == TargetPlatform.windows
+      ? 'ms-settings:privacy-microphone'
+      : 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
 );
 
 /// Opens [superTabMicrophoneSettings]; a test puts its own here.
 @visibleForTesting
 Future<bool> Function(Uri url) superTabOpenSettings = launchUrl;
 
-/// What the composer says when the microphone was refused: on macOS with a
-/// way to System Settings, in a browser where to allow it (no page can open
+/// What the composer says when the microphone was refused: on a computer with a
+/// way to its settings, in a browser where to allow it (no page can open
 /// a browser's settings).
 const superTabMicRefusedMac = "Harness can't use the microphone";
 const superTabMicRefusedWeb =
@@ -146,7 +148,9 @@ class SuperTabVoiceNotice extends StatelessWidget {
                           superTabOpenSettings(superTabMicrophoneSettings),
                         ),
                         child: Text(
-                          'Open System Settings',
+                          defaultTargetPlatform == TargetPlatform.windows
+                              ? 'Open Settings'
+                              : 'Open System Settings',
                           style: DesktopChrome.metadata(
                             color: DesktopChrome.accent,
                           ),

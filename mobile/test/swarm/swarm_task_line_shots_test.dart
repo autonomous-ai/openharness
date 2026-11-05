@@ -140,8 +140,12 @@ void main() {
     }
   }, skip: shots == null || !Platform.isMacOS);
 
-  // Dee's approved mockup (2026-11-04, #2552): one tag after the time.
-  testWidgets('the project chat with each state of an ask', (tester) async {
+  // Anh Dee's 'bot messages' mockup (11-04, task #2925): only rows people
+  // wrote, the agent doing the work's 👀 and ✅ under them, the thread line
+  // unchanged, and no On it or Shipped, even from a server that sends them.
+  testWidgets('the project chat with people\'s asks and their reactions', (
+    tester,
+  ) async {
     final paletteBefore = AppTheme.palette.value;
     final brightnessBefore = AppTheme.brightness.value;
     addTearDown(() {
@@ -153,53 +157,60 @@ void main() {
       'id': name,
       'name': '$name@example.com',
     };
+    List<Map<String, Object>> reacted(String agent, List<String> emoji) => [
+      for (final e in emoji)
+        {
+          'emoji': e,
+          'count': 1,
+          'by': [
+            {'kind': 'agent', 'id': agent},
+          ],
+        },
+    ];
     Map<String, dynamic> row(
       String id,
       int sequence,
       Map<String, Object?> author,
-      String text, [
+      String text, {
       String? kind,
-    ]) => {
+      List<Map<String, Object>> reactions = const [],
+    }) => {
       ...taskLine(id: id, sequence: sequence),
       'text': text,
       'thread': id,
       'author': author,
       'source': kind == null ? null : {'kind': kind},
+      'reactions': reactions,
     };
     final river = {'kind': 'agent', 'id': 'agent-lead', 'name': 'River'};
     final rows = [
       row(
-        'pm',
+        'huy',
         1,
-        river,
-        "I'm fixing the CI check that timed out on every batch tonight.",
+        person('huy'),
+        'Jumping back a week in a chat freezes my Mac.',
+        reactions: reacted('gannet', ['eyes']),
       ),
       row(
-        'shipped',
+        'darren',
         5,
-        person('scholes'),
-        "Backlog: Mine shows nothing and doesn't say why",
-        'task-line',
+        person('darren'),
+        'I renamed the agents, but the sidebar still shows the old names.',
+        reactions: reacted('egret', ['eyes', 'check']),
       ),
       row(
-        'open',
+        'diego',
         9,
         person('diego'),
-        'Desktop chat: a message after a Routed-to line loses its name and avatar',
-        'task-line',
+        "The menu bar's Swarm notices don't match Activity, even the counts. "
+            'Can someone make them match?',
+        kind: 'buddy-proposal',
       ),
       row(
-        'proposal',
+        'dee',
         13,
-        person('diego'),
-        "Desktop chat: in a task with steps, your next message reads as the step agent's",
-        'buddy-proposal',
-      ),
-      row(
-        'plain',
-        17,
-        person('huy'),
-        'sidebar looks heavy, can we make it lighter?',
+        person('dee'),
+        'the ui/ux is still not quite there yet. how do we fix this?',
       ),
     ];
     Map<String, Object?> summary(String id, int replies, [String? ask]) => {
@@ -207,7 +218,7 @@ void main() {
       'ask': ?ask,
       'replies': replies,
       'lastSequence': 30,
-      'lastAt': DateTime.utc(2026, 11, 2, 18).toIso8601String(),
+      'lastAt': DateTime.utc(2026, 11, 4, 12).toIso8601String(),
       'authors': [river],
       'people': <Object>[],
     };
@@ -219,11 +230,11 @@ void main() {
           (_) => {
             'messages': rows.reversed.toList(),
             'threads': [
-              summary('pm', 3, 'on-it'),
-              summary('shipped', 6, 'shipped'),
-              summary('open', 4, 'on-it'),
-              summary('proposal', 2, 'proposal'),
-              summary('plain', 1),
+              // An older server still marks these; the rows draw nothing.
+              summary('huy', 3, 'on-it'),
+              summary('darren', 2, 'shipped'),
+              summary('diego', 1, 'proposal'),
+              summary('dee', 6),
             ],
             'next': null,
           };
@@ -235,15 +246,15 @@ void main() {
         theme: buildAppTheme(brightness: palette.brightness),
       );
       expect(find.text('✋ Proposal'), findsOneWidget);
-      expect(find.text('● On it'), findsNWidgets(2));
-      expect(find.text('✓ Shipped'), findsOneWidget);
+      expect(find.textContaining('On it'), findsNothing);
+      expect(find.textContaining('Shipped'), findsNothing);
       await tester.runAsync(() async {
         final image =
             await (boundary.currentContext!.findRenderObject()!
                     as RenderRepaintBoundary)
                 .toImage(pixelRatio: 3);
         final png = await image.toByteData(format: ui.ImageByteFormat.png);
-        await File('$shots/ask-tags-${palette.brightness.name}.png')
+        await File('$shots/asks-phone-${palette.brightness.name}.png')
             .writeAsBytes(png!.buffer.asUint8List());
         image.dispose();
       });

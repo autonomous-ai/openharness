@@ -4,52 +4,6 @@
   "choice": {
    "shown": [
     {
-     "kind": "new",
-     "machineId": "a",
-     "machineName": "a",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "quota": {
-      "known": true,
-      "leftPercent": 80,
-      "resetsAt": null,
-      "windows": [
-       {
-        "name": "5-hour",
-        "leftPercent": 80,
-        "resetsAt": 1010800000
-       },
-       {
-        "name": "weekly",
-        "leftPercent": 90,
-        "resetsAt": 1432000000
-       }
-      ],
-      "account": "a"
-     },
-     "activity": "new",
-     "known": true,
-     "refusals": [],
-     "notes": [],
-     "fit": {
-      "status": "fits",
-      "coverage": 1.78,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "a"
-     },
-     "id": "c0",
-     "title": "New agent · Claude opus high · a",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (80% left, resets in 3h); weekly 6% of 90% · a · new · quota 5-hour 80% left (resets in 3h), weekly 90% left (resets in 5 days)"
-    },
-    {
      "kind": "member",
      "machineId": "a",
      "machineName": "a",
@@ -109,9 +63,55 @@
       },
       "account": "a"
      },
-     "id": "c1",
+     "id": "c0",
      "title": "Multiply · Claude sonnet medium · a",
      "label": "Member Multiply · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (80% left, resets in 3h); weekly 4% of 90% · a · idle · same repo · on \"Fix the dial\" · in openharness, branch fix/dial · last active 20m ago · earlier here: Dial fix merged · quota 5-hour 80% left (resets in 3h), weekly 90% left (resets in 5 days)"
+    },
+    {
+     "kind": "new",
+     "machineId": "a",
+     "machineName": "a",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "quota": {
+      "known": true,
+      "leftPercent": 80,
+      "resetsAt": null,
+      "windows": [
+       {
+        "name": "5-hour",
+        "leftPercent": 80,
+        "resetsAt": 1010800000
+       },
+       {
+        "name": "weekly",
+        "leftPercent": 90,
+        "resetsAt": 1432000000
+       }
+      ],
+      "account": "a"
+     },
+     "activity": "new",
+     "known": true,
+     "refusals": [],
+     "notes": [],
+     "fit": {
+      "status": "fits",
+      "coverage": 1.78,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "a"
+     },
+     "id": "c1",
+     "title": "New agent · Claude opus high · a",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (80% left, resets in 3h); weekly 6% of 90% · a · new · quota 5-hour 80% left (resets in 3h), weekly 90% left (resets in 5 days)"
     },
     {
      "kind": "new",
@@ -263,55 +263,9 @@
    "belowFloor": false
   },
   "verdict": {
-   "pick": {
-    "kind": "new",
-    "machineId": "a",
-    "machineName": "a",
-    "engine": "claude",
-    "model": "opus",
-    "effort": "high",
-    "quality": 3,
-    "cost": 3,
-    "quota": {
-     "known": true,
-     "leftPercent": 80,
-     "resetsAt": null,
-     "windows": [
-      {
-       "name": "5-hour",
-       "leftPercent": 80,
-       "resetsAt": 1010800000
-      },
-      {
-       "name": "weekly",
-       "leftPercent": 90,
-       "resetsAt": 1432000000
-      }
-     ],
-     "account": "a"
-    },
-    "activity": "new",
-    "known": true,
-    "refusals": [],
-    "notes": [],
-    "fit": {
-     "status": "fits",
-     "coverage": 1.78,
-     "effectiveCost": 3,
-     "expiring": 0,
-     "spend": {
-      "5-hour": 45,
-      "weekly": 6
-     },
-     "account": "a"
-    },
-    "id": "c0",
-    "title": "New agent · Claude opus high · a",
-    "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (80% left, resets in 3h); weekly 6% of 90% · a · new · quota 5-hour 80% left (resets in 3h), weekly 90% left (resets in 5 days)"
-   },
-   "via": "order",
+   "via": "instructions",
    "p": null,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   },
   "record": {
    "assessment": {
@@ -323,29 +277,6 @@
    "candidates": [
     {
      "id": "c0",
-     "kind": "new",
-     "machineId": "a",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "title": "New agent · Claude opus high · a",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (80% left, resets in 3h); weekly 6% of 90% · a · new · quota 5-hour 80% left (resets in 3h), weekly 90% left (resets in 5 days)",
-     "fit": {
-      "status": "fits",
-      "coverage": 1.78,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "a"
-     }
-    },
-    {
-     "id": "c1",
      "kind": "member",
      "agentId": "m1",
      "machineId": "a",
@@ -364,6 +295,29 @@
       "spend": {
        "5-hour": 30,
        "weekly": 4
+      },
+      "account": "a"
+     }
+    },
+    {
+     "id": "c1",
+     "kind": "new",
+     "machineId": "a",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "title": "New agent · Claude opus high · a",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (80% left, resets in 3h); weekly 6% of 90% · a · new · quota 5-hour 80% left (resets in 3h), weekly 90% left (resets in 5 days)",
+     "fit": {
+      "status": "fits",
+      "coverage": 1.78,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
       },
       "account": "a"
      }
@@ -442,63 +396,16 @@
    "excluded": [],
    "floor": 1,
    "notes": false,
-   "pick": "c0",
-   "via": "order",
+   "via": "instructions",
    "p": null,
    "belowFloor": false,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   }
  },
  {
-  "name": "high, large: strong pick short, weaker one fits",
+  "name": "high, large: a strong candidate short, a weaker one fits",
   "choice": {
    "shown": [
-    {
-     "kind": "new",
-     "machineId": "b",
-     "machineName": "b",
-     "engine": "codex",
-     "model": "default",
-     "effort": "default",
-     "quality": 3,
-     "cost": 2,
-     "quota": {
-      "known": true,
-      "leftPercent": 5,
-      "resetsAt": null,
-      "windows": [
-       {
-        "name": "5-hour",
-        "leftPercent": 5,
-        "resetsAt": 1014400000
-       },
-       {
-        "name": "weekly",
-        "leftPercent": 60,
-        "resetsAt": 1259200000
-       }
-      ],
-      "account": "B"
-     },
-     "activity": "new",
-     "known": true,
-     "refusals": [],
-     "notes": [],
-     "fit": {
-      "status": "short",
-      "coverage": 0.1,
-      "effectiveCost": 1.8,
-      "expiring": 0.1,
-      "spend": {
-       "5-hour": 50,
-       "weekly": 8
-      },
-      "account": "B"
-     },
-     "id": "c0",
-     "title": "New agent · Codex default default · b",
-     "label": "New agent · Codex default default · strength 3, cost 2 · short: needs about 50% of the 5-hour window (5% left, resets in 4h, otherwise unused); weekly 8% of 60% · b · new · quota 5-hour 5% left (resets in 4h), weekly 60% left (resets in 3 days)"
-    },
     {
      "kind": "new",
      "machineId": "a",
@@ -541,9 +448,55 @@
       },
       "account": "A"
      },
-     "id": "c1",
+     "id": "c0",
      "title": "New agent · Claude opus high · a",
      "label": "New agent · Claude opus high · strength 3, cost 3 · short: needs about 75% of the 5-hour window (20% left, resets in 4h, otherwise unused); weekly 12% of 50% · a · new · quota 5-hour 20% left (resets in 4h), weekly 50% left (resets in 5 days)"
+    },
+    {
+     "kind": "new",
+     "machineId": "b",
+     "machineName": "b",
+     "engine": "codex",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
+     "quality": 3,
+     "cost": 2,
+     "quota": {
+      "known": true,
+      "leftPercent": 5,
+      "resetsAt": null,
+      "windows": [
+       {
+        "name": "5-hour",
+        "leftPercent": 5,
+        "resetsAt": 1014400000
+       },
+       {
+        "name": "weekly",
+        "leftPercent": 60,
+        "resetsAt": 1259200000
+       }
+      ],
+      "account": "B"
+     },
+     "activity": "new",
+     "known": true,
+     "refusals": [],
+     "notes": [],
+     "fit": {
+      "status": "short",
+      "coverage": 0.1,
+      "effectiveCost": 1.8,
+      "expiring": 0.1,
+      "spend": {
+       "5-hour": 50,
+       "weekly": 8
+      },
+      "account": "B"
+     },
+     "id": "c1",
+     "title": "New agent · Codex gpt-6.1-sol high · b",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · short: needs about 50% of the 5-hour window (5% left, resets in 4h, otherwise unused); weekly 8% of 60% · b · new · quota 5-hour 5% left (resets in 4h), weekly 60% left (resets in 3 days)"
     },
     {
      "kind": "new",
@@ -594,59 +547,12 @@
    ],
    "excluded": [],
    "floor": 1,
-   "belowFloor": false,
-   "short": "The first candidate's 5-hour quota is expected to run out partway and resets in 4h; New agent · Claude sonnet medium · c fits."
+   "belowFloor": false
   },
   "verdict": {
-   "pick": {
-    "kind": "new",
-    "machineId": "b",
-    "machineName": "b",
-    "engine": "codex",
-    "model": "default",
-    "effort": "default",
-    "quality": 3,
-    "cost": 2,
-    "quota": {
-     "known": true,
-     "leftPercent": 5,
-     "resetsAt": null,
-     "windows": [
-      {
-       "name": "5-hour",
-       "leftPercent": 5,
-       "resetsAt": 1014400000
-      },
-      {
-       "name": "weekly",
-       "leftPercent": 60,
-       "resetsAt": 1259200000
-      }
-     ],
-     "account": "B"
-    },
-    "activity": "new",
-    "known": true,
-    "refusals": [],
-    "notes": [],
-    "fit": {
-     "status": "short",
-     "coverage": 0.1,
-     "effectiveCost": 1.8,
-     "expiring": 0.1,
-     "spend": {
-      "5-hour": 50,
-      "weekly": 8
-     },
-     "account": "B"
-    },
-    "id": "c0",
-    "title": "New agent · Codex default default · b",
-    "label": "New agent · Codex default default · strength 3, cost 2 · short: needs about 50% of the 5-hour window (5% left, resets in 4h, otherwise unused); weekly 8% of 60% · b · new · quota 5-hour 5% left (resets in 4h), weekly 60% left (resets in 3 days)"
-   },
-   "via": "order",
+   "via": "instructions",
    "p": null,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   },
   "record": {
    "assessment": {
@@ -658,29 +564,6 @@
    "candidates": [
     {
      "id": "c0",
-     "kind": "new",
-     "machineId": "b",
-     "engine": "codex",
-     "model": "default",
-     "effort": "default",
-     "quality": 3,
-     "cost": 2,
-     "title": "New agent · Codex default default · b",
-     "label": "New agent · Codex default default · strength 3, cost 2 · short: needs about 50% of the 5-hour window (5% left, resets in 4h, otherwise unused); weekly 8% of 60% · b · new · quota 5-hour 5% left (resets in 4h), weekly 60% left (resets in 3 days)",
-     "fit": {
-      "status": "short",
-      "coverage": 0.1,
-      "effectiveCost": 1.8,
-      "expiring": 0.1,
-      "spend": {
-       "5-hour": 50,
-       "weekly": 8
-      },
-      "account": "B"
-     }
-    },
-    {
-     "id": "c1",
      "kind": "new",
      "machineId": "a",
      "engine": "claude",
@@ -700,6 +583,29 @@
        "weekly": 12
       },
       "account": "A"
+     }
+    },
+    {
+     "id": "c1",
+     "kind": "new",
+     "machineId": "b",
+     "engine": "codex",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
+     "quality": 3,
+     "cost": 2,
+     "title": "New agent · Codex gpt-6.1-sol high · b",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · short: needs about 50% of the 5-hour window (5% left, resets in 4h, otherwise unused); weekly 8% of 60% · b · new · quota 5-hour 5% left (resets in 4h), weekly 60% left (resets in 3 days)",
+     "fit": {
+      "status": "short",
+      "coverage": 0.1,
+      "effectiveCost": 1.8,
+      "expiring": 0.1,
+      "spend": {
+       "5-hour": 50,
+       "weekly": 8
+      },
+      "account": "B"
      }
     },
     {
@@ -729,11 +635,10 @@
    "excluded": [],
    "floor": 1,
    "notes": false,
-   "pick": "c0",
-   "via": "order",
+   "via": "instructions",
    "p": null,
    "belowFloor": false,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   }
  },
  {
@@ -788,47 +693,6 @@
     },
     {
      "kind": "new",
-     "machineId": "c",
-     "machineName": "c",
-     "engine": "codex",
-     "model": "default",
-     "effort": "default",
-     "quality": 3,
-     "cost": 2,
-     "quota": {
-      "known": true,
-      "leftPercent": 30,
-      "resetsAt": null,
-      "windows": [
-       {
-        "name": "weekly",
-        "leftPercent": 30,
-        "resetsAt": 1518400000
-       }
-      ],
-      "account": "C"
-     },
-     "activity": "new",
-     "known": true,
-     "refusals": [],
-     "notes": [],
-     "fit": {
-      "status": "fits",
-      "coverage": 30,
-      "effectiveCost": 2,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 10,
-       "weekly": 1
-      },
-      "account": "C"
-     },
-     "id": "c1",
-     "title": "New agent · Codex default default · c",
-     "label": "New agent · Codex default default · strength 3, cost 2 · fits: 5-hour window unknown; weekly 1% of 30% · c · new · quota weekly 30% left (resets in 6 days)"
-    },
-    {
-     "kind": "new",
      "machineId": "b",
      "machineName": "b",
      "engine": "claude",
@@ -869,9 +733,50 @@
       },
       "account": "B"
      },
-     "id": "c2",
+     "id": "c1",
      "title": "New agent · Claude opus high · b",
      "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 15% of the 5-hour window (40% left, resets in 4h); weekly 2% of 80% · b · new · quota 5-hour 40% left (resets in 4h), weekly 80% left (resets in 2 days)"
+    },
+    {
+     "kind": "new",
+     "machineId": "c",
+     "machineName": "c",
+     "engine": "codex",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
+     "quality": 3,
+     "cost": 2,
+     "quota": {
+      "known": true,
+      "leftPercent": 30,
+      "resetsAt": null,
+      "windows": [
+       {
+        "name": "weekly",
+        "leftPercent": 30,
+        "resetsAt": 1518400000
+       }
+      ],
+      "account": "C"
+     },
+     "activity": "new",
+     "known": true,
+     "refusals": [],
+     "notes": [],
+     "fit": {
+      "status": "fits",
+      "coverage": 30,
+      "effectiveCost": 2,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 10,
+       "weekly": 1
+      },
+      "account": "C"
+     },
+     "id": "c2",
+     "title": "New agent · Codex gpt-6.1-sol high · c",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · fits: 5-hour window unknown; weekly 1% of 30% · c · new · quota weekly 30% left (resets in 6 days)"
     }
    ],
    "excluded": [],
@@ -879,55 +784,9 @@
    "belowFloor": false
   },
   "verdict": {
-   "pick": {
-    "kind": "new",
-    "machineId": "a",
-    "machineName": "a",
-    "engine": "claude",
-    "model": "opus",
-    "effort": "high",
-    "quality": 3,
-    "cost": 3,
-    "quota": {
-     "known": true,
-     "leftPercent": 10,
-     "resetsAt": null,
-     "windows": [
-      {
-       "name": "5-hour",
-       "leftPercent": 70,
-       "resetsAt": 1001200000
-      },
-      {
-       "name": "weekly",
-       "leftPercent": 10,
-       "resetsAt": 1518400000
-      }
-     ],
-     "account": "A"
-    },
-    "activity": "new",
-    "known": true,
-    "refusals": [],
-    "notes": [],
-    "fit": {
-     "status": "fits",
-     "coverage": 4.67,
-     "effectiveCost": 0,
-     "expiring": 1,
-     "spend": {
-      "5-hour": 15,
-      "weekly": 1.5
-     },
-     "account": "A"
-    },
-    "id": "c0",
-    "title": "New agent · Claude opus high · a",
-    "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 15% of the 5-hour window (70% left, resets in 20m, otherwise unused); weekly 2% of 10% · a · new · quota 5-hour 70% left (resets in 20m), weekly 10% left (resets in 6 days)"
-   },
-   "via": "order",
+   "via": "instructions",
    "p": null,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   },
   "record": {
    "assessment": {
@@ -964,29 +823,6 @@
     {
      "id": "c1",
      "kind": "new",
-     "machineId": "c",
-     "engine": "codex",
-     "model": "default",
-     "effort": "default",
-     "quality": 3,
-     "cost": 2,
-     "title": "New agent · Codex default default · c",
-     "label": "New agent · Codex default default · strength 3, cost 2 · fits: 5-hour window unknown; weekly 1% of 30% · c · new · quota weekly 30% left (resets in 6 days)",
-     "fit": {
-      "status": "fits",
-      "coverage": 30,
-      "effectiveCost": 2,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 10,
-       "weekly": 1
-      },
-      "account": "C"
-     }
-    },
-    {
-     "id": "c2",
-     "kind": "new",
      "machineId": "b",
      "engine": "claude",
      "model": "opus",
@@ -1006,22 +842,90 @@
       },
       "account": "B"
      }
+    },
+    {
+     "id": "c2",
+     "kind": "new",
+     "machineId": "c",
+     "engine": "codex",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
+     "quality": 3,
+     "cost": 2,
+     "title": "New agent · Codex gpt-6.1-sol high · c",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · fits: 5-hour window unknown; weekly 1% of 30% · c · new · quota weekly 30% left (resets in 6 days)",
+     "fit": {
+      "status": "fits",
+      "coverage": 30,
+      "effectiveCost": 2,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 10,
+       "weekly": 1
+      },
+      "account": "C"
+     }
     }
    ],
    "excluded": [],
    "floor": 1,
    "notes": false,
-   "pick": "c0",
-   "via": "order",
+   "via": "instructions",
    "p": null,
    "belowFloor": false,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   }
  },
  {
   "name": "picks still at work hold their quota",
   "choice": {
    "shown": [
+    {
+     "kind": "new",
+     "machineId": "a",
+     "machineName": "a",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "quota": {
+      "known": true,
+      "leftPercent": 50,
+      "resetsAt": null,
+      "windows": [
+       {
+        "name": "5-hour",
+        "leftPercent": 50,
+        "resetsAt": 1010800000
+       },
+       {
+        "name": "weekly",
+        "leftPercent": 50,
+        "resetsAt": 1432000000
+       }
+      ],
+      "account": "A"
+     },
+     "activity": "new",
+     "known": true,
+     "refusals": [],
+     "notes": [],
+     "fit": {
+      "status": "short",
+      "coverage": 0.56,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "A"
+     },
+     "id": "c0",
+     "title": "New agent · Claude opus high · a",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · short: needs about 45% of the 5-hour window (25% left, resets in 3h); weekly 6% of 47% · a · new · quota 5-hour 50% left (resets in 3h), weekly 50% left (resets in 5 days)"
+    },
     {
      "kind": "new",
      "machineId": "b",
@@ -1064,55 +968,9 @@
       },
       "account": "B"
      },
-     "id": "c0",
+     "id": "c1",
      "title": "New agent · Claude opus high · b",
      "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (45% left, resets in 3h); weekly 6% of 50% · b · new · quota 5-hour 45% left (resets in 3h), weekly 50% left (resets in 5 days)"
-    },
-    {
-     "kind": "new",
-     "machineId": "a",
-     "machineName": "a",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "quota": {
-      "known": true,
-      "leftPercent": 50,
-      "resetsAt": null,
-      "windows": [
-       {
-        "name": "5-hour",
-        "leftPercent": 50,
-        "resetsAt": 1010800000
-       },
-       {
-        "name": "weekly",
-        "leftPercent": 50,
-        "resetsAt": 1432000000
-       }
-      ],
-      "account": "A"
-     },
-     "activity": "new",
-     "known": true,
-     "refusals": [],
-     "notes": [],
-     "fit": {
-      "status": "short",
-      "coverage": 0.56,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "A"
-     },
-     "id": "c1",
-     "title": "New agent · Claude opus high · a",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · short: needs about 45% of the 5-hour window (25% left, resets in 3h); weekly 6% of 47% · a · new · quota 5-hour 50% left (resets in 3h), weekly 50% left (resets in 5 days)"
     }
    ],
    "excluded": [],
@@ -1120,55 +978,9 @@
    "belowFloor": false
   },
   "verdict": {
-   "pick": {
-    "kind": "new",
-    "machineId": "b",
-    "machineName": "b",
-    "engine": "claude",
-    "model": "opus",
-    "effort": "high",
-    "quality": 3,
-    "cost": 3,
-    "quota": {
-     "known": true,
-     "leftPercent": 45,
-     "resetsAt": null,
-     "windows": [
-      {
-       "name": "5-hour",
-       "leftPercent": 45,
-       "resetsAt": 1010800000
-      },
-      {
-       "name": "weekly",
-       "leftPercent": 50,
-       "resetsAt": 1432000000
-      }
-     ],
-     "account": "B"
-    },
-    "activity": "new",
-    "known": true,
-    "refusals": [],
-    "notes": [],
-    "fit": {
-     "status": "fits",
-     "coverage": 1,
-     "effectiveCost": 3,
-     "expiring": 0,
-     "spend": {
-      "5-hour": 45,
-      "weekly": 6
-     },
-     "account": "B"
-    },
-    "id": "c0",
-    "title": "New agent · Claude opus high · b",
-    "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (45% left, resets in 3h); weekly 6% of 50% · b · new · quota 5-hour 45% left (resets in 3h), weekly 50% left (resets in 5 days)"
-   },
-   "via": "order",
+   "via": "instructions",
    "p": null,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   },
   "record": {
    "assessment": {
@@ -1180,29 +992,6 @@
    "candidates": [
     {
      "id": "c0",
-     "kind": "new",
-     "machineId": "b",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "title": "New agent · Claude opus high · b",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (45% left, resets in 3h); weekly 6% of 50% · b · new · quota 5-hour 45% left (resets in 3h), weekly 50% left (resets in 5 days)",
-     "fit": {
-      "status": "fits",
-      "coverage": 1,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "B"
-     }
-    },
-    {
-     "id": "c1",
      "kind": "new",
      "machineId": "a",
      "engine": "claude",
@@ -1223,16 +1012,38 @@
       },
       "account": "A"
      }
+    },
+    {
+     "id": "c1",
+     "kind": "new",
+     "machineId": "b",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "title": "New agent · Claude opus high · b",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (45% left, resets in 3h); weekly 6% of 50% · b · new · quota 5-hour 45% left (resets in 3h), weekly 50% left (resets in 5 days)",
+     "fit": {
+      "status": "fits",
+      "coverage": 1,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "B"
+     }
     }
    ],
    "excluded": [],
    "floor": 1,
    "notes": false,
-   "pick": "c0",
-   "via": "order",
+   "via": "instructions",
    "p": null,
    "belowFloor": false,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   }
  },
  {
@@ -1244,8 +1055,8 @@
      "machineId": "a",
      "machineName": "a",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
      "quota": {
@@ -1270,16 +1081,16 @@
       "account": "a:codex"
      },
      "id": "c0",
-     "title": "New agent · Codex default default · a",
-     "label": "New agent · Codex default default · strength 3, cost 2 · fits: metered, no usage window to run out · a · new · quota metered"
+     "title": "New agent · Codex gpt-6.1-sol high · a",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · fits: metered, no usage window to run out · a · new · quota metered"
     },
     {
      "kind": "new",
      "machineId": "b",
      "machineName": "b",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
      "quota": {
@@ -1304,16 +1115,16 @@
       "account": "b:codex"
      },
      "id": "c1",
-     "title": "New agent · Codex default default · b",
-     "label": "New agent · Codex default default · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · b · new · quota unknown (signed out of usage)"
+     "title": "New agent · Codex gpt-6.1-sol high · b",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · b · new · quota unknown (signed out of usage)"
     },
     {
      "kind": "new",
      "machineId": "c",
      "machineName": "c",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
      "quota": {
@@ -1337,16 +1148,16 @@
       "account": "c:codex"
      },
      "id": "c2",
-     "title": "New agent · Codex default default · c",
-     "label": "New agent · Codex default default · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · c · new · quota 40% left, resets in 2h"
+     "title": "New agent · Codex gpt-6.1-sol high · c",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · c · new · quota 40% left, resets in 2h"
     },
     {
      "kind": "new",
      "machineId": "d",
      "machineName": "d",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
      "quota": {
@@ -1371,8 +1182,8 @@
       "account": "d:codex"
      },
      "id": "c3",
-     "title": "New agent · Codex default default · d",
-     "label": "New agent · Codex default default · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · d · new · quota read on Team Mac, whose subscription this account spends: 40% left"
+     "title": "New agent · Codex gpt-6.1-sol high · d",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · d · new · quota read on Team Mac, whose subscription this account spends: 40% left"
     }
    ],
    "excluded": [],
@@ -1380,43 +1191,9 @@
    "belowFloor": false
   },
   "verdict": {
-   "pick": {
-    "kind": "new",
-    "machineId": "a",
-    "machineName": "a",
-    "engine": "codex",
-    "model": "default",
-    "effort": "default",
-    "quality": 3,
-    "cost": 2,
-    "quota": {
-     "known": true,
-     "leftPercent": null,
-     "resetsAt": null,
-     "metered": true
-    },
-    "activity": "new",
-    "known": true,
-    "refusals": [],
-    "notes": [],
-    "fit": {
-     "status": "fits",
-     "coverage": null,
-     "effectiveCost": 2,
-     "expiring": 0,
-     "spend": {
-      "5-hour": 30,
-      "weekly": 4
-     },
-     "account": "a:codex"
-    },
-    "id": "c0",
-    "title": "New agent · Codex default default · a",
-    "label": "New agent · Codex default default · strength 3, cost 2 · fits: metered, no usage window to run out · a · new · quota metered"
-   },
-   "via": "order",
+   "via": "instructions",
    "p": null,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   },
   "record": {
    "assessment": {
@@ -1431,12 +1208,12 @@
      "kind": "new",
      "machineId": "a",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
-     "title": "New agent · Codex default default · a",
-     "label": "New agent · Codex default default · strength 3, cost 2 · fits: metered, no usage window to run out · a · new · quota metered",
+     "title": "New agent · Codex gpt-6.1-sol high · a",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · fits: metered, no usage window to run out · a · new · quota metered",
      "fit": {
       "status": "fits",
       "coverage": null,
@@ -1454,12 +1231,12 @@
      "kind": "new",
      "machineId": "b",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
-     "title": "New agent · Codex default default · b",
-     "label": "New agent · Codex default default · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · b · new · quota unknown (signed out of usage)",
+     "title": "New agent · Codex gpt-6.1-sol high · b",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · b · new · quota unknown (signed out of usage)",
      "fit": {
       "status": "unknown",
       "coverage": null,
@@ -1477,12 +1254,12 @@
      "kind": "new",
      "machineId": "c",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
-     "title": "New agent · Codex default default · c",
-     "label": "New agent · Codex default default · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · c · new · quota 40% left, resets in 2h",
+     "title": "New agent · Codex gpt-6.1-sol high · c",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · c · new · quota 40% left, resets in 2h",
      "fit": {
       "status": "unknown",
       "coverage": null,
@@ -1500,12 +1277,12 @@
      "kind": "new",
      "machineId": "d",
      "engine": "codex",
-     "model": "default",
-     "effort": "default",
+     "model": "gpt-6.1-sol",
+     "effort": "high",
      "quality": 3,
      "cost": 2,
-     "title": "New agent · Codex default default · d",
-     "label": "New agent · Codex default default · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · d · new · quota read on Team Mac, whose subscription this account spends: 40% left",
+     "title": "New agent · Codex gpt-6.1-sol high · d",
+     "label": "New agent · Codex gpt-6.1-sol high · strength 3, cost 2 · unknown: 5-hour window unknown; weekly unknown · d · new · quota read on Team Mac, whose subscription this account spends: 40% left",
      "fit": {
       "status": "unknown",
       "coverage": null,
@@ -1522,11 +1299,10 @@
    "excluded": [],
    "floor": 1,
    "notes": false,
-   "pick": "c0",
-   "via": "order",
+   "via": "instructions",
    "p": null,
    "belowFloor": false,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   }
  },
  {
@@ -1535,21 +1311,21 @@
    "shown": [
     {
      "kind": "new",
-     "machineId": "m05",
-     "machineName": "m05",
+     "machineId": "m00",
+     "machineName": "m00",
      "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
+     "model": "sonnet",
+     "effort": "medium",
+     "quality": 2,
+     "cost": 2,
      "quota": {
       "known": true,
-      "leftPercent": 50,
+      "leftPercent": 30,
       "resetsAt": null,
       "windows": [
        {
         "name": "5-hour",
-        "leftPercent": 50,
+        "leftPercent": 30,
         "resetsAt": 1010800000
        },
        {
@@ -1558,7 +1334,7 @@
         "resetsAt": 1432000000
        }
       ],
-      "account": "acct5"
+      "account": "acct0"
      },
      "activity": "new",
      "known": true,
@@ -1566,202 +1342,18 @@
      "notes": [],
      "fit": {
       "status": "fits",
-      "coverage": 1.11,
-      "effectiveCost": 3,
+      "coverage": 1,
+      "effectiveCost": 2,
       "expiring": 0,
       "spend": {
-       "5-hour": 45,
-       "weekly": 6
+       "5-hour": 30,
+       "weekly": 4
       },
-      "account": "acct5"
+      "account": "acct0"
      },
      "id": "c0",
-     "title": "New agent · Claude opus high · m05",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (50% left, resets in 3h); weekly 6% of 90% · m05 · new · quota 5-hour 50% left (resets in 3h), weekly 90% left (resets in 5 days)"
-    },
-    {
-     "kind": "new",
-     "machineId": "m07",
-     "machineName": "m07",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "quota": {
-      "known": true,
-      "leftPercent": 58,
-      "resetsAt": null,
-      "windows": [
-       {
-        "name": "5-hour",
-        "leftPercent": 58,
-        "resetsAt": 1010800000
-       },
-       {
-        "name": "weekly",
-        "leftPercent": 90,
-        "resetsAt": 1432000000
-       }
-      ],
-      "account": "acct7"
-     },
-     "activity": "new",
-     "known": true,
-     "refusals": [],
-     "notes": [],
-     "fit": {
-      "status": "fits",
-      "coverage": 1.29,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "acct7"
-     },
-     "id": "c1",
-     "title": "New agent · Claude opus high · m07",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (58% left, resets in 3h); weekly 6% of 90% · m07 · new · quota 5-hour 58% left (resets in 3h), weekly 90% left (resets in 5 days)"
-    },
-    {
-     "kind": "new",
-     "machineId": "m09",
-     "machineName": "m09",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "quota": {
-      "known": true,
-      "leftPercent": 66,
-      "resetsAt": null,
-      "windows": [
-       {
-        "name": "5-hour",
-        "leftPercent": 66,
-        "resetsAt": 1010800000
-       },
-       {
-        "name": "weekly",
-        "leftPercent": 90,
-        "resetsAt": 1432000000
-       }
-      ],
-      "account": "acct9"
-     },
-     "activity": "new",
-     "known": true,
-     "refusals": [],
-     "notes": [],
-     "fit": {
-      "status": "fits",
-      "coverage": 1.47,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "acct9"
-     },
-     "id": "c2",
-     "title": "New agent · Claude opus high · m09",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (66% left, resets in 3h); weekly 6% of 90% · m09 · new · quota 5-hour 66% left (resets in 3h), weekly 90% left (resets in 5 days)"
-    },
-    {
-     "kind": "new",
-     "machineId": "m11",
-     "machineName": "m11",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "quota": {
-      "known": true,
-      "leftPercent": 74,
-      "resetsAt": null,
-      "windows": [
-       {
-        "name": "5-hour",
-        "leftPercent": 74,
-        "resetsAt": 1010800000
-       },
-       {
-        "name": "weekly",
-        "leftPercent": 90,
-        "resetsAt": 1432000000
-       }
-      ],
-      "account": "acct11"
-     },
-     "activity": "new",
-     "known": true,
-     "refusals": [],
-     "notes": [],
-     "fit": {
-      "status": "fits",
-      "coverage": 1.64,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "acct11"
-     },
-     "id": "c3",
-     "title": "New agent · Claude opus high · m11",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (74% left, resets in 3h); weekly 6% of 90% · m11 · new · quota 5-hour 74% left (resets in 3h), weekly 90% left (resets in 5 days)"
-    },
-    {
-     "kind": "new",
-     "machineId": "m13",
-     "machineName": "m13",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "quota": {
-      "known": true,
-      "leftPercent": 82,
-      "resetsAt": null,
-      "windows": [
-       {
-        "name": "5-hour",
-        "leftPercent": 82,
-        "resetsAt": 1010800000
-       },
-       {
-        "name": "weekly",
-        "leftPercent": 90,
-        "resetsAt": 1432000000
-       }
-      ],
-      "account": "acct13"
-     },
-     "activity": "new",
-     "known": true,
-     "refusals": [],
-     "notes": [],
-     "fit": {
-      "status": "fits",
-      "coverage": 1.82,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "acct13"
-     },
-     "id": "c4",
-     "title": "New agent · Claude opus high · m13",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (82% left, resets in 3h); weekly 6% of 90% · m13 · new · quota 5-hour 82% left (resets in 3h), weekly 90% left (resets in 5 days)"
+     "title": "New agent · Claude sonnet medium · m00",
+     "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (30% left, resets in 3h); weekly 4% of 90% · m00 · new · quota 5-hour 30% left (resets in 3h), weekly 90% left (resets in 5 days)"
     },
     {
      "kind": "new",
@@ -1805,101 +1397,9 @@
       },
       "account": "acct1"
      },
-     "id": "c5",
+     "id": "c1",
      "title": "New agent · Claude opus high · m01",
      "label": "New agent · Claude opus high · strength 3, cost 3 · short: needs about 45% of the 5-hour window (34% left, resets in 3h); weekly 6% of 90% · m01 · new · quota 5-hour 34% left (resets in 3h), weekly 90% left (resets in 5 days)"
-    },
-    {
-     "kind": "new",
-     "machineId": "m03",
-     "machineName": "m03",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "quota": {
-      "known": true,
-      "leftPercent": 42,
-      "resetsAt": null,
-      "windows": [
-       {
-        "name": "5-hour",
-        "leftPercent": 42,
-        "resetsAt": 1010800000
-       },
-       {
-        "name": "weekly",
-        "leftPercent": 90,
-        "resetsAt": 1432000000
-       }
-      ],
-      "account": "acct3"
-     },
-     "activity": "new",
-     "known": true,
-     "refusals": [],
-     "notes": [],
-     "fit": {
-      "status": "short",
-      "coverage": 0.93,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "acct3"
-     },
-     "id": "c6",
-     "title": "New agent · Claude opus high · m03",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · short: needs about 45% of the 5-hour window (42% left, resets in 3h); weekly 6% of 90% · m03 · new · quota 5-hour 42% left (resets in 3h), weekly 90% left (resets in 5 days)"
-    },
-    {
-     "kind": "new",
-     "machineId": "m00",
-     "machineName": "m00",
-     "engine": "claude",
-     "model": "sonnet",
-     "effort": "medium",
-     "quality": 2,
-     "cost": 2,
-     "quota": {
-      "known": true,
-      "leftPercent": 30,
-      "resetsAt": null,
-      "windows": [
-       {
-        "name": "5-hour",
-        "leftPercent": 30,
-        "resetsAt": 1010800000
-       },
-       {
-        "name": "weekly",
-        "leftPercent": 90,
-        "resetsAt": 1432000000
-       }
-      ],
-      "account": "acct0"
-     },
-     "activity": "new",
-     "known": true,
-     "refusals": [],
-     "notes": [],
-     "fit": {
-      "status": "fits",
-      "coverage": 1,
-      "effectiveCost": 2,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 30,
-       "weekly": 4
-      },
-      "account": "acct0"
-     },
-     "id": "c7",
-     "title": "New agent · Claude sonnet medium · m00",
-     "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (30% left, resets in 3h); weekly 4% of 90% · m00 · new · quota 5-hour 30% left (resets in 3h), weekly 90% left (resets in 5 days)"
     },
     {
      "kind": "new",
@@ -1943,9 +1443,55 @@
       },
       "account": "acct2"
      },
-     "id": "c8",
+     "id": "c2",
      "title": "New agent · Claude sonnet medium · m02",
      "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (38% left, resets in 3h); weekly 4% of 90% · m02 · new · quota 5-hour 38% left (resets in 3h), weekly 90% left (resets in 5 days)"
+    },
+    {
+     "kind": "new",
+     "machineId": "m03",
+     "machineName": "m03",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "quota": {
+      "known": true,
+      "leftPercent": 42,
+      "resetsAt": null,
+      "windows": [
+       {
+        "name": "5-hour",
+        "leftPercent": 42,
+        "resetsAt": 1010800000
+       },
+       {
+        "name": "weekly",
+        "leftPercent": 90,
+        "resetsAt": 1432000000
+       }
+      ],
+      "account": "acct3"
+     },
+     "activity": "new",
+     "known": true,
+     "refusals": [],
+     "notes": [],
+     "fit": {
+      "status": "short",
+      "coverage": 0.93,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "acct3"
+     },
+     "id": "c3",
+     "title": "New agent · Claude opus high · m03",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · short: needs about 45% of the 5-hour window (42% left, resets in 3h); weekly 6% of 90% · m03 · new · quota 5-hour 42% left (resets in 3h), weekly 90% left (resets in 5 days)"
     },
     {
      "kind": "new",
@@ -1989,9 +1535,55 @@
       },
       "account": "acct4"
      },
-     "id": "c9",
+     "id": "c4",
      "title": "New agent · Claude sonnet medium · m04",
      "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (46% left, resets in 3h); weekly 4% of 90% · m04 · new · quota 5-hour 46% left (resets in 3h), weekly 90% left (resets in 5 days)"
+    },
+    {
+     "kind": "new",
+     "machineId": "m05",
+     "machineName": "m05",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "quota": {
+      "known": true,
+      "leftPercent": 50,
+      "resetsAt": null,
+      "windows": [
+       {
+        "name": "5-hour",
+        "leftPercent": 50,
+        "resetsAt": 1010800000
+       },
+       {
+        "name": "weekly",
+        "leftPercent": 90,
+        "resetsAt": 1432000000
+       }
+      ],
+      "account": "acct5"
+     },
+     "activity": "new",
+     "known": true,
+     "refusals": [],
+     "notes": [],
+     "fit": {
+      "status": "fits",
+      "coverage": 1.11,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "acct5"
+     },
+     "id": "c5",
+     "title": "New agent · Claude opus high · m05",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (50% left, resets in 3h); weekly 6% of 90% · m05 · new · quota 5-hour 50% left (resets in 3h), weekly 90% left (resets in 5 days)"
     },
     {
      "kind": "new",
@@ -2035,9 +1627,55 @@
       },
       "account": "acct6"
      },
-     "id": "c10",
+     "id": "c6",
      "title": "New agent · Claude sonnet medium · m06",
      "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (54% left, resets in 3h); weekly 4% of 90% · m06 · new · quota 5-hour 54% left (resets in 3h), weekly 90% left (resets in 5 days)"
+    },
+    {
+     "kind": "new",
+     "machineId": "m07",
+     "machineName": "m07",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "quota": {
+      "known": true,
+      "leftPercent": 58,
+      "resetsAt": null,
+      "windows": [
+       {
+        "name": "5-hour",
+        "leftPercent": 58,
+        "resetsAt": 1010800000
+       },
+       {
+        "name": "weekly",
+        "leftPercent": 90,
+        "resetsAt": 1432000000
+       }
+      ],
+      "account": "acct7"
+     },
+     "activity": "new",
+     "known": true,
+     "refusals": [],
+     "notes": [],
+     "fit": {
+      "status": "fits",
+      "coverage": 1.29,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "acct7"
+     },
+     "id": "c7",
+     "title": "New agent · Claude opus high · m07",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (58% left, resets in 3h); weekly 6% of 90% · m07 · new · quota 5-hour 58% left (resets in 3h), weekly 90% left (resets in 5 days)"
     },
     {
      "kind": "new",
@@ -2081,9 +1719,55 @@
       },
       "account": "acct8"
      },
-     "id": "c11",
+     "id": "c8",
      "title": "New agent · Claude sonnet medium · m08",
      "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (62% left, resets in 3h); weekly 4% of 90% · m08 · new · quota 5-hour 62% left (resets in 3h), weekly 90% left (resets in 5 days)"
+    },
+    {
+     "kind": "new",
+     "machineId": "m09",
+     "machineName": "m09",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "quota": {
+      "known": true,
+      "leftPercent": 66,
+      "resetsAt": null,
+      "windows": [
+       {
+        "name": "5-hour",
+        "leftPercent": 66,
+        "resetsAt": 1010800000
+       },
+       {
+        "name": "weekly",
+        "leftPercent": 90,
+        "resetsAt": 1432000000
+       }
+      ],
+      "account": "acct9"
+     },
+     "activity": "new",
+     "known": true,
+     "refusals": [],
+     "notes": [],
+     "fit": {
+      "status": "fits",
+      "coverage": 1.47,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "acct9"
+     },
+     "id": "c9",
+     "title": "New agent · Claude opus high · m09",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (66% left, resets in 3h); weekly 6% of 90% · m09 · new · quota 5-hour 66% left (resets in 3h), weekly 90% left (resets in 5 days)"
     },
     {
      "kind": "new",
@@ -2127,9 +1811,55 @@
       },
       "account": "acct10"
      },
-     "id": "c12",
+     "id": "c10",
      "title": "New agent · Claude sonnet medium · m10",
      "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (70% left, resets in 3h); weekly 4% of 90% · m10 · new · quota 5-hour 70% left (resets in 3h), weekly 90% left (resets in 5 days)"
+    },
+    {
+     "kind": "new",
+     "machineId": "m11",
+     "machineName": "m11",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "quota": {
+      "known": true,
+      "leftPercent": 74,
+      "resetsAt": null,
+      "windows": [
+       {
+        "name": "5-hour",
+        "leftPercent": 74,
+        "resetsAt": 1010800000
+       },
+       {
+        "name": "weekly",
+        "leftPercent": 90,
+        "resetsAt": 1432000000
+       }
+      ],
+      "account": "acct11"
+     },
+     "activity": "new",
+     "known": true,
+     "refusals": [],
+     "notes": [],
+     "fit": {
+      "status": "fits",
+      "coverage": 1.64,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "acct11"
+     },
+     "id": "c11",
+     "title": "New agent · Claude opus high · m11",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (74% left, resets in 3h); weekly 6% of 90% · m11 · new · quota 5-hour 74% left (resets in 3h), weekly 90% left (resets in 5 days)"
     },
     {
      "kind": "new",
@@ -2173,9 +1903,55 @@
       },
       "account": "acct12"
      },
-     "id": "c13",
+     "id": "c12",
      "title": "New agent · Claude sonnet medium · m12",
      "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (78% left, resets in 3h); weekly 4% of 90% · m12 · new · quota 5-hour 78% left (resets in 3h), weekly 90% left (resets in 5 days)"
+    },
+    {
+     "kind": "new",
+     "machineId": "m13",
+     "machineName": "m13",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "quota": {
+      "known": true,
+      "leftPercent": 82,
+      "resetsAt": null,
+      "windows": [
+       {
+        "name": "5-hour",
+        "leftPercent": 82,
+        "resetsAt": 1010800000
+       },
+       {
+        "name": "weekly",
+        "leftPercent": 90,
+        "resetsAt": 1432000000
+       }
+      ],
+      "account": "acct13"
+     },
+     "activity": "new",
+     "known": true,
+     "refusals": [],
+     "notes": [],
+     "fit": {
+      "status": "fits",
+      "coverage": 1.82,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "acct13"
+     },
+     "id": "c13",
+     "title": "New agent · Claude opus high · m13",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (82% left, resets in 3h); weekly 6% of 90% · m13 · new · quota 5-hour 82% left (resets in 3h), weekly 90% left (resets in 5 days)"
     },
     {
      "kind": "new",
@@ -2229,55 +2005,9 @@
    "belowFloor": false
   },
   "verdict": {
-   "pick": {
-    "kind": "new",
-    "machineId": "m05",
-    "machineName": "m05",
-    "engine": "claude",
-    "model": "opus",
-    "effort": "high",
-    "quality": 3,
-    "cost": 3,
-    "quota": {
-     "known": true,
-     "leftPercent": 50,
-     "resetsAt": null,
-     "windows": [
-      {
-       "name": "5-hour",
-       "leftPercent": 50,
-       "resetsAt": 1010800000
-      },
-      {
-       "name": "weekly",
-       "leftPercent": 90,
-       "resetsAt": 1432000000
-      }
-     ],
-     "account": "acct5"
-    },
-    "activity": "new",
-    "known": true,
-    "refusals": [],
-    "notes": [],
-    "fit": {
-     "status": "fits",
-     "coverage": 1.11,
-     "effectiveCost": 3,
-     "expiring": 0,
-     "spend": {
-      "5-hour": 45,
-      "weekly": 6
-     },
-     "account": "acct5"
-    },
-    "id": "c0",
-    "title": "New agent · Claude opus high · m05",
-    "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (50% left, resets in 3h); weekly 6% of 90% · m05 · new · quota 5-hour 50% left (resets in 3h), weekly 90% left (resets in 5 days)"
-   },
-   "via": "order",
+   "via": "instructions",
    "p": null,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   },
   "record": {
    "assessment": {
@@ -2289,167 +2019,6 @@
    "candidates": [
     {
      "id": "c0",
-     "kind": "new",
-     "machineId": "m05",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "title": "New agent · Claude opus high · m05",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (50% left, resets in 3h); weekly 6% of 90% · m05 · new · quota 5-hour 50% left (resets in 3h), weekly 90% left (resets in 5 days)",
-     "fit": {
-      "status": "fits",
-      "coverage": 1.11,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "acct5"
-     }
-    },
-    {
-     "id": "c1",
-     "kind": "new",
-     "machineId": "m07",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "title": "New agent · Claude opus high · m07",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (58% left, resets in 3h); weekly 6% of 90% · m07 · new · quota 5-hour 58% left (resets in 3h), weekly 90% left (resets in 5 days)",
-     "fit": {
-      "status": "fits",
-      "coverage": 1.29,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "acct7"
-     }
-    },
-    {
-     "id": "c2",
-     "kind": "new",
-     "machineId": "m09",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "title": "New agent · Claude opus high · m09",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (66% left, resets in 3h); weekly 6% of 90% · m09 · new · quota 5-hour 66% left (resets in 3h), weekly 90% left (resets in 5 days)",
-     "fit": {
-      "status": "fits",
-      "coverage": 1.47,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "acct9"
-     }
-    },
-    {
-     "id": "c3",
-     "kind": "new",
-     "machineId": "m11",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "title": "New agent · Claude opus high · m11",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (74% left, resets in 3h); weekly 6% of 90% · m11 · new · quota 5-hour 74% left (resets in 3h), weekly 90% left (resets in 5 days)",
-     "fit": {
-      "status": "fits",
-      "coverage": 1.64,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "acct11"
-     }
-    },
-    {
-     "id": "c4",
-     "kind": "new",
-     "machineId": "m13",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "title": "New agent · Claude opus high · m13",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (82% left, resets in 3h); weekly 6% of 90% · m13 · new · quota 5-hour 82% left (resets in 3h), weekly 90% left (resets in 5 days)",
-     "fit": {
-      "status": "fits",
-      "coverage": 1.82,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "acct13"
-     }
-    },
-    {
-     "id": "c5",
-     "kind": "new",
-     "machineId": "m01",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "title": "New agent · Claude opus high · m01",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · short: needs about 45% of the 5-hour window (34% left, resets in 3h); weekly 6% of 90% · m01 · new · quota 5-hour 34% left (resets in 3h), weekly 90% left (resets in 5 days)",
-     "fit": {
-      "status": "short",
-      "coverage": 0.76,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "acct1"
-     }
-    },
-    {
-     "id": "c6",
-     "kind": "new",
-     "machineId": "m03",
-     "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "title": "New agent · Claude opus high · m03",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · short: needs about 45% of the 5-hour window (42% left, resets in 3h); weekly 6% of 90% · m03 · new · quota 5-hour 42% left (resets in 3h), weekly 90% left (resets in 5 days)",
-     "fit": {
-      "status": "short",
-      "coverage": 0.93,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "acct3"
-     }
-    },
-    {
-     "id": "c7",
      "kind": "new",
      "machineId": "m00",
      "engine": "claude",
@@ -2472,7 +2041,30 @@
      }
     },
     {
-     "id": "c8",
+     "id": "c1",
+     "kind": "new",
+     "machineId": "m01",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "title": "New agent · Claude opus high · m01",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · short: needs about 45% of the 5-hour window (34% left, resets in 3h); weekly 6% of 90% · m01 · new · quota 5-hour 34% left (resets in 3h), weekly 90% left (resets in 5 days)",
+     "fit": {
+      "status": "short",
+      "coverage": 0.76,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "acct1"
+     }
+    },
+    {
+     "id": "c2",
      "kind": "new",
      "machineId": "m02",
      "engine": "claude",
@@ -2495,7 +2087,30 @@
      }
     },
     {
-     "id": "c9",
+     "id": "c3",
+     "kind": "new",
+     "machineId": "m03",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "title": "New agent · Claude opus high · m03",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · short: needs about 45% of the 5-hour window (42% left, resets in 3h); weekly 6% of 90% · m03 · new · quota 5-hour 42% left (resets in 3h), weekly 90% left (resets in 5 days)",
+     "fit": {
+      "status": "short",
+      "coverage": 0.93,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "acct3"
+     }
+    },
+    {
+     "id": "c4",
      "kind": "new",
      "machineId": "m04",
      "engine": "claude",
@@ -2518,7 +2133,30 @@
      }
     },
     {
-     "id": "c10",
+     "id": "c5",
+     "kind": "new",
+     "machineId": "m05",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "title": "New agent · Claude opus high · m05",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (50% left, resets in 3h); weekly 6% of 90% · m05 · new · quota 5-hour 50% left (resets in 3h), weekly 90% left (resets in 5 days)",
+     "fit": {
+      "status": "fits",
+      "coverage": 1.11,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "acct5"
+     }
+    },
+    {
+     "id": "c6",
      "kind": "new",
      "machineId": "m06",
      "engine": "claude",
@@ -2541,7 +2179,30 @@
      }
     },
     {
-     "id": "c11",
+     "id": "c7",
+     "kind": "new",
+     "machineId": "m07",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "title": "New agent · Claude opus high · m07",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (58% left, resets in 3h); weekly 6% of 90% · m07 · new · quota 5-hour 58% left (resets in 3h), weekly 90% left (resets in 5 days)",
+     "fit": {
+      "status": "fits",
+      "coverage": 1.29,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "acct7"
+     }
+    },
+    {
+     "id": "c8",
      "kind": "new",
      "machineId": "m08",
      "engine": "claude",
@@ -2564,7 +2225,30 @@
      }
     },
     {
-     "id": "c12",
+     "id": "c9",
+     "kind": "new",
+     "machineId": "m09",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "title": "New agent · Claude opus high · m09",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (66% left, resets in 3h); weekly 6% of 90% · m09 · new · quota 5-hour 66% left (resets in 3h), weekly 90% left (resets in 5 days)",
+     "fit": {
+      "status": "fits",
+      "coverage": 1.47,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "acct9"
+     }
+    },
+    {
+     "id": "c10",
      "kind": "new",
      "machineId": "m10",
      "engine": "claude",
@@ -2587,7 +2271,30 @@
      }
     },
     {
-     "id": "c13",
+     "id": "c11",
+     "kind": "new",
+     "machineId": "m11",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "title": "New agent · Claude opus high · m11",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (74% left, resets in 3h); weekly 6% of 90% · m11 · new · quota 5-hour 74% left (resets in 3h), weekly 90% left (resets in 5 days)",
+     "fit": {
+      "status": "fits",
+      "coverage": 1.64,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "acct11"
+     }
+    },
+    {
+     "id": "c12",
      "kind": "new",
      "machineId": "m12",
      "engine": "claude",
@@ -2607,6 +2314,29 @@
        "weekly": 4
       },
       "account": "acct12"
+     }
+    },
+    {
+     "id": "c13",
+     "kind": "new",
+     "machineId": "m13",
+     "engine": "claude",
+     "model": "opus",
+     "effort": "high",
+     "quality": 3,
+     "cost": 3,
+     "title": "New agent · Claude opus high · m13",
+     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (82% left, resets in 3h); weekly 6% of 90% · m13 · new · quota 5-hour 82% left (resets in 3h), weekly 90% left (resets in 5 days)",
+     "fit": {
+      "status": "fits",
+      "coverage": 1.82,
+      "effectiveCost": 3,
+      "expiring": 0,
+      "spend": {
+       "5-hour": 45,
+       "weekly": 6
+      },
+      "account": "acct13"
      }
     },
     {
@@ -2636,11 +2366,10 @@
    "excluded": [],
    "floor": 1,
    "notes": false,
-   "pick": "c0",
-   "via": "order",
+   "via": "instructions",
    "p": null,
    "belowFloor": false,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   }
  },
  {
@@ -2763,55 +2492,9 @@
    "belowFloor": false
   },
   "verdict": {
-   "pick": {
-    "kind": "new",
-    "machineId": "a",
-    "machineName": "a",
-    "engine": "claude",
-    "model": "sonnet",
-    "effort": "medium",
-    "quality": 2,
-    "cost": 2,
-    "quota": {
-     "known": true,
-     "leftPercent": 80,
-     "resetsAt": null,
-     "windows": [
-      {
-       "name": "5-hour",
-       "leftPercent": 80,
-       "resetsAt": 1010800000
-      },
-      {
-       "name": "weekly",
-       "leftPercent": 90,
-       "resetsAt": 1432000000
-      }
-     ],
-     "account": "a"
-    },
-    "activity": "new",
-    "known": true,
-    "refusals": [],
-    "notes": [],
-    "fit": {
-     "status": "fits",
-     "coverage": 2.67,
-     "effectiveCost": 2,
-     "expiring": 0,
-     "spend": {
-      "5-hour": 30,
-      "weekly": 4
-     },
-     "account": "a"
-    },
-    "id": "c0",
-    "title": "New agent · Claude sonnet medium · a",
-    "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (80% left, resets in 3h); weekly 4% of 90% · a · new · quota 5-hour 80% left (resets in 3h), weekly 90% left (resets in 5 days)"
-   },
-   "via": "order",
+   "via": "instructions",
    "p": null,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   },
   "record": {
    "assessment": {
@@ -2880,11 +2563,10 @@
    ],
    "floor": 1,
    "notes": false,
-   "pick": "c0",
-   "via": "order",
+   "via": "instructions",
    "p": null,
    "belowFloor": false,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   }
  },
  {
@@ -2970,46 +2652,9 @@
    "belowFloor": false
   },
   "verdict": {
-   "pick": {
-    "kind": "new",
-    "machineId": "b",
-    "machineName": "b",
-    "engine": "claude",
-    "model": "default",
-    "effort": "default",
-    "quality": 1,
-    "cost": 1,
-    "quota": {
-     "known": false,
-     "leftPercent": null,
-     "resetsAt": null
-    },
-    "activity": "new",
-    "known": true,
-    "refusals": [],
-    "notes": [],
-    "gridModel": "kimi-k3",
-    "gridName": "swarm-0123456789ab",
-    "gridLabel": "Kimi K3",
-    "gridKind": "api",
-    "fit": {
-     "status": "fits",
-     "coverage": null,
-     "effectiveCost": 1,
-     "expiring": 0,
-     "spend": {
-      "5-hour": 0,
-      "weekly": 0
-     },
-     "account": "local:swarm-0123456789ab:kimi-k3"
-    },
-    "id": "c0",
-    "title": "New agent · Claude on Kimi K3 (API) · b",
-    "label": "New agent · Claude on Kimi K3 (API) · strength 1, cost 1 · fits: a local model on the Swarm's grid uses no subscription · b · new · quota unknown"
-   },
-   "via": "order",
+   "via": "instructions",
    "p": null,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   },
   "record": {
    "assessment": {
@@ -3075,11 +2720,10 @@
    "excluded": [],
    "floor": 1,
    "notes": false,
-   "pick": "c0",
-   "via": "order",
+   "via": "instructions",
    "p": null,
    "belowFloor": false,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   }
  },
  {
@@ -3190,58 +2834,9 @@
    "belowFloor": false
   },
   "verdict": {
-   "pick": {
-    "kind": "new",
-    "machineId": "a",
-    "machineName": "a",
-    "engine": "claude",
-    "model": "claude-opus-6",
-    "effort": "default",
-    "quality": 1,
-    "cost": 1,
-    "quota": {
-     "known": true,
-     "leftPercent": 80,
-     "resetsAt": null,
-     "windows": [
-      {
-       "name": "5-hour",
-       "leftPercent": 80,
-       "resetsAt": 1010800000
-      },
-      {
-       "name": "weekly",
-       "leftPercent": 90,
-       "resetsAt": 1432000000
-      }
-     ],
-     "account": "a"
-    },
-    "activity": "new",
-    "known": true,
-    "refusals": [],
-    "notes": [
-     "The catalog does not rate this model."
-    ],
-    "unrated": true,
-    "fit": {
-     "status": "fits",
-     "coverage": 5.33,
-     "effectiveCost": 1,
-     "expiring": 0,
-     "spend": {
-      "5-hour": 15,
-      "weekly": 2
-     },
-     "account": "a"
-    },
-    "id": "c0",
-    "title": "New agent · Claude claude-opus-6 default · a",
-    "label": "New agent · Claude claude-opus-6 default · unrated, cost 1 · fits: needs about 15% of the 5-hour window (80% left, resets in 3h); weekly 2% of 90% · The catalog does not rate this model. · a · new · quota 5-hour 80% left (resets in 3h), weekly 90% left (resets in 5 days)"
-   },
-   "via": "order",
+   "via": "instructions",
    "p": null,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   },
   "record": {
    "assessment": {
@@ -3302,11 +2897,10 @@
    "excluded": [],
    "floor": 1,
    "notes": false,
-   "pick": "c0",
-   "via": "order",
+   "via": "instructions",
    "p": null,
    "belowFloor": false,
-   "why": "First by strength, then price and quota fit."
+   "why": "Not ranked: candidates are listed by machine name, then engine. Choose one by the project's Routing instructions (Order and quota), and give the rule that chose it as overrideReason when you start or assign it."
   }
  },
  {
@@ -3344,7 +2938,7 @@
      "machine": "a"
     },
     {
-     "title": "New agent · Codex default default · b",
+     "title": "New agent · Codex gpt-6.1-sol high · b",
      "reason": "Codex is signed out.",
      "machine": "b"
     }
@@ -3419,64 +3013,6 @@
    "belowFloor": false
   },
   "verdict": {
-   "pick": {
-    "kind": "member",
-    "machineId": "a",
-    "machineName": "a",
-    "engine": "claude",
-    "model": "gpt-x",
-    "effort": "medium",
-    "quality": 1,
-    "cost": 1,
-    "quota": {
-     "known": true,
-     "leftPercent": 80,
-     "resetsAt": null,
-     "windows": [
-      {
-       "name": "5-hour",
-       "leftPercent": 80,
-       "resetsAt": 1010800000
-      },
-      {
-       "name": "weekly",
-       "leftPercent": 90,
-       "resetsAt": 1432000000
-      }
-     ],
-     "account": "a"
-    },
-    "activity": "working",
-    "known": true,
-    "refusals": [],
-    "notes": [],
-    "agentId": "m3",
-    "unrated": true,
-    "terminalUnverified": true,
-    "frame": {
-     "title": null,
-     "project": null,
-     "cwd": "/r",
-     "root": "/r",
-     "remote": "github.com/o/r",
-     "branch": null,
-     "updatedAt": null
-    },
-    "fit": {
-     "status": "fits",
-     "coverage": 16,
-     "effectiveCost": 1,
-     "expiring": 0,
-     "spend": {
-      "5-hour": 5,
-      "weekly": 0.5
-     },
-     "account": "a"
-    },
-    "id": "c0",
-    "title": "Member · Claude gpt-x medium · a",
-    "label": "Member · Claude gpt-x medium · unrated, cost 1 · fits: needs about 5% of the 5-hour window (80% left, resets in 3h); weekly 1% of 90% · a · working · last active unknown · quota 5-hour 80% left (resets in 3h), weekly 90% left (resets in 5 days)"
-   },
    "via": "only",
    "p": null,
    "why": "Only candidate that can run this task."
@@ -3517,7 +3053,6 @@
    "excluded": [],
    "floor": 1,
    "notes": false,
-   "pick": "c0",
    "via": "only",
    "p": null,
    "belowFloor": false,

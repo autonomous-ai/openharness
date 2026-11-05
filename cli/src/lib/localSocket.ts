@@ -22,7 +22,7 @@ import type { Duplex } from 'node:stream'
 import { chmodSync, linkSync, lstatSync, mkdirSync, renameSync, unlinkSync, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { readDaemonRecord } from './daemonRecord.js'
+import { configuredPortOf, readDaemonRecord } from './daemonRecord.js'
 import { daemonPipe, type LocalDaemonOptions } from './windows/daemonPipe.js'
 import { checkPipeAuth, newPipePath, NonceWindow, PIPE_AUTH_HEADER, PIPE_PROOF_HEADER, pipeIdOf, pipeProofValue } from './windows/pipeAuth.js'
 import { pipeAbsent, pipeRequest, PipeUnproven } from './windows/pipeClient.js'
@@ -80,7 +80,7 @@ export function unixSocketPath(dataDir: string, port: number, platform: NodeJS.P
  * A caller that needs a filesystem socket (`ws+unix://`, the services) uses unixSocketPath.
  */
 export function localSocketPath(dataDir: string, port: number, platform: NodeJS.Platform = process.platform): string | null {
-  return platform === 'win32' ? readDaemonRecord(dataDir, port, platform)?.pipe ?? null : unixSocketPath(dataDir, port, platform)
+  return platform === 'win32' ? readDaemonRecord(dataDir, configuredPortOf(dataDir, port, platform), platform)?.pipe ?? null : unixSocketPath(dataDir, port, platform)
 }
 
 /** Where a daemon starting on `port` listens: its Unix socket, or on Windows a pipe of a new random name. */

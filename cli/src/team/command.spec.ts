@@ -1055,6 +1055,15 @@ describe('harness team logs and sign-in', () => {
     expect(none.err.join('\n')).toContain('No Harness Team account')
   })
 
+  it('reads the team log on Windows too, quoting its path for PowerShell', async () => {
+    const f = fake({ platform: 'win32', adminResult: { ok: true, stdout: '2026-11-03 14:23:01 [agent] create pane open\n' },
+      readConfig: () => ({ ...config, home: "C:\\Users\\O'Team" }) as never })
+    expect(await teamCommand(['logs', '--lines=5'], f.deps)).toBe(0)
+    expect(f.built[0]!.script).toContain("Get-Content -LiteralPath 'C:\\Users\\O''Team")
+    expect(f.built[0]!.script).toContain('-Tail 5 -Encoding UTF8 -ErrorAction Stop')
+    expect(f.out.join('\n')).toContain('create pane open')
+  })
+
   it('refuses the sign-in where it cannot run, naming what to do instead', async () => {
     const windows = fake({ platform: 'win32', readConfig: () => config as never })
     expect(await teamCommand(['sign-in', 'claude'], windows.deps)).toBe(1)

@@ -1708,8 +1708,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          "Teammates' agents will run as you on $name. They can read your files, your keychain and your "
-                          'signed-in apps. Agents already running are not moved.',
+                          // Kept per Swarm (task #2993): other Swarms with this Mac keep their own choice.
+                          "Teammates' agents in this Swarm will run as you on $name. They can read your files, your keychain "
+                          'and your signed-in apps. Agents already running are not moved. Your other Swarms keep their own choice.',
                         ),
                         if (attempted && !busy && c.operationError != null) ...[
                           const SizedBox(height: 12),

@@ -193,11 +193,15 @@ class SwarmProjectBuddy extends StatefulWidget {
     required this.swarmId,
     required this.projectId,
     required this.actions,
+    this.findRequests,
   });
 
   final SwarmReader reader;
   final String swarmId, projectId;
   final SwarmBuddyActions actions;
+
+  /// Told when the project's header asks to find in the Buddy chat.
+  final Listenable? findRequests;
 
   @override
   State<SwarmProjectBuddy> createState() => _SwarmProjectBuddyState();
@@ -283,6 +287,7 @@ class _SwarmProjectBuddyState extends State<SwarmProjectBuddy> {
             conversationId: id,
             header: false,
             buddy: widget.actions,
+            findRequests: widget.findRequests,
           );
         }
         final Widget body;

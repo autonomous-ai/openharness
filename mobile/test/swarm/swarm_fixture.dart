@@ -11,6 +11,8 @@ import 'package:harness_mobile/swarm/swarm_outbox.dart' show superTabMessageId;
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 
+import '../temp_folder.dart';
+
 /// Swarm answers as the backend sends them (docs/design/2026-10-26-swarm-state-parts.md, section 4), built by hand so a
 /// test reads like the wire. Nothing here reaches a machine or the backend.
 
@@ -386,14 +388,26 @@ class MemorySwarmHomeKey implements SwarmHomeKey {
 Future<void> homeSaved(SwarmHomeCache cache, {String account = me}) =>
     cache.read(account);
 
-/// A kept Home in a folder of its own, gone after the test.
+/// A kept Home in a folder of its own, gone after the test ([removeHome]).
 SwarmHomeCache memoryHomeCache() {
   final dir = Directory.systemTemp.createTempSync('swarm-home');
-  addTearDown(() => dir.deleteSync(recursive: true));
-  return SwarmHomeCache(
+  final cache = SwarmHomeCache(
     key: MemorySwarmHomeKey(),
     file: File('${dir.path}/home.bin'),
   );
+  addTearDown(() => removeHome(cache));
+  return cache;
+}
+
+/// Deletes [cache]'s folder once the saves it has under way are done: one
+/// landing mid-delete failed the test ('Directory not empty', task #2759), or
+/// put the folder back after it. A save started under a widget test's fake
+/// clock never moves again once the test is over, so the wait gives up after
+/// a moment, as it does after every such test.
+Future<void> removeHome(SwarmHomeCache cache) async {
+  await homeSaved(cache)
+      .timeout(const Duration(milliseconds: 300), onTimeout: () {});
+  await deleteTempFolder(cache.file.parent);
 }
 
 /// Swarm Home C's project screen is up for the project named [name]: its

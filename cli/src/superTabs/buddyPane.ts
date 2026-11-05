@@ -6,18 +6,16 @@
  * a Buddy is this computer's own launch record (service.ts `buddyCheck`): the second review found a server read alone
  * missed its deadline 2 times in 3 under load, and refused everyone in an outage. In order:
  * - with the Swarm off, or a daemon from before the check, nothing changes, and no pane is looked at;
- * - a daemon that is not running is left to the command, which says so as it always has;
- * - Windows has no cheap check of a pty host pane, so while this computer runs a Buddy an agent's shell is refused.
+ * - a daemon that is not running is left to the command, which says so as it always has.
  */
 import { openDaemon, whereFor, type Where } from '../agentClient/daemon.js'
-import { callerOf, outsideCaller, type Frame } from '../agentClient/model.js'
+import { callerOf, type Frame } from '../agentClient/model.js'
+import type { ProcessRow } from '../lib/processTable.js'
 import { sendPane } from '../messages/command.js'
-import { inDaemonPane, NOT_IN_PANE, runningPane, type PaneProbe } from './callerPane.js'
+import { inDaemonPane, NOT_IN_PANE, runningPane, windowsRunningPane, type PaneProbe } from './callerPane.js'
 
 const BUDDY = 'A Buddy talks with its owner in its own chat: it may not send to, start, tell or close other sessions.'
 const UNSURE = 'Harness could not confirm whether this harness is a Buddy just now, so it did not run this. Try again in a moment.'
-export const WINDOWS_BUDDY = 'This Windows computer runs a Buddy, and Harness cannot tell its pane from this one, so an agent here may not do this '
-  + 'while it runs. Run it from your own terminal.'
 
 type DaemonLike = { request: (type: string, payload?: Record<string, unknown>, ms?: number) => Promise<Record<string, unknown>> }
 
@@ -27,7 +25,7 @@ export const SWARM_UNSURE = 'Harness could not reach this computer\'s Swarm just
  * Whether this computer's Swarm knows of Buddies: null with the Swarm off (core/serviceHost.ts answers a service off for good
  * as unavailable, not to be retried) or a daemon from before `buddyCheck` (no Swarm service, or one that reads it as an agent's
  * request without a Swarm: invalid). Anything else, a failure or no answer in time, throws [SWARM_UNSURE]: read as "off", it
- * skipped the Buddy check and Windows' backstop (re-check 2 of #2093 at 0648a8690).
+ * skipped the Buddy check (re-check 2 of #2093 at 0648a8690).
  */
 export async function buddiesHere(daemon: DaemonLike): Promise<boolean | null> {
   const answer = await daemon.request('super_tabs', { action: 'buddyCheck' }, 10_000).catch(() => { throw new Error(SWARM_UNSURE) })
@@ -56,11 +54,9 @@ export async function paneBuddy(daemon: DaemonLike, pane: string, machineId: str
   return answer.buddy ? 'buddy' : 'not a buddy'
 }
 
-/** An agent's shell on Windows, as it marks itself: its Harness pane, or the engine's own variables (`outsideCaller`). */
-export const agentShell = (env: NodeJS.ProcessEnv): boolean => !!sendPane(env) || !!outsideCaller(env, '')
-
 export async function buddyRefusal(deps: {
   probe?: PaneProbe; env?: NodeJS.ProcessEnv; where?: () => Where; open?: typeof openDaemon
+  readProcesses?: () => Promise<ProcessRow[] | null>
 } = {}, platform: NodeJS.Platform = process.platform): Promise<string | null> {
   const env = deps.env ?? process.env
   const where = (deps.where ?? (() => whereFor(sendPane(env))))()
@@ -70,8 +66,9 @@ export async function buddyRefusal(deps: {
     let buddies: boolean | null
     try { buddies = await buddiesHere(daemon) } catch { return SWARM_UNSURE }
     if (buddies === null) return null
-    if (platform === 'win32') return buddies && agentShell(env) ? WINDOWS_BUDDY : null
-    const running = runningPane(env, deps.probe, platform)
+    const running = platform === 'win32'
+      ? await windowsRunningPane(sendPane(env), deps.readProcesses)
+      : runningPane(env, deps.probe, platform)
     if (running.refused) return running.refused
     // Not shortcut on `buddies`: a harness an agent started with no Swarm record is asked about by itself (service.ts).
     if (!running.pane) return null

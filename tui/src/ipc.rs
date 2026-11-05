@@ -13,8 +13,6 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::event::Event;
 
-unsafe extern "C" { fn getuid() -> u32; }
-
 /// Where the sockets live: short enough for a socket path (104 bytes on macOS), private to you.
 /// This client's own socket, once it listens: what HN_SOCKET says to the commands it runs, and
 /// #{socket_path}.
@@ -82,15 +80,17 @@ pub fn busiest(name: &str) -> Option<PathBuf> {
 pub fn is_headless(socket: &std::path::Path) -> bool { socket.with_extension("headless").exists() }
 
 pub fn dir() -> PathBuf {
-    let base = std::env::var("HN_TMPDIR").or_else(|_| std::env::var("TMUX_TMPDIR")).unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(base).join(format!("hn-{}", unsafe { getuid() }))
+    // On Windows the account's own temporary folder, under its private profile: nothing there is shared, as /tmp is.
+    let base = std::env::var_os("HN_TMPDIR").or_else(|| std::env::var_os("TMUX_TMPDIR")).map(PathBuf::from)
+        .unwrap_or_else(|| if cfg!(windows) { std::env::temp_dir() } else { PathBuf::from("/tmp") });
+    base.join(format!("hn-{}", crate::sys::uid()))
 }
 
 /// Listen for commands from shells; each is run on the app loop, its output sent back.
 pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
     let dir = dir();
     std::fs::create_dir_all(&dir).ok()?;
-    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)); }
+    let _ = crate::sock::secure_dir(&dir);
     // Sockets of clients gone are swept.
     sweep(&dir);
     // Named with -L (as tmux's), else `default`. The name's socket is its first client's: one
@@ -99,16 +99,15 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
     // the client that has it).
     let name = std::env::var("HN_SOCKET_NAME").ok().filter(|n| !n.is_empty()).unwrap_or_else(|| "default".into());
     let primary = dir.join(format!("{name}.sock"));
-    let (listener, path) = match tokio::net::UnixListener::bind(&primary) {
+    let (listener, path) = match crate::sock::Listener::bind(&primary) {
         Ok(l) => (l, primary),
         Err(_) => {
             let beside = dir.join(format!("{name}@{}.sock", std::process::id()));
             let _ = std::fs::remove_file(&beside);
-            (tokio::net::UnixListener::bind(&beside).ok()?, beside)
+            (crate::sock::Listener::bind(&beside).ok()?, beside)
         }
     };
     let _ = HERE.set(path.clone());
-    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)); }
     // Which daemon this client talks to, beside its socket: `hn -L name list-harnesses` asks that
     // one, never another it happens to find on the default port.
     let _ = std::fs::write(path.with_extension("port"), port.to_string());
@@ -118,12 +117,12 @@ pub fn serve(sink: mpsc::UnboundedSender<Event>, port: u16) -> Option<PathBuf> {
 }
 
 /// Each connection's command run on the app loop, its output sent back.
-fn accept(listener: tokio::net::UnixListener, sink: mpsc::UnboundedSender<Event>) {
+fn accept(mut listener: crate::sock::Listener, sink: mpsc::UnboundedSender<Event>) {
     tokio::spawn(async move {
-        while let Ok((stream, _)) = listener.accept().await {
+        while let Ok(stream) = listener.accept().await {
             let sink = sink.clone();
             tokio::spawn(async move {
-                let (read, mut write) = stream.into_split();
+                let (read, mut write) = crate::sock::split(stream);
                 let mut line = String::new();
                 // A connection that says nothing (whether this client answers) runs nothing.
                 if BufReader::new(read).read_line(&mut line).await.is_err() || line.trim().is_empty() { return }
@@ -180,10 +179,7 @@ pub fn claim_name() {
     // (Another client may have taken it while this one waited for the lock.)
     if answers(&primary) { return }
     let _ = std::fs::remove_file(&primary);
-    let Ok(std_listener) = std::os::unix::net::UnixListener::bind(&primary) else { return };
-    let _ = std_listener.set_nonblocking(true);
-    let Ok(listener) = tokio::net::UnixListener::from_std(std_listener) else { return };
-    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&primary, std::fs::Permissions::from_mode(0o600)); }
+    let Ok(listener) = crate::sock::Listener::bind(&primary) else { return };
     if let Some(own) = here() {
         for ext in ["port", "size"] { if let Ok(value) = std::fs::read_to_string(own.with_extension(ext)) { let _ = std::fs::write(primary.with_extension(ext), value); } }
         // The primary name is now an alias of this client, including whether it has a
@@ -202,8 +198,8 @@ pub fn claim_name() {
 /// Another client told something (hn-server-sync, hn-mirror-refresh): sent, and its answer
 /// waited for off the app loop (5s at most).
 pub async fn notify(peer: &std::path::Path, words: &[String]) {
-    let Ok(stream) = tokio::net::UnixStream::connect(peer).await else { return };
-    let (read, mut write) = stream.into_split();
+    let Ok(stream) = crate::sock::connect(peer).await else { return };
+    let (read, mut write) = crate::sock::split(stream);
     let line = format!("{}\n", json!({ "argv": words, "forwarded": true }));
     if write.write_all(line.as_bytes()).await.is_err() { return }
     let mut reply = String::new();
@@ -212,10 +208,7 @@ pub async fn notify(peer: &std::path::Path, words: &[String]) {
 
 /// The same, from a client that is going: sent now, not waited for.
 pub fn notify_now(peer: &std::path::Path, words: &[String]) {
-    use std::io::Write;
-    let Ok(mut stream) = std::os::unix::net::UnixStream::connect(peer) else { return };
-    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(300)));
-    let _ = stream.write_all(format!("{}\n", json!({ "argv": words, "forwarded": true })).as_bytes());
+    crate::sock::send_sync(peer, &format!("{}\n", json!({ "argv": words, "forwarded": true })), std::time::Duration::from_millis(300));
 }
 
 /// What hn's jobs (run-shell, if-shell, #(), copy-pipe) run with, as tmux's run with TMUX set:
@@ -229,7 +222,7 @@ pub fn job_env_with(path: &str) -> Vec<(String, String)> {
     let Some(sock) = here() else { return env };
     env.push(("HN_SOCKET".into(), sock.display().to_string()));
     env.push(("TMUX".into(), format!("{},{},0", sock.display(), std::process::id())));
-    if let Some(bin) = shim() { env.push(("PATH".into(), format!("{}:{path}", bin.display()))); }
+    if let Some(bin) = shim() { env.push(("PATH".into(), format!("{}{}{path}", bin.display(), if cfg!(windows) { ';' } else { ':' }))); }
     env
 }
 
@@ -268,6 +261,12 @@ fn shim() -> Option<PathBuf> {
             #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).ok()?; }
             std::fs::rename(&tmp, &path).ok()?;
         }
+        // The same from PowerShell or cmd, which run no script without an extension.
+        #[cfg(windows)] {
+            let batch = format!("@set HN_AS_TMUX=1\r\n@\"{}\" %*\r\n", me.display());
+            let path = bin.join("tmux.cmd");
+            if std::fs::read_to_string(&path).ok().as_deref() != Some(batch.as_str()) { std::fs::write(&path, &batch).ok()?; }
+        }
         Some(bin)
     }).clone()
 }
@@ -293,7 +292,7 @@ fn sweep(dir: &std::path::Path) {
         // keeps it so later commands distinguish a stopped server from one never started.
         let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         if stem != name && !stem.strip_prefix(&name).is_some_and(|s| s.starts_with('@')) { continue }
-        if p.extension().map(|x| x == "sock").unwrap_or(false) && std::os::unix::net::UnixStream::connect(&p).is_err() {
+        if p.extension().map(|x| x == "sock").unwrap_or(false) && !crate::sock::answers(&p) {
             let _ = std::fs::remove_file(&p);
             for ext in ["port", "headless", "activity", "size"] { let _ = std::fs::remove_file(p.with_extension(ext)); }
         }
@@ -338,12 +337,12 @@ pub fn gone(path: &std::path::Path) {
     if path == primary { return }
     let _ = std::fs::remove_file(path);
     if path.parent() == primary.parent() && !primary.exists() && clients_of(&name).is_empty() {
-        drop(std::os::unix::net::UnixListener::bind(&primary));
+        crate::sock::leave_closed(&primary);
     }
 }
 
 /// Whether a client listens at [path] (the connection is let go at once, and runs nothing).
-pub fn answers(path: &std::path::Path) -> bool { std::os::unix::net::UnixStream::connect(path).is_ok() }
+pub fn answers(path: &std::path::Path) -> bool { crate::sock::answers(path) }
 
 /// A server name's running clients: its first one's socket (`work.sock`), then the others'
 /// (`work@4242.sock`), the newest first.
@@ -380,15 +379,10 @@ pub fn ask(path: &std::path::Path, words: &[String]) -> Option<crate::app::Reply
 
 /// Forward a user command while retaining its invoking terminal's geometry.
 pub fn ask_with_size(path: &std::path::Path, words: &[String], size: Option<(u16, u16)>) -> Option<crate::app::Reply> {
-    use std::io::{BufRead, Write};
     // Serving another client's command: never wait on a client (it may be the one waiting).
     if forwarded() { return None }
-    let mut s = std::os::unix::net::UnixStream::connect(path).ok()?;
-    s.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok()?;
-    s.set_write_timeout(Some(std::time::Duration::from_secs(2))).ok()?;
-    writeln!(s, "{}", json!({ "argv": words, "cwd": find_cwd(), "forwarded": true, "client_size": size })).ok()?;
-    let mut line = String::new();
-    std::io::BufReader::new(&s).read_line(&mut line).ok()?;
+    let request = format!("{}\n", json!({ "argv": words, "cwd": find_cwd(), "forwarded": true, "client_size": size }));
+    let line = crate::sock::exchange_sync(path, &request, std::time::Duration::from_secs(5), std::time::Duration::from_secs(2))?;
     let reply: Value = serde_json::from_str(line.trim()).ok()?;
     let lines = |k: &str| -> Vec<String> { reply.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(|l| l.as_str().map(str::to_string)).collect()).unwrap_or_default() };
     let mut out = lines("out");
@@ -399,11 +393,9 @@ pub fn ask_with_size(path: &std::path::Path, words: &[String], size: Option<(u16
 /// The sessions file held for this client alone while it is read and written again (flock):
 /// clients of one name keep their sessions in one file.
 pub fn lock(path: &std::path::Path) -> Option<std::fs::File> {
-    use std::os::unix::io::AsRawFd;
     if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
     let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path.with_extension("lock")).ok()?;
-    // SAFETY: a valid descriptor, held open for as long as the lock.
-    (unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } == 0).then_some(f)
+    crate::sys::lock_file(&f).then_some(f)
 }
 
 /// The newest running client's socket.
@@ -440,9 +432,9 @@ pub fn no_server(path: &std::path::Path) -> String {
 /// A command run by the client at [path], its output printed here; None when nothing answers.
 pub async fn call_at(path: &std::path::Path, words: &[String]) -> Option<i32> {
     {
-        match tokio::net::UnixStream::connect(path).await {
+        match crate::sock::connect(path).await {
             Ok(stream) => {
-                let (read, mut write) = stream.into_split();
+                let (read, mut write) = crate::sock::split(stream);
                 let cwd = find_cwd();
                 // load-buffer - and source-file -: what is piped in goes with the command.
                 let reads_stdin = words.first().and_then(|w| crate::cmd::find(w).ok()).map(|e| matches!(e.name, "load-buffer" | "source-file")).unwrap_or(false) && words.iter().skip(1).any(|w| crate::commands::is_stdin(w));

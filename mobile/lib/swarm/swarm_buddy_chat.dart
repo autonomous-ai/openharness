@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -18,6 +19,7 @@ import 'model.dart';
 import 'swarm_buddy.dart';
 import 'swarm_chat_menu.dart' show swarmNotifySection;
 import 'swarm_conversation_page.dart';
+import 'swarm_message_receipt.dart' show swarmMachineOffline;
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'swarm_row.dart';
@@ -63,7 +65,10 @@ Future<String?> openSwarmBuddy(
 /// may write: the chat is there before any Buddy. Under all of it, what went
 /// wrong with the last start or removal. Nothing for a viewer with no Buddy,
 /// nor while a Buddy runs on the person's own machine: the chat is the
-/// screen, and its messages start under the header (Tony, 10-29).
+/// screen, and its messages start under the header (Tony, 10-29). Nor that
+/// a Buddy is down while its computer is offline: the line under the message
+/// sent to it says that computer is offline, and nothing starts there until
+/// it is back (Tony, 11-04).
 class SwarmBuddyBar extends StatelessWidget {
   const SwarmBuddyBar({super.key, required this.actions});
 
@@ -73,7 +78,13 @@ class SwarmBuddyBar extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     return ListenableBuilder(
-      listenable: Listenable.merge([actions.reader, actions]),
+      // Every read, changed or not: a computer goes offline by its reading
+      // growing old, which no change to the Swarm announces.
+      listenable: Listenable.merge([
+        actions.reader,
+        actions.reader.reads,
+        actions,
+      ]),
       builder: (context, _) {
         final reader = actions.reader;
         final canWrite = swarmCanWrite(reader);
@@ -124,11 +135,18 @@ class SwarmBuddyBar extends StatelessWidget {
 
   /// On someone else's machine, "Claude on Dee Studio · dee can see its
   /// terminal" (a Buddy from before the server kept Buddies to their owner's
-  /// machines, 10-28); and, while it is down, that it is offline with Start
-  /// again. Null on the person's own machine while it runs.
+  /// machines, 10-28); and, while it is down on a computer that is online,
+  /// that it is offline with Start again. Null on the person's own machine
+  /// while it runs, or while it is down there and that computer is offline.
   Widget? _running(SwarmReader reader, SuperTabAgent agent, bool canWrite) {
     final shared = agent.machineOwnerId != reader.accountId;
-    if (!shared && agent.downSince == null) return null;
+    final down =
+        agent.downSince != null &&
+        !swarmMachineOffline(
+          reader.snapshot?.pool(agent.machineId),
+          clock.now(),
+        );
+    if (!shared && !down) return null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -142,18 +160,17 @@ class SwarmBuddyBar extends StatelessWidget {
             key: const ValueKey('swarm-buddy-where'),
             lines: 2,
           ),
-        if (agent.downSince != null)
+        if (down)
           _Line(
             key: const ValueKey('swarm-buddy-offline'),
             text:
                 '${swarmBuddyName(reader, actions.projectId)} is offline. '
                 'Your chat stays.',
-            engine: agent.engine,
             again: canWrite
                 ? () => unawaited(
                     actions.start(
                       machineId: agent.machineId,
-                      engine: swarmBuddyRestartEngine(agent.engine),
+                      engine: agent.engine,
                     ),
                   )
                 : null,
@@ -182,12 +199,11 @@ class SwarmBuddyBar extends StatelessWidget {
       return _Line(
         key: const ValueKey('swarm-buddy-failed'),
         text: "Couldn't start: $error",
-        engine: engine,
         again: canWrite && machineId.isNotEmpty
             ? () => unawaited(
                 actions.start(
                   machineId: machineId,
-                  engine: swarmBuddyRestartEngine(engine),
+                  engine: engine,
                 ),
               )
             : null,
@@ -204,19 +220,16 @@ class SwarmBuddyBar extends StatelessWidget {
 }
 
 /// What happened to the Buddy, in a line, and Start again at its end for a
-/// person who may write: "Start with Claude Code" for an [engine] the server
-/// refuses.
+/// person who may write.
 class _Line extends StatelessWidget {
   const _Line({
     super.key,
     required this.text,
-    required this.engine,
     required this.again,
     required this.busy,
   });
 
   final String text;
-  final String engine;
   final VoidCallback? again;
   final bool busy;
 
@@ -229,7 +242,7 @@ class _Line extends StatelessWidget {
       if (again != null)
         SwarmButton(
           key: const ValueKey('swarm-buddy-start-again'),
-          label: swarmBuddyRestartLabel(engine),
+          label: 'Start again',
           style: SwarmButtonStyle.link,
           busy: busy,
           busyLabel: 'Starting…',
@@ -378,9 +391,7 @@ class _BuddyStartState extends State<_BuddyStart> {
                       key: ValueKey('swarm-buddy-engine-$key'),
                       label: value,
                       icon: key == _engine ? LucideIcons.check : null,
-                      // One the server refuses is offered turned off.
-                      onPressed:
-                          busy || swarmBuddyEngineRefusals.containsKey(key)
+                      onPressed: busy
                           ? null
                           : () => setState(() => _engine = key),
                     ),
@@ -388,14 +399,6 @@ class _BuddyStartState extends State<_BuddyStart> {
               ],
             ),
           ),
-          for (final refusal in swarmBuddyEngineRefusals.values)
-            Padding(
-              padding: const EdgeInsets.only(
-                left: _Field._labelWidth,
-                top: AppSpace.xs,
-              ),
-              child: SwarmRow.line(refusal, lines: 3),
-            ),
           const SizedBox(height: AppSpace.s),
           SwarmButton(
             key: const ValueKey('swarm-buddy-start-button'),
@@ -463,9 +466,13 @@ class SwarmBuddyMenuButton extends StatelessWidget {
     required this.chatId,
     this.swarmId,
     this.swarmSwitch,
+    this.onFind,
   });
 
   final SwarmBuddyActions actions;
+
+  /// Find in chat, where the page holding the chat offers it (task #2826).
+  final VoidCallback? onFind;
 
   /// The Buddy chat it is on: what Rename names the Buddy of, by its id
   /// rather than its project. Null while that chat is not known yet.
@@ -603,6 +610,12 @@ class SwarmBuddyMenuButton extends StatelessWidget {
                   onTap: () => unawaited(_rename(context, chatId)),
                 ),
               ],
+              if (onFind case final find?)
+                PhoneSheetAction(
+                  icon: LucideIcons.search300,
+                  label: 'Find in chat',
+                  onTap: find,
+                ),
               if (_oldChats(reader).isNotEmpty)
                 PhoneSheetAction(
                   icon: LucideIcons.history,

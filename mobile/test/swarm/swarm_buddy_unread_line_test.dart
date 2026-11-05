@@ -207,6 +207,32 @@ void main() {
       expect(tester.getTopLeft(find.text('Update 3.')).dy, greaterThan(y));
     });
 
+    // Task #2849: a terminal's prompt is no chat row, so the line never
+    // sits above it.
+    testWidgets('passes over a terminal\'s prompt, which the chat does not '
+        'draw', (tester) async {
+      await pump(
+        tester,
+        backend([
+          said(1),
+          said(2),
+          {
+            ...said(3, text: 'Run the hourly cleanup.'),
+            'source': {
+              'kind': 'native',
+              'phase': 'prompt',
+              'operator': {'name': 'ken15@autonomous.ai'},
+            },
+          },
+          said(4),
+        ], mark: 2),
+      );
+      expect(find.text('Run the hourly cleanup.'), findsNothing);
+      final y = tester.getTopLeft(line).dy;
+      expect(tester.getTopLeft(find.text('Update 2.')).dy, lessThan(y));
+      expect(tester.getTopLeft(find.text('Update 4.')).dy, greaterThan(y));
+    });
+
     testWidgets("passes over the person's own messages", (tester) async {
       await pump(
         tester,

@@ -93,7 +93,7 @@ void main() {
   });
 
   testWidgets(
-    'one sidebar build looks up each Buddy chat once and asks each open conversation once',
+    'one sidebar build looks up each Buddy chat once',
     (tester) async {
       final server = ConversationServer();
       final ids = _manyProjects(server);
@@ -108,7 +108,6 @@ void main() {
       }
       expect(controller.snapshot!.conversations, hasLength(2 + 19 + 20 * 201));
 
-      final asked = <String, int>{};
       late StateSetter rebuild;
       await tester.binding.setSurfaceSize(const Size(280, 1000));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -122,10 +121,6 @@ void main() {
                 return ProjectSidebar(
                   controller: controller,
                   onSelect: controller.select,
-                  needsHuman: (group) {
-                    asked.update(group.id, (n) => n + 1, ifAbsent: () => 1);
-                    return 0;
-                  },
                 );
               },
             ),
@@ -135,20 +130,11 @@ void main() {
       await tester.pump();
 
       controller.buddyChatLookups.clear();
-      asked.clear();
       rebuild(() {});
       await tester.pump();
 
       expect(controller.buddyChatLookups.keys, unorderedEquals(ids));
       expect(controller.buddyChatLookups.values, everyElement(1));
-      // Each project's 150 open workgroups, as its Tasks board places them
-      // for its badge (task #2569), and "offline"; never a closed one, whose
-      // agent asks nothing, nor a project's chat or the reader's Buddy chat,
-      // which wait on no human.
-      expect(asked, hasLength(20 * 150 + 1));
-      expect(asked.keys.where((id) => id.startsWith('lead')), isEmpty);
-      expect(asked.keys.where((id) => id.startsWith('buddy-')), isEmpty);
-      expect(asked.values, everyElement(1));
 
       await tester.pumpWidget(const SizedBox());
       await controller.flush();

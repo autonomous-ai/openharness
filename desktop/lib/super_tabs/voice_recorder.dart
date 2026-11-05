@@ -34,15 +34,19 @@ abstract interface class SuperTabVoiceRecorder {
   ValueListenable<double> get level;
 }
 
-/// The recorder for this build, or null where none works: macOS (AVFoundation)
-/// and the web (getUserMedia). Linux and Windows get none, so their composer
-/// draws no mic (#2665: a mic that cannot record is a button that does nothing).
+/// The recorder for this build, or null where none works: macOS (AVFoundation),
+/// Windows (Media Foundation) and the web (getUserMedia). Linux gets none, so its
+/// composer draws no mic (#2665: a mic that cannot record is a button that does
+/// nothing).
 SuperTabVoiceRecorder Function()? superTabVoiceRecorder({
   bool web = kIsWeb,
   TargetPlatform? platform,
-}) => web || (platform ?? defaultTargetPlatform) == TargetPlatform.macOS
-    ? SuperTabMicRecorder.new
-    : null;
+}) {
+  final here = platform ?? defaultTargetPlatform;
+  return web || here == TargetPlatform.macOS || here == TargetPlatform.windows
+      ? SuperTabMicRecorder.new
+      : null;
+}
 
 /// [SuperTabVoiceRecorder] over the computer's or browser's microphone.
 ///

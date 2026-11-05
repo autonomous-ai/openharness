@@ -9,6 +9,7 @@ import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
 import 'package:harness_mobile/swarm/swarm_you_page.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -138,6 +139,9 @@ void main() {
   Finder key(String value) => find.byKey(ValueKey(value));
   Finder inside(String k, Finder matching) =>
       find.descendant(of: key(k), matching: matching);
+
+  /// The chevron that says You's header opens the profile.
+  final chevron = find.byIcon(LucideIcons.chevronRight300);
   TextField field(WidgetTester tester) =>
       tester.widget<TextField>(key('swarm-username-field'));
   bool saveOn(WidgetTester tester) =>
@@ -154,7 +158,7 @@ void main() {
   }
 
   Future<void> openProfile(WidgetTester tester) async {
-    await tester.tap(key('swarm-you-username'));
+    await tester.tap(key('swarm-you-me'));
     await tester.pumpAndSettle();
     expect(key('swarm-username-field'), findsOneWidget);
   }
@@ -175,11 +179,11 @@ void main() {
       if (c['type'] == 'member.username') c,
   ];
 
-  testWidgets('You shows the username, and Change opens the profile with '
-      'it in its field', (tester) async {
+  testWidgets('You heads with the username, and a tap there opens the '
+      'profile with it in its field', (tester) async {
     await pump(tester);
-    expect(inside('swarm-you-username', find.text('tony')), findsOneWidget);
-    expect(inside('swarm-you-username', find.text('Change')), findsOneWidget);
+    expect(inside('swarm-you-me', find.text('tony')), findsOneWidget);
+    expect(inside('swarm-you-me', chevron), findsOneWidget);
     await openProfile(tester);
     expect(field(tester).controller!.text, 'tony');
     expect(find.text('How people see and tag you in this Swarm.'), findsOne);
@@ -207,7 +211,7 @@ void main() {
     );
     await tester.tap(key('swarm-profile-close'));
     await tester.pumpAndSettle();
-    expect(inside('swarm-you-username', find.text('tony.b')), findsOneWidget);
+    expect(inside('swarm-you-me', find.text('tony.b')), findsOneWidget);
   });
 
   testWidgets('a name the server refuses says why under its field, and '
@@ -296,8 +300,8 @@ void main() {
     await tester.tap(key('swarm-profile-close'));
     await tester.pumpAndSettle();
     // You keeps nothing of them, and offers no way in.
-    expect(inside('swarm-you-username', find.text('tony')), findsNothing);
-    expect(inside('swarm-you-username', find.text('Change')), findsNothing);
+    expect(find.text('tony'), findsNothing);
+    expect(inside('swarm-you-me', chevron), findsNothing);
   });
 
   testWidgets('an answer that lands after access was taken away changes '
@@ -350,15 +354,15 @@ void main() {
   testWidgets('a first read that failed and then recovers still lets them '
       'change it', (tester) async {
     await pump(tester, firstLoadFails: true);
-    expect(inside('swarm-you-username', find.text('Change')), findsNothing);
-    await tester.tap(key('swarm-you-username'));
+    expect(inside('swarm-you-me', chevron), findsNothing);
+    await tester.tap(key('swarm-you-me'));
     await tester.pumpAndSettle();
     expect(key('swarm-username-field'), findsNothing);
 
     partsFail = null;
     await host.session!.inbox.reader(tab)!.refresh();
     await tester.pumpAndSettle();
-    expect(inside('swarm-you-username', find.text('tony')), findsOneWidget);
+    expect(inside('swarm-you-me', find.text('tony')), findsOneWidget);
     await openProfile(tester);
     await type(tester, 'tony.b');
     await save(tester);

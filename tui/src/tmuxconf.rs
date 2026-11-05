@@ -284,7 +284,7 @@ pub fn expand_home(path: &str) -> String {
 /// Run a condition with sh, a second at most; true when it exits 0.
 pub fn shell_true(cond: &str) -> bool {
     use std::process::{Command, Stdio};
-    let mut c = Command::new("sh");
+    let mut c = Command::new(if cfg!(windows) { crate::sys::sh() } else { "sh".to_string() });
     c.arg("-c").arg(cond).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     if let Some(p) = crate::ipc::here() { c.env("HN_SOCKET", p); }
     let Ok(mut child) = c.spawn() else { return false };

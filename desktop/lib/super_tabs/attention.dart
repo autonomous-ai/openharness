@@ -100,6 +100,35 @@ class SuperTabAttention extends ChangeNotifier {
   /// The server stopped short of everything (its bounds).
   bool more = false;
 
+  /// Read threads asked for at a time, and at most (backend read/followedThreads.ts `READ_THREADS_ASKED_MAX`): Activity's
+  /// Threads lists them 50 at a time as the reader scrolls (task #2835).
+  static const readPage = 50, readMax = 250;
+
+  /// How many read threads the next read asks for while Activity is open: the pages it shows. Closed, a read asks for
+  /// none and gets the server's 30 as before, so the reads on every Swarm change cost what they did (review of #2993); the
+  /// next visit starts at the first page again.
+  int readWanted = readPage;
+
+  /// The server takes `read`; false on one before it (it refuses the query), which answers its own number and cannot page.
+  /// Not asked again in this session on purpose: it changes only with a backend release, and the next session asks.
+  bool readPaging = true;
+
+  /// Whether the end of the read threads can ask for more.
+  bool get canReadMore =>
+      _open &&
+      loaded &&
+      more &&
+      readPaging &&
+      read.length >= readWanted &&
+      readWanted < readMax;
+
+  /// Asks for the next [readPage] read threads, when there are more.
+  Future<void> readMore() {
+    if (_disposed || !canReadMore) return Future.value();
+    readWanted = (readWanted + readPage).clamp(readPage, readMax);
+    return load();
+  }
+
   /// Threads shown as new in this visit of Activity: they stay new
   /// until the view is left, though opening them marked them read.
   final Set<String> _newThisVisit = {};
@@ -158,6 +187,30 @@ class SuperTabAttention extends ChangeNotifier {
   /// gone.
   int mentionsIn(String conversationId) =>
       tagsIn(conversationId) + decisionsIn(conversationId);
+
+  /// A project row's red number (task #2927, Slack's channel badge): the
+  /// reader's tags in [conversationId]'s main stream that they have not read
+  /// past, so opening the chat clears it. Tags in its threads and its tasks,
+  /// decisions and tasks waiting on the reader are in Activity, which counts
+  /// each of these too (`SuperTabActivity.mentionUnread`): the row never says
+  /// more than Activity. A muted chat never counts.
+  int chatTagsIn(String conversationId) {
+    if (controller.accessRevoked ||
+        controller.notifyOf(conversationId) == SuperTabNotify.muted) {
+      return 0;
+    }
+    final mark = controller.readMark(conversationId);
+    return mentions.waiting
+        .where(
+          (m) =>
+              m.conversationId == conversationId &&
+              m.threadId == null &&
+              m.resolvedBy != 'read' &&
+              m.resolvedBy != 'done' &&
+              (m.messageSequence ?? _unknown) > mark,
+        )
+        .length;
+  }
 
   /// What a conversation's red number counts, for its hover label.
   String? badgeTooltipIn(String conversationId) {
@@ -326,6 +379,7 @@ class SuperTabAttention extends ChangeNotifier {
 
   void closed() {
     _open = false;
+    readWanted = readPage;
     _trailing?.cancel();
     _trailing = null;
     _newThisVisit.clear();
@@ -335,6 +389,7 @@ class SuperTabAttention extends ChangeNotifier {
 
   void _clear() {
     unread = read = const [];
+    readWanted = readPage;
     loaded = false;
     error = null;
     more = false;
@@ -426,7 +481,20 @@ class SuperTabAttention extends ChangeNotifier {
       var full = followSupported;
       if (full) {
         try {
-          answer = await controller.request('GET', '$_path/threads');
+          // Read pages only for the open view (see [readWanted]).
+          final paged = readPaging && _open;
+          try {
+            answer = await controller.request(
+              'GET',
+              paged ? '$_path/threads?read=$readWanted' : '$_path/threads',
+            );
+          } on SuperTabFailure catch (failure) {
+            // A server before paging refuses `read`: read as it takes it.
+            if (failure.statusCode != 400 || !paged) rethrow;
+            readPaging = false;
+            if (!current()) return;
+            answer = await controller.request('GET', '$_path/threads');
+          }
         } on SuperTabFailure catch (failure) {
           if (failure.statusCode != 404) rethrow;
           full = false;

@@ -16,7 +16,14 @@ class WebUpdateWatcher extends ChangeNotifier {
     required this.running,
     required this.readLatest,
     this.every = const Duration(minutes: 5),
-  });
+    bool Function()? shown,
+  }) : _shown = shown ?? _always;
+
+  static bool _always() => true;
+
+  /// Whether the page is shown. A hidden tab asks the host nothing on the clock (task #2953);
+  /// coming back to it checks at once (`pageShown`, [WebUpdateHost]).
+  final bool Function() _shown;
 
   /// The version this page started on.
   final String? running;
@@ -50,7 +57,9 @@ class WebUpdateWatcher extends ChangeNotifier {
 
   /// Asks the host every [every] from now on, until disposed.
   void start() {
-    _timer ??= Timer.periodic(every, (_) => unawaited(check()));
+    _timer ??= Timer.periodic(every, (_) {
+      if (_shown()) unawaited(check());
+    });
   }
 
   @override

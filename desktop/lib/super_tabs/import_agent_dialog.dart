@@ -23,10 +23,12 @@ import 'import_agent.dart';
 import 'model.dart';
 import 'team_account_setup.dart';
 
-/// Whether Add agent offers Import: Harness on a Mac, where its daemon and a
-/// Harness Team account are; never the web, Linux or Windows.
+/// Whether Add agent offers Import: Harness on a Mac or a Windows PC, where its
+/// daemon and a Harness Team account are; never the web or Linux.
 bool get superTabImportOffered =>
-    !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.windows);
 
 /// Import an agent into [group]'s project: the agents of this Mac to choose
 /// from, the handoff of the one chosen as its project's members will read it,
@@ -231,10 +233,10 @@ class _ImportAgentDialogState extends State<_ImportAgentDialog> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const EmptyState(
+          EmptyState(
             compact: true,
             icon: AppIcons.bot,
-            title: 'No agent on this Mac to import',
+            title: 'No agent on this $importComputerWord to import',
             message: 'Claude Code and Codex agents of yours show here.',
           ),
           note,
@@ -328,7 +330,8 @@ class _ImportAgentDialogState extends State<_ImportAgentDialog> {
         style: DesktopChrome.metadata(),
       ),
       Text(
-        'The agent on this Mac keeps running; nothing about it changes.',
+        'The agent on this $importComputerWord keeps running; nothing about it '
+        'changes.',
         style: DesktopChrome.metadata(),
       ),
       if (_import != null) ...[

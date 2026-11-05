@@ -211,7 +211,7 @@ describe('contributed machine executor', () => {
     const f = fixture()
     f.prepare.mockResolvedValueOnce({ requester: 'olive@example.com' } as never)
     await f.machine.tick()
-    expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, github: { requester: 'olive@example.com' } })
+    expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, signedIn: null, github: { requester: 'olive@example.com' } })
     f.prepare.mockRejectedValueOnce(new Error('This machine could not get a Harness GitHub App token for this project'))
     f.advance()
     await f.machine.tick()
@@ -251,7 +251,7 @@ describe('contributed machine executor', () => {
       await h.pass(16_000)
       expect(h.token).toHaveBeenCalledTimes(2)
       expect(h.failures()).toEqual([])
-      expect((h.f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, github: { requester: 'olive@example.com' } })
+      expect((h.f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, signedIn: null, github: { requester: 'olive@example.com' } })
       // The read-only token is revoked once the start is prepared, as on a first try.
       expect(h.revoked.mock.calls.map(([url, init]) => [url, init.headers.Authorization])).toEqual([['https://api.github.com/installation/token', `Bearer ${TOKEN_ANSWER.token}`]])
     })
@@ -312,7 +312,7 @@ describe('contributed machine executor', () => {
     expect(body).toMatchObject({ generation: 'grant', runningHarnessIds: ['running'], stoppedHarnessIds: ['stopped'], quotas: [{ engine: 'codex', known: true }] })
     expect(JSON.stringify(body)).not.toMatch(/private@example|private-token|account_email/)
     const [input, scoped, where] = (f.start.mock.calls as unknown[][])[0]!
-    expect(input).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true })
+    expect(input).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, signedIn: null })
     expect(where).toMatchObject({ machineId: 'host', dataDir: '/isolated-pool-fixture' })
     await (scoped as (p: unknown) => Promise<unknown>)({ action: 'startStatus' })
     expect(f.backend).toHaveBeenLastCalledWith(f.core, 'GET', '/api/super-tabs/hosts/host/starts/tab/start', undefined)
@@ -331,20 +331,29 @@ describe('contributed machine executor', () => {
     const f = fixture()
     Object.assign(f.pool, { starts: [], buddyStarts: [{ id: 'buddy-start', dispatched: false }] })
     await f.machine.tick()
-    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', hostDispatch: true }])
+    // No account signed in here (the fake has none): the start itself then refuses a Buddy (start.ts buddyOnOwnMachine).
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', hostDispatch: true, signedIn: null }])
+  })
+  // Task #2832: a Buddy launches only where the account signed in here is its owner's; the host hands the start what it reads.
+  it('hands each start the account signed in here, as this machine reads it', async () => {
+    const f = fixture()
+    Object.assign(f.core.account, { identity: vi.fn(async () => ({ accountId: 'peer' })) })
+    Object.assign(f.pool, { starts: [], buddyStarts: [{ id: 'buddy-start', dispatched: false }] })
+    await f.machine.tick()
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', hostDispatch: true, signedIn: 'peer' }])
   })
   it('launches a Product Manager\'s start, which the backend lists apart so that a host from before them never does', async () => {
     const f = fixture()
     Object.assign(f.pool, { starts: [], leadStarts: [{ id: 'lead-start', dispatched: false }] })
     await f.machine.tick()
-    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'lead-start', hostDispatch: true }])
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'lead-start', hostDispatch: true, signedIn: null }])
   })
   it('says in its reading that it starts Product Managers, a Buddy\'s thread sessions and a person\'s one Buddy, to a backend that asks, and to no other', async () => {
     const f = fixture()
     Object.assign(f.pool, { capabilitiesWanted: true })
     await f.machine.tick()
     const posted = (g: typeof f) => g.backend.mock.calls.filter(c => c[1] === 'POST').map(c => c[3] as Record<string, unknown>)
-    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'leadSwitch', 'buddyModel'] })
+    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'leadSwitch', 'buddyModel'] })
     // A backend from before them does not ask, and would refuse the field.
     const older = fixture()
     await older.machine.tick()
@@ -920,6 +929,62 @@ describe('contributed machine executor', () => {
       expect(machinePosts(f).at(-1)).not.toHaveProperty('preparingStartIds')
     })
 
+    // Issue #2989 and River on task #2890: a start dispatched here that never got an agent, failed by the Swarm ("did not
+    // start it within 3 minutes"), held its memory on this machine until the ledger's launch deadline. Its host reads the
+    // verdict once the start leaves its pending list, and ends the reservation at once.
+    describe('that the backend fails before any agent joins', () => {
+      const startPath = '/api/super-tabs/hosts/host/starts/tab/start'
+      const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+      function failedEarly(status: () => unknown, ended: () => Promise<Record<string, unknown>> = async () => ({ ok: true, reservationId: 'creation', returned: true })) {
+        const f = fixture()
+        f.start.mockResolvedValue({ ...pendingCreation, state: 'unconfirmed' } as never)
+        const original = f.backend.getMockImplementation()!
+        f.backend.mockImplementation(async (core, method, path, body) => method === 'GET' && path === startPath ? status() : original(core, method, path, body))
+        const usage = f.request.getMockImplementation()!
+        f.request.mockImplementation(async (type, ...rest) => type === 'super_tabs' && (rest[0] as Record<string, unknown>)?.action === 'endCapacity'
+          ? ended() : usage(type, ...rest as []))
+        const ends = () => f.request.mock.calls.filter(c => c[0] === 'super_tabs' && (c[1] as Record<string, unknown>)?.action === 'endCapacity')
+        return { f, ends, fail: () => { f.pool.starts = [] } }
+      }
+
+      it('ends its reservation on this machine once, as soon as the Swarm says it failed', async () => {
+        const { f, ends, fail } = failedEarly(() => ({ error: 'Mac Auto did not start it within 3 minutes' }))
+        await f.machine.tick()
+        f.advance(); await f.machine.tick(); await settle()
+        expect(ends()).toHaveLength(0)
+        fail(); f.advance(); await f.machine.tick(); await settle()
+        await vi.waitFor(() => expect(ends()).toEqual([['super_tabs', { action: 'endCapacity', creationId: 'creation' }, 10_000]]))
+        expect(f.log.mock.calls.flat().join('\n')).toContain('Freed the memory of start start, which the Swarm failed: Mac Auto did not start it within 3 minutes')
+        f.advance(); await f.machine.tick(); await settle()
+        expect(ends()).toHaveLength(1)
+      })
+
+      it('leaves one that settled or got its agent to the ledger, and asks a few times when it cannot tell', async () => {
+        for (const status of [{ harnessId: 'joined' }, { error: null }]) {
+          const { f, ends, fail } = failedEarly(() => status)
+          await f.machine.tick(); fail(); f.advance(); await f.machine.tick(); await settle()
+          f.advance(); await f.machine.tick(); await settle()
+          expect(ends()).toHaveLength(0)
+          expect(f.backend.mock.calls.filter(c => c[2] === startPath)).toHaveLength(1)
+        }
+        const { f, ends, fail } = failedEarly(() => { throw new Error('backend down') })
+        await f.machine.tick(); fail()
+        for (let pass = 0; pass < 7; pass++) { f.advance(); await f.machine.tick(); await settle() }
+        expect(f.backend.mock.calls.filter(c => c[2] === startPath)).toHaveLength(5)
+        expect(ends()).toHaveLength(0)
+        expect(f.log.mock.calls.flat().join('\n')).toContain('Could not free the memory of failed start start: backend down')
+      })
+
+      it('lets an older daemon that cannot end it keep the row for its launch deadline', async () => {
+        const { f, ends, fail } = failedEarly(() => ({ error: 'Mac Auto did not start it within 3 minutes' }), async () => ({ error: 'UNKNOWN_ACTION' }))
+        await f.machine.tick(); fail(); f.advance(); await f.machine.tick(); await settle()
+        await vi.waitFor(() => expect(ends()).toHaveLength(1))
+        f.advance(); await f.machine.tick(); await settle()
+        expect(ends()).toHaveLength(1)
+        expect(f.log.mock.calls.flat().join('\n')).toContain('Could not free the memory of failed start start: UNKNOWN_ACTION')
+      })
+    })
+
     // Mac Auto's Harness Team account, 2026-10-29: the backend failed each start at 3 minutes while its Codex never recorded
     // its session, and the agent the machine launched for it stayed, idle, with no Swarm agent behind it.
     describe('that the backend then fails', () => {
@@ -983,6 +1048,18 @@ describe('contributed machine executor', () => {
         // Once: it is no longer the host's to stop.
         f.advance(); await f.machine.tick(); await settle()
         expect(closeMember).toHaveBeenCalledTimes(1)
+      })
+
+      // The start is still listed for one pass after the Swarm fails it, and that pass reads the failure with no agent named. The
+      // agent was forgotten there and kept running as nobody's: three Codex panes on DESKTOP-0TFH0OJ, 2026-11-04.
+      it('still stops it when a pass reads the failure before the start leaves the list', async () => {
+        const { f, closeMember, fail } = failedLater(() => ({ error: 'Mac Auto did not start it within 3 minutes' }))
+        await f.machine.tick()
+        f.start.mockResolvedValueOnce({ error: 'START_FAILED', startId: 'start', detail: 'Mac Auto did not start it within 3 minutes' } as never)
+        f.advance(); await f.machine.tick(); await settle()
+        expect(closeMember).not.toHaveBeenCalled()
+        fail(); f.advance(); await f.machine.tick(); await settle()
+        expect(closeMember).toHaveBeenCalledWith('launched', 'creation')
       })
 
       // A daemon restarted between the launch and the Swarm failing the start no longer forgets the agent it launched.
@@ -1700,7 +1777,7 @@ describe('contributed machine executor', () => {
       await after(f, 5_000)
       expect(posts(f)).toHaveLength(2)
       expect(f.start).toHaveBeenCalledOnce()
-      expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'second', hostDispatch: true })
+      expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'second', hostDispatch: true, signedIn: null })
       // Settled: that too is a change, and is sent.
       f.pool.starts.length = 0
       await after(f, 5_000)

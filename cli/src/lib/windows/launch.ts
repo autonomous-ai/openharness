@@ -151,6 +151,16 @@ export function windowsEngineArgv(engine: string, argv: readonly string[], optio
   return runs([program, ...args])
 }
 
+/**
+ * [reason], a program's failure to start, in the person's words when Windows' Smart App Control or another application
+ * control policy blocked the program, which says only "os error 4551" or a raw status. Any other reason is left as it is.
+ */
+export function windowsBlockedReason(command: readonly string[], reason: string): string {
+  if (!/os error 4551|0xC0E90002|Application Control/i.test(reason)) return reason
+  const program = (command[0] ?? '').split(/[\\/]/).pop()!.replace(/\.(exe|cmd|bat|com)$/i, '') || 'this program'
+  return `Windows blocked ${program}: Smart App Control does not trust it. Choose another engine.`
+}
+
 /** A create's or fork's answer for [error] when it is a refused Windows launch, a batch file's or an unverified
  *  startup's (lib/windows/engineStart.ts), shown to the person as its detail; any other error is thrown on. */
 export function windowsLaunchRefusal(error: unknown): { ok: false; error: 'ENGINE_LAUNCH_REFUSED'; detail: string } {

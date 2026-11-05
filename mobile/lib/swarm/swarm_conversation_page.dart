@@ -31,6 +31,7 @@ import 'swarm_buddy_chat.dart';
 import 'swarm_session_widgets.dart';
 import 'swarm_buddy_tab.dart'
     show SwarmBuddyDot, SwarmBuddyMark, swarmBuddyMark;
+import 'swarm_chat_find.dart';
 import 'swarm_chat_menu.dart';
 import 'swarm_file_links.dart';
 import 'swarm_choices.dart';
@@ -41,6 +42,8 @@ import 'swarm_face.dart';
 import 'swarm_file_picker.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_inbox.dart';
+import 'swarm_lead_start.dart';
+import 'swarm_lead_start_card.dart';
 import 'swarm_reader.dart';
 import 'swarm_live_card.dart';
 import 'swarm_link_previews.dart';
@@ -151,6 +154,7 @@ class SwarmConversationPage extends StatefulWidget {
     required this.swarmId,
     required this.conversationId,
     this.header = true,
+    this.findRequests,
     this.buddy,
     this.messageId,
     this.threadId,
@@ -180,6 +184,10 @@ class SwarmConversationPage extends StatefulWidget {
   /// Buddy chat — Remove Buddy at its end. None in a project's tab
   /// (`swarm_project_page.dart`), under the project's own header.
   final bool header;
+
+  /// Told when the page around the chat asks to find in it: the project's
+  /// own menu, where the chat has no header of its own (task #2826).
+  final Listenable? findRequests;
 
   /// What the person does to their Buddy, where the page around the chat
   /// holds it, for its own header's menu; null makes the chat its own while
@@ -238,6 +246,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// Earlier messages are read on their own as the person nears the top;
   /// "Earlier messages" is offered only once that read failed.
   bool _loadingOlder = false, _olderFailed = false;
+
+  /// Find in the chat (task #2826), while its bar is open under the header;
+  /// and its current match as last brought into view, which stays
+  /// [_target] and [_lit] for as long as it is current.
+  SwarmChatFind? _find;
+  String? _found;
+  bool _findRefreshing = false;
 
   /// No other screen covers this one.
   bool _visible = true;
@@ -320,6 +335,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     WidgetsBinding.instance.addObserver(this);
     _text.addListener(_typed);
     _scroll.addListener(_scrolled);
+    widget.findRequests?.addListener(_openFind);
+  }
+
+  @override
+  void didUpdateWidget(SwarmConversationPage old) {
+    super.didUpdateWidget(old);
+    if (old.findRequests != widget.findRequests) {
+      old.findRequests?.removeListener(_openFind);
+      widget.findRequests?.addListener(_openFind);
+    }
   }
 
   @override
@@ -697,6 +722,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _steps.clear();
     if (_buddy != widget.buddy) _buddy?.dispose();
     _buddy = null;
+    // Find goes with the chat it searched, a read-back under way too.
+    _dropFind();
     _rows.clear();
     _madeFrom = null;
     _lineAt = null;
@@ -718,6 +745,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    widget.findRequests?.removeListener(_openFind);
     _close();
     _voice?.dispose();
     _view.dispose();
@@ -807,6 +835,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         _loadingOlder ||
         _olderFailed ||
         _finding ||
+        _findReading ||
         !_scroll.hasClients) {
       return;
     }
@@ -815,6 +844,91 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     if (position.extentAfter < position.viewportDimension) {
       unawaited(_loadOlder(c));
     }
+  }
+
+  /// Find reads older pages itself: the near-top read waits until it is
+  /// done.
+  bool get _findReading => _find?.reading != null;
+
+  /// Opens find under the header, from the chat's ⋮.
+  void _openFind() {
+    final c = _conversation;
+    if (c == null || _find != null || !mounted) return;
+    final find = SwarmChatFind(
+      rows: () => _findRows(c),
+      hasOlder: () => c.hasOlder,
+      readOlder: () => _findOlder(c),
+    )..addListener(_findMoved);
+    setState(() => _find = find);
+  }
+
+  /// ✕: the query, the fills and the light go, and a read-back stops.
+  void _closeFind() {
+    if (_find == null) return;
+    _dropFind();
+    if (mounted) setState(() {});
+  }
+
+  void _dropFind() {
+    final find = _find;
+    if (find == null) return;
+    find
+      ..removeListener(_findMoved)
+      ..dispose();
+    _find = null;
+    if (_target == _found) _target = null;
+    if (_lit == _found) _lit = null;
+    _found = null;
+  }
+
+  /// What find searches: the messages the list draws, oldest first, as far
+  /// as it draws them — those waiting below while the person reads back
+  /// join once they show. Thread-only replies are the thread's own.
+  List<SuperTabMessage> _findRows(SwarmConversation c) {
+    final rows = _drawnOf(c).rows;
+    final held = _held.value;
+    final at = held == null ? -1 : rows.lastIndexWhere((m) => m.id == held);
+    return at < 0 ? rows : rows.sublist(0, at + 1);
+  }
+
+  /// One older page for find, as scrolling back reads it: false when it
+  /// failed, or brought nothing while more is said to be there.
+  Future<bool> _findOlder(SwarmConversation c) async {
+    final shown = c.messages.length;
+    await c.loadOlder();
+    if (!mounted || _conversation != c) return false;
+    return c.messages.length > shown || (!c.hasOlder && c.error == null);
+  }
+
+  /// Find moved: a new current match is brought into view and lit, as a
+  /// message link's original is, and stays lit while it is current.
+  void _findMoved() {
+    final find = _find, c = _conversation;
+    if (find == null || c == null || !mounted) return;
+    final current = find.current;
+    if (current != _found) {
+      _litTimer?.cancel();
+      if (_target == _found) _target = null;
+      if (_lit == _found) _lit = null;
+      _found = current;
+      if (current != null) {
+        _target = current;
+        _lit = current;
+        _reveal(c, current, 0);
+      }
+    }
+    setState(() {});
+  }
+
+  /// The rows the list draws changed: find counts them again once this
+  /// frame is built.
+  void _refreshFindSoon() {
+    if (_find == null || _findRefreshing) return;
+    _findRefreshing = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _findRefreshing = false;
+      if (mounted) _find?.refresh();
+    });
   }
 
   /// Reads the page before the oldest message shown. The list is drawn from
@@ -912,6 +1026,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                     required acting,
                     required lit,
                     required followed,
+                    required match,
                     required onTap,
                   }) => _threadRow(
                     c,
@@ -921,6 +1036,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                     acting: acting,
                     lit: lit,
                     followed: followed,
+                    match: match,
                     onTap: onTap,
                   ),
               pending: (t, post) => _threadPending(c, t, post),
@@ -967,6 +1083,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     required bool acting,
     required bool lit,
     required bool followed,
+    required bool match,
     required VoidCallback onTap,
   }) {
     final view = _view.value;
@@ -989,6 +1106,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       grouped: grouped,
       lit: lit,
       followed: followed,
+      match: match,
       quote: null,
       actions: acting,
       onTap: onTap,
@@ -1379,13 +1497,19 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               final buddy? => SwarmBuddyMenuButton(
                 actions: buddy,
                 chatId: widget.conversationId,
+                onFind: _openFind,
                 swarmId: widget.swarmId,
                 swarmSwitch: widget.swarmSwitch,
               ),
-              null => SwarmChatMenuButton(reader: c.reader, chatId: c.id),
+              null => SwarmChatMenuButton(
+                reader: c.reader,
+                chatId: c.id,
+                onFind: _openFind,
+              ),
             },
           ),
         ),
+      if (_find case final find?) SwarmFindBar(find: find, onClose: _closeFind),
       if (_buddy case final buddy?) SwarmBuddyBar(actions: buddy),
       // The composer takes what it needs, up to all of the room under the
       // header: on a short phone with the keyboard up its field gives up lines
@@ -1953,6 +2077,23 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         return const SwarmChatSkeleton();
       }
       if (view.decisions.isEmpty) {
+        // A Personal project with no Lead offers to start one, as Desktop's
+        // empty chat does (task #2941).
+        if (SwarmScope.computersOf(context)
+            case final SwarmLeadComputers computers
+            when swarmWantsLeadStart(c.reader, c.id)) {
+          return Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpace.screenInset),
+              child: SwarmLeadStartCard(
+                reader: c.reader,
+                computers: computers,
+                chatId: c.id,
+              ),
+            ),
+          );
+        }
         return _said(
           'No messages yet.',
           key: const ValueKey('swarm-chat-empty'),
@@ -2003,13 +2144,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       _placeOf = {for (final (i, entry) in _shown.indexed) _keyOf(entry): i};
       _rows.removeWhere((key, _) => !_placeOf.containsKey(key));
       _madeFrom = from;
+      _refreshFindSoon();
     }
     final entries = _shown;
     final byId = _byId;
     // Newest at the foot: the list runs bottom up.
     final pending = c.outgoing.reversed.toList();
     // A page shorter than the screen never scrolls: look once it is drawn.
-    if (c.hasOlder && !_loadingOlder && !_olderFailed) {
+    if (c.hasOlder && !_loadingOlder && !_olderFailed && !_findReading) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _nearTop();
       });
@@ -2050,6 +2192,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final tagged = _taggedOf(c, m);
           final labels = _labelsOf(c, m);
           final lit = _lit == m.id, followed = _target == m.id;
+          final match = _find?.matching.contains(m.id) ?? false;
           final acting = _acting == m.id;
           final reactions = c.reactionsOf(m);
           final receipt =
@@ -2087,6 +2230,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               grouped,
               lit,
               followed,
+              match,
               acting,
               receipt,
               reply,
@@ -2125,6 +2269,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               grouped: grouped,
               lit: lit,
               followed: followed,
+              match: match,
               quote: m.threadReply
                   ? SwarmRepliedInThread(
                       key: ValueKey('swarm-replied-in-thread-${m.id}'),

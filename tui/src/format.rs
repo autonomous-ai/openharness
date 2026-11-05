@@ -126,12 +126,10 @@ impl<'a> Es<'a> {
 #[derive(Default)]
 pub struct Job { expanded: String, out: Option<String>, running: bool, started: i64, last: i64, generation: u64, pub pid: Option<i32>, updated: bool }
 
-unsafe extern "C" { fn kill(pid: i32, sig: i32) -> i32; }
-
 /// Every `#()` job still running, ended (job_free's SIGTERM, to its process group), as tmux's
 /// server ends its jobs when it goes.
 pub fn kill_jobs(app: &crate::app::App) {
-    for job in app.jobs.borrow_mut().values_mut() { if let Some(pid) = job.pid.take() { unsafe { kill(-pid, 15); } } }
+    for job in app.jobs.borrow_mut().values_mut() { if let Some(pid) = job.pid.take() { crate::sys::end_group(pid); } }
 }
 
 /// The output of `cmd` (its latest line), running it if it is due: the first time, when its
@@ -154,7 +152,7 @@ fn job_get(es: &mut Es, cmd: &str) -> String {
         let run = force || due;
         if run {
             // (New text for it: the run before ends, as format_job_get frees it.)
-            if force { if let Some(pid) = job.pid.take() { unsafe { kill(-pid, 15); } } }
+            if force { if let Some(pid) = job.pid.take() { crate::sys::end_group(pid); } }
             job.expanded = expanded.clone();
             job.running = true;
             job.updated = false;
@@ -173,10 +171,12 @@ fn job_get(es: &mut Es, cmd: &str) -> String {
         // As tmux runs one: /bin/sh -c, nothing on stdin, the client's folder, the server's
         // environment; HN_SOCKET (and a `tmux` that is hn) so a command inside it talks to
         // this client. A group of its own, so ending it ends what it started.
-        let mut c = tokio::process::Command::new("/bin/sh");
+        let mut c = tokio::process::Command::new(crate::sys::sh());
         c.arg("-c").arg(&expanded);
         crate::ipc::set_job_env(&mut c, &env);
-        c.stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).process_group(0).kill_on_drop(false);
+        c.stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).kill_on_drop(false);
+        #[cfg(unix)]
+        c.process_group(0);
         match c.spawn() {
             Ok(mut child) => {
                 if let Some(job) = app.jobs.borrow_mut().get_mut(&key) { job.pid = child.id().map(|p| p as i32) }
@@ -635,7 +635,7 @@ fn basename(p: &str) -> String {
     if p.is_empty() { return ".".into() }
     let t = p.trim_end_matches('/');
     if t.is_empty() { return "/".into() }
-    t.rsplit('/').next().unwrap_or(t).to_string()
+    crate::sys::path_name(t).to_string()
 }
 
 fn dirname(p: &str) -> String {
@@ -686,6 +686,15 @@ fn matches(fm: &Mod, pattern: &str, text: &str) -> String {
 }
 
 /// tmux uses the platform's POSIX extended expressions, including its escape rules.
+#[cfg(windows)]
+fn posix_match(pattern: &str, text: &str, icase: bool) -> bool {
+    // Windows has no regcomp. The regex crate reads the same extended syntax, with Perl's `(?…)` groups beside it, which an
+    // extended expression has none of: as on a Mac, those match nothing.
+    if pattern.contains("(?") { return false }
+    regex::RegexBuilder::new(pattern).case_insensitive(icase).build().is_ok_and(|re| re.is_match(text))
+}
+
+#[cfg(unix)]
 fn posix_match(pattern: &str, text: &str, icase: bool) -> bool {
     let (Ok(pattern), Ok(text)) = (std::ffi::CString::new(pattern), std::ffi::CString::new(text)) else { return false };
     let mut re = std::mem::MaybeUninit::<libc::regex_t>::uninit();
@@ -999,7 +1008,10 @@ pub(crate) fn local_tm(t: i64) -> libc::tm {
     // SAFETY: localtime_r only writes the struct it is given.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let tt = t as libc::time_t;
+    #[cfg(unix)]
     unsafe { libc::localtime_r(&tt, &mut tm) };
+    #[cfg(windows)]
+    unsafe { crate::sys::localtime(&mut tm, &tt) };
     tm
 }
 
@@ -1010,10 +1022,17 @@ fn strftime(_app: &App, fmt: &str, t: i64) -> String { strftime_at(fmt, t) }
 /// strftime(3) of a time in seconds, in local time.
 pub fn strftime_at(fmt: &str, t: i64) -> String {
     let tm = local_tm(t);
+    #[cfg(windows)]
+    let fmt = crate::sys::strftime_format(fmt);
+    #[cfg(windows)]
+    let fmt = fmt.as_str();
     let Ok(cfmt) = std::ffi::CString::new(fmt) else { return fmt.to_string() };
     let mut buf = vec![0u8; 8192];
     // SAFETY: the buffer's length is passed, and strftime writes at most that.
+    #[cfg(unix)]
     let n = unsafe { libc::strftime(buf.as_mut_ptr() as *mut libc::c_char, buf.len(), cfmt.as_ptr(), &tm) };
+    #[cfg(windows)]
+    let n = unsafe { crate::sys::strftime(buf.as_mut_ptr() as *mut libc::c_char, buf.len(), cfmt.as_ptr(), &tm) };
     buf.truncate(n);
     String::from_utf8_lossy(&buf).into_owned()
 }
@@ -1339,8 +1358,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
             (lines * g.columns() * 5 + lines * 48).to_string()
         }).unwrap_or_default(),
         "line" => app.format_line.map(|n| n.to_string()).unwrap_or_default(),
-        "uid" | "client_uid" => unsafe { libc::getuid() }.to_string(),
-        "client_user" | "user" => { let pw = unsafe { libc::getpwuid(libc::getuid()) }; if pw.is_null() { String::new() } else { unsafe { std::ffi::CStr::from_ptr((*pw).pw_name) }.to_string_lossy().into_owned() } }
+        "uid" | "client_uid" => crate::sys::uid().to_string(),
+        "client_user" | "user" => crate::sys::username(),
         "pane_marked" => (focus.is_some() && app.marked == focus && app.marked_session == Some(app.session_id)).then_some("1").unwrap_or("0").into(),
         "pane_marked_set" => app.marked.is_some().then_some("1").unwrap_or("0").into(),
         "window_id" => tab.map(|t| format!("@{}", t.wid())).unwrap_or_default(),

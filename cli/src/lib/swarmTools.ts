@@ -26,16 +26,20 @@ Every command starts \`harness super-tab --tab TAB\` (your tab id is in your lau
 - \`type AGENT [TEXT] [--key K]...\`: type text, then keys (Enter, Esc, Tab, Up, Down, Left, Right, Ctrl-C, 0-9), into another agent's terminal in your project. Answer prompts within its task; ask the owner before approving anything risky. Codex's "Update available" screen is dismissed with Esc alone, never a number and Enter.
 
 ## Post
-\`post GROUP TEXT OPERATION_ID [--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...\`
-- Answer a message once, inside its thread: \`--reply-to MESSAGE_ID\` puts your reply in that message's thread. Post at the top level only to start a new topic.
+\`post GROUP TEXT OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...\`
+- Answer a message once, where it was asked: \`--answers MESSAGE_ID\` puts your answer right below a message in the main chat; \`--reply-to MESSAGE_ID\` puts it in the thread of a message that is in one. Open a thread yourself only for a back-and-forth on one topic, or to answer something far up the chat. Post with neither only to start a new topic.
 - \`--attach PATH\` sends a file (a screenshot, a log; up to 10 files of 256 MB each); TEXT may then be empty.
-- \`--mention PERSON\` tags a person by the id or email shown in status (up to 5), when you need them to act or decide; an @username or @email in TEXT tags too, outside code and links. Nobody is tagged who cannot read the conversation.
+- \`--mention PERSON\` tags a person by the username, display name or id shown in status (up to 5), when you need them to act or decide; an @username in TEXT tags too, outside code and links. Nobody is tagged who cannot read the conversation.
+- Never type a person's email: name them by username. A machine's privacy check stops a session whose command holds its owner's email until a person approves it.
 - Quote TEXT so the shell keeps it one argument.
 
 ### Who a post reaches
 - \`--to AGENT\` names the agents it reaches: any agent of this project, by id from status, up to 16. Named agents are told and join the conversation if they are not in it. A post reaches exactly the agents you name, no others.
-- With no \`--to\`, an agent's post reaches the project's coordinator; the coordinator's post in a task reaches the task's assigned agent. Name the agent whenever you answer one.
-- Nothing is dropped: a post that names no one still goes to its default addressee.
+- \`@Name\` in TEXT names an agent of this conversation the same way, when only one agent there goes by that name and no person does.
+- A reply (\`--reply-to\`) also reaches the agent who wrote the message it answers.
+- A post that names no one reaches no agent, except in a task or step, where it reaches the agent assigned there unless that is you. It stays readable in its conversation, and the people it tags are still told; its result says when it reached no agent.
+- The coordinator gets a post only when it is named: your status (done, needs_human, blocked) is how it hears your work, so never post it a result, a verdict, a Ready or an acknowledgement.
+- In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person's answer to its line reaches it; \`--to\` there adds no agent, so name only the coordinator.
 - A post stays inside your project. Private chats and Buddy chats keep their own members.
 
 ## Reactions
@@ -64,6 +68,7 @@ Task and group commands:
 - \`{"type":"work.check","conversationId":"GROUP","assignmentId":"current","checkId":"CHECK","passed":true,"evidence":"exact command, revision and observed result"}\` records one acceptance check.
 - \`{"type":"work.cancel","conversationId":"GROUP","assignmentId":"current","reason":"one short sentence"}\` cancels a task.
 - \`{"type":"agent.release","agentId":"AGENT","decision":"keep|stop"}\` records keep or requests stop of an agent whose work is finished; wait for its machine to confirm a stop.
+- \`{"type":"proposal.close","projectId":"PROJECT","messageId":"PROPOSAL","reason":"built in #N, declined or duplicate"}\` closes a Buddy's proposal that is still listed as open though it was answered or built (before threads, or opened as a task without its proposalMessageId): it leaves the open proposals for good with its reason kept, and posts nothing in the chat. The project's coordinator, or a person who reads the project.
 - \`{"type":"conversation.merged","conversationId":"GROUP","pullRequestUrl":"https://github.com/OWNER/REPOSITORY/pull/NUMBER","mergedAt":"optional ISO time"}\` records that a group's pull request merged; the requester's request counts as shipped from that record.
 - \`{"type":"decision.ask","conversationId":"GROUP","personId":"PERSON","questions":[{"question":"...","options":["A","B"],"recommended":0,"unblocks":"..."}]}\` puts up to 10 questions to one person at once, each with 2 to 5 options.
 - \`{"type":"person.tell","personId":"PERSON","text":"..."}\` lands in that person's Buddy chat, which you cannot read. It is not private: members watching your terminal see what you send.
@@ -82,14 +87,14 @@ Swarm and machine settings (each refused unless you may change that setting; a p
 - Remove a note: \`{"type":"note.remove","projectId":"PROJECT","noteId":"NOTE"}\` (each note's id is in the \`instructions\` output): the coordinator, or a person who reads the project. An expired note is already gone.
 
 ## Route and start
-- \`route GROUP JSON\` ranks who could do a group's work, before you start an agent or assign it. Work you do yourself is not routed. JSON: \`{"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","why":"one sentence","kind":"${ROUTE_KIND_HELP}","local":true,"model":"optional","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}\`.
+- \`route GROUP JSON\` lists who could do a group's work, before you start an agent or assign it. Work you do yourself is not routed. JSON: \`{"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","why":"one sentence","kind":"${ROUTE_KIND_HELP}","local":true,"model":"optional","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}\`.
   - size is how long the work runs: small about 20 minutes, medium about an hour, large about three hours.
   - \`local\` only when a person asked for a local model. When a person names a model, set \`model\` to their words ("deepseek 4.1 flash"): the route then offers that model alone, unrated when the catalog does not list it.
   - It leaves out what cannot run (a machine offline, paused or full, an engine signed out or suspended, tools or devices the work needs, a machine that cannot take a teammate's project), and says why.
   - ${CHEAP_FIRST_HELP}
-  - It ranks the rest by strength, then price and quota fit, then an idle agent before a new one. What else it knows is a note on the candidate: a used-up quota, a lost task, a machine whose last starts failed, a task requirement naming another machine, a model not offered by default. Your instructions say how to choose; where they say nothing, choose by strength, quota and price.
-  - A pick on a model served on the Swarm's grid starts with the \`gridModel\` and \`gridName\` the route gives, in place of model and effort.
-- Start or assign any candidate with the decision's \`routeDecisionId\`; a reason for choosing another (\`overrideReason\`) is optional.
+  - It ranks nothing and names no pick: the rest come by machine name, then engine, each with its facts (model, effort, the catalog's strength and price, quota fit with weekly % left and reset time, the agents on its machine, idle or new). What else it knows is a note on the candidate: a used-up quota, a lost task, a machine whose last starts failed, a task requirement naming another machine, a model not offered by default, a plug-in's finding. The first row is first by its machine's name, not by merit: choose by your project's Routing instructions.
+  - A candidate on a model served on the Swarm's grid starts with the \`gridModel\` and \`gridName\` its row gives, in place of model and effort.
+- Start or assign the candidate you chose with the decision's \`routeDecisionId\` and \`overrideReason\`: the Routing rule that chose it, in one sentence. The decision records the candidate the start or assignment matches.
 - \`plan [JSON]\` places all open groups at once on machines and models (needs Python 3 and OR-Tools; without them it says how to install). JSON optional: \`{"groups":{"GROUP":{"difficulty":"...","risk":"...","size":"...","kind":"optional","after":["GROUP"]}}}\`. It records nothing: route each group, then start the plan's pick with the route's \`routeDecisionId\`.
 - \`capacity MACHINE_ID JSON\` inspects a machine's, engine's and quota headroom (JSON: the start fields). Unknown allowances are not reported as free tokens.
 - \`start OPERATION_ID JSON\` creates one agent in a conversation on a machine in the Swarm's Machines list; it does not assign work. JSON:
@@ -111,7 +116,7 @@ Swarm and machine settings (each refused unless you may change that setting; a p
 - After a restart, read the recovery notice and the last recorded checkpoint, then check the agent's actual session and saved work. Never replay old input or commands: they may already have taken effect.
 
 ## Threads
-Many people talk at once; answers in the main chat bury each other. Answer a message in its thread with \`--reply-to\`; summarize a long thread once and record an important decision once.
+Many people talk at once. Answer a message in the main chat right below it with \`--answers\`, and one in a thread inside that thread with \`--reply-to\`; summarize a long thread once and record an important decision once.
 
 ## Accounts and machines
 - The Swarm's people are its members (\`status\`); someone may go by another name or email in the chat. Match a name to a member before asking for an invitation.

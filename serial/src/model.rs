@@ -23,7 +23,8 @@ pub fn version_line() -> String {
     format!(r#"{{"version":"{VERSION}","protocol":{PROTOCOL}}}"#)
 }
 
-pub const USAGE: &str = "usage: harness-serial watch | open COMn | probe COMn | version";
+pub const USAGE: &str =
+    "usage: harness-serial watch | open COMn | probe COMn | reset COMn | version";
 
 /// `watch` could not enumerate devices; also a usage error.
 pub const EXIT_FAILED: i32 = 2;
@@ -39,6 +40,7 @@ pub enum Command {
     Watch,
     Open(String),
     Probe(String),
+    Reset(String),
     Version,
 }
 
@@ -49,6 +51,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         ["version"] => Ok(Command::Version),
         ["open", port] if is_com_name(port) => Ok(Command::Open(port.to_ascii_uppercase())),
         ["probe", port] if is_com_name(port) => Ok(Command::Probe(port.to_ascii_uppercase())),
+        ["reset", port] if is_com_name(port) => Ok(Command::Reset(port.to_ascii_uppercase())),
         _ => Err(USAGE.to_string()),
     }
 }
@@ -177,12 +180,17 @@ mod tests {
             parse(&args(&["probe", "COM12"])),
             Ok(Command::Probe("COM12".into()))
         );
+        assert_eq!(
+            parse(&args(&["reset", "com3"])),
+            Ok(Command::Reset("COM3".into()))
+        );
         for bad in [
             &[][..],
             &["open"][..],
             &["open", "COM3", "x"][..],
             &["open", r"\\.\COM3"][..],
             &["open", "NUL"][..],
+            &["reset", "NUL"][..],
             &["serve"][..],
         ] {
             assert_eq!(parse(&args(bad)), Err(USAGE.to_string()), "{bad:?}");

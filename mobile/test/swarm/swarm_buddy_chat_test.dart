@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -67,13 +68,21 @@ void main() {
     'createdAt': DateTime.utc(2026, 10, 29, 1, minute).toIso8601String(),
   };
 
-  Map<String, dynamic> machine(String id, String name, {String owner = me}) => {
+  Map<String, dynamic> machine(
+    String id,
+    String name, {
+    String owner = me,
+    Duration ago = Duration.zero,
+  }) => {
     'machineId': id,
     'name': name,
     'contributorId': owner,
     'engines': ['claude', 'codex'],
-    // Reporting now: in no account list here, so only this says it is up.
-    'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch},
+    // Reporting [ago] (now by default): in no account list here, so only this
+    // says it is up.
+    'observation': {
+      'receivedAt': clock.now().subtract(ago).millisecondsSinceEpoch,
+    },
   };
 
   Map<String, dynamic> wren({String? downSince}) => {
@@ -545,8 +554,8 @@ void main() {
       ]);
     });
 
-    testWidgets('an offline Codex Buddy starts again with Claude Code, since '
-        'the server refuses a Codex Buddy for now', (tester) async {
+    // Ken, 11-04 (#2832): a Codex Buddy runs as a Claude one does.
+    testWidgets('an offline Codex Buddy starts again on Codex', (tester) async {
       final fake = backend(
         buddy: {
           ...wren(downSince: offline),
@@ -559,7 +568,7 @@ void main() {
       expect(
         find.descendant(
           of: key('swarm-buddy-start-again'),
-          matching: find.text('Start with Claude Code'),
+          matching: find.text('Start again'),
         ),
         findsOneWidget,
       );
@@ -571,9 +580,140 @@ void main() {
           'type': 'buddy.create',
           'projectId': project,
           'machineId': 'mac-1',
-          'engine': 'claude',
+          'engine': 'codex',
         },
       ]);
+    });
+
+    // Tony, 11-04: while its computer is offline, the line under the message
+    // sent to it says so, and nothing starts there until it is back.
+    group('down on a computer that is offline', () {
+      testWidgets('shows no bar under the header, and the chat stays', (
+        tester,
+      ) async {
+        await pump(
+          tester,
+          backend(
+            buddy: wren(downSince: offline),
+            machines: [
+              machine(
+                'mac-1',
+                'Tonys-MacBook-Pro',
+                ago: const Duration(hours: 4),
+              ),
+            ],
+          ),
+        );
+
+        expect(key('swarm-buddy-bar'), findsNothing);
+        expect(find.text('Wren is offline. Your chat stays.'), findsNothing);
+        expect(key('swarm-buddy-start-again'), findsNothing);
+        expect(find.byType(TextField), findsOneWidget);
+      });
+
+      testWidgets('one that never reported is offline too', (tester) async {
+        await pump(
+          tester,
+          backend(
+            buddy: wren(downSince: offline),
+            machines: [
+              {...machine('mac-1', 'Tonys-MacBook-Pro')}..remove('observation'),
+            ],
+          ),
+        );
+
+        expect(key('swarm-buddy-bar'), findsNothing);
+      });
+
+      testWidgets('the message sent says its computer is offline instead', (
+        tester,
+      ) async {
+        final host = await pump(
+          tester,
+          backend(
+            buddy: wren(downSince: offline),
+            machines: [
+              machine(
+                'mac-1',
+                'Tonys-MacBook-Pro',
+                ago: const Duration(hours: 4),
+              ),
+            ],
+            page: [
+              {
+                ...message('m1', 1, author: me, text: 'Hi'),
+                'deliveries': [
+                  {'id': 'd1', 'agentId': 'agent-wren', 'status': 'queued'},
+                ],
+              },
+            ],
+          ),
+        );
+        await readAgain(tester, host);
+
+        expect(find.text("Wren's computer is offline"), findsOneWidget);
+        expect(
+          find.text(
+            'Tonys-MacBook-Pro was last seen 4 h ago. '
+            "Your message goes in when it's back online.",
+          ),
+          findsOneWidget,
+        );
+        expect(key('swarm-buddy-bar'), findsNothing);
+      });
+
+      testWidgets('its offline line goes at the next read once the computer '
+          'stops reporting', (tester) async {
+        final host = await pump(
+          tester,
+          backend(
+            buddy: wren(downSince: offline),
+            machines: [machine('mac-1', 'Tonys-MacBook-Pro')],
+          ),
+        );
+        expect(find.text('Wren is offline. Your chat stays.'), findsOneWidget);
+
+        await tester.pump(const Duration(seconds: 36));
+        await readAgain(tester, host);
+
+        expect(key('swarm-buddy-bar'), findsNothing);
+      });
+
+      testWidgets("on someone else's machine, only who can see its terminal "
+          'stays', (tester) async {
+        await pump(
+          tester,
+          backend(
+            buddy: {
+              ...wren(downSince: offline),
+              'machineOwnerId': 'person-dee',
+            },
+            machines: [
+              machine(
+                'mac-1',
+                'Dee Studio',
+                owner: 'person-dee',
+                ago: const Duration(hours: 4),
+              ),
+            ],
+          ),
+        );
+
+        expect(key('swarm-buddy-where'), findsOneWidget);
+        expect(key('swarm-buddy-offline'), findsNothing);
+        expect(key('swarm-buddy-start-again'), findsNothing);
+      });
+    });
+
+    testWidgets('⋮ has Find in chat, which opens the find field (#2826)', (
+      tester,
+    ) async {
+      await pump(tester, backend(buddy: wren()));
+      await tester.tap(key('swarm-buddy-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Find in chat'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-find-field'), findsOneWidget);
     });
 
     testWidgets('⋮ holds the chat\'s Notifications too: Muted is kept, and '
@@ -920,26 +1060,18 @@ void main() {
       expect(key('swarm-buddy-start-button'), findsNothing);
     });
 
-    testWidgets('Codex is offered turned off, with the reason the server '
-        'refuses it beside it, as on Desktop; Claude stays picked', (
-      tester,
-    ) async {
+    testWidgets('Codex is offered as Claude is, with nothing beside it, as on '
+        'Desktop (#2832)', (tester) async {
       final fake = backend(machines: [machine('mac-1', 'Tonys-MacBook-Pro')]);
       await pump(tester, fake);
 
-      expect(
-        find.text(
-          'A Codex Buddy is not available yet: Codex would run some commands '
-          'outside its sandbox without asking. Choose Claude Code.',
-        ),
-        findsOneWidget,
-      );
+      expect(find.textContaining('Codex Buddy'), findsNothing);
       await tester.tap(key('swarm-buddy-engine-codex'));
       await tester.pump();
       await tester.tap(key('swarm-buddy-start-button'));
       await tester.pumpAndSettle();
 
-      expect(fake.commands.single['engine'], 'claude');
+      expect(fake.commands.single['engine'], 'codex');
     });
 
     testWidgets('a start that failed says why, and Start again asks with the '
@@ -973,7 +1105,7 @@ void main() {
       });
     });
 
-    testWidgets('a Codex start that failed is asked again with Claude Code', (
+    testWidgets('a Codex start that failed is asked again on Codex', (
       tester,
     ) async {
       final fake = backend(
@@ -992,7 +1124,7 @@ void main() {
       expect(
         find.descendant(
           of: key('swarm-buddy-start-again'),
-          matching: find.text('Start with Claude Code'),
+          matching: find.text('Start again'),
         ),
         findsOneWidget,
       );
@@ -1003,7 +1135,7 @@ void main() {
         'type': 'buddy.create',
         'projectId': project,
         'machineId': 'mac-1',
-        'engine': 'claude',
+        'engine': 'codex',
       });
     });
 

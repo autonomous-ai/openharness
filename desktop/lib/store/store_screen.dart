@@ -23,6 +23,7 @@ import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../state/app_state.dart';
 import '../state/essential_harness_controller.dart';
+import '../super_tabs/visible_tick.dart';
 import '../widgets/dsh_install_panel.dart' show describeInstallFailure;
 import '../widgets/engine_identity.dart';
 import '../widgets/new_agent_dialog.dart';
@@ -138,7 +139,8 @@ class _StorePlace {
 
 final _storePlaces = Expando<_StorePlace>('store place');
 
-class _StoreTabState extends State<StoreTab> {
+class _StoreTabState extends State<StoreTab>
+    with WidgetsBindingObserver, VisibleTick<StoreTab> {
   late final StoreController _store = StoreController(
     widget.api ?? ApiStoreApi(widget.notifier.api),
   );
@@ -156,7 +158,7 @@ class _StoreTabState extends State<StoreTab> {
   );
   final _searchFocus = FocusNode(debugLabel: 'Store search');
   final _browseFocus = FocusNode(debugLabel: 'Store navigation');
-  Timer? _catalogRefresh;
+  bool _catalogPolls = false;
 
   void _remember() {
     _place
@@ -191,16 +193,26 @@ class _StoreTabState extends State<StoreTab> {
       if (local != null) _ask(local, userAction: opened);
       widget.notifier.addListener(_onAppChanged);
       // A Store left open picks up new publications; engines do not need reprobes.
-      // The daemon caches catalog HTTP requests for five minutes.
-      _catalogRefresh = Timer.periodic(const Duration(minutes: 1), (_) {
-        final local = widget.notifier.localMachineState;
-        if (local?.connectionStatus == ConnectionStatus.connected) {
-          unawaited(
-            widget.notifier.probeDsh(local!.machine.machineId, force: true),
-          );
-        }
-      });
+      // The daemon caches catalog HTTP requests for five minutes. Only while the Store can be
+      // seen, and once as it is seen again.
+      _catalogPolls = true;
+      visibleTick(const Duration(minutes: 1));
     });
+  }
+
+  @override
+  void onTick() {
+    final local = widget.notifier.localMachineState;
+    if (local?.connectionStatus == ConnectionStatus.connected) {
+      unawaited(
+        widget.notifier.probeDsh(local!.machine.machineId, force: true),
+      );
+    }
+  }
+
+  @override
+  void onScreenChanged(bool onScreen) {
+    if (onScreen && _catalogPolls) onTick();
   }
 
   /// Machines asked since they last connected.
@@ -254,7 +266,6 @@ class _StoreTabState extends State<StoreTab> {
 
   @override
   void dispose() {
-    _catalogRefresh?.cancel();
     widget.notifier.removeListener(_onAppChanged);
     _search.dispose();
     _searchFocus.dispose();

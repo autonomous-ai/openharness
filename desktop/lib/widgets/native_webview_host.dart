@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import '../core/runtime_platform.dart';
 import 'transient_menus.dart';
 
-/// Detaches GTK's overlay widget while Flutter draws above it. The controller
+/// Detaches the native web view that Linux and Windows draw above the Flutter
+/// window (GTK's overlay, WebView2's window) while Flutter draws there. The controller
 /// stays with its owner, retaining the loaded page until the widget returns.
 class NativeWebViewHost extends StatelessWidget {
   const NativeWebViewHost({
@@ -17,7 +18,7 @@ class NativeWebViewHost extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!RuntimePlatform.isLinux) return child;
+    if (!RuntimePlatform.isLinux && !RuntimePlatform.isWindows) return child;
     final routeCovered = ModalRoute.isCurrentOf(context) == false;
     return ValueListenableBuilder<bool>(
       valueListenable: transientMenusVisible,

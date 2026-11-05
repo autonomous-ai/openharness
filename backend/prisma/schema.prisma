@@ -543,7 +543,8 @@ model ProductUsagePreference {
   @@map("product_usage_preferences")
 }
 
-/// Only fleet-wide counters. Never add an account, machine, agent, location or event timestamp.
+/// Only fleet-wide counters. Never add an account, machine, agent, location or event timestamp. So no index on `machineId`
+/// either, as the Atlas advisor suggested on 2026-11-04 (task #2841): no row has one, and no backend read asks for it.
 model ProductUsageTotal {
   id     String   @id @default(auto()) @map("_id") @db.ObjectId
   dayUtc DateTime
@@ -1295,6 +1296,8 @@ model SuperTabThreadMark {
 /// of a walk of the whole chat (task #2777). Written in the transaction that inserts each root (store.ts writeMessages), and by
 /// a chat's first reads, which seed it from the chat's rows; a row id `seeded:<tabId>:<conversationId>`, sequence -1, marks a
 /// chat seeded. Removed by the read once it finds a root answered or gone, and with its Swarm (purge.ts). Under 10 per project.
+/// A root closed by hand (proposal.close, task #2926) stays, with sequence -2 and `closed` { reason, by, at }, out of every
+/// read, so no seed opens it again: one row per closed proposal (about 50 per project at first), removed with its Swarm.
 model SuperTabOpenProposal {
   /// The root message's id, or the chat's seed mark.
   id             String   @id @map("_id")
@@ -1912,6 +1915,9 @@ model SwarmGroup {
   /// written before it (markFinishedGroups).
   workFinished       Boolean   @default(false)
 
+  /// Not indexed on `data.kind` (Atlas advisor, 2026-11-04, task #2841): no backend read filters by it, the only one that
+  /// does is the rollback script scripts/buddy-sessions/end-all.ts, across every Swarm; and every hot read keeps its plan
+  /// with such an index (the numbers are in task #2841's pull request). The top-level `kind` holds the same value.
   @@unique([tabId, key])
   @@index([tabId, changedAt])
   @@index([tabId, dormant, changedAt])

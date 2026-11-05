@@ -7,7 +7,7 @@
  */
 
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { isTerminalEngine, type AgentEngine, type ProcessEngine } from '../engines/types.js'
 
 /** How to find the executable after the installer returns. */
@@ -137,6 +137,60 @@ export const ENGINE_INSTALL: Readonly<Record<ProcessEngine, EngineInstallRecipe>
   },
 }
 
+/**
+ * How Windows installs an engine (engines/kit/windowsInstall.ts). An npm package, into the person's own `.local`, or the
+ * vendor's own PowerShell installer, whose [programs] are where it leaves the engine, without an extension: under
+ * %LOCALAPPDATA%, or the profile when they start `~\`. [args] are the vendor's flags; [armArgs], npm's on Windows on Arm.
+ */
+export type WindowsInstall =
+  | { readonly npm: string; readonly args?: readonly string[]; readonly armArgs?: readonly string[] }
+  | { readonly powershell: string; readonly args?: readonly string[]; readonly programs: readonly string[] }
+
+/**
+ * Exhaustive as ENGINE_INSTALL is, and beside it rather than in it: a recipe's fingerprint is in every Mac's and Linux
+ * computer's install journal (kit/nativeInstall.ts). Each is the vendor's own Windows install, read 2026-11-04.
+ */
+export const ENGINE_WINDOWS_INSTALL: Readonly<Record<ProcessEngine, WindowsInstall>> = {
+  claude: { npm: '@anthropic-ai/claude-code' },
+  codex: { npm: '@openai/codex' },
+  cursor: { powershell: 'https://cursor.com/install?win32=true', programs: ['cursor-agent\\cursor-agent'] },
+  // Its Windows Arm build stops before its screen opens (lib/windows/launch.ts): the x64 build runs under emulation.
+  opencode: { npm: 'opencode-ai', armArgs: ['--cpu=x64'] },
+  pi: { npm: '@earendil-works/pi-coding-agent', args: ['--ignore-scripts'] },
+  omp: { powershell: 'https://omp.sh/install.ps1', programs: ['omp\\omp'] },
+  hermes: { powershell: 'https://hermes-agent.nousresearch.com/install.ps1', args: ['-NonInteractive'], programs: ['hermes\\bin\\hermes'] },
+  commandcode: { npm: 'command-code' },
+  devin: { powershell: 'https://cli.devin.ai/install.ps1', programs: ['devin\\cli\\bin\\devin'] },
+  muse: { powershell: 'https://dev.meta.ai/install.ps1', programs: ['Programs\\muse\\muse'] },
+  amp: { powershell: 'https://ampcode.com/install.ps1', programs: ['~\\.amp\\bin\\amp'] },
+  kilo: { npm: '@kilocode/cli' },
+  grok: { powershell: 'https://x.ai/cli/install.ps1', programs: ['~\\.grok\\bin\\grok'] },
+  agy: { powershell: 'https://antigravity.google/cli/install.ps1', programs: ['agy\\bin\\agy'] },
+  copilot: { npm: '@github/copilot' },
+}
+
+const WINDOWS_OF = new Map((Object.keys(ENGINE_INSTALL) as ProcessEngine[]).map((engine) => [ENGINE_INSTALL[engine], ENGINE_WINDOWS_INSTALL[engine]]))
+
+/** What a person is shown before Harness installs [recipe] on [platform]: the line that really runs there. */
+export function engineInstallLine(recipe: EngineInstallRecipe, platform: NodeJS.Platform = process.platform, arch: string = process.arch): string {
+  const windows = platform === 'win32' ? WINDOWS_OF.get(recipe) : undefined
+  if (!windows) return recipe.command
+  if ('powershell' in windows) return [`irm ${windows.powershell} | iex`, ...windows.args ?? []].join(' ')
+  return ['npm install -g', ...windows.args ?? [], ...(arch === 'arm64' ? windows.armArgs ?? [] : []), windows.npm].join(' ')
+}
+
+/** Where Windows leaves [recipe]'s engine: npm's commands sit in the prefix itself, not in its bin folder. */
+function windowsInstallPaths(recipe: EngineInstallRecipe, home: string, localAppData: string | undefined): string[] {
+  const windows = WINDOWS_OF.get(recipe)
+  if (!windows) return []
+  if ('powershell' in windows) {
+    const local = localAppData ?? win32.join(home, 'AppData', 'Local')
+    return windows.programs.map((program) => program.startsWith('~\\') ? win32.join(home, program.slice(2)) : win32.join(local, program))
+  }
+  // Never `cmd`, which names the command processor there (kit/launchExecutable.ts `launchSearchNames`).
+  return recipe.executable.names.filter((name) => name !== 'cmd').map((name) => win32.join(home, '.local', name))
+}
+
 /** A terminal has nothing to install — the login shell is already there — hence `undefined`. */
 export function engineInstallRecipe(engine: AgentEngine): EngineInstallRecipe | undefined {
   return isTerminalEngine(engine) ? undefined : ENGINE_INSTALL[engine]
@@ -148,8 +202,10 @@ export function npmEnginePrefix(): string {
 }
 
 /** The same candidates are used by launch, availability checks, and process discovery. */
-export function engineInstallPaths(recipe: EngineInstallRecipe, home = homedir()): string[] {
+export function engineInstallPaths(recipe: EngineInstallRecipe, home = homedir(), platform: NodeJS.Platform = process.platform,
+  localAppData: string | undefined = process.env.LOCALAPPDATA): string[] {
   return [...new Set([
+    ...(platform === 'win32' ? windowsInstallPaths(recipe, home, localAppData) : []),
     ...(recipe.executable.homeRelativePaths ?? []).map((path) => join(home, path)),
     ...(recipe.executable.absolutePaths ?? []),
     ...(recipe.executable.npmGlobal

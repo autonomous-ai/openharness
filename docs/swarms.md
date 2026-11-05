@@ -258,11 +258,9 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   it sends (Ken, 2026-10-28), and, as with any session, so does the owner of the machine running it. The product
   manager puts nothing there it would not say in the project chat.
 - Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
-  list, and Claude Code (a Codex Buddy is refused for now; see below). A Buddy runs only on its owner's own machine, in their own
-  account: never on a machine shared with them, and never in a Harness Team account. A Buddy can't be added on a
-  Windows machine yet: Harness can't yet tell a Buddy's window from another agent's there. As a backstop, while a Buddy
-  runs on a Windows computer, agents there may not send to, start, tell or close other sessions, or speak as a named
-  agent.
+  list, and Claude Code or Codex. A Buddy runs only on its owner's own machine, in their own
+  account: never on a machine shared with them, and never in a Harness Team account. A Windows machine needs a Harness
+  that tells a Buddy's window from another agent's there (`windowsBuddy`); one from before that is asked to update.
 - A Buddy's machine checks every Swarm command against the window it runs in. An agent speaks only as itself, only
   through its own computer's Harness, never through another machine. From a Buddy's window, `harness send`, `new`,
   `tell` and `close` are refused. A command that can't prove which window it runs in is refused. The window's agent is
@@ -303,50 +301,36 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   Nobody else sees which lines reached a Buddy: they are not listed as the line's recipients or deliveries. The Buddy
   posts one short note in its own chat at each milestone (the product manager took it, the task it went to, its pull
   request merged or released) and nothing when nothing changed. It still cannot post in the project chat or assign work.
-- A Buddy never changes code, and never waits on a prompt nobody answers. A Claude Code Buddy starts in Claude Code's
-  dontAsk mode with a guard (a PreToolUse hook in its folder's local settings) that answers every tool call: Read, Grep,
-  Glob, its Super Tab commands and plain read commands (git grep, log, show, diff, blame and status; gh issue view and
-  list; gh pr view, list and diff; ls, cat, rg, head, tail, wc and grep) run without asking, each as one command with
-  no pipes, redirects, `;`, `&&`, `$()` or globs. Everything else is refused without asking, including the read
-  commands' own ways to write (git `--output`, `--ext-diff`, `-O`; gh `--web`; rg `--pre`, `--hostname-bin`), a
-  command run in the background and `tail -f`. A guard that cannot start refuses the call. One that times out leaves
-  the call to dontAsk: it still runs the commands Claude Code itself counts as read-only, inside the folder, and refuses
-  everything else, so nothing can write. A managed policy that runs only managed hooks (`allowManagedHooksOnly`) would
-  leave a Buddy in that same state, plus whatever the policy itself allows; that was not tested, as it is an
-  administrator's file. Its Super Tab commands are a Buddy's
-  own (status, messages, message, decisions, post, propose and help), as the pane it runs in identifies it: never with
-  `--agent`, `--port` or `--machine`. Known limit: a Buddy whose machine's Harness runs on a port other than the default
-  (18473) cannot run these commands, since reaching that daemon takes `--port`.
-- What a Buddy reads: the guard confines the Buddy's own reads to its folder. Files another local process places in
-  that folder, by link, hard link or copy, are outside what it can stop: it judges a path when it answers, before
-  Claude Code opens it, and a hard link's real path is its name in the folder. The Buddy has no command that writes, so
-  it cannot place any. Within that, it reads the files in its own copy of the project (by real path, so a link out of
-  it is out), the project's git history, the project's GitHub issues and pull requests through the person's own `gh`
-  sign-in, and through Harness its own chat, the project chat and the project's workgroups, as above. Its own
-  reads reach nothing else on the machine: absolute paths and `..`
-  are refused, glued to an option
-  too (`-f/x`), and so are gh's `-R`/`--repo`, which would read any repository the person can, and git's `--no-index`.
-  Nothing in the folder is changed or removed for this: a link out of it, committed or brought later by a pull, or a
-  broken one, is refused by its real path when the guard answers each command, and grep, rg and ls may not follow
-  links as they walk.
-- A Claude Code Buddy reads only its own folder's settings and starts no MCP server, so nothing from the
-  person's own Claude Code settings or committed to the project (hooks, permission rules, plugins, MCP servers) runs
-  in it, and neither do the machine MCP servers Harness gives other agents: a hook a teammate commits would otherwise
-  run with the person's credentials. It loads no memory file either (`CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules`):
-  a committed one importing files from outside the folder stopped a Buddy at a question nobody answers, and a yes would
-  read them past the guard. It can still read the project's instructions with Read. Its `grep` is Claude Code's
-  built-in ugrep, so only grep's plain long options are allowed, by their whole names, and rg's likewise. Harness's own session, turn and
-  Agent Messages hooks are copied into the folder's settings at each launch. File editing is turned off, and the files
-  in its own copy of the project are read-only.
-  A Claude Code too old for the mode keeps a Buddy stopped rather than relaunching it without. No Buddy gets the
-  Harness GitHub App's token.
-- The server refuses a Codex Buddy for now. Codex runs a command its rules files allow outside its sandbox without
-  asking, and those files are shared by all of the person's Codex sessions: Harness's own allows `harness new` and
-  `harness send`, and the person's keeps everything they once told Codex to always allow. A Codex Buddy comes back once
-  it has a Codex home of its own. Every Codex Buddy started before the refusal (Harness before 10-29) runs with Codex's
-  full permissions, and its relaunches keep the mode it was started with: remove it and add a Claude Code Buddy. A
-  start the server recorded before the refusal, run by a Harness from 10-29 on, starts in Codex's read-only sandbox
-  with approvals sent to the person, and a Codex too old for that mode stays stopped rather than starting without it.
+- **A Buddy is its owner's right hand** (Ken, 2026-11-04, task #2832). On its owner's own machine it launches like their
+  own Claude Code or Codex session: Claude Code with bypass permissions, Codex with full access, reading the owner's own
+  settings, hooks and MCP servers. Whatever the owner can do there, it can do: read and change files anywhere they can,
+  run any command, and use their own git and gh sign-ins. It never gets the Harness GitHub App's token, and nothing the
+  owner's own session lacks. Until then a guard held it read-only (a PreToolUse hook answering every tool call, a
+  read-only copy of the project, wide reads approved one command at a time by `run:` lines); thaibao56 stopped using his
+  Buddy after its jobs were refused, and kept a session of his own instead. A Buddy relaunched in a folder an older release
+  locked gets it back: the guard's script and the settings it wrote are removed, and its files' owner write bit is
+  restored, only where the guard's script shows Harness locked it. A Buddy saved in the older modes relaunches in full
+  mode, and the Codex sandbox and thread-session refusals that existed only because Codex had no guard are gone.
+- Swarm-side nothing changed: a Buddy talks only with its owner, in their Buddy chat, sends only the proposals they ask for,
+  and is never assigned work; who reads or talks to a Buddy is as above. The Swarm knows it as a Buddy by the pane it runs
+  in, and refuses every other command from there. With full access it could run a command from another shell, where
+  Harness reads it as its owner's terminal, as their own session can; its skill tells it never to.
+- **Where it may run.** Because it runs with its owner's full rights, a Buddy launches only where those rights are its
+  owner's own. The server adds it only on its owner's own machine, in their own account (`BUDDY_OWN_MACHINE`). The
+  machine checks again before anything is reserved or launched: its own host dispatched the start (every Buddy start is a
+  machine's own), it is not a Harness Team account, the account signed in to Harness there is the Buddy's owner, and the
+  start's record says the machine is the owner's, contributed by them and not lent to them. Anything missing refuses the
+  start ("A Buddy runs only on your own machine. Pick one of yours.").
+- **What others wrote stays data.** Only its owner's own words, in their chat or typed in its terminal, ask a Buddy to do
+  something. Project-chat news, the product manager's private lines, tasks, messages, pull requests, issues, logs, files
+  and code reach it framed as data, never as instructions, in its skill and in each delivery, and project files
+  (`CLAUDE.md`, `AGENTS.md`) say how to work in a project, never what to do for anyone. It asks its owner before anything
+  that deletes or rewrites their work, pushes, merges or reaches outside the machine, unless they asked for exactly that.
+  The guard's best-effort check of a Buddy's posts and proposals for pasted secrets and code went with the guard; the skill
+  still tells it to summarize and never paste output, code or a secret.
+- Its owner-presence grant stays: at each message its owner sends it in their own Buddy chat, signed in on its machine,
+  the host grants the Buddy session for that launch and an hour. A relay to its owner's own sessions (`harness tell`,
+  #2626) holds only while that grant does.
 - A Buddy is called "<person>'s Buddy" until its owner names it: **Rename Buddy…** in the Buddy chat's ⋮ menu
   (`buddy.rename` with the Buddy chat's id, and `null` for the default), at any time, even before a Buddy runs.
   Everyone in the Swarm sees the new name on its roster row and as its messages' sender. Only the chat's owner may
@@ -368,7 +352,7 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   instead, and switching back to the subscription reopens the earlier one. One line in the Buddy chat says how it went.
   Whoever serves the model gets a line in their own Buddy chat saying whose Buddy runs on it; a model that hits a limit,
   keeps failing or nobody has served for 2 minutes sends the Buddy back to its owner's subscription by itself. On a
-  shared model a Buddy keeps its guard and starts no MCP server: none of the grid's web tools. What it sends, which can
+  shared model a Buddy keeps the grid's web tools, as any session does (task #2832). What it sends, which can
   include anything its owner reads, goes to the machine or API serving the model; the picker names them for that reason.
   A Buddy on a Buddy-only machine cannot reach the Swarm's grid: the picker says to add the machine to the Swarm's
   Machines. A new thread session starts on the model its Buddy runs on.
@@ -376,8 +360,7 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   or one from the last hour, and only once for each such message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.
 - A proposal's files are only ones its owner handed it: a file inside the Buddy's own copy of the project (checked by
   its real path on its own machine, so never through a link out of it, and never the repository's or Harness's own
-  records), or a file its owner sent in their Buddy chat. A file from its own copy is at most 10 MB, since its guard reads
-  it whole to check it for secrets; a file its owner sent has a chat file's limit (256 MB). The server accepts
+  records), or a file its owner sent in their Buddy chat. A file from its own copy is at most 10 MB; a file its owner sent has a chat file's limit (256 MB). The server accepts
   a Buddy's file only in its own chat and only on a proposal, so it cannot post a file in the project chat any other way.
   The files show on the proposal message like any message's files, for the product manager and every member.
 - Nobody else reads a Buddy chat: not the product manager, and not the project's or the Swarm's owner. Private matters
@@ -493,19 +476,20 @@ recorded is never changed.
 
 ## Routing
 
-**Advice, not rules.** `harness super-tab route` ranks the candidates for a task
+**Advice, not rules.** `harness super-tab route` lists the candidates for a task
 before an agent is started or assigned. By default the coordinator does it; the
 project's instructions may give routing to another role. The route leaves out
 only facts: a machine that is offline, removed or paused; an engine that is
 signed out or suspended; a model the machine does not serve (a grid model whose
-host is down). Each candidate left out says why. It ranks the rest by strength,
-price, quota fit and idle agents. The project's instructions say what the
-project prefers in their Routing section; where they say nothing, the route's
-order stands. Quota and task requirements are notes on a candidate, never a
-reason to refuse one. A route decision records the revision of the instructions
-it relied on, stamped by the server when the decision is recorded. A person or
-an agent may follow any candidate; following one other than the first needs no
-reason.
+host is down). Each candidate left out says why. It ranks nothing and names no
+pick (task #2901): the rest come by machine name, then engine, each with its
+facts (strength, price, quota fit with weekly quota left and its reset, the
+agents on its machine). The project's instructions choose, in their Routing
+section. Quota and task requirements are notes on a candidate, never a reason
+to refuse one. A route decision records the revision of the instructions it
+relied on, stamped by the server when the decision is recorded. The start or
+assignment that follows it gives the Routing rule that chose its candidate, and
+the decision records which candidate that was.
 
 **The model catalog.** A reviewed, read-only list in the backend (`catalog.ts`,
 `MODEL_CATALOG`) holds each engine's models and the efforts offered, with a
@@ -887,19 +871,20 @@ Agents talk to each other directly, not through the product manager
 - A post that names agents reaches exactly them: no copy goes to the product
   manager. On 2026-10-30 such copies were 198 of the 486 messages it received in
   a day.
-- A post that names no one goes to its default addressee: an agent's to the
-  project's coordinator (the product manager unless the project names it
-  otherwise), the coordinator's to the task's assigned agent, a person's as
-  before. It is never lost: the post is written, and the coordinator gets it as a
-  notice (see [Notices to the coordinator](#notices-to-the-coordinator)). On
-  2026-10-29 a monitoring agent's "the backend worker is down" alarm named no
-  one and reached nobody for 4 h 50 min.
+- An agent also names an agent of the conversation by `@Name` in its text: its
+  display name or name, when exactly one agent there goes by it and no person's
+  username is the same. A reply reaches the agent who wrote the message it
+  answers.
+- An agent's post that names no one reaches, in a task or step, that
+  conversation's current assignee (unless the poster is the assignee), and
+  anywhere else no agent (task #2963). It is written and stays readable in its
+  conversation; the people it tags are told. The coordinator is delivered an
+  agent's post only when it is named, and hears the work through status (done,
+  needs a human, stuck, lost, stalled). Until 2026-11-04 an unnamed post went to
+  the coordinator: in a day 402 of 437 agent posts reached the product manager
+  as their only recipient, and only 1 named it.
 - A person's message is unchanged: it reaches the agent it addresses, or the
   coordinator when it addresses none.
-- The coordinator's unnamed posts to its assigned agent keep their bounce limit
-  (`leadWorkerBounced`): once the two have exchanged 6 messages in a row, with
-  no person or other agent between, its next unnamed post reaches nobody until
-  it names the agent.
 - Agents of another project, Buddies, Buddy chats, private chats, the project
   chat keep their own members; naming an agent there
   is refused with `INVALID_RECIPIENT`. Only the coordinator or a person adds an
@@ -918,9 +903,10 @@ Design:
 - Read cost: the loop count reads the conversation's 20 newest messages, the
   read a message already made for 6.
 - Scale: delivery rows per message equal the agents named, at most 16.
-- Compatibility: an older CLI names no one, so its posts keep their old
-  addressee and reach the coordinator as before; a newer CLI on an older
-  backend is refused only when it names an agent outside the conversation.
+- Compatibility: the server picks the recipients, so an older CLI's unnamed
+  post follows the same rule; its delivered prompt already names the author it
+  replies to. A newer CLI on an older backend is refused only when it names an
+  agent outside the conversation.
 - Migration and rollback: none; a rollback restores the copies.
 - Audience: the server checks the recipient belongs to the same project and the
   conversation is not a Buddy chat, the project chat or
@@ -928,7 +914,8 @@ Design:
   needs no role.
 - Identity: messages stay the agent's own.
 - Failure: a refused recipient is an `INVALID_RECIPIENT` error to the sender; a
-  post that names no one is delivered as a notice, not dropped.
+  post that names no one is written to its conversation, where people and its
+  agents read it.
 - Platforms: server-side; the same everywhere.
 
 ## Notices to the coordinator
@@ -1011,7 +998,7 @@ workflow and its routing (`docs/plans/2026-10-30-project-instructions-design.md`
 The server and the CLI validate nothing in it. They refuse only facts (a machine
 offline, removed or paused; an engine signed out or suspended; a model not served
 there) and access (who may read the project, the Swarm's settings, Team
-accounts, Buddy guards, the starts-pending cap). Who does what, in which order
+accounts, where a Buddy may run, the starts-pending cap). Who does what, in which order
 and on which model is the document's to say, and the agents follow it.
 
 - **The document** is Markdown, at most 64 KB, one per project, free text. A new
@@ -1297,8 +1284,8 @@ advice) ships in the same order, and its parts need each other:
 - Then Desktop and the web app, then the phone. A newer client on an older
   backend finds no `coordinatorName`: it shows no Instructions and sends no
   `roleName`, and everything else works as before.
-- An older CLI on a newer backend names no one, so its posts reach the
-  coordinator as before, and its `rule.set` lands in the Routing section of the
+- An older CLI on a newer backend names no one, so its unnamed posts follow the
+  server's rule (task #2963), and its `rule.set` lands in the Routing section of the
   instructions. An older Desktop's role, skill-set and policy saves are accepted
   and ignored (see [Routing](#routing)).
 - A machine on an older CLI that is sent an agent by a newer one installs the

@@ -190,6 +190,10 @@ class SuperTabOutgoing {
 /// before.
 const kSwarmPushLease = Duration(minutes: 5);
 
+/// How often a pushing server repeats that word on one socket (backend lib/swarmClientPushes.ts
+/// `PUSHES_REPEAT_MS`). A word off this beat is a socket that (re)connected.
+const kSwarmPushRepeat = Duration(minutes: 4);
+
 /// While the server pushes, a Swarm nothing was said of is still read this
 /// often: the safety net for a push lost on the way.
 const kSwarmPushSafetyNet = Duration(seconds: 60);
@@ -762,6 +766,14 @@ class SuperTabController extends ChangeNotifier {
   /// back reads at once.
   bool get away => _away;
   bool _away = false;
+
+  /// The page or window is hidden ([SuperTabClient.pageVisible]), set before [away]. While the
+  /// server pushes, a hidden Swarm reads only what it is told (task #2953): its safety net waits
+  /// for the return, which reads at once.
+  bool pageHidden = false;
+
+  bool get _restsHidden =>
+      pageHidden && _pushing && !(_toldMain || _toldMachine);
   set away(bool value) {
     if (_away == value) return;
     _away = value;
@@ -908,6 +920,10 @@ class SuperTabController extends ChangeNotifier {
   /// every device, and this controller keeps reading with nothing shown, so
   /// nothing counts as read until [threadPaneShown].
   bool _threadUnshown = false;
+
+  /// Whether the open thread's pane is on screen, as its read mark counts it:
+  /// its replies are being read.
+  bool get threadPaneOnScreen => openedThread != null && !_threadUnshown;
 
   /// The pane of the open thread is on screen.
   void threadPaneShown() {
@@ -2058,7 +2074,7 @@ class SuperTabController extends ChangeNotifier {
   );
 
   static bool _listed(SuperTabMessage m) =>
-      m.source['kind'] != 'update-request';
+      m.source['kind'] != 'update-request' && !m.terminalPrompt;
 
   /// [id]'s messages with its steps' rows merged in by time (task steps
   /// design): each step keeps its own conversation, shown inside its task.
@@ -2332,18 +2348,24 @@ class SuperTabController extends ChangeNotifier {
   /// thread's reply line instead ([threadUnread]). The server's newest
   /// main-stream message covers a chat not held here; an older server's
   /// newest message, and the newest held, stand in for it.
-  bool unread(SuperTabConversation group) =>
-      max(
-        group.lastMainSequence ?? group.lastMessageSequence,
-        _messages[group.id]?.reversed
-                .where(
-                  (m) => m.source['kind'] != 'update-request' && m.inMainStream,
-                )
-                .firstOrNull
-                ?.sequence ??
-            0,
-      ) >
-      readMark(group.id);
+  /// Held through the server's newest message, the rows held say it, so a
+  /// row the chat does not list (a terminal's prompt) is nothing new.
+  bool unread(SuperTabConversation group) {
+    final held = _messages[group.id];
+    final heldAll =
+        held != null &&
+        held.isNotEmpty &&
+        held.last.sequence >= group.lastMessageSequence;
+    return max(
+          heldAll ? 0 : group.lastMainSequence ?? group.lastMessageSequence,
+          held?.reversed
+                  .where((m) => _listed(m) && m.inMainStream)
+                  .firstOrNull
+                  ?.sequence ??
+              0,
+        ) >
+        readMark(group.id);
+  }
 
   void start() {
     if (_disposed) return;
@@ -2358,7 +2380,7 @@ class SuperTabController extends ChangeNotifier {
     if (_disposed || updateRequired || pollInterval <= Duration.zero) return;
     if (!_policy.adapts) {
       _poll = Timer.periodic(_every, (_) {
-        if (_pollDue) unawaited(refresh());
+        if (_pollDue && !_restsHidden) unawaited(refresh());
         _checkReceipt();
       });
       return;
@@ -3123,6 +3145,20 @@ class SuperTabController extends ChangeNotifier {
         null;
   }
 
+  /// Renames the agent [agentId] for everyone in the Swarm (backend
+  /// `agent.rename`): only the person who runs it, or its machine's owner, may.
+  /// Null once the server took it; otherwise why it did not.
+  Future<String?> renameAgent(String agentId, String name) async {
+    final done = await command({
+      'type': 'agent.rename',
+      'agentId': agentId,
+      'name': name.trim(),
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
   /// Moves [taskId] right after [after] in its project's shared Next up, or to
   /// its top when [after] is null, for everyone (backend taskQueue.ts). Null
   /// once the server took it; otherwise why it did not.
@@ -3604,7 +3640,36 @@ class SuperTabController extends ChangeNotifier {
       return;
     }
     final loaded = _loadedMessageSequence(id);
-    final last = min(through ?? loaded, loaded);
+    var last = min(through ?? loaded, loaded);
+    // Rows the chat does not list (a terminal's prompt) just after what was
+    // read are read with it, so another device does not show them unread.
+    for (final m in _messages[id] ?? const <SuperTabMessage>[]) {
+      if (m.sequence <= last || !m.inMainStream) continue;
+      if (_listed(m) || m.sequence > loaded) break;
+      last = m.sequence;
+    }
+    _serverMarks.mark(id, last, kept: snapshot?.readMarks[id] ?? 0);
+    if ((_readAt[id] ?? 0) >= last) return;
+    _readAt[id] = last;
+    _saveSoon();
+    _changed();
+  }
+
+  /// [id] was read through [sequence] outside its chat (Activity's Mark read
+  /// on a tag): kept here and sent to the server, as [markThreadRead] does for
+  /// a thread. Unlike [markRead] it does not stop at the loaded messages, as
+  /// the chat may not be open; it stops at the chat's newest message.
+  void markReadThrough(String id, int sequence) {
+    final group = snapshot?.conversation(id);
+    if (_disposed || accessRevoked || group == null || sequence <= 0) return;
+    final last = min(
+      sequence,
+      max(
+        group.lastMainSequence ?? group.lastMessageSequence,
+        _loadedMessageSequence(id),
+      ),
+    );
+    _unreadHeld.remove(id);
     _serverMarks.mark(id, last, kept: snapshot?.readMarks[id] ?? 0);
     if ((_readAt[id] ?? 0) >= last) return;
     _readAt[id] = last;
@@ -3999,7 +4064,7 @@ class SuperTabController extends ChangeNotifier {
       try {
         final answer = await request(
           'GET',
-          '$_path/changes?cursor=${Uri.encodeQueryComponent(held.cursor)}',
+          '$_path/changes?${held.changesQuery}',
         );
         if (answer['reload'] != true) {
           final SuperTabPartsChange change;
@@ -4020,7 +4085,14 @@ class SuperTabController extends ChangeNotifier {
           );
         }
       } on SuperTabFailure catch (failure) {
-        if (!const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) rethrow;
+        // A backend rolled back to one without the summary etag refuses it
+        // (#2906): read in full, which holds none.
+        final etagRefused =
+            failure.code == 'VALIDATION_ERROR' && held.derivedEtag != null;
+        if (!etagRefused &&
+            !const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
+          rethrow;
+        }
       }
       _parts = null;
     }

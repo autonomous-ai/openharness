@@ -28,21 +28,27 @@ function root(): string {
 }
 
 describe('a person\'s one Buddy\'s folder', () => {
-  it('answers Claude Code\'s folder question for it, and leaves any other engine to ask', async () => {
-    const claude = root(), home = join(root(), 'home'), config = join(claude, '.claude.json')
+  // Task #2832: a Codex Buddy runs too, and would sit at Codex's own folder question in a terminal no Swarm view shows.
+  it('answers Claude Code\'s and Codex\'s folder question for it, and leaves any other engine to ask', async () => {
+    const claude = root(), codex = root(), home = join(root(), 'home'), config = join(claude, '.claude.json'), toml = join(codex, 'config.toml')
     mkdirSync(home)
     writeFileSync(config, '{}')
-    const moved = process.env.CLAUDE_CONFIG_DIR
+    writeFileSync(toml, '')
+    const moved = { claude: process.env.CLAUDE_CONFIG_DIR, codex: process.env.CODEX_HOME }
     process.env.CLAUDE_CONFIG_DIR = claude
+    process.env.CODEX_HOME = codex
     try {
-      await trustBuddyHome(home, 'codex')
-      expect(readFileSync(config, 'utf8')).toBe('{}')
+      await trustBuddyHome(home, 'opencode')
+      expect([readFileSync(config, 'utf8'), readFileSync(toml, 'utf8')]).toEqual(['{}', ''])
       await trustBuddyHome(home, 'claude')
       const saved = Object.values(JSON.parse(readFileSync(config, 'utf8')).projects as Record<string, { hasTrustDialogAccepted: boolean }>)
       expect(saved.map(p => p.hasTrustDialogAccepted)).toEqual([true])
+      await trustBuddyHome(home, 'codex')
+      expect(readFileSync(toml, 'utf8')).toMatch(/trust_level = "trusted"/)
+      expect(readFileSync(toml, 'utf8')).toContain(home.split('/').pop()!)
     } finally {
-      if (moved === undefined) delete process.env.CLAUDE_CONFIG_DIR
-      else process.env.CLAUDE_CONFIG_DIR = moved
+      if (moved.claude === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = moved.claude
+      if (moved.codex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = moved.codex
     }
   })
 
@@ -296,12 +302,11 @@ describe('a Buddy\'s copy of a project follows its default branch', { timeout: 3
     expect(copies(p.home)).not.toContain('s3cret')
   })
 
-  it('locks again the files a move wrote, and never a link\'s target', async () => {
+  // Task #2832: a Buddy works in its copies as its owner would, so a move leaves the files it wrote as git writes them.
+  it('leaves the files a move wrote writable, as git writes them, and never touches a link\'s target', async () => {
     const r = root(), p = project(r), target = join(r, 'outside')
     writeFileSync(target, 'x', { mode: 0o644 })
     await prepareBuddyHome(p.home, p.web)
-    // As the launch's lock leaves it.
-    chmodSync(join(copy(p.home), 'WHO'), 0o444)
     commit(p.teammate, 'WHO', 'changed\n')
     symlinkSync(target, join(p.teammate, 'LINK'))
     git(p.teammate, 'add', 'LINK')
@@ -312,43 +317,16 @@ describe('a Buddy\'s copy of a project follows its default branch', { timeout: 3
     git(p.teammate, 'push', '-q', 'origin', 'main')
     await refreshBuddyHome(p.home)
     expect(readFileSync(join(copy(p.home), 'WHO'), 'utf8')).toBe('changed\n')
-    for (const file of ['WHO', 'RUN']) expect(statSync(join(copy(p.home), file)).mode & 0o222).toBe(0)
+    for (const file of ['WHO', 'RUN']) expect(statSync(join(copy(p.home), file)).mode & 0o200).toBe(0o200)
     expect(statSync(join(copy(p.home), 'RUN')).mode & 0o111).not.toBe(0)
-    expect(statSync(target).mode & 0o222).not.toBe(0)
-    // The lock reads as no change, or the next pass would leave it behind.
+    expect(statSync(target).mode & 0o777).toBe(0o644)
     expect(git(copy(p.home), 'status', '--porcelain')).toBe('')
     advance(p.teammate, 'LATER')
     await refreshBuddyHome(p.home)
     expect(head(copy(p.home))).toBe(head(p.teammate))
   })
 
-  it('locks a file a move wrote whatever its name: a leading space, a line break, a folder (security review 2 of #2524)', async () => {
-    const p = project(root()), names = [' leading.txt', 'trailing.txt ', 'line\nbreak.txt', 'plain.txt']
-    await prepareBuddyHome(p.home, p.web)
-    mkdirSync(join(p.teammate, ' folder'))
-    for (const name of [...names, ' folder/ inner.txt']) writeFileSync(join(p.teammate, name), 'x\n')
-    git(p.teammate, 'add', '-A')
-    git(p.teammate, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'names')
-    git(p.teammate, 'push', '-q', 'origin', 'main')
-    await refreshBuddyHome(p.home)
-    expect(head(copy(p.home))).toBe(head(p.teammate))
-    for (const name of [...names, ' folder/ inner.txt']) expect([name, statSync(join(copy(p.home), name)).mode & 0o222]).toEqual([name, 0])
-  })
-
-  // macOS refuses such a name; CI's Linux takes it.
-  it.skipIf(process.platform === 'darwin')('locks a file a move wrote whose name is not UTF-8 (security review 2 of #2524)', async () => {
-    const p = project(root()), name = Buffer.from([0x66, 0xff, 0x2e, 0x74])
-    await prepareBuddyHome(p.home, p.web)
-    writeFileSync(Buffer.concat([Buffer.from(`${p.teammate}/`), name]), 'x\n')
-    git(p.teammate, 'add', '-A')
-    git(p.teammate, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'bytes')
-    git(p.teammate, 'push', '-q', 'origin', 'main')
-    await refreshBuddyHome(p.home)
-    expect(head(copy(p.home))).toBe(head(p.teammate))
-    expect(statSync(Buffer.concat([Buffer.from(`${copy(p.home)}/`), name])).mode & 0o222).toBe(0)
-  })
-
-  it('never locks a file outside through a folder a commit turned into a link (review of #2524)', async () => {
+  it('never changes a file outside through a folder a commit turned into a link (review of #2524)', async () => {
     const r = root(), p = project(r), outside = join(r, 'outside')
     mkdirSync(outside)
     writeFileSync(join(outside, 'b.txt'), 'theirs', { mode: 0o644 })

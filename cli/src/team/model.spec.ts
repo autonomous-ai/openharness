@@ -44,9 +44,34 @@ describe('harness team model set', () => {
     const bare = setup({ readConfig: () => null })
     expect(await teamModelSet(bare.deps, ['model', 'set', 'openrouter'], ['--model', 'x'])).toBe(1)
     expect(bare.errors.join('\n')).toContain('Run harness team setup first')
-    const windows = setup({ platform: 'win32' })
-    expect(await teamModelSet(windows.deps, ['model', 'set', 'openrouter'], ['--model', 'x'])).toBe(1)
-    expect(windows.admin).not.toHaveBeenCalled()
+  })
+
+  describe('on Windows', () => {
+    const windows = (status: () => unknown, over = {}) => {
+      let clock = 1_000
+      const handed: unknown[] = []
+      const f = setup({ platform: 'win32', handModel: (h: unknown) => handed.push(h), now: () => clock, sleep: async (ms: number) => { clock += ms }, readStatus: status, ...over })
+      return { ...f, handed }
+    }
+
+    it('leaves it for the Team account, with no administrator prompt, and waits until it says so', async () => {
+      let looks = 0
+      const f = windows(() => ++looks < 3 ? null : { version: 1, model: { state: 'applied', at: 1_000 } })
+      expect(await teamModelSet(f.deps, ['model', 'set', 'openrouter', 'm1'], ['--model'])).toBe(0)
+      expect(f.admin).not.toHaveBeenCalled()
+      expect(JSON.stringify(f.handed)).toContain('sk-test-key')
+      expect(f.out.join('\n')).not.toContain('sk-test-key')
+      expect(f.out.join('\n')).toContain('now runs Claude Code on OpenRouter')
+    })
+
+    it('says why when the Team account could not take it, or is not running', async () => {
+      const refused = windows(() => ({ version: 1, model: { state: 'failed', at: 1_000, detail: 'disk full' } }))
+      expect(await teamModelSet(refused.deps, ['model', 'set', 'openrouter', 'm1'], ['--model'])).toBe(1)
+      expect(refused.errors.join('\n')).toContain('disk full')
+      const quiet = windows(() => ({ version: 1, model: { state: 'applied', at: 1 } }))
+      expect(await teamModelSet(quiet.deps, ['model', 'set', 'openrouter', 'm1'], ['--model'])).toBe(1)
+      expect(quiet.errors.join('\n')).toContain('did not take it yet')
+    })
   })
 
   it('clears it again, and never asks for a key to do so', async () => {
