@@ -16,6 +16,7 @@ typedef PersonalMachineRow = ({
   String name,
   String status,
   String? reason,
+  bool canRetry,
 });
 
 /// The person's own machines in their Personal Swarm, per app (Dee,
@@ -34,6 +35,13 @@ class PersonalMachines extends ChangeNotifier {
       _of[app] ??= PersonalMachines._(app);
 
   final AppNotifier app;
+
+  /// What Try again on a machine that is off runs first (task #3042).
+  @visibleForTesting
+  late Future<void> Function() reconnect = app.retryMachines;
+
+  /// Try again on [machineId]'s row (task #3042): not built yet.
+  Future<void> retry(SuperTabController c, String machineId) async {}
 
   /// The longest wait before a failed machine is asked again.
   static const maxRetryWait = Duration(minutes: 5);
@@ -83,6 +91,7 @@ class PersonalMachines extends ChangeNotifier {
                 ? "Couldn't add"
                 : 'Adding',
             reason: m.isOffline ? null : _reasons[_key(c, m.machine.machineId)],
+            canRetry: false,
           ),
     ];
   }
