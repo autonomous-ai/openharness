@@ -584,27 +584,52 @@ class SuperTabBuddyBar extends StatelessWidget {
   /// switch that landed, another failure) settles it, and a Buddy started
   /// again, a new agent, never inherits it. Scholes, 11-05: the line alone
   /// told him to start his Buddy again, with no way to do it while it ran.
+  ///
+  /// Only from the chat's newest messages (Guide's review of #3171): a window
+  /// opened at an older read mark holds an older page, and the line that
+  /// settled the switch may be among the newer ones it has not read. The
+  /// cheap checks come first, and the held rows are read from the end, so
+  /// the scan stops at this Buddy's newest system line.
   bool _mustStartAgain(SuperTabController c, SuperTabAgent agent) {
     if (!chat.isSwarmBuddyChat || agent.modelRequest != null) return false;
-    final last = c
-        .messages(chat.id)
-        .where(
-          (m) => m.source['kind'] == 'system' && m.author['id'] == agent.id,
-        )
-        .lastOrNull;
-    return last != null && last.text.startsWith(_heldSwitch);
+    final conversation = c.snapshot?.conversation(chat.id);
+    if (conversation == null ||
+        c.hasNewer(chat.id) ||
+        c.awaitsNewest(chat.id)) {
+      return false;
+    }
+    final held = c.messages(chat.id);
+    final newest =
+        conversation.lastMainSequence ?? conversation.lastMessageSequence;
+    if (held.isEmpty || held.last.sequence < newest) return false;
+    for (final m in held.reversed) {
+      if (m.source['kind'] == 'system' && m.author['id'] == agent.id) {
+        return m.text.startsWith(_heldSwitch);
+      }
+    }
+    return false;
   }
 
   /// A running Buddy refuses a second start (backend BUDDY_EXISTS): it is
-  /// removed and started again on the same machine and engine, as a down
-  /// one's Start again replaces it. Its chat and its name stay.
+  /// removed, then started on the same machine and engine. Its chat and its
+  /// name stay. Unlike a down Buddy's Start again, which the server replaces
+  /// in one command, these are two: the machine and engine are kept first
+  /// ([_restartTargets]), so a start refused after the removal, or a removal
+  /// whose answer was lost, leaves the Start bar on them, one click away.
   Future<void> _startAgain(SuperTabController c, SuperTabAgent agent) async {
-    if (!await c.removeBuddy(chat.projectId)) return;
-    await c.addBuddy(
-      projectId: chat.projectId,
+    final projectId = chat.projectId;
+    (_restartTargets[c] ??= {})[projectId] = (
       machineId: agent.machineId,
       engine: agent.engine,
     );
+    if (!await c.removeBuddy(projectId)) return;
+    if (await c.addBuddy(
+      projectId: projectId,
+      machineId: agent.machineId,
+      engine: agent.engine,
+    )) {
+      _restartTargets[c]?.remove(projectId);
+    }
   }
 
   @override
@@ -678,8 +703,10 @@ class SuperTabBuddyBar extends StatelessWidget {
                     style: DesktopChrome.control(),
                   ),
                 ),
+                // While new work is paused the server refuses a start: the
+                // Buddy is not removed for a start that cannot follow.
                 TextButton(
-                  onPressed: busy
+                  onPressed: busy || c.snapshot!.paused
                       ? null
                       : () => unawaited(_startAgain(c, agent)),
                   child: const Text('Start again'),
@@ -715,6 +742,15 @@ class SuperTabBuddyBar extends StatelessWidget {
   }
 }
 
+/// The machine and engine of a Buddy removed to start again (the Buddy bar's
+/// Start again), by its project key, until a start of it is accepted: per
+/// controller, so another account's never shows. In memory only: it serves
+/// the restart under way in this window.
+final _restartTargets =
+    Expando<Map<String, ({String machineId, String engine})>>(
+      'buddy restart targets',
+    );
+
 /// A Buddy chat with no Buddy: one click starts one, on the reader's own
 /// machine and with Claude unless they pick otherwise (mockup A, Lead 10-29).
 /// A viewer, who adds nothing, sees no bar.
@@ -741,6 +777,17 @@ class _BuddyStartState extends State<_BuddyStart> {
   String? _machine, _error;
   String _engine = 'claude';
   bool _adding = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // A Buddy removed to start again whose start did not follow: back on the
+    // machine and engine it ran on.
+    if (_restartTargets[c]?[widget.projectId] case final target?) {
+      _machine = target.machineId;
+      _engine = target.engine;
+    }
+  }
 
   /// Starts the Buddy on [machine], first preparing it when it is one of the
   /// reader's machines outside the Swarm. A failed setup says why and starts
@@ -773,6 +820,7 @@ class _BuddyStartState extends State<_BuddyStart> {
             setup: setup,
           )
           .then((added) {
+            if (added) _restartTargets[c]?.remove(projectId);
             // Its host reads the Swarm now rather than on its next pass.
             if (added && setup != null) unawaited(app?.wakeSuperTabHost(id));
           }),
