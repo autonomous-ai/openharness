@@ -11,6 +11,7 @@ import '../state/swarm_navigation.dart';
 import '../state/welcome_sessions.dart';
 import '../state/workspace_chrome.dart';
 import '../state/session_activity.dart';
+import '../super_tabs/visible_tick.dart';
 import 'engine_identity.dart';
 import 'finger_target.dart';
 import 'new_tab_actions.dart';
@@ -72,7 +73,8 @@ class WorkspaceWelcome extends StatefulWidget {
   State<WorkspaceWelcome> createState() => _WorkspaceWelcomeState();
 }
 
-class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
+class _WorkspaceWelcomeState extends State<WorkspaceWelcome>
+    with WidgetsBindingObserver, VisibleTick<WorkspaceWelcome> {
   // Resolve the icon at compile time. Lazy initialization of Lucide's large
   // generated library overflows the browser debug runtime's stack here.
   static const _phoneIcon = AppIcons.smartphone;
@@ -124,6 +126,16 @@ class _WorkspaceWelcomeState extends State<WorkspaceWelcome> {
       }
     });
   }
+
+  // The rows' activity is read only while the page can be seen.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _activity?.seen = onScreen;
+  }
+
+  @override
+  void onScreenChanged(bool onScreen) => _activity?.seen = onScreen;
 
   void _appChanged() => _sessions?.appChanged();
 

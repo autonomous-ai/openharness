@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
 
+import '../demo/sample_mode.dart' show SampleMode;
 import '../notify/system_notices.dart';
 import '../p2p/phone_terminal_p2p.dart';
 import '../swarm/swarm_activity_page.dart' show swarmActivityRoute;
@@ -15,6 +16,7 @@ import '../swarm/swarm_inbox.dart' show SwarmDecisionNeed;
 import '../swarm/swarm_message_link.dart';
 import '../swarm/swarm_profile.dart';
 import '../swarm/swarm_project_page.dart' show swarmChatRoute;
+import '../swarm/swarm_thread.dart' show SwarmThreadFocus;
 import '../swarm/swarm_session.dart';
 import '../swarm/swarm_tabs.dart';
 import 'agent_home.dart';
@@ -325,6 +327,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
             conversationId: conversationId,
             messageId: null,
             decisionId: null,
+            threadId: null,
           ));
           return;
         }
@@ -383,6 +386,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       conversationId: link.conversationId,
       messageId: link.messageId,
       decisionId: null,
+      threadId: null,
     ));
   }
 
@@ -412,7 +416,13 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
         swarmChatRoute(
           swarmId: target.swarmId,
           conversationId: target.conversationId,
-          messageId: target.messageId,
+          // A message only in its thread: the chat at the thread's root, the
+          // thread open over it at that message, as Activity opens a reply.
+          messageId: target.threadId ?? target.messageId,
+          threadId: target.threadId,
+          threadFocus: target.threadId != null && target.messageId != null
+              ? SwarmThreadFocus.message(target.messageId!)
+              : null,
         ),
       ),
     );
@@ -579,6 +589,11 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
             swarm: (_) => SwarmTabsPage(
               onSettings: (context) =>
                   openPhoneSettings(context, widget.notifier, swarm: true),
+              // You's Notifications, not in the sample, as Settings leaves
+              // it out there: its notices go nowhere.
+              notices: SampleMode.ofNotifier(widget.notifier) == null
+                  ? widget.notifier.agentNotices.system
+                  : null,
             ),
           ),
         ),

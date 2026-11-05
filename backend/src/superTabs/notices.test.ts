@@ -76,7 +76,7 @@ describe('the notices the Swarm writes into a chat', () => {
   const written = writtenKinds()
 
   it('finds the notices it is known to write, so a change in how they are written cannot empty this check', () => {
-    expect([...written.keys()]).toEqual(expect.arrayContaining(['system', 'instructions', 'agent-only', 'idle', 'review-failed', 'work-lost', 'terminal-alert', 'native', 'task-line']))
+    expect([...written.keys()]).toEqual(expect.arrayContaining(['system', 'instructions', 'agent-only', 'idle', 'review-failed', 'work-lost', 'terminal-alert', 'native']))
   })
 
   it('classifies every kind it writes, and only those', () => {
@@ -85,8 +85,9 @@ describe('the notices the Swarm writes into a chat', () => {
     // A kind no longer written keeps its readers for the rows stored before: the server's idle stop (project instructions,
     // phase 4) told only the Lead; the coordinator's progress post, now the project's status card (Dee, 2026-10-31), people;
     // the Shipped line, now the task's own line (taskLine.ts; Quiet Swarm, Dee, 2026-11-02), people; a machine's removal ending,
-    // no longer said in any chat (anh Dee, 11-04, #2742), nobody.
-    const retired = ['idle-stop', 'project-report', 'ship', 'machine-left']
+    // no longer said in any chat (anh Dee, 11-04, #2742), nobody; a task's own row under its requester's name, now only a person's
+    // own message (anh Dee, 11-04, 'bot messages', #2925), people.
+    const retired = ['idle-stop', 'project-report', 'ship', 'machine-left', 'task-line', 'routing-reflection']
     expect(Object.keys(NOTICE_READERS).filter(kind => !written.has(kind) && !retired.includes(kind))).toEqual([])
     expect(retired.filter(kind => written.has(kind))).toEqual([])
   })

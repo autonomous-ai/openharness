@@ -27,7 +27,7 @@ export const GROUP_FIELDS = {
   always: ['id', 'kind', 'projectId', 'leadId', 'agentIds', 'archived', 'audience', 'dormant', 'assignment.id', 'assignment.agentId', 'assignment.status',
     'assignment.lost'],
   whenRunning: ['title', 'task.owns', 'assignment.execution', 'assignment.result'],
-  unread: ['number', 'brief', 'reviewOf', 'teamWritten', 'step', 'reviewStamp', 'checks', 'lastMessageSequence', 'lastMainSequence', 'lastPersonSequence', 'pullRequestUrls', 'pullRequestEvents', 'cards', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger', 'reactionSeq', 'proposals', 'buddyName', 'buddySessions', 'buddyDownTold', 'liveness', 'leadAction', 'stepUp', 'queueRank', 'notBefore',
+  unread: ['number', 'brief', 'reviewOf', 'teamWritten', 'step', 'reviewStamp', 'checks', 'lastMessageSequence', 'lastMainSequence', 'lastPersonSequence', 'heardAt', 'pullRequestUrls', 'pullRequestEvents', 'cards', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger', 'reactionSeq', 'proposals', 'buddyName', 'buddySessions', 'buddyDownTold', 'liveness', 'leadAction', 'stepUp', 'queueRank', 'notBefore',
     'assignment.configuration', 'assignment.recordingProgress', 'assignment.leaseUntil', 'assignment.progressAt', 'assignment.askedOf', 'assignment.reviewFoundAt', 'assignment.changesRequestedAt', 'assignment.toldEngineerAt',
     'assignment.handoffs', 'assignment.verdicts'],
 } as const
@@ -77,7 +77,8 @@ const toPart = <T>(kind: PartKind, row: PartRow): Part<T> => ({ kind, key: row.k
 /** Delivery authority only: no machine reports, starts, progress, or unrelated work. Keep the Lead conversations for
  * ledProject, and the named agents' groups for legacy project identity and native-context privacy checks. These projected
  * groups must never be committed as state; a delivery only touches its authority parts and updates its own row. */
-export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds: string[], agentIds: string[], nativeAgentId?: string): Promise<SwarmParts> {
+export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds: string[], agentIds: string[], nativeAgentId?: string,
+  receiverId?: string): Promise<SwarmParts> {
   const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') } })
   if (!head) throw Object.assign(new Error(`Swarm ${tabId} has no parts`), { code: 'PARTS_MISSING' })
   const { projects } = head.data as unknown as HeadData
@@ -98,7 +99,13 @@ export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds
     related.length ? groupsBy(tx, 'agents', [{ $match: { tabId, deleted: false, dormant: false,
       agentIds: { $in: related } } }, { $project: LIGHT_GROUP }]) : Promise.resolve([]),
   ])
-  const groups = [...new Map([...named, ...linked].map(row => [row.key, lightGroup(row)])).values()]
+  // A receiver not in the project chat it is delivered in hears there only while it works in the project (commands.ts
+  // worksInProjectChat, #2924): its own groups, by the membership index, and only then; a member's claim reads nothing more.
+  const chat = named.find(row => groupIds.includes(row.key as string) && keys.includes(row.key as string))
+  const outside = !!receiverId && !!chat && !((chat.data as { agentIds?: string[] } | undefined)?.agentIds ?? []).includes(receiverId)
+  const worked = outside ? await groupsBy(tx, 'agents', [{ $match: { tabId, deleted: false, dormant: false, agentIds: { $in: [receiverId] } } },
+    { $project: LIGHT_GROUP }]) : []
+  const groups = [...new Map([...named, ...linked, ...worked].map(row => [row.key, lightGroup(row)])).values()]
   return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow),
     members: members.map(row => toPart('member', row)), agents: agents.map(row => toPart('agent', row)),
     groups, machines: [], starts: [], progress: [],

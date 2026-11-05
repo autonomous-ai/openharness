@@ -24,6 +24,7 @@ import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
 import '../shortcuts/app_keymap.dart' show KeymapRegion;
 import '../shortcuts/keymap.dart' show KeymapContext;
+import 'chat_find.dart';
 import 'chat_scroll.dart';
 import 'leaderboard/reader.dart';
 import 'jump_to_latest.dart';
@@ -47,7 +48,10 @@ import 'activity.dart';
 import 'attachment_chips.dart' show superTabShowsInPlace;
 import 'attachment_image.dart';
 import 'reminders.dart';
-import 'activity_view.dart';
+import 'decisions_page.dart';
+import 'mentions_page.dart';
+import 'threads_page.dart';
+import 'places.dart';
 import 'attention.dart';
 import 'controller.dart';
 import 'file_links.dart';
@@ -147,7 +151,7 @@ class SuperTabView extends StatefulWidget {
   final SwarmLinkSwarms? linkSwarms;
 
   /// Makes the microphone the composers' mic records with
-  /// ([superTabVoiceRecorder]: macOS and the web); without it, no mic shows.
+  /// ([superTabVoiceRecorder]: macOS, Windows and the web); without it, no mic shows.
   final SuperTabVoiceRecorder Function()? voiceRecorder;
 
   @override
@@ -182,7 +186,13 @@ class _SuperTabViewState extends State<SuperTabView>
   /// requests does for a task.
   bool _showTasks = false;
 
-  bool _showNotifications = false;
+  /// The card the board shows selected (task #2948): the task or proposal
+  /// last opened from it, or the task whose chat the board was opened from.
+  String? _tasksSelectedId;
+
+  /// The Swarm's page holding the main pane, if one does: Decisions,
+  /// Mentions or Threads (anh Dee, 11-05, task #2996).
+  SwarmPage? _page;
 
   /// Manage holds the main pane; [_manageTab] is which of its pages, but for
   /// Devices, which is the pane the view holds for it ([_devicesVisible]).
@@ -206,6 +216,12 @@ class _SuperTabViewState extends State<SuperTabView>
   ({String conversationId, String messageId, double top})? _back;
   String? _lit;
   Timer? _litTimer;
+  // Find in the open chat (task #2826): the search, the conversation it is
+  // in, and the match last brought into view.
+  SuperTabChatFind? _find;
+  String? _findIn, _foundMatch;
+  final _findFocus = FocusNode(debugLabel: 'Find in chat');
+  final _threadFind = GlobalKey<SuperTabThreadPanelState>();
   bool _viewEnabled = true;
   bool _chatCovered = false;
   final _loadingOlder = <String>{};
@@ -308,6 +324,7 @@ class _SuperTabViewState extends State<SuperTabView>
     c.addListener(_holdVoiceAway);
     c.buddyChatOpener = _openBuddyChat;
     SuperTabChatNotices.of(c).chatShown = _chatShown;
+    SuperTabPlaces.of(c).addListener(_takePlace);
     _registerDial();
     _changed();
   }
@@ -379,15 +396,18 @@ class _SuperTabViewState extends State<SuperTabView>
   @override
   void didUpdateWidget(SuperTabView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // A terminal that opens shows: Manage and Activity outrank it in the pane.
+    // A terminal that opens shows: Manage and the pages outrank it in the pane.
     final terminalNow = widget.terminalsVisible || widget.terminal != null;
     final terminalBefore =
         oldWidget.terminalsVisible || oldWidget.terminal != null;
     if (terminalNow && !terminalBefore && !c.devicesSelected) {
-      _showManage = _showNotifications = false;
+      _showManage = false;
+      _page = null;
     }
     if (oldWidget.controller != c) {
       _noticesLeave(oldWidget.controller);
+      SuperTabPlaces.of(oldWidget.controller).removeListener(_takePlace);
+      SuperTabPlaces.of(c).addListener(_takePlace);
       SuperTabChatNotices.of(c).chatShown = _chatShown;
     }
     if (oldWidget.controller != c || oldWidget.app != widget.app) {
@@ -423,6 +443,7 @@ class _SuperTabViewState extends State<SuperTabView>
       _jumpRequest++;
       _finding = null;
       _back = null;
+      _closeFind(refocus: false);
       _anchors.clear();
       _selected = null;
       _changed();
@@ -487,6 +508,7 @@ class _SuperTabViewState extends State<SuperTabView>
       if (_selected != null) _jumpRequest++;
       _finding = null;
       _back = null;
+      _closeFind(refocus: false);
       if (_anchors.remove(id) case final anchor?) {
         unawaited(_keepRow(id, anchor));
       }
@@ -574,7 +596,7 @@ class _SuperTabViewState extends State<SuperTabView>
         _terminalsVisible ||
         _showPullRequests ||
         _showTasks ||
-        _showNotifications ||
+        _page != null ||
         _showManage) {
       return false;
     }
@@ -881,7 +903,8 @@ class _SuperTabViewState extends State<SuperTabView>
       if (group == null || !c.unreadShown(group)) continue;
       widget.onCloseTerminal?.call();
       setState(() {
-        _showNotifications = _showManage = false;
+        _page = null;
+        _showManage = false;
         _showPullRequests = _showTasks = false;
       });
       unawaited(c.select(group.id));
@@ -925,6 +948,7 @@ class _SuperTabViewState extends State<SuperTabView>
         ...?region?.actions,
         'swarm.next_unread': () => _jumpUnread(1),
         'swarm.previous_unread': () => _jumpUnread(-1),
+        'swarm.find_in_chat': _findKey,
       },
       composing: region?.composing,
       keeps: region?.keeps,
@@ -984,6 +1008,7 @@ class _SuperTabViewState extends State<SuperTabView>
   @override
   void dispose() {
     _noticesLeave(c);
+    SuperTabPlaces.of(c).removeListener(_takePlace);
     // The controller outlives its view, reading another Swarm's replies.
     c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
@@ -999,6 +1024,10 @@ class _SuperTabViewState extends State<SuperTabView>
     _unregisterDial?.call();
     _dial.cancel();
     _litTimer?.cancel();
+    _find
+      ?..removeListener(_findMoved)
+      ..dispose();
+    _findFocus.dispose();
     _historyRetry?.cancel();
     _composer.dispose();
     _mentionIndex.dispose();
@@ -1500,6 +1529,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void _readEarlierNearTop(String id, ScrollMetrics metrics) {
     if (metrics.extentBefore > 400 ||
         _finding != null ||
+        _find?.reading != null ||
         _loadingOlder.contains(id) ||
         _olderFailed.contains(id) ||
         !c.hasOlder(id)) {
@@ -1814,17 +1844,20 @@ class _SuperTabViewState extends State<SuperTabView>
     app: widget.app,
     onNewProject: widget.onNewProject,
     onNewSwarm: widget.onNewSwarm,
-    notificationsSelected: _notificationsVisible,
+    page: _pageShown,
+    places: SuperTabPlaces.of(c),
     attention: SuperTabAttention.of(c),
     activity: SuperTabActivity.of(c),
     onManage: _openManage,
     manageSelected: _manageOpen,
-    // Activity on every platform (Lead, 10-31): the Mac's menu bar and Dock
-    // still say what waits, and the sidebar lists it as Slack does.
-    onNotifications: _openActivity,
-    needsHuman: (group) => _needsHuman(group).length,
+    // On every platform: the Mac's menu bar and Dock still say what waits,
+    // and the sidebar lists it as Slack does (task #2996).
+    onPage: _openPage,
     onSelect: (id) {
-      setState(() => _showNotifications = _showManage = _showTasks = false);
+      setState(() {
+        _page = null;
+        _showManage = _showTasks = false;
+      });
       // Choosing a conversation leaves the Manage pane: its Devices page left
       // the controller's flag set, so the sidebar's Manage row stayed lit while
       // a conversation was open.
@@ -1842,7 +1875,8 @@ class _SuperTabViewState extends State<SuperTabView>
   Future<bool> _openBuddyChat(String projectId) {
     c.leaveDevices();
     setState(() {
-      _showNotifications = _showManage = false;
+      _page = null;
+      _showManage = false;
       _showPullRequests = _showTasks = false;
     });
     widget.onCloseTerminal?.call();
@@ -1850,51 +1884,107 @@ class _SuperTabViewState extends State<SuperTabView>
     return c.openBuddyChat(projectId);
   }
 
-  /// What the menu bar asked to open ([SuperTabController.openNotice]): a tag
-  /// at its message, a decision on the Notifications page where it is answered.
+  /// What the menu bar asked to open ([SuperTabController.openNotice]), as
+  /// its page's row opens it (task #2914): a tag or a due reminder at its
+  /// message, an agent waiting in its chat with its terminal beside it, a
+  /// decision on Decisions, where it is answered.
   void _takeNotice() {
     final request = c.noticeRequest;
     if (request == null || c.snapshot == null) return;
     c.noticeRequest = null;
     widget.onCloseTerminal?.call();
+    final notice = SuperTabActivity.of(c).notices
+        .where((n) => n.kind.name == request.kind && n.id == request.id)
+        .firstOrNull;
     setState(() {
-      _showNotifications = true;
+      _page = notice?.kind == SuperTabNoticeKind.mention
+          ? SwarmPage.mentions
+          : SwarmPage.decisions;
       _showManage = false;
       _showPullRequests = _showTasks = false;
     });
-    if (request.kind != 'mention') return;
-    final mention = SuperTabMentions.of(c).waiting
-        .where((m) => m.id == request.id)
-        .firstOrNull;
-    if (mention != null) unawaited(_openMention(mention));
+    switch (notice) {
+      case SuperTabNotice(:final mention?):
+        unawaited(_openMention(mention));
+      case SuperTabNotice(:final reminder?):
+        unawaited(_openReminder(reminder));
+      case SuperTabNotice(kind: SuperTabNoticeKind.agent, :final need?):
+        if (_openConversation(need.conversationId) && need.agentId != null) {
+          c.openAgentTerminal(
+            need.agentId!,
+            conversationId: need.conversationId,
+          );
+        }
+      case _:
+        break;
+    }
   }
 
-  /// Shows Activity in the main pane, as its sidebar row does. [from] is the
-  /// controller the asking widget was built for: a press arriving once the
-  /// view has moved to another Swarm opens nothing.
-  void _openActivity({SuperTabController? from}) {
-    if (!mounted || (from != null && from != c)) return;
+  /// Shows [page] in the main pane, as its sidebar row does.
+  void _openPage(SwarmPage page) {
+    if (!mounted) return;
     _closeSidebar();
     c.leaveDevices();
     setState(() {
-      _showNotifications = true;
+      _page = page;
       _showManage = false;
       _showPullRequests = _showTasks = false;
     });
     widget.onCloseTerminal?.call();
   }
 
-  bool get _notificationsVisible =>
-      _showNotifications && !_devicesVisible && !c.accessRevoked;
+  /// The page on screen: none under Devices or once access is gone.
+  SwarmPage? get _pageShown =>
+      _devicesVisible || c.accessRevoked ? null : _page;
 
-  /// Activity or Manage holds the main pane, with no chat header.
+  bool get _notificationsVisible => _pageShown != null;
+
+  /// Where the reader is, for Back and Forward: a page, or the chat with the
+  /// thread open beside it. Elsewhere (Manage, a terminal, Tasks, pull
+  /// requests) is no place of its own.
+  SuperTabPlace? get _place {
+    if (_pageShown case final page?) return SuperTabPlace.page(page);
+    if (_manageOpen ||
+        _terminalsVisible ||
+        _showPullRequests ||
+        _showTasks ||
+        c.snapshot?.conversation(c.selectedId) == null) {
+      return null;
+    }
+    return SuperTabPlace.chat(c.selectedId, root: c.threadOnScreen);
+  }
+
+  /// Records where the reader is once this frame is drawn: a build never
+  /// tells listeners (the sidebar's arrows) anything.
+  void _recordPlace() {
+    final place = _place;
+    if (place == null) return;
+    final controller = c;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && c == controller && _place == place) {
+        SuperTabPlaces.of(controller).record(place);
+      }
+    });
+  }
+
+  /// Back or Forward asked for a place ([SuperTabPlaces.step]): go there.
+  void _takePlace() {
+    final place = SuperTabPlaces.of(c).takeStep();
+    if (place == null || !mounted) return;
+    if (place.page case final page?) return _openPage(page);
+    if (!_openConversation(place.conversationId!)) return;
+    if (place.root case final root?) {
+      c.openThread(root);
+    } else {
+      c.closeThread();
+    }
+  }
+
+  /// A page or Manage holds the main pane, with no chat header.
   bool get _listViewHoldsThePane => _notificationsVisible || _manageVisible;
 
   bool get _manageVisible =>
-      _showManage &&
-      !_showNotifications &&
-      !_devicesVisible &&
-      !c.accessRevoked;
+      _showManage && _page == null && !_devicesVisible && !c.accessRevoked;
 
   /// Manage shows, on any of its pages: Devices is one of them, however it
   /// was opened.
@@ -1907,7 +1997,8 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
     setState(() {
       _showManage = true;
-      _showNotifications = _showPullRequests = _showTasks = false;
+      _page = null;
+      _showPullRequests = _showTasks = false;
       if (_manageTab == SuperTabManageTab.devices && !_hasDevices) {
         _manageTab = SuperTabManageTab.machines;
       }
@@ -1927,12 +2018,12 @@ class _SuperTabViewState extends State<SuperTabView>
     }
   }
 
-  /// Opens [root]'s thread in its chat from Activity's New replies.
+  /// Opens [root]'s thread beside its chat, from a Threads card.
   void _openThreadFromList(String conversationId, String root) {
     if (_openConversation(conversationId)) c.openThread(root);
   }
 
-  /// Opens chat [conversationId] from a row of Activity; false when it is
+  /// Opens chat [conversationId] from a row of a page; false when it is
   /// gone or the reader's access is.
   bool _openConversation(String conversationId) {
     if (c.accessRevoked || c.snapshot?.conversation(conversationId) == null) {
@@ -1941,7 +2032,8 @@ class _SuperTabViewState extends State<SuperTabView>
     widget.onCloseTerminal?.call();
     _closeSidebar();
     setState(() {
-      _showNotifications = _showManage = false;
+      _page = null;
+      _showManage = false;
       _showPullRequests = _showTasks = false;
     });
     c.select(conversationId);
@@ -2019,7 +2111,8 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     final shownBy = _rowShowing(id, messageId) ?? messageId;
     setState(() {
-      _showNotifications = _showManage = false;
+      _page = null;
+      _showManage = false;
       _showPullRequests = _showTasks = false;
       _back = null;
       _target = shownBy;
@@ -2107,7 +2200,7 @@ class _SuperTabViewState extends State<SuperTabView>
   Future<void> _openMention(SuperTabMention mention) =>
       _openAtMessage(mention.conversationId, mention.messageId, answer: true);
 
-  /// More ▸ Remind me: the message comes back in Activity at [when].
+  /// More ▸ Remind me: the message comes back in Decisions at [when].
   Future<void> _remind(SuperTabMessage message, SuperTabRemindIn when) async {
     final at = when.from(clock.now());
     final kept = await SuperTabReminders.of(c).set(message, at);
@@ -2124,7 +2217,7 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// A due reminder opened from Activity: its message, which clears it.
+  /// A due reminder opened from Decisions: its message, which clears it.
   Future<void> _openReminder(SuperTabReminder reminder) async {
     unawaited(SuperTabReminders.of(c).open(reminder));
     await _openAtMessage(
@@ -2134,7 +2227,7 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// Opens conversation [id] at message [messageId], from Activity; [answer]
+  /// Opens conversation [id] at message [messageId], from a page; [answer]
   /// replies to it (a tag).
   Future<void> _openAtMessage(
     String id,
@@ -2166,8 +2259,8 @@ class _SuperTabViewState extends State<SuperTabView>
       );
       return;
     }
-    if (!_showNotifications) return;
-    _showNotifications = false;
+    if (_page == null) return;
+    _page = null;
     c.select(id);
     // A tag in a thread opens the thread; one in a thread reply shown only
     // there is not in the chat to scroll to.
@@ -2401,6 +2494,71 @@ class _SuperTabViewState extends State<SuperTabView>
     _focus.requestFocus();
   }
 
+  /// Cmd+F: the thread's find while the thread has focus, else the chat's.
+  void _findKey() {
+    if (_threadFind.currentState case final thread? when thread.focused) {
+      return thread.openFind();
+    }
+    _openFind();
+  }
+
+  void _openFind() {
+    final id = c.selectedId;
+    if (_find != null && _findIn == id) return _findFocus.requestFocus();
+    _closeFind(refocus: false);
+    final find = SuperTabChatFind(
+      rows: () => [
+        for (final entry in superTabTranscriptEntries(_shownMessages(id)))
+          if (entry.interruptions == 0) entry.message,
+      ],
+      hasOlder: () => c.hasOlder(id),
+      readOlder: () async {
+        final loaded = c.messages(id).length;
+        await _loadEarlier(id, keep: _find?.current);
+        return c.messages(id).length > loaded || !c.hasOlder(id);
+      },
+    )..addListener(_findMoved);
+    setState(() {
+      _find = find;
+      _findIn = id;
+    });
+  }
+
+  void _closeFind({bool refocus = true}) {
+    final find = _find;
+    if (find == null) return;
+    find
+      ..removeListener(_findMoved)
+      ..clear()
+      ..dispose();
+    _find = null;
+    _findIn = _foundMatch = null;
+    if (!mounted) return;
+    setState(() {});
+    if (refocus) _focus.requestFocus();
+  }
+
+  /// A new current match is brought into view, as a followed link is.
+  void _findMoved() {
+    final find = _find, id = _findIn;
+    if (find == null || id == null || !mounted) return;
+    final match = find.current;
+    setState(() {});
+    if (match == null || match == _foundMatch) return;
+    _foundMatch = match;
+    setState(() {
+      _target = match;
+      _scrollRequest++;
+      _jumpingToEnd = false;
+      _follow(id, false);
+    });
+    _revealTarget(
+      id,
+      0,
+      arrived: (row) => unawaited(Scrollable.ensureVisible(row, alignment: .3)),
+    );
+  }
+
   void _light(String messageId) {
     _litTimer?.cancel();
     setState(() => _lit = messageId);
@@ -2409,6 +2567,10 @@ class _SuperTabViewState extends State<SuperTabView>
     });
   }
 
+  /// The agents of [group] waiting on the reader: one with a question in its
+  /// terminal, or one the task's work waits on for an answer from them
+  /// ([_asksReader]). A task blocked on CI, a review or another person is not
+  /// here; its status line already says why (Leo, #3017).
   List<SuperTabAgent> _needsHuman(SuperTabConversation group) =>
       c.snapshot?.agents
           .where(
@@ -2416,11 +2578,101 @@ class _SuperTabViewState extends State<SuperTabView>
                 group.agentIds.contains(agent.id) &&
                 (widget.app?.questionFor(agent.machineId, agent.harnessId) !=
                         null ||
-                    (superTabWorkWaits(group.assignment?['status']) &&
-                        group.assignment?['agentId'] == agent.id)),
+                    _asksReader(group, agent)),
           )
           .toList() ??
       const [];
+
+  /// The open decisions of the reader that [group]'s work asked.
+  List<SuperTabDecision> _decisionsOf(SuperTabConversation group) => [
+    for (final d in SuperTabDecisions.of(c).open)
+      if (d.conversationId == group.id) d,
+  ];
+
+  /// Whether [group]'s work, done by [agent], waits on the reader's answer: a
+  /// decision asked of them, or `needs_human` asked of them by name, else of
+  /// whom the server says it waits on, else (a backend that names nobody)
+  /// of whoever reads. `blocked` is never a question.
+  bool _asksReader(SuperTabConversation group, SuperTabAgent agent) {
+    final work = group.assignment;
+    if (work == null || work['agentId'] != agent.id) return false;
+    if (_decisionsOf(group).isNotEmpty) return true;
+    if (work['status'] != 'needs_human') return false;
+    final liveness = group.liveness;
+    final waited = liveness != null && liveness['why'] == 'person';
+    final Object? person =
+        work['askedOf'] ?? (waited ? liveness['personId'] : null);
+    return person == null || person == c.accountId;
+  }
+
+  /// The bar's click: the question where it is, so it visibly does something
+  /// (Leo, #3017). A decision opens where decisions are answered; a question
+  /// in the chat comes into view, lit; a prompt in the terminal opens it, or
+  /// says it is already open.
+  void _openQuestion(SuperTabConversation group, SuperTabAgent agent) {
+    final asks = widget.app?.questionFor(agent.machineId, agent.harnessId);
+    if (_decisionsOf(group).isNotEmpty) {
+      _openPage(SwarmPage.decisions);
+      return;
+    }
+    final message = asks != null ? null : _askedIn(group, agent);
+    if (message != null) {
+      _showMessage(group.id, message);
+      return;
+    }
+    if (_terminalsVisible) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text(
+            "${_agentName(agent)}'s question is in its terminal, open beside this chat.",
+          ),
+        ),
+      );
+      return;
+    }
+    _openAgent(agent);
+  }
+
+  /// The message where [agent] asked [group]'s question: the one that says
+  /// what the assignment's result says, else the agent's latest in the chat
+  /// (a line of the task itself is never it).
+  SuperTabMessage? _askedIn(SuperTabConversation group, SuperTabAgent agent) {
+    final said = [
+      for (final m in _ownShown(group.id))
+        if (m.author['kind'] == 'agent' &&
+            m.author['id'] == agent.id &&
+            !m.isTaskLine)
+          m,
+    ];
+    final ask = (group.assignment?['result'] as String?)?.trim();
+    if (ask != null && ask.isNotEmpty) {
+      for (final m in said.reversed) {
+        if (m.text.contains(ask)) return m;
+      }
+    }
+    return said.lastOrNull;
+  }
+
+  /// Brings [message] of chat [id] into view, lit, from the chat's own view.
+  void _showMessage(String id, SuperTabMessage message) {
+    widget.onCloseTerminal?.call();
+    setState(() {
+      _showPullRequests = _showTasks = false;
+      _target = message.id;
+      // Stop following the end: the question is what to see.
+      _scrollRequest++;
+      _jumpingToEnd = false;
+      _follow(id, false);
+    });
+    _revealTarget(
+      id,
+      0,
+      arrived: (row) {
+        unawaited(Scrollable.ensureVisible(row, alignment: .3));
+        _light(message.id);
+      },
+    );
+  }
 
   /// What the card over [message]'s name or avatar shows, worked out as it
   /// opens (Huy, 11-04): a person's status and zone; an agent's engine and
@@ -2524,8 +2776,12 @@ class _SuperTabViewState extends State<SuperTabView>
     final project = group == null ? null : c.snapshot?.projectFor(group.id);
     final name = _manageOpen
         ? 'Manage'
-        : _notificationsVisible
-        ? 'Activity'
+        : _pageShown != null
+        ? switch (_pageShown!) {
+            SwarmPage.decisions => 'Decisions',
+            SwarmPage.mentions => 'Mentions',
+            SwarmPage.threads => 'Threads',
+          }
         : group == null
         ? c.snapshot?.projects.isEmpty == true
               ? c.snapshot!.name
@@ -2903,6 +3159,7 @@ class _SuperTabViewState extends State<SuperTabView>
       unawaited(c.select(project.leadConversationId));
     }
     setState(() {
+      if (group.id != project.leadConversationId) _tasksSelectedId = group.id;
       _showTasks = true;
       _showPullRequests = false;
     });
@@ -2937,9 +3194,15 @@ class _SuperTabViewState extends State<SuperTabView>
       project: project,
       storage: widget.app?.localStore,
       needsHuman: (g) => _needsHuman(g).length,
-      onOpenTask: (id) => unawaited(_openTask(id)),
-      onOpenProposal: (id) =>
-          _openThreadFromList(project.leadConversationId, id),
+      selectedId: _tasksSelectedId,
+      onOpenTask: (id) {
+        _tasksSelectedId = id;
+        unawaited(_openTask(id));
+      },
+      onOpenProposal: (id) {
+        _tasksSelectedId = id;
+        _openThreadFromList(project.leadConversationId, id);
+      },
     );
   }
 
@@ -2950,27 +3213,49 @@ class _SuperTabViewState extends State<SuperTabView>
     final project = c.snapshot!.projectById(group.projectId)!;
     final selected = task || (_showTasks && !_terminalsVisible);
     final count = _tasksNeedingYou(project);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
+    return _withCountBadge(
+      fingerTarget(
+        enabled: _phone,
+        AppIconButton(
+          key: const ValueKey('super-tasks'),
+          icon: AppIcons.squareKanban,
+          size: AppIcons.inlineSize,
+          tooltip: 'Tasks',
+          selected: selected,
+          color: selected ? DesktopChrome.foreground : DesktopChrome.muted,
+          onPressed: () => _openTasks(group),
+        ),
+      ),
+      count,
+      key: const ValueKey('super-tasks-badge'),
+      tooltip: count == 1 ? '1 task needs you' : '$count tasks need you',
+      onTap: () => _openTasks(group),
+    );
+  }
+
+  /// A header icon's count, the one badge style (Dee, #3017): the red number
+  /// on the icon's top-right corner, like a notification badge, none at 0.
+  Widget _withCountBadge(
+    Widget icon,
+    int count, {
+    required Key key,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    if (count <= 0) return icon;
+    return Stack(
+      clipBehavior: Clip.none,
       children: [
-        fingerTarget(
-          enabled: _phone,
-          AppIconButton(
-            key: const ValueKey('super-tasks'),
-            icon: AppIcons.squareKanban,
-            size: AppIcons.inlineSize,
-            tooltip: 'Tasks',
-            selected: selected,
-            color: selected ? DesktopChrome.foreground : DesktopChrome.muted,
-            onPressed: () => _openTasks(group),
+        icon,
+        Positioned(
+          top: -2,
+          right: -2,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: SuperTabCountBadge(count, key: key, tooltip: tooltip),
           ),
         ),
-        if (count > 0)
-          SuperTabCountBadge(
-            count,
-            key: const ValueKey('super-tasks-badge'),
-            tooltip: count == 1 ? '1 task needs you' : '$count tasks need you',
-          ),
       ],
     );
   }
@@ -3103,6 +3388,21 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ),
           if (group != null && !_devicesVisible && !_listViewHoldsThePane) ...[
+            if (!_terminalsVisible && !_showPullRequests && !_showTasks) ...[
+              fingerTarget(
+                enabled: _phone,
+                AppIconButton(
+                  key: const ValueKey('super-find-button'),
+                  icon: AppIcons.search,
+                  size: AppIcons.inlineSize,
+                  tooltip: 'Find in chat',
+                  selected: _find != null,
+                  color: DesktopChrome.muted,
+                  onPressed: _openFind,
+                ),
+              ),
+              const SizedBox(width: 4),
+            ],
             // A project's chat is where its header rests: the button back
             // to it shows only from another view (Quiet Swarm, screen 1).
             if (!restsOnChat ||
@@ -3709,6 +4009,14 @@ class _SuperTabViewState extends State<SuperTabView>
             username: name,
       },
       references: _references,
+      onOpenInstructions: (saved) => unawaited(
+        showSuperTabInstructions(
+          context,
+          c,
+          saved.projectId,
+          revision: saved.revision,
+        ),
+      ),
       onOpenGroup: (id) {
         setState(() => _showPullRequests = _showTasks = false);
         c.select(id);
@@ -3843,6 +4151,7 @@ class _SuperTabViewState extends State<SuperTabView>
       images: () => _images(rows),
       thread: open.root,
       child: SuperTabThreadPanel(
+        key: _threadFind,
         controller: c,
         root: open.root,
         row: (message, grouped) =>
@@ -4152,6 +4461,8 @@ class _SuperTabViewState extends State<SuperTabView>
           _ => false,
         },
       );
+    // Find matches the rows as they are drawn now.
+    final search = _findIn == c.selectedId ? (_find?..refresh()) : null;
     Widget row(int index) {
       final entry = entries[index];
       final message = entry.message;
@@ -4187,7 +4498,8 @@ class _SuperTabViewState extends State<SuperTabView>
               child: KeyedSubtree(
                 key: message.id == _target ? _targetKey : null,
                 child: SuperTabMessageHighlight(
-                  on: message.id == _lit,
+                  on: message.id == _lit || message.id == search?.current,
+                  match: search?.matching.contains(message.id) ?? false,
                   child: pendingById.containsKey(message.id)
                       ? _outgoingRow(
                           pendingById[message.id]!,
@@ -4264,6 +4576,13 @@ class _SuperTabViewState extends State<SuperTabView>
         : null;
     return Column(
       children: [
+        if (search != null)
+          SuperTabFindBar(
+            key: ValueKey('super-find-$chatId'),
+            find: search,
+            focus: _findFocus,
+            onClose: _closeFind,
+          ),
         if (c.error != null && !unread)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
@@ -4623,29 +4942,36 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ),
         if (group != null)
-          for (final agent in _needsHuman(group))
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
-              child: ListTile(
-                key: ValueKey('super-needs-human-${agent.id}'),
-                dense: true,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                tileColor: grid.AppPalette.warn.withValues(alpha: .08),
-                leading: Icon(
-                  AppIcons.messageCircleQuestionMark,
-                  color: grid.AppPalette.warn,
-                  size: 18,
-                ),
-                title: Text(
-                  '${_agentName(agent)} needs you',
-                  style: DesktopChrome.control(medium: true),
-                ),
-                trailing: const Icon(AppIcons.arrowRight, size: 16),
-                onTap: () => _openAgent(agent),
-              ),
+          ListenableBuilder(
+            listenable: SuperTabDecisions.of(c),
+            builder: (context, _) => Column(
+              children: [
+                for (final agent in _needsHuman(group))
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
+                    child: ListTile(
+                      key: ValueKey('super-needs-human-${agent.id}'),
+                      dense: true,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      tileColor: grid.AppPalette.warn.withValues(alpha: .08),
+                      leading: Icon(
+                        AppIcons.messageCircleQuestionMark,
+                        color: grid.AppPalette.warn,
+                        size: 18,
+                      ),
+                      title: Text(
+                        '${_agentName(agent)} needs you',
+                        style: DesktopChrome.control(medium: true),
+                      ),
+                      trailing: const Icon(AppIcons.arrowRight, size: 16),
+                      onTap: () => _openQuestion(group, agent),
+                    ),
+                  ),
+              ],
             ),
+          ),
         ListenableBuilder(
           listenable: completing,
           builder: (context, _) {
@@ -4952,7 +5278,7 @@ class _SuperTabViewState extends State<SuperTabView>
                             conversationId: chatId,
                             padding: const EdgeInsets.fromLTRB(
                               grid.AppDesktop.composerSide,
-                              0,
+                              grid.AppDesktop.controlGap,
                               grid.AppDesktop.composerSide,
                               grid.AppDesktop.controlGap,
                             ),
@@ -5035,6 +5361,7 @@ class _SuperTabViewState extends State<SuperTabView>
   @override
   Widget build(BuildContext context) {
     _syncThreadPane();
+    _recordPlace();
     return SuperTabFiles(
       fresh: widget.controller.readFileLink,
       child: SuperTabImageStage(open: _openImages, child: _swarm(context)),
@@ -5092,7 +5419,8 @@ class _SuperTabViewState extends State<SuperTabView>
           setState(() {
             _showPullRequests = _showTasks = false;
             _rosterOpen = false;
-            _showManage = _showNotifications = false;
+            _showManage = false;
+            _page = null;
           });
           (widget.onChooseAgentTerminal ?? widget.onOpenTerminal)(agent);
         },
@@ -5176,17 +5504,30 @@ class _SuperTabViewState extends State<SuperTabView>
                                   visible: !_terminalsVisible,
                                 )
                               : const SizedBox.shrink(),
-                          _notificationsVisible
-                              ? SuperTabActivityView(
-                                  activity: SuperTabActivity.of(c),
-                                  onOpenMention: (mention) =>
-                                      unawaited(_openMention(mention)),
-                                  onOpenThread: _openThreadFromList,
-                                  onOpenConversation: _openConversation,
-                                  onOpenReminder: (reminder) =>
-                                      unawaited(_openReminder(reminder)),
-                                )
-                              : const SizedBox.shrink(),
+                          switch (_pageShown) {
+                            SwarmPage.decisions => SuperTabDecisionsPage(
+                              activity: SuperTabActivity.of(c),
+                              onOpenConversation: _openConversation,
+                              onOpenReminder: (reminder) =>
+                                  unawaited(_openReminder(reminder)),
+                            ),
+                            SwarmPage.mentions => SuperTabMentionsPage(
+                              activity: SuperTabActivity.of(c),
+                              onOpenMention: (mention) =>
+                                  unawaited(_openMention(mention)),
+                            ),
+                            SwarmPage.threads => SuperTabThreadsPage(
+                              activity: SuperTabActivity.of(c),
+                              onOpenThread: _openThreadFromList,
+                              message: (message) => _message(
+                                message,
+                                false,
+                                const {},
+                                inThread: true,
+                              ),
+                            ),
+                            null => const SizedBox.shrink(),
+                          },
                           _manageVisible
                               ? SuperTabManagePage(
                                   controller: c,
@@ -5296,7 +5637,7 @@ class _SuperTabViewState extends State<SuperTabView>
                           child: SizedBox(
                             width: 240,
                             child: Material(
-                              color: grid.AppPalette.swarmWelcome,
+                              color: grid.AppPalette.swarmSidebar,
                               elevation: 8,
                               child: _sidebar(),
                             ),

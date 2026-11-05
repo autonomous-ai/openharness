@@ -1030,7 +1030,7 @@ fn submit(app: &mut App, what: Entry, value: String) {
             let path = if typed.len() > 1 { typed.trim_end_matches('/') } else { typed }.to_string();
             if path.is_empty() { return note(app, "Nothing changed") }
             let label = if write { "Share a folder they can edit" } else { "Share a folder they can view" };
-            if !path.starts_with('/') { entry(app, Entry::ShareFolder { write }, label, &value, false); return fail(app, "Enter the folder's full path, like /Users/you/project") }
+            if !crate::sys::path_absolute(&path) { entry(app, Entry::ShareFolder { write }, label, &value, false); return fail(app, if cfg!(windows) { r"Enter the folder's full path, like C:\Users\you\project" } else { "Enter the folder's full path, like /Users/you/project" }) }
             let mut folders = sharing_folders(app);
             if folders.iter().any(|(p, _)| *p == path) { return note(app, format!("{path} is already shared")) }
             folders.push((path.clone(), write));

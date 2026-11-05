@@ -210,18 +210,17 @@ describe('a Buddy through the store', () => {
     const f = await swarm()
     const { chat, agentId } = await buddy(f)
     const ask = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
-    const propose = () => f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, goal: 'Offline sync', scope: 'Desktop only',
+    const propose = () => f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it to the PM', goal: 'Offline sync', scope: 'Desktop only',
       priority: 'normal' }, peer, agentId)
     const sent = await propose()
     const row = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: String(sent.result.messageId) } })
-    expect(row).toMatchObject({ conversationId: 'lead', recipientIds: [], author: { kind: 'person', id: peer.sub },
-      source: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: ask }, text: 'Offline sync' })
-    const details = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, thread: row.id, replyTo: row.id } })
-    expect(details).toMatchObject({ author: { kind: 'agent', id: agentId }, recipientIds: [f.lead],
-      text: 'Goal: Offline sync\nScope: Desktop only\nPriority: normal' })
-    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: details.id, agentId: f.lead } })).toBe(1)
+    // Its owner's own words, delivered to the PM, with the goal and scope kept for the PM and no reply from the Buddy (task #2926).
+    expect(row).toMatchObject({ conversationId: 'lead', recipientIds: [f.lead], author: { kind: 'person', id: peer.sub }, text: 'Send it to the PM',
+      source: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: ask, goal: 'Offline sync', scope: 'Desktop only', priority: 'normal' } })
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, replyTo: row.id } })).toBe(0)
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: row.id, agentId: f.lead } })).toBe(1)
     const page = await f.store.messages(owner, f.tab, 'lead', {})
-    expect(page.threads).toEqual(expect.arrayContaining([expect.objectContaining({ id: row.id, replies: 1 })]))
+    expect(page.messages.find(m => m.id === row.id)).toMatchObject({ text: 'Send it to the PM' })
     await expect(propose()).rejects.toThrow('already sent')
     await expect(f.execute({ type: 'message.send', conversationId: 'lead', text: 'Hi PM', replyTo: null, recipientIds: [] }, peer, agentId))
       .rejects.toThrow('A Buddy posts only in its own chat')
@@ -231,7 +230,7 @@ describe('a Buddy through the store', () => {
     const f = await swarm()
     const { chat, agentId } = await buddy(f)
     const ask = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
-    const sent = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, goal: 'Offline sync', scope: 'Desktop only',
+    const sent = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it to the PM', goal: 'Offline sync', scope: 'Desktop only',
       priority: 'normal' }, peer, agentId)).result.messageId)
     // Written with the proposal itself, before anything reads it.
     expect(await db.superTabOpenProposal.findMany({ where: { tabId: f.tab }, select: { id: true, conversationId: true } })).toEqual([{ id: sent, conversationId: 'lead' }])
@@ -333,7 +332,7 @@ describe('a Buddy through the store', () => {
     await expect(f.store.costSummary(peer, f.tab, 7, agentId)).rejects.toThrow('A Buddy reads no routing')
   })
 
-  it('never reads the nightly routing reflection, which says what each engine and model cost: routing too', async () => {
+  it('receives no nightly report and still cannot read historical routing reports', async () => {
     const f = await swarm()
     const { agentId } = await buddy(f)
     const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Parser', brief: '', checks: [] })).result.conversationId)
@@ -341,11 +340,16 @@ describe('a Buddy through the store', () => {
     await db.superTabRouteDecision.create({ data: { id: randomUUID(), tabId: f.tab, conversationId: group, assignmentId: randomUUID(), outcome: 'done',
       createdAt: new Date(at), final: { kind: 'member' }, record: { assessment: { kind: 'parser' } }, run: { machineId: 'peer-mac', harnessId: 'h',
         engine: 'claude', model: 'opus', effort: 'high', billing: 'subscription', startedAt: at, start: {}, endedAt: at + 60_000, end: {} } } })
-    expect(await f.store.postReflection(f.tab, 'lead', '2026-10-30')).toBe('posted')
-    const report = (await f.store.messages(peer, f.tab, 'lead', {})).messages.find(m => (m.source as { kind?: unknown } | null)?.kind === 'routing-reflection')
-    expect(report?.text).toContain('- claude opus high, parser: 1 attempt, 0 shipped')
-    expect((await f.store.messages(peer, f.tab, 'lead', {}, agentId)).messages.map(m => m.id)).not.toContain(report!.id)
-    await expect(f.store.messages(peer, f.tab, 'lead', { messageId: report!.id }, agentId)).resolves.toMatchObject({ messages: [] })
+    expect(await f.store.postReflection(f.tab, 'lead', '2026-10-30')).toBe('empty')
+    expect((await f.store.messages(peer, f.tab, 'lead', {})).messages.some(m => (m.source as { kind?: unknown } | null)?.kind === 'routing-reflection')).toBe(false)
+    const report = await db.superTabMessage.create({ data: { id: randomUUID(), tabId: f.tab, conversationId: 'lead', sequence: 1,
+      author: { kind: 'agent', id: f.lead, name: 'Lead' }, recipientIds: [], mentions: [], text: 'Routing reflection: an old report.',
+      source: { kind: 'routing-reflection', projectId: 'lead', on: '2026-10-29' } } })
+    expect((await f.store.messages(peer, f.tab, 'lead', { messageId: report.id })).messages).toEqual([
+      expect.objectContaining({ id: report.id, text: report.text }),
+    ])
+    expect((await f.store.messages(peer, f.tab, 'lead', {}, agentId)).messages.map(m => m.id)).not.toContain(report.id)
+    await expect(f.store.messages(peer, f.tab, 'lead', { messageId: report.id }, agentId)).resolves.toMatchObject({ messages: [] })
   })
 
   it('never reads the routing proposals asked of its person: not in its decisions, nor as the PM\'s line when its person leaves one to the PM (review of #2276)', async () => {
@@ -363,6 +367,10 @@ describe('a Buddy through the store', () => {
     const theirs = (await f.store.decisions(peer, f.tab, 'open')).decisions
     expect(theirs.map(d => d.question).sort()).toEqual([...routing.map(r => r.question), 'Which week?'].sort())
     expect((await f.store.decisions(peer, f.tab, 'open', agentId)).decisions.map(d => d.question)).toEqual(['Which week?'])
+    // An agent reads whom a decision asks by name, never email; the person's own app keeps it (review of #2954).
+    expect((await f.store.decisions(peer, f.tab, 'open', agentId)).decisions[0]).toMatchObject({ personEmail: null, personName: expect.any(String) })
+    expect(JSON.stringify((await f.store.decisions(peer, f.tab, 'open', agentId)).decisions)).not.toContain(peer.email)
+    expect(theirs.find(d => d.question === 'Which week?')).toMatchObject({ personEmail: peer.email })
     // Left to the PM: the plain one's line reaches the Buddy chat, the proposal's never does, and the Buddy's answered list holds no proposal.
     await f.execute({ type: 'decision.answer', decisionId: routing[0]!.id, delegate: true }, peer)
     await f.execute({ type: 'decision.answer', decisionId: theirs.find(d => d.question === 'Which week?')!.id, delegate: true }, peer)
@@ -431,16 +439,16 @@ describe('a Buddy through the store', () => {
     const unsent = await upload('draft.txt', 'text/plain', Buffer.from('not for the PM'), chat, false)
     const ask = async () => String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM with the plan', replyTo: null, recipientIds: [] }, peer)).result.messageId)
     const propose = async (attachmentIds: string[], ownerMessageId?: string) => f.execute({ type: 'buddy.propose', conversationId: chat,
-      ownerMessageId: ownerMessageId ?? await ask(), goal: 'Offline sync', scope: 'Desktop only', priority: 'normal', attachmentIds }, peer, agentId)
+      ownerMessageId: ownerMessageId ?? await ask(), text: 'Send it to the PM with the plan', goal: 'Offline sync', scope: 'Desktop only', priority: 'normal', attachmentIds }, peer, agentId)
 
     await expect(propose([plan, unsent])).rejects.toThrow('Upload this file again')
     await expect(propose([plan, 'a'.repeat(24), 'b'.repeat(24), 'c'.repeat(24), 'd'.repeat(24), 'e'.repeat(24)])).rejects.toThrow('at most 5 files')
     const sent = await propose([plan, shot, log])
     const id = String(sent.result.messageId)
-    const read = (await f.store.messages(owner, f.tab, 'lead', {}, f.lead)).messages.find(m => m.replyTo === id)
+    const read = (await f.store.messages(owner, f.tab, 'lead', {}, f.lead)).messages.find(m => m.id === id)
     expect(read?.attachments?.map(a => [a.name, a.mime, a.url.startsWith('https://cdn.example.test/super-tabs/')])).toEqual([
       ['plan.md', 'text/markdown', true], ['shot.png', 'image/png', true], ['sync.log', 'text/plain', true]])
-    expect((await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.replyTo === id)?.attachments).toHaveLength(3)
+    expect((await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.id === id)?.attachments).toHaveLength(3)
     // Each opens from its link as the apps open it: the picture shown in place, the plan and the log as their own text.
     // And from the signed link each read adds (fileLinks.ts), as apps that know links open it.
     expect(read!.attachments!.map(a => f.files.open(a.link!)?.length)).toEqual(read!.attachments!.map(a => a.size))
@@ -463,8 +471,8 @@ describe('a Buddy through the store', () => {
     const [first, second] = [await ask(), await ask()]
     const raced = await Promise.allSettled([propose([again], first), propose([again], second)])
     expect(raced.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected'])
-    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', source: { equals: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: first } } } })
-      + await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', source: { equals: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: second } } } })).toBe(1)
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', source: { equals: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: first, goal: 'Offline sync', scope: 'Desktop only', priority: 'normal' } } } })
+      + await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', source: { equals: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: second, goal: 'Offline sync', scope: 'Desktop only', priority: 'normal' } } } })).toBe(1)
     const elsewhere = await upload('other.txt', 'text/plain', Buffer.from('project chat'), 'lead', false)
     await f.execute({ type: 'message.send', conversationId: 'lead', text: 'FYI', replyTo: null, recipientIds: [], attachmentIds: [elsewhere] }, peer)
     await expect(propose([elsewhere])).rejects.toThrow('Upload this file again')
@@ -491,7 +499,7 @@ describe('a Buddy through the store', () => {
       remove.mockRestore()
     }
     const ask = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
-    const propose = (attachmentIds: string[]) => f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, goal: 'Offline sync',
+    const propose = (attachmentIds: string[]) => f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it to the PM', goal: 'Offline sync',
       scope: 'Desktop only', priority: 'normal', attachmentIds }, peer, agentId)
     await expect(propose([owners])).rejects.toThrow('Upload this file again')
     await expect(propose([own])).rejects.toThrow('Upload this file again')
@@ -798,7 +806,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     const f = await swarm()
     const { chat, agentId: proposer, main: agentId, swarmChat } = await buddy(f)
     const ask = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
-    const proposal = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, goal: 'Offline sync', scope: 'Desktop only',
+    const proposal = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it to the PM', goal: 'Offline sync', scope: 'Desktop only',
       priority: 'normal' }, peer, proposer)).result.messageId)
     const pm = (text: string, extra: { replyTo?: string; mentions?: string[] } = {}) => f.execute({ type: 'message.send', conversationId: 'lead', text,
       replyTo: extra.replyTo ?? null, recipientIds: [], ...extra.mentions ? { mentions: extra.mentions } : {} }, owner, f.lead)
@@ -841,9 +849,28 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     expect((await f.store.messages(peer, f.tab, group, {}, agentId)).messages.map(m => m.id)).toContain(notice.id)
   })
 
+  // River, 11-04 (task #2926): a proposal answered before threads, or built without the task's link, is closed by hand.
+  it('leaves the open proposals for good once the PM closes it with a reason, posting nothing', async () => {
+    const { f, proposal } = await proposed()
+    const rows = await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead' } })
+    await f.execute({ type: 'proposal.close', projectId: 'lead', messageId: proposal, reason: 'Built in #2901' }, owner, f.lead)
+    const listed = async () => (await f.store.proposals(owner, f.tab, 'lead')).proposals.map(p => p.messageId)
+    expect(await listed()).not.toContain(proposal)
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead' } })).toBe(rows)
+    // Past the seed's half hour too, and its reason kept with it.
+    await db.superTabOpenProposal.updateMany({ where: { id: `seeded:${f.tab}:lead` }, data: { createdAt: new Date(Date.now() - SEED_SETTLE_MS - 1000) } })
+    expect(await listed()).not.toContain(proposal)
+    const [kept] = await db.superTabOpenProposal.aggregateRaw({ pipeline: [{ $match: { _id: proposal } }] }) as unknown as Array<Record<string, unknown>>
+    expect(kept).toMatchObject({ sequence: -2, closed: { reason: 'Built in #2901', by: f.lead } })
+  })
+
   it('links the proposal when the PM names its details, the reply it was delivered; a reply of its own stays refused (Scholes, 11-04)', async () => {
     const { f, proposal, pm } = await proposed()
-    const details = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, replyTo: proposal } })
+    // A proposal posted before task #2926 has its Buddy's first reply holding its details, stored as it was written then.
+    const root = await db.superTabMessage.findUniqueOrThrow({ where: { id: proposal } })
+    const details = await db.superTabMessage.create({ data: { id: randomUUID().replaceAll('-', '').slice(0, 24), tabId: f.tab, conversationId: 'lead',
+      sequence: root.sequence + 10_000, author: { kind: 'agent', id: String((root.source as { buddyId: string }).buddyId), name: 'Buddy' },
+      text: 'Goal: Offline sync\nScope: Desktop only\nPriority: normal', replyTo: proposal, thread: proposal, recipientIds: [f.lead], mentions: [] } })
     const open = (proposalMessageId: string) => f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
       checks: [{ description: 'Edits survive a restart', independent: false }], proposalMessageId }, owner, f.lead)
     const answer = String((await pm('Taking it.', { replyTo: proposal })).result.messageId)
@@ -939,7 +966,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     await buddy(f)
     expect((await read()).deliveries).toEqual([])
     // Ordinary deliveries still show: the proposal's to the PM, its listed recipient.
-    const sent = (await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.replyTo === proposal)!
+    const sent = (await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.id === proposal)!
     expect(sent.deliveries.map(d => d.agentId)).toEqual([f.lead])
   })
 

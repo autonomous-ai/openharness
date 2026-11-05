@@ -494,7 +494,10 @@ describe('the ship moment', () => {
   it('replies Merged in the task\'s thread when its merge is recorded, once on a retry, waking nobody', async () => {
     const tab = await swarm()
     await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: randomUUID(), name: 'River', configuration: config, lead: true })
-    const group = (await run(tab, { type: 'conversation.create', title: 'Avatars', brief: 'Add avatars.',
+    // Asked for in the owner's own message, whose thread is the task's (#2925).
+    const asked = (await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Can we have avatars?', replyTo: null, recipientIds: [] }))
+      .result.messageId as string
+    const group = (await run(tab, { type: 'conversation.create', title: 'Avatars', brief: 'Add avatars.', requestMessageId: asked,
       checks: [{ description: 'Tests pass', independent: false }] })).result.conversationId as string
     const builder = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'host', harnessId: randomUUID(), name: 'Kai',
       configuration: config, lead: false })).result.agentId as string
@@ -514,11 +517,9 @@ describe('the ship moment', () => {
     await run(tab, merged, owner, undefined, mergeId)
     const rows = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' } })
     expect(rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'ship')).toEqual([])
-    const lines = rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'task-line')
-    expect(lines).toHaveLength(1)
-    expect(lines[0]).toMatchObject({ text: 'Avatars', recipientIds: [], source: { taskId: group } })
-    const merges = rows.filter(m => m.thread === lines[0]!.id && m.text.startsWith('Merged'))
+    expect(rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'task-line')).toEqual([])
+    const merges = rows.filter(m => m.thread === asked && m.text.startsWith('Merged'))
     expect(merges).toEqual([expect.objectContaining({ text: 'Merged: PR #7. Ships in the next release.', recipientIds: [] })])
-    expect(await db.superTabDelivery.count({ where: { tabId: tab, messageId: { in: [lines[0]!.id, merges[0]!.id] } } })).toBe(0)
+    expect(await db.superTabDelivery.count({ where: { tabId: tab, messageId: { in: [merges[0]!.id] } } })).toBe(0)
   })
 })

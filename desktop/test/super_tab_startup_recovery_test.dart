@@ -90,6 +90,25 @@ void main() {
     expect(prompt, contains('text:null when nothing changed'));
   });
 
+  // Answers go right below, not in a thread (anh Dee, 2026-11-04; task #2929).
+  test('bootstrap answers a main-chat message right below it', () {
+    for (final lead in [true, false]) {
+      final prompt = superTabLaunchPrompt(
+        tabId: 'a' * 160,
+        conversationId: 'b' * 160,
+        lead: lead,
+      );
+      expect(
+        prompt,
+        contains(
+          'Reply: `post GROUP "message" UNIQUE_OPERATION_ID [--answers MESSAGE_ID | --reply-to MESSAGE_ID]`. '
+          'A main-chat message is answered right below it with --answers; one in a thread, in its thread with --reply-to; answer each message once, do not post again.',
+        ),
+      );
+      expect(prompt.length, lessThanOrEqualTo(2000));
+    }
+  });
+
   for (final engine in ['codex', 'claude']) {
     for (final newProject in [false, true]) {
       for (final task in ['', 'hi', '文🙂\n' * 500]) {

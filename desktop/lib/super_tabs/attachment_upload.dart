@@ -51,6 +51,7 @@ const _mimes = {
   'log': 'text/plain',
   'md': 'text/markdown',
   'csv': 'text/csv',
+  'wav': 'audio/wav',
 };
 
 /// Where the backend serves attachments from; the same host as its

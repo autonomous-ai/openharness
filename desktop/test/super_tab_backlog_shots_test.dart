@@ -264,15 +264,25 @@ void main() {
       'many-shipped',
       'mine',
       'project',
+      'mine-nothing-open',
       'mine-empty',
-      'mine-shipped',
     ]) {
       testWidgets('screenshots for review ($scene, ${brightness.name})', (
         tester,
       ) async {
         final picture = GlobalKey();
         final server = swarm(perProject: 3);
-        if (scene.startsWith('mine-')) nothingOpenWithArchived(server);
+        if (scene == 'mine-nothing-open') {
+          // Scholes's 72 (#2885): nothing open, and Shipped still lists.
+          nothingOpenWithArchived(server);
+          manyShipped(server, 69);
+        }
+        if (scene == 'mine-empty') {
+          // Nothing open and nothing shipped: the one empty message.
+          for (final g in (server.state['conversations'] as List).cast<Map>()) {
+            if (g['requesterId'] == 'owner') g['requesterId'] = 'huy';
+          }
+        }
         if (scene == 'many-shipped') manyShipped(server, 12);
         // GitHub's answer for the open pull requests: checks passed on the
         // one in review, and its approval; checks running on the others.
@@ -305,12 +315,6 @@ void main() {
         if (scene.startsWith('mine')) {
           await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
           await tester.pumpAndSettle();
-          if (scene == 'mine-shipped') {
-            await tester.tap(
-              find.byKey(const ValueKey('super-backlog-mine-shipped')),
-            );
-            await tester.pumpAndSettle();
-          }
         } else if (scene == 'project') {
           await tester.tap(find.byKey(const ValueKey('super-backlog-project')));
           await tester.pumpAndSettle();

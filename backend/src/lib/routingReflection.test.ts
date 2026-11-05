@@ -24,7 +24,7 @@ describe('when the nightly routing reflection is due', () => {
     expect(reflectionDue({ digest: { time: '08:00', timeZone: 'Mars/Olympus' } }, utc(30, 16, 30))).toBe('2026-10-30')
   })
 
-  it('posts one report a project a local date', () => {
+  it('uses a stable nightly operation ID per project and local date', () => {
     expect(reflectionMessageId('tab', 'p1', '2026-10-30')).toBe(reflectionMessageId('tab', 'p1', '2026-10-30'))
     expect(reflectionMessageId('tab', 'p1', '2026-10-30')).not.toBe(reflectionMessageId('tab', 'p1', '2026-10-31'))
     expect(reflectionMessageId('tab', 'p1', '2026-10-30')).not.toBe(reflectionMessageId('tab', 'p2', '2026-10-30'))

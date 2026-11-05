@@ -6,6 +6,7 @@ import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/phone/settings_row.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/shared/theme/appearance_prefs_store.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/swarm/swarm_row.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
@@ -17,10 +18,10 @@ import 'edge_fixture.dart';
 
 /// Settings opened from Swarm's You wears Swarm's pages (prototype A lean, 2026-11-03,
 /// `docs/design/2026-11-03-swarm-settings.md`): Swarm's top bar, sentence-case captions, cards of
-/// Swarm rows each led by a glyph, in the app's face; the account's rows in three cards;
-/// Notifications and Swarm with no line under them; Language in Terminal's card; Help and About
-/// one row each, opening a sheet of what they held. Opened from anywhere else, it keeps the
-/// phone's own look.
+/// Swarm rows each led by a glyph, in the app's face; the account's rows in three cards; Swarm
+/// with no line under it; Language in Terminal's card; Help and About one row each, opening a
+/// sheet of what they held; no Notifications or Theme, which are on You (2026-11-04). Opened from
+/// anywhere else, it keeps the phone's own look.
 ///
 /// No choice is made in any sheet or stepper: those write through stores whose home is the real
 /// state file (see `settings_behavior_test.dart`).
@@ -149,7 +150,6 @@ void main() {
       // Top to bottom, as the list goes: it builds only what it shows.
       for (final (title, glyph) in [
         ('Usage', LucideIcons.gauge300),
-        ('Notifications', LucideIcons.bell300),
         ('Privacy', LucideIcons.shield300),
         ('Computers', LucideIcons.laptop300),
         ('Connectors', LucideIcons.plug300),
@@ -160,7 +160,6 @@ void main() {
         ('Size', LucideIcons.aLargeSmall300),
         ('Colors', LucideIcons.palette300),
         ('Language', LucideIcons.mic300),
-        ('Theme', LucideIcons.sunMoon300),
         ('Text size', LucideIcons.aLargeSmall300),
         ('Swarm', LucideIcons.flaskConical300),
         ('Help', LucideIcons.circleHelp300),
@@ -203,7 +202,7 @@ void main() {
         'use, your computers, this phone', (tester) async {
       final app = await openSettings(tester, swarm: true);
 
-      for (final row in ['Usage', 'Notifications', 'Privacy']) {
+      for (final row in ['Usage', 'Privacy']) {
         expect(inCard('Ada Lovelace', row), findsOneWidget, reason: row);
       }
       expect(inCard('Usage', 'Computers'), findsNothing);
@@ -314,13 +313,21 @@ void main() {
       await close(tester, app);
     });
 
-    testWidgets('Notifications says on or off, with no line under it', (
-      tester,
-    ) async {
+    testWidgets('no Notifications and no Theme: they are on You, one tap '
+        'nearer (2026-11-04)', (tester) async {
       final app = await openSettings(tester, swarm: true);
 
-      expect(rowOf('Notifications'), findsOneWidget);
-      expect(find.textContaining('a harness finishes'), findsNothing);
+      expect(inCard('Ada Lovelace', 'Usage'), findsOneWidget);
+      expect(find.text('Notifications'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('settings-notifications')),
+        findsNothing,
+      );
+
+      await reveal(tester, find.text('Text size'));
+      expect(find.text('Theme'), findsNothing);
+      expect(find.byType(SwarmSegments<AppThemeMode>), findsNothing);
+      expect(find.text('App colors'), findsNothing, reason: 'nor the palettes');
       await close(tester, app);
     });
 

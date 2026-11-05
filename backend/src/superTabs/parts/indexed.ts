@@ -171,6 +171,11 @@ export async function retryStaleIndex<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+/** The rows a named read asks for in its first reply: all of them, in one round trip, within Mongo's 16 MB reply. Its default
+ *  first batch is 101 documents, and each further batch a getMore: an agent's quiet conversations or a Swarm's week of
+ *  finished starts took more of them as the Swarm grew (#2839: Atlas ops per request up 38% at flat traffic). */
+export const READ_BATCH = 100_000
+
 /**
  * The rows of an `aggregateRaw` pipeline on `collection`, through its index `name` once the database is known to have it.
  * An index removed since the last listing (a rollback, an index replaced) fails the read: the listing is dropped, said, and
@@ -180,7 +185,7 @@ export async function retryStaleIndex<T>(run: () => Promise<T>): Promise<T> {
 export async function readBy<C extends NamedCollection>(tx: Transaction, collection: C, name: NamedIndex<C>,
   pipeline: Prisma.InputJsonValue[]): Promise<Array<Record<string, unknown>>> {
   const model = (tx as unknown as Record<string, { aggregateRaw(args: unknown): Promise<unknown> }>)[collection[0]!.toLowerCase() + collection.slice(1)]!
-  const run = async (hint?: Record<string, number>) => await model.aggregateRaw({ pipeline, ...hint ? { options: { hint } } : {} }) as
+  const run = async (hint?: Record<string, number>) => await model.aggregateRaw({ pipeline, options: { batchSize: READ_BATCH, ...hint ? { hint } : {} } }) as
     Array<Record<string, unknown>>
   if (rerun.getStore() || !present.get(collection)?.has(name)) return run()
   try {

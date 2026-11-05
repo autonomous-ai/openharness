@@ -3,8 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 
-import 'super_tab_activity_lists_test.dart'
-    show swarm, unreadThread, wait;
+import 'super_tab_activity_lists_test.dart' show swarm, unreadThread, wait;
 import 'super_tab_mentions_test.dart' show showView;
 import 'support/super_tab_fixture.dart';
 
@@ -63,7 +62,7 @@ void main() {
       server.ask(['Ship it?'], conversationId: 'lead');
       await showView(tester, server);
       final activity = find.descendant(
-        of: _key('super-activity'),
+        of: _key('super-decisions'),
         matching: find.byType(SuperTabCountBadge),
       );
       expect(
@@ -87,7 +86,7 @@ void main() {
 
     // Project rows are 4 px taller than the rest since Huy's ask (11-03,
     // #2427); Activity and Buddy keep Slack's pitch.
-    testWidgets('Activity and Buddy sit 4 px closer than project rows', (
+    testWidgets('Decisions and Mentions sit 4 px closer than project rows', (
       tester,
     ) async {
       final server = swarm();
@@ -104,7 +103,7 @@ void main() {
           y(find.text('second-project').first) -
           y(find.text('web-project').first);
       expect(
-        y(_key('super-swarm-buddy')) - y(_key('super-activity')),
+        y(_key('super-mentions')) - y(_key('super-decisions')),
         rows.abs() - 4,
       );
     });
@@ -121,9 +120,9 @@ void main() {
       expect(_key('super-members-button'), findsNothing);
     });
 
-    testWidgets('Activity has no Members', (tester) async {
+    testWidgets('Decisions has no Members', (tester) async {
       await showView(tester, swarm());
-      await tester.tap(_key('super-activity'));
+      await tester.tap(_key('super-decisions'));
       await tester.pumpAndSettle();
       expect(_key('super-members-button'), findsNothing);
     });
@@ -166,7 +165,7 @@ void main() {
     });
   });
 
-  group('Activity', () {
+  group('Decisions, Mentions and Threads', () {
     testWidgets("its marks are the app's icons, as task lines' are", (
       tester,
     ) async {
@@ -177,14 +176,14 @@ void main() {
         'more': false,
       };
       await showView(tester, server);
-      await tester.tap(_key('super-activity'));
+      await tester.tap(_key('super-threads'));
       await tester.pumpAndSettle();
       for (final glyph in ['↳', '✓', '◐']) {
         expect(find.text(glyph), findsNothing);
       }
-      // A thread row says who replied in words, not with a reply mark.
-      expect(find.textContaining('Lead replied'), findsOneWidget);
       expect(find.byIcon(AppIcons.reply), findsNothing);
+      // The card marked its thread read: its save runs out.
+      await tester.pump(const Duration(seconds: 1));
     });
 
     testWidgets("today's time reads as the chat's", (tester) async {
@@ -201,7 +200,7 @@ void main() {
         ).toUtc().toIso8601String(),
       );
       await showView(tester, server);
-      await tester.tap(_key('super-activity'));
+      await tester.tap(_key('super-mentions'));
       await tester.pumpAndSettle();
       expect(find.text('8:08 PM'), findsOneWidget);
     });
@@ -209,24 +208,26 @@ void main() {
     testWidgets('a heading sits nearer its rows than the section above', (
       tester,
     ) async {
-      final server = swarm();
-      server.followedThreads = {
-        'unread': [
-          {
-            ...unreadThread('message-1'),
-            'lastReplyAt': DateTime.now().toUtc().toIso8601String(),
-          },
-          unreadThread('message-2', text: 'Older root'),
-        ],
-        'read': [],
-        'more': false,
-      };
+      final server = swarm()..followedThreads = null;
+      final now = DateTime.now().toUtc();
+      server.tag(
+        'message-1',
+        leadId: 'a',
+        text: 'Older tag',
+        createdAt: now.subtract(const Duration(days: 3)).toIso8601String(),
+      );
+      server.tag(
+        'message-1',
+        leadId: 'b',
+        text: 'Newer tag',
+        createdAt: now.toIso8601String(),
+      );
       await showView(tester, server);
-      await tester.tap(_key('super-activity'));
+      await tester.tap(_key('super-mentions'));
       await tester.pumpAndSettle();
       double y(String text) => tester.getCenter(find.text(text)).dy;
-      final under = y('Older root') - y('Earlier');
-      final over = y('Earlier') - y('Lead: Root text');
+      final under = y('Older tag') - y('Earlier');
+      final over = y('Earlier') - y('Newer tag');
       expect(under, lessThan(over));
     });
   });

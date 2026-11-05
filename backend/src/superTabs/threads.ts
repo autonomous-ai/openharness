@@ -1,7 +1,6 @@
 import type { Author, Conversation, SuperTabState } from './model.js'
 import type { ThreadReply } from './pageReads.js'
 import { canReadGroup } from './projects.js'
-import type { TaskAsk } from './taskLine.js'
 
 /** What a page says about one thread: the line under its root, and who it marks unread for. */
 export interface ThreadSummary {
@@ -13,14 +12,14 @@ export interface ThreadSummary {
   authors: Author[]
   /** People who wrote in the thread or were tagged in it, in order of first appearance. */
   people: string[]
-  /** Where the ask at its root stands: the row's tag in the chat (Dee, 2026-11-04). */
-  ask?: Exclude<TaskAsk, 'closed'> | 'proposal'
+  /** A Buddy's proposal nobody has answered yet: the row's tag in the chat (Dee, 2026-11-04). A task's state is no tag: its
+   *  agent reacts 👀 and ✅ on the row instead (taskLine.ts; Dee, 11-04, 'bot messages'). */
+  ask?: 'proposal'
 }
 
-/** A task's newest mark decides (taskLine.ts). With none, a Buddy's proposal is an ask until the PM has answered it. */
+/** A Buddy's proposal is an ask until the PM has answered it, or a task took it (any task mark, taskLine.ts). */
 function askOf(group: Conversation, root: string, thread: ThreadReply[]): ThreadSummary['ask'] {
-  const mark = thread.findLast(row => row.ask)?.ask
-  if (mark) return mark === 'closed' ? undefined : mark
+  if (thread.some(row => row.ask)) return undefined
   const asked = thread.some(row => row.id === root && row.kind === 'buddy-proposal')
   return asked && !thread.some(row => row.id !== root && row.author.kind === 'agent' && row.author.id === group.leadId) ? 'proposal' : undefined
 }

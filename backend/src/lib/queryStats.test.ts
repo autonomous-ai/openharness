@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createQueryStats, enterWork, estimateBytes, filterShape, registerWorkContext, runWork, workKind, type QueryStatsOptions } from './queryStats.js'
+import type { PrismaClient } from '@prisma/client'
+import { createQueryStats, enterWork, estimateBytes, filterShape, registerWorkContext, runWork, withQueryStats, workKind, type QueryStatsOptions } from './queryStats.js'
 
 type Logged = { message: string; context: Record<string, unknown> }
 
@@ -249,5 +250,53 @@ describe('estimateBytes', () => {
     s.record('SwarmGroup', 'findMany', {}, 1, [])
     s.flush()
     expect(infos[0]!.context).toMatchObject({ bytesCapped: 1 })
+  })
+})
+
+describe('the query hook', () => {
+  type Call = { model?: string; operation: string; args: unknown; query: (args: unknown) => Promise<unknown> }
+  /** A client whose only part is `$extends`: it keeps the hook so a test can call it as Prisma would. */
+  function hooked(observe: (model: string, operation: string, seconds: number) => void) {
+    let hook: ((call: Call) => Promise<unknown>) | undefined
+    const client = { $extends: (extension: { query: { $allOperations: (call: Call) => Promise<unknown> } }) => { hook = extension.query.$allOperations; return client } }
+    withQueryStats(client as unknown as PrismaClient, () => undefined, () => {}, observe)
+    return (call: Call) => hook!(call)
+  }
+
+  it('times every query once into the duration histogram, a failed one and a raw command too (#1880)', async () => {
+    const seen: Array<[string, string, number]> = []
+    const run = hooked((model, operation, seconds) => { seen.push([model, operation, seconds]) })
+    await expect(run({ model: 'User', operation: 'findFirst', args: { where: { email: 'person@example.com' } }, query: async () => ({ id: 'u1' }) })).resolves.toEqual({ id: 'u1' })
+    const failure = new Error('write conflict')
+    await expect(run({ model: 'User', operation: 'update', args: {}, query: async () => { throw failure } })).rejects.toBe(failure)
+    await run({ operation: '$runCommandRaw', args: { ping: 1 }, query: async () => ({ ok: 1 }) })
+    expect(seen.map(([model, operation]) => [model, operation])).toEqual([['User', 'findFirst'], ['User', 'update'], ['raw', '$runCommandRaw']])
+    for (const [, , seconds] of seen) expect(seconds).toBeGreaterThanOrEqual(0)
+    expect(JSON.stringify(seen)).not.toContain('person@example.com')
+  })
+
+  it('keeps a query\'s result when the histogram throws', async () => {
+    const run = hooked(() => { throw new Error('registry broke') })
+    await expect(run({ model: 'User', operation: 'count', args: {}, query: async () => 3 })).resolves.toBe(3)
+  })
+})
+
+describe('the minute handed on to the counters (#2957)', () => {
+  it('hands every route of the minute to onWindow, not only the 40 the line lists', () => {
+    const windows: Array<Map<string, { n: number; ms: number; bytes: number }>> = []
+    const { s, infos } = stats({ sampleEvery: 1, onWindow: routes => { windows.push(new Map(routes)) } })
+    for (let i = 0; i < 45; i++) runWork(`http GET /api/r${i}`, () => s.record('User', 'findFirst', { where: { k: 'y' } }, 1, [{ a: 1 }]))
+    s.flush()
+    expect(Object.keys(infos[0]!.context.routes as object)).toHaveLength(40)
+    expect(windows[0]!.size).toBe(45)
+    expect(windows[0]!.get('http GET /api/r44')).toMatchObject({ n: 1, ms: 1, bytes: JSON.stringify([{ a: 1 }]).length })
+  })
+
+  it('still logs its line, and warns, when onWindow throws', () => {
+    const { s, infos, warns } = stats({ onWindow: () => { throw new Error('counter broke') } })
+    runWork('http GET /api/a', () => s.record('User', 'count', {}, 1, 3))
+    expect(() => s.flush()).not.toThrow()
+    expect(infos).toHaveLength(1)
+    expect(warns.map(w => w.message)).toContain('query stats window failed')
   })
 })

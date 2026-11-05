@@ -81,14 +81,16 @@ const Map<String, List<PermissionMode>> kEnginePermissionModes = {
   ],
 };
 
-/// Modes Harness launches on its own and New Harness never offers: a
-/// Buddy's (CLI superTabs/start.ts), named here so its details read by name.
+/// Modes Harness launches on its own and New Harness never offers: an older
+/// Buddy's saved mode, now full (CLI engines/*/launch.ts, task #2832), and
+/// Team-written work's, named here so their details read by name. The older
+/// Buddy modes go with the CLI's aliases after 2026-12-04.
 const Map<String, List<PermissionMode>> kLaunchOnlyPermissionModes = {
   'claude': [
     PermissionMode(
       'buddy',
-      'Reads only, never asks',
-      'Runs its read tools and commands, refuses the rest without asking',
+      'Full, older Buddy',
+      'Runs with full access, as its owner\'s own session',
     ),
     PermissionMode(
       'teamWritten',
@@ -99,8 +101,8 @@ const Map<String, List<PermissionMode>> kLaunchOnlyPermissionModes = {
   'codex': [
     PermissionMode(
       'readOnlyAsk',
-      'Read only, asks you',
-      'Reads in its sandbox, asks you before anything outside it',
+      'Full, older Buddy',
+      'Runs with full access, as its owner\'s own session',
     ),
     PermissionMode(
       'teamWritten',

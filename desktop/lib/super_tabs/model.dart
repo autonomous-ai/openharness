@@ -1399,14 +1399,11 @@ class SuperTabThread {
   final int replies, lastSequence;
   final DateTime? lastAt;
 
-  /// What its root's row says after the time; null for a message that is no
-  /// ask, and for a state this app does not know.
-  String? get askTag => switch (ask) {
-    'proposal' => '✋ Proposal',
-    'on-it' => '● On it',
-    'shipped' => '✓ Shipped',
-    _ => null,
-  };
+  /// What its root's row says after the time: a Buddy's proposal nobody has
+  /// answered yet; null for any other message. A task's state is no tag: its
+  /// agent reacts 👀 and ✅ on the row instead (anh Dee, 11-04, task #2925),
+  /// so an older server's On it and Shipped draw nothing.
+  String? get askTag => ask == 'proposal' ? '✋ Proposal' : null;
 
   /// The newest distinct reply authors, newest first: the first wrote the
   /// last reply.
@@ -1520,6 +1517,10 @@ class SuperTabMessage {
   String get authorId => author['id'] as String? ?? '';
   bool get fromAgent => author['kind'] == 'agent';
   bool get fromTerminal => source['kind'] == 'native';
+
+  /// What was typed into an agent's terminal, a scheduled prompt too: no chat
+  /// row and nothing unread (Ken 11-04, task #2849). Its answer still is one.
+  bool get terminalPrompt => fromTerminal && source['phase'] == 'prompt';
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
 
@@ -1548,6 +1549,17 @@ class SuperTabMessage {
 
   /// The project chat's line when linked work is Done (ship_row.dart).
   bool get shipLine => source['kind'] == 'ship';
+
+  /// The project and revision an instructions save's chat line names, which
+  /// its "See revision" link opens (#3021); null for any other row.
+  ({String projectId, int revision})? get instructionsSave =>
+      switch ((source['kind'], source['projectId'], source['revision'])) {
+        ('instructions', final String projectId, final num revision) => (
+          projectId: projectId,
+          revision: revision.toInt(),
+        ),
+        _ => null,
+      };
 
   /// A line the chat draws as its own row, with no sender's header (view.dart):
   /// a message after it has no header to join (Diego, #2547).

@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/composer_actions.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/super_tabs/voice_row.dart';
@@ -25,6 +27,22 @@ void main() {
   }
 
   Finder key(String value) => find.byKey(ValueKey(value));
+
+  /// The refused line's words sit a gap below the row, as any line under a
+  /// composer's buttons does (Alder2878's review of 83e32f41a).
+  void expectGapUnder(WidgetTester tester, Finder send) {
+    final words = tester.getRect(
+      find.textContaining("Harness can't use the microphone"),
+    );
+    expect(
+      words.top - tester.getRect(send).bottom,
+      greaterThanOrEqualTo(
+        composerRowInsets(target: grid.AppControl.height).bottom +
+            grid.AppDesktop.controlGap -
+            0.5,
+      ),
+    );
+  }
 
   Future<SuperTabController> show(
     WidgetTester tester, {
@@ -159,13 +177,52 @@ void main() {
         find.textContaining("Harness can't use the microphone"),
         findsOneWidget,
       );
+      expectGapUnder(tester, find.byTooltip('Send message'));
       await tester.tap(key('super-voice-settings'));
       expect(opened, [superTabMicrophoneSettings]);
       await close(tester);
     });
+
+    testWidgets('on Windows it opens Windows settings, in Windows words', (
+      tester,
+    ) async {
+      final opened = <Uri>[];
+      final before = superTabOpenSettings;
+      superTabOpenSettings = (url) async {
+        opened.add(url);
+        return true;
+      };
+      addTearDown(() => superTabOpenSettings = before);
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      try {
+        await show(tester);
+        mic.allow = false;
+        await tester.tap(key('super-composer-mic'));
+        await tester.pumpAndSettle();
+        expect(find.text('Open Settings'), findsOneWidget);
+        expect(find.textContaining('System Settings'), findsNothing);
+        await tester.tap(key('super-voice-settings'));
+        expect(opened, [Uri.parse('ms-settings:privacy-microphone')]);
+        await close(tester);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
   });
 
   group('a thread', () {
+    testWidgets('a refused microphone says so under the thread\'s row', (
+      tester,
+    ) async {
+      await show(tester, thread: 'message-1');
+      mic.allow = false;
+      await tester.tap(key('super-thread-mic'));
+      await tester.pumpAndSettle();
+      expect(key('super-voice-refused'), findsOneWidget);
+      expectGapUnder(tester, key('super-thread-send'));
+      await close(tester);
+    });
+
     testWidgets("the thread's mic sends a reply to its root", (tester) async {
       await show(tester, thread: 'message-1');
       await tester.tap(key('super-thread-mic'));

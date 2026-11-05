@@ -65,6 +65,9 @@ describe('the row that says so', () => {
     expect(actorLabel(state, 'person:ken')).toBe('ken15')
     expect(actorLabel(state, 'agent:gone')).toBeUndefined()
     expect(actorLabel(state, 'person:gone')).toBeUndefined()
+    // Never an email, even one they took as their name (review of #2954).
+    state.people.find(p => p.id === 'ken')!.name = state.people.find(p => p.id === 'ken')!.email
+    expect(actorLabel(state, 'person:ken')).toBe('ken15')
   })
 
   it('names a person by the name they set, when they set one, as plain words', () => {

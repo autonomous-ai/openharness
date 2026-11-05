@@ -2,8 +2,8 @@
  * A person's Activity in one Swarm (Desktop's Activity view, as Slack's): replies to their messages and reactions to them.
  * Tags and decisions have their own rows (mentions.ts, decisions.ts); Desktop merges the three.
  *
- * A row is written when it happens, in the command's own transaction (store.ts): a thread reply whose root a person wrote, by
- * anyone else, and a reaction to a person's message by anyone else. Removing the reaction removes its row. Rows live in
+ * A row is written when it happens, in the command's own transaction (store.ts): a thread reply, for everyone in its thread but
+ * its author (writeReplyActivity), and a reaction to a person's message by anyone else. Removing the reaction removes its row. Rows live in
  * SuperTabActivity, never in the tab state, so writing one wakes no other reader and an older backend reads and writes a tab
  * that has them.
  *
@@ -21,6 +21,8 @@ import { agentOnly, isLeads, stableId, type Actor, type Author, type Conversatio
 import { SESSION_ENDED_KIND } from './buddySessions.js'
 import { canReadGroup, projectOf } from './projects.js'
 import { groupsBy, readBy } from './parts/indexed.js'
+import type { ThreadFacet } from './pageReads.js'
+import type { ReplyRow } from '../push/notices.js'
 import { shownNameOf } from './personNames.js'
 import { FIELDS, readable, row as messageRow, type Row } from './read/inbox.js'
 
@@ -40,38 +42,98 @@ export type ActivityKind = 'reply' | 'reaction'
 const unread: Prisma.SuperTabActivityWhereInput = { OR: [{ readAt: null }, { readAt: { isSet: false } }] }
 const own = (author: { kind?: string; id?: string } | undefined, personId: string) => author?.kind === 'person' && author.id === personId
 
-/** Activity rows for the thread replies among `messages`: one for the person who wrote the thread's root and one for the person
- *  who wrote the message replied to, unless they wrote the reply. A notice for agents alone is nobody's activity, and a root or
- *  quoted message counts only in the reply's own chat. A Buddy session's ended line is nobody's activity either. Each row keeps its
- *  message's `sequence` (from `sequences`) and whether it is also in the chat, so a thread or chat mark reads it (markActivityThreadRead).
- *  Those messages by id in one read. */
-export async function writeReplyActivity(tx: Tx, tabId: string, messages: MessageDraft[], sequences: ReadonlyMap<string, number>, now: number): Promise<void> {
+/** The most people one thread reply tells (replyAudience). */
+export const REPLY_FANOUT = 100
+
+/** Who one reply tells, before the checks of who may hear it (writeReplyActivity): the thread's starter and the author of the
+ *  message it quotes first, then the people tagged in the thread, then those who replied in it, newest reply first; each once,
+ *  at most REPLY_FANOUT. */
+export function replyAudience(input: { starter: string | null; quoted: string | null; tagged: string[]; repliers: Array<{ id: string; sequence: number }> }): string[] {
+  const told = new Set<string>()
+  const add = (id: string | null) => { if (id && told.size < REPLY_FANOUT) told.add(id) }
+  add(input.starter)
+  add(input.quoted)
+  for (const id of input.tagged) add(id)
+  for (const r of [...input.repliers].sort((a, b) => b.sequence - a.sequence)) add(r.id)
+  return [...told]
+}
+
+/** The people in a thread by its summary (pageReads.ts threadFacet), as the Threads view counts them (read/followedThreads.ts):
+ *  each person who replied, by their newest reply, and each person tagged in it. */
+function threadPeople(facet: ThreadFacet | undefined, root: string): { tagged: string[]; repliers: Array<{ id: string; sequence: number }> } {
+  if (!facet) return { tagged: [], repliers: [] }
+  const repliers = facet.parts.filter(p => p._id.thread === root && !p._id.root && p.newest.author?.kind === 'person' && p.newest.author.id)
+    .map(p => ({ id: p.newest.author.id, sequence: p.newest.s }))
+  const tagged = facet.mentions.filter(m => m._id.thread === root).sort((a, b) => a.first.s - b.first.s).map(m => m._id.person)
+  return { tagged, repliers }
+}
+
+/** What writeReplyActivity needs to tell everyone in a thread: the Swarm as the command left it, and the summaries of the threads
+ *  replied in, computed in the same transaction (pageReads.ts refreshReplies), so finding the people reads nothing more. */
+export interface ReplyFanout { state: SuperTabState; threads: ReadonlyMap<string, ThreadFacet> }
+
+/** Activity rows for the thread replies among `messages` (task #2745, as Slack's threads): a plain reply tells everyone in its
+ *  thread, the person who started it, every person who replied in it and every person tagged in it (replyAudience, from
+ *  `fanout`); a Swarm notice in a thread (a row with a source) tells only the starter and the author of the message it quotes,
+ *  as before; without `fanout` every reply tells only those two. Never the reply's author, nor a person tagged in the reply
+ *  itself (the tag tells them, mentions.ts), nor one who unfollowed the thread (readMarks.ts writeThreadFollow) or muted the
+ *  chat (chatSettings.ts); with `fanout`, never a person no longer in the Swarm or who cannot read the chat now, and a chat
+ *  its state does not hold tells only those two. A notice for
+ *  agents alone, or a Buddy session's ended line, is nobody's activity. A root or quoted message counts only in the reply's own
+ *  chat. Each row keeps its message's `sequence` (from `sequences`) and whether it is also in the chat, so a thread or chat mark
+ *  reads it (markActivityThreadRead).
+ *
+ *  Reads: the roots and quoted messages by id, the people's thread marks by id and their chat settings by id: three reads
+ *  whatever the thread's length, the last two only when someone is told. Writes: one row per person told, in one createMany. */
+export async function writeReplyActivity(tx: Tx, tabId: string, messages: MessageDraft[], sequences: ReadonlyMap<string, number>, now: number,
+  fanout?: ReplyFanout): Promise<ReplyRow[]> {
   const replies = messages.filter(m => m.thread && m.thread !== m.id && !agentOnly(m.source ?? null, m.recipients) && m.source?.kind !== SESSION_ENDED_KIND)
-  if (!replies.length) return
+  if (!replies.length) return []
   const ids = [...new Set(replies.flatMap(m => [m.thread!, ...(m.replyTo ? [m.replyTo] : [])]))]
   // By id through its index, as a plain $in (parts/indexed.ts): Prisma's `in` plans slowly.
   const found = new Map((await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: ids }, tabId } }, { $project: { conversationId: 1, author: 1 } }]))
     .map(r => [r._id as string, { conversationId: r.conversationId as string, author: r.author }]))
+  const personOf = (m: MessageDraft, target: string | null | undefined) => {
+    const row = target ? found.get(target) : undefined
+    const by = row?.author as { kind?: string; id?: string } | undefined
+    return row && row.conversationId === m.conversationId && by?.kind === 'person' && by.id ? by.id : null
+  }
+  const people = fanout ? new Map(fanout.state.people.map(p => [p.id, p])) : undefined
   const recipients = replies.map(m => {
-    const people = new Set([m.thread!, m.replyTo].flatMap(target => {
-      const row = target ? found.get(target) : undefined
-      const by = row?.author as { kind?: string; id?: string } | undefined
-      return row && row.conversationId === m.conversationId && by?.kind === 'person' && by.id && !own(m.author, by.id) ? [by.id] : []
-    }))
-    return { message: m, people }
+    const starter = personOf(m, m.thread), quoted = personOf(m, m.replyTo)
+    const group = fanout?.state.conversations.find(c => c.id === m.conversationId)
+    const spread = fanout && group && !m.source ? threadPeople(fanout.threads.get(m.thread!), m.thread!) : { tagged: [], repliers: [] }
+    const tagsHere = new Set(m.mentions ?? [])
+    const told = replyAudience({ starter, quoted, ...spread }).filter(personId => {
+      if (own(m.author, personId) || tagsHere.has(personId)) return false
+      // A chat the command's state does not hold (a quiet one) tells the starter and the quoted author, as without `fanout`.
+      if (!people || !group) return true
+      const person = people.get(personId)
+      return !!person && canReadGroup(fanout!.state, { kind: 'person', userId: person.id, email: person.email }, group)
+    })
+    return { message: m, people: told }
   })
-  const markIds = [...new Set(recipients.flatMap(({ message, people }) => [...people].map(personId =>
+  const markIds = [...new Set(recipients.flatMap(({ message, people }) => people.map(personId =>
     stableId(tabId, message.conversationId, message.thread!, personId))))]
-  const marks = markIds.length ? await tx.superTabThreadMark.aggregateRaw({ pipeline: [
+  if (!markIds.length) return []
+  const marks = await tx.superTabThreadMark.aggregateRaw({ pipeline: [
     { $match: { _id: { $in: markIds } } }, { $project: { _id: 1, follow: 1 } },
-  ] }) as unknown as Array<{ _id: string; follow?: boolean | null }> : []
+  ] }) as unknown as Array<{ _id: string; follow?: boolean | null }>
   const unfollowed = new Set(marks.filter(mark => mark.follow === false).map(mark => mark._id))
+  // Muted chats: by the setting rows' ids, as the marks above (chatSettings.ts writeChatSetting names them).
+  const settingIds = [...new Set(recipients.flatMap(({ message, people }) => people.map(personId => stableId(tabId, message.conversationId, personId, 'notify'))))]
+  const settings = await tx.superTabChatSetting.aggregateRaw({ pipeline: [
+    { $match: { _id: { $in: settingIds } } }, { $project: { _id: 1, notify: 1 } },
+  ] }) as unknown as Array<{ _id: string; notify?: string }>
+  const muted = new Set(settings.filter(row => row.notify === 'muted').map(row => row._id))
   const data = recipients.flatMap(({ message: m, people }) => {
-    return [...people].filter(personId => !unfollowed.has(stableId(tabId, m.conversationId, m.thread!, personId))).map(personId => ({ id: stableId(tabId, 'reply', m.id, personId), tabId, personId, kind: 'reply', conversationId: m.conversationId,
+    return people.filter(personId => !unfollowed.has(stableId(tabId, m.conversationId, m.thread!, personId))
+      && !muted.has(stableId(tabId, m.conversationId, personId, 'notify'))).map(personId => ({ id: stableId(tabId, 'reply', m.id, personId), tabId, personId, kind: 'reply', conversationId: m.conversationId,
       messageId: m.id, threadId: m.thread!, actorKind: m.author.kind, actorId: m.author.id, emoji: null, createdAt: new Date(now), readAt: null,
       ...sequences.has(m.id) ? { sequence: sequences.get(m.id)! } : {}, ...m.alsoInChat ? { alsoInChat: true } : {} }))
   })
   if (data.length) await tx.superTabActivity.createMany({ data })
+  return data
 }
 
 /** The row of the reaction `reactionId`, for the person who wrote the message, unless they reacted themselves: written when the

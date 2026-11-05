@@ -62,6 +62,24 @@ describe('harness git-credential', () => {
     expect((await run(['get'], ask('https://github.com/acme/app.git'), { ok: true, value: { ...token, defaultBranchProtected: true } })).err).toBe('')
   })
 
+  // A Windows pane sets HARNESS_PANE, and no TMUX_PANE: without it, git got no token there for any Swarm agent's push.
+  it('finds a Windows agent by the pane its shell names', async () => {
+    vi.stubEnv('TMUX_PANE', '')
+    vi.stubEnv('HARNESS_PANE', 'p2:%7')
+    try {
+      const out: string[] = [], requests: unknown[] = []
+      const open = vi.fn(async () => ({ machineId: 'machine-1', close: vi.fn(), request: async (type: string, payload?: Record<string, unknown>) => {
+        requests.push([type, payload])
+        return type === 'agents_list'
+          ? { agents: [{ id: 'win-1', tmuxPane: '%7', status: 'active', engine: 'codex', name: 'Builder', terminal: { runtimes: [{ backend: 'ptyhost', instance: 'p2', paneId: '%7' }] } }] }
+          : { ok: true, value: token }
+      } })) as unknown as typeof import('../agentClient/daemon.js').openDaemon
+      await gitCredentialCommand(['get'], { where, open, input: async () => ask('https://github.com/acme/app'), print: t => out.push(t), warn: () => {} })
+      expect(requests).toContainEqual(['super_tabs', { action: 'githubToken', harnessId: 'win-1' }])
+      expect(out.join('')).toContain('password=ghs_fixture_token_1')
+    } finally { vi.unstubAllEnvs() }
+  })
+
   it('gives another host, plain http or no path nothing, without asking the daemon', async () => {
     for (const input of [ask('https://gitlab.example.com/acme/app.git'), 'protocol=http\nhost=github.com\npath=acme/app\n\n', 'protocol=https\nhost=github.com\n\n']) {
       const result = await run(['get'], input)

@@ -447,7 +447,7 @@ void main() {
     });
 
     testWidgets(
-      'on Linux and Windows Play opens the file as a chip does',
+      'on Linux Play opens the file as a chip does',
       (tester) async {
         await show(tester, withVoice());
         await tester.tap(find.byTooltip('Play'));
@@ -457,10 +457,21 @@ void main() {
         expect(sources, isEmpty);
         await close(tester);
       },
-      variant: TargetPlatformVariant({
-        TargetPlatform.linux,
-        TargetPlatform.windows,
-      }),
+      variant: TargetPlatformVariant.only(TargetPlatform.linux),
+    );
+
+    testWidgets(
+      'on Windows Play plays in the chat, from a local copy',
+      (tester) async {
+        await show(tester, withVoice());
+        await tester.tap(find.byTooltip('Play'));
+        await settleFiles(tester);
+        expect(opened, isEmpty);
+        expect(sources, hasLength(1));
+        expect(sources.single.isScheme('file'), isTrue);
+        await close(tester);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
     );
   });
 }

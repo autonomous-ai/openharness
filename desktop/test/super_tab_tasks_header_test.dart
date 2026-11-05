@@ -23,6 +23,10 @@ Future<SuperTabController> _showView(
   await tester.pumpWidget(
     MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.light),
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(disableAnimations: true),
+        child: child!,
+      ),
       home: Scaffold(
         body: SuperTabView(
           controller: c,
@@ -96,5 +100,29 @@ void main() {
     await tester.pumpAndSettle();
     expect(c.selectedId, 'lead');
     expect(_key('super-tasks-column-working'), findsOneWidget);
+  });
+
+  testWidgets('back on the board, the task just opened shows selected', (
+    tester,
+  ) async {
+    await _showView(tester, tasksServer());
+    await tester.tap(_key('super-tasks'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSemantics(_key('super-task-card-tag')),
+      isNot(isSemantics(isSelected: true)),
+    );
+    await tester.tap(_key('super-task-card-tag'));
+    await tester.pumpAndSettle();
+    await tester.tap(_key('super-tasks'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSemantics(_key('super-task-card-tag')),
+      isSemantics(isSelected: true),
+    );
+    expect(
+      tester.getSemantics(_key('super-task-card-preview')),
+      isNot(isSemantics(isSelected: true)),
+    );
   });
 }

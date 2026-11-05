@@ -61,10 +61,14 @@ export function failTeamWritten(details?: Record<string, unknown>): never {
 export const hasStep = (state: SuperTabState, group: Conversation, worker: Agent): boolean =>
   state.conversations.some(c => c.reviewOf === group.id && (c.assignment?.agentId === worker.id || c.agentIds.includes(worker.id)))
 
-/** Refuses an agent naming a main-account member of Team-written work in a post: how a re-test or re-check is asked for. */
+/** Whether [sender] may name [named] in a post: not a main-account member of Team-written work, how a re-test or re-check is
+ *  asked for, unless [sender] coordinates. */
+export const mayName = (state: SuperTabState, group: Conversation, sender: Agent, named: Agent): boolean =>
+  coordinates(state, group, sender) || named.id === sender.id || !barredFromTeamWritten(state, group, named)
+
+/** Refuses an agent naming one it may not ([mayName]) with --to. */
 export function requireNameable(state: SuperTabState, group: Conversation, sender: Agent, named: Agent): void {
-  if (coordinates(state, group, sender) || named.id === sender.id) return
-  requireTeamWrittenAccount(state, group, named)
+  if (!mayName(state, group, sender, named)) failTeamWritten()
 }
 
 /** Everyone to tell when [group]'s task has just been marked, by the conversation that reaches them, each once: the main-account

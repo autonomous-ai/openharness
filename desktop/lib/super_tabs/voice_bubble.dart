@@ -30,14 +30,9 @@ VideoPlayerController _player(Uri source) => source.isScheme('file')
     ? VideoPlayerController.file(File.fromUri(source))
     : VideoPlayerController.networkUrl(source);
 
-/// video_player has no Linux or Windows implementation; there Play opens the
-/// file in the system's player, as its chip would.
-bool get _playsHere =>
-    kIsWeb ||
-    !const {
-      TargetPlatform.linux,
-      TargetPlatform.windows,
-    }.contains(defaultTargetPlatform);
+/// video_player has no Linux implementation; there Play opens the file in the
+/// system's player, as its chip would.
+bool get _playsHere => kIsWeb || defaultTargetPlatform != TargetPlatform.linux;
 
 /// A voice message as Telegram draws one: `( ▶ ) ıllıllııılll 1:21 →A`. Play
 /// plays a copy of the file read once to this computer, never the signed

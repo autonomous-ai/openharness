@@ -19,7 +19,7 @@ export type SolverRun = (instance: Json) => Promise<{ ok: true; value: Json } | 
 declare const __SCHEDULER_FILES__: Record<string, string> | undefined
 /** How long the solver may think: the brief's limit for 30 tasks on 8 machines with 6 models (it takes about a quarter second). */
 const TIME_LIMIT_SECONDS = 10
-const INSTALL = 'Install Python 3 (python.org, or brew install python), then: python3 -m pip install ortools==9.15.6755.'
+const INSTALL = 'Install Python 3 from python.org, then: python3 -m pip install ortools==9.15.6755.'
 const list = (value: unknown) => Array.isArray(value) ? value.map(object) : []
 
 /** The scheduler package's files. The release bundle carries them inside cli.js (build-bundle.mjs `define`), as the installed

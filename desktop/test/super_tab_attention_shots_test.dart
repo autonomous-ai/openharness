@@ -79,6 +79,8 @@ ConversationServer _swarm() {
     conversationId: 'web-lead',
     projectId: 'web',
   );
+  // A tag in the project chat: the one thing its number counts (#2927).
+  server.tag(server.messages.last['id'] as String, conversationId: 'web-lead');
   _fromLead(server, 'Weekly plan', 'lead');
   final threadRoot = server.messages.last['id'] as String;
   _fromLead(server, 'Looks right to me.', 'lead');
@@ -188,7 +190,7 @@ void main() {
         await tester.pumpAndSettle();
         if (scene.startsWith('threads')) {
           // New replies are in Activity, not a separate Threads control.
-          await tester.tap(find.byKey(const ValueKey('super-activity')));
+          await tester.tap(find.byKey(const ValueKey('super-decisions')));
           await tester.pumpAndSettle();
           await tester.pumpAndSettle();
         }

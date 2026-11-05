@@ -513,6 +513,14 @@ neither freezes the distribution's WebKitGTK security updates nor establishes th
 the plugin has been security-audited or endorsed by Flutter. It is MIT-licensed;
 retain its attribution in Flutter's bundled notices.
 
+`webview_win_floating` is deliberately pinned to `2.3.2`, its last release that registers on
+Windows alone: `3.x` registers on Linux too, where it would replace `webview_all_linux`. Its
+`fullscreen_window` dependency still adds that small native plugin to the Linux build. It and
+`video_player_win`, pinned to `3.3.1`, are BSD-3-Clause and one author's work, not endorsed by
+Flutter. Upgrading either requires reviewing its native code and retesting on Windows. Their
+DLLs ship in the Windows package, which the release signs. Retain their attribution in
+Flutter's bundled notices.
+
 The official [`webview_flutter`](https://pub.dev/packages/webview_flutter/versions/4.14.1)
 currently lists Android, iOS and macOS implementations, with no endorsed Linux
 implementation. [`webview_flutter_linux`](https://pub.dev/packages/webview_flutter_linux)

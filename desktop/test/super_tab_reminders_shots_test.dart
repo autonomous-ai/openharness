@@ -123,7 +123,7 @@ void main() {
 
       await tester.pump(const Duration(minutes: 21));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Activity').first);
+      await tester.tap(find.byKey(const ValueKey('super-decisions')));
       await tester.pumpAndSettle();
       expect(
         find.byKey(

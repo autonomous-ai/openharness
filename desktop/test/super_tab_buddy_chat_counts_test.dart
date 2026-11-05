@@ -522,7 +522,7 @@ void main() {
       (tester) async {
         final c = await show(tester, riverSwarm());
         Future<void> shortcutOverNotifications() async {
-          await tester.tap(find.byKey(const ValueKey('super-activity')));
+          await tester.tap(find.byKey(const ValueKey('super-decisions')));
           await tester.pumpAndSettle();
           expect(find.text('Message your Buddy'), findsNothing);
           // What ⇧⌘K runs (openActiveBuddyChat).
@@ -539,31 +539,30 @@ void main() {
       },
     );
 
-    testWidgets(
-      'the header names a workgroup by its number in grey, no #',
-      (tester) async {
-        final server = riverSwarm();
-        (server.state['conversations'] as List).last['number'] = 196;
-        final c = await show(tester, server);
-        await c.select('offline');
-        await tester.pumpAndSettle();
+    testWidgets('the header names a workgroup by its number in grey, no #', (
+      tester,
+    ) async {
+      final server = riverSwarm();
+      (server.state['conversations'] as List).last['number'] = 196;
+      final c = await show(tester, server);
+      await c.select('offline');
+      await tester.pumpAndSettle();
 
-        expect(find.text('#196 Offline editing'), findsNothing);
-        // The header's alone: the sidebar lists no tasks (task #2569).
-        final name = tester.widget<Text>(find.text('196  Offline editing'));
-        expect(
-          (name.textSpan! as TextSpan).children!.first.style?.color,
-          DesktopChrome.muted,
-        );
-        await close(tester, c);
-      },
-    );
+      expect(find.text('#196 Offline editing'), findsNothing);
+      // The header's alone: the sidebar lists no tasks (task #2569).
+      final name = tester.widget<Text>(find.text('196  Offline editing'));
+      expect(
+        (name.textSpan! as TextSpan).children!.first.style?.color,
+        DesktopChrome.muted,
+      );
+      await close(tester, c);
+    });
 
     testWidgets('the first open leaves Notifications for the new chat', (
       tester,
     ) async {
       final c = await show(tester, pmChatSwarm());
-      await tester.tap(find.byKey(const ValueKey('super-activity')));
+      await tester.tap(find.byKey(const ValueKey('super-decisions')));
       await tester.pumpAndSettle();
       expect(find.text('Message your Buddy'), findsNothing);
 
@@ -921,10 +920,6 @@ void main() {
         image.dispose();
       });
 
-      if (c.projectsGroupOpen) c.toggleProjectsGroup();
-      await tester.pumpAndSettle();
-      await shot('collapsed');
-      c.toggleProjectsGroup();
       await tester.pumpAndSettle();
       await shot('expanded');
       await tester.pumpWidget(const SizedBox());

@@ -28,6 +28,25 @@ const swarmQueuedNotice = Duration(minutes: 2);
 /// desktop's `kSuperTabMachineOfflineAfter`.
 const _machineOfflineAfter = Duration(seconds: 35);
 
+/// When [machine], a Swarm's pool row, last reported, if it ever did.
+DateTime? _readingAt(Map<String, dynamic>? machine) {
+  final observation = machine?['observation'];
+  final receivedAt = observation is Map ? observation['receivedAt'] : null;
+  return receivedAt is num
+      ? DateTime.fromMillisecondsSinceEpoch(receivedAt.toInt())
+      : null;
+}
+
+/// Whether [machine], a Swarm's pool row, is offline at [now] as a message's
+/// line calls it "computer is offline": listed, with no reading or one older
+/// than [_machineOfflineAfter]. A machine the Swarm does not list (null) is
+/// no answer, so not offline.
+bool swarmMachineOffline(Map<String, dynamic>? machine, DateTime now) {
+  if (machine == null) return false;
+  final at = _readingAt(machine);
+  return at == null || now.difference(at) >= _machineOfflineAfter;
+}
+
 /// The line under the person's newest message while its delivery is queued and
 /// not getting in, or when its computer could not confirm it: the desktop's
 /// `SuperTabMessageReceipt` for those cases, its words and rule. Queued is in
@@ -168,15 +187,8 @@ class _SwarmMessageReceiptState extends State<SwarmMessageReceipt>
       return _unconfirmed(context, c, message, delivery, agent, name);
     }
     final machine = snapshot.pool(agent.machineId);
-    final observation = machine?['observation'];
-    final receivedAt = observation is Map ? observation['receivedAt'] : null;
-    final readingAt = receivedAt is num
-        ? DateTime.fromMillisecondsSinceEpoch(receivedAt.toInt())
-        : null;
-    final offline =
-        machine != null &&
-        (readingAt == null ||
-            now.difference(readingAt) >= _machineOfflineAfter);
+    final readingAt = _readingAt(machine);
+    final offline = swarmMachineOffline(machine, now);
     final failingSince = delivery.claimFailingSince;
     final failingAt = failingSince?.add(swarmClaimFailingNotice);
     final queuedAt = message.createdAt?.add(swarmQueuedNotice);

@@ -42,7 +42,8 @@ import 'machine_details.dart';
 import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
-import 'join_machine.dart' show superTabSuggestedAgentSlots;
+import 'join_machine.dart'
+    show superTabOldJoinSuggestion, superTabSuggestedAgentSlots;
 import 'personal_machine_rows.dart';
 import 'team_account_setup.dart';
 import 'section_heading.dart';
@@ -373,6 +374,7 @@ Future<bool> _sendContribution(
   Map<String, dynamic> prepared,
   List<String> engines, {
   required int maxAgents,
+  required bool memory,
   required bool Function() alive,
   bool teamAccountOnly = false,
   bool offerTeamAccount = true,
@@ -403,6 +405,8 @@ Future<bool> _sendContribution(
     if (prepared['scope'] != null) 'scope': prepared['scope'],
     'engines': engines,
     'maxAgents': maxAgents,
+    // Its Agents setting, so a count is a limit only when its owner chose one.
+    'agents': memory ? 'memory' : 'atMost',
     if (teamAccountOnly) 'teamAccountOnly': true,
     if (ifMissing) 'ifMissing': true,
     if (unlessRemoved) 'unlessRemoved': true,
@@ -475,6 +479,7 @@ Future<String?> contributeComputer(
     prepared,
     engines,
     maxAgents: slots,
+    memory: true,
     alive: alive,
     teamAccountOnly: teamAccountOnly,
     offerTeamAccount: offerTeamAccount,
@@ -549,11 +554,11 @@ Future<void> _machineSettingsDialog(
   String? error;
   var busy = false;
   String? setupId;
+  Map<String, dynamic>? storedRow(String? id) => id == null
+      ? null
+      : c.snapshot?.machines.where((m) => m['machineId'] == id).firstOrNull;
   int? storedSlots(String? id) {
-    final row = id == null
-        ? null
-        : c.snapshot?.machines.where((m) => m['machineId'] == id).firstOrNull;
-    final current = row?['maxAgents'];
+    final current = storedRow(id)?['maxAgents'];
     return current is num ? current.toInt() : null;
   }
 
@@ -579,8 +584,18 @@ Future<void> _machineSettingsDialog(
   int? atMostEdited;
   bool memoryChoice() {
     if (memoryEdited != null) return memoryEdited!;
+    // The setting the server keeps (Dee, 2026-11-04: "remove the limit").
+    final agents = storedRow(existingId)?['agents'];
+    if (agents == 'memory') return true;
+    if (agents == 'atMost') return false;
     final stored = storedSlots(existingId);
     final maximum = memoryMaximum();
+    // A machine saved before the server kept it: the server reads the old
+    // join suggestion as As memory allows (superTabOldJoinSuggestion).
+    if (stored != null &&
+        superTabOldJoinSuggestion(stored, settingsResources())) {
+      return true;
+    }
     return stored != null && maximum != null && stored >= maximum;
   }
 
@@ -591,6 +606,9 @@ Future<void> _machineSettingsDialog(
   int atMostValue() {
     if (atMostEdited != null) return atMostEdited!;
     final stored = storedSlots(existingId);
+    if (stored != null && storedRow(existingId)?['agents'] == 'atMost') {
+      return stored.clamp(_agentSlotsMin, atMostMaximum());
+    }
     final maximum = memoryMaximum();
     if (stored != null && (maximum == null || stored < maximum)) {
       return _clampAgentSlots(stored);
@@ -714,6 +732,7 @@ Future<void> _machineSettingsDialog(
                   prepared,
                   engines,
                   maxAgents: atMost ?? memoryLimit(prepared),
+                  memory: atMost == null,
                   alive: () => context.mounted,
                   // The machine is in the Swarm already: changing its
                   // settings is no moment to ask for the Team account, and
@@ -1692,8 +1711,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          "Teammates' agents will run as you on $name. They can read your files, your keychain and your "
-                          'signed-in apps. Agents already running are not moved.',
+                          // Kept per Swarm (task #2993): other Swarms with this Mac keep their own choice.
+                          "Teammates' agents in this Swarm will run as you on $name. They can read your files, your keychain "
+                          'and your signed-in apps. Agents already running are not moved. Your other Swarms keep their own choice.',
                         ),
                         if (attempted && !busy && c.operationError != null) ...[
                           const SizedBox(height: 12),

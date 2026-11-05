@@ -20,7 +20,12 @@ export interface ContributedMachine {
   cwd: string
   scope?: 'swarm'
   engines: string[]
+  /** The count its owner allows when [agents] is `atMost` (and for an older row, see agentLimit). Kept as a number every
+   *  client reads; with As memory allows it is only what the owner last saw, never a limit. */
   maxAgents: number
+  /** Its Agents setting (Dee, 11-04: "remove the limit"): `memory`, as many as free memory allows, checked at each start;
+   *  `atMost`, its owner's own [maxAgents]. Absent on a row saved by an older client: agentLimit reads it. */
+  agents?: 'memory' | 'atMost'
   paused: boolean
   /** `sessionKind` is how the reporting machine is signed in, stamped from its session by the store, never taken from
    *  the report: `team` for a Mac's team account (lib/teamSession.ts), `computer` for any other. Absent on older readings.
@@ -482,9 +487,12 @@ export const ownAccountWork = (pool: Pick<ContributedMachine, 'ownAccountChoice'
 export const ownAccountNote = (pool: Pick<ContributedMachine, 'name'>, ownerName: string | undefined): string =>
   `${pool.name} runs teammates' work in ${ownerName ?? 'its owner'}'s own account.`
 
-/** What a start moved to [pool]'s Team account says, so it is never moved silently (task #2806). */
-export const movedToTeamAccount = (pool: Pick<ContributedMachine, 'name'>): string =>
-  `${pool.name} runs teammates' work in its Harness Team account. Its owner can change that in Manage > Machines.`
+/** What a start moved to [pool]'s Team account says, so it is never moved silently (task #2806). The owner's choice is kept
+ *  on each Swarm's own entry for the Mac, so it says which Swarm's to change (task #2993: Gray turned it on in another
+ *  Swarm). Team-written code moves whatever the owner chose, so that note names the code, not a setting that would not help. */
+export const movedToTeamAccount = (pool: Pick<ContributedMachine, 'name'>, teamWritten = false): string => teamWritten
+  ? `A Harness Team agent wrote this task's code, so it runs in the Harness Team account on ${pool.name}.`
+  : `${pool.name} runs teammates' work in its Harness Team account in this Swarm. Its owner can change that in this Swarm's Manage > Machines.`
 
 /** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. Not when its owner lets teammates'
@@ -576,17 +584,24 @@ export function recordAgentPresence(state: SuperTabState, machineId: string, run
 
 /** Why a start other than its own person's Buddy is refused on a Buddy-only machine: worded as for any machine outside the
  *  Swarm, so the refusal says nothing about whose it is or what runs there. */
-/** Harness cannot yet tell a Buddy's window from another agent's on Windows (security review of #2093). */
-export const BUDDY_WINDOWS_REFUSAL = 'A Buddy cannot run on a Windows machine yet. Pick one of your Macs or Linux machines.'
+/** A host that can tell a Buddy's window from another agent's on Windows (CLI callerPane.ts `windowsRunningPane`). An older one
+ *  cannot: a Buddy there refused every agent's Swarm command on that computer (security review of #2093). */
+export const WINDOWS_BUDDY_CAPABILITY = 'windowsBuddy'
+export const BUDDY_WINDOWS_REFUSAL = 'Update Harness on this Windows machine to run a Buddy on it, or pick another of your machines.'
+export const refusesWindowsBuddy = (pool: ContributedMachine): boolean => pool.observation?.resources.os === 'Windows'
+  && !pool.observation.capabilities?.includes(WINDOWS_BUDDY_CAPABILITY)
 export const NOT_SWARM_MACHINE = 'This machine is not one of the Swarm\'s machines.'
-/** Real machines only: a Mac's Harness Team account is that same Mac (Ken, 2026-11-04). It stays 32 until a machine's reading
- *  stops re-reading every machine; #2900 has what grows with the count. */
-const MAX_MACHINES = 32
-export const MACHINES_FULL_MESSAGE = `This Swarm is at its limit of ${MAX_MACHINES} machines. One has to be removed before another can be added.`
-/** Whether [state] can take another machine, or with [team] another Team account's entry: one for each machine at most. */
-export const machinesFull = (state: SuperTabState, team = false): boolean => team
-  ? (state.machines?.length ?? 0) >= 2 * MAX_MACHINES
-  : (state.machines ?? []).filter(m => !m.hostMachineId).length >= MAX_MACHINES
+/** The most machines one person adds to one Swarm (#2637, Ken, 2026-11-04). The Swarm-wide 32 dated from one 16 MB
+ *  document; each machine is its own part now. Team accounts' entries count apart, so a Mac's Team account never uses up
+ *  its owner's 20, and still have a bound. Review again when one Swarm passes 100 entries (plan 2026-11-04). */
+export const MACHINES_PER_PERSON = 20
+export const MACHINE_LIMIT_MESSAGE = `You have ${MACHINES_PER_PERSON} machines in this Swarm, the most one person can add. Remove one before adding another.`
+/** How many more machines [contributorId] may add to [state], or with [team] Team accounts' entries. Buddy-only records count
+ *  as the person's machines. The command's check and the host's join rows both read this, so they never disagree. */
+export const machineRoom = (state: SuperTabState, contributorId: string, { team = false } = {}): number =>
+  Math.max(0, MACHINES_PER_PERSON - (state.machines ?? []).filter(m => m.contributorId === contributorId && !!m.hostMachineId === team).length)
+export const machineLimitReached = (state: SuperTabState, contributorId: string, options: { team?: boolean } = {}): boolean =>
+  machineRoom(state, contributorId, options) === 0
 
 /** A Buddy-only machine with no Buddy left on it, running or starting, leaves: its host deletes the Swarm's folders there as
  *  for a removed machine, and no chat hears of it, since none ever saw it (Lead, 10-29). Run after every command (commands.ts)
@@ -781,7 +796,7 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (!pool) return null
   if (pool.buddyOnly && request.buddyOf?.personId !== pool.contributorId) fail('NOT_SWARM_MACHINE', NOT_SWARM_MACHINE, 403)
   // At its add and again at its launch: a Buddy-only machine is first read after its Buddy was asked for.
-  if (request.buddyOf && pool.observation?.resources.os === 'Windows') fail('BUDDY_WINDOWS', BUDDY_WINDOWS_REFUSAL, 403)
+  if (request.buddyOf && refusesWindowsBuddy(pool)) fail('BUDDY_WINDOWS', BUDDY_WINDOWS_REFUSAL, 403)
   if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
   if (start && start.poolGeneration !== pool.generation) fail('CONTRIBUTION_REVOKED', 'This machine contribution changed. Reconcile the original start.', 403)
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
@@ -822,9 +837,87 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   }
   // A Buddy-only machine is recorded with its Buddy's start, before its host ever read the Swarm: the start waits for it.
   if (machineOffline(pool, now) && !(pool.buddyOnly && !pool.observation)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
-  if (!start && slots(pool) >= pool.maxAgents) fail('MACHINE_FULL', 'This machine has reached its contributed agent limit.')
+  if (!start) admitByRoom(state, pool, slots(pool), request.requirements.memoryBytes)
   // A new start only: a grid model runs without the engine's subscription, and one already asked for is settled by its host.
   const unusable = !start && !local ? engineUnusable(pool, request.engine, now) : null
   if (unusable) fail('ENGINE_UNAVAILABLE', unusable)
   return pool
+}
+
+/** What one agent needs to start, as the CLI asks (capacity.ts START_REQUIREMENTS.memoryBytes). */
+export const AGENT_MEMORY_BYTES = 2 * 1024 ** 3
+/** The most agents any machine runs, as machine.contribute's own bound: a ceiling on growth, never a setting. */
+export const MACHINE_AGENTS_CEILING = 1024
+/** What joining suggested before 11-04 (CLI prepareContribution, Desktop superTabSuggestedAgentSlots): one agent per 4 GiB,
+ *  1 to 16. Joining stored it as a limit; Mac 3 refused Milo's engineer at 16 (Dee, 11-04). */
+export const joinSuggestion = (memoryTotalBytes: number): number =>
+  Math.max(1, Math.min(16, Math.floor(memoryTotalBytes / (2 * AGENT_MEMORY_BYTES))))
+/** The count its owner holds a machine to, or null when it takes agents as memory allows. A Buddy-only machine counts its
+ *  own Buddies (commands.ts). An older row says neither (a compatibility rule: review it once Desktop and the CLI send
+ *  `agents`, and remove it when no stored row lacks it): a stored number that is the old join suggestion (16, or the one its
+ *  measured memory gave) was never the owner's own limit; any other number is. Desktop's old As memory allows stored the
+ *  machine's maximum (one per 2 GiB), which free memory reaches first anyway. */
+export function agentLimit(pool: Pick<ContributedMachine, 'maxAgents' | 'agents' | 'buddyOnly' | 'observation'>): number | null {
+  if (pool.buddyOnly || pool.agents === 'atMost') return pool.maxAgents
+  if (pool.agents === 'memory') return null
+  if (pool.maxAgents === 16) return null
+  const total = pool.observation?.resources?.memoryTotalBytes
+  // Under 4 GiB the suggestion was its floor of 1, not a figure from memory.
+  if (typeof total === 'number' && total >= 2 * AGENT_MEMORY_BYTES && pool.maxAgents === joinSuggestion(total)) return null
+  return pool.maxAgents
+}
+
+/** Its measured free memory, from its last reading; null with none. */
+export function freeMemoryBytes(pool: Pick<ContributedMachine, 'observation'>): number | null {
+  const r = pool.observation?.resources
+  return r && typeof r.memoryTotalBytes === 'number' && typeof r.memoryUsedBytes === 'number' ? Math.max(0, r.memoryTotalBytes - r.memoryUsedBytes) : null
+}
+
+/** A Mac and its Harness Team account: one machine, one memory (slotCounter counts their slots together too). */
+function memoryPair(state: SuperTabState, pool: ContributedMachine): ContributedMachine[] {
+  const mac = pool.hostMachineId ? state.machines?.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId) : pool
+  return [...new Set([pool, mac, mac && teamPoolOf(state, mac)])].filter((m): m is ContributedMachine => !!m)
+}
+
+/** What a new start can use on [pool] as memory allows: the least free memory its Mac and Team account last read, less what
+ *  starts admitted there and not yet launched will take, which no reading shows yet (review of #3001: three 2 GiB starts
+ *  were all admitted on 5 GiB free). Null with no reading. */
+export function startableMemoryBytes(state: SuperTabState, pool: ContributedMachine): number | null {
+  const pair = memoryPair(state, pool)
+  const readings = pair.map(freeMemoryBytes).filter((free): free is number => free !== null)
+  if (!readings.length) return null
+  const machines = new Set(pair.map(m => m.machineId))
+  let held = 0
+  for (const start of state.starts ?? []) {
+    if (start.error || start.harnessId || !machines.has(start.request.machineId)) continue
+    held += start.request.requirements?.memoryBytes || AGENT_MEMORY_BYTES
+  }
+  return Math.max(0, Math.min(...readings) - held)
+}
+
+/** How many more agents it takes now, for the route and Desktop: its owner's count less what runs, or, as memory allows,
+ *  one per AGENT_MEMORY_BYTES of startable memory (none with no reading). Its host checks free memory and disk again at
+ *  each launch. */
+export function availableSlots(state: SuperTabState, pool: ContributedMachine, used: number): number {
+  const limit = agentLimit(pool)
+  const ceiling = Math.max(0, (limit ?? MACHINE_AGENTS_CEILING) - used)
+  if (limit !== null) return ceiling
+  const free = startableMemoryBytes(state, pool)
+  return free === null ? 0 : Math.min(ceiling, Math.floor(free / AGENT_MEMORY_BYTES))
+}
+
+const gib = (bytes: number) => `${Math.round(bytes / 1024 ** 3 * 10) / 10} GB`
+/** A new start's room on [pool], said in words its owner can act on: its own count, or its free memory. */
+export function admitByRoom(state: SuperTabState, pool: ContributedMachine, used: number, memoryBytes: number) {
+  const limit = agentLimit(pool)
+  if (limit !== null) {
+    if (used >= limit) fail('MACHINE_FULL', `${pool.name} is set to run at most ${limit} agent${limit === 1 ? '' : 's'} and runs ${used}. Its owner can change that in its settings, or try again when one finishes.`)
+    return
+  }
+  if (used >= MACHINE_AGENTS_CEILING) fail('MACHINE_FULL', `${pool.name} already runs ${used} agents, the most any machine runs.`)
+  const free = startableMemoryBytes(state, pool)
+  if (free !== null && free < memoryBytes) {
+    fail('MACHINE_FULL', `${pool.name} is out of free memory: ${gib(free)} free, and an agent needs ${gib(memoryBytes)}. Try again when an agent there finishes, or pick another machine.`,
+      409, { reason: 'memory' })
+  }
 }

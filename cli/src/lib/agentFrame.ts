@@ -30,7 +30,7 @@ import type { AgentOutputStats } from './agentOutputStats.js'
 import type { GridAssignment } from './gridAssignment.js'
 import type { GridWebSearchStatus } from './gridLaunchWire.js'
 import type { AgentGridTarget, GridAnnotation } from './gridAnnotation.js'
-import { projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './registry.js'
+import { isNameChosen, projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './registry.js'
 import { engineCanFork } from './forkAgent.js'
 import { resumeMode, type ResumeMode } from './resumeCapability.js'
 import type { DshVerdict } from '../dsh/verdict.js'
@@ -54,6 +54,12 @@ export type AgentFrame = {
   sessionId: string
   userId: string
   name: string
+  /**
+   * Whether a person chose `name` (they renamed the agent), as against the name it was created with or its session
+   * title (registry.ts, `isNameChosen`). A client sends only a chosen name to the Swarm (task #2920). Absent from a
+   * daemon before it: a client reads that as "unknown" and sends nothing.
+   */
+  nameChosen: boolean
   /**
    * What the agent is on, in its own words — the session title (Claude Code's, Codex's), cleaned;
    * null when there is none or it is the name already. It is usually the name too (registry.ts,
@@ -224,6 +230,7 @@ export async function agentFrame(
     sessionId: s.sessionId,
     userId: '',
     name: projectDisplayName(s),
+    nameChosen: isNameChosen(s),
     title: frameTitle(s),
     status: s.active ? 'active' : 'offline',
     activity: contextActivity?.() ?? null,

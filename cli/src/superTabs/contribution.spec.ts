@@ -213,7 +213,7 @@ describe('the owner setting how many agents a machine offers, from a terminal', 
     expect(await f.set(96)).toEqual({ ok: true, machineId: 'studio', maxAgents: 96, maximum: 96 })
     expect(f.sent).toHaveLength(1)
     expect(f.sent[0]!.command).toEqual({ type: 'machine.contribute', machineId: 'studio', name: 'Mac Studio', cwd: '/Users/ken/harnesses/swarms/tab',
-      scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 96 })
+      scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 96, agents: 'atMost' })
     expect(String(f.sent[0]!.operationId)).toMatch(/^machine-agents-/)
   })
   it('refuses a number above the machine\'s maximum, and says what the maximum is', async () => {
@@ -237,7 +237,7 @@ describe('the owner setting how many agents a machine offers, from a terminal', 
     const f = owned(192, { paused: true })
     expect(await f.set(32)).toEqual({ ok: true, machineId: 'studio', maxAgents: 32, maximum: 96 })
     expect(f.sent.map(body => body.command)).toEqual([{ type: 'machine.contribute', machineId: 'studio', name: 'Mac Studio', cwd: '/Users/ken/harnesses/swarms/tab',
-      scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 32 }])
+      scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 32, agents: 'atMost' }])
   })
   it('passes on the server\'s refusal, such as another person\'s machine', async () => {
     const f = owned(192)

@@ -355,6 +355,10 @@ export interface Conversation {
   /** The sequence of its newest main-stream message from a person, not a system row (parts/commit.ts): what makes a task's
    *  sidebar row bold (Huy, 11-03, #2427). Absent until a person's first message after this was added; readers read 0. */
   lastPersonSequence?: number
+  /** When a person last wrote to its project's coordinator here: any message in the project chat (threads included), or one
+   *  reaching the coordinator in another chat of the project (parts/commit.ts). The built-in wake asks the coordinator to save
+   *  what it was taught only after one (pmSchedule.ts; task #3022). Absent until then. */
+  heardAt?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
   /** What its Engineer was already told of each linked pull request, newest first (pullRequestEvents.ts): absent until read. */
@@ -449,6 +453,9 @@ export interface Invitation {
   role: 'collaborator' | 'viewer'
   conversationId: string
   expiresAt: number
+  /** Who sent it: the Workspace check at acceptance reads their role then (store.ts invite.accept). Absent on invitations
+   *  from before it was recorded. */
+  invitedBy?: string
 }
 /** An agent a machine's report removed as closed: as it was, and where it was (closedAgents.ts). */
 export interface RemovedSession {
@@ -706,6 +713,8 @@ export interface CommandEffects {
   messageEdit?: { messageId: string; text: string }
   /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
   terminal?: import('./terminal.js').TerminalEffect
+  /** A Buddy's proposal closed by hand, written into the open proposals by the store (proposals.ts closeProposal). */
+  closedProposal?: { messageId: string; conversationId: string; reason: string }
   /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
   decisions?: import('./decisions.js').DecisionDraft[]
   decisionAnswer?: import('./decisions.js').DecisionAnswer
@@ -716,6 +725,9 @@ export interface CommandEffects {
   instructions?: import('./instructions.js').InstructionsWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
+  /** Reactions the Swarm adds as a task's agent on the message that asked for it (taskLine.ts), written by the store as that
+   *  agent's own `message.react`. */
+  reactions?: Array<{ conversationId: string; messageId: string; agentId: string; emoji: import('./reactions.js').Reaction }>
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {

@@ -39,7 +39,7 @@ pub fn add(app: &mut App, kind: usize, line: &str) {
 pub fn clear(app: &mut App, kind: usize) { record(app, Change::Clear(kind.min(3))) }
 
 fn path(file: &str) -> Option<PathBuf> {
-    if file.starts_with('/') { return Some(PathBuf::from(file)) }
+    if crate::sys::path_absolute(file) { return Some(PathBuf::from(file)) }
     file.strip_prefix("~/").and_then(|rest| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(rest)))
 }
 

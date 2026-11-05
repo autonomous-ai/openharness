@@ -677,7 +677,7 @@ describe('a Buddy passes its owner\'s words to their own harnesses here (#2626)'
       answers.push(await t.ask({ action: 'tell', pane: '%1', agentId, text: 'x' }), await t.ask({ action: 'tell', pane: '%1', agentId, text: 'x', reply: true }))
     }
     expect(new Set(answers.map((a) => JSON.stringify(a)))).toEqual(new Set([JSON.stringify({ error: 'NOT_YOURS',
-      detail: 'That is not one of your owner\'s harnesses on this Mac, or it no longer runs. Nothing was sent.' })]))
+      detail: 'That is not one of your owner\'s harnesses on this computer, or it no longer runs. Nothing was sent.' })]))
     expect(t.delivered).toEqual([])
   })
 

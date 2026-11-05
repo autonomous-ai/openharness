@@ -22,14 +22,15 @@ type Seen = { method: string; path: string; query: URLSearchParams; accept?: str
 const PROCESSES = [
   { id: 'autonomous-code-prod-shard-00-00.x.mongodb.net:27017', hostname: 'autonomous-code-prod-shard-00-00.x.mongodb.net', port: 27017, typeName: 'REPLICA_PRIMARY', userAlias: 'autonomous-code-prod-shard-00-00.x.mongodb.net' },
   { id: 'autonomous-code-prod-shard-00-01.x.mongodb.net:27017', hostname: 'autonomous-code-prod-shard-00-01.x.mongodb.net', port: 27017, typeName: 'REPLICA_SECONDARY', userAlias: 'autonomous-code-prod-shard-00-01.x.mongodb.net' },
+  { id: 'autonomous-code-prod-shard-00-02.x.mongodb.net:27017', hostname: 'autonomous-code-prod-shard-00-02.x.mongodb.net', port: 27017, typeName: 'REPLICA_SECONDARY', userAlias: 'autonomous-code-prod-shard-00-02.x.mongodb.net' },
   { id: 'other-cluster-shard-00-00.x.mongodb.net:27017', hostname: 'other-cluster-shard-00-00.x.mongodb.net', port: 27017, typeName: 'REPLICA_PRIMARY', userAlias: 'other-cluster-shard-00-00.x.mongodb.net' },
 ]
 
 /** Two points a metric: CPU 40 then 80 on the primary, so the average is 60 and the peak 80. */
 function measurements(processId: string, metrics: string[]) {
-  const primary = processId === PROCESSES[0]!.id
+  const primary = processId === PROCESSES[0]!.id, second = processId === PROCESSES[2]!.id
   const values: Record<string, [number, number]> = {
-    PROCESS_NORMALIZED_CPU_USER: primary ? [30, 70] : [5, 5], PROCESS_NORMALIZED_CPU_KERNEL: primary ? [10, 10] : [1, 1],
+    PROCESS_NORMALIZED_CPU_USER: primary ? [30, 70] : second ? [8, 12] : [5, 5], PROCESS_NORMALIZED_CPU_KERNEL: primary ? [10, 10] : second ? [2, 2] : [1, 1],
     OPCOUNTER_QUERY: [600, 800], NETWORK_BYTES_OUT: [10_000_000, 20_000_000], QUERY_TARGETING_SCANNED_OBJECTS_PER_RETURNED: [2, 3],
   }
   return { processId, granularity: 'PT5M', measurements: metrics.map(name => ({ name, units: 'SCALAR',
@@ -147,7 +148,7 @@ describe('runSnapshot', () => {
     expect(result).toEqual({ ok: true, skipped: [], failed: [] })
     // Only the named cluster's processes, a day at 5-minute points, every metric the roadmap lists.
     const asked = seen.filter(s => s.path.endsWith('/measurements') && s.auth?.startsWith('Digest '))
-    expect(asked.map(s => decodeURIComponent(s.path.split('/')[7]!)).sort()).toEqual([PROCESSES[0]!.id, PROCESSES[1]!.id])
+    expect(asked.map(s => decodeURIComponent(s.path.split('/')[7]!)).sort()).toEqual([PROCESSES[0]!.id, PROCESSES[1]!.id, PROCESSES[2]!.id])
     expect(asked[0]!.query.get('granularity')).toBe('PT5M')
     expect(asked[0]!.query.get('period')).toBe('P1D')
     expect(asked[0]!.query.getAll('m')).toEqual(expect.arrayContaining(['PROCESS_NORMALIZED_CPU_USER', 'OPCOUNTER_QUERY', 'DOCUMENT_METRICS_RETURNED',
@@ -161,6 +162,11 @@ describe('runSnapshot', () => {
     // CPU is user + kernel: (30+10, 70+10) → average 60, peak 80.
     expect(summary.primary.PROCESS_CPU).toEqual({ average: 60, peak: 80, latest: 80 })
     expect(summary.primary.OPCOUNTER_QUERY).toEqual({ average: 700, peak: 800, latest: 800 })
+    // Each secondary's CPU beside the primary's (task #2970): the reads moved off the primary land there.
+    expect(summary.secondaries).toEqual([
+      { process: PROCESSES[1]!.id, cpu: { average: 6, peak: 6, latest: 6 } },
+      { process: PROCESSES[2]!.id, cpu: { average: 12, peak: 14, latest: 14 } },
+    ])
     // 30 s and 40 s in the same minute, then 0.5 s: 70.5 s in all, 70 s in the worst minute; the unreadable line counted.
     expect(summary.slowOps).toMatchObject({ count: 3, unreadable: 1, totalSeconds: 70.5, peakSecondsPerMinute: 70 })
     expect(summary.slowOps.top[0]).toMatchObject({ ns: 'prod.users', op: 'find', shape: '{"autonomousEnv":"?","email":"?"}', count: 3, seconds: 70.5 })
@@ -176,6 +182,8 @@ describe('runSnapshot', () => {
     expect(port(sizes.readFrom)).not.toBe(port(sizes.primary))
     const markdown = await readFile(join(out, 'summary.md'), 'utf8')
     expect(markdown).toContain('| Process CPU (%) | 60 | 80 | 80 |')
+    expect(markdown).toContain('| Secondary CPU (%), autonomous-code-prod-shard-00-01 | 6 | 6 | 6 |')
+    expect(markdown).toContain('| Secondary CPU (%), autonomous-code-prod-shard-00-02 | 12 | 14 | 14 |')
     expect(printed.join('\n')).toContain(out)
     expect(printed.join('\n')).not.toMatch(/priv-secret|pub-key/)
   })
@@ -255,7 +263,8 @@ describe('compareSnapshots', () => {
     const write = async (name: string, cpu: number, slow: number) => {
       await mkdir(join(dir, name))
       await writeFile(join(dir, name, 'summary.json'), JSON.stringify({ label: name, takenAt: '2026-10-29T08:00:00.000Z',
-        primary: { PROCESS_CPU: { average: cpu, peak: cpu * 2, latest: cpu } }, slowOps: { count: 1, totalSeconds: slow, peakSecondsPerMinute: slow, unreadable: 0, top: [] },
+        primary: { PROCESS_CPU: { average: cpu, peak: cpu * 2, latest: cpu } },
+        secondaries: [{ process: 'b:27017', cpu: { average: 80 - cpu, peak: 90 - cpu, latest: 1 } }, { process: 'c:27017', cpu: { average: 15, peak: 20, latest: 1 } }], slowOps: { count: 1, totalSeconds: slow, peakSecondsPerMinute: slow, unreadable: 0, top: [] },
         sizes: { collections: [], dataBytes: 100, indexBytes: 50 } }))
       return join(dir, name)
     }
@@ -263,5 +272,7 @@ describe('compareSnapshots', () => {
       JSON.parse(await readFile(join(await write('after', 10, 6), 'summary.json'), 'utf8')))
     expect(table).toContain('| Process CPU (%), average | 40 | 10 | -75% |')
     expect(table).toContain('| Slow operations, seconds | 60 | 6 | -90% |')
+    expect(table).toContain('| Secondary 1 CPU (%), average | 40 | 70 | +75% |')
+    expect(table).toContain('| Secondary 2 CPU (%), peak | 20 | 20 | +0% |')
   })
 })

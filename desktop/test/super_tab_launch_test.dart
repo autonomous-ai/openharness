@@ -2854,7 +2854,12 @@ void main() {
             as String;
     expect(prompt, contains('helpful colleague'));
     expect(prompt, contains('under 150 words'));
-    expect(prompt, contains('UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID]`'));
+    expect(
+      prompt,
+      contains(
+        'UNIQUE_OPERATION_ID [--answers MESSAGE_ID | --reply-to MESSAGE_ID]`',
+      ),
+    );
     expect(prompt, contains('answer each message once'));
     expect(prompt, contains('do not post again'));
     expect(prompt, isNot(contains('Report exact revisions')));

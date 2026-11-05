@@ -39,14 +39,17 @@ import { createOwnerSubscriptions } from '../lib/ownerSubscriptions.js'
 import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import { buddyArchived, buddyStatus, isBuddyIn, isSwarmBuddyIn, projectNamed, type BuddyStatusDeps } from './buddyStatus.js'
 import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
+import { peopleNamed, personName } from './personName.js'
 
-const POST_ABOUT = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with --reply-to its ID. --attach sends a file (a screenshot, a log; up to 10 files of 256 MB each), and TEXT may then be empty. --to names the agents it reaches (any agent of this project, by id from status; up to 16): they join the conversation if they are not in it. With no --to, your post reaches the PM.'
+const POST_ABOUT = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with its ID: --answers puts your answer right below that message, in the main chat; --reply-to puts it in that message\'s thread. --attach sends a file (a screenshot, a log; up to 10 files of 256 MB each), and TEXT may then be empty. --to names the agents it reaches (any agent of this project, by id from status; up to 16): they join the conversation if they are not in it. With no --to or @Name it reaches no agent, except the agent a reply answers and, in a task or step, its assignee. Your status tells the PM your work: never post it results, verdicts or acknowledgements. In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person\'s answer to its line reaches it; --to there adds no agent, so name only the PM.'
 const POST_HELP = `${POST_ABOUT} TEXT is one argument: when it holds quotes, or is only -, put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<'MSG' … MSG); an empty stdin is refused and nothing is posted.`
 /** A Buddy's guard refuses TEXT - (#2358): on stdin its message would skip the secret check. A Buddy that followed the stdin
  *  hint was refused and tried again, so its help passes the message in quotes, as the guard's refusal says. */
 const BUDDY_POST_HELP = `${POST_ABOUT} TEXT is one argument, the message itself in quotes: 'your message', or "it's done" when it holds an apostrophe. A Buddy never passes - for TEXT: its message is checked for secrets, so one read from stdin is refused and nothing is posted.`
-const POST_FLAGS = '[--to AGENT]... [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...'
-const MENTION_HELP = ' --mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications. An @username or @email in TEXT tags that person as well, outside code and links. Nobody is tagged who cannot read the conversation.'
+const POST_FLAGS = '[--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]...'
+// By username, display name or id, never email: a PM typed --mention with Ken's email and a machine's privacy hook stopped it
+// (task #2954). An email still resolves for older callers (mentionCommand), and the server still reads @email in TEXT.
+const MENTION_HELP = ' --mention tags a person, by the username, display name or id shown in status (up to 5), when you need them to act or decide; it shows in their notifications. An @username in TEXT tags that person as well, outside code and links. Never type a person\'s email. Nobody is tagged who cannot read the conversation.'
 /** What the command entry says after how its JSON is passed, the same for everyone. A task's review plan (#2382) is said in
  *  its brief (backend superTabs/model.ts renderWorkTask), for whoever opens its review (project instructions, phase 4). */
 const COMMAND_ABOUT = 'send one of the commands below.'
@@ -82,11 +85,11 @@ const HELP = {
   release: 'agent.release records keep, or requests stop, for an agent whose work ended; assigning it new work reuses it. Wait for the execution host to confirm a stop. A person can withdraw a stuck stop; the session cannot receive new work in that Swarm. Its native capacity stays reserved until its host confirms stopping. Other Swarms wait up to two minutes for an in-flight close, then may reuse it.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
   // Buddies (backend superTabs/buddies.ts): a person adds and removes their own; the Buddy proposes only when they ask.
-  buddies: 'Buddies, in every Swarm: each person has one Buddy chat for the whole Swarm that only they and their Buddy read (buddy.chat opens it before any Buddy; with projectId, their older chat in that project), may add their one Buddy (buddy.create with machineId of their own machine, engine claude), remove it (buddy.remove), and name it (buddy.rename with conversationId of their Buddy chat and name, or null for the default name). It reads every project they read and brainstorms with them in that chat, and the PM\'s private lines to them land there too, marked with their project. A proposal is the only thing it sends into a project. propose OPERATION_ID JSON [--attach PATH]...: when its owner asks (a New session in one project, in its thread, for that project): {"conversationId":"its chat","ownerMessageId":"their message asking","projectId":"the project they read to send it to; a session of one project leaves it out","title":"Short name (at most 80 characters)","goal":"...","scope":"...","priority":"low|normal|high","attachmentIds":["a file its owner sent in its chat"]}. --attach adds a file inside its own folder (in that project\'s folder, for their one Buddy); up to 5 files in all, 10 MB each. The Swarm posts it in the project chat as "Let\'s build: <title>" from its owner, with the full proposal as the first reply in its thread, for the PM. A Buddy is never assigned work.',
+  buddies: 'Buddies, in every Swarm: each person has one Buddy chat for the whole Swarm that only they and their Buddy read (buddy.chat opens it before any Buddy; with projectId, their older chat in that project), may add their one Buddy (buddy.create with machineId of their own machine, engine claude), remove it (buddy.remove), and name it (buddy.rename with conversationId of their Buddy chat and name, or null for the default name). It reads every project they read and brainstorms with them in that chat, and the PM\'s private lines to them land there too, marked with their project. A proposal is the only thing it sends into a project. propose OPERATION_ID JSON [--attach PATH]...: when its owner asks (a New session in one project, in its thread, for that project): {"conversationId":"its chat","ownerMessageId":"their message asking","projectId":"the project they read to send it to; a session of one project leaves it out","text":"the line its owner okayed, or their own words","goal":"...","scope":"...","priority":"low|normal|high","attachmentIds":["a file its owner sent in its chat"]}. --attach adds a file inside its own folder (in that project\'s folder, for their one Buddy); up to 5 files in all, 10 MB each. The Swarm posts the text in full in the project chat as its owner\'s own message, delivered to the PM with the goal, scope and priority, which become the task\'s brief; words its owner did not okay in its chat are refused. A Buddy is never assigned work.',
   // A person's own command, for the machines they added; an agent's terminal is refused (command.ts), so no agent raises its
   // own machine's room (Lead, 2026-10-28).
   setAgents: 'set-agents MACHINE_ID COUNT: for a machine\'s owner, from their own terminal, not an agent\'s: how many Swarm agents may run on that machine at once. Each agent still needs free memory when it starts. A machine may offer one agent for every 2 GB of its memory, and at least 4; a larger number is refused.',
-  route: `route GROUP JSON: rank who could do a group's work, before you start an agent or assign it to another. Work you do yourself is not routed. JSON: {"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","why":"one sentence","kind":"${ROUTE_KIND_HELP}","local":"optional true, only when a person asked for a local model","model":"optional: the model a person named, in their words; only it is offered","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}. size is how long the work runs: small about 20 minutes, medium about an hour, large about three hours. The route leaves out what cannot run, and says why: a machine offline, paused or full, an engine not installed, signed out or suspended, tools or devices the work needs that a machine lacks, and machines that cannot take a teammate's project (it runs only on Team machines: a Mac's Harness Team account whose privacy check passed, or a machine used only for agents). It ranks the rest by strength, then price and quota fit, then an idle agent before a new one, and notes what else it knows on each candidate: a used-up quota, a lost task, a machine whose last starts failed, a task requirement naming another machine, a model the catalog does not offer by default or does not rate. ${CHEAP_FIRST_HELP} Your project's instructions say how to choose; where they say nothing, choose by strength, quota and price. A named model the catalog does not list is offered unrated. A pick on a model served on the Swarm's grid starts with gridModel and gridName in place of model and effort. Start or assign any candidate with the routeDecisionId, so the decision records what ran.`,
+  route: `route GROUP JSON: list who could do a group's work, before you start an agent or assign it to another. Work you do yourself is not routed. JSON: {"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","why":"one sentence","kind":"${ROUTE_KIND_HELP}","local":"optional true, only when a person asked for a local model","model":"optional: the model a person named, in their words; only it is offered","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}. size is how long the work runs: small about 20 minutes, medium about an hour, large about three hours. The route leaves out what cannot run, and says why: a machine offline, paused or full, an engine not installed, signed out or suspended, tools or devices the work needs that a machine lacks, and machines that cannot take a teammate's project (it runs only on Team machines: a Mac's Harness Team account whose privacy check passed, or a machine used only for agents). It ranks nothing and names no pick: the rest come by machine name, then engine, each with its facts (model, effort, the catalog's strength and price, quota fit with weekly % left and reset time, the agents on its machine, idle or new), and it notes what else it knows on each candidate: a used-up quota, a lost task, a machine whose last starts failed, a task requirement naming another machine, a model the catalog does not offer by default or does not rate, a plug-in's finding. ${CHEAP_FIRST_HELP} The first row is first by its machine's name, not by merit: choose by your project's Routing instructions. A named model the catalog does not list is offered unrated. A candidate on a model served on the Swarm's grid starts with gridModel and gridName in place of model and effort. Start or assign the candidate you chose with the routeDecisionId and overrideReason, the Routing rule that chose it, so the decision records what ran and why.`,
   screen: 'screen AGENT [--scrollback N]: read another agent\'s terminal in your project as plain text, with up to 200 lines of scrollback. Use it when an agent seems stuck.',
   type: 'type AGENT [TEXT] [--key K]...: type text, then keys (Enter, Esc, Tab, Up, Down, Left, Right, Ctrl-C, 0-9), into another agent\'s terminal in your project. Answer prompts within its task; ask the owner before approving anything risky.',
   capacity: 'capacity MACHINE_ID JSON: inspect machine, engine and quota headroom. JSON uses the start request fields below. Unknown allowances are not reported as free tokens.',
@@ -185,21 +188,26 @@ function statusView(answer: Record<string, unknown>, agentId: string): Record<st
   return { ...answer, state: { ...state, conversations } }
 }
 
-/** A post's mentions name people by id or email; the backend takes person ids. A name that is nobody in the Swarm is refused
- *  here, before anything is sent. Whether this agent may tag them in this conversation is the backend's to judge. Only such
- *  a post reads the Swarm, for its people. */
+/** A post's mentions name people by id, username or display name, or (older callers) email (personName.ts peopleNamed); the
+ *  backend takes person ids. A name that is nobody in the Swarm, or that two people go by, is refused here, before anything is
+ *  sent. Whether this agent may tag them in this conversation is the backend's to judge. Only such a post reads the Swarm,
+ *  for its people. */
 async function mentionCommand(command: Record<string, unknown>, swarm: () => Promise<Record<string, unknown>>): Promise<Record<string, unknown>> {
   if (command.type !== 'message.send' || !Array.isArray(command.mentions)) return command
   const people = list((await swarm()).people)
   const ids = command.mentions.map(name => {
-    const person = people.find(p => p.id === name || typeof name === 'string' && typeof p.email === 'string' && p.email.toLowerCase() === name.toLowerCase())
-    if (!person) throw new SuperTabHostError('MENTION_UNKNOWN', `${String(name)} is not a person in this Swarm. Tag a person by the id or email shown in status.`, 400)
-    return person.id
+    const named = typeof name === 'string' ? peopleNamed(people, name) : []
+    if (!named.length) throw new SuperTabHostError('MENTION_UNKNOWN', `${String(name)} is not a person in this Swarm. Tag a person by the username or id shown in status.`, 400)
+    if (named.length > 1) {
+      const usernames = named.map(p => String(p.username ?? p.id)).join(', ')
+      throw new SuperTabHostError('MENTION_AMBIGUOUS', `${String(name)} is the name of more than one person here (${usernames}). Tag them by username or id.`, 400)
+    }
+    return named[0]!.id
   })
   return { ...command, mentions: [...new Set(ids)] }
 }
 
-/** The instructions with each note's asker named (`askedByName`: their username, else their email), as the status read has
+/** The instructions with each note's asker named (`askedByName`: their username, never their email, task #2954), as the status read has
  *  them, so the printed notes say who asked rather than an id (final review). Only a document with notes reads the Swarm; a
  *  member the read does not have, or a read that fails, keeps the id alone. */
 async function withAskerNames(document: Record<string, unknown>, state: () => Promise<Record<string, unknown>>): Promise<Record<string, unknown>> {
@@ -207,7 +215,7 @@ async function withAskerNames(document: Record<string, unknown>, state: () => Pr
   const people = await state().then(read => list(read.people), () => [])
   const nameOf = (id: unknown) => {
     const person = people.find(p => p.id === id)
-    return typeof person?.username === 'string' && person.username ? person.username : typeof person?.email === 'string' ? person.email : null
+    return typeof person?.username === 'string' && person.username ? person.username : personName(person) ?? null
   }
   return { ...document, notes: document.notes.map(note => {
     const name = nameOf(object(note).askedBy)
@@ -254,12 +262,14 @@ function markAnswered(page: unknown, later: unknown[], agentId: string): unknown
   const body = object(page)
   if (!Array.isArray(body.messages)) return page
   const mine = new Set([...body.messages, ...later].map(object).filter(m => object(m.author).id === agentId && typeof m.replyTo === 'string').map(m => m.replyTo))
+  // An answer right below a message has no replyTo (task #2929): the caller's delivery of the message says it was answered.
+  const settled = (m: Record<string, unknown>) => Array.isArray(m.deliveries) && m.deliveries.map(object).some(d => d.agentId === agentId && d.status === 'answered')
   return { ...body, messages: body.messages.map(object).map(row => {
     // `thread` is named on a thread reply only: a top-level message is its own thread's root, and an older row has none.
     const { thread, ...m } = row
     const reply = typeof thread === 'string' && thread !== m.id ? { ...m, thread } : m
     const asked = Array.isArray(m.recipientIds) && m.recipientIds.includes(agentId) && object(m.author).id !== agentId
-    return asked ? { ...reply, answered: mine.has(m.id) } : reply
+    return asked ? { ...reply, answered: mine.has(m.id) || settled(m) } : reply
   }) }
 }
 
@@ -420,6 +430,9 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'reserveCapacity') return await reservations().reserve(payload, closed)
         if (payload.action === 'observeCapacity') return await reservations().observe(payload.creationId, closed)
         if (payload.action === 'returnCapacity') return await reservations().giveBack(payload.creationId, closed)
+        // Only this machine's own host, which read the Swarm's verdict for its start (machines.ts): a relayed caller could
+        // otherwise free memory a start still holds (issue #2989).
+        if (payload.action === 'endCapacity') return asker.local ? await reservations().ended(payload.creationId, closed) : { error: 'OWNER_REQUIRED' }
         // A backend-issued context scopes provenance only. Existing machine
         // control is still required to open/write the native terminal itself.
         if (payload.action === 'prepareNative' || payload.action === 'renewNative') {
@@ -654,12 +667,15 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             // An older backend has no such route: its 404 is unreadable like any other failure.
             within(backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(payload.conversationId))}/attempts?${identity}`)),
           ])
-          // The log's records carry every candidate's line; the route needs only who was picked and how it went, and the account and expected spend of what actually runs, which an open pick still holds: after an override
-          // that is the person's chosen candidate, and a Lead's own choice outside the list has no known account.
+          // The log's records carry every candidate's line; the route needs only who was chosen and how it went, and the account and expected spend of what actually runs, which an open decision still holds: the
+          // candidate its start or assignment matched (task #2901: a route names no pick, and the backend records that one in the final), else after an override the person's chosen candidate, else an old record's
+          // pick. A Lead's own choice outside the list has no known account.
           const decisions = Array.isArray(logged) ? logged.slice(0, 50).map(object).map(d => {
             const record = object(d.record), final = object(d.final), candidates = list(record.candidates), pick = candidates.find(c => c.id === record.pick)
-            const runs = d.override ? candidates.find(c => c.id === object(d.override).candidateId) : pick, fit = object(runs?.fit)
-            return { id: d.id, conversationId: d.conversationId, title: String(pick?.title ?? 'unknown pick'),
+            const byFinal = candidates.find(c => typeof final.candidateId === 'string' && c.id === final.candidateId)
+            const runs = byFinal ?? (d.override ? candidates.find(c => c.id === object(d.override).candidateId) : pick), fit = object(runs?.fit)
+            const title = pick?.title ?? byFinal?.title ?? (record.pick === undefined && candidates.length ? 'not chosen yet' : 'unknown pick')
+            return { id: d.id, conversationId: d.conversationId, title: String(title),
               ...(typeof fit.account === 'string' ? { account: fit.account, spend: object(fit.spend), size: object(record.assessment).size ?? 'medium' } : {}),
               ...(typeof record.via === 'string' ? { via: record.via } : {}), outcome: d.outcome ?? null, assignmentId: d.assignmentId ?? null, createdAt: d.createdAt,
               final: final.kind === 'member' ? { kind: 'member', agentId: final.agentId } : final.kind === 'new' ? { kind: 'new', engine: final.engine, model: final.model } : null }
@@ -788,6 +804,12 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
               && error.code === 'VALIDATION_ERROR' && /Unrecognized key[^"]*"step"/.test(error.message)) {
               const { step: _step, ...plain } = command
               return { ok: true, operationId: payload.operationId, value: await send(plain) }
+            }
+            // A backend from before answers below (task #2929) refuses the field: the answer goes as a reply, which settles it there.
+            if (command.answers && command.type === 'message.send' && error instanceof SuperTabHostError && error.status === 400
+              && error.code === 'VALIDATION_ERROR' && /Unrecognized key[^"']*["']answers["']/.test(error.message)) {
+              const { answers, ...reply } = command
+              return { ok: true, operationId: payload.operationId, value: await send({ ...reply, replyTo: answers }) }
             }
             // A backend from before cost records refuses the totals; the status itself still goes.
             if (command.tokens && error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR' && /"tokens"|'tokens'/.test(error.message)) {

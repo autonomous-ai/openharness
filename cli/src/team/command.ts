@@ -17,10 +17,11 @@ import { spawnSync } from 'node:child_process'
 import type { AgentTmpState } from '../lib/agentTmp.js'
 import { sameSignIn, type AuthSession } from '../lib/authSession.js'
 import { SIGN_OUT_BUTTON_FLAG, type SignOutAsked } from '../lib/signOut.js'
-import type { AdminVia, RunAdmin } from './admin.js'
+import { psQuote, type AdminVia, type RunAdmin } from './admin.js'
 import { teamConfigJson, type TeamConfig } from './config.js'
 import { engineLines, type TeamEngines } from './engines.js'
 import { teamModelSet } from './model.js'
+import type { TeamModelHandoff } from './modelHandoff.js'
 import { mintTeamConversion, mintTeamHandoff, redeemTeamHandoff, revokeHarnessRefresh, teamSession, TeamSignInError, type Delete, type Get, type Post } from './handoff.js'
 import {
   SENTINEL_NAME, TEAM_PORT, TEAM_REAL_NAME, TEAM_STATUS_FILE,
@@ -191,6 +192,8 @@ export interface TeamCommandDeps {
   handOver?(code: string): void
   /** Windows: asks Task Scheduler to start the team daemon's task; false when it would not. */
   startTeamTask?(): Promise<boolean>
+  /** Windows: leaves a model API for the Team daemon (./modelHandoff.ts); a spec names its own. */
+  handModel?(handoff: TeamModelHandoff): void
 }
 
 export async function teamCommand(argv: string[], deps: TeamCommandDeps): Promise<number> {
@@ -840,11 +843,14 @@ async function teamLogs(deps: TeamCommandDeps, words: readonly string[], flags: 
   const where = deps.platform === 'darwin' ? 'this Mac' : 'this computer'
   const config = deps.readConfig()
   if (!config) return fail(deps, json, 'NO_ACCOUNT', `No Harness Team account on ${where}. Run harness team setup first.`)
-  if (deps.platform === 'win32') return fail(deps, json, 'UNSUPPORTED', 'Reading the team log on Windows is not here yet; harness team status shows its path.')
   const inline = flags.find((flag) => flag.startsWith('--lines='))
   const asked = inline ? Number(inline.slice('--lines='.length)) : flags.includes('--lines') ? Number(words[1]) : 40
   const lines = Number.isInteger(asked) && asked > 0 && asked <= 5000 ? asked : 40
-  const result = await deps.admin(() => ({ script: `tail -n ${lines} ${quoted(teamPaths(config.home).log)}` }),
+  // Windows has no tail. -ErrorAction Stop: a log not there yet is said as an error, as tail says it.
+  const read = deps.platform === 'win32'
+    ? `Get-Content -LiteralPath ${psQuote(windowsTeamPaths(config.home).log)} -Tail ${lines} -Encoding UTF8 -ErrorAction Stop`
+    : `tail -n ${lines} ${quoted(teamPaths(config.home).log)}`
+  const result = await deps.admin(() => ({ script: read }),
     `Harness wants to read the Harness Team account's log on ${where}.`)
   if (!result.ok) {
     if (result.code === 'NO_PROMPT') deps.err(`✗ ${result.message} Run it in a terminal.`)

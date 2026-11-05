@@ -28,6 +28,7 @@ import 'controller.dart';
 import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
+import 'import_agent.dart' show importComputerWord;
 import 'import_agent_dialog.dart';
 import 'project_add_people.dart';
 import 'leaderboard/format.dart';
@@ -836,7 +837,7 @@ class _AddAgentMenuState extends State<_AddAgentMenu> {
       children: [
         for (final (label, icon, run) in [
           (
-            'Import an agent running on this Mac',
+            'Import an agent running on this $importComputerWord',
             AppIcons.download,
             widget.onImport,
           ),

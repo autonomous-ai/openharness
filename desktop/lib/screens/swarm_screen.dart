@@ -40,6 +40,7 @@ import '../widgets/finger_target.dart';
 import '../widgets/session_close_dialog.dart';
 import '../super_tabs/swarm_accounts.dart';
 import '../super_tabs/lead_guard.dart';
+import '../super_tabs/places.dart';
 import '../notify/system_notifications.dart';
 import '../widgets/account_device_detail.dart';
 import '../widgets/approve_device_code.dart';
@@ -83,6 +84,7 @@ import '../state/harness_placement.dart';
 import '../state/new_harness.dart';
 import '../state/harness_launch_integration.dart';
 import '../super_tabs/launch.dart';
+import '../super_tabs/message_link.dart' show swarmMessageLinkInbox;
 import '../super_tabs/buddy_chat.dart' show countText;
 import '../super_tabs/buddy_chat_shortcut.dart';
 import '../super_tabs/join_machine.dart';
@@ -794,6 +796,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
           agentId.substring(0, slash),
           agentId.substring(slash + 1),
         );
+        return;
+      }
+      // A reply's notice carries its message link: the click opens it as the link does, in its thread.
+      if (machineId == SystemNotifications.messageNoticeMachine) {
+        unawaited(swarmMessageLinkInbox.accept(agentId));
         return;
       }
       // A device notice puts its marker where an agent's machine goes and the device's key where the
@@ -2236,8 +2243,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       },
       // File's Make Leader / Remove Leader title, for the focused pane.
       'leaderAction': ?_focusedLeaderAction,
-      'canGoBack': _navigation.canGoBack(app),
-      'canGoForward': _navigation.canGoForward(app),
+      'canGoBack': _canStepHistory(-1),
+      'canGoForward': _canStepHistory(1),
       'closedHistory': [
         for (final entry in closedWorkDestinations(app))
           {
@@ -7171,7 +7178,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
   }
 
+  /// The controller of the Swarm tab in front, whose places ⌘[ and ⌘] step
+  /// first (task #2996); null in any other tab.
+  SuperTabController? get _frontSwarm {
+    final tab = app.activeSwarm;
+    final id = tab.superTabId;
+    return tab.isSuperTab && id != null ? app.superTabs.peek(id) : null;
+  }
+
+  bool _canStepHistory(int direction) =>
+      canStepSwarmPlaces(_frontSwarm, direction) ||
+      (direction < 0
+          ? _navigation.canGoBack(app)
+          : _navigation.canGoForward(app));
+
   void _stepHistory(int direction) {
+    if (stepSwarmPlaces(_frontSwarm, direction)) return;
     if (direction < 0
         ? !_navigation.canGoBack(app)
         : !_navigation.canGoForward(app)) {
@@ -7422,7 +7444,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   Future<void> _revealForDevice() async {
-    if (!RuntimePlatform.isMacOS ||
+    if (RuntimePlatform.isLinux ||
         !mounted ||
         app.inForeground ||
         nativePickerOpen ||
@@ -7990,8 +8012,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (id == 'swarm.next' || id == 'swarm.previous') {
       return app.profileSwarms.length > 1;
     }
-    if (id == 'navigation.back') return _navigation.canGoBack(app);
-    if (id == 'navigation.forward') return _navigation.canGoForward(app);
+    if (id == 'navigation.back') return _canStepHistory(-1);
+    if (id == 'navigation.forward') return _canStepHistory(1);
     // Opening a terminal needs no terminal to already be there; the other
     // `terminal.*` commands are find, which does.
     if (id == 'terminal.new') return true;

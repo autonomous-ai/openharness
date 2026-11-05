@@ -78,6 +78,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.onOpenReply,
     this.references = const {},
     this.onOpenGroup,
+    this.onOpenInstructions,
     this.mentions = const [],
     this.mentionAddresses = const {},
     this.mentionLabels = const {},
@@ -151,6 +152,10 @@ class SuperTabMessageRow extends StatefulWidget {
   final Map<String, String> mentionLabels;
   final Map<int, String> references;
   final ValueChanged<String>? onOpenGroup;
+
+  /// Opens the revision an instructions save's line names
+  /// ([SuperTabMessage.instructionsSave]), to read the change whole.
+  final ValueChanged<({String projectId, int revision})>? onOpenInstructions;
   final String author;
   final SuperTabAgent? agent;
 
@@ -847,6 +852,32 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     ),
                                   ),
                                 ),
+                              if ((
+                                    message.deleted
+                                        ? null
+                                        : message.instructionsSave,
+                                    widget.onOpenInstructions,
+                                  )
+                                  case (final saved?, final open?))
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    top: grid.AppDesktop.menuInset,
+                                  ),
+                                  child: SuperTabLink(
+                                    key: ValueKey(
+                                      'super-instructions-link-${message.id}',
+                                    ),
+                                    label: 'See revision ${saved.revision}',
+                                    onTap: () => open(saved),
+                                    child: Text(
+                                      'See revision ${saved.revision}',
+                                      style: DesktopChrome.control(
+                                        color: DesktopChrome.accent,
+                                        medium: true,
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               if (message.editedAt != null &&
                                   !message.deleted &&
                                   _editing == null)
@@ -1043,22 +1074,29 @@ class SuperTabReplyPreview extends StatelessWidget {
   }
 }
 
-/// Lights a message briefly, as the one a quote was followed to.
+/// Lights a message briefly, as the one a quote was followed to, or while it
+/// is find's current match; a [match] of find's others is lit more quietly.
 class SuperTabMessageHighlight extends StatelessWidget {
   const SuperTabMessageHighlight({
     super.key,
     required this.on,
+    this.match = false,
     required this.child,
   });
-  final bool on;
+  final bool on, match;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
+    final selection = DesktopChrome.selection;
     return AnimatedContainer(
       duration: const Duration(milliseconds: 400),
-      color: on ? DesktopChrome.selection : Colors.transparent,
+      color: on
+          ? selection
+          : match
+          ? selection.withValues(alpha: selection.a / 2)
+          : Colors.transparent,
       child: child,
     );
   }

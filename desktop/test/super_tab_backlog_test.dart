@@ -720,6 +720,33 @@ void main() {
       expect(listed(tester), hasLength(6));
     });
 
+    testWidgets('under Mine, each card counts its group\'s rows (task #2885)', (
+      tester,
+    ) async {
+      await show(tester, swarm());
+      await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
+      await tester.pumpAndSettle();
+      int headed(SuperTabBacklogGroup g) {
+        if (header(g).evaluate().isEmpty) return 0;
+        return int.parse(
+          tester
+              .widgetList<Text>(
+                find.descendant(of: header(g), matching: find.byType(Text)),
+              )
+              .map((t) => int.tryParse(t.data ?? ''))
+              .nonNulls
+              .single
+              .toString(),
+        );
+      }
+
+      final cards = summary(tester);
+      expect(cards.working, headed(SuperTabBacklogGroup.working));
+      expect(cards.review, headed(SuperTabBacklogGroup.inReview));
+      expect(cards.shipped, headed(SuperTabBacklogGroup.shipped));
+      expect(cards.working + cards.review, greaterThan(0));
+    });
+
     testWidgets('the summary counts what the filters show', (tester) async {
       await show(tester, swarm());
       expect(summary(tester), (working: 1, review: 1, shipped: 1));
@@ -886,6 +913,31 @@ void main() {
         rowText(tester, 'working'),
         contains('PR 2733 · 12 checks passed'),
       );
+    });
+
+    // Task #2953: a hidden window asks GitHub nothing for the backlog's rows, as live cards do
+    // (VisibleTick); back on screen it watches them again.
+    testWidgets('a hidden window lets the rows\' pull requests go, and watches '
+        'them again on return', (tester) async {
+      var reads = 0;
+      final facts = SuperTabPullRequestFacts((_) async {
+        reads++;
+        return const {'account': 'ada', 'rows': []};
+      });
+      addTearDown(facts.dispose);
+      await show(tester, swarm(), facts: facts);
+      expect(facts.watching, isNotEmpty);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      await tester.pump();
+      expect(facts.watching, isEmpty, reason: 'nothing watched while hidden');
+      final before = reads;
+      await tester.pump(SuperTabPullRequestFacts.every * 3);
+      expect(reads, before, reason: 'no read while hidden');
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(facts.watching, isNotEmpty);
     });
 
     testWidgets('clicking a row opens its chat', (tester) async {
@@ -1242,54 +1294,77 @@ void main() {
         expect(c.snapshot!.conversation('recent'), isNotNull);
       });
 
-      testWidgets(
-        'an empty Mine says so and links to what the reader shipped',
-        (tester) async {
+      /// [count] tasks the reader asked for, shipped and archived an hour
+      /// apart, the newest first: Scholes's 72 (task #2885).
+      List<Map<String, dynamic>> shippedOfMine(int count) => [
+        for (var i = 0; i < count; i++)
+          archived('mine-$i', 100 + i, daysAgo: (i + 1) / 24),
+      ];
+
+      for (final mine in [true, false]) {
+        testWidgets('with nothing open, Shipped still lists the newest 7 of '
+            '72 with Show 65 more shipped (${mine ? 'Mine' : 'Everyone'}, '
+            'task #2885)', (tester) async {
           final server = nothingOpen();
           server.parts.clock = now;
-          add(server, [
-            archived('mine-a', 30),
-            archived('mine-b', 31),
-            archived('theirs', 32, requester: 'pilot'),
-          ]);
+          add(server, shippedOfMine(72));
+          if (!mine) {
+            // Everyone has nothing open either: only the project chats stay.
+            (server.state['conversations'] as List).removeWhere(
+              (g) =>
+                  (g as Map)['number'] != null &&
+                  !(g['id'] as String).startsWith('mine-'),
+            );
+          }
           await show(tester, server, today: at);
-          await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
-          await tester.pumpAndSettle();
-          expect(find.text('No open tasks of yours'), findsOneWidget);
-          expect(row('mine-a'), findsNothing);
-          // The cards still count what Mine shipped.
-          expect(summary(tester), (working: 0, review: 0, shipped: 2));
-          final link = find.byKey(const ValueKey('super-backlog-mine-shipped'));
+          if (mine) {
+            await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
+            await tester.pumpAndSettle();
+          }
+          expect(summary(tester), (working: 0, review: 0, shipped: 72));
+          expect(find.text('No open tasks of yours'), findsNothing);
+          expect(find.text('No tasks'), findsNothing);
+          expect(header(SuperTabBacklogGroup.shipped), findsOneWidget);
+          expect(listed(tester), [for (var i = 0; i < 7; i++) 'mine-$i']);
+          final more = find.byKey(const ValueKey('super-backlog-shipped-more'));
           expect(
             find.descendant(
-              of: link,
-              matching: find.text(
-                'Your shipped tasks from the last 7 days · 2',
-              ),
+              of: more,
+              matching: find.text('Show 65 more shipped'),
             ),
             findsOneWidget,
           );
-          await tester.tap(link);
+          await tester.tap(more);
           await tester.pumpAndSettle();
-          expect(find.text('No open tasks of yours'), findsNothing);
-          expect(row('mine-a'), findsOneWidget);
-          expect(row('mine-b'), findsOneWidget);
-          expect(row('theirs'), findsNothing);
-          expect(summary(tester), (working: 0, review: 0, shipped: 2));
-        },
-      );
+          // The list builds what fits; the eighth is there, and no foot.
+          expect(row('mine-7'), findsOneWidget);
+          expect(more, findsNothing);
+        });
+      }
 
-      testWidgets('an empty Mine with nothing shipped has no link', (
-        tester,
-      ) async {
+      testWidgets('the empty message shows only when nothing is open and '
+          'nothing shipped (task #2885)', (tester) async {
+        final server = nothingOpen();
+        server.parts.clock = now;
+        add(server, [
+          archived('mine-a', 30),
+          archived('theirs', 32, requester: 'pilot'),
+        ]);
+        await show(tester, server, today: at);
+        await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
+        await tester.pumpAndSettle();
+        // One shipped task of the reader's: it lists, and nothing says empty.
+        expect(find.text('No open tasks of yours'), findsNothing);
+        expect(listed(tester), ['mine-a']);
+        expect(summary(tester), (working: 0, review: 0, shipped: 1));
+        await tester.pumpWidget(const SizedBox());
+        // Nothing open and nothing shipped: the message, and no rows.
         await show(tester, nothingOpen(), today: at);
         await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
         await tester.pumpAndSettle();
         expect(find.text('No open tasks of yours'), findsOneWidget);
-        expect(
-          find.byKey(const ValueKey('super-backlog-mine-shipped')),
-          findsNothing,
-        );
+        expect(listed(tester), isEmpty);
+        expect(summary(tester), (working: 0, review: 0, shipped: 0));
       });
 
       testWidgets('Mine goes by who asked, not who worked on it', (
@@ -1308,10 +1383,7 @@ void main() {
         await show(tester, server, today: at);
         await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
         await tester.pumpAndSettle();
-        expect(
-          find.text('Your shipped tasks from the last 7 days · 1'),
-          findsOneWidget,
-        );
+        expect(listed(tester), ['asked']);
       });
 
       testWidgets('a failed read says so, and trying again reads it', (

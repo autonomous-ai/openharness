@@ -259,6 +259,23 @@ class SuperTabDecisions extends ChangeNotifier {
   Future<bool> answer(SuperTabDecision decision, int choice) =>
       _answer(decision, {'choice': choice});
 
+  /// The reader's answer in their own words, for the asker to read as the
+  /// decision's note with no option (task #2996).
+  Future<bool> answerInWords(SuperTabDecision decision, String words) {
+    final note = words.trim();
+    if (note.isEmpty) return Future.value(false);
+    return _answer(decision, {'note': note});
+  }
+
+  /// Decisions whose answer in words the server refused: one before typed
+  /// answers takes an option only. The words stay with the reader, who can
+  /// answer in the chat instead.
+  final Set<String> _refusedWords = {};
+
+  /// Whether the server refused [decision]'s answer in words.
+  bool refusedWords(SuperTabDecision decision) =>
+      _refusedWords.contains(decision.id);
+
   /// Let PM decide: the backend answers with the recommended option on the
   /// reader's behalf, recorded as the PM's choice, never as theirs.
   Future<bool> delegate(SuperTabDecision decision) =>
@@ -310,8 +327,18 @@ class SuperTabDecisions extends ChangeNotifier {
         },
       );
       _failed.remove(decision.id);
+      _refusedWords.remove(decision.id);
       return true;
-    } catch (_) {
+    } catch (failure) {
+      if (failure is SuperTabFailure &&
+          failure.statusCode == 400 &&
+          answer.containsKey('note') &&
+          !answer.containsKey('choice')) {
+        // Sending it again gets the same answer: not a failure to retry.
+        _refusedWords.add(decision.id);
+        _failed.remove(decision.id);
+        return false;
+      }
       // Said on the card that sent it ([failedToSend]), wherever it shows.
       _failed[decision.id] = answer;
       return false;

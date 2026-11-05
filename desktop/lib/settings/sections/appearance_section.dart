@@ -11,8 +11,8 @@ import '../../shared/widgets/setting_row.dart';
 import '../../shortcuts/app_keymap.dart';
 import '../../widgets/key_hints.dart';
 
-/// Appearance ▸ Workspace: inactive pane shading, automatic tab names and the
-/// colour palette. (The class keeps its old name; the tab was Appearance.)
+/// Appearance ▸ Workspace: the theme (Light / Dark / Match macOS and its two
+/// palettes), inactive pane shading and automatic tab names. (The class keeps its old name; the tab was Appearance.)
 ///
 /// Palettes coordinate the workspace and terminal defaults. The shared font
 /// and size are configured once in Appearance ▸ Terminal.
@@ -51,6 +51,8 @@ class AppearanceSection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Light / Dark / Match macOS and the two themes first (#3006).
+          PaletteSection(store: store),
           ValueListenableBuilder<AppearancePrefs>(
             valueListenable: preferences,
             builder: (context, prefs, _) {
@@ -189,8 +191,6 @@ class AppearanceSection extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 24),
-          PaletteSection(store: store),
           // Room under the last card so a scrolled-to-bottom pane does not end
           // flush against the window edge.
           const SizedBox(height: 8),

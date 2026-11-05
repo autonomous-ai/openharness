@@ -35,6 +35,8 @@ export interface Derived {
   otherProjectsWork?: Json[]
   /** A person only. */
   mentionsWaiting?: number
+  /** A person only: a digest of which of their tags wait, moving when one is made, answered or expires. */
+  mentionsDigest?: string
   /** False only in a Swarm Harness Team accounts are not tried in yet (backend machines.ts teamAccountSwarm). */
   teamAccounts?: false
 }

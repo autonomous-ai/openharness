@@ -13,6 +13,7 @@ import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { readCapabilities, quotaOf, meteredEngine, quotaUnknownReason } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
+import { settleHiddenScreen } from './startScreen.js'
 import { PrepareRetryError, prepareSwarmStart } from './projectFolder.js'
 import { readAuthSession } from '../lib/authSession.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
@@ -183,7 +184,9 @@ const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list
 /** What this host launches beyond workers, said in its reading (backend leadStart.ts): a project's Product Manager, a
  *  Buddy's thread sessions (spec 2026-10-30-buddy-thread-sessions), and a person's one Buddy for the Swarm in its folder of
  *  project worktrees (spec 2026-10-31-one-buddy-per-swarm), which the backend offers only on a host that says so. */
-const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy']
+// windowsBuddy: this CLI proves a command's pane from its parents on Windows too (callerPane.ts `windowsRunningPane`), so a
+// Buddy there refuses no other agent's Swarm command. The backend starts no Buddy on a Windows machine without it.
+const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy']
 /** What this host does for a Product Manager's switch to another engine or account (spec 2026-11-02-pm-switch-engine-account),
  *  said beside the others: the backend refuses a switch to a host that does not. */
 CAPABILITIES.push('leadSwitch')
@@ -227,6 +230,8 @@ export class ContributedMachines {
    *  last pass found them. Reported so the backend waits past its 3 minutes (backend liveness.ts): Diego's Mac fetched and
    *  checked out a 470 MB project, and the start failed while it did (2026-10-27). */
   private readonly preparing = new Set<string>()
+  /** Per start, the waiting screen its engine showed on the last pass (startScreen.ts), until the next pass reads it again. */
+  private readonly hiddenScreens = new Map<string, string>()
   /** The starts whose host reports the backend refused (a 403), with its refusal, as this machine's passes met them. Named in
    *  the next reading so the backend fails each at once (backend liveness.ts failRefusedStarts), where it waited out its 3
    *  minutes with the refusal in this log alone (task #2441). */
@@ -235,6 +240,9 @@ export class ContributedMachines {
   private readonly heldSince = new Map<string, number>()
   /** Starts this host launched whose engine has not yet recorded its session: the agent each created, by start id. */
   private readonly unconfirmed = new Map<string, Unconfirmed>()
+  /** Starts dispatched here whose creation has no agent yet, by start id ([failedEarly]). In memory only: after a restart the
+   *  ledger's launch deadline frees them (reservations.ts LAUNCH_DEADLINE_MS). */
+  private readonly agentless = new Map<string, Agentless>()
   /** Removals cleaned and acknowledged by this host, and the one in progress per removal. */
   private readonly cleaned = new Set<string>()
   private readonly cleaning = new Map<string, Promise<void>>()
@@ -493,8 +501,10 @@ export class ContributedMachines {
     for (const id of this.preparing) if (!pendingIds.has(id)) this.preparing.delete(id)
     for (const id of this.refused.keys()) if (!pendingIds.has(id)) this.refused.delete(id)
     for (const id of this.heldSince.keys()) if (!pendingIds.has(id)) this.heldSince.delete(id)
+    for (const id of this.hiddenScreens.keys()) if (!pendingIds.has(id)) this.hiddenScreens.delete(id)
     this.loadUnconfirmed()
     for (const [id, launch] of this.unconfirmed) if (!pendingIds.has(id) && !launch.checking) void this.abandoned(id, launch)
+    for (const [id, launch] of this.agentless) if (!pendingIds.has(id) && !launch.checking) void this.failedEarly(id, launch, where)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
     for (const tab of this.lastSent.keys()) if (!pools.some(row => row.tabId === tab)) this.lastSent.delete(tab)
     for (const tab of this.readingFailures.keys()) if (!pools.some(row => row.tabId === tab)) this.readingFailures.delete(tab)
@@ -705,7 +715,11 @@ export class ContributedMachines {
                   continue
                 }
               }
-              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, ...(github ? { github } : {}) }, scoped, where, this.deps.open)
+              // A Buddy launches only where the account signed in here is its owner's (superTabs/start.ts buddyOnOwnMachine): read
+              // at each start, as the start itself says whether it is a Buddy's. One that cannot be read is none: a Buddy refuses.
+              const signedIn = await Promise.resolve().then(() => this.core.account.identity()).then(identity => identity?.accountId ?? null, () => null)
+              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, signedIn, ...(github ? { github } : {}) },
+                scoped, where, this.deps.open)
               this.refused.delete(String(start.id))
               const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
               // Launched, and its creation still under way on the daemon: anything else is not preparing.
@@ -716,7 +730,24 @@ export class ContributedMachines {
               // this close runs a Team account's confidential purge, and tries again until it has (security review 1 of #2668).
               if ((result.error === 'START_PENDING' || typeof result.refused === 'string') && identifier(result.harnessId) && identifier(result.creationId)) {
                 this.remember(String(start.id), { path, harnessId: result.harnessId, creationId: result.creationId, tries: 0, checking: false })
-              } else this.forget(String(start.id))
+              // A start the Swarm failed is listed for one more pass, which reads the failure with no agent named. Kept for [abandoned]:
+              // forgotten here, the agent ran on as nobody's (three Codex panes on DESKTOP-0TFH0OJ, 2026-11-04).
+              } else if (result.error !== 'START_FAILED') this.forget(String(start.id))
+              // Dispatched here with a creation and no agent yet: should the Swarm fail it, [failedEarly] frees its memory at once.
+              if (result.ok !== true && !identifier(result.harnessId) && identifier(result.creationId)) {
+                this.agentless.set(String(start.id), { path, creationId: result.creationId, tries: this.agentless.get(String(start.id))?.tries ?? 0, checking: false })
+              } else this.agentless.delete(String(start.id))
+              // Launched, its engine yet to record its session: a screen it stopped on that nobody sees is answered, or fails
+              // the start now rather than at the backend's 3 minutes (startScreen.ts, task #3009). Its agent goes as any failed
+              // start's does, through [abandoned], which [remember] above keeps it for.
+              if (result.error === 'START_PENDING' && result.state !== 'pending' && identifier(result.harnessId)) {
+                const settled = await settleHiddenScreen(this.core.superTabs, result.harnessId, object(start.request), this.hiddenScreens.get(start.id),
+                  async error => { await scoped({ action: 'command', operationId: `hidden-screen-${start.id}`, command: { type: 'agent.startFailed', startId: start.id, error } }) },
+                  line => this.log(line))
+                if (settled.screen !== undefined) this.hiddenScreens.set(start.id, settled.screen)
+                else this.hiddenScreens.delete(start.id)
+                if (settled.outcome === 'failed') { this.refusedSince.delete(start.id); continue }
+              } else this.hiddenScreens.delete(start.id)
               const held = result.error === 'START_PENDING' && result.state === 'pending' ? object(result.held) : {}
               if (typeof held.detail !== 'string' || held.service === 'install') this.heldSince.delete(start.id)
               else {
@@ -960,6 +991,30 @@ export class ContributedMachines {
     } catch (error) {
       if (++launch.tries >= ABANDONED_TRIES) this.forget(startId)
       this.log(`Could not stop the agent a failed start launched (start ${startId}): ${error instanceof Error ? error.message : String(error)}`)
+    } finally { launch.checking = false }
+  }
+
+  /**
+   * A start dispatched here with no agent that the backend no longer lists as pending: when the backend says it failed (its
+   * machine did not start it within 3 minutes, say) and no agent joined, this machine's ledger ends its reservation at once
+   * rather than at its launch deadline (River on task #2890, issue #2989). A status the backend cannot give now is asked
+   * again on later passes, a few times; a daemon that cannot end it keeps the row until that deadline.
+   */
+  private async failedEarly(startId: string, launch: Agentless, where: Parameters<MachineDeps['open']>[0]): Promise<void> {
+    launch.checking = true
+    try {
+      const status = object(await this.deps.backend(this.core, 'GET', launch.path))
+      if (identifier(status.harnessId) || !status.error) { this.agentless.delete(startId); return }
+      this.agentless.delete(startId)
+      const local = await this.deps.open(where)
+      try {
+        const ended = object(await local.request('super_tabs', { action: 'endCapacity', creationId: launch.creationId }, 10_000))
+        if (ended.ok === true) this.log(`Freed the memory of start ${startId}, which the Swarm failed: ${String(status.error)}`)
+        else this.log(`Could not free the memory of failed start ${startId}: ${String(ended.error ?? 'no answer')}; its launch deadline frees it.`)
+      } finally { local.close() }
+    } catch (error) {
+      if (++launch.tries >= ABANDONED_TRIES) this.agentless.delete(startId)
+      this.log(`Could not free the memory of failed start ${startId}: ${error instanceof Error ? error.message : String(error)}`)
     } finally { launch.checking = false }
   }
 
@@ -1311,6 +1366,8 @@ const SWARM_GRID = /^swarm-[0-9a-f]{12}$/
 
 /** A start this host launched whose engine has not recorded its session yet (ContributedMachines `abandoned`). */
 interface Unconfirmed { path: string; harnessId: string; creationId: string; tries: number; checking: boolean }
+/** A start dispatched here whose creation has no agent yet (ContributedMachines `failedEarly`). */
+interface Agentless { path: string; creationId: string; tries: number; checking: boolean }
 /** How many passes ask about an abandoned start before it is let go. */
 const ABANDONED_TRIES = 5
 

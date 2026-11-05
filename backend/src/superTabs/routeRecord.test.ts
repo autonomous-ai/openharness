@@ -4,9 +4,15 @@ import { finalMatches, readRecord, routeRecordSchema, storedRecord, type RouteRe
 
 const candidate = (i: number) => ({ id: `c${i}`, kind: 'new', machineId: `m${i}`, engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3,
   title: `New agent · Claude opus high · m${i}`, label: `New agent · Claude opus high · m${i}` })
+/** An older CLI's record, still taken as before: its pick, first by strength (before task #2901). */
 const record = (count: number) => ({ assessment: { difficulty: 'medium', risk: 'low', why: 'Endpoint.' },
   candidates: Array.from({ length: count }, (_, i) => candidate(i)), excluded: [], floor: 1, notes: false, pick: 'c0', via: 'order', p: null,
   belowFloor: false, why: 'First by strength, then price and quota fit.' })
+/** The route since task #2901 (Ken, 2026-11-04): no pick and no ranking; the project's Routing instructions choose. */
+const pickless = (count: number) => {
+  const { pick: _pick, ...rest } = record(count)
+  return { ...rest, via: count === 1 ? 'only' : 'instructions', why: 'No ranking: the project\'s Routing instructions choose.' }
+}
 
 describe('route.record', () => {
   // The route shows every engine on every machine (Ken, 2026-11-03): a Swarm of a dozen Macs with two engines, a new agent and an
@@ -14,6 +20,15 @@ describe('route.record', () => {
   it('keeps up to 64 candidates, and refuses more', () => {
     expect(routeRecordSchema.safeParse(record(64)).success).toBe(true)
     expect(routeRecordSchema.safeParse(record(65)).success).toBe(false)
+  })
+  // Task #2901 (Ken, 2026-11-04): the route names no pick, so PMs stop taking its top line against the Routing instructions. An
+  // older CLI still sends its pick, and that record is held to its candidates as before.
+  it('takes a record that names no pick, chosen by the instructions or the only candidate, and an older one with its pick', () => {
+    expect(routeRecordSchema.safeParse(pickless(42)).success).toBe(true)
+    expect(routeRecordSchema.safeParse(pickless(1)).success).toBe(true)
+    expect(routeRecordSchema.safeParse(record(3)).success).toBe(true)
+    expect(routeRecordSchema.safeParse({ ...record(3), pick: 'c9' }).success).toBe(false)
+    expect(routeRecordSchema.safeParse({ ...pickless(3), via: 'ranked' }).success).toBe(false)
   })
 })
 
@@ -101,6 +116,36 @@ describe('a route decision of every engine on every machine, as stored (task #27
         : { kind: 'new' as const, startId: 's', machineId: c.machineId, engine: c.engine, model: c.model, effort: c.effort }
       expect(finalMatches(kept, final)).toBe(true)
     }
+  })
+
+  // Task #2901: with no pick, nobody knows which candidate runs until the start, and the route history needs that one's account
+  // and spend (cli service.ts routeHistory). So every candidate keeps those two of its fit, and nothing else of it.
+  const pickless = (): RouteRecord => {
+    const { pick: _pick, ...rest } = routed()
+    return { ...rest, via: 'instructions', why: 'No ranking: the project\'s Routing instructions choose.' } as RouteRecord
+  }
+
+  // Measured 11-04: 14,568 bytes, of which the 42 slim fits are 5,376 (128 bytes a candidate, its 64-character account most of it).
+  it('stores a record that names no pick, 42 candidates each with its account and spend, in under 15 KB (measured 14,568 bytes)', () => {
+    expect(size(storedRecord(pickless()))).toBeLessThan(15_000)
+  })
+
+  it('keeps of every candidate of a record that names no pick who and where it is, its title and its account and spend', () => {
+    const r = pickless(), back = readRecord(storedRecord(r))
+    for (const [i, c] of r.candidates.entries()) {
+      const kept = back.candidates[i]!
+      expect(kept).toEqual({ id: c.id, kind: c.kind, ...c.agentId ? { agentId: c.agentId } : {}, machineId: c.machineId, engine: c.engine, model: c.model,
+        effort: c.effort, title: c.title, fit: { account: c.fit!.account, spend: c.fit!.spend } })
+    }
+  })
+
+  it('keeps no fit of a candidate that had none, and no account of one that had none', () => {
+    const r = pickless()
+    delete r.candidates[0]!.fit
+    delete r.candidates[1]!.fit!.account
+    const [first, second] = storedRecord(r).candidates
+    expect(first).not.toHaveProperty('fit')
+    expect(second!.fit).toEqual({ spend: { '5-hour': 2.5, weekly: 1 } })
   })
 
   it('keeps a grid model on a candidate that runs one', () => {

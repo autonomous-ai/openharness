@@ -5,6 +5,7 @@
  * thread. Each line is left out when it does not apply or cannot be read; the delivery always goes.
  */
 import { isCoordinator, isStep, openWorkOf, projectOpenWork, stepName } from './agentContext.js'
+import { personName } from './personName.js'
 
 type Json = Record<string, unknown>
 const object = (value: unknown): Json => value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {}
@@ -23,7 +24,9 @@ export function placeLine(state: Json, groupId: string): string {
   if (group.kind === 'buddy' || group.kind === 'swarm-buddy') {
     const buddy = list(state.agents).find(a => Array.isArray(group.agentIds) && group.agentIds.includes(a.id) && object(a.buddyOf).personId)
     const person = buddy ? list(state.people).find(p => p.id === object(buddy.buddyOf).personId) : undefined
-    return person ? `In ${String(person.email)}'s Buddy chat ${at}` : `In a Buddy chat ${at}`
+    // By name, never email (task #2954).
+    const name = personName(person)
+    return name ? `In ${name}'s Buddy chat ${at}` : `In a Buddy chat ${at}`
   }
   const title = JSON.stringify(String(group.title ?? ''))
   // A step is said as its task and its name (task steps design).
@@ -34,6 +37,15 @@ export function placeLine(state: Json, groupId: string): string {
 }
 const taskWords = (task: Json): string =>
   `task ${typeof task.number === 'number' ? `#${task.number} ` : ''}${JSON.stringify(String(task.title ?? ''))}`
+
+/** Whether [authorId], the project's coordinator, wrote in a task or step [groupId] that [agentId] holds (task #3057, Ken 11-05).
+ *  A post there that names no one reaches no agent, so the reader needs no --to to answer it; the delivery's sample reply
+ *  command used to carry --to the sender, and agents copied it into their acknowledgements to the PM. */
+export function coordinatorInOwnTask(state: Json, groupId: string, authorId: string, agentId: string): boolean {
+  if (!isCoordinator(state, authorId)) return false
+  const group = list(state.conversations).find(c => c.id === groupId)
+  return !!group && (isStep(group) || typeof group.number === 'number') && object(group.assignment).agentId === agentId
+}
 
 const and = (items: string[]): string => items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
 

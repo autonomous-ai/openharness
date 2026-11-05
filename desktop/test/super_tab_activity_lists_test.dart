@@ -91,10 +91,19 @@ Future<SuperTabActivity> load(
 
 final _evening = DateTime(2026, 11, 2, 20, 30);
 
+/// The sidebar's two red numbers together (Decisions and Mentions), and
+/// whether any of its three rows has news: what the Activity row said before
+/// task #2996 split it.
+extension SuperTabActivityTotals on SuperTabActivity {
+  int get count => needsCount + mentionsCount;
+  bool get unread => count > 0 || threadsCount > 0;
+}
+
 void main() {
   group('Needs you', () {
     test('lists the decisions asked of the reader and the agents waiting on '
-        'them, in that order, and counts each; a tag is not listed', () async {
+        'them, in that order, and counts each; a tag is not listed, but '
+        'counts on Activity (#2887)', () async {
       final server = swarm()..followedThreads = null;
       server.ask(['Ship it?']);
       wait(server);
@@ -108,7 +117,8 @@ void main() {
         [for (final n in activity.needsYou) n.title],
         ['Ship it?', 'Kestrel is waiting on you'],
       );
-      expect(activity.count, 2);
+      expect(activity.needsCount, 2);
+      expect(activity.count, 3);
     });
 
     test(
@@ -187,7 +197,8 @@ void main() {
       server.followedThreads = {'unread': [], 'read': [], 'more': false};
       final activity = await load(server);
       expect(activity.needsYou, isEmpty);
-      expect(activity.count, 0);
+      expect(activity.needsCount, 0);
+      expect(activity.count, 1);
       expect(activity.mentionRows, hasLength(1));
       expect(activity.unread, isTrue);
       expect(activity.newReplies, isEmpty);
@@ -195,8 +206,8 @@ void main() {
   });
 
   group('the number', () {
-    test('counts only Needs you: tags, new replies, done work and replies to '
-        'the reader add nothing', () async {
+    test('counts Needs you and the unread tags: new replies, done work and '
+        'replies to the reader add nothing', () async {
       final server = swarm();
       server.ask(['Ship it?']);
       server.tag('message-1');
@@ -229,7 +240,8 @@ void main() {
       };
       await withClock(Clock.fixed(_evening), () async {
         final activity = await load(server);
-        expect(activity.count, 1);
+        expect(activity.needsCount, 1);
+        expect(activity.count, 2);
         expect(activity.newReplies, hasLength(1));
       });
     });
@@ -265,26 +277,23 @@ void main() {
       await activity.decisions.load();
     }
 
-    test(
-      'a tag is bold until its chat is read past it; it never counts',
-      () async {
-        final server = swarm()..followedThreads = null;
-        server.tag('message-1', messageSequence: 5);
-        server.state['readMarks'] = {
-          'owner': {'lead': 4},
-        };
-        final activity = await load(server);
-        expect(activity.count, 0);
-        expect(activity.needsYou, isEmpty);
-        expect(activity.unread, isTrue);
-        server.state['readMarks'] = {
-          'owner': {'lead': 5},
-        };
-        await reload(activity, server);
-        expect(activity.count, 0);
-        expect(activity.unread, isFalse);
-      },
-    );
+    test('a tag counts and is bold until its chat is read past it', () async {
+      final server = swarm()..followedThreads = null;
+      server.tag('message-1', messageSequence: 5);
+      server.state['readMarks'] = {
+        'owner': {'lead': 4},
+      };
+      final activity = await load(server);
+      expect(activity.count, 1);
+      expect(activity.needsYou, isEmpty);
+      expect(activity.unread, isTrue);
+      server.state['readMarks'] = {
+        'owner': {'lead': 5},
+      };
+      await reload(activity, server);
+      expect(activity.count, 0);
+      expect(activity.unread, isFalse);
+    });
 
     test('a decision counts until it is answered', () async {
       final server = swarm()..followedThreads = null;
@@ -329,7 +338,8 @@ void main() {
       final activity = await load(server);
       expect(activity.needsYou, isEmpty);
       expect(activity.mentionRows.single.newest.conversationId, 'offline');
-      expect(activity.count, 0);
+      expect(activity.needsCount, 0);
+      expect(activity.count, 1);
       expect(activity.newReplies.map((t) => t.rootId), ['message-1']);
     });
   });

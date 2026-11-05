@@ -10,6 +10,7 @@ import 'package:harness_mobile/swarm/swarm_attachment.dart';
 import 'package:harness_mobile/swarm/swarm_attachment_store.dart';
 import 'package:harness_mobile/swarm/swarm_file_download.dart';
 
+import '../temp_folder.dart';
 import 'picture_loads.dart';
 import 'swarm_attachment_fakes.dart';
 
@@ -41,9 +42,8 @@ void main() {
     reads = PictureReads();
     store = storeIn(root, storage, reads: reads);
   });
-  tearDown(() {
-    if (root.existsSync()) root.deleteSync(recursive: true);
-  });
+  // A test can end with a fetch still writing its picture in.
+  tearDown(() => deleteTempFolder(root));
 
   Finder key(String value) => find.byKey(ValueKey(value));
   final chip = key('chip');

@@ -104,11 +104,9 @@ void main() {
           'id': 'lead-agent',
           'name': 'Lead',
         };
-        server.messages.last['source'] = {
-          'kind': 'native',
-          'phase': 'prompt',
-          'operator': {'id': 'leo', 'name': 'leo@example.com'},
-        };
+        // A terminal's answer: what was typed into it is no chat row
+        // (task #2849).
+        server.messages.last['source'] = {'kind': 'native', 'phase': 'answer'};
         if (profile.scale == 1) {
           server.append(
             '@Builder, check persistence. @Reviewer, check account switching.',
@@ -201,7 +199,7 @@ void main() {
         );
         await tester.pumpAndSettle();
         final source = find.text(
-          'Terminal input · session opened by leo@example.com',
+          'Verify offline edits through a restart and reconnect.',
         );
         // The first of the chat's messages: with Slack's spacing (Huy,
         // 2026-11-03) it is above what the chat builds at this window size.
@@ -216,9 +214,18 @@ void main() {
               .first,
         );
         expect(source, findsOneWidget);
-        await tester.ensureVisible(
-          find.ancestor(of: source, matching: find.byType(SuperTabMessageRow)),
+        final sourceRow = find.ancestor(
+          of: source,
+          matching: find.byType(SuperTabMessageRow),
         );
+        expect(
+          find.descendant(
+            of: sourceRow,
+            matching: find.text('Terminal answer'),
+          ),
+          findsOneWidget,
+        );
+        await tester.ensureVisible(sourceRow);
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
         if (capture != null) {

@@ -17,9 +17,11 @@ import { HostReads } from '../src/superTabs/read/host.js'
 import { buddyChatId, openSwarmBuddyChat } from '../src/superTabs/buddies.js'
 import { ACTIVITY_EXPIRY_MS, ACTIVITY_READS, resetActivityReads, sweepActivity, writeReplyActivity } from '../src/superTabs/activity.js'
 import { SESSION_ENDED_KIND } from '../src/superTabs/buddySessions.js'
+import { threadFacet } from '../src/superTabs/pageReads.js'
 import { CHAT_SETTING_DEFAULT_KEEP_MS, sweepChatSettings } from '../src/superTabs/chatSettings.js'
 import type { Command, SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import type { PhoneNotice } from '../src/push/sender.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -27,6 +29,12 @@ let replica: MongoMemoryReplSet
 let db: PrismaClient
 let app: FastifyInstance
 let store: SuperTabStore
+// The same database through a client that reports each command, for the cost test; quiet unless `listening`.
+let measured: PrismaClient
+let measuredStore: SuperTabStore
+let tally: Record<string, number> | null = null
+// What each write would tell phones, after its commit (push/notices.ts, task #2905).
+const phones: PhoneNotice[] = []
 const user = (actor: { userId: string; email: string }): AuthUser => ({ sub: actor.userId, email: actor.email, autonomousEnv: 'prod', role: 'user' })
 const [owner, peer, outsider] = [ownerActor, peerActor, outsiderActor].map(user) as [AuthUser, AuthUser, AuthUser]
 const ownerTeam: AuthUser = { ...owner, harnessSessionId: 'owner-team-session', harnessSessionKind: 'team' }
@@ -44,7 +52,15 @@ beforeAll(async () => {
   db = new PrismaClient({ datasources: { db: { url: uri } } })
   for (const each of [owner, peer, outsider]) await db.user.create({ data: { id: each.sub, externalId: `fixture-${each.sub}`, email: each.email, autonomousEnv: 'prod' } })
   await db.machine.create({ data: { machineId: 'host', userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-  store = new SuperTabStore(db)
+  store = new SuperTabStore(db, Date.now, null, { phoneNotices: notices => { phones.push(...notices) } })
+  measured = new PrismaClient({ datasources: { db: { url: uri } }, log: [{ emit: 'event', level: 'query' }] })
+  measuredStore = new SuperTabStore(measured)
+  measured.$on('query', (event: { query: string }) => {
+    if (!tally) return
+    const name = /db\.(\w+)\.(\w+)/.exec(event.query)
+    const key = name ? `${name[1]}.${name[2]}` : event.query.slice(0, 40)
+    tally[key] = (tally[key] ?? 0) + 1
+  })
   app = Fastify()
   app.setErrorHandler(errorHandler)
   // External SSO is replaced with fixture accounts; every permission and write below is real.
@@ -59,16 +75,18 @@ beforeAll(async () => {
 afterAll(async () => {
   await app?.close()
   await db?.$disconnect()
+  await measured?.$disconnect()
   await replica?.stop()
 })
 beforeEach(() => resetActivityReads())
 
 /** A Swarm in parts: a public chat ("Web", with a worker on the owner's machine), a project shared with the owner alone
  *  ("Secret work"), a public project the owner can make private later ("Open chat"), and peer's Buddy chat. */
-async function scene() {
+async function scene(extra: Array<{ kind: 'person'; userId: string; email: string }> = []) {
   const s = swarm(MIGRATED)
   s.join(peerActor)
   s.join(outsiderActor)
+  for (const person of extra) s.join(person)
   const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
   const open = s.run({ type: 'project.create', name: 'Open', visibility: 'public', brief: '' }).projectId as string
   const openChat = s.group('Open chat', open)
@@ -127,10 +145,11 @@ describe('Activity: replies to a person\'s messages', () => {
     await run(s.tabId, { type: 'member.name', name: 'Peer Person' }, peer)
     expect((await items(s.tabId)).find(i => i.messageId === reply).actor.name).toBe('Peer Person')
     expect(typeof list[0].messageSequence).toBe('number')
-    // Nothing for the person who replied, and nothing for a reply in one's own thread.
-    expect(await items(s.tabId, peer)).toEqual([])
-    await send(s.tabId, s.web, 'Owner adds', owner, root)
+    // The person who replied hears of the replies after theirs, never of their own; nothing for a reply in one's own thread.
+    expect((await items(s.tabId, peer)).map(i => i.messageId)).toEqual([agentReply])
+    const ownerAdds = await send(s.tabId, s.web, 'Owner adds', owner, root)
     expect((await items(s.tabId)).length).toBe(2)
+    expect((await items(s.tabId, peer)).map(i => i.messageId)).toEqual([ownerAdds, agentReply])
   })
 
   it('tells the author of the message replied to as well as the thread\'s, once each', async () => {
@@ -162,6 +181,178 @@ describe('Activity: replies to a person\'s messages', () => {
     const s = await scene()
     await send(s.tabId, s.web, 'Top level by peer', peer)
     expect(await items(s.tabId)).toEqual([])
+  })
+})
+
+describe('Phone push: a write tells the phones of whoever its rows tell (task #2905)', () => {
+  const tagging = async (tabId: string, conversationId: string, text: string, as: AuthUser, replyTo: string | null, mentions: string[]) =>
+    (await run(tabId, { type: 'message.send', conversationId, text, replyTo, recipientIds: [], mentions }, as)).result.messageId as string
+  const told = async (write: () => Promise<unknown>) => {
+    phones.length = 0
+    await write()
+    return phones.map(n => ({ personId: n.personId, kind: n.key.split(':')[0], link: n.link, title: n.title }))
+  }
+
+  it('tells the thread\'s starter of a reply, linking the reply in its thread, and nobody of a message outside threads', async () => {
+    const s = await scene()
+    let root = ''
+    expect(await told(async () => { root = await send(s.tabId, s.web, 'Owner root') })).toEqual([])
+    let reply = ''
+    const notices = await told(async () => { reply = await send(s.tabId, s.web, 'Peer answers', peer, root) })
+    expect(notices).toEqual([{ personId: owner.sub, kind: 'reply', link: `swarm:${s.tabId}/${s.web}/message/${reply}/thread/${root}`, title: expect.stringMatching(/ replied in a thread$/) }])
+    const row = await db.superTabActivity.findFirst({ where: { tabId: s.tabId, personId: owner.sub, messageId: reply } })
+    expect(phones[0]!.key).toBe(`reply:${s.tabId}:${row!.id}`)
+  })
+
+  it('tells a person who muted the chat of a tag alone, never of a reply', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Peer root', peer)
+    expect((await notify(s.tabId, s.web, 'muted', peer)).status).toBe(200)
+    expect(await told(() => send(s.tabId, s.web, 'Owner answers', owner, root))).toEqual([])
+    let tag = ''
+    expect(await told(async () => { tag = await tagging(s.tabId, s.web, 'Peer, please check', owner, root, [peer.sub]) }))
+      .toEqual([{ personId: peer.sub, kind: 'mention', link: `swarm:${s.tabId}/${s.web}/message/${tag}/thread/${root}`, title: expect.stringMatching(/ tagged you$/) }])
+  })
+})
+
+describe('Activity: a reply tells everyone in its thread (task #2745)', () => {
+  const tagging = async (tabId: string, conversationId: string, text: string, as: AuthUser, replyTo: string | null, mentions: string[]) =>
+    (await run(tabId, { type: 'message.send', conversationId, text, replyTo, recipientIds: [], mentions }, as)).result.messageId as string
+  const tags = async (tabId: string, as: AuthUser) => (await call('GET', `/api/super-tabs/${tabId}/mentions?state=waiting`, as)).body.data.mentions as any[]
+  const follow = (tabId: string, conversationId: string, root: string, value: boolean, as: AuthUser) =>
+    call('POST', `/api/super-tabs/${tabId}/conversations/${conversationId}/threads/${root}/follow`, as, { follow: value })
+  const rowsOf = (tabId: string, as: AuthUser) => db.superTabActivity.findMany({ where: { tabId, personId: as.sub }, select: { messageId: true } })
+    .then(rows => rows.map(r => r.messageId).sort())
+
+  it('tells the starter and every person who replied, but never the reply\'s author', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Owner root')
+    const peerReply = await send(s.tabId, s.web, 'Peer answers', peer, root)
+    const outsiderReply = await send(s.tabId, s.web, 'Outsider answers the root', outsider, root)
+    expect((await items(s.tabId)).map(i => i.messageId)).toEqual([outsiderReply, peerReply])
+    expect((await items(s.tabId, peer)).map(i => i.messageId)).toEqual([outsiderReply])
+    expect(await items(s.tabId, outsider)).toEqual([])
+    const peerAgain = await send(s.tabId, s.web, 'Peer again', peer, root)
+    expect((await items(s.tabId, outsider)).map(i => i.messageId)).toEqual([peerAgain])
+    expect((await items(s.tabId, peer)).map(i => i.messageId)).toEqual([outsiderReply])
+  })
+
+  it('tells a person tagged earlier in the thread of later replies, and a person tagged in the reply by the tag alone', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Owner root')
+    const tagReply = await tagging(s.tabId, s.web, 'Outsider, look', owner, root, [outsider.sub])
+    expect((await tags(s.tabId, outsider)).map(t => t.messageId)).toEqual([tagReply])
+    // Tagged in the reply itself: the tag tells them, with no second row for the same message.
+    expect(await rowsOf(s.tabId, outsider)).toEqual([])
+    const later = await send(s.tabId, s.web, 'Peer answers', peer, root)
+    expect((await items(s.tabId, outsider)).map(i => i.messageId)).toEqual([later])
+    // The starter tagged in a reply hears of it by the tag, not by a reply row too.
+    const tagsOwner = await tagging(s.tabId, s.web, 'Owner, here', peer, root, [owner.sub])
+    expect((await tags(s.tabId, owner)).map(t => t.messageId)).toContain(tagsOwner)
+    expect(await rowsOf(s.tabId, owner)).toEqual([later].sort())
+  })
+
+  it('stops for a person who unfollowed the thread, while a tag there still tells them', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Owner root')
+    await send(s.tabId, s.web, 'Peer answers', peer, root)
+    expect((await follow(s.tabId, s.web, root, false, peer)).status).toBe(200)
+    const quiet = await send(s.tabId, s.web, 'Outsider answers', outsider, root)
+    expect((await items(s.tabId, peer)).some(i => i.messageId === quiet)).toBe(false)
+    expect(await rowsOf(s.tabId, peer)).toEqual([])
+    const tag = await tagging(s.tabId, s.web, 'Peer, one thing', outsider, root, [peer.sub])
+    expect((await tags(s.tabId, peer)).map(t => t.messageId)).toEqual([tag])
+  })
+
+  it('writes no reply rows for a person who muted the chat, and a tag there still tells them', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Peer root', peer)
+    await send(s.tabId, s.web, 'Outsider answers', outsider, root)
+    expect((await notify(s.tabId, s.web, 'muted', peer)).status).toBe(200)
+    await send(s.tabId, s.web, 'Owner answers', owner, root)
+    expect(await rowsOf(s.tabId, peer)).toHaveLength(1)
+    // Outsider, who replied and did not mute, still hears of it.
+    expect(await rowsOf(s.tabId, outsider)).toHaveLength(1)
+    const tag = await tagging(s.tabId, s.web, 'Peer, please check', owner, root, [peer.sub])
+    expect((await tags(s.tabId, peer)).map(t => t.messageId)).toEqual([tag])
+  })
+
+  it('tells nobody new of a Swarm notice or an agent-only notice in a thread: the starter alone, as before', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Owner root')
+    await send(s.tabId, s.web, 'Peer answers', peer, root)
+    const state = (await store.read(owner, s.tabId)).state as unknown as SuperTabState
+    const rootRow = await db.superTabMessage.findUniqueOrThrow({ where: { id: root } })
+    const draft = (id: string, source: Record<string, unknown>, recipients: string[] = []) => ({ id, conversationId: s.web, text: 'Notice', replyTo: null,
+      recipients, thread: root, source, author: { kind: 'agent' as const, id: s.worker, name: 'worker-harness', membershipGeneration: 'fixture' } })
+    await db.$transaction(async tx => {
+      const threads = new Map([[root, await threadFacet(tx, s.tabId, s.web, [root])]])
+      await writeReplyActivity(tx, s.tabId, [draft('swarm-notice', { kind: 'system' }), draft('agent-only', { kind: 'agent-only' }, [s.worker])],
+        new Map([['swarm-notice', rootRow.sequence + 10], ['agent-only', rootRow.sequence + 11]]), Date.now(), { state, threads })
+    })
+    const notices = (rows: string[]) => rows.filter(id => id === 'swarm-notice' || id === 'agent-only')
+    expect(notices(await rowsOf(s.tabId, owner))).toEqual(['swarm-notice'])
+    expect(notices(await rowsOf(s.tabId, peer))).toEqual([])
+  })
+
+  it('still tells the starter of a Swarm notice in a chat the command did not load, as before', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Owner root')
+    await send(s.tabId, s.web, 'Peer answers', peer, root)
+    const read = (await store.read(owner, s.tabId)).state as unknown as SuperTabState
+    // The command's state without this chat, as a quiet chat is left out of it.
+    const state = { ...read, conversations: read.conversations.filter(c => c.id !== s.web) }
+    const rootRow = await db.superTabMessage.findUniqueOrThrow({ where: { id: root } })
+    await db.$transaction(async tx => {
+      const threads = new Map([[root, await threadFacet(tx, s.tabId, s.web, [root])]])
+      await writeReplyActivity(tx, s.tabId, [{ id: 'quiet-notice', conversationId: s.web, text: 'Notice', replyTo: null, recipients: [], thread: root,
+        source: { kind: 'system' }, author: { kind: 'agent' as const, id: s.worker, name: 'worker-harness', membershipGeneration: 'fixture' } }],
+      new Map([['quiet-notice', rootRow.sequence + 10]]), Date.now(), { state, threads })
+    })
+    expect((await rowsOf(s.tabId, owner)).includes('quiet-notice')).toBe(true)
+  })
+
+  it('writes nothing for a person who left the Swarm or can no longer read the chat', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.openChat, 'Owner root')
+    await send(s.tabId, s.openChat, 'Peer answers', peer, root)
+    await send(s.tabId, s.openChat, 'Outsider answers', outsider, root)
+    await run(s.tabId, { type: 'member.remove', userId: outsider.sub })
+    const afterLeaving = await send(s.tabId, s.openChat, 'Owner again', owner, root)
+    expect((await rowsOf(s.tabId, outsider)).includes(afterLeaving)).toBe(false)
+    expect((await rowsOf(s.tabId, peer)).includes(afterLeaving)).toBe(true)
+    // The owner makes the project private to themselves: peer can no longer read the chat.
+    await run(s.tabId, { type: 'project.sharing', projectId: s.open, visibility: 'private', memberIds: [] })
+    const afterLosing = await send(s.tabId, s.openChat, 'Owner once more', owner, root)
+    expect((await rowsOf(s.tabId, peer)).includes(afterLosing)).toBe(false)
+  })
+})
+
+describe('Activity: what one thread reply costs (task #2745)', () => {
+  it('reads three times by id whatever the thread, and writes one row per person told', async () => {
+    const counts: Array<{ people: number; total: number; commands: Record<string, number>; rows: number }> = []
+    for (const size of [1, 10, 50]) {
+      const extra = Array.from({ length: size }, (_, i) => ({ kind: 'person' as const, userId: `2${String(size).padStart(3, '0')}${String(i).padStart(20, '0')}`,
+        email: `fanout-${size}-${i}@example.com` }))
+      for (const person of extra) await db.user.create({ data: { id: person.userId, externalId: `fixture-${person.userId}`, email: person.email, autonomousEnv: 'prod' } })
+      const s = await scene(extra)
+      const root = await send(s.tabId, s.web, 'Owner root')
+      for (const person of extra) await send(s.tabId, s.web, 'In the thread', user(person), root)
+      // The reply measured: by peer, telling the starter and the `size` people who replied.
+      const commands: Record<string, number> = {}
+      tally = commands
+      const reply = await (async () => (await measuredStore.execute(peer, s.tabId, { operationId: randomUUID(),
+        command: { type: 'message.send', conversationId: s.web, text: 'Measured reply', replyTo: root, recipientIds: [] } })) as { result: Record<string, unknown> })()
+      tally = null
+      const rows = await db.superTabActivity.count({ where: { tabId: s.tabId, messageId: reply.result.messageId as string } })
+      expect(rows).toBe(size + 1)
+      const total = Object.values(commands).reduce((n, v) => n + v, 0)
+      counts.push({ people: size + 1, total, commands: Object.fromEntries(Object.entries(commands).filter(([k]) => /Activity|ThreadMark|ChatSetting/.test(k))), rows })
+    }
+    console.log(`reply fan-out: ${JSON.stringify(counts)}`)
+    // The reads Activity makes are the same for a thread of 2 people and of 51.
+    const reads = (c: Record<string, number>) => Object.entries(c).filter(([k]) => /ThreadMark|ChatSetting/.test(k)).reduce((n, [, v]) => n + v, 0)
+    expect(new Set(counts.map(c => reads(c.commands))).size).toBe(1)
   })
 })
 

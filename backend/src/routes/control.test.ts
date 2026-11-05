@@ -39,7 +39,7 @@ const fakes = vi.hoisted(() => {
   }
 })
 vi.mock('../lib/bus.js', () => ({ pub: fakes.pub }))
-vi.mock('../lib/prisma.js', () => ({ prisma: fakes.prisma, machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] } }))
+vi.mock('../lib/prisma.js', () => ({ prisma: fakes.prisma, prismaSecondary: fakes.prisma, machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] } }))
 // The real hub starts its heartbeat timers on import; these tests never attach a hub client, so it is a stub with none.
 vi.mock('../lib/hub.js', () => ({
   CLIENTS_FRAME: '__clients', CLIENTS_DIRTY: '__clients_dirty', LIVENESS_TICK_MS: 5_000, CLIENT_IDLE_DEADLINE_MS: 75_000,

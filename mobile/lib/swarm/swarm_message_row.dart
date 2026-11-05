@@ -258,7 +258,8 @@ const swarmDeletedText = 'This message was deleted.';
 /// author changed it), its files, its [reactions] and its [thread]'s line. A
 /// deleted one keeps only "This message was deleted." and its thread's line.
 /// A tap opens its actions, a long-press [onLongPress]; lit for a moment when
-/// a quote leads to it.
+/// a quote leads to it, and while it is find's current match; a quieter fill
+/// while it is one of find's other matches.
 class SwarmMessageRow extends StatelessWidget {
   const SwarmMessageRow({
     super.key,
@@ -276,6 +277,7 @@ class SwarmMessageRow extends StatelessWidget {
     required this.grouped,
     required this.lit,
     this.followed = false,
+    this.match = false,
     required this.quote,
     required this.actions,
     required this.onTap,
@@ -291,6 +293,7 @@ class SwarmMessageRow extends StatelessWidget {
     this.onLongPress,
     this.references = const {},
     this.onOpenConversation,
+    this.onOpenInstructions,
   });
 
   final SuperTabMessage message;
@@ -328,6 +331,10 @@ class SwarmMessageRow extends StatelessWidget {
   /// The row a quote led to: lit, then fading. Only it animates — a fade on
   /// every row would give each its own ticker.
   final bool followed;
+
+  /// One of find's matches (swarm_chat_find.dart): a quiet fill, under
+  /// [lit]'s.
+  final bool match;
   final Widget? quote;
   final VoidCallback onTap;
 
@@ -336,6 +343,10 @@ class SwarmMessageRow extends StatelessWidget {
 
   /// Opens a conversation resolved from [references].
   final ValueChanged<String>? onOpenConversation;
+
+  /// Opens the revision an instructions save's line names
+  /// ([SuperTabMessage.instructionsSave]), to read the change whole.
+  final ValueChanged<({String projectId, int revision})>? onOpenInstructions;
 
   /// Null where the person cannot post, or in the thread itself.
   final VoidCallback? onReply;
@@ -479,6 +490,8 @@ class SwarmMessageRow extends StatelessWidget {
           deletedBody ??
           [
             if (lit) SizedBox(key: ValueKey('swarm-lit-${message.id}')),
+            if (match && !lit)
+              SizedBox(key: ValueKey('swarm-match-${message.id}')),
             ?quote,
             ?swarmTerminalNote(message),
             // A voice message's text is its words: under its bubble, on →A.
@@ -502,6 +515,22 @@ class SwarmMessageRow extends StatelessWidget {
                       onOpenConversation: onOpenConversation,
                     ),
                   ),
+            if ((message.instructionsSave, onOpenInstructions) case (
+              final saved?,
+              final open?,
+            ))
+              TtyTap(
+                key: ValueKey('swarm-instructions-link-${message.id}'),
+                semanticsLabel: 'See revision ${saved.revision}',
+                onTap: () => open(saved),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: AppSpace.xs),
+                  child: Text(
+                    'See revision ${saved.revision}',
+                    style: swarmChatText(14, color: AppPalette.accentOnSurface),
+                  ),
+                ),
+              ),
             if (message.editedAt != null)
               Padding(
                 padding: const EdgeInsets.only(top: AppSpace.xs),
@@ -562,6 +591,22 @@ class SwarmMessageRow extends StatelessWidget {
           )
         : null;
     if (!followed) {
+      // Find's matches; its current one keeps its light once a post moved
+      // the list's target away.
+      if (match) {
+        return Container(
+          key: key,
+          padding: padding,
+          decoration: BoxDecoration(
+            color: lit
+                ? AppPalette.accentOnSurface.withValues(alpha: 0.16)
+                : _matchFill,
+            borderRadius: BorderRadius.circular(AppControl.rowRadius),
+          ),
+          foregroundDecoration: bar,
+          child: held,
+        );
+      }
       if (!taggedYou) return Padding(key: key, padding: padding, child: held);
       return KeyedSubtree(
         key: key,
@@ -582,6 +627,8 @@ class SwarmMessageRow extends StatelessWidget {
       decoration: BoxDecoration(
         color: lit
             ? AppPalette.accentOnSurface.withValues(alpha: 0.16)
+            : match
+            ? _matchFill
             : taggedYou
             ? AppSurface.accentWash
             : Colors.transparent,
@@ -592,6 +639,9 @@ class SwarmMessageRow extends StatelessWidget {
     );
   }
 }
+
+/// A find match's fill: half a lit row's.
+Color get _matchFill => AppPalette.accentOnSurface.withValues(alpha: 0.08);
 
 /// A message's first line: who, in what role, then [trailing] — its time,
 /// or how its post is going — and [tag], where the ask it is stands.

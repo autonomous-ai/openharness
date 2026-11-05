@@ -4,8 +4,8 @@ import { createSuperTab, visibleState, type Actor } from './model.js'
 import { split } from './parts/shape.js'
 import { touchesFor } from './parts/touches.js'
 import { readerView } from './read/views.js'
-import { MAX_NAME_LENGTH, shownNameOf, writtenNameOf } from './personNames.js'
-import { usernameOf } from './usernames.js'
+import { authorForAgent, lazyUsernames, MAX_NAME_LENGTH, namesPerson, rowForAgent, shownNameOf, writtenNameOf } from './personNames.js'
+import { swarmUsernames, usernameOf } from './usernames.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'Ken15@autonomous.ai' }
 const NOW = Date.parse('2026-11-03T10:00:00.000Z')
@@ -161,7 +161,7 @@ describe('member.name', () => {
 
   it('refuses a web address as a name, which server lines would show as a link (review 2 of #2794)', () => {
     const f = fixture()
-    for (const name of ['https://ev.il/x', 'ev.il://x', 'www.ev.il', 'WWW.EV.IL']) {
+    for (const name of ['https://ev.il/x', 'ev.il://x', 'www.ev.il', 'WWW.EV.IL', '//ev.il', '[Ken](//ev.il)']) {
       expect(() => f.setName(name), name).toThrow(expect.objectContaining({ code: 'INVALID_NAME' }))
     }
   })
@@ -174,5 +174,64 @@ describe('member.name', () => {
     expect(writtenNameOf(f.state, 'relay')).toBe('1\\. Minh')
     // A username is written as it is today.
     expect(writtenNameOf(f.state, 'peer')).toBe('dee')
+  })
+})
+
+// Task #2954 (Ken, 11-04): a person's message is stored with their email as its author's name, and agents copied it into
+// commands and pull request bodies until a machine's privacy hook stopped their sessions. An agent reads names instead.
+describe('a person author as an agent reads it', () => {
+  const stored = (id: string, email: string) => ({ kind: 'person' as const, id, name: email, membershipGeneration: 'g' })
+
+  it('names them by username and the name they show, never by email', () => {
+    const f = fixture()
+    f.setName('Minh Nguyen')
+    const names = swarmUsernames(f.state)
+    expect(authorForAgent(f.state, stored('relay', relay.email), names))
+      .toEqual({ kind: 'person', id: 'relay', name: 'wkpnjjhbnm', displayName: 'Minh Nguyen', membershipGeneration: 'g' })
+    expect(authorForAgent(f.state, stored('peer', peer.email), names))
+      .toEqual({ kind: 'person', id: 'peer', name: 'dee', displayName: 'dee', membershipGeneration: 'g' })
+  })
+
+  // A person may take their own email as their name (member.name): an agent still never reads it.
+  it('names a person whose name is their own email by username', () => {
+    const f = fixture()
+    f.setName(relay.email)
+    expect(authorForAgent(f.state, stored('relay', relay.email), swarmUsernames(f.state)))
+      .toEqual({ kind: 'person', id: 'relay', name: 'wkpnjjhbnm', displayName: 'wkpnjjhbnm', membershipGeneration: 'g' })
+    // Or holds it among other words (review of #2954).
+    f.setName(`Minh ${relay.email}`)
+    expect(authorForAgent(f.state, stored('relay', relay.email), swarmUsernames(f.state))).toMatchObject({ displayName: 'wkpnjjhbnm' })
+  })
+
+  it('reads every username as swarmUsernames gives it, working them out only for one not stored', () => {
+    const f = fixture()
+    f.run({ type: 'member.username', username: 'minh' }, relay)
+    const lazy = lazyUsernames(f.state), all = swarmUsernames(f.state)
+    for (const p of f.state.people) expect(lazy.get(p.id), p.id).toBe(all.get(p.id))
+    expect(lazy.get('gone')).toBeUndefined()
+  })
+
+  it('names someone who left as a person, and leaves an agent author as it is', () => {
+    const f = fixture()
+    const names = swarmUsernames(f.state)
+    const gone = authorForAgent(f.state, stored('gone', 'gone@example.com'), names)
+    expect(gone).toEqual({ kind: 'person', id: 'gone', name: 'a person', displayName: 'a person', membershipGeneration: 'g' })
+    expect(JSON.stringify(gone)).not.toContain('@')
+    const agent = { kind: 'agent' as const, id: 'a1', name: 'Lead', displayName: 'River', membershipGeneration: 'g' }
+    expect(authorForAgent(f.state, agent, names)).toBe(agent)
+  })
+
+  it('names the person who typed into an agent\'s terminal by name too, in a row an agent reads', () => {
+    const f = fixture()
+    const names = swarmUsernames(f.state)
+    const agent = { kind: 'agent' as const, id: 'a1', name: 'Builder', displayName: 'Robin', membershipGeneration: 'g' }
+    const native = { id: 'm1', author: agent, text: 'npm test', source: { kind: 'native', phase: 'input', operator: stored('peer', peer.email) } }
+    expect(namesPerson(native)).toBe(true)
+    const read = rowForAgent(f.state, names, native)
+    expect(read).toEqual({ ...native, source: { kind: 'native', phase: 'input', operator: { kind: 'person', id: 'peer', name: 'dee', displayName: 'dee', membershipGeneration: 'g' } } })
+    expect(JSON.stringify(read)).not.toContain('@')
+    const plain = { id: 'm2', author: agent, text: 'Done.', source: null }
+    expect(namesPerson(plain)).toBe(false)
+    expect(rowForAgent(f.state, names, plain)).toEqual(plain)
   })
 })

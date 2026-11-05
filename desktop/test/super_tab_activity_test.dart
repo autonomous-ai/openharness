@@ -26,6 +26,7 @@ import 'super_tab_attention_test.dart'
         rowText,
         unreadThread;
 import 'support/buddy_fixture.dart';
+import 'super_tab_activity_lists_test.dart' show SuperTabActivityTotals;
 import 'support/super_tab_fixture.dart';
 
 Future<SuperTabController> open(ConversationServer server) async {
@@ -59,11 +60,10 @@ Future<void> pumpSidebar(
           listenable: c,
           builder: (context, _) => ProjectSidebar(
             controller: c,
-            needsHuman: (_) => 0,
             onSelect: c.select,
             attention: SuperTabAttention.of(c),
             activity: SuperTabActivity.of(c),
-            onNotifications: () {},
+            onPage: (_) {},
           ),
         ),
       ),
@@ -551,8 +551,10 @@ void main() {
 
   group('sidebar', () {
     for (final brightness in Brightness.values) {
-      testWidgets('Activity takes Notifications\' place; a muted chat is '
-          'greyed with its mark and no number ($brightness)', (tester) async {
+      testWidgets('Mentions counts the tag; a '
+          'muted chat is greyed with its mark and no number ($brightness)', (
+        tester,
+      ) async {
         final server = projectServer();
         fromLead(server, 'News');
         server.tag('message-1');
@@ -561,9 +563,10 @@ void main() {
         await c.setNotify('lead', SuperTabNotify.muted);
         await pumpSidebar(tester, c, brightness: brightness);
         expect(find.text('Notifications'), findsNothing);
-        expect(inRow('super-activity', find.text('Activity')), findsOneWidget);
-        // A tag is no longer counted: Activity shows no number for it.
-        expect(inRow('super-activity', find.text('1')), findsNothing);
+        expect(inRow('super-mentions', find.text('Mentions')), findsOneWidget);
+        // Mentions counts the unread tag (#2887); the muted chat's own row
+        // carries no number.
+        expect(inRow('super-mentions', find.text('1')), findsOneWidget);
         expect(find.byKey(const ValueKey('super-muted-lead')), findsOneWidget);
         expect(
           inRow('super-group-lead', find.byType(SuperTabCountBadge)),
@@ -732,16 +735,74 @@ void main() {
       return SuperTabActivity.of(c);
     }
 
-    test('tags do not count', () async {
+    test('an unread tag counts once in Activity and in Mentions; Mark read '
+        'clears both', () async {
       final server = withAgent();
-      for (var i = 1; i <= 4; i++) {
-        server.tag('message-$i', messageSequence: i);
+      server.tag('message-1', messageSequence: 1);
+      final activity = await activityOf(server);
+      await activity.mentions.load();
+      await activity.decisions.load();
+      expect(activity.count, 1);
+      expect(activity.mentionsUnread, 1);
+      expect(activity.needsCount, 0);
+      expect(activity.unread, isTrue);
+      activity.markMentionsRead(activity.mentions.waiting);
+      await settle();
+      expect(activity.count, 0);
+      expect(activity.mentionsUnread, 0);
+    });
+
+    test('a tag answered but not read past still counts; read past, it does '
+        'not', () async {
+      final server = withAgent();
+      server.tag('message-1', messageSequence: 5);
+      conversation(server, 'lead')['lastMessageSequence'] = 20;
+      server.mentions.last
+        ..['resolvedAt'] = '2026-10-24T06:00:00Z'
+        ..['resolvedBy'] = 'answer';
+      server.state['mentionsWaiting'] = 0;
+      final activity = await activityOf(server);
+      await activity.mentions.load();
+      await activity.decisions.load();
+      expect(activity.count, 1);
+      expect(activity.mentionsUnread, 1);
+      activity.markMentionsRead(activity.mentions.earlier);
+      expect(activity.controller.readMark('lead'), 5);
+      expect(activity.count, 0);
+      expect(activity.mentionsUnread, 0);
+    });
+
+    test('a tag answered in a chat this Swarm does not hold is read: it '
+        'could never be read past or marked read here', () async {
+      final server = withAgent();
+      // An archived task chat: the server lists its tags, the snapshot
+      // does not hold it.
+      server.tag('message-1', conversationId: 'archived', messageSequence: 5);
+      server.mentions.last
+        ..['resolvedAt'] = '2026-10-24T06:00:00Z'
+        ..['resolvedBy'] = 'answer';
+      server.state['mentionsWaiting'] = 0;
+      final activity = await activityOf(server);
+      await activity.mentions.load();
+      await activity.decisions.load();
+      expect(activity.controller.snapshot?.conversation('archived'), isNull);
+      expect(activity.mentions.earlier, hasLength(1));
+      expect(activity.count, 0);
+      expect(activity.mentionsUnread, 0);
+      expect(activity.mentionRows, isEmpty);
+    });
+
+    test('each folded tag counts once', () async {
+      final server = withAgent();
+      for (var i = 1; i <= 3; i++) {
+        server.tag('message-$i', messageSequence: i, leadId: 'dee');
       }
       final activity = await activityOf(server);
       await activity.mentions.load();
       await activity.decisions.load();
-      expect(activity.count, 0);
-      expect(activity.unread, isTrue);
+      expect(activity.mentionRows, hasLength(1));
+      expect(activity.count, 3);
+      expect(activity.mentionsUnread, 3);
     });
 
     test('a stuck task nobody was asked about does not count', () async {
@@ -769,14 +830,17 @@ void main() {
       expect(activity.count, 1);
     });
 
-    testWidgets('the sidebar fallback counts decisions only', (tester) async {
+    testWidgets('before the tags and decisions are read, the sidebar counts '
+        'the server\'s waiting ones', (tester) async {
       final server = withAgent();
       server.state['mentionsWaiting'] = 4;
       server.state['decisionsWaiting'] = 2;
       server.failDecisions = true;
+      server.failMentions = true;
       final c = await openHere(server);
       await pumpSidebar(tester, c);
-      expect(inRow('super-activity', find.text('2')), findsOneWidget);
+      expect(inRow('super-decisions', find.text('2')), findsOneWidget);
+      expect(inRow('super-mentions', find.text('4')), findsOneWidget);
       await close(tester, c);
     });
 

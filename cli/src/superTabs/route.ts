@@ -1,10 +1,11 @@
-/** Super Tab routing, the pure half (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md), ordered by
- * strength, effective cost and quota fit since phase 1 (docs/plans/2026-10-21-swarm-routing-phase1.md).
+/** Super Tab routing, the pure half (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md).
  * Since the project instructions (docs/plans/2026-10-30-project-instructions-design.md, Routing) the route is advice: it
- * leaves out only what cannot run (an offline or paused machine, an engine signed out, a model not served) and ranks every
- * other candidate by strength, price, quota fit and idle members. The owner's rules, floors, review and build limits are
- * gone; what the route knows beside the facts (a lost task, a stalled machine, a catalog note) is a note on the candidate,
- * and the project's instructions say how to choose. */
+ * leaves out only what cannot run (an offline or paused machine, an engine signed out, a model not served) and shows every
+ * other candidate with its facts: strength, price, quota fit, weekly quota left and its reset, the agents on its machine.
+ * Since task #2901 (Ken, 2026-11-04) it ranks nothing and names no pick: PMs took its top line, nearly always Opus or Astra,
+ * against the instructions' Order and quota. Candidates come by machine name, then engine
+ * (docs/plans/2026-11-04-route-no-ranking-plan.md), and the project's Routing instructions choose. What the route knows beside
+ * the facts (a lost task, a stalled machine, a catalog note, a plug-in's finding) is a note on the candidate. */
 import { isAbsolute } from 'node:path'
 import { claudeAliasForModel } from '../engines/claude/runtimeProfile.js'
 
@@ -24,7 +25,10 @@ export interface Needs { tools: string[]; devices: string[]; cwd?: string; heavy
 export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; local?: boolean; model?: string; needs: Needs }
 /** A model of the reviewed catalog (backend superTabs/catalog.ts): how strong it is, what it costs, and whether it is offered
  * when nobody names it. */
-export interface CatalogModel { engine: 'claude' | 'codex'; model: string; effort: string; strength: number; cost: number; offered: boolean; note?: string }
+export interface CatalogModel { engine: 'claude' | 'codex'; model: string; effort: string; strength: number; cost: number; offered: boolean; engineDefault?: true; note?: string }
+/** Why a Codex row at `default` model or effort is never offered. A backend from before task #2972 still serves one: it ran whatever
+ *  the account's CLI defaulted to (gpt-6-luna on one owner's Mac), 67 of 71 Codex picks in a day, and no one rated that. */
+export const CODEX_DEFAULT_NOT_OFFERED = 'Codex at its default model or effort is not offered: it runs whatever the account\'s CLI chooses. Start the catalog\'s named models.'
 /** The catalog's models and how strong the models served on the Swarm's grid count: the first named row whose every word is
  * in a model's name, else `strength`. */
 export interface Catalog { models: CatalogModel[]; grid: { strength: number; models: Array<{ model: string; strength: number }> } }
@@ -84,20 +88,20 @@ export interface Shown extends Probe { id: string; title: string; label: string;
 /** A candidate left out and why; [machine] names its machine, absent for a model that is not offered anywhere. */
 export interface Excluded { title: string; reason: string; machine?: string }
 /** `floor` and `belowFloor` are what the decision log still takes (backend routeRecord.ts): there is no floor, so 1 and false.
- *  `short` says when the pick is not expected to cover the task on its quota. `adjusted`: a plug-in moved a candidate or left
+ *  `short` says when no candidate is expected to cover the task on its quota. `adjusted`: a plug-in noted a candidate or left
  *  one out ([RoutePlugin]). `warnings`: the plug-ins that failed and were left out of this route. */
 export interface Choice { shown: Shown[]; excluded: Excluded[]; floor: 1; belowFloor: false; short?: string; adjusted?: true; warnings?: string[] }
 export type NoCandidate = { error: 'NO_CANDIDATE'; excluded: Excluded[]; warnings?: string[] }
 
 /** What a plug-in sees of the route it ranks: the task, the time, the catalog, and the picks still at work. */
 export interface RouteContext { readonly assessment: Assessment; readonly now: number; readonly catalog: Catalog; readonly open: readonly Commitment[] }
-/** A plug-in's word on one candidate. `strength` and `cost` shift the two terms the order ranks by (stronger first, then
- *  cheaper in effect), in the catalog's units: +0.5 strength or -1 cost moves it up. Neither changes what the candidate is
- *  shown and recorded as (its strength, cost and fit stay as measured). `refuse` leaves it out, only for a fact that it cannot
- *  run there. `reason` is what people read, on the candidate's notes as "name: reason", so it holds only what every reader of
- *  the Swarm's route log may see: never one member's raw usage or anything private to a person or chat. */
+/** A plug-in's word on one candidate. `strength` and `cost` say which way the plug-in's finding leans, in the catalog's units;
+ *  since task #2901 they move nothing (the route ranks nothing), and its `reason` is what the agent choosing reads, on the
+ *  candidate's notes as "name: reason". Neither changes what the candidate is shown and recorded as (its strength, cost and fit
+ *  stay as measured). `refuse` leaves it out, only for a fact that it cannot run there. The reason holds only what every
+ *  reader of the Swarm's route log may see: never one member's raw usage or anything private to a person or chat. */
 export interface Adjustment { reason: string; strength?: number; cost?: number; refuse?: true }
-/** One piece of the ranking that is not the route's own (Scholes's goals, pieces 3 to 6: measured cost and results, more model
+/** One piece of the route that is not its own (Scholes's goals, pieces 3 to 6: measured cost and results, more model
  *  candidates, machine fit, window pull). Plug-ins run in their list's order: each `candidates` call sees the probes so far,
  *  earlier plug-ins' among them, and returns more, which every rule of [choose] then treats like the others; `adjust` judges
  *  each candidate that can run, after its quota fit is known. A plug-in must be pure and synchronous: what it needs from
@@ -108,14 +112,12 @@ export interface RoutePlugin {
   candidates?(probes: readonly Probe[], context: RouteContext): Probe[]
   adjust?(candidate: Readonly<Probe & { fit: Fit }>, context: RouteContext): Adjustment | null
 }
-/** The order's two adjustable terms for one candidate ([compare]); with no plug-in they are its strength and effective cost. */
-interface Ranked { strength: number; cost: number }
 /** How long one plug-in may take over a route's candidates, per step. Plug-ins are pure and synchronous, so a route of a few
  *  dozen candidates takes them well under a millisecond; one over this is doing work it should have done before the route
  *  (Lead, 10-31: a plug-in that runs too long is skipped). A plug-in that never returns cannot be stopped from inside: that is
  *  why they must be synchronous and read nothing. */
 export const PLUGIN_BUDGET_MS = 200
-export const pluginSkipped = (name: string, why: string) => `The routing plug-in "${cut(name, 80)}" was skipped: ${why}. The route is ranked without it.`
+export const pluginSkipped = (name: string, why: string) => `The routing plug-in "${cut(name, 80)}" was skipped: ${why}. The route is shown without it.`
 const FAILED = 'it failed', SLOW = `it took longer than ${PLUGIN_BUDGET_MS} ms`
 /** Runs [step] for one plug-in, timed: its answer, or why it is skipped. Its error text is never kept, since it may hold
  *  anything (a path, a token). */
@@ -179,7 +181,9 @@ function pluginAdjustments<T extends Probe & { fit: Fit }>(ranked: T[], plugins:
   }
   return each
 }
-export interface Verdict { pick: Shown; via: 'order' | 'only'; p: null; why: string }
+/** What the route says of its candidates: no pick (task #2901). `via` `instructions`: the project's Routing instructions choose;
+ *  `only`: one candidate can run. */
+export interface Verdict { via: 'instructions' | 'only'; p: null; why: string }
 
 const LEVELS: Level[] = ['low', 'medium', 'high']
 const HEAVY_WORK: unknown[] = ['build', 'e2e'] satisfies HeavyWork[]
@@ -211,8 +215,11 @@ export function catalogFrom(effective: Json): Catalog {
   const models = rows.map(object).flatMap((m): CatalogModel[] => {
     const strength = served ? m.strength : m.quality, offered = served ? m.offered : m.enabled
     if (!ENGINES.includes(String(m.engine)) || typeof m.model !== 'string' || typeof m.effort !== 'string' || !finite(strength) || !finite(m.cost)) return []
-    return [{ engine: m.engine as CatalogModel['engine'], model: m.model, effort: m.effort, strength, cost: m.cost, offered: offered === true,
-      ...(served && typeof m.note === 'string' && m.note ? { note: m.note } : {}) }]
+    // A Codex row at `default` model or effort stays for rating a member launched on the engine's own model, but is never offered.
+    const unnamed = m.engine === 'codex' && (m.model === 'default' || m.effort === 'default')
+    return [{ engine: m.engine as CatalogModel['engine'], model: m.model, effort: m.effort, strength, cost: m.cost, offered: offered === true && !unnamed,
+      ...(served && m.engineDefault === true ? { engineDefault: true as const } : {}),
+      ...(unnamed ? { note: CODEX_DEFAULT_NOT_OFFERED } : served && typeof m.note === 'string' && m.note ? { note: m.note } : {}) }]
   })
   const grid = served ? object(catalog.grid) : object(policy.localModels)
   const gridRows = (Array.isArray(grid.models) ? grid.models : []) as unknown[]
@@ -302,13 +309,15 @@ export function repositoryKey(url: string): string | null {
 }
 
 /** A member's model is what its engine reported after work: Claude's full id (`claude-opus-4-7`, `claude-sonnet-4-5[1m]`),
- * Codex's slug (`gpt-5.5`). The catalog names Claude families and a Codex `default`, so the id is reduced to its family
- * first. Its row: the exact one, else the model's at another effort, else the engine's `default` row when the agent was
+ * Codex's slug (`gpt-5.5`). The catalog names Claude families and Codex's default model, so the id is reduced to its family
+ * first. Its row: the exact one, else the model's at another effort, else the engine's named default when the agent was
  * launched on the engine's own model ([engineDefault]) and is no small variant; otherwise none, so a small Codex variant is
  * never taken for a strong one (review of #2137). */
 export function catalogRow(c: Catalog, engine: string, model: string | null, effort: string | null, engineDefault = false): CatalogModel | null {
   const name = engine === 'claude' && model ? claudeAliasForModel(model.replace(/\[1m\]$/i, '')) ?? model : model ?? 'default'
-  const rowOf = (named: string) => c.models.find(m => m.engine === engine && m.model === named && m.effort === (effort ?? 'default'))
+  // The engine's own model is the catalog's named default (`engineDefault`), else a `default` row of an older backend.
+  const rowOf = (named: string) => named === 'default' ? c.models.find(m => m.engine === engine && m.engineDefault) ?? c.models.find(m => m.engine === engine && m.model === 'default')
+    : c.models.find(m => m.engine === engine && m.model === named && m.effort === (effort ?? 'default'))
     ?? c.models.find(m => m.engine === engine && m.model === named)
   // A small model it reports is never promoted by its launch (review of ee4ee6c9a).
   return rowOf(name) ?? (engineDefault && !SMALL.test(model ?? '') ? rowOf('default') : undefined) ?? null
@@ -470,31 +479,28 @@ function sizeUp(p: Probe, a: Assessment, now: number, open: Commitment[]): Sized
 }
 export const LOCAL_NONE = 'No local model is being served on this Swarm\'s grid. Ask a member to run one or share an API (Your models, in the Swarm\'s sidebar).'
 
-const FIT_ORDER = { fits: 0, unknown: 1, short: 2 } as const
-/** The order: a member in another repository last; then stronger, cheaper in effect (price, less with a 5-hour window that
- *  would otherwise go unused), a better quota fit, an idle member in the task's repository before a new agent, then by title
- *  (project instructions, phase 4). */
-function compare(x: Probe & Sized & { rank: Ranked }, y: Probe & Sized & { rank: Ranked }): number {
-  // A member in another repository tied a new agent and its name decided whether it took the task (Diego, 2026-10-30, #2377);
-  // ranked only after a new agent, a cheaper model or more quota still won it. The route no longer tells a build from a
-  // review, which needs no worktree, so it is shown last with OTHER_REPOSITORY as a note (choose), never left out.
+/** The neutral order (task #2901): machine name, then engine (a machine's grid models after its engines), then title, so the
+ *  same candidates come in the same order whatever the machines answered first. Nothing in it is strength, price, quota fit or
+ *  a plug-in's finding: the PM took the top line of the old order, by strength then price, against the project's Routing
+ *  instructions (Ken, 2026-11-04). A member in another repository comes after the others on its machine and engine, with
+ *  OTHER_REPOSITORY as a note (choose): it would build in that repository's worktree (Diego, 2026-10-30, #2377). */
+function compare(x: Probe, y: Probe): number {
+  const grid = (p: Probe) => p.gridModel ? 1 : 0
   const elsewhere = (p: Probe) => p.kind === 'member' && p.repo === 'different' ? 1 : 0
-  const placed = (p: Probe) => p.kind === 'member' && (p.repo ?? 'same') === 'same' ? 0 : 1
-  return elsewhere(x) - elsewhere(y)
-    || y.rank.strength - x.rank.strength
-    || x.rank.cost - y.rank.cost
-    || FIT_ORDER[x.fit.status] - FIT_ORDER[y.fit.status]
-    || placed(x) - placed(y)
+  return x.machineName.localeCompare(y.machineName) || x.machineId.localeCompare(y.machineId)
+    || grid(x) - grid(y) || x.engine.localeCompare(y.engine)
+    || elsewhere(x) - elsewhere(y)
     || titleOf(x).localeCompare(titleOf(y))
+    || (x.agentId ?? '').localeCompare(y.agentId ?? '')
 }
 
 /** An engine on a machine, or the machine's local models, as a new agent or an idle member: what the project's order picks
  *  between (an account, then whether to reuse an agent on it). */
 export const slotOf = (p: Pick<Probe, 'machineId' | 'engine' | 'gridModel' | 'kind'>) => `${p.machineId}\0${p.gridModel ? 'grid' : p.engine}\0${p.kind}`
 
-/** The rows shown: the best new agent and the best member of every engine on every machine, up to [RECORD_MAX], then the rest by rank up to the limit, all in rank
- *  order. The agent choosing picks between accounts by the project's order; one row a machine, cut at 12, hid a Claude account with
- *  99% left behind its machine's used-up Codex (Ken, 2026-11-03). */
+/** The rows shown: the first new agent and the first member of every engine on every machine in the neutral order, up to
+ *  [RECORD_MAX], then the rest up to 12, all in that order. The agent choosing picks between accounts by the project's order;
+ *  one row a machine, cut at 12, hid a Claude account with 99% left behind its machine's used-up Codex (Ken, 2026-11-03). */
 function withEveryAccount<T extends Pick<Probe, 'machineId' | 'engine' | 'gridModel' | 'kind'>>(ranked: T[]): T[] {
   const keep = new Set<T>(), seen = new Set<string>()
   for (const p of ranked) if (!seen.has(slotOf(p)) && keep.size < RECORD_MAX) { seen.add(slotOf(p)); keep.add(p) }
@@ -533,7 +539,7 @@ function unratedProbes(probes: Probe[], named: string): Probe[] {
   return [...bases.values()].map(base => ({ ...base, model, effort: 'default', quality: 1, cost: 1, unrated: true as const, notes: [...base.notes, UNRATED] }))
 }
 
-/** The candidates that can run the task, ranked ([compare]), and those that cannot, with why. A catalog row not offered by
+/** The candidates that can run the task, in the neutral order ([compare]), and those that cannot, with why. A catalog row not offered by
  *  default (Sonnet, Haiku) is offered when a person names it; its note goes with it, and with a member already on it.
  *  `held`: models served for the Swarm that take no more agents, to say who holds a named or local model none offers.
  *  `offline`: models a host now offline served (routeCommand.ts offlineModels), by name. `plugins`: [RoutePlugin]; with none
@@ -578,55 +584,53 @@ export function choose(given: Probe[], catalog: Catalog, a: Assessment, now: num
   const sized = viable.map(p => ({ ...p, ...sizeUp(p, a, now, open) }))
   const adjustments = pluginAdjustments(sized, plugins, context, warnings)
   const adjusted = adjustments.some(list => list.length)
-  const ranked = sized.flatMap((p, i) => {
-    const mine = adjustments[i]!, rank = { strength: p.quality, cost: p.fit.effectiveCost }
-    if (!mine.length) return [{ ...p, rank }]
+  // A plug-in's refusal leaves its candidate out; its strength or cost is a note and moves nothing (task #2901).
+  const listed = sized.flatMap((p, i) => {
+    const mine = adjustments[i]!
+    if (!mine.length) return [p]
     const reasons = mine.map(({ name, adjustment }) => `${name}: ${adjustment.reason.trim()}`)
     if (mine.some(m => m.adjustment.refuse)) {
       excluded.push({ title: titleOf(p), reason: reasons.filter((_, j) => mine[j]!.adjustment.refuse).join(' '), machine: p.machineName })
       return []
     }
-    for (const { adjustment } of mine) { rank.strength += adjustment.strength ?? 0; rank.cost += adjustment.cost ?? 0 }
-    return [{ ...p, notes: [...p.notes, ...reasons], rank }]
+    return [{ ...p, notes: [...p.notes, ...reasons] }]
   }).sort(compare)
-  if (!ranked.length) return { error: 'NO_CANDIDATE', excluded, ...warned() }
-  const shown = withEveryAccount(ranked).map(({ tight, text, rank: _rank, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
-  const first = ranked[0]!
-  return { shown, excluded, floor: 1, belowFloor: false, ...(first.fit.status === 'short' ? { short: shortOf(first, ranked) } : {}),
+  if (!listed.length) return { error: 'NO_CANDIDATE', excluded, ...warned() }
+  const shown = withEveryAccount(listed).map(({ tight, text, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
+  // With nothing first, only one thing is worth saying of quota beside each row's fit: that none of them covers the task.
+  const none = listed.every(p => p.fit.status === 'short')
+  return { shown, excluded, floor: 1, belowFloor: false, ...(none ? { short: NONE_COVERS } : {}),
     ...(adjusted ? { adjusted: true as const } : {}), ...warned() }
 }
+export const NONE_COVERS = 'No candidate is expected to cover this task on its quota.'
 
-/** What the agent choosing is told when the pick is not expected to cover the task on its quota: a candidate further down
- *  may, or none does. */
-function shortOf(first: Probe & Sized, ranked: Array<Probe & Sized>): string {
-  const w = first.tight!, resets = w.resetsIn === null ? '' : ` and resets in ${span(w.resetsIn)}`
-  const fitting = ranked.find(p => p.fit.status === 'fits')
-  return fitting ? `The first candidate's ${w.name} quota is expected to run out partway${resets}; ${titleOf(fitting)} fits.`
-    : `No candidate is expected to cover this task; its ${w.name} quota is expected to run out partway${resets}.`
-}
-
+/** What the route says of its candidates (task #2901): it names no pick, and its why sends the agent choosing to the project's
+ *  Routing instructions, since a list's first row read as the route's choice (River, 2026-11-04: PMs started the machine the
+ *  route listed first). */
+export const CHOOSE_BY_INSTRUCTIONS = 'Not ranked: candidates are listed by machine name, then engine. Choose one by the project\'s Routing instructions '
+  + '(Order and quota), and give the rule that chose it as overrideReason when you start or assign it.'
 export function decide(choice: Choice): Verdict {
-  const pick = choice.shown[0]!
-  return choice.shown.length === 1 ? { pick, via: 'only', p: null, why: 'Only candidate that can run this task.' }
-    : { pick, via: 'order', p: null, why: choice.adjusted ? 'First by strength, then price and quota fit, with the plug-ins\' adjustments in each candidate\'s notes.'
-      : 'First by strength, then price and quota fit.' }
+  return choice.shown.length === 1 ? { via: 'only', p: null, why: 'Only candidate that can run this task.' }
+    : { via: 'instructions', p: null, why: choice.adjusted ? `${CHOOSE_BY_INSTRUCTIONS} Plug-ins' findings are in each candidate's notes.` : CHOOSE_BY_INSTRUCTIONS }
 }
 
-/** The record in the shape a backend takes: `current` with the job's kind (what attempts are compared by, backend costs/read.ts),
- *  `unkinded` for a backend from before kinds, and `v1` without size and fit too, for one from before phase 1. Each refuses the
- *  newer fields with its strict schema. There is no floor and no policy notes: `floor` 1, `belowFloor` and `notes` false.
- *  The server stamps the instructions' revision the decision relied on (phase 4, decision 12). */
-export type RecordShape = 'current' | 'unkinded' | 'v1'
+/** The record in the shape a backend takes: `current` with the job's kind (what attempts are compared by, backend costs/read.ts)
+ *  and no pick (task #2901); `picked` for a backend from before that, which takes a record only with a pick, so `c0` stands in
+ *  for one by the old `order`; `unkinded` for a backend from before kinds too, and `v1` without size and fit as well, for one
+ *  from before phase 1. Each refuses the newer fields with its strict schema. There is no floor and no policy notes: `floor` 1,
+ *  `belowFloor` and `notes` false. The server stamps the instructions' revision the decision relied on (phase 4, decision 12). */
+export type RecordShape = 'current' | 'picked' | 'unkinded' | 'v1'
 export function recordOf(choice: Choice, verdict: Verdict, a: Assessment, shape: RecordShape = 'current'): Record<string, unknown> {
-  const v1 = shape === 'v1'
+  const v1 = shape === 'v1', kinded = shape === 'current' || shape === 'picked'
   return {
-    assessment: { difficulty: a.difficulty, risk: a.risk, why: a.why, ...(v1 ? {} : { size: a.size }), ...(shape === 'current' && a.kind ? { kind: a.kind } : {}),
-      ...(shape === 'current' && a.local ? { local: true } : {}), ...(shape === 'current' && a.model ? { model: a.model } : {}) },
+    assessment: { difficulty: a.difficulty, risk: a.risk, why: a.why, ...(v1 ? {} : { size: a.size }), ...(kinded && a.kind ? { kind: a.kind } : {}),
+      ...(kinded && a.local ? { local: true } : {}), ...(kinded && a.model ? { model: a.model } : {}) },
     candidates: choice.shown.map(s => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
       engine: s.engine, model: s.model, effort: s.effort, quality: s.quality, cost: s.cost, title: s.title, label: s.label, ...(v1 ? {} : { fit: s.fit }),
       ...(s.gridModel && s.gridName ? { gridModel: s.gridModel, gridName: s.gridName } : {}) })),
     excluded: choice.excluded.slice(0, 200).map(e => ({ title: e.title, reason: cut(e.reason, 500) })),
     floor: 1, notes: false,
-    pick: verdict.pick.id, via: verdict.via, p: verdict.p, belowFloor: false, why: cut(verdict.why, 300),
+    ...(shape === 'current' ? { via: verdict.via } : { pick: choice.shown[0]!.id, via: verdict.via === 'only' ? 'only' : 'order' }),
+    p: verdict.p, belowFloor: false, why: cut(verdict.why, 300),
   }
 }

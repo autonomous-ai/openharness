@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { activeWork, agent, agentRole, author, conversation, fail, isLeads, leadsRemoved, nextConversationNumber, person, type Actor, type Agent, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import type { SwarmRule } from './rules.js'
 import { buddyReads, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat } from './buddies.js'
+import { agentWrittenNameOf } from './personNames.js'
 
 export type ProjectVisibility = 'public' | 'private'
 /** Which built-in skill texts the project's agents get: Default (the team process only) or today's Harness orchestration. */
@@ -45,8 +46,10 @@ export interface SwarmProject {
   digestOff?: true
   /** The last 30-minute slot of the built-in PM schedule in which its coordinator's poll found something to sweep
    *  (pmSchedule.ts), woken or held back, and the message that last carried a wake (its own, an update request or a notice
-   *  digest): no new wake while that one is unread. A slot with nothing to sweep is not written. Readers never get it. */
-  schedule?: { lastSlot: number; wakeId?: string }
+   *  digest): no new wake while that one is unread. A slot with nothing to sweep is not written. Readers never get it.
+   *  `heardAt`: when the last wake asked it to save what people taught it; `tidiedOn` and `tidiedRevision`: the local date
+   *  and instructions revision of the last daily tidy it was asked for (pmSchedule.ts recordWake; task #3022). */
+  schedule?: { lastSlot: number; wakeId?: string; heardAt?: number; tidiedOn?: string; tidiedRevision?: number }
   /** The status card at the top of the project chat (Dee, 2026-10-31): the coordinator's last project.report text, which
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null
@@ -187,11 +190,12 @@ export function workRequesterId(state: SuperTabState, project: SwarmProject, gro
  *  task, from that task's requester, so a reused Engineer never names the one before; the start prompt names nobody
  *  (security review 2 of #2492). Given where the start prompt gave it before: another person's project work, where the
  *  project's owner is not the machine's (cli/src/superTabs/start.ts `githubPromptLine`). A review opens no pull request.
- *  The email is the Swarm row's, which the Swarm's members already see. */
+ *  The name is the one the Swarm shows them (personNames.ts writtenNameOf). */
 export function requestedByLine(state: SuperTabState, project: SwarmProject, group: Conversation, worker: Agent): string | null {
   if (group.reviewOf || project.ownerId === worker.machineOwnerId) return null
-  const email = state.people.find(p => p.id === workRequesterId(state, project, group))?.email
-  return email ? `Start each pull request body with: Requested by ${email} through Harness.` : null
+  const requester = state.people.find(p => p.id === workRequesterId(state, project, group))
+  // By name, never email: agents pasted the email into pull requests and a machine's privacy hook stopped them (task #2954).
+  return requester?.email ? `Start each pull request body with: Requested by ${agentWrittenNameOf(state, requester.id)} through Harness.` : null
 }
 
 export function readProject(state: SuperTabState, actor: Actor, projectId: string): SwarmProject {
@@ -269,6 +273,18 @@ function readsSwarmBuddyChat(state: SuperTabState, actor: Actor, group: Conversa
 export function buddyPerson(state: SuperTabState, buddy: Agent, project: SwarmProject): Person | undefined {
   const person = state.people.find(p => p.id === buddy.buddyOf!.personId && p.generation === buddy.buddyOf!.generation)
   return person && canReadProject(state, { kind: 'person', userId: person.id, email: person.email }, project) ? person : undefined
+}
+
+/** The project whose instructions [buddy] reads for its person (task #3024): any project its person reads now, at the
+ *  membership they added it in, a Buddy of one project's included, so it can check a project's rules for them as they would
+ *  (Leo, 11-05: his Buddy could not read lamp's). This read alone: its other reads stay with its project. Refused in the words
+ *  of a project that does not exist. */
+export function buddyInstructionsProject(state: SuperTabState, actor: Actor, buddy: Agent, projectId: string): SwarmProject {
+  author(state, actor)
+  const project = projectOf(state, projectId)
+  if (actor.kind !== 'agent' || actor.agentId !== buddy.id || buddy.machineOwnerId !== actor.machineOwnerId || !isBuddy(buddy)
+    || !buddyPerson(state, buddy, project)) fail('NOT_FOUND', 'This project is unavailable.', 404)
+  return project
 }
 
 /** A private conversation's audience: each person a member who reads its project, captured at their generation. */
@@ -388,6 +404,11 @@ export function wordsOf(source: unknown): 'author' | 'none' | 'unknown' | { agen
   if (SERVER_WORDS.has(row?.kind)) return 'none'
   if (row?.kind === 'review-failed') return 'unknown'
   if (row?.kind === 'work-lost') return typeof row.agentId === 'string' ? { agentId: row.agentId } : 'unknown'
+  // A Buddy's proposal, posted as its owner: its Buddy wrote the goal and scope and picked the words (security review 2 of #3024).
+  if (row?.kind === 'buddy-proposal') {
+    const buddyId = (row as { buddyId?: unknown }).buddyId
+    return typeof buddyId === 'string' ? { agentId: buddyId } : 'unknown'
+  }
   return 'author'
 }
 

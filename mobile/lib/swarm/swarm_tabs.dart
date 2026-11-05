@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
@@ -116,10 +117,13 @@ bool showSwarmTab(
 /// Back on another tab goes to Home first; at Home, and while Harness covers
 /// the tabs, back is not the tabs'.
 class SwarmTabsPage extends StatefulWidget {
-  const SwarmTabsPage({super.key, this.onSettings, this.tabs});
+  const SwarmTabsPage({super.key, this.onSettings, this.notices, this.tabs});
 
   /// The phone's Settings, from You ([SwarmYouSettings]).
   final void Function(BuildContext context)? onSettings;
+
+  /// The phone's notice centre, for You's Notifications ([SwarmYouSettings]).
+  final SystemNotices? notices;
 
   /// The tabs, in the bar's order; [swarmTabs] when null.
   final List<SwarmTabEntry>? tabs;
@@ -212,6 +216,7 @@ class _SwarmTabsPageState extends State<SwarmTabsPage> {
           asks: _activityAsks,
           child: SwarmYouSettings(
             onSettings: widget.onSettings,
+            notices: widget.notices,
             onOpened: _youOpened,
             child: Scaffold(
               backgroundColor: Tty.of(context).ground,

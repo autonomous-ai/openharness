@@ -76,9 +76,9 @@ describe('a project\'s morning digest', () => {
       { conversationId: 'g3', personId: 'ann', count: 1 }, { conversationId: 'g7', personId: 'ann', count: 1 }, { conversationId: 'g11', personId: 'owner', count: 1 },
       { conversationId: 'g9', personId: 'owner', count: 1 }, { conversationId: 'g3', personId: 'gone', count: 1 }, { conversationId: 'deleted', personId: 'owner', count: 1 },
       { conversationId: 'lead-p1', personId: 'ann', count: 1 }])).toEqual([
-      '- This chat: 1 for ann@example.com',
-      '- #3 Lexer: 1 for ann@example.com',
-      '- #7 Pricing: 2 for owner@example.com, 1 for ann@example.com',
+      '- This chat: 1 for ann',
+      '- #3 Lexer: 1 for ann',
+      '- #7 Pricing: 2 for owner, 1 for ann',
     ])
     expect(decisionLines(state, lampOS(state), [])).toEqual([])
   })
@@ -88,12 +88,12 @@ describe('a project\'s morning digest', () => {
     const group = state.conversations.find(c => c.id === 'g7')!
     group.assignment = { ...group.assignment!, status: 'done' }
     expect(decisionLines(state, lampOS(state), [{ conversationId: 'g7', personId: 'owner', count: 1 }, { conversationId: 'g3', personId: 'ann', count: 1 }]))
-      .toEqual(['- #3 Lexer: 1 for ann@example.com'])
+      .toEqual(['- #3 Lexer: 1 for ann'])
   })
 
   it('puts the decisions waiting in the Lead\'s digest wake-up only when there are some', () => {
     const state = fixture(), lead = state.agents.find(a => a.id === 'lead')!
-    expect(digestRequest(state, lead, EIGHT, [{ conversationId: 'g7', personId: 'ann', count: 1 }])!.text).toMatch(/\nDecisions waiting:\n- #7 Pricing: 1 for ann@example\.com$/)
+    expect(digestRequest(state, lead, EIGHT, [{ conversationId: 'g7', personId: 'ann', count: 1 }])!.text).toMatch(/\nDecisions waiting:\n- #7 Pricing: 1 for ann$/)
     expect(digestRequest(state, lead, EIGHT, [])!.text).not.toContain('Decisions waiting')
   })
 

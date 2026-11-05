@@ -1,5 +1,5 @@
 import { encodeRuntimeProfile } from '../engines/kit/runtime.js'
-import { mkdirSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { randomUUID } from 'node:crypto'
@@ -11,10 +11,10 @@ import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, wireRole, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
 import { BUDDY_COPIES_FILE, BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome, trustBuddyHome } from './buddyHome.js'
-import { markBuddyNarrow } from '../lib/buddyGuard.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { join as joinPath } from 'node:path'
+import { markBuddyOwner } from '../lib/buddyGuard.js'
 import { codexModelNotOffered, NO_PM_RELAY, offeredCodexModels, teamRelayed } from '../team/relay.js'
 
 type Json = Record<string, unknown>
@@ -101,7 +101,22 @@ function projectSessionPrompt(tabId: string, chat: string, thread: string, mode:
 }
 
 /** Why a thread session that is not Claude Code's never starts. */
-export const BUDDY_SESSION_ENGINE = 'A thread session runs only with Claude Code, under its Buddy guard.'
+/** Why a Buddy start launched nothing on this machine: the server's own words (backend buddyContract.ts BUDDY_OWN_MACHINE_REFUSAL). */
+export const BUDDY_NOT_OWN_MACHINE = 'A Buddy runs only on your own machine. Pick one of yours.'
+
+/**
+ * Whether this machine may launch the Buddy a start names (Ken, 11-04, task #2832): a Buddy runs with its owner's full rights,
+ * like their own Claude Code or Codex session, so it launches only where those rights are its owner's own. The Swarm starts a
+ * Buddy only on its owner's own machine (backend commands.ts buddy.create, BUDDY_OWN_MACHINE); here the machine checks again,
+ * by what it knows itself: its own host dispatched the start (every Buddy start is a machine's own, backend `poolGeneration`),
+ * it is not a Harness Team account, and the account signed in to Harness here is the Buddy's owner. The start's record must say
+ * the same: the machine is its owner's, contributed by them, and not lent to them. Anything missing refuses.
+ */
+export function buddyOnOwnMachine(input: Json, start: Json, buddyOf: Json): boolean {
+  const owner = buddyOf.personId
+  return identifier(owner) && input.hostDispatch === true && !isTeamDaemon() && input.signedIn === owner
+    && start.machineOwnerId === owner && start.contributorId === owner && !start.hostGrant
+}
 
 /** The thread a Buddy start's session is for, if it is one (backend `AgentStartRequest.buddySession`). */
 export function buddySessionThread(request: Json): string | null {
@@ -200,6 +215,24 @@ async function watchQueued(queued: Json, scoped: ScopedRequest, pause: (ms: numb
     if (start.dispatched || start.harnessId) break
   }
   return queued
+}
+
+/**
+ * Names a Team-written start's checkout untrusted in its own Codex home (task #3009). The home names no project so that the
+ * branch's own config, hooks and exec policies stay off (audit H2), but codex-cli 0.165 then stops on "Trust this folder?
+ * 1. Trust and continue / 2. Quit" in a pane nobody sees: every such start timed out at 3 minutes (10 of 10, 2026-10-29 to
+ * 11-05). Named untrusted, it asks "Open restricted / Quit" instead, whose first row keeps them off and saves no trust, and
+ * the host answers that screen alone (machines.ts). A worktree takes its repository's answer, so the source folder is named,
+ * as written and as the disk resolves it. Never `trusted`; an entry already there is left as it is.
+ */
+export function untrustCheckout(home: string, checkout: string): void {
+  const file = joinPath(home, 'config.toml')
+  let resolved = checkout
+  try { resolved = realpathSync(checkout) } catch { /* A folder not made yet is named as written. */ }
+  const config = existsSync(file) ? readFileSync(file, 'utf8') : ''
+  // A TOML basic string is a JSON string, except that DEL must be escaped too (engines/kit/folderTrust.ts recordToml).
+  const tables = [...new Set([checkout, resolved])].map(folder => `[projects.${JSON.stringify(folder).replace(/\x7f/g, '\\u007f')}]`).filter(table => !config.includes(table))
+  if (tables.length) appendFileSync(file, `${config && !config.endsWith('\n') ? '\n' : ''}${tables.map(table => `${table}\ntrust_level = "untrusted"\n`).join('')}`, { mode: 0o600 })
 }
 
 /** How a backend from before `heavy` (backend superTabs/commands.ts startRequestSchema) refuses it, word for word. */
@@ -335,11 +368,11 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
           return { error: 'START_FAILED', startId, detail }
         }
       }
-      // A Buddy thread session runs only under Claude Code, whose Buddy guard hook holds it: a Codex session would run without
-      // that hook (security review 1 of #2345). The backend refuses one too; this refuses it here before anything launches.
-      if (request.buddySession !== undefined && request.engine !== 'claude') {
-        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: BUDDY_SESSION_ENGINE } }))
-        return { error: 'START_FAILED', startId, detail: BUDDY_SESSION_ENGINE }
+      // A Buddy launches with its owner's full rights, so only on its owner's own machine and account (task #2832), before
+      // anything is reserved or launched.
+      if (request.buddyOf !== undefined && !buddyOnOwnMachine(input, start, object(request.buddyOf))) {
+        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: BUDDY_NOT_OWN_MACHINE } }))
+        return { error: 'START_FAILED', startId, detail: BUDDY_NOT_OWN_MACHINE }
       }
       const resources = await inspectCapacity(target, request)
       if (resources.capacity.error === 'GUEST_NOT_ALLOWED') return {
@@ -389,10 +422,12 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // Buddy's Claude Code traces covers it (host.ts buddyWorktree and ownScrub; security reviews of #2345 and #2375). The
       // backend's folder for it only admits the start.
       const homeFolder = swarmBuddy ? joinPath(projectsRoot(), 'worktrees', BUDDY_HOMES, worktreeFolderName(`super-tab/${startId}`)) : null
+      // Its folder recorded as its owner's, checked above, before it launches: every launch and relaunch of a Buddy requires it
+      // (lib/swarmSkills.ts; security review 2 of #2832). Only a folder named for this start: one the request names could share
+      // its name with another folder, so a Buddy there has no record and does not launch.
+      if (buddy && (homeFolder || request.worktree)) markBuddyOwner(worktreeFolderName(`super-tab/${startId}`), String(object(request.buddyOf).personId))
       const home = homeFolder ? await prepareBuddyHome(homeFolder, buddyProjectsOf(request)) : null
       if (homeFolder) await trustBuddyHome(homeFolder, request.engine)
-      // A Buddy of one project launches with no wide guard: its folder is marked before its launch (lib/buddyGuard.ts).
-      if (buddy && request.buddyNarrow === true) markBuddyNarrow(worktreeFolderName(`super-tab/${startId}`))
       // A project's Product Manager (backend leadStart.ts): the Lead of its project's conversation once it runs.
       const lead = !buddy && !!request.leadFor && typeof request.leadFor === 'object'
       const handoffNote = lead && typeof request.handoffNote === 'string' && request.handoffNote.length <= 32_000
@@ -410,16 +445,13 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       const hosted = input.hostDispatch === true ? object(input.github) : null
       const facts = skilled && !hosted ? await projectFacts(scoped, request.conversationId, start.machineOwnerId) : null
       const mode = !skilled ? null : isSwarmSkillMode(start.skillMode) ? start.skillMode : facts?.mode ?? 'orchestration'
-      // A Buddy never writes code (Lead's ruling, privacy review of #1992): never the GitHub App's token. A Claude Buddy runs
-      // past its folder's guard, which allows reads and its Super Tab commands, and the rest is refused without a prompt
-      // nobody answers (lib/buddyGuard.ts, Ken 10-29). A Codex Buddy reads in its read-only sandbox and asks before anything
-      // outside it: with full permissions it could push and open pull requests with its person's own GitHub login (Lead, 10-29).
+      // A Buddy is its owner's right hand (Ken, 11-04, task #2832): on their own machine it launches like their own session, in
+      // full mode, and uses their own git and gh. It never gets the Harness GitHub App's token, which is for a task's agents.
       const github = buddy ? null : hosted ? (typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null) : facts?.github ?? null
-      const asks = !buddy ? null : request.engine === 'claude' ? 'buddy' : request.engine === 'codex' ? 'readOnlyAsk' : null
       // The role's name from the project's document, when the backend's start request has it; one line, bounded.
       const roleName = typeof request.roleName === 'string' ? request.roleName.replace(/\s+/g, ' ').trim().slice(0, 80) : ''
-      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: !asks,
-        ...(asks ? { permissionMode: asks } : projectSettingsOff ? { permissionMode: 'teamWritten' } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
+      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: true,
+        ...(projectSettingsOff ? { permissionMode: 'teamWritten' } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
         ...(github ? { swarmGitHub: true } : {}),
         // A thread session (#2345) gets its own Buddy note; a coordinator's and an agent's notes name their role (phase 3).
@@ -441,6 +473,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         // Codex refuses a CODEX_HOME that is not there; only the Team user reads it.
         mkdirSync(pmHome, { recursive: true, mode: 0o700 })
         payload.codexHome = pmHome
+        if (projectSettingsOff) untrustCheckout(pmHome, String(request.cwd))
       }
       // The routed model goes on the command line of this session alone. Typing /model into the pane afterwards saves
       // it as the person's default in their own Claude settings (manual run 2, 2026-10-19).
@@ -516,8 +549,16 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     // New native frames have their creation time before the engine binds. Wait for its original session identity.
     // The agent it launched goes with it: should the Swarm fail this start meanwhile, its host stops that agent
     // (superTabs/machines.ts `abandoned`).
-    if (typeof frame.createdAt === 'string' && !startedSession) return { error: 'START_PENDING', startId, creationId, harnessId: nativeId,
-      detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
+    if (typeof frame.createdAt === 'string' && !startedSession) {
+      // An engine can stop at a question of its own before it has a session, in a pane nobody has open: Codex's "Hooks need review"
+      // for another program's hook failed two starts as "did not start within 3 minutes", and suspended Codex on that computer
+      // (DESKTOP-0TFH0OJ, 2026-11-04). Only the person can answer it, so the Lead is told to ask, not to try again.
+      const screen = await target.request('agent_close', { agentId: nativeId, sessionId: '', createdAt: frame.createdAt, mode: 'inspect' }, 10_000).catch(() => null)
+      if (object(screen).activity === 'needs_input') return { error: 'START_PENDING', startId, creationId, harnessId: nativeId, needsPerson: true,
+        detail: `${String(request.name ?? 'The agent')} is waiting on its screen for a person to answer. Ask them to open it in Harness on that computer (search their harnesses for its name) and answer it. Then resume this same start request; do not make another start request.` }
+      return { error: 'START_PENDING', startId, creationId, harnessId: nativeId,
+        detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
+    }
     // An agent left on its engine's own model (Codex) names it at its first turn: it joins with it, so the work assigned to
     // it records it. Bounded: an engine or grid model that never reports one joins without it, and its first report fills
     // its attempts later (backend leaderboard/record.ts). A routed model is switched in after the join and read then.

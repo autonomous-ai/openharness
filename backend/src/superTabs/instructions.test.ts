@@ -11,6 +11,8 @@ const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'own
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
 const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+/** A save's chat line: its summary line, above the change it shows. */
+const firstLine = (text: string) => text.split('\n')[0]
 
 function fixture() {
   let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
@@ -45,6 +47,8 @@ describe('the built-in template', () => {
     expect(TEMPLATE_WORKFLOW).toContain('run `mine`')
     expect(TEMPLATE_WORKFLOW).toContain('read `task GROUP`')
     expect(TEMPLATE_WORKFLOW).toContain('read the thread before acting on it')
+    // Task #2963: an unnamed post no longer reaches the PM, so the workflow says where verdicts and results go.
+    expect(TEMPLATE_WORKFLOW).toContain('A verdict goes to the Engineer by name\n   (--to, or a reply to its request); a result reaches the PM through status, never by a post to the PM.')
     // Ken, 2026-11-02 (from openharness): a two-review task gets two review steps; the Engineer picks its Reviewers
     // itself instead of asking the PM (since 2026-11-03, when the pull request is ready).
     expect(TEMPLATE_WORKFLOW).toContain('A task that needs two\n   reviews gets two review steps.')
@@ -134,7 +138,7 @@ describe('the built-in template', () => {
     expect(routing).toContain('weekly quota left above the share of its week left (with 5 of 7 days to go, above 71%)')
     expect(routing).toContain('Every other account is used while it has weekly quota left: the one resetting soonest first')
     expect(routing).toContain('An idle agent is reused only between candidates equal so far')
-    expect(routing).toContain('"Idle" is not a reason.')
+    expect(routing).toContain('"Idle" or "first in the list" is not a reason.')
     expect(routing).toContain('hands its pushed branch to an agent on another account.')
     expect(routing).toContain('Urgent work (production down, security) ignores quota.')
     for (const gone of ['share per day', '5-hour', 'Engineers move to the next model', 'Max 20x']) expect(routing).not.toContain(gone)
@@ -148,8 +152,17 @@ describe('the built-in template', () => {
     // Ken, 2026-11-03: the route's rows now carry each account's quota, and no account is cut from them.
     const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
     expect(routing).toContain('- The route lists the best new agent and the best idle agent of every engine on every machine, each with its quota: '
-      + 'fits or short, weekly quota left and reset time. Its order does not rank by quota: the PM applies this order itself.')
+      + 'fits or short, weekly quota left and reset time.')
     expect(routing).not.toContain('The route\'s lines show')
+  })
+  it('says the route ranks nothing and picks nothing, and every start from it gives the rule that chose it', () => {
+    // Task #2901 (Ken, 2026-11-04): PMs took the route's first line, nearly always Opus or Astra, against this order and quota.
+    // The route now lists by machine name and names no pick; the reason goes with the start or assignment.
+    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
+    expect(routing).toContain('It lists them by machine name, with no ranking and no pick: the PM applies this order itself.')
+    expect(routing).toContain('Every start or assignment from a route gives as its reason the rule above that chose it: urgency, context or a '
+      + 'machine the work needs where it departs from the order. "Idle" or "first in the list" is not a reason.')
+    for (const gone of ['Its order does not rank by quota', 'Picking against it needs a reason in the route\'s override']) expect(routing).not.toContain(gone)
   })
 })
 
@@ -234,7 +247,32 @@ describe('instructions.save', () => {
     expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 2, instructionsHash: instructionsHash('Reviews run on Opus.') })
     expect(effects.messages).toHaveLength(1)
     expect(effects.messages[0]).toMatchObject({ conversationId: 'lead', author: { kind: 'person', id: 'owner' }, recipients: [],
-      text: 'owner changed the instructions: Reviews run on Opus.', source: { kind: 'instructions', projectId: 'lead', revision: 2 } })
+      source: { kind: 'instructions', projectId: 'lead', revision: 2 } })
+    expect(firstLine(effects.messages[0]!.text)).toBe('owner changed the instructions: Reviews run on Opus.')
+  })
+
+  // Ken, 11-05: the line named only the PM's summary, so "I wrote it into the instructions" could not be checked (#3021).
+  it('posts the lines the save really added and removed, from the revision it replaced, under the summary', () => {
+    const f = fixture()
+    const stored = { instructions: { revision: 1, text: '# Rules\n\n- Opus builds.\n- Haiku reviews.' } }
+    const effects = f.run(save(1, '# Rules\n\n- Opus builds.\n- Sonnet reviews.\n- Tests run first.'), owner, stored)
+    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', source: { kind: 'instructions', projectId: 'lead', revision: 2 },
+      text: 'owner changed the instructions: Reviews run on Opus.\n\nIn Rules:\nRemoved: Haiku reviews.\nAdded: Sonnet reviews.\nAdded: Tests run first.' })])
+    // The summary never stands in for the change: a summary claiming a rule shows the lines the text really holds.
+    const claimed = f.run(save(2, '# Rules\n\n- Opus builds.\n- Sonnet reviews.\n- Tests run first.\n- Ship daily.', { summary: 'Added the Haiku ban' }),
+      owner, { instructions: { revision: 2, text: '# Rules\n\n- Opus builds.\n- Sonnet reviews.\n- Tests run first.' } })
+    expect(claimed.messages[0]!.text).toBe('owner changed the instructions: Added the Haiku ban.\n\nIn Rules:\nAdded: Ship daily.')
+  })
+
+  it('shows 12 items of a long change and how many more, and says when the earlier revision could not be read', () => {
+    const f = fixture()
+    const rules = Array.from({ length: 30 }, (_, i) => `- Rule ${i + 1}.`)
+    const long = f.run(save(1, ['# Rules', ...rules].join('\n')), owner, { instructions: { revision: 1, text: '# Rules' } }).messages[0]!.text
+    expect(long).toBe(['owner changed the instructions: Reviews run on Opus.', '', 'In Rules:', ...rules.slice(0, 12).map(r => `Added: ${r.slice(2)}`), '',
+      'and 18 more changes.'].join('\n'))
+    // The store reads the current revision for every save (store.ts); one it could not read is said, never shown as no change.
+    expect(f.run(save(2, 'Other.'), owner, { instructions: null }).messages[0]!.text)
+      .toBe('owner changed the instructions: Reviews run on Opus.\n\nThe earlier revision could not be read, so the change is not shown.')
   })
 
   it('refuses a save on an older revision with the current revision and text, so the caller can merge', () => {
@@ -260,7 +298,8 @@ describe('instructions.save', () => {
     expect(() => f.run(save(1, 'PM text.', { askedBy: 'stranger' }), as(lead))).toThrow(expect.objectContaining({ code: 'ASKED_BY_UNAVAILABLE' }))
     const effects = f.run(save(1, 'PM text.', { askedBy: 'peer' }), as(lead))
     expect(effects.instructions).toMatchObject({ writtenBy: { kind: 'agent', id: lead }, askedBy: 'peer' })
-    expect(effects.messages[0]).toMatchObject({ author: { kind: 'agent', id: lead }, text: 'lead changed the instructions for peer: Reviews run on Opus.' })
+    expect(effects.messages[0]).toMatchObject({ author: { kind: 'agent', id: lead } })
+    expect(firstLine(effects.messages[0]!.text)).toBe('lead changed the instructions for peer: Reviews run on Opus.')
     expect(() => f.run(save(2, 'Engineer text.', { askedBy: 'owner' }), as(engineer))).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
     const buddy = f.add('buddy', group)
     f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
@@ -275,8 +314,8 @@ describe('instructions.save', () => {
     f.invite()
     const effects = f.run(save(1, 'Peer text.', { askedBy: 'peer' }))
     expect(effects.instructions).toMatchObject({ writtenBy: { kind: 'person', id: 'owner' }, askedBy: 'peer' })
-    expect(effects.messages[0]!.text).toBe('owner changed the instructions for peer: Reviews run on Opus.')
-    expect(f.run(save(2, 'Owner text.', { askedBy: 'owner' })).messages[0]!.text).toBe('owner changed the instructions: Reviews run on Opus.')
+    expect(firstLine(effects.messages[0]!.text)).toBe('owner changed the instructions for peer: Reviews run on Opus.')
+    expect(firstLine(f.run(save(2, 'Owner text.', { askedBy: 'owner' })).messages[0]!.text)).toBe('owner changed the instructions: Reviews run on Opus.')
   })
 
   it('keeps a document within 64 KB and a summary on one line, and saves nothing new for the same text', () => {

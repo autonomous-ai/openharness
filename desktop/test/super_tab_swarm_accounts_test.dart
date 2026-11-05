@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/models/model_search_catalog.dart' show thisComputerName;
 import 'package:harness/super_tabs/swarm_accounts.dart';
 
 const work = SwarmAccount(
@@ -42,7 +43,7 @@ void main() {
       await open(tester, load: () async => [work, two]);
       expect(
         find.textContaining(
-          'Other people’s PMs on this Mac can run on an offered account and spend its usage.',
+          'Other people’s PMs on ${thisComputerName()} can run on an offered account and spend its usage.',
         ),
         findsOneWidget,
       );

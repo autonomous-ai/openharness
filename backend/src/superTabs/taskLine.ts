@@ -3,6 +3,7 @@ import { isBuddyChat } from './buddies.js'
 import { shippedNotice } from './buddyNews.js'
 import { activeWork, isLeads, stableId, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { groupProject, projectsOf } from './projects.js'
+import type { Reaction } from './reactions.js'
 import { isStep } from './steps.js'
 import { usernameOf } from './usernames.js'
 
@@ -74,7 +75,8 @@ function progress(state: SuperTabState, effects: CommandEffects, group: Conversa
   // Most tasks did not move in this command: they say nothing, and nothing more is read for them.
   if (!assignment || (was?.id === assignment.id && was.status === assignment.status)) return null
   const builder = agentDisplayName(state.agents, assignment.agentId)
-  if (was?.id !== assignment.id) return assignment.status === 'lost' ? null : `On it: ${builder} is building it.`
+  // Its agent's 👀 on the ask says it is taken (inThread), a new agent's takeover no more than that.
+  if (was?.id !== assignment.id) return null
   switch (assignment.status) {
     case 'needs_human': {
       const asked = assignment.askedOf && usernameOf(state, assignment.askedOf)
@@ -125,8 +127,22 @@ export function syncTaskLines(before: SuperTabState, effects: CommandEffects, se
   }
 }
 
-/** [group] is new, or moved in this command: its root when it has none, then its details and progress replies. */
+/** [group] is new, or moved in this command. A task some message asked for (a person's own, or their Buddy's proposal) replies
+ *  in that message's thread; one nobody's message asked for posts nothing in the chat (Dee, 11-04, 'bot messages': a person sees
+ *  only rows they wrote), and lives in Backlog and its own conversation. */
 function moved(state: SuperTabState, effects: CommandEffects, group: Conversation, previous: Conversation | undefined, sender: Author | undefined,
+  operationId: string): void {
+  if (group.cards?.line || group.ledger?.proposal) inThread(state, effects, group, previous, sender, operationId)
+  // Only its first recorded merge is news to the Buddy, as the Shipped line was: a merge recorded again tells nobody again.
+  if (group.ledger?.mergedAt != null && previous?.ledger?.mergedAt == null) {
+    const news = sender && shippedNotice(state, group, sender, operationId)
+    if (news) effects.messages.push(news)
+  }
+}
+
+/** [group]'s replies in the thread of the message that asked for it: its name when it opens there (several tasks may share one
+ *  message), then its details and progress. */
+function inThread(state: SuperTabState, effects: CommandEffects, group: Conversation, previous: Conversation | undefined, sender: Author | undefined,
   operationId: string): void {
   const line = group.cards?.line
   const chat = state.conversations.find(c => c.id === (line?.conversationId ?? groupProject(state, group).leadConversationId))
@@ -134,30 +150,29 @@ function moved(state: SuperTabState, effects: CommandEffects, group: Conversatio
   if (!chat || !coordinator) return
   // Stuck names the coordinator, never the agent that is stuck when there is no coordinator to sign.
   const pm = chat.leadId && coordinator.kind === 'agent' && coordinator.id === chat.leadId ? coordinator.displayName ?? coordinator.name : 'the PM'
-  const reply = (id: string, words: string) => {
+  const reply = (id: string, words: string, linked: Record<string, unknown> = {}) => {
     const root = group.cards!.line!.messageId
-    effects.messages.push({ id, conversationId: chat.id, author: coordinator, text: words, replyTo: root, thread: root, recipients: [], source: { kind: 'system', ask: taskAsk(group) } })
+    effects.messages.push({ id, conversationId: chat.id, author: coordinator, text: words, replyTo: root, thread: root, recipients: [],
+      source: { kind: 'system', ask: taskAsk(group), ...linked } })
   }
   if (!line) {
-    const proposal = group.ledger?.proposal
-    const root = proposal?.messageId ?? stableId(operationId, TASK_LINE_KIND, group.id)
-    group.cards = { ...group.cards, line: { messageId: root, conversationId: chat.id } }
-    // A proposal's root already has the proposal as its first reply; only a root the server posts gets the brief.
-    if (!proposal) {
-      const requester = state.people.find(p => p.id === group.requesterId)
-      effects.messages.push({ id: root, conversationId: chat.id,
-        author: requester ? { kind: 'person', id: requester.id, name: requester.email, membershipGeneration: requester.generation } : coordinator,
-        text: group.title, replyTo: null, recipients: [], source: { kind: TASK_LINE_KIND, ...fields(group) } })
-      if (group.brief) reply(stableId(operationId, 'task-details', group.id), group.brief)
-    }
-  } else if (previous && previous.brief !== group.brief && group.brief) reply(stableId(operationId, 'task-details', group.id), group.brief)
+    // A proposal's root already has the proposal as its first reply.
+    group.cards = { ...group.cards, line: { messageId: group.ledger!.proposal!.messageId, conversationId: chat.id } }
+  } else if (!previous) {
+    // Opened from a person's message (commands.ts requestOf): the thread names it, by its title alone.
+    reply(stableId(operationId, 'task-named', group.id), group.title, fields(group))
+  } else if (previous.brief !== group.brief && group.brief) reply(stableId(operationId, 'task-details', group.id), group.brief)
   const text = progress(state, effects, group, previous, pm)
   if (text) reply(stableId(operationId, 'task-progress', group.id), text)
-  // Only its first recorded merge is news to the Buddy, as the Shipped line was: a merge recorded again tells nobody again.
-  if (group.ledger?.mergedAt != null && previous?.ledger?.mergedAt == null) {
-    const news = sender && shippedNotice(state, group, sender, operationId)
-    if (news) effects.messages.push(news)
+  // In place of the On it / Shipped label (Dee, 11-04, 'bot messages'): its agent reacts on the ask as a teammate would, 👀 when
+  // the task's work first starts and ✅ at its first merge. The store writes each as that agent's own reaction, once by its id.
+  const agentId = group.assignment?.agentId
+  const react = (emoji: Reaction) => {
+    (effects.reactions ??= []).push({ conversationId: chat.id, messageId: group.cards!.line!.messageId, agentId: agentId!, emoji })
+    chat.reactionSeq = (chat.reactionSeq ?? 0) + 1
   }
+  if (agentId && !previous?.assignment && group.assignment!.status !== 'lost') react('eyes')
+  if (agentId && group.ledger?.mergedAt != null && previous?.ledger?.mergedAt == null) react('check')
 }
 
 /** The thread reply of a task that ended outside any command, which syncTaskLines never sees (Diego, 2026-11-04, task #2693):

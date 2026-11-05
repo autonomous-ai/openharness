@@ -46,9 +46,8 @@ pub fn resolve(name: &str) -> Result<String, String> {
 
 /// tmux's checkshell: a full path to something that runs, and not tmux (hn) itself.
 fn suitable_shell(shell: &str) -> bool {
-    let base = shell.rsplit('/').next().unwrap_or(shell);
-    let Ok(c) = std::ffi::CString::new(shell) else { return false };
-    shell.starts_with('/') && !matches!(base, "hn" | "tmux") && unsafe { libc::access(c.as_ptr(), libc::X_OK) } == 0
+    let path = std::path::Path::new(shell);
+    path.is_absolute() && !matches!(crate::sys::shell_label(shell), "hn" | "tmux") && crate::sys::executable(path)
 }
 
 /// A hook (set-hook's, show-hooks'), not an option.
@@ -216,7 +215,7 @@ pub fn tmux_defaults() -> &'static BTreeMap<String, String> {
 
 /// tmux's default-shell: $SHELL when it is a suitable shell, else /bin/sh (_PATH_BSHELL).
 fn default_shell(env: Option<&str>) -> String {
-    env.filter(|s| suitable_shell(s)).unwrap_or("/bin/sh").to_string()
+    env.filter(|s| suitable_shell(s)).map(str::to_string).unwrap_or_else(crate::sys::sh)
 }
 
 /// Explicit user styles win; default surfaces follow the terminal's current theme. Only the
@@ -692,10 +691,11 @@ mod tests {
     /// The default shell is this computer's, as tmux's is, never the fixture's Mac `/bin/zsh`.
     #[test]
     fn the_default_shell_is_the_users_or_sh() {
-        assert_eq!(default_shell(Some("/bin/sh")), "/bin/sh");
-        assert_eq!(default_shell(Some("/nonexistent/zsh")), "/bin/sh");
-        assert_eq!(default_shell(Some("zsh")), "/bin/sh", "not a full path");
-        assert_eq!(default_shell(None), "/bin/sh");
+        let sh = crate::sys::sh();
+        assert_eq!(default_shell(Some(&sh)), sh);
+        assert_eq!(default_shell(Some("/nonexistent/zsh")), sh);
+        assert_eq!(default_shell(Some("zsh")), sh, "not a full path");
+        assert_eq!(default_shell(None), sh);
         let expected = default_shell(std::env::var("SHELL").ok().as_deref());
         assert_eq!(tmux_defaults()["default-shell"], expected);
     }

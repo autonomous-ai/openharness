@@ -9,6 +9,7 @@ import '../shared/widgets/app_icon_button.dart';
 import '../state/harness_attachments.dart';
 import '../widgets/desktop_chrome.dart';
 import 'buddy_sessions.dart';
+import 'chat_find.dart';
 import 'composer_tags.dart';
 import 'composer_toggle.dart';
 import 'day_pill.dart';
@@ -63,10 +64,10 @@ class SuperTabThreadPanel extends StatefulWidget {
   final SuperTabVoiceTake? voice;
 
   @override
-  State<SuperTabThreadPanel> createState() => _SuperTabThreadPanelState();
+  State<SuperTabThreadPanel> createState() => SuperTabThreadPanelState();
 }
 
-class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
+class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   late final _composer = TextEditingController(
     text: c.threadDraft(widget.root),
   );
@@ -101,6 +102,69 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   String? _target, _lit;
   Timer? _litTimer;
   int _jumps = 0;
+  // Find in this thread (task #2826): its root and replies, the earlier
+  // replies read as Show earlier replies reads them.
+  SuperTabChatFind? _find;
+  String? _foundMatch;
+  final _findFocus = FocusNode(debugLabel: 'Find in thread');
+
+  /// Whether what has focus is in this thread: Cmd+F finds here then.
+  bool get focused =>
+      FocusManager.instance.primaryFocus?.context
+          ?.findAncestorStateOfType<SuperTabThreadPanelState>() ==
+      this;
+
+  void openFind() {
+    if (_find != null) return _findFocus.requestFocus();
+    final root = widget.root;
+    setState(
+      () => _find = SuperTabChatFind(
+        // The root counts once no earlier replies are left to read: Up
+        // from the oldest loaded reply reads them first.
+        rows: () => [
+          for (final m in c.threadMessages(root))
+            if (m.id != root || !c.hasEarlierReplies(root)) m,
+        ],
+        hasOlder: () => c.hasEarlierReplies(root),
+        readOlder: () async {
+          final loaded = c.threadMessages(root).length;
+          _scroll.holdPlace();
+          await c.loadThread(earlier: true);
+          return c.threadMessages(root).length > loaded ||
+              !c.hasEarlierReplies(root);
+        },
+      )..addListener(_findMoved),
+    );
+  }
+
+  void _closeFind({bool refocus = true}) {
+    final find = _find;
+    if (find == null) return;
+    find
+      ..removeListener(_findMoved)
+      ..clear()
+      ..dispose();
+    _find = _foundMatch = null;
+    if (!mounted) return;
+    setState(() {});
+    if (refocus) _focus.requestFocus();
+  }
+
+  /// A new current match is brought into view, as a followed link is.
+  void _findMoved() {
+    final match = _find?.current;
+    if (!mounted) return;
+    setState(() {});
+    if (match == null || match == _foundMatch) return;
+    _foundMatch = match;
+    // Brought into view as the reply a thread opens at is.
+    final messages = c.threadMessages(widget.root);
+    final at = messages.indexWhere((m) => m.id == match);
+    if (at < 0) return;
+    final jump = ++_jumps;
+    setState(() => _target = match);
+    _reveal(jump, at / messages.length, 0);
+  }
 
   /// [row] with its message's time, for the day pill over the list. Keyed
   /// by the message, so the list keeps each row's place as replies arrive.
@@ -109,7 +173,13 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     time: message.createdAt,
     child: KeyedSubtree(
       key: message.id == _target ? _targetKey : null,
-      child: SuperTabMessageHighlight(on: message.id == _lit, child: row),
+      // Lit as the reply opened at, or as find's current match; find's
+      // other matches more quietly.
+      child: SuperTabMessageHighlight(
+        on: message.id == _lit || message.id == _find?.current,
+        match: _find?.matching.contains(message.id) ?? false,
+        child: row,
+      ),
     ),
   );
 
@@ -184,6 +254,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
       _newSession = false;
       _tagIndex.value = 0;
       _tagDismissed.value = null;
+      _closeFind(refocus: false);
     }
   }
 
@@ -191,6 +262,10 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   void dispose() {
     _litTimer?.cancel();
     widget.onScroll?.call(null);
+    _find
+      ?..removeListener(_findMoved)
+      ..dispose();
+    _findFocus.dispose();
     _scroll.dispose();
     _composer.dispose();
     _focus.dispose();
@@ -394,6 +469,8 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     grid.AppTheme.watch(context);
     final messages = c.threadMessages(widget.root);
     _takeTarget(messages);
+    // Find matches the rows as they are drawn now.
+    _find?.refresh();
     final root = messages.where((m) => m.id == widget.root).firstOrNull;
     final replies = messages.where((m) => m.id != widget.root).toList();
     final pending = c
@@ -439,6 +516,13 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                     ),
                   ),
                   AppIconButton(
+                    key: const ValueKey('super-thread-find-button'),
+                    icon: AppIcons.search,
+                    tooltip: 'Find in thread',
+                    selected: _find != null,
+                    onPressed: openFind,
+                  ),
+                  AppIconButton(
                     key: const ValueKey('super-thread-close'),
                     icon: AppIcons.close,
                     tooltip: 'Close thread',
@@ -448,6 +532,13 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
               ),
             ),
             Divider(height: 1, thickness: 1, color: DesktopChrome.rim),
+            if (_find case final find?)
+              SuperTabFindBar(
+                key: ValueKey('super-thread-find-${widget.root}'),
+                find: find,
+                focus: _findFocus,
+                onClose: _closeFind,
+              ),
             SuperTabThreadSessionLine(
               key: ValueKey('super-thread-session-${widget.root}'),
               controller: c,
@@ -656,7 +747,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
         root: widget.root,
         padding: const EdgeInsets.fromLTRB(
           grid.AppDesktop.composerSide,
-          0,
+          grid.AppDesktop.controlGap,
           grid.AppDesktop.composerSide,
           grid.AppDesktop.controlGap,
         ),

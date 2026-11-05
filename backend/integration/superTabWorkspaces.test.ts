@@ -22,7 +22,8 @@ const user = (n: number, email: string): AuthUser => ({ sub: `300000000000000000
 const owner = user(1, 'owner@example.com'), peer = user(2, 'peer@example.com'), other = user(3, 'other@elsewhere.test'),
   admin = user(4, 'admin@example.com'), member = user(5, 'member@example.com')
 const legacyOwner = user(6, 'legacy-owner@example.com'), legacyPeer = user(7, 'legacy-peer@example.com')
-const accounts = [owner, peer, other, admin, member, legacyOwner, legacyPeer]
+const returner = user(8, 'returner@example.com'), newcomer = user(9, 'newcomer@example.com')
+const accounts = [owner, peer, other, admin, member, legacyOwner, legacyPeer, returner, newcomer]
 const call = (method: 'GET' | 'POST', url: string, as: AuthUser, body?: object) =>
   app.inject({ method, url, headers: { authorization: `Bearer ${as.sub}` }, ...(body ? { payload: body } : {}) })
 const run = async (tab: string, command: Command, as = owner) => {
@@ -456,5 +457,73 @@ describe('who may invite people to a Workspace\'s Swarm', () => {
       { operationId: randomUUID(), command: { type: 'invite.revoke', inviteId } })
     expect((await revokeAs(member)).statusCode).toBe(403)
     expect((await revokeAs(admin)).statusCode).toBe(200)
+  })
+})
+
+describe('a Swarm invitation for someone the Workspace removed', () => {
+  /** A Workspace with `returner` in it as a member, and a Swarm of it that the plain member is in. */
+  const setUp = async (name: string) => {
+    const workspaceId = await workspace(name)
+    expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/invitations`, owner, { email: returner.email, role: 'member' })).statusCode).toBe(200)
+    expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/accept`, returner, {})).statusCode).toBe(200)
+    const tab = await create(owner, `${name} work`, workspaceId)
+    await invite(tab, member)
+    await invite(tab, admin)
+    return { workspaceId, tab }
+  }
+  const removeReturner = async (workspaceId: string) =>
+    expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/members/${returner.sub}/remove`, admin, {})).statusCode).toBe(200)
+  const inviteAs = (tab: string, by: AuthUser, email = returner.email) => call('POST', `/api/super-tabs/${tab}/commands`, by,
+    { operationId: randomUUID(), command: { type: 'invite.create', email, role: 'collaborator', conversationId: 'lead' } })
+  const accept = (tab: string, inviteId: string, who = returner) => store.execute(who, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId } as Command })
+  const rowOf = (workspaceId: string, who: AuthUser) => db.swarmWorkspaceMember.findUniqueOrThrow({ where: { id: `${workspaceId}:${who.sub}` } })
+  const declined = async (workspaceId: string) => (await db.swarmWorkspace.findUniqueOrThrow({ where: { id: workspaceId } })).autoJoinDeclined
+  const keptOut = async (workspaceId: string, tab: string) => {
+    expect((await rowOf(workspaceId, returner)).removedAt).not.toBeNull()
+    expect(await declined(workspaceId)).toContain(returner.sub)
+    expect(await swarmPeople(tab)).not.toContain(returner.sub)
+  }
+
+  it('refuses a plain member\'s invitation, at create and at accept, and keeps the removal and the decline', async () => {
+    const { workspaceId, tab } = await setUp('Undo removal')
+    // Sent while they were still in the Workspace, and by an admin who is a member by the time it is accepted.
+    const early = (await inviteAs(tab, member)).json().data.result.inviteId as string
+    await removeReturner(workspaceId)
+
+    const created = await inviteAs(tab, member)
+    expect(created.statusCode).toBe(403)
+    expect(created.json().error.code).toBe('WORKSPACE_ROLE_REQUIRED')
+    await keptOut(workspaceId, tab)
+
+    await expect(accept(tab, early)).rejects.toMatchObject({ code: 'WORKSPACE_ACCESS_REVOKED', status: 403 })
+    const overRoute = await call('POST', `/api/super-tabs/${tab}/commands`, returner, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: early } })
+    expect(overRoute.statusCode).toBe(NOT_AVAILABLE.status)
+    await keptOut(workspaceId, tab)
+
+    const byAdmin = (await inviteAs(tab, admin)).json().data.result.inviteId as string
+    expect((await call('POST', `/api/super-tabs/workspaces/${workspaceId}/members/${admin.sub}`, owner, { role: 'member' })).statusCode).toBe(200)
+    await expect(accept(tab, byAdmin)).rejects.toMatchObject({ code: 'WORKSPACE_ACCESS_REVOKED' })
+    await keptOut(workspaceId, tab)
+  })
+
+  it('brings them back on a Workspace admin\'s invitation, with the admin as addedBy', async () => {
+    const { workspaceId, tab } = await setUp('Admin brings back')
+    await removeReturner(workspaceId)
+    const created = await inviteAs(tab, admin)
+    expect(created.statusCode).toBe(200)
+    await accept(tab, created.json().data.result.inviteId as string)
+    const row = await rowOf(workspaceId, returner)
+    expect(row).toMatchObject({ removedAt: null, role: 'guest', addedBy: admin.sub })
+    expect(await declined(workspaceId)).not.toContain(returner.sub)
+    expect(await swarmPeople(tab)).toContain(returner.sub)
+  })
+
+  it('lets a person never removed join through a member\'s invitation as today, credited to that member', async () => {
+    const { workspaceId, tab } = await setUp('Never removed')
+    const created = await inviteAs(tab, member, newcomer.email)
+    expect(created.statusCode).toBe(200)
+    await accept(tab, created.json().data.result.inviteId as string, newcomer)
+    expect(await rowOf(workspaceId, newcomer)).toMatchObject({ removedAt: null, role: 'guest', addedBy: member.sub })
+    expect(await swarmPeople(tab)).toContain(newcomer.sub)
   })
 })
