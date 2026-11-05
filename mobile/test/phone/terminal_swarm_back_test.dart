@@ -62,7 +62,6 @@ void main() {
   });
 
   tearDown(() {
-    debugDefaultTargetPlatformOverride = null;
     voice.dispose();
     language.dispose();
     home.dispose();
@@ -158,7 +157,6 @@ void main() {
   testWidgets('on iOS, a swipe from the left edge goes back to Swarm', (
     tester,
   ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     home.showHarness();
     await tester.pumpWidget(terminal());
     await tester.pump(const Duration(milliseconds: 100));
@@ -166,25 +164,29 @@ void main() {
     await tester.dragFrom(const Offset(2, 300), const Offset(220, 0));
     await tester.pump();
     expect(toSwarm, 1);
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
-  testWidgets('a swipe that does not start at the edge is not back, and '
-      'Android has no edge swipe: its system back is the shell\'s', (
+  testWidgets('on iOS, a swipe that does not start at the edge is not back', (
     tester,
   ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     home.showHarness();
     await tester.pumpWidget(terminal());
     await tester.pump(const Duration(milliseconds: 100));
+
     await tester.dragFrom(const Offset(120, 300), const Offset(220, 0));
     await tester.pump(const Duration(milliseconds: 300));
     expect(toSwarm, 0);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
-    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+  testWidgets("Android has no edge swipe: its system back is the shell's", (
+    tester,
+  ) async {
+    home.showHarness();
     await tester.pumpWidget(terminal());
     await tester.pump(const Duration(milliseconds: 100));
+
     await tester.dragFrom(const Offset(2, 300), const Offset(220, 0));
     await tester.pump(const Duration(milliseconds: 300));
     expect(toSwarm, 0);
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 }
