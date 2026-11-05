@@ -117,6 +117,49 @@ void main() {
     );
   });
 
+  testWidgets('your Buddy proposal offers Delete without Edit', (tester) async {
+    final server = ConversationServer()..append('Please fix the menu');
+    server.messages.single['source'] = {
+      'kind': 'buddy-proposal',
+      'personId': 'owner',
+    };
+    await show(tester, server);
+    await openMore(tester, 'message-1');
+    expect(find.text('Delete message'), findsOneWidget);
+    expect(find.text('Edit message'), findsNothing);
+  });
+
+  for (final entry in <String, Map<String, dynamic>>{
+    'another person': {'kind': 'person', 'id': 'huy', 'name': 'Huy'},
+    'an agent': {'kind': 'agent', 'id': 'owner', 'name': 'Buddy'},
+  }.entries) {
+    testWidgets('${entry.key} cannot delete an owner Buddy proposal', (tester) async {
+      final server = ConversationServer()..append('Please fix the menu');
+      server.messages.single
+        ..['author'] = entry.value
+        ..['source'] = {'kind': 'buddy-proposal', 'personId': 'owner'};
+      await show(tester, server);
+      await openMore(tester, 'message-1');
+      expect(find.text('Delete message'), findsNothing);
+      expect(find.text('Edit message'), findsNothing);
+    });
+  }
+
+  for (final source in [
+    {'kind': 'buddy-proposal', 'personId': 'huy'},
+    {'kind': 'buddy-proposal'},
+    {'kind': 'task-line', 'personId': 'owner'},
+  ]) {
+    testWidgets('a source that does not authorize owner deletion: $source', (tester) async {
+      final server = ConversationServer()..append('Please fix the menu');
+      server.messages.single['source'] = source;
+      await show(tester, server);
+      await openMore(tester, 'message-1');
+      expect(find.text('Delete message'), findsNothing);
+      expect(find.text('Edit message'), findsNothing);
+    });
+  }
+
   testWidgets('an agent’s and another person’s message offer neither', (
     tester,
   ) async {
