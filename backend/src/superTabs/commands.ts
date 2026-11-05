@@ -3771,10 +3771,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.status === 'stopped' && !context.confirmedStopped) fail('STOP_UNCONFIRMED', 'Wait for the execution host to confirm the stop.')
       if (assignment.status === 'reconciling' && command.status !== 'stopped') fail('RECONCILING', 'Reconcile the previous assignment before continuing.')
       let asked: string | undefined
-      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): its own agent's needs_human, when that agent is not the PM,
-      // is the PM's crew need, and its question opens no decision for the person it names.
-      const pmInstead = command.status === 'needs_human' && actor.kind === 'agent' && actor.agentId === assignment.agentId
-        ? routesToPm(state, actor, group) : null
+      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): an agent's needs_human, whoever's assignment it is, when that
+      // agent is not the PM, is the PM's crew need, and its question opens no decision for the person it names (review of #3223).
+      const pmInstead = command.status === 'needs_human' ? routesToPm(state, actor, group) : null
       if (command.ask) {
         if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {
           fail('INVALID_DECISION', 'An agent asks a person for a decision only when its work needs a human, with the question as its result.', 400)
@@ -3838,7 +3837,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // A needs_human for the PM is its crew need: on this row when the row reaches the PM, else on a row of its own there.
         const need = pmInstead ? { personIds: command.ask ? [command.ask.personId] : [], conversationId: group.id,
           ...command.result ? { question: command.result } : {}, ...command.ask ? { options: command.ask.options, recommended: command.ask.recommended } : {} } : null
-        const onRow = need && pmInstead && recipients.includes(pmInstead) ? { crewNeed: { agentId: assignment.agentId, ...need, messageId: operationId } } : {}
+        const onRow = need && pmInstead && actor.kind === 'agent' && recipients.includes(pmInstead)
+          ? { crewNeed: { agentId: actor.agentId, ...need, messageId: operationId } } : {}
         // The status set, on the row: a Done waits for the coordinator's next digest, what needs someone does not (store.ts writeMessages).
         message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}${asked}`, recipients, null, { ...SYSTEM_ROW, status: command.status, ...onRow })
         if (need && pmInstead) {

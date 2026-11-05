@@ -80,12 +80,12 @@ function progress(state: SuperTabState, effects: CommandEffects, group: Conversa
   if (was?.id !== assignment.id) return null
   switch (assignment.status) {
     case 'needs_human': {
-      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): another agent's question is the PM's crew need, so its line
-      // tells nobody it is their call.
-      const projectLead = projectPm(state, group)
-      if (projectLead && projectLead !== assignment.agentId) return `Needs a decision: ${sentence(assignment.result) || 'a decision is needed.'} Next: ${pm} is on it.`
-      const asked = assignment.askedOf && usernameOf(state, assignment.askedOf)
       const decision = effects.decisions?.find(d => d.conversationId === group.id && d.assignmentId === assignment.id)
+      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): with a PM, a question that opened no decision for a person is
+      // the PM's crew need, so its line tells nobody it is their call. The line follows the decision, as commands.ts routes by
+      // who asked (review of #3223).
+      if (projectPm(state, group) && !decision) return `Needs a decision: ${sentence(assignment.result) || 'a decision is needed.'} Next: ${pm} is on it.`
+      const asked = assignment.askedOf && usernameOf(state, assignment.askedOf)
       const fallback = decision && decision.options[decision.recommended]
       return `${asked ? `@${asked} ` : ''}Your call: ${sentence(assignment.result) || 'a decision is needed.'}${fallback ? ` Default: ${sentence(fallback)}` : ''}`
     }
