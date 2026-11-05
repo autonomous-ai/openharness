@@ -3,7 +3,7 @@ import type { Agent, Conversation, SuperTabState } from './model.js'
 import type { SwarmProject } from './projects.js'
 import { missingContract } from './taskContract.js'
 import { backendPaused, compareTags, componentsOf, inReleaseWindow, isReleaseTag, notePendingRelease, PENDING_MAX, RELEASE_COMPONENTS, RELEASE_RULES,
-  pendingKey, releaseDue, settleReleases, PENDING_MS, shipped, waitingFor, type PendingRelease, type ReleaseLedger } from './releases.js'
+  ledgerGroupIds, pendingKey, releaseDue, settleReleases, PENDING_MS, shipped, waitingFor, type PendingRelease, type ReleaseLedger } from './releases.js'
 
 /** A time in Vietnam (UTC+7, no daylight saving) on 6 November 2026. */
 const vn = (hour: number, minute = 0) => Date.UTC(2026, 10, 6, hour - 7, minute)
@@ -132,6 +132,16 @@ describe('notePendingRelease', () => {
     const dropped = notePendingRelease(p, { id: 'late' }, 'https://github.com/o/r/pull/999', vn(12))
     expect(dropped.map(e => e.groupId)).toEqual(['g0'])
     expect(p.releases!.pending).toHaveLength(PENDING_MAX)
+    // Review of #3267: the merge's write may not hold the task it pushed out, so the next settle clears its releasing.
+    expect(p.releases!.leaving).toEqual(['g0'])
+  })
+
+  it('names no task as leaving while another of its merges is still on the list', () => {
+    const p = project()
+    notePendingRelease(p, { id: 'g0' }, 'https://github.com/o/r/pull/1', vn(9))
+    for (let i = 1; i < PENDING_MAX; i++) notePendingRelease(p, { id: i === 1 ? 'g0' : `g${i}` }, `https://github.com/o/r/pull/${i + 1}`, vn(10) + i)
+    notePendingRelease(p, { id: 'late' }, 'https://github.com/o/r/pull/999', vn(12))
+    expect(p.releases!.leaving).toBeUndefined()
   })
 })
 
@@ -256,6 +266,15 @@ describe('settleReleases', () => {
     // A re-run of an older tag's workflow is not newer: the last release stays.
     settleReleases(state, 'p1', { resolved: [], releases: { desktop: desktopRelease([], 'v1.3.77_desktop', T) } }, vn(20))
     expect(ledgerOf(state).last!.desktop!.tag).toBe('v1.3.78_desktop')
+  })
+
+  it('loads and clears the tasks the cap pushed off the list', () => {
+    const state = swarm([], { leaving: ['g12'] })
+    state.conversations.find(c => c.id === 'g12')!.releasing = ['desktop']
+    expect(ledgerGroupIds(ledgerOf(state))).toEqual(['g12'])
+    settleReleases(state, 'p1', noFacts, vn(20))
+    expect(state.conversations.find(c => c.id === 'g12')).not.toHaveProperty('releasing')
+    expect(ledgerOf(state)).not.toHaveProperty('leaving')
   })
 
   it('drops a merge no release carried in 14 days', () => {
