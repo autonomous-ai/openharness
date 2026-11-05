@@ -11,7 +11,9 @@ release 09:00-10:00 VN, Ken 2026-11-05).
 
 Exit 0: allowed. Exit 2: refused, with the next allowed time on stderr. An urgent release is recorded on its
 tag as a `Release-Urgent: <reason>` line, which --from-tag reads, so the workflow honors the same override and
-a tag pushed by hand without one is refused.
+a tag pushed by hand without one is refused. A person tagging by hand names the emergency with an
+`Emergency: <reason>` line instead; either line counts only in an annotated tag (a lightweight tag's "message" is its
+commit's, which any push can write), and the reason goes to the job summary.
 """
 import argparse
 import json
@@ -25,7 +27,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 CONFIG_PATH = Path(__file__).resolve().parent / "release-window.json"
-URGENT_LINE = re.compile(r"^Release-Urgent: (.+)$", re.MULTILINE)
+# `Emergency: <reason>` is the line a person writes in a tag by hand; the release scripts write `Release-Urgent: <reason>`.
+URGENT_LINE = re.compile(r"^(?:Emergency|Release-Urgent):[ \t]*(\S.*)$", re.MULTILINE)
 
 Verdict = namedtuple("Verdict", "allowed next_allowed message urgent_reason chat_line")
 
@@ -135,6 +138,8 @@ def tagged_at(repo, tag):
 
 
 def urgent_reason_of_tag(repo, tag):
+    if not tagged_at(repo, tag):
+        return None  # lightweight: `%(contents)` would be its commit's message, which any push can write
     body = _git(repo, "tag", "-l", "--format=%(contents)", tag)
     found = URGENT_LINE.search(body)
     return found.group(1).strip() if found else None

@@ -64,7 +64,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # A tag pushed by hand skips the release scripts, so the window is checked here too
-      # (scripts/release-window.py). An urgent release carries `Release-Urgent: <reason>` in its tag message.
+      # (scripts/release-window.py). An emergency release carries `Emergency: <reason>` (or the scripts' `Release-Urgent: <reason>`) in its annotated tag.
       - name: Release window
         if: ${{ github.event_name == 'push' }}
         env:
