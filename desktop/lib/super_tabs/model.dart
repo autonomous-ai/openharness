@@ -321,58 +321,6 @@ class SuperTabCrew {
   }
 }
 
-/// One lane of a crew project as the server counts it (backend read/views.ts
-/// `derived.lanes`, task #3400): its tasks waiting and in hand, when the
-/// oldest waiting one opened, and the waiting ones in the order it hands
-/// them out.
-class SuperTabLaneCapacity {
-  const SuperTabLaneCapacity({
-    required this.lane,
-    required this.waiting,
-    required this.busy,
-    required this.oldestAt,
-    required this.taskIds,
-  });
-  final String lane;
-  final int waiting, busy;
-  final DateTime? oldestAt;
-  final List<String> taskIds;
-
-  /// Null for anything that is not a lane with a name.
-  static SuperTabLaneCapacity? fromJson(Object? value) {
-    if (value is! Map) return null;
-    final lane = value['lane'];
-    if (lane is! String || lane.isEmpty) return null;
-    int count(Object? n) => n is num ? n.toInt() : 0;
-    final oldest = value['oldestAt'];
-    return SuperTabLaneCapacity(
-      lane: lane,
-      waiting: count(value['waiting']),
-      busy: count(value['busy']),
-      oldestAt: oldest is num
-          ? DateTime.fromMillisecondsSinceEpoch(oldest.toInt())
-          : null,
-      taskIds: List.unmodifiable(
-        value['taskIds'] is List
-            ? (value['taskIds'] as List).whereType<String>()
-            : const <String>[],
-      ),
-    );
-  }
-
-  /// Each project's lanes in [value] (`derived.lanes`), by project id; empty
-  /// from a server before lanes.
-  static Map<String, List<SuperTabLaneCapacity>> byProject(Object? value) =>
-      Map.unmodifiable({
-        if (value is Map)
-          for (final MapEntry(:key, value: lanes) in value.entries)
-            if (key is String && lanes is List)
-              key: List<SuperTabLaneCapacity>.unmodifiable(
-                lanes.map(fromJson).nonNulls,
-              ),
-      });
-}
-
 /// What makes an agent a thread session: its thread's root and the sequence
 /// of the message that started it (backend model.ts `Agent.buddySession`).
 class SuperTabBuddySessionOf {
@@ -484,6 +432,9 @@ class SuperTabConversation {
           : null,
       queueRank = (row['queueRank'] as num?)?.toDouble(),
       priority = row['priority'] as String?,
+      handOutLane = row['handOutLane'] is String
+          ? row['handOutLane'] as String
+          : null,
       notBefore = DateTime.tryParse(row['notBefore'] as String? ?? ''),
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
@@ -591,6 +542,11 @@ class SuperTabConversation {
   /// taskPriority.ts); null on a step, a chat, and a task from before it,
   /// whose title may still mark one (`superTabTaskPriority`, backlog.dart).
   final String? priority;
+
+  /// The lane the crew dispatch hands this task out in (backend read/views.ts
+  /// `handOutLane`, task #3400): its PM's, else its owned paths'. Null when
+  /// no lane owns it, on a chat or a step, and from an older server.
+  final String? handOutLane;
 
   /// The day before which its work may not start, a promise the PM keeps
   /// ("remove the preview route after Dec 4"); null when there is none.
@@ -753,7 +709,6 @@ class SuperTabSnapshot {
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
       activityDigest = row['activityDigest'] as String?,
-      lanes = SuperTabLaneCapacity.byProject(row['lanes']),
       remindersDigest = row['remindersDigest'] as String?,
       chatSettings = Map.unmodifiable({
         if (row['chatSettings'] case final Map settings)
@@ -892,10 +847,6 @@ class SuperTabSnapshot {
   /// Which of the reader's Activity rows are unread (replies to them, reactions to their messages), as a digest
   /// that moves when one comes or is read; null from a backend before Activity (superTabs/activity.ts).
   final String? activityDigest;
-
-  /// Each crew project's lanes, by project id (backend `derived.lanes`, task
-  /// #3400); empty from an older server and for a project with no crew.
-  final Map<String, List<SuperTabLaneCapacity>> lanes;
 
   /// Which reminders the reader has set and when each is due, as a digest that moves when one is set, replaced or
   /// cleared; null from a backend before reminders (superTabs/reminders.ts).

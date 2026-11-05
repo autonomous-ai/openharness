@@ -379,11 +379,12 @@ void main() {
     expect(_text(_member('wren'), 'Wren · docs'), findsOneWidget);
     expect(_text(_member('wren'), 'Full'), findsOneWidget);
     expect(_text(_member('wren'), 'Free'), findsNothing);
+    // In the board's order: Waiting lists the newest first.
     expect(_top(tester, _member('wren'), names: {'handed:'}), [
       'handed:',
-      'w-h1',
-      'w-h2',
       'w-h3',
+      'w-h2',
+      'w-h1',
     ]);
 
     // An agent that is not crew gets no column, and its task is not
