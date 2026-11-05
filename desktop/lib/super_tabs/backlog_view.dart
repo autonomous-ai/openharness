@@ -34,6 +34,7 @@ String _meaning(SuperTabBacklogGroup group) => switch (group) {
   SuperTabBacklogGroup.waitingOnSomeone => 'Waiting on a person’s answer',
   SuperTabBacklogGroup.inReview => 'Pull request open, waiting on a human',
   SuperTabBacklogGroup.readyToMerge => 'Passed review, waiting for its merge',
+  SuperTabBacklogGroup.releasing => 'Merged, waiting for its release',
   SuperTabBacklogGroup.shipped => 'Merged in the last 7 days',
 };
 
@@ -44,6 +45,7 @@ Color _tone(SuperTabBacklogGroup group) => switch (group) {
   SuperTabBacklogGroup.waitingOnSomeone => grid.AppPalette.usageLow,
   SuperTabBacklogGroup.inReview => _merged,
   SuperTabBacklogGroup.readyToMerge => grid.AppPalette.teal,
+  SuperTabBacklogGroup.releasing => grid.AppPalette.accentOnSurface,
   SuperTabBacklogGroup.shipped => grid.AppPalette.online,
 };
 
@@ -53,6 +55,7 @@ IconData _icon(SuperTabBacklogGroup group) => switch (group) {
   SuperTabBacklogGroup.waitingOnSomeone => AppIcons.hand,
   SuperTabBacklogGroup.inReview => AppIcons.gitPullRequest,
   SuperTabBacklogGroup.readyToMerge => AppIcons.circleDot,
+  SuperTabBacklogGroup.releasing => AppIcons.packageOpen,
   SuperTabBacklogGroup.shipped => AppIcons.circleCheck,
 };
 

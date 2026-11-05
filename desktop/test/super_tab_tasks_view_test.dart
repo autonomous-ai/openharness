@@ -24,6 +24,7 @@ Map<String, dynamic> taskFixture(
   bool merged = false,
   bool archived = false,
   DateTime? shippedAt,
+  List<String>? releasing,
 }) => {
   ...conversationFixture(id, title),
   'projectId': 'lead',
@@ -51,6 +52,7 @@ Map<String, dynamic> taskFixture(
     },
   },
   if (shippedAt != null) 'shippedAt': shippedAt.millisecondsSinceEpoch,
+  'releasing': ?releasing,
 };
 
 /// The project of the mockup Dee confirmed: a proposal, two tasks nobody is on
@@ -793,5 +795,53 @@ void main() {
       );
       await _close(tester, c);
     });
+  });
+
+  testWidgets('a merged task waits in Waiting, as merged, releasing, until its '
+      'release; a merge the server has no release list for stays Shipped '
+      '(task #3452)', (tester) async {
+    final server = tasksServer();
+    (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+      taskFixture(
+        'releasing',
+        'Round dial recap',
+        20,
+        requester: 'owner',
+        status: 'done',
+        pullRequest: 3401,
+        merged: true,
+        shippedAt: _now.subtract(const Duration(hours: 1)),
+        releasing: ['desktop', 'cli'],
+      ),
+      taskFixture(
+        'fresh',
+        'Reminder opens no thread',
+        21,
+        requester: 'owner',
+        status: 'done',
+        pullRequest: 3234,
+        merged: true,
+        shippedAt: _now.subtract(const Duration(minutes: 2)),
+        releasing: [],
+      ),
+    ]);
+    final c = await _show(tester, server);
+    expect(_cardsIn(tester, 'waiting'), containsAll(['releasing', 'fresh']));
+    expect(_cardsIn(tester, 'shipped'), ['sender']);
+    expect(
+      find.descendant(
+        of: _card('releasing'),
+        matching: find.textContaining('merged, releasing (Desktop, CLI)'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: _card('fresh'),
+        matching: find.textContaining('merged, releasing'),
+      ),
+      findsOneWidget,
+    );
+    await _close(tester, c);
   });
 }

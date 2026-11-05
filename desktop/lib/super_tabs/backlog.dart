@@ -12,6 +12,7 @@ enum SuperTabBacklogGroup {
   waitingOnSomeone('Waiting on someone'),
   inReview('In review'),
   readyToMerge('Ready to merge'),
+  releasing('Releasing'),
   shipped('Shipped');
 
   const SuperTabBacklogGroup(this.label);
@@ -22,11 +23,18 @@ enum SuperTabBacklogGroup {
 /// reshape of Scholes's ask, task #2551).
 const superTabBacklogShippedWindow = Duration(days: 7);
 
-/// Whether [task] has shipped (task #2558): a recorded merge of any of its pull
-/// requests (a batch's counts, its own closed), or Done with none to merge. Its
-/// `shippedAt` alone cannot say: the server sets that at the first Done.
+/// Whether [task] merged and waits for the release that carries it (task
+/// #3452): the server lists its `releasing` parts from the merge until the
+/// release, an empty list included, so present is what says it.
+bool superTabTaskReleasing(SuperTabConversation task) => task.releasing != null;
+
+/// Whether [task] has shipped (task #2558, released since #3452): a recorded
+/// merge of any of its pull requests (a batch's counts, its own closed) that
+/// no release still waits on, or Done with none to merge. Its `shippedAt`
+/// alone cannot say: the server sets that at the first Done.
 bool superTabTaskShipped(SuperTabConversation task) =>
-    task.cards.pullRequests.any((card) => card.merged) ||
+    (task.cards.pullRequests.any((card) => card.merged) &&
+        !superTabTaskReleasing(task)) ||
     (task.assignment?['status'] == 'done' &&
         task.cards.pullRequests.isEmpty &&
         task.pullRequestUrls.isEmpty);
@@ -40,6 +48,7 @@ SuperTabBacklogGroup? superTabBacklogGroupOf(
   DateTime now,
 ) {
   final status = task.assignment?['status'];
+  if (superTabTaskReleasing(task)) return SuperTabBacklogGroup.releasing;
   final at = task.shippedAt;
   final inWindow =
       at != null && now.difference(at) <= superTabBacklogShippedWindow;

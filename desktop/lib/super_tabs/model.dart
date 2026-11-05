@@ -406,6 +406,9 @@ class SuperTabConversation {
           ? SuperTabTask.fromJson(superTabMap(row['task']))
           : null,
       requesterId = row['requesterId'] as String?,
+      releasing = row['releasing'] is List
+          ? List.unmodifiable((row['releasing'] as List).whereType<String>())
+          : null,
       shippedAt = row['shippedAt'] is num
           ? DateTime.fromMillisecondsSinceEpoch(
               (row['shippedAt'] as num).toInt(),
@@ -505,6 +508,15 @@ class SuperTabConversation {
   /// The person who asked for this task; null on a conversation that is no
   /// task, and from a server that does not say.
   final String? requesterId;
+
+  /// The parts (`backend`, `cli`, `desktop`, `web`, in that order) a merged
+  /// task still waits on for a verified release (backend releases.ts, task
+  /// #3452). Present from the merge until the release, and shrinking as each
+  /// part's release lands; empty for a few minutes after the merge, while the
+  /// server reads the pull request's files. Null before a merge, once
+  /// released, for work merged before the server recorded releases, and from
+  /// an older server: each reads as released, as it did.
+  final List<String>? releasing;
 
   /// Its first Done, or its merge once one is recorded: not proof that it merged
   /// (a pull request card's `merged` is); null until then, and from a server

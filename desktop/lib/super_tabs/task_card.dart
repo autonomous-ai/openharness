@@ -29,6 +29,7 @@ class SuperTabTaskCard extends StatelessWidget {
     required this.onOpen,
     this.priority,
     this.titleLines = 2,
+    this.captionLines = 1,
     this.tile = false,
     this.selected = false,
     this.trailing,
@@ -39,7 +40,7 @@ class SuperTabTaskCard extends StatelessWidget {
   final HarnessActivity activity;
   final VoidCallback onOpen;
   final SuperTabTaskPriority? priority;
-  final int titleLines;
+  final int titleLines, captionLines;
   final bool tile, selected;
   final Widget? trailing;
 
@@ -108,7 +109,7 @@ class SuperTabTaskCard extends StatelessWidget {
                             Flexible(
                               child: Text(
                                 caption,
-                                maxLines: 1,
+                                maxLines: captionLines,
                                 overflow: TextOverflow.ellipsis,
                                 style: muted,
                               ),

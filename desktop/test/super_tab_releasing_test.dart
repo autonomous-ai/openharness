@@ -67,8 +67,22 @@ void main() {
       expect(place(merged())!.column, SuperTabTaskColumn.shipped);
     });
 
-    test('an empty list is not releasing', () {
-      expect(place(merged(releasing: []))!.column, SuperTabTaskColumn.shipped);
+    test('a list still empty, before the files are read, is releasing', () {
+      final p = place(merged(releasing: []))!;
+      expect(p.column, SuperTabTaskColumn.waiting);
+      expect(p.state, 'merged, releasing');
+    });
+
+    test('the server says it: present means releasing', () {
+      final p = place(
+        SuperTabConversation.fromJson({
+          ...conversationFixture('work', 'A task'),
+          'assignment': {'id': 'a1', 'agentId': 'kestrel', 'status': 'done'},
+          'releasing': ['cli'],
+        }),
+      )!;
+      expect(p.column, SuperTabTaskColumn.waiting);
+      expect(p.state, 'merged, releasing (CLI)');
     });
 
     test('a task merged and closed while releasing still waits', () {
@@ -100,6 +114,7 @@ void main() {
 
     test('a merged task still releasing is in Releasing', () {
       expect(group(merged(releasing: ['desktop'])), 'releasing');
+      expect(group(merged(releasing: [])), 'releasing');
     });
 
     test('a released task is Shipped', () {
