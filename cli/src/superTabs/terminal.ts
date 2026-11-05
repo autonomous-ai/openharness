@@ -95,6 +95,25 @@ export function modelFailing(text: string): boolean {
   return text.split('\n').slice(-LIMIT_NEAR_LINES).some(line => MODEL_LINE.test(line))
 }
 
+/** An engine whose model refuses its sign-in: Claude Code's "Not logged in · Please run /login", "API Error: 401 {…
+ *  authentication_error …} · Please run /login", "Invalid API key · Please run /login" and "OAuth token has expired", and
+ *  Codex's "■ unexpected status 401 Unauthorized". A CLI release restarts the owner's daemon and its relay: a Team agent
+ *  launched in that gap, or holding a token the relay no longer takes, showed one and sat there (task #3301, Quince,
+ *  2026-11-05). Only a line that starts with the notice, bare or under the engines' own marks (Claude Code's "⎿", Codex's
+ *  "■"), where the engine draws its own ([ownNotice]), and near the prompt: an agent writing or printing these words, its
+ *  reply under "⏺" or "•" included, is not signed out (security review 2 of #3172). */
+const SIGNED_OUT_LINE = /^\s*(?:⎿\s+|■\s+)?(?:api error:\s*401\b|not logged in\b|invalid api key\b|oauth token has (?:expired|been revoked)|unexpected status 401\b)/i
+
+/** Whether the screen shows its engine signed out of its model: no answer will come until it is launched signed in. */
+export function signedOut(text: string): boolean {
+  const lines = text.split('\n')
+  const from = Math.max(0, lines.length - LIMIT_NEAR_LINES)
+  return lines.slice(from).some((line, i) => SIGNED_OUT_LINE.test(line) && ownNotice(lines, from + i))
+}
+
+/** A model the agent gets no answer from: retrying one that does not answer, or signed out of it. */
+const unanswered = (text: string) => modelFailing(text) || signedOut(text)
+
 /** Claude Code's tool call, whose output it draws under it: "⏺ Bash(…)", "⏺ Read(…)", "⏺ mcp__github__get_pr(…)". */
 const TOOL_CALL = /^⏺\s+[\w.-]+\(/
 
@@ -314,12 +333,13 @@ export class TerminalHost {
       state.skips = await this.skipUpdate(agent, read, state.skips ?? 0)
       const now = this.now()
       const digest = screenDigest(read.text), seen = this.progress.get(agent.harnessId)
+      const failing = unanswered(read.text)
       // A model being retried is not the agent's work moving, whatever else the screen shows meanwhile.
-      if (!seen || (seen.digest !== digest && !modelFailing(read.text))) this.progress.set(agent.harnessId, { digest, at: now })
+      if (!seen || (seen.digest !== digest && !failing)) this.progress.set(agent.harnessId, { digest, at: now })
       state.prompt = await this.episode(agent, 'prompt', state.prompt, read.hold !== null && WAITING.has(read.hold), now, since => now - since >= PROMPT_WAIT_MS, {})
       const limit = limitOf(read.text, now)
       state.limit = await this.episode(agent, 'limit', state.limit, limit !== null, now, () => true, limit ?? {})
-      if (modelFailing(read.text)) state.retried = now
+      if (failing) state.retried = now
       const retrying = state.retried !== undefined && now - state.retried < MODEL_CLEAR_MS
       // Ten minutes up to the last retry seen, not up to now: the quiet minutes that confirm answers came again are not
       // failure, so a burst that recovers before ten minutes never alerts (and its task is never lost for it).
@@ -327,7 +347,7 @@ export class TerminalHost {
       // Failing now, on this read: the model alert's episode outlasts the retries by ten minutes, a restart's by as long. Not
       // waited on: a restart takes up to a minute, and the other agents' reads and alerts must not wait behind it.
       void this.relay?.seen(agent.harnessId, this.core.agents.byAgent(agent.harnessId)?.engine,
-        { failingSince: modelFailing(read.text) && state.model ? state.model.since : null, waiting: read.hold !== null && WAITING.has(read.hold) })
+        { failingSince: failing && state.model ? state.model.since : null, waiting: read.hold !== null && WAITING.has(read.hold) })
         .catch(error => this.log(`relay recovery: ${error instanceof Error ? error.message : String(error)}`))
     }
   }
