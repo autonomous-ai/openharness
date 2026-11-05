@@ -27,17 +27,40 @@ export const RELAY_REASONS = {
   claudeRefused: "This account runs on its owner's subscription, and Anthropic refused the owner's Claude sign-in: the owner signs in to Claude Code again.",
   refused: "This account runs on its owner's subscription, and the owner's relay did not accept its key: the owner's Harness hands out a new one when it next publishes its relay.",
   down: "This account runs on its owner's subscription, and the owner's Harness relay on this Mac does not answer: the owner's Harness is restarting or stopped.",
+  /** The relay's own 502: anything that threw in it, Anthropic out of reach or an owner sign-in it refreshed and could not
+   *  save back (lib/ownerSubscriptions.ts). */
+  vendor: "This account runs on its owner's subscription, and the owner's Harness can't reach Anthropic or save the owner's refreshed Claude sign-in.",
 } as const
 
 const PROBE_TIMEOUT_MS = 10_000
+/** As much of an error body as is read: the relay's own fit in a few hundred bytes, and whatever holds the port may send
+ *  without end (review 1 of #3098). */
+const BODY_BYTES = 4096
+
+/** The first [BODY_BYTES] of [answer]'s body, the rest left unread. */
+async function headOf(answer: Response): Promise<string> {
+  const reader = answer.body?.getReader()
+  if (!reader) return ''
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (size < BODY_BYTES) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(value)
+      size += value.byteLength
+    }
+  } finally { await reader.cancel().catch(() => {}) }
+  return Buffer.concat(chunks).subarray(0, BODY_BYTES).toString('utf8')
+}
 /** The relay's own refusals carry this; anything else came from the vendor through it (lib/subscriptionRelay.ts `fail`). */
 const RELAY_OWN = '"harness_relay_error"'
 
 /**
- * Asks the relay at [grant] for Claude's model list with its token. Only the relay's own refusals and the vendor refusing
- * the owner's sign-in read as not answering: Anthropic busy, limiting or failing (a 503, 529 or 429 passed through) is
- * no fault of this account's, and read as the owner's sign-in it told the owner to allow access that was there (security
- * reviews of #3098).
+ * Asks the relay at [grant] for Claude's model list with its token. It answers on a 2xx, and on Anthropic's own error for
+ * Anthropic busy, limiting or failing (a 503, 529 or 429 passed through), which is no fault of this account's: read as the
+ * owner's sign-in, it told the owner to allow access that was there (security reviews of #3098). Everything else reads as
+ * not answering, with why.
  */
 export async function probeRelay(grant: TeamRelayGrant, fetchImpl: typeof fetch = fetch): Promise<RelayHealth> {
   let status: number, body = ''
@@ -48,7 +71,7 @@ export async function probeRelay(grant: TeamRelayGrant, fetchImpl: typeof fetch 
     })
     status = answer.status
     if (status >= 200 && status < 300) await answer.body?.cancel().catch(() => {})
-    else body = (await answer.text()).slice(0, 2048)
+    else body = await headOf(answer)
   } catch {
     return { ok: false, reason: RELAY_REASONS.down }
   }
@@ -56,12 +79,26 @@ export async function probeRelay(grant: TeamRelayGrant, fetchImpl: typeof fetch 
   if (body.includes(RELAY_OWN)) {
     if (status === 503) return { ok: false, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true }
     if (status === 401) return { ok: false, reason: RELAY_REASONS.refused }
-    // 502: the relay could not reach the vendor, which is the network's, not this account's.
-    if (status === 502) return { ok: true }
+    // 502: anything that threw in the relay, for every request while it lasts (review 1 of #3098, second read).
+    if (status === 502) return { ok: false, reason: RELAY_REASONS.vendor }
     return { ok: false, reason: `This account runs on its owner's subscription, and the owner's relay answered with an error (HTTP ${status}).` }
   }
-  if (status === 401 || status === 403) return { ok: false, reason: RELAY_REASONS.claudeRefused, claudeOnly: true }
-  return { ok: true }
+  // Anthropic's own answer, passed through: its sign-in refused is Claude's alone; busy, limiting or failing is no fault of
+  // this account's. Anything else (a redirect, a 404, an empty body) is not the owner's relay: whatever holds its port once
+  // the owner's Harness has gone (review 2 of #3098, second read).
+  const vendor = vendorErrorType(body)
+  if (vendor === 'authentication_error' || vendor === 'permission_error') return { ok: false, reason: RELAY_REASONS.claudeRefused, claudeOnly: true }
+  if (vendor) return { ok: true }
+  return { ok: false, reason: RELAY_REASONS.down }
+}
+
+/** The error type in Anthropic's own error body (`{"type":"error","error":{"type":"overloaded_error",…}}`), or null. */
+function vendorErrorType(body: string): string | null {
+  try {
+    const value = JSON.parse(body) as { type?: unknown; error?: { type?: unknown } }
+    const type = value?.type === 'error' ? value.error?.type : undefined
+    return typeof type === 'string' && /^[a-z_]{1,40}_error$/.test(type) ? type : null
+  } catch { return null }
 }
 
 /** This Team account's: the grant read as each launch reads it (team/relay.ts `realTeamRelayLaunch`), then asked. Null with
