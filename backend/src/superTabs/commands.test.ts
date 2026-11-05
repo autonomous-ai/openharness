@@ -13,6 +13,7 @@ import { modelMatches } from './rules.js'
 import { appendRouting, instructionsHash } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
+import { LEAD_CAPABILITY, leadHost } from './leadStart.js'
 import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fixture.test-support.js'
 import { groupView } from './read/views.js'
 import { weekStart } from './leaderboard/week.js'
@@ -6130,5 +6131,49 @@ describe('agent.rename (renaming a harness renames its agent, task #2912)', () =
     const github = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_'), removed: CredentialKind[] = []
     expect(withoutCredentials(rename('a', github), removed)).toMatchObject({ name: CREDENTIAL_MARKER })
     expect(removed).toEqual(['github'])
+  })
+})
+
+// Task #3211 (vie, 11-05): a project whose lead started in a folder with no GitHub origin has nothing to clone, so its work
+// starts on other machines in an empty folder of its own, without a worktree; a project with a repository keeps today's rule.
+describe('a start for a project with no repository', () => {
+  const pool = (machineId: string) => ({ machineId, name: machineId, contributorId: 'owner', membershipGeneration: 'pilot', generation: 'g1',
+    cwd: '/data/swarm-projects/tab', scope: 'swarm' as const, engines: ['claude'], maxAgents: 4, paused: false,
+    observation: { generation: 'g1', receivedAt: 1000, capabilities: [LEAD_CAPABILITY], resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null,
+      diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null, deviceType: null, chip: null, os: null, gpuPercent: null },
+      tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] } })
+  const setUp = (repositoryUrl: string | null) => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    f.state.machines = [{ ...pool('source'), membershipGeneration: f.state.people[0]!.generation }, { ...pool('other'), membershipGeneration: f.state.people[0]!.generation }]
+    f.state.projects![0]!.repository = { machineId: 'source', cwd: '/Users/vie/outreach', repositoryUrl }
+    return { f, lead, group }
+  }
+  const start = (repositoryUrl: string | null, machineId: string, cwd: string) => {
+    const { f, lead, group } = setUp(repositoryUrl)
+    const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const request = { conversationId: group, machineId, engine: 'claude', name: 'Writer', cwd, worktree: true, branchRef: 'refs/remotes/origin/main',
+      requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } }
+    f.run({ type: 'agent.start', request, ...via } as Command, actor, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, ...decisionIn(group) })
+    return f.state.starts!.at(-1)!.request
+  }
+
+  it('starts on another machine in the project\'s own folder there, without a worktree', () => {
+    const request = start(null, 'other', '/data/swarm-projects/tab/lead')
+    expect(request).toMatchObject({ machineId: 'other', cwd: '/data/swarm-projects/tab/lead', worktree: false })
+    expect(request.branchRef).toBeUndefined()
+  })
+
+  it('keeps a worktree on the machine whose folder it started in, and wherever it has a repository', () => {
+    expect(start(null, 'source', '/Users/vie/outreach')).toMatchObject({ worktree: true, branchRef: 'refs/remotes/origin/main' })
+    expect(start('https://github.com/vie/outreach', 'other', '/data/swarm-projects/tab/lead')).toMatchObject({ worktree: true, branchRef: 'refs/remotes/origin/main' })
+  })
+
+  it('starts its Product Manager on another machine without a worktree too', () => {
+    const { f } = setUp(null)
+    const project = f.state.projects![0]!
+    const leadFor = { projectId: project.id, personId: 'owner', generation: f.state.people[0]!.generation }
+    expect(leadHost(f.state, project, 'other', { engine: 'claude' }, leadFor, { now: 1000 })).toMatchObject({ cwd: '/data/swarm-projects/tab/lead', worktree: false })
+    f.state.projects![0]!.repository!.repositoryUrl = 'https://github.com/vie/outreach'
+    expect(leadHost(f.state, project, 'other', { engine: 'claude' }, leadFor, { now: 1000 })).toMatchObject({ worktree: true })
   })
 })
