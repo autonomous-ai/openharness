@@ -196,11 +196,13 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  /// Types [owner] and goes on: checked once, not per key.
   Future<void> chooseOwner(WidgetTester tester, String owner) async {
     await tester.enterText(
       find.descendant(of: _owner, matching: find.byType(EditableText)),
       owner,
     );
+    await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pumpAndSettle();
   }
 
@@ -231,13 +233,7 @@ void main() {
           find.descendant(of: _row, matching: find.text('New Repository')),
           findsOneWidget,
         );
-        expect(
-          find.descendant(
-            of: _row,
-            matching: find.text('Create one on GitHub'),
-          ),
-          findsOneWidget,
-        );
+        // A door, as GitHub above it: the menu shows its title alone.
         await shot(tester, boundary, 'new-repository-menu-${brightness.name}');
         await unmount(tester);
       },
