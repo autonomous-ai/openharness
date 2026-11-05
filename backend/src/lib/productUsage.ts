@@ -239,7 +239,8 @@ async function writeRelayBatch(id: string, increments: UsageIncrement[]): Promis
     try {
       return await prisma.$transaction(async tx => {
         if ((await tx.productUsageReceipt.findMany({ where: { id: { in: [receipt] } }, select: { id: true } })).length) return
-        await tx.productUsageReceipt.createMany({ data: [{ id: receipt, expiresAt: new Date(Date.now() + 2 * DAY) }] })
+        // [life]: the receipt rule (productUsageReceiptSweep.ts) refuses a receipt without one; this one lives 2 days.
+        await tx.productUsageReceipt.createMany({ data: [{ id: receipt, expiresAt: new Date(Date.now() + 2 * DAY), life: 2 }] })
         await incrementUsageTotals(tx, increments)
       })
     } catch (error) {

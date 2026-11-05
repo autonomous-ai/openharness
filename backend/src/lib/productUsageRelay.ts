@@ -33,7 +33,7 @@ export function createRelayTotals({ write, retries = 5, maxKeys = 4096, interval
     if (failed) {
       const batch = failed
       try { await write(batch.id, batch.increments); failed = null } catch {
-        if (++batch.attempts >= retries) { failed = null; complain('[product-usage] Some relay counts were dropped after repeated write failures.') }
+        if (++batch.attempts >= retries) { failed = null; complain('[product-usage] Some counts were dropped after repeated write failures.') }
         return
       }
     }
@@ -42,7 +42,7 @@ export function createRelayTotals({ write, retries = 5, maxKeys = 4096, interval
     pending = new Map()
     try { await write(batch.id, batch.increments) } catch {
       failed = batch
-      complain('[product-usage] Some relay counts are unavailable.')
+      complain('[product-usage] Some counts are unavailable.')
     }
   }
   function flush(): Promise<void> {

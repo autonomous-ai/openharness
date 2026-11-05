@@ -433,6 +433,8 @@ describe('relay connects', () => {
     await flushRelayUsage()
     expect(receipts()).toHaveLength(1)
     expect(receipts()[0]).toMatch(/^relay:/)
+    // The receipt rule refuses a receipt without a life.
+    expect(db.productUsageReceipt.createMany.mock.calls[0][0].data[0].life).toBe(2)
     expect(db.productUsageReceipt.createMany.mock.calls[0][0].data[0].expiresAt.getTime()).toBeGreaterThan(Date.now())
     expect(db.$transaction).toHaveBeenCalledOnce()
   })
