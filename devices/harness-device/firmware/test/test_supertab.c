@@ -241,7 +241,7 @@ static void chats(void)
     ht_supertabs_recap_open(&model, "s1", "L0", 260);
     assert(model.recap.state == HT_RECAP_LOADED && !strcmp(model.recap.text, "Tests green.") && model.recap.asked_ms == 260);
     assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "", "Deployed.", 4, false) && !strcmp(model.recap.text, "Deployed."));
-    ht_supertabs_recap_open(&model, "s1", "L2", 270); ht_supertabs_recap_open(&model, "s1", "L2", 280);
+    ht_supertabs_recap_open(&model, "s1", "L1", 270); ht_supertabs_recap_open(&model, "s1", "L1", 280);   // L1 never had one
     assert(model.recap.state == HT_RECAP_LOADING && model.recap.asked_ms == 280);
     // The face's chat moved on: what it holds is another chat's, and is not kept.
     ht_supertabs_recap_open(&model, "s1", "L0", 290);
@@ -358,6 +358,69 @@ static void buddies(void)
     puts("supertab: Buddies on, the Buddy block and its avatar, a Buddy face, bad blocks dropped with the Lead kept PASS");
 }
 
+// A swipe to another project shows the recap it last had at once, not the resting pet until the new one arrives (Diego's
+// dial, 2026-11-05): the last few Leads' recaps are remembered, each only for the chat and thread it was for.
+static void recap_memory(void)
+{
+    static ht_supertab_t t;
+    ht_supertabs_reset(&model);
+    const char ids[1][ID_MAX] = {"s1"};
+    ht_supertabs_ids(&model, ids, 1, NULL, 0);
+    assert(ht_supertab_init(&t, "s1", "", "openharness", 3));
+    ht_lead_in_t a = lead("L0", "work", 0); a.chat = "group"; a.chat_id = "g1"; a.chat_name = "Fix login";
+    ht_lead_in_t b = lead("L1", "done", 1); b.chat = "pm"; b.chat_id = "pm1"; b.chat_name = "PM";
+    ht_lead_in_t c = lead("L2", "done", 2); c.chat = "pm"; c.chat_id = "pm2"; c.chat_name = "PM";
+    assert(ht_supertab_lead_add(&t, &a) && ht_supertab_lead_add(&t, &b) && ht_supertab_lead_add(&t, &c));
+    ht_supertabs_put(&model, &t, 0, NULL, 0);
+    ht_supertabs_recap_open(&model, "s1", "L0", 100);
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "", "Tests green.", 2, false));
+    ht_supertabs_recap_open(&model, "s1", "L1", 110);
+    assert(model.recap.state == HT_RECAP_LOADING);   // never had one: still asked for
+    assert(ht_supertabs_recap_put(&model, "s1", "L1", "pm1", "", "", 0, true) && model.recap.state == HT_RECAP_EMPTY);
+    // Back to L0: its recap is on the face at once, and the fresh one still lands.
+    ht_supertabs_recap_open(&model, "s1", "L0", 120);
+    assert(model.recap.state == HT_RECAP_LOADED && !strcmp(model.recap.text, "Tests green.") && !strcmp(model.recap.chat_id, "g1"));
+    assert(model.recap.asked_ms == 120 && model.recap.at == 2);
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "", "Deployed.", 3, false) && !strcmp(model.recap.text, "Deployed."));
+    // L1 had none: it comes back as none.
+    ht_supertabs_recap_open(&model, "s1", "L1", 130);
+    assert(model.recap.state == HT_RECAP_EMPTY && !model.recap.text[0]);
+    // The newest text is the one remembered.
+    ht_supertabs_recap_open(&model, "s1", "L0", 140);
+    assert(model.recap.state == HT_RECAP_LOADED && !strcmp(model.recap.text, "Deployed."));
+    // Its chat moved on: the remembered text was another chat's, so the face waits for the new one.
+    ht_supertabs_recap_open(&model, "s1", "L2", 150);
+    t.leads[0].chat_id[0] = 'h'; ht_supertabs_put(&model, &t, 0, NULL, 0);
+    ht_supertabs_recap_open(&model, "s1", "L0", 160);
+    assert(model.recap.state == HT_RECAP_LOADING && !model.recap.text[0] && !model.recap.chat_id[0]);
+    // A reset forgets them all.
+    ht_supertabs_recap_open(&model, "s1", "L1", 170);
+    ht_supertabs_reset(&model);
+    ht_supertabs_ids(&model, ids, 1, NULL, 0); ht_supertabs_put(&model, &t, 0, NULL, 0);
+    ht_supertabs_recap_open(&model, "s1", "L1", 180);
+    assert(model.recap.state == HT_RECAP_LOADING);
+    // More Leads than it remembers: the oldest is forgotten, the rest kept.
+    ht_supertabs_reset(&model);
+    static ht_supertab_t many;
+    assert(ht_supertab_init(&many, "s1", "", "openharness", HT_SUPERTAB_LEADS_MAX));
+    char lid[HT_SUPERTAB_LEADS_MAX][8], cid[HT_SUPERTAB_LEADS_MAX][8];
+    for (int i = 0; i < HT_SUPERTAB_LEADS_MAX; i++) {
+        snprintf(lid[i], sizeof lid[i], "M%d", i); snprintf(cid[i], sizeof cid[i], "c%d", i);
+        ht_lead_in_t m = lead(lid[i], "done", i); m.chat = "pm"; m.chat_id = cid[i]; m.chat_name = "PM";
+        assert(ht_supertab_lead_add(&many, &m));
+    }
+    ht_supertabs_ids(&model, ids, 1, NULL, 0); ht_supertabs_put(&model, &many, 0, NULL, 0);
+    for (int i = 0; i < HT_RECAP_REMEMBERED + 1; i++) {
+        ht_supertabs_recap_open(&model, "s1", lid[i], 200 + i);
+        assert(ht_supertabs_recap_put(&model, "s1", lid[i], cid[i], "", "said", 5, false));
+    }
+    ht_supertabs_recap_open(&model, "s1", lid[0], 300);
+    assert(model.recap.state == HT_RECAP_LOADING);
+    ht_supertabs_recap_open(&model, "s1", lid[2], 310);
+    assert(model.recap.state == HT_RECAP_LOADED);
+    puts("supertab: the last Leads' recaps come back at once on a swipe, only for their chat, oldest forgotten, reset clears PASS");
+}
+
 int main(void)
 {
     order_and_limits();
@@ -366,5 +429,6 @@ int main(void)
     chats();
     threads();
     buddies();
+    recap_memory();
     return 0;
 }

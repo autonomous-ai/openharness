@@ -4,6 +4,7 @@ import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, sw
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { readsRawReason } from './startFailure.js'
 import { sweepLiveness } from './liveness.js'
+import { REOPEN_OWNER_MS } from './handed.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
 import { defaultProfileId, hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
 import { activeWork, agentOnly, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration, type Author } from './model.js'
@@ -1961,7 +1962,7 @@ describe('any agent of the project', () => {
   it('lets any agent of the project run the task commands', () => {
     const { f, engineer, E } = project(), A = f.worker
     const group = f.run({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits while offline.',
-      checks: [{ description: 'Reconnect preserves the edits.', independent: false }] }, E).result.conversationId as string
+      checks: [{ description: 'Reconnect preserves the edits.', independent: false }], priority: 'P2', requesterId: 'owner' }, E).result.conversationId as string
     const task = () => f.state.conversations.find(c => c.id === group)!
     f.run({ type: 'work.define', conversationId: group, brief: 'Build it.', checks: [{ description: 'Tests pass.', independent: false }] }, E)
     expect(f.run({ type: 'route.record', conversationId: group, decision: record() } as Command, E).result.routeDecisionId).toEqual(expect.any(String))
@@ -2625,7 +2626,7 @@ describe('an agent joining a task by a post or by opening it', () => {
 
   it('checks the team access of an agent that opens a task, which it would be in', () => {
     const { f, mate, mine } = teammate()
-    const create = { type: 'conversation.create', title: 'Fix it', brief: 'Fix it.', checks: [] } as Command
+    const create = { type: 'conversation.create', title: 'Fix it', brief: 'Fix it.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'owner' } as Command
     const groups = f.state.conversations.length
     expect(() => f.run(create, as(mate))).toThrow(refused)
     expect(f.state.conversations).toHaveLength(groups)
@@ -2963,14 +2964,16 @@ describe('Reviewer role', () => {
       return { ...setup, built, builderActor, verdict, task, swept }
     }
 
-    it('keeps work in review when a review finds problems: the findings are information, and its quiet time still does not count', () => {
+    // Task #3399: a review that finds problems brings the handed task back to its builder, which has 60 minutes to pick it up.
+    it('brings work in review back to its builder when a review finds problems, and its quiet time counts from then', () => {
       const { verdict, task, swept, builder } = handedOver('review')
       const foundAt = 2000 + 2 * HOUR
       expect(swept(foundAt)).toBe('review')
       const found = verdict(false, foundAt)
-      expect(task()).toMatchObject({ status: 'review', result: 'Ready for review: PR #42 at abc1234' })
-      expect(found.messages.filter(m => m.recipients.includes(builder))).toEqual([])
-      expect(swept(foundAt + 2 * HOUR)).toBe('review')
+      expect(task()).toMatchObject({ status: 'working', result: 'Ready for review: PR #42 at abc1234', reopened: { at: foundAt } })
+      expect(found.messages.filter(m => m.recipients.includes(builder)).map(m => m.text)).toEqual([expect.stringContaining('back with you')])
+      expect(swept(foundAt + REOPEN_OWNER_MS)).toBe('working')
+      expect(swept(foundAt + 2 * HOUR)).toBe('lost')
     })
 
     it('keeps work in review when the review passes', () => {
@@ -4115,7 +4118,7 @@ describe('other projects\' work for Leads', () => {
     const roster = work(docs.projectId, 'Roster', ['desktop/lib/super_tabs'])
     const name = (id: string) => f.state.agents.find(a => a.id === id)!.displayName
     const overlaps = (effects: ReturnType<typeof f.run>) => effects.messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'overlap')
-    const created = f.run({ type: 'conversation.create', title: 'Agents filter', task: task([' ./desktop/lib/super_tabs/roster.dart ', 'cli']), checks }, as(lead))
+    const created = f.run({ type: 'conversation.create', title: 'Agents filter', task: task([' ./desktop/lib/super_tabs/roster.dart ', 'cli']), checks, priority: 'P2', requesterId: 'owner' }, as(lead))
     const group = created.result.conversationId as string
     const text = `"Agents filter" (Pilot, ${name(lead)}) and "Roster" (Docs, ${name(docs.lead)}) both change desktop/lib/super_tabs/roster.dart.`
     // The acting Lead created the overlap and is not told again; the other project's Lead hears it in its own project chat.
@@ -4916,27 +4919,28 @@ describe('checks are information', () => {
 
   it('creates, defines and assigns a task with no checks', () => {
     const f = routed()
-    const group = f.run({ type: 'conversation.create', title: 'Docs', brief: 'Fix the docs.', checks: [] }, f.leadActor).result.conversationId as string
+    const group = f.run({ type: 'conversation.create', title: 'Docs', brief: 'Fix the docs.', checks: [] }, owner).result.conversationId as string
     expect(f.state.conversations.find(c => c.id === group)!.checks).toEqual([])
     f.run(commandSchema.parse({ type: 'work.define', conversationId: group, brief: 'Fix the install docs.', checks: [] }), f.leadActor)
     f.run({ type: 'conversation.agent', conversationId: group, agentId: f.worker, present: true, lead: false }, f.leadActor)
     const assigned = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker })
     expect(assigned.messages.find(m => m.recipients.includes(f.worker))!.text).toBe('Fix the install docs.\n\nStart each pull request body with: Requested by owner through Harness.')
     // A task with no brief at all is assigned too: its title is what its agent reads.
-    const bare = f.run({ type: 'conversation.create', title: 'Look into the flaky test', brief: '', checks: [] }, f.leadActor).result.conversationId as string
+    const bare = f.run({ type: 'conversation.create', title: 'Look into the flaky test', brief: '', checks: [] }, owner).result.conversationId as string
     const other = f.add('other', 'owner', bare)
     expect(f.run({ type: 'work.assign', conversationId: bare, agentId: other }).messages.find(m => m.recipients.includes(other))!.text)
       .toBe('Look into the flaky test\n\nStart each pull request body with: Requested by owner through Harness.')
   })
 
-  it('keeps a failed check as a finding', () => {
+  it('keeps a failed check as a finding, and brings a handed task back to its Engineer', () => {
     const f = routed(), group = f.group(), reviewer = f.add('reviewer', 'owner', group)
     f.run({ type: 'conversation.agent', conversationId: group, agentId: f.worker, present: true, lead: false })
     const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker }).result.assignmentId as string
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Ready for review: PR #42 at abc1234' }, f.workerActor)
     const checkId = f.state.conversations.find(c => c.id === group)!.checks[0]!.id
     const found = f.run({ type: 'work.check', conversationId: group, assignmentId, checkId, passed: false, evidence: 'Two findings at abc1234' }, as(reviewer))
-    expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ status: 'review', result: 'Ready for review: PR #42 at abc1234' })
+    // The task comes back to its Engineer (#3399); its result stays as it wrote it.
+    expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ status: 'working', result: 'Ready for review: PR #42 at abc1234' })
     expect(f.state.conversations.find(c => c.id === group)!.checks[0]).toMatchObject({ passedBy: null, evidence: 'Two findings at abc1234' })
     expect(found.messages.filter(m => m.text.startsWith('Working'))).toEqual([])
   })
@@ -5110,7 +5114,8 @@ describe('notices of failed work', () => {
     const sonnet = other('sonnet', 'claude-sonnet-4-5')
     const attempt = give(sonnet)
     expect(failed(failIt(attempt, sonnet))).toEqual([])
-    expect(mine().assignment).toMatchObject({ id: attempt, status: 'review' })
+    // It comes back to its own agent, in the same attempt (#3399); the grid one above is not pinned, as its next attempt steps up.
+    expect(mine().assignment).toMatchObject({ id: attempt, status: 'working' })
     expect(mine().stepUp).toBeUndefined()
   })
 
@@ -5456,6 +5461,33 @@ describe('lead.switch', () => {
     const own = setup()
     own.f.run(own.request)
     expect(own.agent().switchRequest).not.toHaveProperty('effort')
+  })
+
+  // Task #3395 (anh Dee, 11-05): Switch PM's "Default" sent no model, and the new PM started on its engine's own
+  // default (the machine's last-used Claude Code model, Sonnet medium). Claude with no model gets the coordinator's
+  // built-in default, as lead.start does; a person's named model is kept.
+  it('gives a Claude switch with no model the PM default, on the same machine and on another, and keeps a named one', () => {
+    const here = setup()
+    here.f.run({ ...here.request, engine: 'claude', profileId: 'default' })
+    expect(here.agent().switchRequest).toMatchObject({ engine: 'claude', model: 'opus', effort: 'xhigh' })
+
+    const moved = setup()
+    const destination = structuredClone(moved.f.state.machines![0]!)
+    Object.assign(destination, { machineId: 'destination', name: 'Destination Mac', generation: 'g2' })
+    destination.observation!.generation = 'g2'
+    destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+    moved.f.state.machines!.push(destination)
+    moved.f.run({ ...moved.request, engine: 'claude', profileId: 'default', machineId: 'destination' })
+    expect(moved.agent().switchRequest).toMatchObject({ targetMachineId: 'destination', model: 'opus', effort: 'xhigh' })
+    expect(moved.f.state.starts).toContainEqual(expect.objectContaining({ request: expect.objectContaining({
+      machineId: 'destination', engine: 'claude', model: 'opus', effort: 'xhigh' }) }))
+
+    const picked = setup()
+    picked.f.run({ ...picked.request, engine: 'claude', profileId: 'default', model: 'sonnet' })
+    expect(picked.agent().switchRequest).toMatchObject({ model: 'sonnet', effort: 'high' })
+    const effort = setup()
+    effort.f.run({ ...effort.request, engine: 'claude', profileId: 'default', effort: 'max' })
+    expect(effort.agent().switchRequest).toMatchObject({ model: 'opus', effort: 'max' })
   })
 
   it('works while the Swarm is paused', () => {
@@ -5904,8 +5936,10 @@ describe('a task\'s priority (conversation.create and work.priority)', () => {
   function prioritized() {
     const f = routed()
     const task = (id: string) => f.state.conversations.find(g => g.id === id)!
+    // An agent's task says its check, priority and who asked (taskContract.ts); a step carries no priority, a person's defaults.
     const create = (fields: Record<string, unknown> = {}, actor: Actor = f.leadActor) =>
-      f.run(commandSchema.parse({ type: 'conversation.create', title: 'Sign-in broken', brief: 'Fix it.', checks: [], ...fields }), actor)
+      f.run(commandSchema.parse({ type: 'conversation.create', title: 'Sign-in broken', brief: 'Fix it.',
+        checks: [{ description: 'Done', independent: false }], ...actor.kind === 'agent' && !fields.reviewOf ? { priority: 'P2', requesterId: 'owner' } : {}, ...fields }), actor)
     const set = (conversationId: string, priority: string) => commandSchema.parse({ type: 'work.priority', conversationId, priority })
     return { f, task, create, set }
   }
@@ -5921,7 +5955,7 @@ describe('a task\'s priority (conversation.create and work.priority)', () => {
 
   it('gives a task created without one P2, and the reply says so', () => {
     const { task, create } = prioritized()
-    const created = create()
+    const created = create({}, owner)
     expect(task(created.result.conversationId as string).priority).toBe('P2')
     expect(created.result).toMatchObject({ priority: 'P2',
       warnings: expect.arrayContaining(['No priority given: this task is P2. Set P0-P3 with work.priority.']) })

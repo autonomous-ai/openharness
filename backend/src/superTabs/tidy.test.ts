@@ -54,6 +54,14 @@ describe('idle agents', () => {
     expect(target(state).idleNoticedAt).toBe(at + 2 * MINUTE)
   })
 
+  // Task #3397: a crew member stands by between tasks; the coordinator is not told to stop it.
+  it('never tells of a crew member, and tells of the same agent off the crew', () => {
+    const crew = swarm({ agents: [worker({ crew: { role: 'Engineer', at: START, by: 'p' } })], groups: [] })
+    expect(idleNotices(crew, 'lead', at, new Set())).toEqual([])
+    delete target(crew).crew
+    expect(idleNotices(crew, 'lead', at, new Set())).toEqual([expect.objectContaining({ text: 'Rowan has had no open task for 15 minutes.' })])
+  })
+
   it('never tells of a Buddy, the coordinator, an agent with a delivery waiting or one in a task with active work', () => {
     const buddy = swarm({ agents: [worker({ buddyOf: { personId: 'p', generation: 'g' } })], groups: [] })
     expect(idleNotices(buddy, 'lead', at, new Set())).toEqual([])
@@ -64,6 +72,14 @@ describe('idle agents', () => {
     expect(idleNotices(swarm({ groups: [group({ assignment: done({ status: 'working' }) })] }), 'lead', at, new Set())).toEqual([])
     const linked = group({ agentIds: ['L', 'other', 'w'], assignment: done({ agentId: 'other', status: 'review' }), lastActivityAt: iso(START - 60 * MINUTE) })
     expect(idleNotices(swarm({ groups: [linked] }), 'lead', at, new Set())).toEqual([])
+  })
+
+  it('tells of an Engineer whose own task is handed over for review, which leaves it free (#3399)', () => {
+    const handed = group({ assignment: done({ status: 'review', result: 'Ready for review: PR #7 at abc1234' }) })
+    expect(idleNotices(swarm({ groups: [handed] }), 'lead', at, new Set())).toEqual([expect.objectContaining({ text: 'Rowan has had no open task for 15 minutes.' })])
+    // A step's own Ready is its verdict, no hand-over: its Reviewer is still at work on it.
+    const step = group({ reviewOf: 'g0', assignment: done({ status: 'review' }) })
+    expect(idleNotices(swarm({ groups: [step] }), 'lead', at, new Set())).toEqual([])
   })
 
   it('waits until a full 15 minutes have passed since the group of its own task last spoke', () => {

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
-import { activeWork, agentOnly, awaitingWorkers, createSuperTab, fail, SuperTabError, visibleState, workerIndex, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState, type WorkStatus } from './model.js'
+import { occupiesAgent, agentOnly, awaitingWorkers, createSuperTab, fail, SuperTabError, visibleState, workerIndex, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState, type WorkStatus } from './model.js'
 import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, skillModeOf, skillSetOf, watchersLost, workRequesterId, requestedByLine, STUCK_START_MS, type OtherRegistrations, type SwarmProject } from './projects.js'
 import { mayDrive } from './terminal.js'
 
@@ -75,7 +75,7 @@ describe('projects inside an invite-only swarm', () => {
     const f = setup(), p = f.project()
     const lead = f.add(p.conversationId, 'lead')
     const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host' }
-    const work = f.run({ type: 'conversation.create', title: 'Work', brief: 'Deliver it', checks: [{ description: 'It works', independent: true }] }, actor)
+    const work = f.run({ type: 'conversation.create', title: 'Work', brief: 'Deliver it', checks: [{ description: 'It works', independent: true }], priority: 'P2', requesterId: 'owner' }, actor)
     expect(f.state.conversations.find(c => c.id === work.conversationId)).toMatchObject({ projectId: p.projectId, agentIds: [lead], leadId: lead })
     expect(visibleState(f.state, actor).projects!.map(p => p.id)).toEqual([p.projectId])
     expect(() => f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: lead, present: true, lead: false })).toThrow('separate agent')
@@ -713,13 +713,14 @@ function legacyRequireSingleRegistration(before: SuperTabState, after: SuperTabS
     }
   }
 }
+/** The reference scan, with today's busy rule: a task its agent handed over leaves it free (model.ts occupiesAgent, #3399). */
 function legacyAwaitingWorkers(state: SuperTabState, projectId: string): Agent[] {
   return state.agents.filter(a => {
     if (state.conversations.some(c => c.leadId === a.id)
-      || state.conversations.some(c => activeWork(c) && c.assignment?.agentId === a.id)) return false
+      || state.conversations.some(c => occupiesAgent(c) && c.assignment?.agentId === a.id)) return false
     const groups = state.conversations.filter(c => c.assignment?.agentId === a.id && !c.assignment.lost)
     return (a.projectId ?? groups.map(c => groupProject(state, c).id)[0] ?? 'lead') === projectId &&
-      (a.workDecision === 'awaiting' || (!a.workDecision && groups.some(c => !activeWork(c))))
+      (a.workDecision === 'awaiting' || (!a.workDecision && groups.some(c => !occupiesAgent(c))))
   })
 }
 
