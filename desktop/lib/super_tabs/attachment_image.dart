@@ -65,13 +65,24 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
   /// A shape an earlier launch kept is known once the cache is listed: the
   /// placeholder takes it then, if the picture has not arrived first.
   void _awaitShape() {
-    final cache = superTabImageCache;
-    if (cache.shapeOf(_ref.file.id) != null) return;
+    if (_shapeOf(_ref.file) != null) return;
     unawaited(
-      cache.ready.then((_) {
-        if (mounted && cache.shapeOf(_ref.file.id) != null) setState(() {});
+      superTabImageCache.ready.then((_) {
+        if (mounted && _shapeOf(_ref.file) != null) setState(() {});
       }),
     );
+  }
+
+  /// [file]'s width and height: as a load here read them, else as the server
+  /// sent them, else its thumbnail's, which has the same shape.
+  static Size? _shapeOf(SuperTabAttachment file) {
+    final cache = superTabImageCache;
+    final width = file.width, height = file.height;
+    return cache.shapeOf(file.id) ??
+        (width != null && height != null
+            ? Size(width.toDouble(), height.toDouble())
+            : null) ??
+        cache.shapeOf(superTabThumbId(file.id));
   }
 
   @override
@@ -186,6 +197,8 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
     // No link at all: nothing to open either. A link that failed to draw
     // stays a click away, as the full-screen viewer may still read it.
     if (url == null) return _failed ? _broken(file) : _loading(file);
+    // The thumbnail is kept apart from the original (image_cache.dart).
+    final cacheId = _thumb ? superTabThumbId(file.id) : file.id;
     final radius = BorderRadius.circular(DesktopChrome.controlRadius);
     return Semantics(
       button: true,
@@ -208,12 +221,13 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
               borderRadius: radius,
               child: ExcludeSemantics(
                 child: Image(
-                  // One state per address: a failed thumbnail's error must not
-                  // greet the original that takes its place.
-                  key: ValueKey(url.toString()),
+                  // One state per picture: a failed thumbnail's error must not
+                  // greet the original that takes its place. Not per link, so
+                  // a fresh link to the same picture keeps what is drawn.
+                  key: ValueKey(cacheId),
                   image: attachmentPicture(
                     url,
-                    fileId: file.id,
+                    fileId: cacheId,
                     side: SuperTabInlineImage.maxSide,
                   ),
                   fit: BoxFit.contain,
@@ -238,7 +252,7 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
   /// arrives; else a fixed one.
   static Widget _loading(SuperTabAttachment file) {
     final size =
-        superTabInlineSize(superTabImageCache.shapeOf(file.id)) ??
+        superTabInlineSize(_shapeOf(file)) ??
         const Size(
           SuperTabInlineImage.maxSide * 2 / 3,
           SuperTabInlineImage.maxSide / 2,

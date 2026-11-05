@@ -335,3 +335,7 @@ class SuperTabImageCache {
 SuperTabImageCache superTabImageCache = kUnderTest
     ? SuperTabImageCache(MemoryImageShelf())
     : SuperTabImageCache(defaultImageShelf(), capBytes: kDefaultShelfBytes);
+
+/// What the cache keeps file [fileId]'s thumbnail (#3177) under, apart from
+/// the original: the two are different pictures of one file.
+String superTabThumbId(String fileId) => '$fileId.thumb';
