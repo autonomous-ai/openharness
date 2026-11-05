@@ -119,6 +119,14 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
     expect(f.lead('mate-mac').result).toMatchObject({ machineId: 'mate-mac' })
   })
 
+  // Task #3060: a start naming the Team account entry itself is refused there too, pointing at the Mac.
+  it('named in a Team account itself whose Mac\'s owner runs teammates\' work in their own account, is refused, pointing at the Mac', () => {
+    const f = swarm()
+    f.run({ type: 'machine.ownAccountWork', machineId: 'mate-mac', allowed: true } as Command, mate)
+    expect(refusal(() => f.lead('mate-team'))).toMatchObject({ code: 'OWN_ACCOUNT_WORK', message: expect.stringContaining('mate-mac') })
+    expect(f.state.starts ?? []).toEqual([])
+  })
+
   it('on a teammate\'s Mac with no Team account, runs on the Mac itself, whatever the Swarm\'s switch says for workers', () => {
     process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1'
     const f = swarm()
