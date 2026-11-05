@@ -685,4 +685,38 @@ void main() {
     ) as Map;
     expect((saved[tabId] as Map)['order'], order);
   });
+
+  // Agreed with Lupine2 for the merge with #3073: the project list's one-pass
+  // hide check reads a pane in a project's own tab as panesFor does.
+  test('a project whose only open pane sits in its own tab is not hidden, '
+      'and the hide check agrees with panesFor', () async {
+    final f = SuperTabLaunchFixture();
+    f.app.machineStates['m']!
+      ..agentLoadStatus = AgentLoadStatus.loaded
+      ..agents = [
+        _agent('a1', remote: 'https://github.com/acme/api', cwd: '/w/api'),
+        // Started from api's chat in a folder of another repo.
+        _agent('a2', remote: 'https://github.com/acme/web', cwd: '/w/web'),
+      ];
+    final first = _tab(f.app, 'desk-api', [_pane('m', 'a1')], name: 'api');
+    final c = await _personal(f);
+    final projects = PersonalProjects.of(f.app);
+    await projects.sync(c);
+    final api = c.snapshot!.projects.firstWhere((p) => p.name == 'api');
+    // The repo's own tab closes; an agent started from api's chat stays open
+    // in api's own tab.
+    f.app.swarms.remove(first);
+    final started = _pane('m', 'a2');
+    _tab(f.app, personalProjectTabId(api.id), [started], name: 'api');
+    expect(projects.panesFor(c, api.leadConversationId), [started]);
+    expect(projects.hiddenIn(c), isNot(contains(api.id)));
+    for (final project in c.snapshot!.projects) {
+      expect(
+        projects.hiddenIn(c).contains(project.id),
+        projects.knownForTest('owner', tabId).containsValue(project.id) &&
+            projects.panesFor(c, project.leadConversationId).isEmpty,
+        reason: project.name,
+      );
+    }
+  });
 }
