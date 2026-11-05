@@ -848,10 +848,21 @@ class SuperTabLaunch {
     }
     checkAccount();
     final at = (link['at'] as num).toInt();
+    final signIn = switch (link['authorizeUrl']) {
+      final String url => Uri.tryParse(url),
+      _ => null,
+    };
+    // Only GitHub's own page is opened (security review 1 of #3207).
+    if (signIn == null || !newRepositorySignInLink(signIn)) {
+      throw const SuperTabFailure(
+        'GITHUB_LINK_REFUSED',
+        kNewRepositoryNotGitHub,
+      );
+    }
     final open =
         openLinkForTest ??
         (Uri url) => launchUrl(url, mode: LaunchMode.externalApplication);
-    if (!await open(Uri.parse(link['authorizeUrl'] as String))) {
+    if (!await open(signIn)) {
       throw const SuperTabFailure(
         'GITHUB_NOT_OPENED',
         'Couldn’t open GitHub. Try again.',

@@ -126,10 +126,14 @@ NewRepositoryOutcome newRepositoryOutcome(
         : const NewRepositoryWaiting();
   }
   return switch (creation.state) {
-    'created' when creation.repositoryUrl != null => NewRepositoryCreated(
-      creation.repositoryUrl!,
-      reachable: creation.reachable != false,
-    ),
+    'created' when _isAsked(creation.repositoryUrl, ask) =>
+      NewRepositoryCreated(
+        creation.repositoryUrl!,
+        reachable: creation.reachable != false,
+      ),
+    // Made, it says, but not what was asked: never started in (security
+    // review 1 of #3207).
+    'created' => const NewRepositoryFailed(kNewRepositoryNothingCreated),
     'taken' => NewRepositoryFailed(
       '${ask.slug} already exists. Choose another name, or choose it under '
       'GitHub in Choose repo to use it.',
@@ -151,6 +155,27 @@ NewRepositoryOutcome newRepositoryOutcome(
     ),
   };
 }
+
+/// Whether [url] is the repository [ask] named, on GitHub. Logins and names
+/// compare without case, as GitHub's do.
+bool _isAsked(String? url, NewRepositoryAsk ask) {
+  final repository = url == null ? null : GitHubRepository.parse(url);
+  return repository != null &&
+      repository.owner.toLowerCase() == ask.owner.toLowerCase() &&
+      repository.name.toLowerCase() == ask.name.toLowerCase();
+}
+
+/// Whether [link] is GitHub's own sign-in, the only page New Repository
+/// opens (security review 1 of #3207): https on github.com, nothing else.
+bool newRepositorySignInLink(Uri link) =>
+    link.scheme == 'https' &&
+    link.host == 'github.com' &&
+    !link.hasPort &&
+    link.userInfo.isEmpty;
+
+/// A sign-in link that is not GitHub's: nothing is opened or created.
+const kNewRepositoryNotGitHub =
+    'Harness got a sign-in link that isn’t GitHub’s. Nothing was created.';
 
 String _sentence(String text) {
   final trimmed = text.trim();
