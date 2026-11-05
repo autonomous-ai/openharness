@@ -1131,20 +1131,22 @@ export class SuperTabHost {
   }
 
   /** A PM's turn as its list read says it (#3545): busy while the core says it works, else idle, and whether it ended since the
-   *  last tick. One read at a time per PM, waited for at most LEAD_TURN_WAIT_MS, so a slow core never holds this machine's
+   *  last tick. One read at a time per PM, waited for at most LEAD_TURN_WAIT_MS and only by the tick that started it, so a slow core never holds this machine's
    *  deliveries: until a read has answered, the list read says no turn, as an older host's does. Unknown or a failed read is
    *  idle: the inbox goes rather than waits. */
   private async leadTurn(harnessId: string): Promise<{ state: 'idle' | 'busy'; ended: boolean } | null> {
     let turn = this.leadTurns.get(harnessId)
     if (!turn) this.leadTurns.set(harnessId, turn = {})
     const known = turn
+    // A read still out from an earlier tick is not waited for again: its answer is used once it comes (Relay's review).
+    const waiting = !known.read
     known.read ??= this.working(harnessId).then(working => {
       const state = working ? 'busy' : 'idle'
       if (known.state === 'busy' && state === 'idle') known.ended = true
       known.state = state
     }).finally(() => { known.read = undefined })
     let timer: ReturnType<typeof setTimeout> | undefined
-    await Promise.race([known.read, new Promise<void>(settle => { timer = setTimeout(settle, LEAD_TURN_WAIT_MS); timer.unref?.() })])
+    if (waiting) await Promise.race([known.read, new Promise<void>(settle => { timer = setTimeout(settle, LEAD_TURN_WAIT_MS); timer.unref?.() })])
     clearTimeout(timer)
     if (!known.state) return null
     const ended = !!known.ended

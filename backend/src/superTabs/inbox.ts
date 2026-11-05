@@ -36,12 +36,16 @@ export const turnInboxHost = (state: SuperTabState, agent: Agent): boolean => !!
 export const gathersForInbox = (state: SuperTabState, recipient: Agent, message: { author: Pick<Author, 'kind'>; source?: unknown }): boolean =>
   inboxSection(message) !== 'results' && turnInboxHost(state, recipient)
 
-/** Whether the PM's gathered rows go out now, the oldest first: a read that sends no turn (an older host) keeps the notice
- *  digest's own clock; one that does, when its turn has ended, or when the oldest has waited TURN_END_WAIT_MS. */
-export function inboxDue(oldest: Pick<SuperTabDelivery, 'createdAt'> | undefined, now: number, turn: 'idle' | 'busy' | undefined): boolean {
+/** Whether the PM's gathered rows, oldest first, go out now. A read that sends no turn (an older host) keeps the notice
+ *  digest's own clock. One that does: when the oldest has waited TURN_END_WAIT_MS, whatever the turn; at idle, at once for a
+ *  person's message or a crew need, and on the digest's clock for notices alone, which it batches (Relay's review of #3278:
+ *  each message is a new turn of a long-context session). */
+export function inboxDue(gathered: ReadonlyArray<Pick<SuperTabDelivery, 'createdAt' | 'inboxSection'>>, now: number, turn: 'idle' | 'busy' | undefined): boolean {
+  const oldest = gathered[0]
   if (!oldest) return false
   if (turn === undefined) return digestIsDue(oldest, now)
-  return turn === 'idle' || now - oldest.createdAt.getTime() >= TURN_END_WAIT_MS
+  if (now - oldest.createdAt.getTime() >= TURN_END_WAIT_MS) return true
+  return turn === 'idle' && (digestIsDue(oldest, now) || gathered.some(d => d.inboxSection))
 }
 
 type Where = Pick<SuperTabDelivery, 'conversationId' | 'messageId'>
@@ -60,7 +64,9 @@ export function crewNeedLine(state: SuperTabState, delivery: Where, need: CrewNe
   const people = need.personIds.map(id => names.get(id) ?? 'a person').join(', ') || 'a person'
   const options = need.options?.length ? ` Options: ${need.options.map((o, i) => i === need.recommended ? `${o} (recommended)` : o).join(' / ')}` : ''
   const ids = ` (message ${delivery.messageId} in ${delivery.conversationId})`
-  return `${shortened(`- ${who} needs ${people}: ${oneLine(need.question ?? words)}${options}`, INBOX_LINE_MAX - ids.length)}${ids}`
+  // A crew-need row's own text (crewNeeds.ts crewNeedText) starts with its lead-in and ends with its options: the line says both.
+  const asked = need.question ?? words.replace(/^Crew need for [^\n]*\n\n/, '').replace(/\n\nOptions: [\s\S]*$/, '')
+  return `${shortened(`- ${who} needs ${people}: ${oneLine(asked)}${options}`, INBOX_LINE_MAX - ids.length)}${ids}`
 }
 
 /** The asks one inbox names; the board lists them all. */

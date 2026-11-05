@@ -3299,7 +3299,8 @@ export class SuperTabStore {
         // Written as ever, so its readers see the message at once; only its coordinator's delivery waits for the digest (noticeDigest.ts).
         // At the store's time, which the release and the settle pass measure from. No host lists it, so none is told.
         // A person's message or a crew need to a PM whose host sends its turn waits for its inbox too (inbox.ts, #3545).
-        const gathered = (gatheredMessage(state, message) && !!ledProject(state, recipient)) || gathersForInbox(state, target, message)
+        const forInbox = gathersForInbox(state, target, message)
+        const gathered = (gatheredMessage(state, message) && !!ledProject(state, recipient)) || forInbox
         deliveries.push({ id: stableId(message.id, recipient), tabId,
           conversationId: message.conversationId, messageId: message.id, agentId: recipient, machineId: target.machineId,
           machineOwnerId: target.machineOwnerId,
@@ -3307,6 +3308,7 @@ export class SuperTabStore {
           membershipGeneration: target.membershipGeneration, authorKind: message.author.kind,
           authorId: message.author.id, authorGeneration: message.author.membershipGeneration,
           ...gathered ? { status: 'gathered', createdAt: new Date(this.now()) } : {},
+          ...forInbox ? { inboxSection: inboxSection(message) } : {},
           ...!gathered && waitsForTurnEnd(state, target, message) ? { waitsUntil: new Date(this.now() + TURN_END_WAIT_MS) } : {} })
       }
     }
@@ -4308,9 +4310,9 @@ export class SuperTabStore {
   async deliveries(user: AuthUser, tabId: string, agentId: string, turn?: 'idle' | 'busy') {
     const key = pollKey(user, tabId, agentId)
     const last = await this.polls.get(key).catch(error => { pollMemoryFailed(error); return undefined })
-    // A PM whose turn just ended gets its inbox now, not at the next full poll (#3545): only its host sends `turn`, and only
-    // a read saying idle with something gathered skips the fast answer, by one indexed read.
-    const releasing = turn === 'idle' && (await agentGatheredDeliveries(this.db, tabId, agentId, 1)).length > 0
+    // A PM whose inbox is due gets it now, not at the next full poll (#3545): only its host sends `turn`, and only a read
+    // whose gathered rows are due (inboxDue) skips the fast answer, by one indexed read.
+    const releasing = turn !== undefined && inboxDue(await agentGatheredDeliveries(this.db, tabId, agentId, NOTICE_DIGEST_MAX), this.now(), turn)
     if (!releasing && last !== undefined && this.now() - last.at < SWEEP_EVERY_MS) {
       const open = await openDeliveries(this.db, tabId, agentId)
       if (!open.length) return []
@@ -4374,14 +4376,13 @@ export class SuperTabStore {
       // gathered go now, in this read, as they would to an older host; the notices keep their digest.
       if (turn === undefined && gathered.length && turnInboxHost(loaded.state, agent(loaded.state, agentId))) {
         const requeued = new Set<string>()
-        for (const delivery of gathered) {
-          const message = await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { author: true, source: true } })
-          if (!message || inboxSection({ author: message.author as unknown as Author, source: message.source }) === 'results') continue
+        // By the section recorded when each was gathered: no message is read for it.
+        for (const delivery of gathered.filter(d => d.inboxSection)) {
           if ((await tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId, status: 'gathered' }, data: { status: 'queued' } })).count) requeued.add(delivery.id)
         }
         gathered = gathered.filter(d => !requeued.has(d.id))
       }
-      const release = inboxDue(gathered[0], this.now(), turn) ? gathered : []
+      const release = inboxDue(gathered, this.now(), turn) ? gathered : []
       // A due digest reads its notices where they were written: a group asleep since is not cancelled for not being loaded.
       const groupIds = new Set(release.map(d => d.conversationId))
       const due = led && !loaded.state.paused ? digestDue(led, this.now()) : null
