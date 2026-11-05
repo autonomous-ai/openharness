@@ -243,8 +243,11 @@ describe('the built-in wake\'s jobs for what people teach the coordinator', () =
   // Ken, 11-05: a project's own instructions guard only its own PM's account, and a copy made before this rule has none.
   it('tells the coordinator an account any project\'s PM runs on keeps that PM running for its week', () => {
     const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
-    expect(text).toContain('An account the route notes as running a PM, yours or another project\'s, keeps that PM running for its week')
-    expect(text).toContain('except work that account\'s owner asks for')
+    expect(text).toContain('Never ask anyone about quota or whose account to use: pick by Routing and go.')
+    expect(text).toContain('An account the route notes as running a PM, yours or another project\'s, takes no new work while it has less than 20% of its week left')
+    // Review of #3134: a project copied before this keeps an older line about its own PM's account; this one still holds.
+    expect(text).toContain('even where an older Routing line in your instructions says otherwise')
+    expect(text).not.toContain('except work that account\'s owner asks for')
   })
 
   it('says in the built-in section when the Swarm wakes it for them', () => {
