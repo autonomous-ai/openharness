@@ -108,6 +108,15 @@ describe('the built-in PM schedule', () => {
     expect(taught).toContain('Don\'t ask whether to save it')
   })
 
+  // River, 11-05, from a case on lamp: a PM asked directly to write code wrote it, and followed the repository's agent files over
+  // the project's instructions.
+  it('tells the coordinator it never writes code itself, and that the project\'s instructions outrank the repository\'s agent files', () => {
+    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
+    expect(text).toContain('You never write code yourself, even when a person asks you directly: open a task and give it to an Engineer.')
+    expect(text).toContain('The project\'s instructions outrank the repository\'s own agent files (CLAUDE.md, AGENTS.md)')
+    expect(text).toContain('follow the instructions and say so')
+  })
+
   it('keeps the instructions short, and counts what a person had to repeat in the nightly reflection', () => {
     expect(PM_SCHEDULE_TEXT).toContain('past 150 lines')
     expect(PM_SCHEDULE_TEXT).toContain('is a repeat')
