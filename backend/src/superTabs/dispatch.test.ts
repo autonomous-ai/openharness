@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type Conversation, type MessageDraft } from './model.js'
-import { capacityLine, derivedLanes, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, laneOf, nudgeLine, pinBuilder, pullRequestPin, returnReason } from './dispatch.js'
+import { capacityLine, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, laneOf, nudgeLine, pinBuilder, pullRequestPin, returnReason } from './dispatch.js'
 import type { PullRequestWatch } from './pullRequestEvents.js'
 import { sweepLiveness } from './liveness.js'
+import { groupView } from './read/views.js'
 
 const NOW = Date.parse('2026-11-05T15:00:00Z')
 
@@ -185,6 +186,35 @@ describe('what a free crew member gets', () => {
     expect(s.picks()).toEqual([['Ash', 'Board', 'lane'], ['Birch', 'Store', 'lane']])
   })
 
+  it('ignores a pin to the member that lost the task for no progress: another member takes it', () => {
+    const s = crew(['Ash', 'Birch'], { Ash: 'backend', Birch: 'backend' })
+    holding(s, s.ids.Ash!, s.tasks.api)
+    const assignment = s.group(s.tasks.api).assignment!
+    assignment.status = 'lost'
+    assignment.lost = { reason: returnReason('backend'), at: NOW }
+    s.group(s.tasks.api).lostAttempt = { id: assignment.id, agentId: s.ids.Ash!, machineId: 'host', engine: 'claude' }
+    // Red CI arrives before the next pass and pins it to Ash, its builder.
+    s.group(s.tasks.api).pin = { agentId: s.ids.Ash!, why: 'ci', at: NOW }
+    expect(s.picks()).toEqual([['Ash', 'Store', 'lane'], ['Birch', 'Api', 'lane']])
+  })
+
+  it('leaves out a member its machine or engine cannot serve now: a usage limit, a model failing, offline, its session stopped', () => {
+    const s = crew(['Ash', 'Birch', 'Cedar', 'Dune', 'Elm'], { Ash: 'backend', Birch: 'backend', Cedar: 'backend', Dune: 'backend', Elm: 'backend' })
+    const agent = (name: string) => s.state.agents.find(a => a.id === s.ids[name])!
+    const report = (receivedAt: number, stopped: string[] = []) => [{ machineId: 'host', name: 'Mac', observation: { receivedAt,
+      runningHarnessIds: s.state.agents.map(a => a.harnessId).filter(h => !stopped.includes(h)), stoppedHarnessIds: stopped } }] as never
+    s.state.machines = report(NOW, ['Dune', 'Elm'])
+    Object.assign(agent('Ash'), { alerting: ['limit'], limitedUntil: new Date(NOW + 3_600_000).toISOString() })
+    Object.assign(agent('Birch'), { alerting: ['model'] })
+    // Dune's session stopped: it is out. Elm's stopped too, but it is asleep on purpose: assigning it wakes it.
+    Object.assign(agent('Elm'), { asleep: { since: NOW - 60_000 } })
+    expect(freeCrew(s.state, 'lead', DISPATCH_RULES, NOW).map(a => a.name)).toEqual(['Cedar', 'Elm'])
+    // A limit that has reset counts no more.
+    expect(freeCrew(s.state, 'lead', DISPATCH_RULES, NOW + 2 * 3_600_000).map(a => a.name)).toEqual([])
+    s.state.machines = report(NOW + 2 * 3_600_000)
+    expect(freeCrew(s.state, 'lead', DISPATCH_RULES, NOW + 2 * 3_600_000).map(a => a.name)).toEqual(['Ash', 'Cedar', 'Dune', 'Elm'])
+  })
+
   it('hands out nothing while the Swarm is paused', () => {
     const s = crew(['Ash'], { Ash: 'backend' })
     s.state.paused = true
@@ -276,14 +306,17 @@ describe('the capacity line per lane', () => {
     expect(capacityLine({ ...desktop, oldestAt: null }, NOW)).toBe('Desktop: 2 waiting, 1 busy')
   })
 
-  it('is read for each project with a crew that the reader reads, and for no other', () => {
+  it('reaches readers on each task, as its hand-out lane, so a change read that sends only changed tasks keeps every lane whole', () => {
     const s = crewSwarm(['Ash'])
-    s.task('Server', ['backend/src/x.ts'])
-    expect(derivedLanes(s.state, s.state)).toBeUndefined()
-    s.state.agents.find(a => a.id === s.ids.Ash)!.crew = { role: 'Engineer', at: 1000, by: 'owner' }
-    expect(derivedLanes(s.state, s.state)).toEqual({ lead: laneCapacity(s.state, 'lead', DISPATCH_RULES) })
-    // A reader who reads no project reads no lanes.
-    expect(derivedLanes(s.state, { ...s.state, projects: [] })).toBeUndefined()
+    const server = s.task('Server', ['backend/src/x.ts']), elsewhere = s.task('Elsewhere', ['firmware/main.c'])
+    expect(groupView(s.group(server), new Set())).toMatchObject({ handOutLane: 'backend' })
+    s.run({ type: 'work.lane', conversationId: server, lane: 'docs' })
+    expect(groupView(s.group(server), new Set())).toMatchObject({ handOutLane: 'docs' })
+    expect(groupView(s.group(elsewhere), new Set())).toMatchObject({ handOutLane: null })
+    // A chat or a step has none.
+    expect(groupView(s.group('lead'), new Set())).not.toHaveProperty('handOutLane')
+    const step = s.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: server, step: 'Review', checks: [] }).result.conversationId as string
+    expect(groupView(s.group(step), new Set())).not.toHaveProperty('handOutLane')
   })
 })
 

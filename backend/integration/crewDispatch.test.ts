@@ -133,21 +133,30 @@ describe('the crew dispatch pass', () => {
       task: { goal: 'Api.', changes: 'The change.', constraints: 'None.', owns: ['backend/src/a.ts'] } })).result.conversationId)
     await vi.waitFor(async () => expect((await readGroup(s.tab, id)).assignment?.agentId).toBe(s.crew.Ash), { timeout: 5_000, interval: 200 })
 
-    // A progress note frees nobody: no pass. Handing over for review does start one.
-    const pass = vi.spyOn(s.store, 'dispatchCrew')
+    // A progress note frees nobody: no pass is scheduled by it. Handing over for review schedules one.
+    await vi.waitFor(() => expect(s.store.dispatchScheduled(s.tab)).toBe(false), { timeout: 5_000, interval: 100 })
     const assignmentId = (await readGroup(s.tab, id)).assignment!.id
     await s.execute({ type: 'work.status', conversationId: id, assignmentId, status: 'working', result: 'Halfway.' }, s.crew.Ash)
-    await new Promise(resolve => setTimeout(resolve, 1_500))
-    expect(pass).not.toHaveBeenCalled()
+    expect(s.store.dispatchScheduled(s.tab)).toBe(false)
     await s.execute({ type: 'work.status', conversationId: id, assignmentId, status: 'review', result: 'Ready at abc1234.' }, s.crew.Ash)
-    await vi.waitFor(() => expect(pass).toHaveBeenCalled(), { timeout: 5_000, interval: 200 })
+    expect(s.store.dispatchScheduled(s.tab)).toBe(true)
 
+    // In a Swarm without a crew, no write schedules one.
     const plain = await swarm({}, {}, true)
-    const plainPass = vi.spyOn(plain.store, 'dispatchCrew')
     await plain.execute({ type: 'conversation.create', title: 'Api', checks: [],
       task: { goal: 'Api.', changes: 'The change.', constraints: 'None.', owns: ['backend/src/a.ts'] } })
-    await new Promise(resolve => setTimeout(resolve, 1_500))
-    expect(plainPass).not.toHaveBeenCalled()
+    expect(plain.store.dispatchScheduled(plain.tab)).toBe(false)
+  })
+
+  it('does not assign a member taken out of the crew while the pass read GitHub', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    const store = s.store as unknown as { pushOriginFor: (...args: unknown[]) => Promise<unknown> }
+    vi.spyOn(store, 'pushOriginFor').mockImplementationOnce(async () => {
+      await editAgent(s.tab, s.crew.Ash!, agent => { const { crew: _crew, ...rest } = agent; return rest as Agent })
+      return undefined
+    })
+    await s.store.dispatchCrew(s.tab)
+    expect(await s.holders()).toEqual({ Api: null })
   })
 
   it('assigns nothing as a PM whose grant no longer holds, and does not try those picks again', async () => {
