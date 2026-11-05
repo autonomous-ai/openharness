@@ -89,6 +89,12 @@ describe('the built-in template', () => {
     expect(role('Engineer', 'Reviewer')).toContain(line)
     expect(role('Reviewer', 'Tester')).toContain(line)
   })
+  // Ken, 11-05: lamp-gtm's PM held dee's own build on dee's account behind this line and asked dee three options.
+  it('runs work the PM\'s account owner asks for on that account at once, past the PM\'s weekly line', () => {
+    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\s+/g, ' ')
+    expect(routing).toContain('At or below that line it takes no new work and idle agents there are not reused, except work the account\'s owner asks for, which runs on it at once.')
+  })
+
   it('describes the spec\'s roles, workflow and routing in one short document', () => {
     for (const heading of ['## Roles', '## Workflow', '## Routing', '### PM', '### Engineer', '### Reviewer', '### Tester']) {
       expect(INSTRUCTIONS_TEMPLATE).toContain(heading)

@@ -226,6 +226,17 @@ describe('the built-in wake\'s jobs for what people teach the coordinator', () =
     expect(wake(state, T + 2 * SCHEDULE_SLOT_MS)).toBeNull()
   })
 
+  // Ken, 11-05: lamp-gtm's PM saved dee's "start what dee asks at once, on the PM's account if needed" (revision 14) beside
+  // the older routing line that keeps the PM's own account for the PM, left both, and then asked dee three options.
+  it('tells the coordinator to fix a contradicted line in the same save, and to settle a conflict without asking', () => {
+    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
+    expect(text).toContain('fix every line it contradicts in that same save')
+    expect(text).toContain('so the instructions never say two things')
+    expect(text).toContain('When two rules still disagree, don\'t ask')
+    expect(text).toContain('the rule written for this case beats the general one, the newer beats the older')
+    expect(text).toContain('an account owner\'s rule beats a default about their account')
+  })
+
   it('says in the built-in section when the Swarm wakes it for them', () => {
     expect(PM_SCHEDULE_TEXT).toContain('when a person wrote to you since the last wake')
     expect(PM_SCHEDULE_TEXT).toContain('Once a day, when the instructions changed')
