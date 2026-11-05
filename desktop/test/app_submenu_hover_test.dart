@@ -118,6 +118,13 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
 
     expect(submenuOpen(tester), isTrue);
+
+    // The grace ended with the pointer in the submenu; a sibling row still
+    // closes it afterwards.
+    await mouse.moveTo(tester.getCenter(find.text('Sharing')));
+    await tester.pumpAndSettle();
+    expect(submenuOpen(tester), isFalse);
+    expect(rowHighlighted(tester), isFalse);
   });
 
   testWidgets('coming back to the row after leaving it keeps it open', (
@@ -134,5 +141,11 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
 
     expect(submenuOpen(tester), isTrue);
+
+    // Back on the row, the grace is over: the next sibling closes it again.
+    await mouse.moveTo(tester.getCenter(find.text('Sharing')));
+    await tester.pumpAndSettle();
+    expect(submenuOpen(tester), isFalse);
+    expect(rowHighlighted(tester), isFalse);
   });
 }
