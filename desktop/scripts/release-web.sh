@@ -114,7 +114,7 @@ else
   TAG_EXISTS=0
   # A new tag is a release, so the window applies (RELEASE_WINDOW, scripts/release-window.py). Resuming an existing
   # tag publishes nothing new and is not refused. A P0 passes --urgent "<reason>"; the reason goes on the tag.
-  source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)/release-window.sh"
+  source "$ROOT/scripts/release-window.sh"
   release_window_guard web
   [ -z "$(git status --porcelain)" ] || { git status --short >&2; die "working tree is dirty — the tag must capture the tested source exactly"; }
   SHA="$(git rev-parse HEAD)"

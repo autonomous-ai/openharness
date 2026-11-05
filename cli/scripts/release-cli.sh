@@ -70,7 +70,7 @@ done
 
 # --- the release window: refused with RELEASE_WINDOW outside 09:00-18:00 Asia/Ho_Chi_Minh, naming the next allowed
 # time (scripts/release-window.py). A P0 passes --urgent "<reason>"; the reason goes on the tag.
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)/release-window.sh"
+source "$ROOT/scripts/release-window.sh"
 release_window_guard cli
 
 # Same rule as next_adapter_version() in cli/scripts/upload-cli.sh:28-42, which is where this

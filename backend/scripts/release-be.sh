@@ -62,7 +62,7 @@ fi
 git fetch --tags --quiet origin
 
 # --- the release window and pace: refused here, before anything is tagged (fresh tags are fetched above).
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)/release-window.sh"
+source "$REPO_ROOT/../scripts/release-window.sh"
 release_window_guard backend
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"

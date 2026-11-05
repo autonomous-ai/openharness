@@ -86,7 +86,7 @@ fi
 # --- the release window: refused with RELEASE_WINDOW outside 09:00-18:00 Asia/Ho_Chi_Minh, naming the next allowed
 # time (scripts/release-window.py). A P0 passes --urgent "<reason>"; the reason goes on the tag.
 # A --prepare candidate publishes nothing, so it is not a release and runs at any hour.
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)/release-window.sh"
+source "$ROOT/../scripts/release-window.sh"
 [ "$PREPARE" -eq 1 ] || release_window_guard desktop
 
 # Same rules as next_desktop_version()/bump_minor_version() in scripts/upload-desktop.sh:55-86, which

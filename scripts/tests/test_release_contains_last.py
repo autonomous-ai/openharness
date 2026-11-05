@@ -42,6 +42,10 @@ class ReleaseContainsLastTests(unittest.TestCase):
             target = self.repo / script
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / script, target)
+        (self.repo / 'scripts').mkdir()
+        # These tests are about other refusals, so the release window must not depend on the clock they run at.
+        shutil.copyfile(ROOT / 'scripts/release-window.sh', self.repo / 'scripts/release-window.sh')
+        (self.repo / 'scripts/release-window.py').write_text('import sys\nsys.exit(0)\n')
         self.git('add', '.')
         self.git('commit', '-qm', 'older')
         self.older = self.git('rev-parse', 'HEAD')
