@@ -38,7 +38,7 @@ import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
-import { accountOf, wordsOf, buddyPerson, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type SwarmProject } from './projects.js'
+import { accountOf, wordsOf, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
@@ -2598,11 +2598,10 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
       const actor = await this.actor(tx, user, state, asAgentId)
-      const project = readProject(state, actor, projectId)
-      // A Buddy reads as its person at the membership they added it in, as its other reads do: one whose person lost a private
-      // project reads nothing of it (review of phase 2).
+      // A Buddy reads as its person at the membership they added it in: every project they read, a Buddy of one project's too
+      // (task #3024), and nothing of one they lost (review of phase 2).
       const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
-      if (buddy && !buddyPerson(state, buddy, project)) fail('NOT_FOUND', 'This project is unavailable.', 404)
+      const project = buddy ? buddyInstructionsProject(state, actor, buddy, projectId) : readProject(state, actor, projectId)
       const revision = project.instructionsRevision ?? 0
       const stored = revision ? await tx.superTabInstructions.findUnique({ where: { id: instructionsId(tabId, projectId) } }) : null
       // Written in the same transaction as the revision, so a gap is a fault: said, never filled with another text.
