@@ -2385,8 +2385,7 @@ describe('the route answer an agent reads (task #3294)', () => {
     const answer = await routeTask(input, twin, where as never, fleetOpener(), () => 'op', undefined, [fit])
     const machines = Object.keys(routeAnswer(answer).candidates as Record<string, string[]>)
     expect(machines.filter(m => m.startsWith(names[0]!))).toEqual(expect.arrayContaining([
-      expect.stringMatching(new RegExp(`^Ken's MacBook Pro \\[${machineIds[0]}\\] · machineId ${machineIds[0]}`)),
-      expect.stringMatching(new RegExp(`^Ken's MacBook Pro \\[${machineIds[1]}\\] · machineId ${machineIds[1]}`))]))
+      `Ken's MacBook Pro · machineId ${machineIds[0]} · 2 agents`, `Ken's MacBook Pro · machineId ${machineIds[1]} · 2 agents`]))
   })
   it('finds the Routing section up to the next heading of its level or higher, its own subsections kept', () => {
     expect(routingSection('# P\n\n## Roles\nr\n\n## Routing\n\n### Models\nm\n\n## Rules\nx')).toBe('## Routing\n\n### Models\nm')

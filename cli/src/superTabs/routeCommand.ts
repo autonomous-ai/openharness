@@ -537,11 +537,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     engine: s.engine, model: s.model, effort: s.effort, title: s.title, ...(s.gridModel ? { gridModel: s.gridModel, gridName: s.gridName } : {}),
     ...(s.unrated ? { unrated: true } : {}), quota: quotaBrief(s, now), ...(s.kind === 'new' ? { cwd: cwdOn(s.machineId) } : {}),
     ...(s.kind === 'new' && s.load?.room ? { machine: machineBrief(s.load.room) } : {}), ...(s.notes.length ? { notes: s.notes } : {}),
-    machineName: machineOf(s), ...(agentsOn.has(s.machineId) ? { agents: agentsOn.get(s.machineId) } : {}), line: lineOf(s) })
-  // Two machines of one name are told apart by id in the lines and the machines map.
-  const ids = new Map<string, Set<string>>()
-  for (const s of offered) ids.set(s.machineName, (ids.get(s.machineName) ?? new Set()).add(s.machineId))
-  const machineOf = (s: Shown) => ids.get(s.machineName)!.size > 1 ? `${s.machineName} [${s.machineId}]` : s.machineName
+    machineName: s.machineName, ...(agentsOn.has(s.machineId) ? { agents: agentsOn.get(s.machineId) } : {}), line: lineOf(s) })
   // The agents on each machine, as any of its rows read them: a member's row may carry no reading of its machine.
   const agentsOn = new Map(offered.filter(s => typeof s.load?.agents === 'number').map(s => [s.machineId, s.load!.agents!]))
   // A candidate in one line for the agent choosing (task #3294), under its machine, which says its id, agents, folder and room
@@ -571,7 +567,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
  *  with a decision that has no pick, and the start or assignment records the candidate it matches. */
 function nextOf(rows: Shown[], conversationId: string, routeDecisionId: string | undefined, instructions: boolean, needs: Assessment['needs']): string {
   // Said once and short (task #3294): it rode on every route, 467 a day in one PM's context.
-  const choose = 'Choose one by the project\'s Routing instructions (Order and quota).'
+  const choose = 'Not ranked: listed by machine name. Choose one by the project\'s Routing instructions (Order and quota), and give the rule that chose it as overrideReason.'
   const decided = routeDecisionId ? { routeDecisionId, overrideReason: 'RULE' } : {}
   const assign = `Assign a member: command OPERATION_ID ${JSON.stringify({ type: 'work.assign', conversationId, agentId: 'AGENT', ...decided })}`
   // No fixed role name: NAME and ROLE are the agent's to fill from the project's instructions. A backend without instructions
@@ -851,8 +847,9 @@ export function routingSection(text: string): string | null {
  *  already read it, [instructionsRead]), each candidate in one line, each machine's id, start folder and room once, and one
  *  line per machine left out. The decision recorded for Details is the whole one ([routeTask]). */
 export function routeAnswer(answer: Json, options: { fullInstructions?: boolean; instructionsRead?: number } = {}): Json {
-  const { instructions, candidates, leftOut: out, excluded, warnings, p, ...rest } = answer
-  const printed: Json = { ...rest, ...(p === null || p === undefined ? {} : { p }) }
+  const { instructions, candidates, leftOut: out, excluded, warnings, p, why, ...rest } = answer
+  // An unranked route's why is its next's first sentence; the record keeps it whole.
+  const printed: Json = { ...rest, ...(p === null || p === undefined ? {} : { p }), ...(why === undefined || answer.via === 'instructions' ? {} : { why }) }
   const written = instructions && typeof instructions === 'object' ? object(instructions) : null
   if (written) {
     const notes = Array.isArray(written.notes) ? written.notes.map(n => String(object(n).text ?? n)) : []
@@ -873,9 +870,10 @@ export function routeAnswer(answer: Json, options: { fullInstructions?: boolean;
     const cwd = [...folders].sort((x, y) => y[1] - x[1])[0]?.[0]
     if (cwd) printed.cwd = cwd
     const machines = new Map<string, { machine: string; candidates: string[] }>()
+    // By id: two machines of one name are told apart by the machineId their lines say.
     for (const row of rows) {
-      const name = String(row.machineName ?? row.machineId)
-      const at = machines.get(name) ?? machines.set(name, { machine: '', candidates: [] }).get(name)!
+      const id = String(row.machineId), name = String(row.machineName ?? row.machineId)
+      const at = machines.get(id) ?? machines.set(id, { machine: '', candidates: [] }).get(id)!
       if (!at.machine || row.kind === 'new' && row.cwd !== cwd && !at.machine.includes(' · cwd ')) {
         at.machine = [name, `machineId ${row.machineId}`, ...(typeof row.agents === 'number' ? [`${row.agents} agents`] : []),
           ...(row.kind === 'new' && row.cwd && row.cwd !== cwd ? [`cwd ${row.cwd}`] : [])].join(' · ')
