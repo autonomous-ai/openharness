@@ -5159,6 +5159,7 @@ class AppNotifier extends ChangeNotifier {
     activeSwarm.arrangedKey = null;
     notifyListeners();
     _persistLayout();
+    _personArranged(activeSwarm);
   }
 
   int _paneResizeRequest = 0;
@@ -5226,15 +5227,35 @@ class AppNotifier extends ChangeNotifier {
       return false;
     }
     if (identical(activeSwarm.paneSizes[layoutKey], arrangement)) {
-      if (persist) _persistLayout();
+      if (persist) {
+        _persistLayout();
+        _personArranged(activeSwarm);
+      }
       return true;
     }
     activeSwarm.savePaneSizes(layoutKey, arrangement);
     activeSwarm.arranged = arrangement;
     _paneLayoutRequest++;
     notifyListeners();
-    if (persist) _persistLayout();
+    if (persist) {
+      _persistLayout();
+      _personArranged(activeSwarm);
+    }
     return true;
+  }
+
+  final _arrangedListeners = <void Function(Swarm)>[];
+
+  /// [listener] hears each time the person arranged a tab's panes: a
+  /// finished divider drag or a preset chosen (a Personal project keeps its
+  /// own sizes, task #3099).
+  void addArrangedListener(void Function(Swarm) listener) =>
+      _arrangedListeners.add(listener);
+
+  void _personArranged(Swarm swarm) {
+    for (final listener in _arrangedListeners.toList()) {
+      listener(swarm);
+    }
   }
 
   void resetPaneSizes() {
@@ -20049,6 +20070,41 @@ class AppNotifier extends ChangeNotifier {
     tab.arranged = arranged ? source.arranged : null;
     tab.arrangedKey = arranged ? source.arrangedKey : null;
     tab.gridColumns = source.gridColumns;
+    _persistLayout();
+    notifyListeners();
+  }
+
+  /// A saved arrangement for Swarm tab [swarmId]'s [count] panes (a Personal
+  /// project's own, kept on this computer): what [copySuperTabLayout] takes
+  /// from a tab, from a record instead.
+  void applySuperTabLayout(
+    String swarmId, {
+    required int count,
+    PanePreset? preset,
+    Map<String, PaneArrangement> sizes = const {},
+    String? arrangedKey,
+    int? gridColumns,
+  }) {
+    final tab = swarms
+        .where((s) => s.id == swarmId && s.isSuperTab)
+        .firstOrNull;
+    if (tab == null || _disposed || tab.panes.length != count) return;
+    final prefix = '$count:';
+    tab.presets.remove(count);
+    if (preset != null && preset.supportsCount(count)) {
+      tab.presets[count] = preset;
+    }
+    tab.paneSizes.removeWhere((key, _) => key.startsWith(prefix));
+    for (final MapEntry(:key, :value) in sizes.entries) {
+      if (key.startsWith(prefix) && value.tiles.length == count) {
+        tab.paneSizes[key] = value;
+      }
+    }
+    final arranged = arrangedKey == null ? null : tab.paneSizes[arrangedKey];
+    tab.arranged = arranged;
+    tab.arrangedKey = arranged == null ? null : arrangedKey;
+    tab.gridColumns = gridColumns;
+    _paneLayoutRequest++;
     _persistLayout();
     notifyListeners();
   }

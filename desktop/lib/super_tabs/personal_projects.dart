@@ -7,7 +7,9 @@ import 'package:flutter/foundation.dart';
 
 import '../logging/app_log.dart';
 import '../state/app_state.dart';
+import '../state/pane_arrangement.dart';
 import '../state/pane_layout_store.dart';
+import '../state/pane_preset.dart';
 import '../state/swarm.dart';
 import '../state/terminal_pane.dart';
 import 'controller.dart';
@@ -222,7 +224,9 @@ List<PersonalPane> personalPanes(AppNotifier app) {
 /// made once, remembered on this computer, and found again by the same
 /// request on another.
 class PersonalProjects extends ChangeNotifier {
-  PersonalProjects._(this.app);
+  PersonalProjects._(this.app) {
+    app.addArrangedListener(_arranged);
+  }
   static final _of = Expando<PersonalProjects>();
   static PersonalProjects of(AppNotifier app) =>
       _of[app] ??= PersonalProjects._(app);
@@ -242,6 +246,11 @@ class PersonalProjects extends ChangeNotifier {
 
   /// Repos renamed to their long name, per account and Swarm.
   final _renamed = <String, Map<String, Set<String>>>{};
+
+  /// Each project's own split sizes, per account and Swarm: project id to
+  /// the arrangement the person gave its panes here. Kept on this computer
+  /// only, beside the project map, and never sent (task #3099).
+  final _layouts = <String, Map<String, Map<String, Map<String, dynamic>>>>{};
   final _loads = <String, Future<void>>{};
   final _syncing = <String>{};
   final _again = <String>{};
@@ -330,6 +339,90 @@ class PersonalProjects extends ChangeNotifier {
       if (project == null || number == null) continue;
       app.renameTabAutomatically(tab.id, projectTabName(project.name, number));
     }
+  }
+
+  /// The person arranged [view]'s panes: kept as the project's own when
+  /// Personal shows one of its projects there ([rememberLayout]).
+  void _arranged(Swarm view) {
+    final id = view.superTabId;
+    if (!view.isSuperTab || id == null || PersonalSwarm.of(app).id != id) {
+      return;
+    }
+    final c = app.superTabs.peek(id);
+    if (c == null) return;
+    final chat = c.selectedId;
+    if (!c.groupTerminalsOpen(chat) || c.terminalAgents(chat).isNotEmpty) {
+      return;
+    }
+    rememberLayout(c, chat, view);
+  }
+
+  /// Keeps [view]'s arrangement as project [conversationId]'s own, on this
+  /// computer only (migration plan, Phase 1 item 4): for a project whose
+  /// panes are not exactly one tab's, which lends its sizes ([soleTab]).
+  void rememberLayout(SuperTabController c, String conversationId, Swarm view) {
+    if (!eligible(c) || !c.snapshot!.isProjectLead(conversationId)) return;
+    final project = c.snapshot!.projectFor(conversationId);
+    if (project == null) return;
+    final panes = panesFor(c, conversationId);
+    if (panes.isEmpty ||
+        view.panes.length != panes.length ||
+        soleTab(panes) != null) {
+      return;
+    }
+    final count = panes.length, prefix = '$count:';
+    ((_layouts[c.accountId] ??= {})[c.tabId] ??= {})[project.id] = {
+      'count': count,
+      if (view.presets[count] case final preset?) 'preset': preset.id,
+      'sizes': {
+        for (final MapEntry(:key, :value) in view.paneSizes.entries)
+          if (key.startsWith(prefix)) key: value.toJson(),
+      },
+      if (view.arrangedKey case final key? when key.startsWith(prefix))
+        'arrangedKey': key,
+      if (view.gridColumns case final columns?) 'gridColumns': columns,
+    };
+    // What this computer kept is read first, so the save keeps it.
+    final account = c.accountId;
+    unawaited(_load(account).then((_) => _save(account)));
+  }
+
+  /// Gives [view] project [conversationId]'s own arrangement, when the person
+  /// made one here for this many panes; false otherwise (the view keeps its
+  /// default).
+  bool applyLayout(SuperTabController c, String conversationId, Swarm view) {
+    if (!eligible(c)) return false;
+    final project = c.snapshot!.projectFor(conversationId);
+    if (project == null) return false;
+    final saved = _layouts[c.accountId]?[c.tabId]?[project.id];
+    final count = view.panes.length;
+    if (saved == null || saved['count'] != count) return false;
+    final sizes = <String, PaneArrangement>{};
+    if (saved['sizes'] case final Map raw) {
+      for (final MapEntry(:key, :value) in raw.entries) {
+        final arrangement = PaneArrangement.fromJson(value);
+        if (key is String && arrangement != null) sizes[key] = arrangement;
+      }
+    }
+    app.applySuperTabLayout(
+      view.id,
+      count: count,
+      preset: PanePreset.byId(saved['preset'] as String?),
+      sizes: sizes,
+      arrangedKey: saved['arrangedKey'] as String?,
+      gridColumns: saved['gridColumns'] as int?,
+    );
+    return true;
+  }
+
+  /// A project gone from Personal takes its saved layout with it.
+  void _dropGoneLayouts(SuperTabController c) {
+    final saved = _layouts[c.accountId]?[c.tabId];
+    if (saved == null || saved.isEmpty) return;
+    final ids = {for (final p in c.snapshot!.projects) p.id};
+    final before = saved.length;
+    saved.removeWhere((id, _) => !ids.contains(id));
+    if (saved.length != before) unawaited(_save(c.accountId));
   }
 
   /// A desk tab holds 9 harnesses (backend `DESK_MAX_PANES`); it drops a 10th
@@ -424,7 +517,9 @@ class PersonalProjects extends ChangeNotifier {
 
   /// Personal lost: what this computer kept of its projects goes.
   void _forget(String account, String swarm) {
-    final had = _known[account]?.remove(swarm) != null;
+    final had =
+        (_known[account]?.remove(swarm) != null) |
+        (_layouts[account]?.remove(swarm) != null);
     _renamed[account]?.remove(swarm);
     // Called while a view builds: saved after, and no one is told now.
     if (had) unawaited(_save(account));
@@ -453,6 +548,15 @@ class PersonalProjects extends ChangeNotifier {
             renamed.whereType<String>(),
           );
         }
+        final layouts = entry['layouts'];
+        if (layouts is Map) {
+          final kept = (_layouts[account] ??= {})[swarm] ??= {};
+          for (final MapEntry(:key, :value) in layouts.entries) {
+            if (key is String && value is Map) {
+              kept.putIfAbsent(key, () => Map<String, dynamic>.from(value));
+            }
+          }
+        }
       }
     } catch (_) {
       // Nothing kept: each project is asked for again, and the server answers
@@ -462,11 +566,14 @@ class PersonalProjects extends ChangeNotifier {
 
   Future<void> _save(String account) async {
     final known = _known[account] ?? const {};
+    final layouts = _layouts[account] ?? const {};
     final value = jsonEncode({
-      for (final MapEntry(key: swarm, value: projects) in known.entries)
+      for (final swarm in {...known.keys, ...layouts.keys})
         swarm: {
-          'projects': projects,
+          'projects': known[swarm] ?? const <String, String?>{},
           'renamed': [...?_renamed[account]?[swarm]],
+          if (layouts[swarm] case final saved? when saved.isNotEmpty)
+            'layouts': saved,
         },
     });
     try {
@@ -494,6 +601,7 @@ class PersonalProjects extends ChangeNotifier {
     }
     try {
       await _load(account);
+      if (eligible(c)) _dropGoneLayouts(c);
       do {
         _again.remove(scope);
         if (!eligible(c)) return;
