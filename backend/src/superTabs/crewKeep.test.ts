@@ -98,3 +98,23 @@ describe('crewKeep: folders', () => {
     expect(kinds(f.state)).toEqual([{ kind: 'dropFolder', agentId: f.ada.id, why: 'low-disk' }])
   })
 })
+
+describe('crewKeep: Team-written work stays in Team accounts (security review of #3229)', () => {
+  it('a Team-account member moves only to a Team-account machine, and is stuck with none', () => {
+    const team = (pool: ReturnType<typeof machine>) => ({ ...pool, hostMachineId: `${pool.machineId}-mac` }) as typeof pool
+    const onlyMain = fixture([team(machine('mac', { signedIn: false })), machine('mini')])
+    expect(kinds(onlyMain.state)).toEqual([{ kind: 'stuck', agentId: onlyMain.ada.id, reason: 'signed-out' }])
+    const withTeam = fixture([team(machine('mac', { signedIn: false })), machine('mini', { resetIn: 86_400_000 }), team(machine('studio'))])
+    expect(kinds(withTeam.state)).toEqual([{ kind: 'move', agentId: withTeam.ada.id, toMachineId: 'studio', reason: 'signed-out' }])
+  })
+  it('a main-account member in a Team-written conversation moves only to a Team-account machine', () => {
+    const f = fixture([machine('mac', { signedIn: false }), machine('mini')])
+    f.state.conversations.find(c => c.id === 'lead')!.teamWritten = true
+    // The project's chat is its coordinator's; a task the member works in is what counts.
+    f.state = applyCommand(f.state, person, { type: 'conversation.create', title: 'Team task', brief: 'b', checks: [] } as never, { now: NOW - 7_200_000, operationId: 'tw' }).state
+    const task = f.state.conversations.find(c => c.title === 'Team task')!
+    task.agentIds.push(f.ada.id)
+    task.teamWritten = true
+    expect(kinds(f.state)).toEqual([{ kind: 'stuck', agentId: f.ada.id, reason: 'signed-out' }])
+  })
+})

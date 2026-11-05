@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { CrewFolders } from './crewFolders.js'
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -5909,6 +5910,16 @@ describe('a crew member at rest', () => {
     awake.live(true)
     await awake.poll()
     expect(awake.closeMember).not.toHaveBeenCalled()
+  })
+  it('after a host restart, an awake member whose folder was dropped gets it back before it reopens (security review of #3229)', async () => {
+    const t = lifeFixture([crewRow()])
+    mkdirSync(join(t.core.dataDir, 'super-tabs'), { recursive: true })
+    writeFileSync(join(t.core.dataDir, 'super-tabs', 'crew-folders-machine-1.json'),
+      JSON.stringify({ version: 1, folders: [{ tabId: 'tab', harnessId: 'harness', path: '/nowhere/ada', source: '/nowhere/clone' }] }))
+    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockResolvedValue('restored')
+    await t.poll()
+    expect(restore).toHaveBeenCalledWith('tab', 'harness')
+    restore.mockRestore()
   })
   it('a member woken and put to sleep again is closed again', async () => {
     const rows = [crewRow({ asleep: { since: 1 } })]
