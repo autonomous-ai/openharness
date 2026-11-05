@@ -22,9 +22,10 @@ Swarm redesign, 11-05). Strengthens "Tell the PM what you want, and your crew sh
 3. `releaseWatch.ts` (worker, every 5 minutes): for each Swarm with recent work, each project with a ledger to settle and a
    GitHub repository the app reads: resolve new pending entries (the merged pull request's merge commit; the task's own
    pull request's files → components), read each component's newest successful tag-push run of its release workflow (the
-   verified release: tag + its artifacts built and checked by that workflow) and check that its tag sits on main. Main is
-   linear (squash merges only) and the merge train records the original pull request with its merge time, so a release
-   carries every merge recorded at or before its tag's commit landed on main. Then `SuperTabStore.settleReleases` writes in one transaction: tasks shipped (`Conversation.released`, a line
+   verified release: tag + its artifacts built and checked by that workflow; the highest version, not the newest run) and
+   check that its tag sits on main. Each pending task's merge commit on main is found once (its pull request's own merge
+   commit, or the batch commit that closed the original), and a release carries a task when GitHub says the tag contains
+   that commit: ancestry, never the recorded merge time, which comes after the merge (review of #3228). Then `SuperTabStore.settleReleases` writes in one transaction: tasks shipped (`Conversation.released`, a line
    in the release step), and a new release step for each due component, the Integrator named in it.
 
 **Tech Stack:** TypeScript, vitest, Prisma on MongoDB (no schema change), the Harness GitHub App (read-only token:
@@ -69,7 +70,7 @@ through the day"); sibling #3393 (`policy.ts` `ProjectRules.releaseWindow/releas
 
 - The window, pause and pace edges (08:59/09:00/09:59/10:00/17:59/18:00 VN, 119/120 minutes).
 - That only a successful tag-push run of the component's own release workflow counts as verified, only for a tag on main,
-  and only for merges recorded at or before its tag's commit.
+  and only for merges whose commit on main its tag contains.
 - A task touching two components ships only when both are released; docs-only work ships at its merge.
 
 ## Task 1: release rules and decisions (pure)

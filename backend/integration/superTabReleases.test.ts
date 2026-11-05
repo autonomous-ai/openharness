@@ -10,6 +10,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { Conversation } from '../src/superTabs/model.js'
+import { pendingKey } from '../src/superTabs/releases.js'
 
 // Task #3405: a recorded merge joins its project's release list; the worker's settle marks the tasks a verified release carries
 // released, and opens one release step for the Integrator inside the window, through the store and a fresh replica set.
@@ -68,8 +69,8 @@ describe('releases scheduled by the Swarm', () => {
     expect((await s.ledger())!.pending).toEqual([{ groupId: shipIt, url, mergedAt: T - 30 * MINUTE }])
     // After 18:00: the release shipped it, and no step opens.
     s.clock.set(T + 8 * 60 * MINUTE)
-    const outcome = await s.store.settleReleases(s.tab, 'lead', { components: [{ groupId: shipIt, url, components: ['desktop'] }],
-      releases: { desktop: { tag: 'v1.3.78_desktop', sha: 'd1', at: T - 5 * MINUTE, committedAt: T - 10 * MINUTE } } })
+    const outcome = await s.store.settleReleases(s.tab, 'lead', { resolved: [{ groupId: shipIt, url, components: ['desktop'], sha: 'm41' }],
+      releases: { desktop: { tag: 'v1.3.78_desktop', sha: 'd1', at: T - 5 * MINUTE, carries: [pendingKey({ groupId: shipIt, url })] } } })
     expect(outcome).toMatchObject({ shipped: [shipIt], opened: null })
     expect((await s.group(shipIt)).released).toEqual({ at: T - 5 * MINUTE, tags: ['v1.3.78_desktop'] })
     expect((await s.ledger())!.pending).toEqual([])
@@ -81,7 +82,7 @@ describe('releases scheduled by the Swarm', () => {
     const shipIt = await s.task('Board strip')
     const url = 'https://github.com/example/app/pull/42'
     await s.run({ type: 'conversation.merged', conversationId: shipIt, pullRequestUrl: url, mergedAt: new Date(T - MINUTE).toISOString() }, host, s.lead)
-    const facts = { components: [{ groupId: shipIt, url, components: ['cli' as const] }], releases: {} }
+    const facts = { resolved: [{ groupId: shipIt, url, components: ['cli' as const] }], releases: {} }
     const outcome = (await s.store.settleReleases(s.tab, 'lead', facts))!
     expect(outcome.opened).toEqual(expect.any(String))
     const step = await s.group(outcome.opened!)

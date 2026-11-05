@@ -61,11 +61,23 @@ export const backendPaused = (rules: ReleaseRules, now: number): boolean =>
   !!rules.releasePace.backendPause && within(clock(rules, now), rules.releasePace.backendPause)
 
 /** A task merged and not yet carried by every release it needs. `components` is unknown until the worker read its pull
- *  request's files; `shippedIn` names, per component, the verified release that carries it. */
-export interface PendingRelease { groupId: string; url: string; mergedAt: number; components?: ReleaseComponentId[]; shippedIn?: Partial<Record<ReleaseComponentId, string>> }
-/** A component's newest verified release: its tag, the tag's commit and when that commit landed on main, and when its
- *  release ran (the pace counts from it). */
-export interface VerifiedRelease { tag: string; sha: string; at: number; committedAt: number }
+ *  request's files, and `sha` until it found the merge's commit on main (its own merge commit, or the batch's that closed
+ *  it); `shippedIn` names, per component, the verified release that carries it. */
+export interface PendingRelease { groupId: string; url: string; mergedAt: number; components?: ReleaseComponentId[]; sha?: string
+  shippedIn?: Partial<Record<ReleaseComponentId, string>> }
+/** A component's newest verified release: its tag, the tag's commit, and when its release ran (the pace counts from it). */
+export interface VerifiedRelease { tag: string; sha: string; at: number }
+
+/** One entry's name on the list, by which a release says it carries it. */
+export const pendingKey = (entry: Pick<PendingRelease, 'groupId' | 'url'>): string => `${entry.groupId} ${entry.url}`
+
+/** Release tags by version (`v1.3.100_desktop` after `v1.3.99_desktop`): negative when [a] is older than [b]. */
+export function compareTags(a: string, b: string): number {
+  const version = (tag: string) => (/^v(\d+)\.(\d+)\.(\d+)/.exec(tag) ?? []).slice(1).map(Number)
+  const [x, y] = [version(a), version(b)]
+  for (let i = 0; i < 3; i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) - (y[i] ?? 0)
+  return 0
+}
 /** The release step open for a component, when the Swarm opened it, and when it first saw that step over without a verified
  *  release (done, cancelled or archived: the release may still be running). */
 export interface ReleaseStep { groupId: string; at: number; endedAt?: number }
@@ -92,10 +104,6 @@ export function releaseDue(ledger: ReleaseLedger, component: ReleaseComponentId,
   return !last || now - last.at >= rules.releasePace.backendEveryMinutes * 60_000
 }
 
-/** Whether [release] carries [entry]'s merge. Main is linear (every merge is a squash), so a merge recorded at or before the
- *  moment the tag's commit landed on main is in it; releaseWatch.ts reads only tags on main. */
-export const carries = (release: VerifiedRelease, entry: PendingRelease): boolean => entry.mergedAt <= release.committedAt
-
 /** Whether every release [entry] needs carries it: none for a change that only tests or documents. */
 export const shipped = (entry: PendingRelease): boolean => !!entry.components && entry.components.every(c => !!entry.shippedIn?.[c])
 
@@ -121,10 +129,11 @@ export function integratorOf(state: SuperTabState, projectId: string): Agent | u
 
 /** What the worker read from GitHub for one project's release list (releaseWatch.ts). */
 export interface ReleaseFacts {
-  /** Pending entries' components, from their pull requests' files. */
-  components: Array<{ groupId: string; url: string; components: ReleaseComponentId[] }>
-  /** Each component's newest verified release on main; a component GitHub could not read is absent, and nothing of it changes. */
-  releases: Partial<Record<ReleaseComponentId, VerifiedRelease>>
+  /** What the worker found of pending entries: their components (their pull requests' files), their merge commits on main. */
+  resolved: Array<{ groupId: string; url: string; components?: ReleaseComponentId[]; sha?: string }>
+  /** Each component's newest verified release on main, with the entries whose merge commits GitHub says its tag contains
+   *  (pendingKey). A component GitHub could not read or compare is absent, and nothing of it changes. */
+  releases: Partial<Record<ReleaseComponentId, VerifiedRelease & { carries: string[] }>>
 }
 /** What a settle did: rows to write, the tasks it marked released, the release step it opened, the entries it dropped. */
 export interface SettledReleases { messages: MessageDraft[]; shipped: string[]; opened: string | null; dropped: PendingRelease[] }
@@ -157,21 +166,27 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
   } : null
   const say = (draft: MessageDraft | null) => { if (draft) outcome.messages.push(draft) }
 
-  for (const read of facts.components) {
-    const entry = ledger.pending.find(e => e.groupId === read.groupId && e.url === read.url)
-    if (entry && !entry.components) entry.components = [...read.components]
+  for (const read of facts.resolved) {
+    const entry = ledger.pending.find(e => pendingKey(e) === pendingKey(read))
+    if (!entry) continue
+    if (!entry.components && read.components) entry.components = [...read.components]
+    if (!entry.sha && read.sha) entry.sha = read.sha
   }
   const fresh = ledger.pending.filter(e => e.mergedAt > now - PENDING_MS)
   outcome.dropped = ledger.pending.filter(e => !fresh.includes(e))
   ledger.pending = fresh
 
   for (const component of RELEASE_COMPONENTS) {
-    const release = facts.releases[component.id]
+    const read = facts.releases[component.id]
     const known = ledger.last?.[component.id]
-    if (!release || (known && known.at >= release.at)) continue
-    ;(ledger.last ??= {})[component.id] = release
-    const carried = waitingFor(ledger, component.id).filter(e => carries(release, e))
+    // A re-run of an older tag's workflow is no newer release; the same tag read again only carries merges resolved since.
+    const order = read && known ? compareTags(read.tag, known.tag) : 1
+    if (!read || order < 0) continue
+    const { carries: keys, ...release } = read
+    const carried = waitingFor(ledger, component.id).filter(e => keys.includes(pendingKey(e)))
     for (const entry of carried) (entry.shippedIn ??= {})[component.id] = release.tag
+    if (order === 0) continue
+    ;(ledger.last ??= {})[component.id] = release
     const step = ledger.steps?.[component.id]
     if (step && release.at >= step.at) {
       const tasks = carried.map(e => named(state, e.groupId))
