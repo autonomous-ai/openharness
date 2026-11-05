@@ -116,12 +116,27 @@ class AppSwarmComputers extends ChangeNotifier
           folders: {
             for (final agent in machine.agents)
               if (agent.project case final project?)
-                ?swarmNormalizedRemote(project.remote):
+                ?(swarmNormalizedRemote(project.repository) ??
+                        swarmNormalizedRemote(project.remote)):
                     project.root ?? project.cwd,
           },
-          lastUsed: null,
+          lastUsed: _lastOpened(machine),
         ),
   ];
+
+  /// When the person last opened one of [machine]'s agents, from any app:
+  /// the phone's nearest word for the computer they are at, which Desktop's
+  /// card prefers (task #3042).
+  static DateTime? _lastOpened(MachineState machine) {
+    DateTime? last;
+    for (final agent in machine.agents) {
+      final opened = agent.lastOpenedAt;
+      if (opened != null && (last == null || opened.isAfter(last))) {
+        last = opened;
+      }
+    }
+    return last;
+  }
 
   /// The computers whose engines the card asked for: once each, as a computer
   /// that cannot answer stays unread and would be asked at every draw.
