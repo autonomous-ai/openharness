@@ -2506,6 +2506,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // pane read is.
   const restoreOn = restoreTerminals({
     backendFor: (runtime) => terminals.backendFor(runtime),
+    newPanesOn: (backend) => isDrainBackend(backend) ? createBackend : null,
     listTmuxPanes: () => listTmuxPanes(),
     cwd: homedir(),
     label: (engine) => buildHarnessSessionLabel(engine),
