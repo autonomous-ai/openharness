@@ -178,13 +178,16 @@ export function buildWindowsGuestInstallScript(input: WindowsGuestInstallInput):
     '}',
     // Guests that were here before this setup version: their task still runs the wrapper written for the old host and
     // Node. The task path and its password do not change, and their hosts were stopped above, so the wrapper is rewritten
-    // in place with this version's binary and PATH.
-    "Get-ChildItem -LiteralPath $HOSTS -Directory -Filter 'hg_*' -ErrorAction SilentlyContinue | ForEach-Object {",
-    "  $wrapper = Join-Path $_.FullName 'host.cmd'",
-    '  if (-not (Test-Path -LiteralPath $wrapper)) { return }',
-    "  $tag = 'gu' + $_.Name.Substring(3)",
-    '  $text = "@echo off`r`nset `"HARNESS_PTY_SHARE_SID=$OWNER_SID`"`r`nset `"HARNESS_PTY_INSTANCE_TAG=$tag`"`r`nset `"PATH=$($_.FullName)\\engines;%USERPROFILE%\\.local;$NODEBIN;%PATH%`"`r`n`"$PTYBIN\\harness-pty.exe`" serve --home `"$($_.FullName)`"`r`n"',
-    '  [IO.File]::WriteAllText($wrapper, $text)',
+    // in place with this version's binary and PATH. Only when a host was staged: a build with no pty (a dev bundle) must
+    // never rewrite a working wrapper to name nothing.
+    "if ($PTYBIN -and (Test-Path -LiteralPath (Join-Path $PTYBIN 'harness-pty.exe'))) {",
+    "  Get-ChildItem -LiteralPath $HOSTS -Directory -Filter 'hg_*' -ErrorAction SilentlyContinue | ForEach-Object {",
+    "    $wrapper = Join-Path $_.FullName 'host.cmd'",
+    '    if (-not (Test-Path -LiteralPath $wrapper)) { return }',
+    "    $tag = 'gu' + $_.Name.Substring(3)",
+    '    $text = "@echo off`r`nset `"HARNESS_PTY_SHARE_SID=$OWNER_SID`"`r`nset `"HARNESS_PTY_INSTANCE_TAG=$tag`"`r`nset `"PATH=$($_.FullName)\\engines;%USERPROFILE%\\.local;$NODEBIN;%PATH%`"`r`n`"$PTYBIN\\harness-pty.exe`" serve --home `"$($_.FullName)`"`r`n"',
+    '    [IO.File]::WriteAllText($wrapper, $text)',
+    '  }',
     '}',
     '',
     '# 4. The privacy sentinel: inherited ACL, owned by the owner, checked as a guest on every ensure.',

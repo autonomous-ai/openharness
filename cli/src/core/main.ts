@@ -3024,11 +3024,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const backend = createGuestHostBackend({ user })
       try {
         const prepared = await backend.prepare({ ownedPanes: new Map() })
-        if (prepared.state !== 'ready') return null
+        if (prepared.state !== 'ready') { backend.dispose(); return null }
       } catch (error) {
         // A task that is gone, or a host that cannot start, is no host: the create says "turn sharing on again"
         // rather than throwing out of the request.
         console.warn(`[guest] ${user} host unavailable · ${error instanceof Error ? error.message : String(error)}`)
+        backend.dispose()
         return null
       }
       terminals.addBackend(backend)

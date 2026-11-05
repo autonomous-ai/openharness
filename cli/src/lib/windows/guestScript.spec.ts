@@ -59,6 +59,8 @@ describe('the guest install script', () => {
     expect(script).toContain("$wrapper = Join-Path $_.FullName 'host.cmd'")
     expect(script).toContain("$tag = 'gu' + $_.Name.Substring(3)")
     expect(script).toContain('[IO.File]::WriteAllText($wrapper, $text)')
+    // Only when a host was staged: a build with no pty must never rewrite a working wrapper to name nothing.
+    expect(script).toContain("if ($PTYBIN -and (Test-Path -LiteralPath (Join-Path $PTYBIN 'harness-pty.exe')))")
   })
 
   it('writes the version last, so a tree that failed to stage never reads as ready', () => {

@@ -9,8 +9,9 @@ import type { TerminalBackend } from './terminalBackend.js'
 import { processIdentityOf, sameProcessIdentity, terminalRuntimeLabel } from './terminalRuntime.js'
 import type { TerminalRuntimeRef } from './terminalTypes.js'
 
-/** What the lookups below need of a backend: the pane's own root process. */
-type PaneRootSource = Pick<TerminalBackend, 'rootProcess'>
+/** What the lookups below need of a backend: the pane's own root process, and the table its panes are in when that is
+ *  not the machine's own (a guest's host). */
+type PaneRootSource = Pick<TerminalBackend, 'rootProcess'> & Pick<Partial<TerminalBackend>, 'processTable'>
 
 /**
  * Resolve the stable CLI process below one tmux pane, ahead of short-lived helper descendants — and say
@@ -26,8 +27,8 @@ export async function lookupPaneEngineProcess(
   backend: PaneRootSource,
   runtime: TerminalRuntimeRef,
   engine: AgentEngine,
-  /** The table to read; the machine's own unless a backend holds its own (a guest's host). */
-  readRows: () => Promise<ProcessRow[] | null> = processRows,
+  /** The table to read; the backend's own when it has one (a guest's host), else the machine's. */
+  readRows: () => Promise<ProcessRow[] | null> = backend.processTable?.() ?? processRows,
 ): Promise<PaneProcessLookup> {
   const label = terminalRuntimeLabel(runtime)
   const rootPid = await backend.rootProcess(runtime)
