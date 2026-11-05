@@ -139,6 +139,9 @@ export interface Agent {
   /** Joined on a Harness Team account's machine: kept, so a machine row that went never brings back the rules of an
    *  ordinary machine (projects.ts teamSessionAccess, security re-review of #2089). */
   teamAccount?: true
+  /** A crew member woken by new work (crewTimes.ts startWake): when, and the task that woke it, until a machine reading shows
+   *  its session running again and the wake's timing row is written (task #3462). Set only by the server. */
+  crewWaking?: { at: number; conversationId: string }
 }
 /** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). A project session also
  *  names its project (buddies.ts; Dee, 10-31): it reads that project alone, and is the only Buddy that writes into it. */

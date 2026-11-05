@@ -70,7 +70,12 @@ export interface ScorecardFigures {
   typedIntoPm: number
   ackPosts: number
   agentPosts: number
+  /** The day's crew wakes and moves, from start to running again (crewTimes.ts, task #3462). Absent on days stored before. */
+  crewWake?: CrewTimes
+  crewMove?: CrewTimes
 }
+/** How many of a kind finished in the day, and their median and slowest time in seconds (null with none). */
+export interface CrewTimes { count: number; medianSeconds: number | null; slowestSeconds: number | null }
 
 const MIN = 60_000
 const DAY = 24 * 60 * MIN
