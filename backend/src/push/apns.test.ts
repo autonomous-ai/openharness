@@ -7,7 +7,11 @@ import type { PushDevice } from './devices.js'
 import type { PhoneNotice } from './sender.js'
 
 const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
-const keys = { keyId: 'ABC123DEFG', teamId: 'TEAM123456', privateKey, topic: 'ai.autonomous.harness.ios' }
+const sandboxKey = generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey
+// Apple's keys are per environment: the production key is refused on the sandbox host and the other way round (Ken, 11-05).
+const keys = { teamId: 'TEAM123456', topic: 'ai.autonomous.harness.ios', production: { keyId: 'ABC123DEFG', privateKey },
+  sandbox: { keyId: '5UTFPCN7LP', privateKey: sandboxKey } }
+const productionOnly = { ...keys, sandbox: null }
 const device: PushDevice = { id: 'd1', userId: 'u1', platform: 'ios', token: 'ab'.repeat(32), sandbox: false }
 const notice: PhoneNotice = { personId: 'u1', key: 'reply:tab:row', title: 'Mia replied in a thread', subtitle: 'openharness',
   body: 'Open Harness to read it.', link: 'swarm:tab/conv/message/m/thread/root' }
@@ -64,10 +68,26 @@ describe('APNs sender (task #2905)', () => {
     }
   })
 
-  it('tries a development build\'s token on the sandbox host once, and says so when it is taken there', async () => {
+  it('tries a development build\'s token on the sandbox host once, signed with the sandbox key, and says so when it is taken there', async () => {
     const { asked, transport } = scripted({ status: 400, reason: 'BadDeviceToken' }, { status: 200, reason: null })
     expect(await apnsSender(keys, { transport }).send(device, notice)).toEqual({ outcome: 'sandbox' })
     expect(asked.map(r => r.sandbox)).toEqual([false, true])
+    expect(part(jwtOf(asked[0]!), 0).kid).toBe('ABC123DEFG')
+    expect(part(jwtOf(asked[1]!), 0).kid).toBe('5UTFPCN7LP')
+    const [head, claims, signature] = jwtOf(asked[1]!).split('.')
+    expect(verify('sha256', Buffer.from(`${head}.${claims}`), { key: createPublicKey(sandboxKey), dsaEncoding: 'ieee-p1363' }, Buffer.from(signature!, 'base64url'))).toBe(true)
+  })
+
+  it('without a sandbox key, never sends to the sandbox host: a production BadDeviceToken is skipped, and the token kept', async () => {
+    const { asked, transport } = scripted({ status: 400, reason: 'BadDeviceToken' })
+    expect(await apnsSender(productionOnly, { transport }).send(device, notice)).toEqual({ outcome: 'unconfigured', reason: 'no APNs sandbox key' })
+    expect(asked.map(r => r.sandbox)).toEqual([false])
+  })
+
+  it('without a sandbox key, sends nothing for a token known to be a sandbox one', async () => {
+    const { asked, transport } = scripted()
+    expect(await apnsSender(productionOnly, { transport }).send({ ...device, sandbox: true }, notice)).toEqual({ outcome: 'unconfigured', reason: 'no APNs sandbox key' })
+    expect(asked).toEqual([])
   })
 
   it('calls a token neither host takes gone', async () => {
@@ -75,10 +95,11 @@ describe('APNs sender (task #2905)', () => {
     expect(await apnsSender(keys, { transport }).send(device, notice)).toEqual({ outcome: 'gone', reason: 'BadDeviceToken' })
   })
 
-  it('sends a sandbox token to the sandbox host alone', async () => {
+  it('sends a sandbox token to the sandbox host alone, signed with the sandbox key', async () => {
     const { asked, transport } = scripted({ status: 200, reason: null })
     expect(await apnsSender(keys, { transport }).send({ ...device, sandbox: true }, notice)).toEqual({ outcome: 'sent' })
     expect(asked.map(r => r.sandbox)).toEqual([true])
+    expect(part(jwtOf(asked[0]!), 0)).toEqual({ alg: 'ES256', kid: '5UTFPCN7LP' })
   })
 
   it('fails on Apple\'s error, a broken connection, or no answer in time', async () => {

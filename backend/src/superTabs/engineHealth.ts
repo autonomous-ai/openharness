@@ -12,12 +12,15 @@ export const SUSPEND_AFTER = 2
 export const SUSPENSION_MS = 6 * 3_600_000
 const NAME: Record<string, string> = { claude: 'Claude Code', codex: 'Codex' }
 const named = (engine: string) => NAME[engine] ?? engine
-/** Failures that say nothing of the engine: the machine was removed, the start was dropped, or it lacked memory. Read at
+/** Failures that say nothing of the engine: the machine was removed, the start was dropped, it lacked memory, or it could not clone the project. Read at
  *  call time: machines.ts imports this file, and startFailure.ts reaches machines.ts, so its constants may not exist yet
  *  while this file loads. */
 const notTheEngine = (error: string) => error === MACHINE_REMOVED || error === ABANDONED || error === 'Removed by its owner before it started.'
-  || MEMORY_SHORT.test(error)
+  || MEMORY_SHORT.test(error) || CLONE_FAILED.test(error)
 const MEMORY_SHORT = /^Not enough free memory: /
+/** A first start whose machine could not clone the project (cli superTabs/projectFolder.ts): the network or GitHub, not the engine.
+ *  Six starts on four machines failed this way on 2026-11-05, and each pair suspended an engine there for hours. */
+const CLONE_FAILED = /could not (?:clone|access) the (?:project )?repository/i
 
 function pool(state: SuperTabState, machineId: string) { return state.machines?.find(m => m.machineId === machineId) }
 /** Only a routed worker's start: a Product Manager's start has its own retries (leadStart.ts), and a Buddy is its owner's own. */
