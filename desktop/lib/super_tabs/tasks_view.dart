@@ -200,7 +200,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         Expanded(
           // Members draws the crew, free or not, though no task is open.
           child: _layout == _Layout.members
-              ? _membersView(project, shown, now)
+              ? _membersView(project, board, now)
               : empty
               ? Center(
                   child: Text(
@@ -515,24 +515,28 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   );
 
   /// Members (task #3400): one muted line of the lanes' capacity, then a
-  /// column per crew member, its name and lane over Working or Free, with
-  /// the tasks in its hands and then those it handed over; and last,
-  /// Unassigned, in the order the server hands work out, each card led by
-  /// its lane. Columns as the Board's: side by side, scrolling sideways.
+  /// column per crew member, its name and lane over Working, Full or Free,
+  /// with the tasks in its hands and then those it handed over; and last,
+  /// Unassigned, in the order the Swarm hands work out, each card led by its
+  /// lane. Columns as the Board's: side by side, scrolling sideways.
+  ///
+  /// Mine and Search hide cards of the whole [board]; a member's state and
+  /// the lanes count every task the app holds.
   Widget _membersView(
     SuperTabProject project,
-    Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> shown,
+    Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> board,
     DateTime now,
   ) {
-    final snapshot = widget.controller.snapshot;
-    final lanes = snapshot?.lanes[project.id] ?? const [];
+    final c = widget.controller;
     final groups = superTabMemberGroups(
-      agents: snapshot?.agents ?? const [],
+      agents: c.snapshot?.agents ?? const [],
       projectId: project.id,
-      entries: shown.values.expand((entries) => entries),
-      lanes: lanes,
+      entries: board.values.expand((entries) => entries),
     );
-    final capacity = superTabCapacityLine(lanes, now);
+    final capacity = superTabCapacityLine(
+      superTabLaneCapacity(superTabProjectTasks(c, project), now),
+      now,
+    );
     Widget column(Key key, Widget heading, List<Widget> rows) => SizedBox(
       width: SuperTabTasksView.columnWidth,
       child: _framed(
@@ -552,7 +556,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       horizontal: grid.AppDesktop.controlGap,
       vertical: grid.AppDesktop.menuInset,
     );
-    final unassigned = groups.unassigned;
+    final unassigned = groups.unassigned.where((u) => _keeps(u.entry)).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -599,15 +603,16 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
                             style: DesktopChrome.control(medium: true),
                           ),
                           Text(
-                            member.working ? 'Working' : 'Free',
+                            member.state.label,
                             style: DesktopChrome.metadata(),
                           ),
                         ],
                       ),
                     ),
                     [
-                      for (final entry in member.inHand) card(entry),
-                      if (member.handed.isNotEmpty)
+                      for (final entry in member.inHand.where(_keeps))
+                        card(entry),
+                      if (member.handed.where(_keeps).isNotEmpty)
                         Padding(
                           padding: inset,
                           child: Text(
@@ -615,7 +620,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
                             style: DesktopChrome.metadata(),
                           ),
                         ),
-                      for (final entry in member.handed) card(entry),
+                      for (final entry in member.handed.where(_keeps))
+                        card(entry),
                     ],
                   ),
                   const SizedBox(width: _columnGap),
