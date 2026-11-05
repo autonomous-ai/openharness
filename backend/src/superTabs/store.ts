@@ -85,7 +85,7 @@ import { WORKSPACE_LABEL, workspaceCan, type WorkspaceRole } from './workspaces.
 import { STATUS_LABELS,
   activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState,
-  pullRequestLinks,
+  projectPullRequestUrl, pullRequestLinks,
 } from './model.js'
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
@@ -1515,7 +1515,10 @@ export class SuperTabStore {
         return { repositoryUrl, urls: [...new Set(urls)], step: !!group.reviewOf }
       })
       if (!facts) return undefined
-      if (facts.urls.length) return { origin: await hook(facts.repositoryUrl, facts.urls), pulls: facts.urls }
+      // Only what the reader reads covers a mark: the project's own repository's pull requests (pushOrigin.ts projectPushOrigin),
+      // which answers clean for none of them (security review 2 of #3304).
+      const read = githubRepository(facts.repositoryUrl) ? facts.urls.flatMap(url => projectPullRequestUrl(url, facts.repositoryUrl) ?? []) : []
+      if (facts.urls.length) return { origin: await hook(facts.repositoryUrl, facts.urls), pulls: read }
       // A step reads or runs a branch, and with no pull request named nothing shows whose. It may name one in a sentence no read
       // can parse, and then its agent runs `gh pr checkout` itself (security review 2 of #2559).
       return facts.step && facts.repositoryUrl && githubRepository(facts.repositoryUrl) ? { origin: 'unknown', pulls: [] } : undefined
