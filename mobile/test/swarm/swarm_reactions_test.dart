@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/parts.dart';
+import 'package:harness_mobile/swarm/swarm_message_link.dart';
 import 'package:harness_mobile/swarm/swarm_reactions.dart';
 
 import 'swarm_fixture.dart';
@@ -335,6 +336,54 @@ void main() {
       await tester.pumpAndSettle();
       expect(await picked, SuperTabReactionEmoji.check);
     });
+
+    for (final scale in [1.0, 2.0]) {
+      testWidgets('menu actions fit a 390-point phone at ${scale}x text', (
+        tester,
+      ) async {
+        tester.view.physicalSize = const Size(390, 844);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        tester.platformDispatcher.textScaleFactorTestValue = scale;
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+        late BuildContext context;
+        await show(
+          tester,
+          Builder(
+            builder: (value) {
+              context = value;
+              return const SizedBox();
+            },
+          ),
+        );
+        var deleted = false;
+        final picked = showSwarmReactionPicker(
+          context,
+          reactions: const [],
+          readerId: me,
+          link: const SwarmMessageLink(
+            tabId: tab,
+            conversationId: 'g1',
+            messageId: 'm1',
+          ),
+          onDelete: () => deleted = true,
+        );
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+        for (final label in ['Copy link to message', 'Delete message']) {
+          final bounds = tester.getRect(find.text(label));
+          expect(bounds.left, greaterThanOrEqualTo(0));
+          expect(bounds.right, lessThanOrEqualTo(390));
+        }
+        final action = find.byKey(const ValueKey('swarm-delete-message'));
+        expect(tester.getSize(action).height, greaterThanOrEqualTo(44));
+        await tester.tap(action);
+        await tester.pumpAndSettle();
+        expect(deleted, isTrue);
+        expect(await picked, isNull);
+      });
+    }
 
     testWidgets('dims the page as every sheet does, and draws each emoji at '
         "an icon's size, 24 points", (tester) async {

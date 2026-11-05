@@ -4291,7 +4291,7 @@ class _SuperTabViewState extends State<SuperTabView>
       onEdit: c.canChange(message)
           ? (text) => _editMessage(message, text)
           : null,
-      onDelete: c.canChange(message)
+      onDelete: c.canDelete(message)
           ? () => unawaited(_deleteMessage(message))
           : null,
       // A message with a thread is answered there; one from before threads
