@@ -102,6 +102,30 @@ class DurationSplitTests(unittest.TestCase):
                 self.assertLessEqual(estimate, 0.75 * limit, f"shard {index}/{shards}: about {estimate:.0f}s of {limit}s")
 
 
+class CiGuardStepTests(unittest.TestCase):
+    """Review of #3241: the guard step must name its test so a rename fails loudly, and the shard verifier must expect as
+    many shards as CI runs."""
+
+    def setUp(self):
+        self.root = SCRIPT.parents[1]
+        self.workflow = (self.root / ".github" / "workflows" / "ci.yml").read_text()
+
+    def test_the_ci_guard_step_names_a_test_that_exists(self):
+        step = re.search(r"Every Desktop shard keeps a quarter.*?run: (.+)", self.workflow, re.S)
+        self.assertIsNotNone(step, "ci.yml lost the headroom guard step")
+        command = step.group(1).splitlines()[0]
+        named = re.search(r"python3 -m unittest -v (test_desktop_tests\.DurationSplitTests\.\w+)$", command)
+        self.assertIsNotNone(named, f"the guard step runs a filter, not one named test: {command}")
+        test = named.group(1).split(".")[-1]
+        self.assertTrue(hasattr(DurationSplitTests, test), f"{test} does not exist")
+
+    def test_the_shard_verifier_expects_as_many_shards_as_ci_runs(self):
+        shards = int(re.search(r'--shard "\$DESKTOP_SHARD/(\d+)"', self.workflow).group(1))
+        verifier = (self.root / "scripts" / "verify-desktop-test-shards.py").read_text()
+        default = re.search(r'add_argument\("--shards", type=int, default=(\d+)\)', verifier)
+        self.assertEqual(int(default.group(1)), shards)
+
+
 class ReporterTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

@@ -5,7 +5,7 @@ import { isTeamAccount } from '../team/config.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
-import { SWARM_TOOLS_SKILL } from './swarmTools.js'
+import { swarmToolsSheet, toolsRoleFor } from './swarmToolSheets.js'
 import { fallbackSkillName, isSwarmRole, isSwarmSkillMode, parseSwarmSkill, roleFromWire, wireRole, type SavedSwarmSkill, type SwarmRole, type SwarmSkill,
   type SwarmSkillGrant, type SwarmSkillMode, type WireRole } from './savedSkill.js'
 
@@ -772,8 +772,11 @@ export function prepareSwarmSkill(workspace: string, saved: SavedSwarmSkill): { 
   const tools = skillFile(root, skill, 'swarm-tools', true)!
   if (existsSync(tools)) plainFile(tools)
   else {
-    const version = textVersion(SWARM_TOOLS_SKILL)
-    writeFileSync(tools, SWARM_TOOLS_SKILL, { flag: 'wx', mode: 0o600 })
+    // The sheet of the role the launch knows (task #3448): the coordinator's is the PM's, an agent's the Engineer's until the
+    // host reads its project role (swarmInstructionsSkill.ts).
+    const sheet = swarmToolsSheet(toolsRoleFor({ coordinator: skill.role === 'coordinator', fallback: skill.fallback }))
+    const version = textVersion(sheet)
+    writeFileSync(tools, sheet, { flag: 'wx', mode: 0o600 })
     writeRecord(dirname(tools), { text: version, notified: version, change: 0, toldChange: 0 })
   }
   return { file, instructions: `Use the built-in swarm-tools skill for Harness's Swarm commands: read ${JSON.stringify(tools)} before working. Your role and how this project works are in its instructions: read them with the instructions command (harness super-tab --tab TAB instructions), and work by them. If that command says this Swarm has no project instructions, use the ${fallbackSkillName(skill)} skill instead: read ${JSON.stringify(file)}.` }

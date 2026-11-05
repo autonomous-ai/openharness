@@ -23,6 +23,8 @@ const _copies = {
   // Task steps design: a task's steps and its merged chat.
   'lib/swarm/task_steps.dart': 'lib/super_tabs/task_steps.dart',
   'lib/swarm/instructions_model.dart': 'lib/super_tabs/instructions_model.dart',
+  // Board pulse (task #3384): what waits for the PM and who works.
+  'lib/swarm/pulse_model.dart': 'lib/super_tabs/pulse.dart',
 };
 
 /// The phone's model is ahead of main's desktop copy, so it is no exact copy
