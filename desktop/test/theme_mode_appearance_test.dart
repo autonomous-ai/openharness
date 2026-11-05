@@ -3,7 +3,6 @@
 // and the whole app following the Mac live in Match macOS.
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -66,7 +65,6 @@ Iterable<String> _palettesIn(String group) => find
 
 void main() {
   tearDown(() {
-    debugDefaultTargetPlatformOverride = null;
     grid.AppTheme.palette.value = HarnessPalette.graphite;
     grid.AppTheme.brightness.value = Brightness.dark;
   });
@@ -74,7 +72,6 @@ void main() {
   testWidgets('Workspace opens on Light / Dark / Match macOS, themes below', (
     tester,
   ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     final store = AppearancePrefsStore(storage: _Storage());
     addTearDown(store.dispose);
     await _openWorkspace(tester, store);
@@ -112,21 +109,19 @@ void main() {
         if (p.isDark) p.name,
     });
     expect(tester.takeException(), isNull);
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
   testWidgets('elsewhere the third choice is Match system', (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
     final store = AppearancePrefsStore(storage: _Storage());
     addTearDown(store.dispose);
     await _openWorkspace(tester, store);
     expect(find.text('Match system'), findsOneWidget);
     expect(find.text('Match macOS'), findsNothing);
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
   testWidgets('the switch and the two theme lists set what shows', (
     tester,
   ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     final store = AppearancePrefsStore(storage: _Storage());
     addTearDown(store.dispose);
     await _openWorkspace(tester, store);
@@ -155,16 +150,15 @@ void main() {
     expect(store.value.palette, HarnessPalette.plum);
 
     // Each list marks its own choice, whichever one is on screen.
-    final selected = tester.getSemantics(
-      find.byKey(const ValueKey('palette-night')),
+    expect(
+      tester.getSemantics(find.byKey(const ValueKey('palette-night'))),
+      containsSemantics(isSelected: true),
     );
-    expect(selected.flagsCollection.isSelected, isTrue);
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
   testWidgets('in Match macOS the whole app follows the Mac live', (
     tester,
   ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     final dispatcher = tester.platformDispatcher;
     dispatcher.platformBrightnessTestValue = Brightness.light;
     addTearDown(dispatcher.clearPlatformBrightnessTestValue);
@@ -215,5 +209,5 @@ void main() {
     expect(grid.AppTheme.palette.value, HarnessPalette.cloud);
     expect(Theme.of(screen).brightness, Brightness.light);
     await tester.pumpWidget(const SizedBox());
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 }

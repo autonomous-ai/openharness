@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:harness/shared/theme/app_icons.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_theme.dart' as grid;
@@ -8,6 +9,9 @@ import '../../shared/theme/appearance_prefs_store.dart';
 import '../../shared/theme/color_palette.dart';
 import '../../shared/widgets/section_heading.dart';
 
+/// Appearance ▸ Workspace's first group (task #3006): Light, Dark or Match
+/// macOS, then the light theme and the dark theme that choice shows, each
+/// chosen in its own list.
 class PaletteSection extends StatelessWidget {
   const PaletteSection({super.key, this.store});
   final AppearancePrefsStore? store;
@@ -21,38 +25,110 @@ class PaletteSection extends StatelessWidget {
       builder: (context, prefs, _) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SectionHeading('Color palette'),
+          const SectionHeading('Theme'),
           const SizedBox(height: 12),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final columns = constraints.maxWidth >= 660
-                  ? 3
-                  : constraints.maxWidth >= 360
-                  ? 2
-                  : 1;
-              final width =
-                  (constraints.maxWidth - 12 * (columns - 1)) / columns;
-              return Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: [
-                  for (final palette in HarnessPalette.values)
-                    SizedBox(
-                      width: width,
-                      child: _PaletteChoice(
-                        palette: palette,
-                        selected: prefs.palette == palette,
-                        onChoose: () =>
-                            unawaited(preferences.setPalette(palette)),
-                      ),
-                    ),
-                ],
-              );
-            },
+          SegmentedButton<AppearanceMode>(
+            key: const ValueKey('appearance-mode'),
+            showSelectedIcon: false,
+            expandedInsets: EdgeInsets.zero,
+            style: SegmentedButton.styleFrom(
+              selectedBackgroundColor: grid.AppDesktop.selection,
+              selectedForegroundColor: grid.AppDesktop.onSelection,
+            ),
+            segments: [
+              for (final mode in AppearanceMode.values)
+                ButtonSegment(
+                  value: mode,
+                  label: Text(
+                    mode.labelFor(defaultTargetPlatform),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+            selected: {prefs.mode},
+            onSelectionChanged: (selection) =>
+                unawaited(preferences.setMode(selection.first)),
+          ),
+          const SizedBox(height: 20),
+          _PaletteGroup(
+            key: const ValueKey('palettes-light'),
+            title: 'Light theme',
+            palettes: [
+              for (final palette in HarnessPalette.values)
+                if (!palette.isDark) palette,
+            ],
+            selected: prefs.lightPalette,
+            onChoose: (palette) => unawaited(preferences.setPalette(palette)),
+          ),
+          const SizedBox(height: 20),
+          _PaletteGroup(
+            key: const ValueKey('palettes-dark'),
+            title: 'Dark theme',
+            palettes: [
+              for (final palette in HarnessPalette.values)
+                if (palette.isDark) palette,
+            ],
+            selected: prefs.darkPalette,
+            onChoose: (palette) => unawaited(preferences.setPalette(palette)),
           ),
           const SizedBox(height: 24),
         ],
       ),
+    );
+  }
+}
+
+class _PaletteGroup extends StatelessWidget {
+  const _PaletteGroup({
+    super.key,
+    required this.title,
+    required this.palettes,
+    required this.selected,
+    required this.onChoose,
+  });
+  final String title;
+  final List<HarnessPalette> palettes;
+  final HarnessPalette selected;
+  final ValueChanged<HarnessPalette> onChoose;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: grid.AppType.label(color: grid.AppPalette.textSecondary),
+        ),
+        const SizedBox(height: 8),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final columns = constraints.maxWidth >= 660
+                ? 3
+                : constraints.maxWidth >= 360
+                ? 2
+                : 1;
+            final width = (constraints.maxWidth - 12 * (columns - 1)) / columns;
+            return Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                for (final palette in palettes)
+                  SizedBox(
+                    width: width,
+                    child: _PaletteChoice(
+                      palette: palette,
+                      selected: selected == palette,
+                      onChoose: () => onChoose(palette),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
     );
   }
 }
