@@ -28,6 +28,8 @@ const TIMEOUTS: Array<[string, string]> = [[TIMED_OUT_SUFFIX, TIMED_OUT],
   [STOPPED_REPORTING_SUFFIX, 'Its machine stopped reporting while preparing it.']]
 /** Reasons the server writes itself, which name nothing (commands.ts removeMachine and machine.contribute). */
 export const MACHINE_REMOVED = 'Its machine was removed from the Swarm.'
+/** Its machine's computer is signed in to another account now (commands.ts machine.moved, #3122). */
+export const MACHINE_MOVED = 'Its machine is signed in to another account now.'
 export const ABANDONED = 'Abandoned before it started.'
 /** A Team account's host refusing a Codex Product Manager it cannot sign in (cli superTabs/start.ts): it names nothing of the
  *  machine but its lack of the owner's relay, which its project reads (security re-check 3 of #2089). */

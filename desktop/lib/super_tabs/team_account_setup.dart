@@ -22,13 +22,15 @@ Future<void> showTeamAccountSetup(
   bool asked = false,
   String? operatingSystem,
   String? missing,
+  bool signInAgain = false,
 }) => showAppDialog<void>(
   context: context,
   barrierDismissible: false,
   builder: (context) => _TeamAccountSetup(
     app: app,
     asked: asked,
-    missing: missing,
+    missing: signInAgain ? 'it is signed in for another account' : missing,
+    signInAgain: signInAgain,
     words: _Words.of(operatingSystem ?? RuntimePlatform.operatingSystem),
   ),
 );
@@ -237,11 +239,15 @@ class _TeamAccountSetup extends StatefulWidget {
     required this.asked,
     required this.words,
     this.missing,
+    this.signInAgain = false,
   });
 
   final AppNotifier app;
   final bool asked;
   final _Words words;
+
+  /// The account is there, signed in for another account of this computer (#3122): Repair signs it in for this one.
+  final bool signInAgain;
 
   /// The account is there and these parts are not (cli/src/team/autoSetup.ts `missingDetail`, #2765): the dialog
   /// repairs instead of setting up. Empty for a part it could not name.
@@ -262,7 +268,9 @@ class _TeamAccountSetupState extends State<_TeamAccountSetup> {
     final words = widget.words;
     String outcome;
     try {
-      final state = await widget.app.setUpTeamAccount();
+      final state = await widget.app.setUpTeamAccount(
+        signInAgain: widget.signInAgain,
+      );
       // The row and the notice follow it from here (#3169): the dialog's OK
       // leaves the person free while it runs.
       if (state == 'started' || state == 'running') {
