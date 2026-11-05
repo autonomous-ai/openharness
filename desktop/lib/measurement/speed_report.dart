@@ -61,7 +61,12 @@ class SpeedReport {
           final step = fields['step'];
           final ms = number('ms');
           if (step == null || ms == null) continue;
-          if (step == 'started') steps = [];
+          if (step == 'started') {
+            // A new launch: what an earlier one read is not this one's.
+            steps = [];
+            reads.clear();
+            images.clear();
+          }
           steps.add((step, ms));
         case 'messages':
           final rows = number('rows');
@@ -91,9 +96,14 @@ class SpeedReport {
   }
 
   /// The three steps of launch that took longest after the step before.
-  List<LaunchStep> get slowestLaunch => ([
-    ...launch,
-  ]..sort((a, b) => b.tookMs.compareTo(a.tookMs))).take(3).toList();
+  List<LaunchStep> get slowestLaunch {
+    // Launch ends at the first chat on screen; later steps are not part of it.
+    final end = launch.indexWhere((s) => s.name == 'first_chat_painted');
+    final steps = end < 0 ? launch : launch.sublist(0, end + 1);
+    return ([
+      ...steps,
+    ]..sort((a, b) => b.tookMs.compareTo(a.tookMs))).take(3).toList();
+  }
 
   /// The three message reads that took longest, whole.
   List<MessageRead> get slowestReads => ([
@@ -121,12 +131,17 @@ class SpeedReport {
       '| Open the app to a painted chat | '
       '${first == null ? 'not reached' : '$first ms'} |',
     );
-    final latest = reads.where((r) => r.kind == 'latest').firstOrNull;
+    final firsts = reads.where((r) => r.kind == 'latest').toList();
     final older = reads.where((r) => r.kind == 'older').toList();
-    out.writeln(
-      '| Big chat, first page | '
-      '${latest == null ? 'not read' : '${latest.totalMs} ms (${latest.rows} rows, request ${latest.requestMs} ms)'} |',
-    );
+    if (firsts.isEmpty) {
+      out.writeln('| Chat first page | not read |');
+    } else {
+      final slowest = firsts.reduce((a, b) => b.totalMs > a.totalMs ? b : a);
+      out.writeln(
+        '| Chat first page | ${firsts.length} chats opened, slowest '
+        '${slowest.totalMs} ms (${slowest.rows} rows, request ${slowest.requestMs} ms) |',
+      );
+    }
     if (older.isNotEmpty) {
       final times = older.map((r) => r.totalMs).toList()..sort();
       out.writeln(
@@ -142,6 +157,16 @@ class SpeedReport {
       ', $imageBytes bytes'
       '${ok.isEmpty ? '' : ', median ${_percentile(ms, .5)} ms, p95 ${_percentile(ms, .95)} ms, slowest ${ms.last} ms'} |',
     );
+    out.writeln();
+    out.writeln('Every chat opened (first page):');
+    out.writeln();
+    out.writeln('| Kind | Rows | Request | Total |');
+    out.writeln('| --- | --- | --- | --- |');
+    for (final r in firsts) {
+      out.writeln(
+        '| ${r.kind} | ${r.rows} | ${r.requestMs} ms | ${r.totalMs} ms |',
+      );
+    }
     out.writeln();
     out.writeln('Three slowest launch steps (time since the step before):');
     out.writeln();

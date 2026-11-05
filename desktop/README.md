@@ -255,7 +255,7 @@ dart run tool/speed_report.dart        # today's and yesterday's logs, or pass l
 
 It prints the table and names the three slowest launch steps and message reads. The clock starts when
 Dart's `main` runs, so the engine's own start before it is not counted; compare with the process start
-time (`ps -o lstart= -p PID`) when that matters. Keep the "before" table with each speed task and run
+time (`ps -o lstart= -p PID`) when that matters. The launch table counts each step from the one before it as logged; steps that run side by side (the daemon check and the saved tabs) show a gap, not a duration of their own. Keep the "before" table with each speed task and run
 the same steps for its "after".
 
 ## Open media from agent output

@@ -196,8 +196,8 @@ void main() {
       );
 
       expect(report.slowestLaunch.map((s) => s.name), [
-        'tools',
         'first_chat_painted',
+        'tools',
         'started',
       ]);
     });

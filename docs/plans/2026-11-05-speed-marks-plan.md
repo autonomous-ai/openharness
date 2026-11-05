@@ -6,7 +6,7 @@
 **Spec:** Task #3176 (Huy, 2026-11-05: before and after numbers for each speed task).
 
 ## Design
-- growth: marks are logged to the daily app log, pruned after 14 days like every other line; a launch step is logged once per launch, messages only for first-page and scroll-up reads (polls are not logged), images once per fetch; the in-memory ring holds the last 500.
+- growth: marks are logged to the daily app log (DEBUG, the log's batched path), pruned after 14 days like every other line; a launch step is logged once per launch, messages only for first-page and scroll-up reads (polls are not logged), images once per fetch; the report reads only the last launch.
 - concurrency: single UI isolate; no locks.
 - read cost: no reads at runtime; the report tool reads the log files on request.
 - scale: 10x chat size changes row counts, not the number of lines per read; the log line rate is bounded by pages read and images shown.

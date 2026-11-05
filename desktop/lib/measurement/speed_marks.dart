@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../logging/app_log.dart';
 
 /// Where Desktop's speed is read (task #3176): how long opening the app takes
@@ -14,7 +16,9 @@ class SpeedMarks {
     : _sink = sink ?? _toAppLog,
       _injected = elapsed;
 
-  static void _toAppLog(String line) => appLog.info('speed', line);
+  // DEBUG goes through the log's batched path (one write a second or 256
+  // lines), so a mark on the UI isolate is a buffer append, not a file write.
+  static void _toAppLog(String line) => appLog.debug('speed', line);
 
   final void Function(String line) _sink;
   // A test reads its own clock; the app reads [_watch].
@@ -28,7 +32,9 @@ class SpeedMarks {
     _begin();
   }
 
-  /// A new sign-in in one process begins the launch steps again, from zero.
+  /// Begins the launch steps again from zero. The app starts once per process,
+  /// so only tests call this.
+  @visibleForTesting
   void restart() {
     _watch
       ..reset()
