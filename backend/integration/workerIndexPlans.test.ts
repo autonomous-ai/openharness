@@ -289,6 +289,31 @@ describe('the pull request watch', () => {
   })
 })
 
+// Task #3402: the merge train reads unarchived tasks that link a pull request, done ones included, through the same finished
+// mark index: both marks of its first field, archived false, then the activity range, newest first and capped.
+describe('the merge train\'s candidates', () => {
+  it('reads the unarchived tasks active this week by the finished mark index, the newest first, capped', async () => {
+    const { SuperTabStore } = await import('../src/superTabs/store.js')
+    let n = 0
+    const group = (activeAt: number, patch: { workFinished?: boolean; archived?: boolean; data?: Record<string, unknown> } = {}) => {
+      const key = `m${++n}`
+      return { id: `tab-m:${key}`, tabId: 'tab-m', key, version: 1, changedAt: new Date(NOW), ordinal: n, agentIds: [], lastActivityAt: new Date(activeAt),
+        workFinished: patch.workFinished ?? false, archived: patch.archived ?? false, data: { pullRequestUrls: [`https://github.com/acme/app/pull/${n}`], ...patch.data } }
+    }
+    // Archived work and work quiet for a month, which a read the index does not bound examines too; a step, which it filters.
+    await db.swarmGroup.createMany({ data: [
+      ...Array.from({ length: 20 }, () => group(NOW - 60_000, { archived: true, workFinished: true })), ...Array.from({ length: 20 }, () => group(NOW - 30 * 24 * 3_600_000)),
+      group(NOW - 3 * 3_600_000), group(NOW - 2 * 3_600_000, { workFinished: true }), group(NOW - 3_600_000, { data: { reviewOf: 'm1' } }),
+    ] })
+    const store = new SuperTabStore(db, () => NOW)
+    const entries = await profiled(db, () => store.trainProjects(NOW, 2))
+    const rows = reads(entries, 'SwarmGroup', ['workFinished', 'lastActivityAt'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ workFinished: 1, archived: 1, lastActivityAt: 1/)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
+  })
+})
+
 describe('the hourly unused-upload sweep', () => {
   // Ken's prod scan of 11-04 (#2676): Performance Advisor suggested an index for it. The sweep's claim reads uploads by
   // `usedBy` and `proposedBy` (both null), `purpose` and age; its remove step reads the uploads it took by `usedBy` alone.

@@ -74,6 +74,8 @@ import { commitParts, indexesOf, machineContentChanged, numberMessages, type Tou
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
 import { pullRequestEvents, type PullRequestWatch } from './pullRequestEvents.js'
+import type { TrainTask } from './mergeTrain/plan.js'
+import type { TrainTaskPull } from './mergeTrain/train.js'
 import { guardedWrite, partId } from './parts/write.js'
 import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
@@ -84,7 +86,7 @@ import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import { activeMember, addMember, hasWorkspaceAccess, latestRemovalAt, listWorkspaces, memberId, removedFromWorkspace, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
 import { WORKSPACE_LABEL, workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { STATUS_LABELS,
-  activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
+  activeWork, actorKey, agent, agentOnly, appendPullRequestUrls, projectPullRequestUrl, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState,
   pullRequestLinks,
 } from './model.js'
@@ -129,6 +131,12 @@ async function countersBefore(tx: Transaction, tabId: string, conversationId: st
   const newest = (list: SuperTabMessage[]) => list.length ? Math.max(...list.map(m => m.sequence)) : undefined
   return { message: newest(shown), main: newest(main), person: newest(person) }
 }
+/** A project the merge train may run on, with its tasks' pull requests (trainProjects). */
+export interface TrainProject { tabId: string; projectId: string; ownerId: string; autonomousEnv: string; repositoryUrl: string; pulls: TrainTaskPull[] }
+/** A task quiet this long is not a merge train candidate. */
+export const TRAIN_QUIET_MS = 7 * 24 * 3_600_000
+/** The most tasks one train pass reads. */
+export const TRAIN_TASKS = 300
 const reactionId = (tabId: string, actor: Actor, command: ReactCommand) => stableId(tabId, command.messageId, actorKey(actor), command.emoji)
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 type SendCommand = Extract<Command, { type: 'message.send' }>
@@ -4661,6 +4669,88 @@ export class SuperTabStore {
       await this.save(tx, loaded, state, clock.next())
       await this.writeMessages(tx, tabId, state, rows, sequences)
       return rows.length
+    })
+  }
+
+  /**
+   * The merge train's candidates (mergeTrain/run.ts): unarchived tasks (not steps), done ones included, active in the last
+   * [TRAIN_QUIET_MS] that link a pull request, at most [limit], the most recently active first; grouped by project, each with
+   * its steps and its own repository's pull requests. Read only: one indexed read, then each Swarm's state once.
+   */
+  async trainProjects(now: number, limit = TRAIN_TASKS): Promise<TrainProject[]> {
+    // The finished mark's index, [workFinished, archived, lastActivityAt], as the PR watch reads it, both marks: a done task
+    // still waits for its merge.
+    const rows = await this.db.swarmGroup.aggregateRaw({ pipeline: [
+      { $match: { workFinished: { $in: [false, true] }, archived: false, lastActivityAt: { $gte: { $date: new Date(now - TRAIN_QUIET_MS).toISOString() } },
+        deleted: false, kind: null, 'data.reviewOf': null, 'data.pullRequestUrls.0': { $exists: true } } },
+      { $sort: { lastActivityAt: -1 } },
+      { $limit: limit },
+      { $project: { _id: 0, tabId: 1, key: 1 } },
+    ] }) as unknown as Array<{ tabId: string; key: string }>
+    const byTab = new Map<string, string[]>()
+    for (const row of rows) byTab.set(row.tabId, [...byTab.get(row.tabId) ?? [], row.key])
+    const projects: TrainProject[] = []
+    for (const [tabId, keys] of byTab) {
+      const row = await this.db.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt) continue
+      // The awake groups come with every load, and a step sleeps only once its task is archived (steps.ts): every step of
+      // these tasks is loaded.
+      const { state } = await loadRow(this.db as unknown as Transaction, requireParts(row), { groupIds: keys })
+      if (state.paused) continue
+      const found = new Map<string, TrainProject>()
+      for (const key of keys) {
+        const group = state.conversations.find(c => c.id === key)
+        if (!group || group.archived || group.reviewOf || group.assignment?.status === 'cancelled') continue
+        const project = groupProject(state, group), repositoryUrl = project.repository?.repositoryUrl ?? null
+        if (!repositoryUrl) continue
+        const entry = found.get(project.id) ?? { tabId, projectId: project.id, ownerId: project.ownerId ?? state.ownerId, autonomousEnv: state.environment,
+          repositoryUrl, pulls: [] }
+        found.set(project.id, entry)
+        const steps = stepsOf(state, group.id).filter(step => !step.archived || step.assignment?.status !== 'cancelled')
+        for (const url of group.pullRequestUrls ?? []) {
+          const own = projectPullRequestUrl(url, repositoryUrl)
+          if (!own) continue
+          entry.pulls.push({ taskId: group.id, url: own, task: { checks: group.checks,
+            pullRequestHeads: (group as { pullRequestHeads?: TrainTask['pullRequestHeads'] }).pullRequestHeads, steps } })
+        }
+      }
+      projects.push(...found.values())
+    }
+    return projects
+  }
+
+  /** Records that the merge train merged [url], a pull request of task [groupId]: conversation.merged, as the project's
+   *  owner, who switched the train on for it (mergeTrain/config.ts). Once per pull request: a retry is the same operation. */
+  async trainMerged(project: Pick<TrainProject, 'tabId' | 'ownerId' | 'autonomousEnv'>, groupId: string, url: string, mergedAt: number): Promise<void> {
+    const person = await this.db.user.findUnique({ where: { id: project.ownerId }, select: { email: true } })
+    if (!person) throw new Error('The project owner is gone: the merge train cannot record its merge.')
+    const user: AuthUser = { sub: project.ownerId, email: person.email, autonomousEnv: project.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
+    await this.executeOnce(user, project.tabId, { operationId: `merge-train-${stableId(groupId, url)}`,
+      command: { type: 'conversation.merged', conversationId: groupId, pullRequestUrl: url, mergedAt: new Date(mergedAt).toISOString() } })
+  }
+
+  /** Tells task [groupId]'s Engineer [text] from the merge train, once per [key], as its project's Lead writes the Swarm's own
+   *  lines (pullRequestSeen). A task with no Engineer in the Swarm hears nothing. Whether it was told now. */
+  async trainTell(tabId: string, groupId: string, key: string, text: string): Promise<boolean> {
+    const id = stableId('merge-train', groupId, key)
+    if (await this.db.superTabMessage.findUnique({ where: { id }, select: { id: true } })) return false
+    return transaction(this.db, async tx => {
+      if (await tx.superTabMessage.findUnique({ where: { id }, select: { id: true } })) return false
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt) return false
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId] }), state = cloneData(loaded.state)
+      const group = state.conversations.find(c => c.id === groupId)
+      if (!group || group.archived || group.reviewOf) return false
+      const ownerId = ownerOf(state, group), owner = ownerId ? state.agents.find(a => a.id === ownerId) : undefined
+      const leadId = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId
+      const by = state.agents.find(a => a.id === leadId) ?? owner
+      if (!owner || !by) return false
+      const rows: MessageDraft[] = [{ id, conversationId: group.id, text, replyTo: null, recipients: [owner.id], source: { kind: 'system' },
+        author: { kind: 'agent', id: by.id, name: by.name, displayName: agentDisplayName(state.agents, by.id), membershipGeneration: by.membershipGeneration } }]
+      const sequences = numberMessages(state, rows, this.now())
+      await this.save(tx, loaded, state, clock.next())
+      await this.writeMessages(tx, tabId, state, rows, sequences)
+      return true
     })
   }
 
