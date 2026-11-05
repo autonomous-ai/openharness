@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/logging/app_log.dart';
 import 'package:harness/measurement/speed_marks.dart';
 import 'package:harness/measurement/speed_report.dart';
 
@@ -96,6 +97,42 @@ void main() {
       marks.launch('tools');
 
       expect(written.where((l) => l.contains('step=tools')), hasLength(2));
+    });
+  });
+
+  group('before the log is installed', () {
+    test('marks wait for the real log and then arrive in order', () {
+      // main() starts the marks before installFileLogs() has replaced the
+      // no-op log: the launch line must not be lost with it.
+      AppLog current = const NoopAppLog();
+      final seen = <String>[];
+      final early = SpeedMarks(log: () => current, elapsed: () => now);
+      early.start();
+      now = const Duration(milliseconds: 40);
+      early.launch('settings loaded');
+
+      current = _Seen(seen);
+      now = const Duration(milliseconds: 90);
+      early.launch('window configured');
+
+      expect(seen, [
+        'launch step=started ms=0',
+        'launch step=settings_loaded ms=40',
+        'launch step=window_configured ms=90',
+      ]);
+    });
+
+    test('a log that never comes holds only the first 64 lines', () {
+      AppLog current = const NoopAppLog();
+      final seen = <String>[];
+      final early = SpeedMarks(log: () => current, elapsed: () => now);
+      for (var i = 0; i < 500; i++) {
+        early.image(ms: 1, bytes: 1);
+      }
+      current = _Seen(seen);
+      early.image(ms: 1, bytes: 1);
+
+      expect(seen, hasLength(65));
     });
   });
 
@@ -227,4 +264,19 @@ void main() {
       expect(report.launch, isEmpty);
     });
   });
+}
+
+class _Seen implements AppLog {
+  _Seen(this.lines);
+  final List<String> lines;
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) {
+    if (category == 'speed') lines.add(message);
+  }
 }
