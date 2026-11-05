@@ -42,6 +42,26 @@ export function parseLaunchModel(engine: string, payload: Record<string, unknown
   return { state: 'ok', launchModel: read }
 }
 
+/** A launch model as a registry row keeps it (lib/registry.ts `RegisteredSession.launchModel`): the shape
+ *  `parseLaunchModel` reads, or undefined for anything else, so a hand-edited row is never launched with. */
+export function storedLaunchModel(raw: unknown): LaunchModel | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const { model, effort } = raw as Record<string, unknown>
+  const fits = (value: unknown, shape: RegExp) => value === null || (typeof value === 'string' && shape.test(value))
+  if (!fits(model, MODEL) || !fits(effort, EFFORT) || (!model && !effort)) return undefined
+  return { model: model as string | null, effort: effort as string | null }
+}
+
+/** What a session of [engine] relaunches with once a person moved it onto [model] at [effort]: the engine's launch
+ *  flags for both, the model alone where the engine takes no flag for that effort (Claude Code's `ultracode`), and null
+ *  for an engine that takes no launch model at all, which then relaunches as its engine restores it. */
+export function pickedLaunchModel(engine: string, model: string, effort: string): LaunchModel | null {
+  const both = parseLaunchModel(engine, { model, effort })
+  if (both.state === 'ok') return both.launchModel
+  const alone = parseLaunchModel(engine, { model })
+  return alone.state === 'ok' ? alone.launchModel : null
+}
+
 /** The argv for `launchModel`, nothing for `default` or for an engine that declares no flags. */
 export function launchModelArgs(engine: string, launchModel: LaunchModel): string[] {
   const contract = launchContract(engine)?.modelArgs

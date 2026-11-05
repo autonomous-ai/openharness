@@ -23,6 +23,7 @@ import { terminalRouteKey } from './terminalRuntime.js'
 import type { ExternalResumeIntent } from './externalResume.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import type { StartedBy } from './agentAttribution.js'
+import type { LaunchModel } from './launchModel.js'
 
 const DEFAULT_MAX_ATTEMPTS = 3
 
@@ -37,6 +38,7 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
     grid?: { baseUrl: string; model: string | null } | null
     gridLaunchRecord?: GridLaunchRecord | null
     scmLaunchRecord?: ScmLaunchRecord | null
+    launchModel?: LaunchModel | null
     codexHome?: string | null
     claudeHome?: string | null
     dsh?: string | null
@@ -79,6 +81,9 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   /** What the workspace's SCM needs re-applied on every relaunch (`scmLaunch` on the row); null or
    *  absent for a folder no SCM prepared. The record, not the launch — `env` already carries it. */
   scmLaunchRecord?: ScmLaunchRecord | null
+  /** The model and effort the engine was launched with as flags, kept on the row so every relaunch passes them again
+   *  (`launchModel` on the row); absent for a launch with none. */
+  launchModel?: LaunchModel | null
   /** The CODEX_HOME folder this agent was launched against, if the caller chose one; codex only. */
   codexHome?: string | null
   /** The CLAUDE_CONFIG_DIR folder (a Claude profile) this agent was launched against, if the caller chose one; claude only. */
@@ -144,6 +149,7 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       grid: deps.grid,
       gridLaunchRecord: deps.gridLaunchRecord,
       scmLaunchRecord: deps.scmLaunchRecord,
+      ...(deps.launchModel ? { launchModel: deps.launchModel } : {}),
       codexHome: deps.codexHome,
       claudeHome: deps.claudeHome,
       dsh: deps.dsh,
