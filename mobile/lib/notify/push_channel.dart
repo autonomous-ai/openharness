@@ -55,6 +55,28 @@ class PushChannel {
     }
   }
 
+  /// The pushes still shown is asked as the app comes back: an answer later than this is not waited for.
+  static const shownTimeout = Duration(milliseconds: 500);
+
+  /// The keys of Harness's pushes still in the notification centre. The server keys a push as the
+  /// app keys its own notice for the same reply or tag (`backend/src/push/notices.ts`), so the app
+  /// does not post it a second time ([SwarmTold.addAll]). Empty where it cannot tell.
+  Future<Set<String>> shown() async {
+    try {
+      final keys = await _channel
+          .invokeListMethod<Object?>('shown')
+          .timeout(shownTimeout);
+      return {...?keys?.whereType<String>()};
+    } on MissingPluginException {
+      return const {};
+    } on PlatformException catch (error) {
+      appLog.warn('push', 'pushes shown not read: ${error.code}');
+      return const {};
+    } on TimeoutException {
+      return const {};
+    }
+  }
+
   /// Hears the pushes tapped ([onOpened], each with its data) and new addresses ([onChanged]) until
   /// [close]. Takes what already waits, such as the push that launched the app.
   void listen({

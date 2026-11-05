@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
+import { readsRawReason } from './startFailure.js'
 import { sweepLiveness } from './liveness.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
 import { defaultProfileId, hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
@@ -12,6 +13,7 @@ import { modelMatches } from './rules.js'
 import { appendRouting, instructionsHash } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
+import { LEAD_CAPABILITY, leadHost } from './leadStart.js'
 import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fixture.test-support.js'
 import { groupView } from './read/views.js'
 import { weekStart } from './leaderboard/week.js'
@@ -3391,6 +3393,39 @@ describe('a failed start\'s reason', () => {
     f.state.starts![0]!.error = 'Its machine was removed from the Swarm.'
     expect(read(owner)).toBe('Its machine was removed from the Swarm.')
   })
+
+  // The reported dead end: a Buddy's owner read only "its machine could not prepare or launch it", while the chat told them
+  // the starter and the PM could read why. A Buddy chat is private to its owner, so the reason belongs there whole.
+  it('writes a Buddy start\'s reason whole in its owner\'s chat, never the group line', () => {
+    const f = fixture(); f.invite()
+    const generation = f.state.people[0]!.generation
+    const chat = { id: 'buddy-chat', kind: 'buddy', number: 1, title: "owner's Buddy", leadId: null, agentIds: [],
+      archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
+      audience: { people: [{ id: 'owner', generation }] } }
+    f.state.conversations.push(chat as never)
+    f.state.starts = [{ id: 's1', actorKey: 'person:owner', contributorId: 'owner', membershipGeneration: generation,
+      machineOwnerId: 'owner', request: { conversationId: chat.id, machineId: 'mac', name: "nsonha777's Buddy",
+        buddyOf: { personId: 'owner', generation } }, harnessId: null, dispatched: true, error: null }] as never
+    const [notice] = f.run({ type: 'agent.startFailed', startId: 's1', error: RAW }, owner).messages
+    expect(notice!.conversationId).toBe(chat.id)
+    expect(notice!.text).toBe(`Could not start nsonha777's Buddy: ${RAW}`)
+    expect(notice!.text).not.toContain('Whoever started it')
+  })
+
+  it('lets a Buddy chat\'s owner read the raw reason even when an agent made the start on another machine', () => {
+    const f = fixture(); f.invite()
+    const generation = f.state.people[0]!.generation
+    const chat = { id: 'buddy-chat', kind: 'buddy', number: 1, title: "owner's Buddy", leadId: null, agentIds: [],
+      archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
+      audience: { people: [{ id: 'owner', generation }] } }
+    f.state.conversations.push(chat as never)
+    f.state.starts = [{ id: 's1', actorKey: 'agent:someone', contributorId: 'owner', membershipGeneration: generation,
+      machineOwnerId: 'someone-else', request: { conversationId: chat.id, machineId: 'host-mac', name: "nsonha777's Buddy",
+        buddyOf: { personId: 'owner', generation } }, harnessId: null, dispatched: true, error: RAW }] as never
+    expect(visibleState(f.state, owner).starts![0]!.error).toBe(RAW)
+    // A Swarm member who is not that chat's owner still reads only what the reason means.
+    expect(readsRawReason(peer, f.state.starts![0]!, chat as never)).toBe(false)
+  })
 })
 
 describe('the owner\'s rules, after review', () => {
@@ -3459,6 +3494,25 @@ describe('machine.remove', () => {
       request: { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
         requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as never]
   }
+
+  // Task #3212: Desktop's join add leaves out a computer its person took out of the Swarm, reading this record; Add machine
+  // brings it back. The record is per Swarm, person and computer, and only that person reads it.
+  it('remembers a machine its person took out, only for them, until they add it again', () => {
+    const f = fixture()
+    f.invite()
+    contribute(f, 'peer', 'peer-mac', null)
+    f.run({ type: 'machine.remove', machineId: 'peer-mac' }, peer)
+    expect(f.state.removedMachines).toEqual([{ machineId: 'peer-mac', contributorId: 'peer' }])
+    expect(visibleState(f.state, peer).removedMachines).toEqual(['peer-mac'])
+    expect(visibleState(f.state, owner).removedMachines).toBeUndefined()
+
+    for (const cleanup of f.state.machineCleanups ?? []) cleanup.requestedAt = new Date(-60 * 60_000).toISOString()
+    f.run({ type: 'machine.contribute', machineId: 'peer-mac', name: 'Peer Mac', cwd: '/repo', scope: 'swarm', engines: ['claude'], maxAgents: 2,
+      teamAccountOnly: true }, peer, { contribution: { machineOwnerId: 'peer', contributorId: 'peer', hostGrant: null } })
+    expect(f.state.machines!.some(m => m.machineId === 'peer-mac' && !m.removal)).toBe(true)
+    expect(f.state.removedMachines).toBeUndefined()
+    expect(visibleState(f.state, peer).removedMachines).toBeUndefined()
+  })
 
   // The phone and the web offer Pause/Resume only to the person who lent the machine; the server holds the same line.
   it('lets only the contributor pause or resume a machine', () => {
@@ -6096,5 +6150,49 @@ describe('agent.rename (renaming a harness renames its agent, task #2912)', () =
     const github = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_'), removed: CredentialKind[] = []
     expect(withoutCredentials(rename('a', github), removed)).toMatchObject({ name: CREDENTIAL_MARKER })
     expect(removed).toEqual(['github'])
+  })
+})
+
+// Task #3211 (vie, 11-05): a project whose lead started in a folder with no GitHub origin has nothing to clone, so its work
+// starts on other machines in an empty folder of its own, without a worktree; a project with a repository keeps today's rule.
+describe('a start for a project with no repository', () => {
+  const pool = (machineId: string) => ({ machineId, name: machineId, contributorId: 'owner', membershipGeneration: 'pilot', generation: 'g1',
+    cwd: '/data/swarm-projects/tab', scope: 'swarm' as const, engines: ['claude'], maxAgents: 4, paused: false,
+    observation: { generation: 'g1', receivedAt: 1000, capabilities: [LEAD_CAPABILITY], resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null,
+      diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null, deviceType: null, chip: null, os: null, gpuPercent: null },
+      tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] } })
+  const setUp = (repositoryUrl: string | null) => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    f.state.machines = [{ ...pool('source'), membershipGeneration: f.state.people[0]!.generation }, { ...pool('other'), membershipGeneration: f.state.people[0]!.generation }]
+    f.state.projects![0]!.repository = { machineId: 'source', cwd: '/Users/vie/outreach', repositoryUrl }
+    return { f, lead, group }
+  }
+  const start = (repositoryUrl: string | null, machineId: string, cwd: string) => {
+    const { f, lead, group } = setUp(repositoryUrl)
+    const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const request = { conversationId: group, machineId, engine: 'claude', name: 'Writer', cwd, worktree: true, branchRef: 'refs/remotes/origin/main',
+      requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } }
+    f.run({ type: 'agent.start', request, ...via } as Command, actor, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, ...decisionIn(group) })
+    return f.state.starts!.at(-1)!.request
+  }
+
+  it('starts on another machine in the project\'s own folder there, without a worktree', () => {
+    const request = start(null, 'other', '/data/swarm-projects/tab/lead')
+    expect(request).toMatchObject({ machineId: 'other', cwd: '/data/swarm-projects/tab/lead', worktree: false })
+    expect(request.branchRef).toBeUndefined()
+  })
+
+  it('keeps a worktree on the machine whose folder it started in, and wherever it has a repository', () => {
+    expect(start(null, 'source', '/Users/vie/outreach')).toMatchObject({ worktree: true, branchRef: 'refs/remotes/origin/main' })
+    expect(start('https://github.com/vie/outreach', 'other', '/data/swarm-projects/tab/lead')).toMatchObject({ worktree: true, branchRef: 'refs/remotes/origin/main' })
+  })
+
+  it('starts its Product Manager on another machine without a worktree too', () => {
+    const { f } = setUp(null)
+    const project = f.state.projects![0]!
+    const leadFor = { projectId: project.id, personId: 'owner', generation: f.state.people[0]!.generation }
+    expect(leadHost(f.state, project, 'other', { engine: 'claude' }, leadFor, { now: 1000 })).toMatchObject({ cwd: '/data/swarm-projects/tab/lead', worktree: false })
+    f.state.projects![0]!.repository!.repositoryUrl = 'https://github.com/vie/outreach'
+    expect(leadHost(f.state, project, 'other', { engine: 'claude' }, leadFor, { now: 1000 })).toMatchObject({ worktree: true })
   })
 })

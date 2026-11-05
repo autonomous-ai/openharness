@@ -1409,6 +1409,11 @@ model SuperTabAttachment {
   /// A voice message's facts (superTabs/voiceMessages.ts StoredVoice): its length, waveform and words, read once before it is
   /// sent (store.ts readVoice). Absent on any other file. Removed with its row: the unsent-file sweep's, or its message's.
   voice          Json?
+  /// A picture's size and its thumbnail (superTabs/thumbnails.ts StoredImage): `{ width, height, thumb?: { url, width, height, size } }`,
+  /// made when the picture was uploaded. The thumbnail object sits beside the original (`<objectKey>.thumb.webp`) and goes with
+  /// it: the unsent-file sweep (lib/attachmentSweep.ts) and the Swarm purge (superTabs/purge.ts) remove both. Absent on a file
+  /// that is not a PNG, JPEG or WebP, on one stored before thumbnails, and on one that would not decode. About 150 bytes.
+  image          Json?
   /// When a readVoice call claimed this file to transcribe it; unset once it stored `voice`. A claim older than two minutes
   /// is taken over.
   voiceSince     DateTime?

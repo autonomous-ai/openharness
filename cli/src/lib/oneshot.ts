@@ -18,6 +18,7 @@ import {
 } from './disposableOneShotPool.js'
 import { oneShotParentEnv } from './loginShellEnv.js'
 import { scrubTerminalContext } from './terminalEnvironment.js'
+import { ownProcessGroup } from './windows/noWindow.js'
 
 function claudeBin(): string {
   return env.CLAUDE_PATH || 'claude'
@@ -149,7 +150,7 @@ class ClaudeWorker extends ProcessWorker {
       ...(effort ? ['--effort', effort] : []),
     ]
     const child = spawn(claudeBin(), args, {
-      cwd, env: buildEnv(), detached: true, stdio: ['pipe', 'pipe', 'pipe'],
+      cwd, env: buildEnv(), ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
     child.stdout?.on('data', (chunk: Buffer) => this.onStdout(chunk.toString()))
@@ -259,7 +260,7 @@ class CodexWorker extends ProcessWorker {
     const processEnv = scrubTerminalContext({ ...oneShotParentEnv() })
     if (codexHome) processEnv.CODEX_HOME = codexHome
     const child = spawn(process.env.CODEX_PATH || 'codex', args, {
-      cwd, env: processEnv, detached: true, stdio: ['pipe', 'ignore', 'pipe'],
+      cwd, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'ignore', 'pipe'],
     })
     super(child)
     this.output = output
@@ -348,7 +349,7 @@ class CursorWorker extends ProcessWorker {
     ]
     const processEnv = scrubTerminalContext({ ...oneShotParentEnv() })
     const child = spawn(cursorBin(), args, {
-      cwd, env: processEnv, detached: true, stdio: ['pipe', 'pipe', 'pipe'],
+      cwd, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
     child.stdout?.on('data', (chunk: Buffer) => this.onStdout(chunk.toString()))
@@ -477,7 +478,7 @@ class OpencodeWorker extends ProcessWorker {
     mkdirSync(OPENCODE_RECAP_DATA_DIR, { recursive: true, mode: 0o700 })
     const { args, env: processEnv } = opencodeOneShotSpawn(model, oneShotParentEnv(), OPENCODE_RECAP_DATA_DIR)
     const child = spawn(opencodeBin(), args, {
-      cwd: OPENCODE_RECAP_DATA_DIR, env: processEnv, detached: true, stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: OPENCODE_RECAP_DATA_DIR, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
     child.stdout?.on('data', (chunk: Buffer) => this.onStdout(chunk.toString()))
@@ -627,7 +628,7 @@ class KiloWorker extends ProcessWorker {
     // `turn_summary` was ever emitted and the device tile stayed on `processing` forever.
     const { args, env: processEnv } = kiloOneShotSpawn(model, oneShotParentEnv())
     const child = spawn(kiloBin(), args, {
-      cwd: KILO_RECAP_DATA_DIR, env: processEnv, detached: true, stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: KILO_RECAP_DATA_DIR, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
     child.stdout?.on('data', (chunk: Buffer) => this.onStdout(chunk.toString()))
@@ -723,7 +724,7 @@ class PiWorker extends ProcessWorker {
     const args = ['-p', '--no-session', '--no-extensions', ...(model ? ['--model', model] : [])]
     const processEnv = scrubTerminalContext({ ...oneShotParentEnv() })
     const child = spawn(piBin(), args, {
-      cwd, env: processEnv, detached: true, stdio: ['pipe', 'pipe', 'pipe'],
+      cwd, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
     child.stdout?.on('data', (chunk: Buffer) => { this.stdout += chunk.toString() })
@@ -801,7 +802,7 @@ class CommandCodeWorker extends ProcessWorker {
     const args = ['-p', '--no-session', ...(model ? ['-m', model] : [])]
     const processEnv = scrubTerminalContext({ ...oneShotParentEnv() })
     const child = spawn(commandCodeBin(), args, {
-      cwd, env: processEnv, detached: true, stdio: ['pipe', 'pipe', 'pipe'],
+      cwd, env: processEnv, ...ownProcessGroup(), stdio: ['pipe', 'pipe', 'pipe'],
     })
     super(child)
     child.stdout?.on('data', (chunk: Buffer) => { this.stdout += chunk.toString() })
@@ -931,7 +932,7 @@ export async function runGrokOneShot(opts: OneShotOptions): Promise<OneShotResul
     const timeoutMs = opts.timeoutMs ?? 60_000
     return await new Promise<OneShotResult>((resolve, reject) => {
       const child = spawn(env.GROK_PATH || 'grok', args, {
-        cwd: opts.cwd, env: processEnv, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: opts.cwd, env: processEnv, ...ownProcessGroup(), stdio: ['ignore', 'pipe', 'pipe'],
       })
       let stdout = ''
       let stderr = ''

@@ -109,3 +109,18 @@ export function resetLoginShellEnvironmentCache(): void {
   cached = null
   inFlight = null
 }
+
+/**
+ * The one startup line about the capture, or null when there is nothing to say. Windows has no POSIX
+ * login shell, so the empty capture there is the normal case, not a failure worth a line at every
+ * start.
+ */
+export function loginShellCaptureLine(
+  count: number,
+  elapsedMs: number,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (count > 0) return `[env] read ${count} variables from the login shell in ${elapsedMs}ms (engine one-shots only)`
+  if (platform === 'win32') return null
+  return '[env] could not read a login shell environment — engine one-shots use the daemon environment only'
+}

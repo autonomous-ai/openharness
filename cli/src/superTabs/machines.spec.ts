@@ -2935,6 +2935,26 @@ describe('a launched start whose engine stops on a screen', () => {
     expect(failures()[0]?.error).toBe('Its engine stopped on a folder trust question ("Trust this folder?") that nobody here can answer.')
   })
 
+  // On 2026-11-04 another program's two hooks stopped every Codex start on DESKTOP-0TFH0OJ at this screen. Esc goes on with
+  // those hooks off: nothing is trusted on the person's behalf, and it applies to any Swarm Codex start, Team-written or not.
+  it.each([
+    ['a Team-written start', { engine: 'codex', projectSettings: 'off' }],
+    ['any other Swarm start', { engine: 'codex' }],
+  ])("skips Codex's review of another program's hooks on %s, with Esc alone", async (_name, request) => {
+    const REVIEW = screens('codex-0163-hooks-review')
+    const { f, inputIfScreen, failures } = launched(REVIEW, 'menu_open', request)
+    await twice(f)
+    expect(inputIfScreen).toHaveBeenCalledWith('launched', ['Escape'], REVIEW)
+    expect(failures()).toEqual([])
+  })
+
+  it('fails, never answers, a screen with those words on another engine', async () => {
+    const { f, inputIfScreen, failures } = launched(screens('codex-0163-hooks-review'), 'menu_open', { engine: 'claude' })
+    await twice(f)
+    expect(inputIfScreen).not.toHaveBeenCalled()
+    expect(failures()[0]?.error).toBe('Its engine stopped on a menu that nobody here can answer.')
+  })
+
   // Security review 2 of #3063: the whole screen in a reason carried what a terminal shows only its own session (a sign-in
   // link's state, wrapped onto the next line; a device code; an account's email), and a malformed link threw before the
   // failure was sent. Its second read: option labels are terminal content too ("Use code 123456", a file path, a name), so

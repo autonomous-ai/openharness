@@ -479,7 +479,7 @@ export class SuperTabHost {
   /** Per tab the roster marks, the add in progress or when the next may run. */
   private readonly joins = new Map<string, { running: boolean; failures: number; retryAt: number }>()
   /** This Mac's Harness Team account being added to a Swarm, by `tabId:machineId` (joinTeams). */
-  private readonly teamJoins = new Map<string, { running: boolean; failures: number; retryAt: number }>()
+  private readonly teamJoins = new Map<string, { running: boolean; failures: number; retryAt: number; error?: string }>()
   /** Each delivery's downloaded files, so input held by a busy terminal is not downloaded again on every retry. Only a
    * complete download is kept: a failed one is tried again before the next delivery of the same message. */
   private readonly files = new Map<string, { text: string; paths: string[] }>()
@@ -1795,12 +1795,26 @@ export class SuperTabHost {
           type: 'machine.contribute', machineId: team.machineId, name: typeof team.name === 'string' && team.name ? team.name : this.core.account.machineName() ?? hostname(),
           cwd: prepared.cwd, scope: 'swarm', engines: prepared.engines,
           maxAgents: typeof team.maxAgents === 'number' ? team.maxAgents : prepared.maxAgents, ifMissing: true } })
-      })().then(() => { join.failures = 0; join.retryAt = this.now() + JOIN_RETRY_MS }, error => {
-        join.retryAt = error instanceof SuperTabHostError && JOIN_FINAL.has(error.code) ? Infinity
-          : this.now() + Math.min(JOIN_RETRY_MAX_MS, JOIN_RETRY_MS * 2 ** join.failures++)
-        this.log(`Could not add this Mac's Harness Team account to its Swarm: ${error instanceof Error ? error.message : String(error)}`)
+      })().then(() => { join.failures = 0; join.retryAt = this.now() + JOIN_RETRY_MS; delete join.error }, error => {
+        // Every refusal is tried again with the backoff, never for good (Amon, #3215: one stopped the join until a restart, and
+        // the row read "joining" with no reason). The roster stops asking once it no longer applies (backend hostRows.ts).
+        join.retryAt = this.now() + Math.min(JOIN_RETRY_MAX_MS, JOIN_RETRY_MS * 2 ** join.failures++)
+        join.error = error instanceof Error ? error.message : String(error)
+        this.log(`Could not add this Mac's Harness Team account to its Swarm: ${join.error}`)
       }).finally(() => { join.running = false })
     }
+  }
+
+  /** Why adding this Mac's Harness Team account to a Swarm last failed, while it still fails; null when none does: what this
+   *  Mac's own row says instead of "joining" (service.ts teamJoinStatus). */
+  teamJoinFailure(): string | null {
+    for (const join of this.teamJoins.values()) if (join.error) return join.error
+    return null
+  }
+
+  /** Retry on the row: each Team account join that failed is tried on the next poll, not after its backoff. */
+  retryTeamJoins(): void {
+    for (const join of this.teamJoins.values()) if (join.error) join.retryAt = 0
   }
 
   /** Its owner removed this machine from a Swarm: the roster names the cleanup until this host acknowledges it, so a host

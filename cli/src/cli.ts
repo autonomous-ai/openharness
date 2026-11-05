@@ -80,6 +80,7 @@ import { probeThisMaster, startMaster, startMasterInForeground } from './masterP
 import { startServiceProcess } from './serviceProcess.js'
 import { askDataFolderServer, isLocalSocketName, localSocketPath, refuseServedDataFolder, shortSocketFolder, servedFolderDeps } from './lib/localSocket.js'
 import { legacyDaemonStatus, localDaemonCall, localDaemonStatus } from './lib/daemonEndpoint.js'
+import { ownProcessGroup } from './lib/windows/noWindow.js'
 import { PipeUnproven } from './lib/windows/pipeClient.js'
 import { ptyManifestUrl, ptyPlatformKey, type PtyEntry } from './lib/windows/ptyPayload.js'
 import { newerPtyForUpdate } from './lib/windows/ptyUpdateCommand.js'
@@ -1095,7 +1096,7 @@ function promptForCallbackUrl(redirectUri: string): {
 function openInBrowser(url: string): void {
   const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
   try {
-    const child = spawn(cmd, [url], { stdio: 'ignore', detached: true, shell: process.platform === 'win32' })
+    const child = spawn(cmd, [url], { stdio: 'ignore', ...ownProcessGroup(), shell: process.platform === 'win32' })
     child.on('error', () => { /* no browser here (headless/ssh) — the printed URL is the fallback */ })
     child.unref()
   } catch { /* ignore */ }

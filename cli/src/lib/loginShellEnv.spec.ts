@@ -8,6 +8,7 @@ const account = vi.hoisted(() => ({ shell: null as string | null }))
 vi.mock('node:os', async (original) => ({ ...await original<typeof import('node:os')>(), userInfo: () => ({ shell: account.shell }) }))
 
 import {
+  loginShellCaptureLine,
   loginShellEnvironment,
   oneShotParentEnv,
   resetLoginShellEnvironmentCache,
@@ -74,6 +75,12 @@ describe('loginShellEnvironment', () => {
       expect((await warmLoginShellEnvironment()).HARNESS_LOGIN_SHELL_PROBE).toBe('from-the-profile')
       expect(oneShotParentEnv().HARNESS_LOGIN_SHELL_PROBE).toBe('from-the-profile')
     } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('says nothing about the empty capture on Windows, where there is no login shell', () => {
+    expect(loginShellCaptureLine(0, 12, 'win32')).toBeNull()
+    expect(loginShellCaptureLine(0, 12, 'darwin')).toContain('could not read a login shell')
+    expect(loginShellCaptureLine(3, 12, 'win32')).toContain('read 3 variables')
   })
 
   it('caches, so a recap never pays for the probe twice', async () => {

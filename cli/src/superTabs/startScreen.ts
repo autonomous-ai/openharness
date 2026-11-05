@@ -7,12 +7,14 @@
  * - A Team-written Codex start's own home names its checkout untrusted (start.ts `untrustCheckout`), so Codex asks to open
  *   it restricted, which keeps the branch's settings off: that exact screen alone is answered (engines/codex/screen.ts
  *   `openRestrictedKeys`), and only while the pane still shows it (inCore/terminal.ts `inputIfScreen`).
+ * - Codex's review of hooks it has not seen, on a computer with another program's new hook, is skipped the same way
+ *   (`hooksReviewSkipKeys`): those hooks stay off and nothing is trusted. Trusting one is a person's.
  * - Any other screen that waits for a person (terminal.ts `WAITING`) fails the start at once, saying what kind of screen it
  *   was, in fixed words ([hiddenPromptReason]): who started it, its coordinator and its machine's owner read that (backend
  *   startFailure.ts); members read only that the machine could not prepare or launch it.
  */
 import type { CoreApi } from '../core/api.js'
-import { openRestrictedKeys } from '../engines/codex/screen.js'
+import { hooksReviewSkipKeys, openRestrictedKeys } from '../engines/codex/screen.js'
 import { WAITING } from './terminal.js'
 import type { MessageHold } from '../engines/facets/screen.js'
 
@@ -44,11 +46,15 @@ export async function settleHiddenScreen(terminal: Terminal | undefined, harness
   if (!terminal) return { outcome: null }
   const read = await terminal.screen(harnessId, 0).catch(() => null)
   if (!read?.ok || !read.hold || !WAITING.has(read.hold as MessageHold)) return { outcome: null }
-  const keys = request.engine === 'codex' && request.projectSettings === 'off' ? openRestrictedKeys(read.text) : null
+  const restricted = request.engine === 'codex' && request.projectSettings === 'off' ? openRestrictedKeys(read.text) : null
+  const skipReview = request.engine === 'codex' && !restricted ? hooksReviewSkipKeys(read.text) : null
+  const keys = restricted ?? skipReview
   if (keys) {
     // A pane that changed meanwhile is read again on the next pass, never answered blind.
     const typed = await terminal.inputIfScreen(harnessId, keys, read.text).catch(() => null)
-    if (typed?.ok) log(`Opened the Team-written checkout restricted for session ${harnessId.slice(0, 8)}, as its engine asked`)
+    if (typed?.ok) log(restricted
+      ? `Opened the Team-written checkout restricted for session ${harnessId.slice(0, 8)}, as its engine asked`
+      : `Went past the review of another program's hooks for session ${harnessId.slice(0, 8)}: they stay off, and nothing was trusted`)
     return { outcome: typed?.ok ? 'answered' : null }
   }
   // Security review 1 of #3063: one read of a screen still drawing failed a start that would have gone on, and two failures in

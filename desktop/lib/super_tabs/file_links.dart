@@ -90,6 +90,19 @@ class SuperTabFileRef {
     return attachmentLink(_latest.url);
   }
 
+  /// The picture's thumbnail link while it opens for more than
+  /// [kSuperTabLinkMargin], else null: the chat then draws the original. Only
+  /// ever a signed link, and never for a file the server could not link.
+  Uri? get currentThumb {
+    final thumb = _latest.thumb;
+    if (thumb == null || thumb.unlinked || _latest.unlinked) return null;
+    final signed = thumb.link, ends = thumb.expiresAt;
+    final link = signed == null ? null : attachmentSignedLink(signed);
+    if (link == null || ends == null) return null;
+    final left = ends - superTabFileClock().millisecondsSinceEpoch;
+    return left > kSuperTabLinkMargin.inMilliseconds ? link : null;
+  }
+
   /// Whether the message names the file only by addresses this app refuses
   /// to open: a signed link off [kSuperTabFilesHost] or not https, or, from
   /// an older server, a stored address off the attachments host. A file not
@@ -151,6 +164,7 @@ Future<Uri?> superTabOpenableLink(
   SuperTabFileRef ref, {
   bool stale = false,
   void Function(String message)? onProblem,
+  void Function(SuperTabFileUnavailable problem)? onUnavailable,
 }) async {
   final source = SuperTabFiles.peek(context);
   bool still() => context.mounted && SuperTabFiles.peek(context) == source;
@@ -158,7 +172,10 @@ Future<Uri?> superTabOpenableLink(
     final link = await ref.link(stale: stale);
     return still() ? link : null;
   } on SuperTabFileUnavailable catch (problem) {
-    if (still()) onProblem?.call(problem.message);
+    if (still()) {
+      onProblem?.call(problem.message);
+      onUnavailable?.call(problem);
+    }
     return null;
   }
 }
