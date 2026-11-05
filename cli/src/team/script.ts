@@ -264,8 +264,8 @@ export const TEAM_ENGINES_INSTALL = [
  * setup on this Mac; copying the two packages took 2.3 s). Run as the team account, never as root. Positional: the mode,
  * the home, the package, its command and the command's file inside it.
  * - `unpack` reads a tar of the package on its input into `<package>.next` in the team's npm prefix, and keeps it only when
- *   it is that package with its command there, executable, to the team account (a link into the owner's private home is
- *   not). tar refuses to write outside the folder or through a link, and as this account sets no owner or set-id bit.
+ *   it is that package with its command there, a file and not a link (security review 1 of #3124), executable to the
+ *   team account. tar refuses to write outside the folder or through a link, and as this account sets no owner or set-id bit.
  * - `commit` puts it in place of the one there, and links the command as npm does, relatively.
  * - `discard` removes what `unpack` left.
  */
@@ -281,7 +281,7 @@ export const TEAM_ENGINE_COPY = [
   '  /usr/bin/tar -C "$dest.next" -xf - || { rm -rf "$dest.next"; exit 1; }',
   // The package's own name, as npm wrote it: what the owner has there is that engine, not something else by its folder.
   '  grep -Eq "\\"name\\"[[:space:]]*:[[:space:]]*\\"$pkg\\"" "$dest.next/package.json" 2>/dev/null \\',
-  '    && [ -f "$dest.next/$file" ] && [ -x "$dest.next/$file" ] || { rm -rf "$dest.next"; exit 1; } ;;',
+  '    && [ ! -L "$dest.next/$file" ] && [ -f "$dest.next/$file" ] && [ -x "$dest.next/$file" ] || { rm -rf "$dest.next"; exit 1; } ;;',
   'commit)',
   '  [ -d "$dest.next" ] || exit 1',
   '  rm -rf "$dest"; mv "$dest.next" "$dest"',
