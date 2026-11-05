@@ -15,7 +15,7 @@ const PR = 'https://github.com/acme/app/pull/7'
 function handedFixture() {
   const f = stepsFixture()
   f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: `Ready for review: ${PR} at abc1234` }, f.as(f.dev))
-  const next = f.run({ type: 'conversation.create', title: 'Fix logout', brief: 'Sign out works offline.', checks: [] }, f.as(f.lead)).result.conversationId as string
+  const next = f.run({ type: 'conversation.create', title: 'Fix logout', brief: 'Sign out works offline.', checks: [{ description: 'Signs out offline', independent: true }], priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
   // Not a spread: it would copy the fixture's `state` getter as a snapshot.
   return Object.assign(f, { next })
 }
@@ -32,7 +32,7 @@ describe('a ready pull request frees its Engineer (#3399)', () => {
 
   it('still refuses a second task while the first is in the Engineer\'s hands', () => {
     const f = stepsFixture()
-    const next = f.run({ type: 'conversation.create', title: 'Fix logout', brief: 'Sign out works offline.', checks: [] }, f.as(f.lead)).result.conversationId as string
+    const next = f.run({ type: 'conversation.create', title: 'Fix logout', brief: 'Sign out works offline.', checks: [{ description: 'Signs out offline', independent: true }], priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
     expect(() => f.run({ type: 'work.assign', conversationId: next, agentId: f.dev }, f.as(f.lead))).toThrow(expect.objectContaining({ code: 'AGENT_BUSY' }))
   })
 

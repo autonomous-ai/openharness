@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AgentStart, Assignment, SuperTabState } from './model.js'
 import { changesRequested, LEASE_MS, loseTasks, nextLossAt, QUIET_RUNNING_MS, renewOwnTask, revisionReady, sweepForLead, sweepLiveness, waitingForReview } from './liveness.js'
 import { MACHINE_FRESH_MS, startPreparing } from './machines.js'
+import { CREW_REOPEN_GRACE_MS } from './crew.js'
 import { split } from './parts/index.js'
 import { stepsFixture } from './steps.test-support.js'
 
@@ -129,6 +130,32 @@ describe('a task waiting for review', () => {
       leaseUntil: handedOver + LEASE_MS, progressAt: handedOver, ...patch }), { receivedAt: handedOver + 45 * MINUTE, harnessProgress: { h: handedOver } }), handedOver + 45 * MINUTE)
     expect(handOff()).toMatchObject({ status: 'working' })
     expect(handOff({ reviewFoundAt: handedOver })).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 45 minutes' } })
+  })
+
+  // Task #3397: a crashed crew member's host reopens it in place, so it keeps its task for CREW_REOPEN_GRACE_MS after its
+  // session went down; one still down then loses it as any worker does. Its machine going offline still loses it at once.
+  it('keeps a crew member\'s task while its host reopens it, and loses it once the grace ends', () => {
+    const crewStopped = (downFor: number) => {
+      const state = quiet('working', 1)
+      state.machines![0]!.observation!.stoppedHarnessIds = ['h']
+      state.agents[0]!.crew = { role: 'Engineer', at: 1, by: 'p' }
+      state.agents[0]!.downSince = new Date(handedOver + MINUTE - downFor).toISOString()
+      return state
+    }
+    expect(status(crewStopped(CREW_REOPEN_GRACE_MS - 1), handedOver + MINUTE)).toMatchObject({ status: 'working' })
+    expect(status(crewStopped(CREW_REOPEN_GRACE_MS), handedOver + MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its session on Mac stopped' } })
+    const notCrew = crewStopped(CREW_REOPEN_GRACE_MS - 1)
+    delete notCrew.agents[0]!.crew
+    expect(status(notCrew, handedOver + MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its session on Mac stopped' } })
+    // Asleep (closed on purpose) or moved to another machine (task #3398): nothing reopens it here, so no grace.
+    for (const gone of [{ asleep: { since: 1 } }, { movedTo: 'w2' }]) {
+      const away = crewStopped(CREW_REOPEN_GRACE_MS - 1)
+      Object.assign(away.agents[0]!, gone)
+      expect(status(away, handedOver + MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its session on Mac stopped' } })
+    }
+    const offline = quiet('working', 1)
+    offline.agents[0]!.crew = { role: 'Engineer', at: 1, by: 'p' }
+    expect(status(offline, handedOver + 4 * MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its machine Mac has been offline for 2 minutes' } })
   })
 
   // Task #3399: a handed task waits on its Reviewers and CI, not its Engineer, so neither loses it (handed.ts). An older skill's

@@ -75,7 +75,7 @@ describe('projects inside an invite-only swarm', () => {
     const f = setup(), p = f.project()
     const lead = f.add(p.conversationId, 'lead')
     const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host' }
-    const work = f.run({ type: 'conversation.create', title: 'Work', brief: 'Deliver it', checks: [{ description: 'It works', independent: true }] }, actor)
+    const work = f.run({ type: 'conversation.create', title: 'Work', brief: 'Deliver it', checks: [{ description: 'It works', independent: true }], priority: 'P2', requesterId: 'owner' }, actor)
     expect(f.state.conversations.find(c => c.id === work.conversationId)).toMatchObject({ projectId: p.projectId, agentIds: [lead], leadId: lead })
     expect(visibleState(f.state, actor).projects!.map(p => p.id)).toEqual([p.projectId])
     expect(() => f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: lead, present: true, lead: false })).toThrow('separate agent')
