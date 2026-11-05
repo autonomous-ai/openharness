@@ -67,11 +67,20 @@ describe('sharedFiles', () => {
 
 // Security review 2 of #3227 (Elm, minor): each pull request's own list was pinned to its own head; the brief says so.
 describe('stepBrief', () => {
-  it('names each pull request with its own head', () => {
+  it('names each pull request at its own whole head and base branch', () => {
     const [step] = reviewPlan(['docs/a.md'])
+    const [h7, h8] = ['abc1234'.padEnd(40, '0'), 'def5678'.padEnd(40, '0')]
     const brief = stepBrief(step!, { number: 9, title: 'Fix', pulls: [
-      { url: 'https://github.com/acme/app/pull/7', head: 'abc1234'.padEnd(40, '0') },
-      { url: 'https://github.com/acme/app/pull/8', head: 'def5678'.padEnd(40, '0') }] })
-    expect(brief).toContain('https://github.com/acme/app/pull/7 at head abc1234, https://github.com/acme/app/pull/8 at head def5678')
+      { url: 'https://github.com/acme/app/pull/7', head: h7, base: 'main' },
+      { url: 'https://github.com/acme/app/pull/8', head: h8, base: 'release' }] })
+    expect(brief).toContain(`https://github.com/acme/app/pull/7 at head ${h7} on base main, https://github.com/acme/app/pull/8 at head ${h8} on base release`)
+  })
+
+  // Task #3540: a verdict counts only at the exact head and base it read (#3394), so the brief asks for both, as the role sheets do.
+  it('asks every kind of step to record its verdict at the head (whole commit id) and base branch it read', () => {
+    for (const step of [...reviewPlan(['backend/src/routes/auth.ts', 'desktop/lib/a.dart']), ...reviewPlan(['docs/a.md']), ...reviewPlan(null)]) {
+      const brief = stepBrief(step, { number: 9, title: 'Fix', pulls: [{ url: 'https://github.com/acme/app/pull/7', head: null, base: null }] })
+      expect(brief, step.name).toContain('at the pull request head (whole commit id) and base branch you read')
+    }
   })
 })

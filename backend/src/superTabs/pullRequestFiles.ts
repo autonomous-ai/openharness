@@ -12,13 +12,13 @@ export interface PullRequestFilesApp {
   resolve: GitHubApp['resolve']
   createToken: GitHubApp['createToken']
   revoke: GitHubApp['revoke']
-  watchPullRequest(repository: GitHubRepository, number: number, token: string): Promise<{ head: string } | null>
+  watchPullRequest(repository: GitHubRepository, number: number, token: string): Promise<{ head: string; base?: string } | null>
   pullRequestFiles(repository: GitHubRepository, number: number, token: string): Promise<Array<{ filename: string }> | null>
 }
 
 /** What the store gives a Ready's command: the pull requests read, the first one's head (what a verdict is held to), each
  *  one's own head, and every file they change. */
-export interface PullRequestFilesRead { urls: string[]; head: string | null; files: string[] | null; heads?: Array<{ url: string; head: string | null }> }
+export interface PullRequestFilesRead { urls: string[]; head: string | null; files: string[] | null; heads?: Array<{ url: string; head: string | null; base?: string | null }> }
 
 const MAX_PULLS = 5
 const PULL = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]*)$/
@@ -42,12 +42,12 @@ export const projectPullRequestFiles = (app: PullRequestFilesApp) =>
       const resolved = await app.resolve(repository)
       if (!resolved) return read
       token = (await app.createToken(resolved.installation, resolved.repository, PULL_WATCH_PERMISSIONS)).token
-      const files = new Set<string>(), heads: Array<{ url: string; head: string | null }> = []
+      const files = new Set<string>(), heads: NonNullable<PullRequestFilesRead['heads']> = []
       for (const [i, pull] of own.entries()) {
         // The files of the head the watch read: when a push moved it while they were listed, they read as unreadable.
         const watch = await app.watchPullRequest(resolved.repository, pull.number, token)
         if (i === 0) read.head = watch?.head ?? null
-        heads.push({ url: pull.url, head: watch?.head ?? null })
+        heads.push({ url: pull.url, head: watch?.head ?? null, base: watch?.base ?? null })
         const listed = watch ? await app.pullRequestFiles(resolved.repository, pull.number, token) : null
         const after = listed ? await app.watchPullRequest(resolved.repository, pull.number, token) : null
         const changed = listed && after?.head === watch!.head ? listed : null

@@ -44,18 +44,21 @@ export function sharedFiles(pulls: ReadonlyArray<{ url: string; files: readonly 
   return [...by].filter(([, urls]) => urls.length > 1).map(([file, urls]) => ({ file, urls }))
 }
 
-const short = (head: string | null) => head ? head.slice(0, 7) : null
-
 /** What a step's agent is asked to do: which pull requests, at which head, for which task, and why this step. */
-export function stepBrief(step: PlannedStep, task: { number: number; title: string; pulls: ReadonlyArray<{ url: string; head: string | null }> }): string {
-  // Each pull request at the head its own files were read at.
-  const pulls = task.pulls.length ? task.pulls.map(pull => short(pull.head) ? `${pull.url} at head ${short(pull.head)}` : pull.url).join(', ') : 'its pull request'
+export function stepBrief(step: PlannedStep, task: { number: number; title: string;
+  pulls: ReadonlyArray<{ url: string; head: string | null; base?: string | null }> }): string {
+  // Each pull request at the whole head its own files were read at, on its base branch: a verdict records both (#3394), and
+  // work.check refuses a short head, so the brief shows the id a reviewer can copy.
+  const pulls = task.pulls.length ? task.pulls.map(pull => `${pull.url}${pull.head ? ` at head ${pull.head}` : ''}${pull.base ? ` on base ${pull.base}` : ''}`).join(', ')
+    : 'its pull request'
   const what = step.kind === 'test'
     ? `Test ${pulls} for task #${task.number} "${task.title}" as a user would, where it changes: ${step.where!.join('; ')}.`
     : `${step.kind === 'security' ? 'Security-review' : 'Review'} ${pulls} for task #${task.number} "${task.title}".`
   const why = step.unread ? ' Its changed files could not be read, so it is reviewed as strictly as the review table goes.'
     : step.kind === 'security' ? ` It changes ${step.areas.join(', ')}: two independent security reviews before merge.` : ''
-  return `${what}${why} Record your verdict at the head you read, and send it to the task's Engineer with "Ready to merge: Yes", "No" or "With fixes".`
+  // A verdict counts only at the exact head and base it read (#3394): the role sheets' words (cli swarmToolSheets.ts work.check).
+  return `${what}${why} Record your verdict as this step's check at the pull request head (whole commit id) and base branch you read, and send `
+    + 'it to the task\'s Engineer with "Ready to merge: Yes", "No" or "With fixes".'
 }
 
 /** The acceptance check a step's agent records. */
