@@ -5323,6 +5323,25 @@ describe('lead.switch', () => {
     expect(code(() => missing.f.run(missing.request))).toBe('ENGINE_NOT_OFFERED')
   })
 
+  // Task #3022 (Ken, 11-05): a PM runs at high effort or above, whoever moves it.
+  it('refuses an effort below high, and asks for high when a model is named with none', () => {
+    for (const effort of ['medium', 'low', 'minimal']) {
+      const s = setup()
+      expect(code(() => s.f.run({ ...s.request, model: 'gpt-6-astra', effort }))).toBe('EFFORT_TOO_LOW')
+      expect(s.agent().switchRequest).toBeUndefined()
+    }
+    const named = setup()
+    named.f.run({ ...named.request, model: 'gpt-6-astra' })
+    expect(named.agent().switchRequest).toMatchObject({ model: 'gpt-6-astra', effort: 'high' })
+    const xhigh = setup()
+    xhigh.f.run({ ...xhigh.request, model: 'gpt-6-astra', effort: 'xhigh' })
+    expect(xhigh.agent().switchRequest).toMatchObject({ effort: 'xhigh' })
+    // No model named: the engine's own model and effort, as before.
+    const own = setup()
+    own.f.run(own.request)
+    expect(own.agent().switchRequest).not.toHaveProperty('effort')
+  })
+
   it('works while the Swarm is paused', () => {
     const s = setup()
     s.f.state.paused = true
