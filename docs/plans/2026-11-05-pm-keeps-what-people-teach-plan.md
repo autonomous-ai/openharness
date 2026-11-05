@@ -29,6 +29,7 @@ reflection counts repeats.
 - Effort floor: `minimal`, `low` and `medium` are refused on `lead.start` and `lead.switch`; a switch naming a model and
   no effort gets `high`. Codex PMs named with no model keep their engine's own model and effort (the host applies an
   effort only with a model).
+- The daily tidy counts revisions after the first document (revision 1), so a new project is not woken to tidy a template.
 - Built-in text is product copy: short and plain (docs/naming-system.md).
 
 ## Review Focus
@@ -48,6 +49,12 @@ Files: `backend/src/superTabs/pmSchedule.ts`, `backend/src/superTabs/pmSchedule.
 - [ ] Test: the section tells the PM to save a correction or lasting rule in the same turn, before answering, naming who
   said it, without asking; to tidy past 150 lines; to count repeats in the nightly reflection. Watch it fail.
 - [ ] Write the text. Watch it pass.
+
+### Task 1b: two more lines (River, 11-05, from a case on lamp)
+
+- [ ] Test: the section says the PM never writes code itself, even when asked directly, and that the project's instructions
+  outrank the repository's agent files (CLAUDE.md, AGENTS.md); on a conflict it follows the instructions and says so.
+- [ ] Write the lines.
 
 ### Task 2: the coordinator hears people (parts/commit.ts numberMessages)
 
