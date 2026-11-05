@@ -165,6 +165,32 @@ describe('reads and tests a change needs', () => {
     expect(testsFor(SEED_RULES, ['desktop/lib/latests/a.dart'])).toEqual(['Desktop on a Mac'])
   })
 
+  // The regex the matcher replaced (#3216), for short inputs where it is fast: both must say the same thing.
+  it('agrees with the regex it replaced on short random patterns and paths', () => {
+    const regex = (glob: string) => {
+      let source = ''
+      for (let i = 0; i < glob.length; i++) {
+        const c = glob[i]!
+        if (c === '*' && glob[i + 1] === '*') {
+          if (glob[i + 2] === '/') { source += '(?:.*/)?'; i += 2 } else { source += '.*'; i += 1 }
+        } else if (c === '*') source += '[^/]*'
+        else if (c === '?') source += '[^/]'
+        else source += c.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      }
+      return new RegExp(`^${source}$`, 'i')
+    }
+    let seed = 7
+    // A linear congruential generator's low bits repeat quickly: take the high ones.
+    const random = (n: number) => { seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648; return Math.floor(seed / 65_536) % n }
+    const pick = <T,>(items: readonly T[]) => items[random(items.length)]!
+    const globParts = ['a', 'b', '/', '*', '?', '**', '**/', '.'], pathParts = ['a', 'b', '/', '.', 'x']
+    for (let n = 0; n < 5_000; n++) {
+      const glob = Array.from({ length: 1 + random(6) }, () => pick(globParts)).join('')
+      const path = Array.from({ length: random(9) }, () => pick(pathParts)).join('')
+      expect(globMatch(glob, path), `${glob} on ${path}`).toBe(regex(glob).test(path))
+    }
+  })
+
   it('asks the most reads any touched row asks, at least the default, and fails closed on files it cannot read', () => {
     expect(requiredReads(SEED_RULES, ['desktop/lib/super_tabs/view.dart'])).toBe(1)
     expect(requiredReads(SEED_RULES, ['desktop/lib/super_tabs/view.dart', 'backend/src/lib/ssoAuth.ts'])).toBe(2)
