@@ -42,32 +42,20 @@ void main() {
   }
 
   group('address', () {
-    test('an iOS token comes with its APNs gateway', () async {
+    test('an iOS or Android token is its platform and token, nothing else', () async {
       answer = (_) => {'token': 'abc', 'platform': 'ios', 'environment': 'sandbox'};
-      expect(await PushChannel().address(), (
-        token: 'abc',
-        platform: 'ios',
-        environment: 'sandbox',
-      ));
-    });
-
-    test('an Android token has none', () async {
-      answer = (_) => {'token': 'fcm', 'platform': 'android', 'environment': 'sandbox'};
-      expect(await PushChannel().address(), (
-        token: 'fcm',
-        platform: 'android',
-        environment: null,
-      ));
+      expect(await PushChannel().address(), (token: 'abc', platform: 'ios'));
+      answer = (_) => {'token': 'fcm:1', 'platform': 'android'};
+      expect(await PushChannel().address(), (token: 'fcm:1', platform: 'android'));
     });
 
     test('anything else names no address', () async {
       for (final bad in <Object?>[
         null,
-        {'platform': 'ios', 'environment': 'production'},
-        {'token': '', 'platform': 'ios', 'environment': 'production'},
+        {'platform': 'ios'},
+        {'token': '', 'platform': 'ios'},
         {'token': 'abc', 'platform': 'web'},
-        {'token': 'abc', 'platform': 'ios'},
-        {'token': 'abc', 'platform': 'ios', 'environment': 'staging'},
+        {'token': 'abc'},
       ]) {
         answer = (_) => bad;
         expect(await PushChannel().address(), isNull, reason: '$bad');

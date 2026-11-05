@@ -11,16 +11,16 @@ import 'voice_fakes.dart' show MemoryKeyValueStore;
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  const apns1 = (token: 'apns-1', platform: 'ios');
   late _Channel channel;
   late PushTokens push;
 
   setUp(() {
-    channel = _Channel()..next = (token: 'apns-1', platform: 'ios', environment: 'production');
+    channel = _Channel()..next = apns1;
     push = PushTokens(
       channel: channel,
       storage: MemoryKeyValueStore(),
       allowed: () async => true,
-      device: () async => 'pub-1',
     );
   });
 
@@ -28,11 +28,11 @@ void main() {
     final rig = viewerApp(pushTokens: push);
     await rig.app.bootstrap();
     await settle();
-    expect(rig.api.pushRegistered.map((a) => a.token), ['apns-1']);
+    expect(rig.api.pushRegistered, [apns1]);
 
     await rig.app.logout();
     await settle();
-    expect(rig.api.pushForgotten, ['apns-1']);
+    expect(rig.api.pushForgotten, [apns1]);
     expect(channel.forgot, 1);
     rig.app.dispose();
   });
@@ -51,10 +51,10 @@ void main() {
     final rig = viewerApp(pushTokens: push);
     await rig.app.bootstrap();
     await settle();
-    channel.next = (token: 'apns-2', platform: 'ios', environment: 'production');
+    channel.next = (token: 'apns-2', platform: 'ios');
     channel.onChanged!();
     await settle();
-    expect(rig.api.pushRegistered.map((a) => a.token), ['apns-1', 'apns-2']);
+    expect(rig.api.pushRegistered, [apns1, (token: 'apns-2', platform: 'ios')]);
     rig.app.dispose();
   });
 

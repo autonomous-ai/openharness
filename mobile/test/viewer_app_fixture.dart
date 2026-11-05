@@ -155,14 +155,15 @@ class FakeApi extends ApiClient {
 
   /// The push addresses told to the backend, and those taken back. Never the network.
   final List<PushAddress> pushRegistered = [];
-  final List<String> pushForgotten = [];
+  final List<PushAddress> pushForgotten = [];
 
   @override
-  Future<void> registerPushToken(PushAddress address, {String? device}) async =>
+  Future<void> registerPushToken(PushAddress address) async =>
       pushRegistered.add(address);
 
   @override
-  Future<void> forgetPushToken(String token) async => pushForgotten.add(token);
+  Future<void> forgetPushToken(PushAddress address) async =>
+      pushForgotten.add(address);
 
   // No acknowledgements ("It's mine" said on another device) unless a test serves some: never the network.
   @override

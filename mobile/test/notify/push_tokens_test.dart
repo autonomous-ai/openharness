@@ -12,14 +12,13 @@ import '../voice_fakes.dart' show MemoryKeyValueStore;
 /// again each week, never for a phone whose person refused notices or signed out — and a phone that
 /// signed out is reached by nothing, even when the backend could not be told.
 void main() {
-  const ios = (token: 'apns-1', platform: 'ios', environment: 'production');
+  const ios = (token: 'apns-1', platform: 'ios');
 
   late _Channel channel;
   late _Api api;
   late MemoryKeyValueStore storage;
   late DateTime now;
   bool? allowed;
-  String? device;
   late PushTokens push;
 
   setUp(() {
@@ -28,12 +27,10 @@ void main() {
     storage = MemoryKeyValueStore();
     now = DateTime(2026, 11, 5, 9);
     allowed = true;
-    device = 'pub-1';
     push = PushTokens(
       channel: channel,
       storage: storage,
       allowed: () async => allowed,
-      device: () async => device,
       now: () => now,
     );
   });
@@ -41,9 +38,9 @@ void main() {
   Future<void> sync({String account = 'acct-1', bool current = true}) =>
       push.sync(account: account, api: api, current: () => current);
 
-  test('tells the backend once, with the device key, and not again within the week', () async {
+  test('tells the backend once, and not again within the week', () async {
     await sync();
-    expect(api.registered, [(address: ios, device: 'pub-1')]);
+    expect(api.registered, [ios]);
 
     now = now.add(const Duration(days: 6));
     await sync();
@@ -54,23 +51,21 @@ void main() {
     expect(api.registered, hasLength(2), reason: 'renewed, so the backend keeps it');
   });
 
-  test('tells again when the address, its gateway or the account changes', () async {
+  test('tells again when the token or the account changes', () async {
     await sync();
-    channel.next = (token: 'apns-2', platform: 'ios', environment: 'production');
-    await sync();
-    channel.next = (token: 'apns-2', platform: 'ios', environment: 'sandbox');
+    channel.next = (token: 'apns-2', platform: 'ios');
     await sync();
     await sync(account: 'acct-2');
-    expect(api.registered.map((r) => r.address.token), ['apns-1', 'apns-2', 'apns-2', 'apns-2']);
-    expect(api.registered[2].address.environment, 'sandbox');
+    expect(api.registered, [ios, (token: 'apns-2', platform: 'ios'), (token: 'apns-2', platform: 'ios')]);
   });
 
-  test('an Android address has no gateway', () async {
-    channel.next = (token: 'fcm-1', platform: 'android', environment: null);
+  test('an Android token is registered and dropped with its platform', () async {
+    channel.next = (token: 'fcm:1', platform: 'android');
     await sync();
     await sync();
-    expect(api.registered, hasLength(1));
-    expect(api.registered.single.address.environment, isNull);
+    expect(api.registered, [(token: 'fcm:1', platform: 'android')]);
+    await push.forget(api);
+    expect(api.forgotten, [(token: 'fcm:1', platform: 'android')]);
   });
 
   test('nothing while the OS cannot say whether notices are allowed', () async {
@@ -85,7 +80,7 @@ void main() {
     await sync();
     allowed = false;
     await sync();
-    expect(api.forgotten, ['apns-1']);
+    expect(api.forgotten, [ios]);
     expect(channel.asked, 1, reason: 'no address is asked for while notices are off');
 
     // Back on: told again at once, not a week later.
@@ -129,7 +124,7 @@ void main() {
   test('a sign-out takes the address back and stops the OS delivering to it', () async {
     await sync();
     await push.forget(api);
-    expect(api.forgotten, ['apns-1']);
+    expect(api.forgotten, [ios]);
     expect(channel.forgot, 1);
     expect(storage.values, isEmpty);
 
@@ -153,7 +148,6 @@ void main() {
       channel: channel,
       storage: storage,
       allowed: () => answer.future,
-      device: () async => device,
       now: () => now,
     );
     final syncing = sync();
@@ -171,13 +165,18 @@ void main() {
     final kept = jsonDecode(storage.values['push_token_sent_v1']!) as Map;
     expect(kept['account'], 'acct-1');
     expect(kept['token'], 'apns-1');
+    expect(kept['platform'], 'ios');
   });
 
-  test('a phone with no device key yet still registers', () async {
-    device = null;
+  test('a record from before the platform was kept counts as never told', () async {
+    await storage.write(
+      'push_token_sent_v1',
+      jsonEncode({'account': 'acct-1', 'token': 'apns-1', 'at': now.millisecondsSinceEpoch}),
+    );
     await sync();
-    expect(api.registered.single.device, isNull);
+    expect(api.registered, [ios]);
   });
+
 }
 
 class _Channel extends PushChannel {
@@ -196,22 +195,22 @@ class _Channel extends PushChannel {
 }
 
 class _Api implements PushTokenApi {
-  final registered = <({PushAddress address, String? device})>[];
-  final forgotten = <String>[];
+  final registered = <PushAddress>[];
+  final forgotten = <PushAddress>[];
   int attempts = 0;
   Object? refuseRegister;
   Object? refuseForget;
 
   @override
-  Future<void> registerPushToken(PushAddress address, {String? device}) async {
+  Future<void> registerPushToken(PushAddress address) async {
     attempts++;
     if (refuseRegister case final error?) throw error;
-    registered.add((address: address, device: device));
+    registered.add(address);
   }
 
   @override
-  Future<void> forgetPushToken(String token) async {
+  Future<void> forgetPushToken(PushAddress address) async {
     if (refuseForget case final error?) throw error;
-    forgotten.add(token);
+    forgotten.add(address);
   }
 }
