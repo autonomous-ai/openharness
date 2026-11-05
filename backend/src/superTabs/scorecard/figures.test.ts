@@ -110,6 +110,7 @@ describe('scorecardDay', () => {
     const messages = [
       lost('t1', at(2)), // picked up after 5 minutes
       lost('t2', at(4)), // a start after 40 minutes
+      lost('t2', at(4)), // the same loss's row to the agent: one loss
       lost('t3', at(23)), // nothing until day end, 60 minutes
     ]
     const day = scorecardDay(input({ tasks, messages, starts: [{ conversationId: 't2', requestedAt: at(4, 40), failed: false }] }))
