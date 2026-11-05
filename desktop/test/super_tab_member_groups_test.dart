@@ -5,11 +5,17 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/member_groups.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/tasks_view.dart';
+import 'package:harness/super_tabs/zone_time.dart';
 
 import 'support/memory_key_value_store.dart';
 import 'support/super_tab_fixture.dart';
 
-final _now = DateTime(2026, 11, 5, 9);
+/// 09:00 on 11-05 in Vietnam, a project's day when its digest names no zone,
+/// whatever zone the machine running the test is in.
+final _now = DateTime.utc(2026, 11, 5, 2);
+
+/// 11-06 01:00 in Vietnam, still 11-05 (10:00) in Los Angeles.
+final _vietnamTomorrow = DateTime.utc(2026, 11, 5, 18);
 int _ago(Duration d) => _now.subtract(d).millisecondsSinceEpoch;
 
 Map<String, dynamic> _task(
@@ -68,9 +74,15 @@ Map<String, dynamic> _agent(
 /// handed over, and one with no lane), an agent that is not crew, and the
 /// open tasks nobody holds: two lost, one P0, one not before tomorrow, one no
 /// lane owns. With [lanes] off, the server is one from before hand-out lanes.
-ConversationServer _server({bool lanes = true}) {
+ConversationServer _server({bool lanes = true, String? digestZone}) {
   final server = ConversationServer();
-  server.state['projects'] = [projectFixture('lead', 'openharness', 'lead')];
+  server.state['projects'] = [
+    {
+      ...projectFixture('lead', 'openharness', 'lead'),
+      if (digestZone != null)
+        'digest': {'time': '08:00', 'timeZone': digestZone},
+    },
+  ];
   server.state['people'] = [
     {'id': 'owner', 'email': 'dee@example.com', 'role': 'owner'},
   ];
@@ -249,6 +261,7 @@ Future<SuperTabController> _show(
   MemoryKeyValueStore? storage,
   List<String>? opened,
   bool members = true,
+  DateTime? now,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1900, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -269,7 +282,7 @@ Future<SuperTabController> _show(
           needsHuman: (_) => 0,
           onOpenTask: (id) => opened?.add(id),
           onOpenProposal: (_) {},
-          now: () => _now,
+          now: () => now ?? _now,
         ),
       ),
     ),
@@ -333,6 +346,8 @@ Finder _containing(Finder of, String text) =>
 /// order the Swarm hands work out, under one line of lane capacity worked out
 /// from the tasks the app holds.
 void main() {
+  setUpAll(superTabLoadZones);
+
   testWidgets('the Tasks view still opens on the Board', (tester) async {
     final c = await _show(tester, _server(), members: false);
     expect(find.byKey(const ValueKey('super-tasks-board')), findsOneWidget);
@@ -439,6 +454,28 @@ void main() {
     expect(
       tester.getBottomLeft(_capacity).dy,
       lessThanOrEqualTo(tester.getTopLeft(_member('finch')).dy),
+    );
+    await _close(tester, c);
+  });
+
+  testWidgets('a task waits from its not-before day in the project\'s zone, '
+      'not the computer\'s', (tester) async {
+    // 11-06 in Vietnam: the task not before 11-06 waits too.
+    var c = await _show(tester, _server(), now: _vietnamTomorrow);
+    expect(
+      tester.widget<Text>(_capacity).data,
+      contains('Desktop: 4 waiting, 2 busy'),
+    );
+    await _close(tester, c);
+    // Still 11-05 where this project's digest is sent: it does not yet.
+    c = await _show(
+      tester,
+      _server(digestZone: 'America/Los_Angeles'),
+      now: _vietnamTomorrow,
+    );
+    expect(
+      tester.widget<Text>(_capacity).data,
+      contains('Desktop: 3 waiting, 2 busy'),
     );
     await _close(tester, c);
   });
@@ -571,6 +608,37 @@ void main() {
         ],
       );
     });
+
+    test('today is the project\'s day, Vietnam\'s by default', () {
+      final later = [task('t', 'Desktop', notBefore: '2026-11-06')];
+      int? waiting(String? zone) => superTabLaneCapacity(
+        later,
+        _vietnamTomorrow,
+        timeZone: zone,
+      ).firstOrNull?.waiting;
+      expect(waiting('Asia/Ho_Chi_Minh'), 1);
+      expect(waiting(null), 1);
+      expect(waiting('America/Los_Angeles'), isNull);
+      // A zone the table lacks: Vietnam's.
+      expect(waiting('Mars/Base'), 1);
+    });
+  });
+
+  test('a project reads its digest\'s zone, Vietnam\'s without one', () {
+    SuperTabProject project(Object? digest) => SuperTabProject.fromJson({
+      ...projectFixture('lead', 'openharness', 'lead'),
+      'digest': ?digest,
+    });
+    expect(
+      project({'time': '08:00', 'timeZone': 'America/Los_Angeles'}).timeZone,
+      'America/Los_Angeles',
+    );
+    expect(project(null).timeZone, 'Asia/Ho_Chi_Minh');
+    expect(
+      project({'time': '08:00', 'timeZone': 5}).timeZone,
+      'Asia/Ho_Chi_Minh',
+    );
+    expect(project('08:00').timeZone, 'Asia/Ho_Chi_Minh');
   });
 
   group('superTabCapacityLine', () {

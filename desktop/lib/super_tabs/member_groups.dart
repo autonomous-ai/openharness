@@ -1,6 +1,7 @@
 import 'backlog.dart';
 import 'model.dart';
 import 'task_groups.dart';
+import 'zone_time.dart';
 
 /// How many tasks a crew member may have handed over and still take the next
 /// (backend dispatch.ts `DISPATCH_RULES.maxHanded`).
@@ -153,15 +154,17 @@ DateTime? _waitingSince(SuperTabConversation task) {
 /// [tasks]' lanes at [now], as the dispatch counts them (backend dispatch.ts
 /// `laneCapacity`), from each task's hand-out lane: waiting, a task not
 /// archived, nobody holding it, not done or cancelled, whose not-before day
-/// has come (the local date); busy, one with active work. The oldest is the
+/// has come in the project's [timeZone] (Vietnam's when null or unknown, as
+/// the server reads it); busy, one with active work. The oldest is the
 /// earliest a waiting task began waiting. Lanes in the table's order, only
 /// those with work; none from a server before hand-out lanes. Every task the
 /// app holds counts, so one changed task moves the line.
 List<SuperTabLaneCapacity> superTabLaneCapacity(
   Iterable<SuperTabConversation> tasks,
-  DateTime now,
-) {
-  final today = DateTime(now.year, now.month, now.day);
+  DateTime now, {
+  String? timeZone,
+}) {
+  final today = superTabDateIn(timeZone ?? superTabDefaultTimeZone, now);
   final waiting = <String, int>{}, busy = <String, int>{};
   final oldest = <String, DateTime>{};
   for (final task in tasks) {
@@ -172,7 +175,10 @@ List<SuperTabLaneCapacity> superTabLaneCapacity(
       continue;
     }
     if (!_unheld(task)) continue;
-    if (task.notBefore case final day? when day.isAfter(today)) continue;
+    if (task.notBefore case final day?
+        when DateTime.utc(day.year, day.month, day.day).isAfter(today)) {
+      continue;
+    }
     waiting[lane] = (waiting[lane] ?? 0) + 1;
     final since = _waitingSince(task);
     final held = oldest[lane];

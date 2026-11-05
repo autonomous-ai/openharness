@@ -18,6 +18,7 @@ import 'member_groups.dart';
 import 'model.dart';
 import 'task_card.dart';
 import 'task_groups.dart';
+import 'zone_time.dart';
 
 /// A project's Tasks view (Dee, task #2569): every ask from proposal to
 /// shipped, as a Board (the default), a List or by crew member (Members,
@@ -91,6 +92,14 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   void initState() {
     super.initState();
     unawaited(_restore());
+    // The lanes read each task's not-before day in its project's zone.
+    if (!superTabZonesLoaded) {
+      unawaited(
+        superTabLoadZones().then((_) {
+          if (mounted) setState(() {});
+        }),
+      );
+    }
     _readShipped();
   }
 
@@ -534,7 +543,11 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       entries: board.values.expand((entries) => entries),
     );
     final capacity = superTabCapacityLine(
-      superTabLaneCapacity(superTabProjectTasks(c, project), now),
+      superTabLaneCapacity(
+        superTabProjectTasks(c, project),
+        now,
+        timeZone: project.timeZone,
+      ),
       now,
     );
     Widget column(Key key, Widget heading, List<Widget> rows) => SizedBox(

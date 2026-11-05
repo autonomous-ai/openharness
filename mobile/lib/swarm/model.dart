@@ -577,6 +577,10 @@ class SuperTabConversation {
   final Map<String, dynamic>? leadAction;
 }
 
+/// The zone a project's day is read in when its digest names none (backend
+/// costs/reflection.ts `DEFAULT_TIME_ZONE`).
+const superTabDefaultTimeZone = 'Asia/Ho_Chi_Minh';
+
 class SuperTabProject {
   SuperTabProject.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -600,6 +604,10 @@ class SuperTabProject {
               superTabMap(member)['generation'] as String?,
       },
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
+      timeZone = switch (row['digest']) {
+        {'timeZone': final String zone} when zone.isNotEmpty => zone,
+        _ => superTabDefaultTimeZone,
+      },
       status = SuperTabProjectStatus.read(row['status']),
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
@@ -609,6 +617,10 @@ class SuperTabProject {
           if (entry is Map && entry['id'] is String) entry['id'] as String,
       };
   final String id, name, ownerId, leadConversationId;
+
+  /// The zone its day is read in, read as the desktop's model reads it (its
+  /// digest's, else [superTabDefaultTimeZone]); the phone shows no lanes yet.
+  final String timeZone;
 
   /// The person's messages the server keeps for this project's Lead: a
   /// Personal Swarm's chat with none, whose Lead their computer starts

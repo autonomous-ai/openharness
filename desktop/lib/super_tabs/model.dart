@@ -562,6 +562,10 @@ class SuperTabConversation {
   final Map<String, dynamic>? leadAction;
 }
 
+/// The zone a project's day is read in when its digest names none (backend
+/// costs/reflection.ts `DEFAULT_TIME_ZONE`).
+const superTabDefaultTimeZone = 'Asia/Ho_Chi_Minh';
+
 class SuperTabProject {
   SuperTabProject.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -585,11 +589,20 @@ class SuperTabProject {
               superTabMap(member)['generation'] as String?,
       },
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
+      timeZone = switch (row['digest']) {
+        {'timeZone': final String zone} when zone.isNotEmpty => zone,
+        _ => superTabDefaultTimeZone,
+      },
       status = SuperTabProjectStatus.read(row['status']),
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
           : null;
   final String id, name, ownerId, leadConversationId;
+
+  /// The zone its day is read in, as the server reads it for the crew
+  /// dispatch and the morning digest: its digest's, else
+  /// [superTabDefaultTimeZone] (backend dispatch.ts `openTasks`).
+  final String timeZone;
 
   /// Sent to the daemon unchanged as `swarmSkillMode` when an agent starts (an older CLI refuses other values).
   final String skillMode;
