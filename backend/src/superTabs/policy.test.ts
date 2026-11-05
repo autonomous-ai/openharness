@@ -37,7 +37,7 @@ describe('the project rules record', () => {
     expect(refused({ ...copy(), mergeTrain: { enabled: 'yes', everyMinutes: 30 } })).toBe(true)
     expect(refused({ ...copy(), caps: Array.from({ length: 51 }, (_, i) => ({ name: `Cap ${i}`, value: i })) })).toBe(true)
     expect(refused({ ...copy(), caps: [{ name: 'Agents', value: -1 }] })).toBe(true)
-    expect(refused({ ...copy(), paths: [{ name: 'Plans', path: '/etc/passwd\n' }] })).toBe(true)
+    expect(refused({ ...copy(), paths: [{ name: 'Plans', path: 'docs/\nplans/' }] })).toBe(true)
     const { mergeTrain: _gone, ...missing } = copy()
     expect(refused(missing)).toBe(true)
     // At most 8 KB as stored: within every list's own limits, still too big together.
