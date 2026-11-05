@@ -1101,6 +1101,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** Any other row the system writes in the actor's name. Without a source, a notice written as the owner read as the owner
    * asking, and a Lead could quote it to change rules (review of #1594). Only `message.send` and an initial message stay plain. */
   const SYSTEM_ROW = { kind: 'system' }
+  /** A cancel, with its status as a status row has it: the scorecard's task timelines see the task close (scorecard/figures.ts). */
+  const CANCEL_ROW = { ...SYSTEM_ROW, status: 'cancelled' }
   /** [agentId] as a member of [group] who may be told there: joined when it is not one yet and may join; else null. */
   const reachable = (group: Conversation, agentId: string | null): string | null => {
     if (!agentId || group.agentIds.includes(agentId)) return agentId
@@ -3828,7 +3830,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const reviewEnded = !!group.reviewOf && !!assignment && ['stopped', 'done'].includes(assignment.status)
         && (command.assignmentId === 'current' || command.assignmentId === assignment.id)
       if ((unassigned || reviewEnded) && allowed && group.id !== project.leadConversationId && !group.kind && !group.audience) {
-        message(group.id, `${who} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.`, [], null, SYSTEM_ROW)
+        message(group.id, `${who} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.`, [], null, CANCEL_ROW)
         // Its line is a report the coordinator acknowledges first, so the sweep puts it to sleep later (sweeps.ts), as for any archive.
         group.archived = true
         endStepsOf(group, `${group.title} was archived.`, true)
@@ -3856,7 +3858,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       endStepsOf(group, `${group.title} was cancelled.`, false)
       message(group.id, `${who} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.${gone ? '' : ' Stop working on it.'}`,
         // Telling its agent to stop is the agent's alone; people read the cancel and its reason on the task itself.
-        gone ? [] : [assignment.agentId], null, gone ? SYSTEM_ROW : forRecipients(SYSTEM_ROW))
+        gone ? [] : [assignment.agentId], null, gone ? CANCEL_ROW : forRecipients(CANCEL_ROW))
       break
     }
     case 'work.resume': {
