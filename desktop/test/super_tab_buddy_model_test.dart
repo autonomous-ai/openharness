@@ -485,4 +485,86 @@ void main() {
       await close(tester, c);
     });
   });
+
+  // Task #3256: a switch the Buddy guard holds (a Buddy started before its
+  // owner was recorded) comes back as this line from the Buddy's machine
+  // (cli superTabs/buddyModel.ts refusal(), backend buddyModel.ts). Until the
+  // Buddy is started again, the bar offers that in one click.
+  group('after a switch its Buddy must be started again for', () {
+    const held =
+        "Couldn't switch your Buddy: Start your Buddy again to switch its "
+        'model. It is still on your subscription.';
+    const offer = 'Start your Buddy again to switch its model.';
+    final startAgain = find.widgetWithText(TextButton, 'Start again');
+
+    /// The Buddy's machine's line in its chat, as the backend writes a
+    /// switch's result: a system line by the Buddy agent [by].
+    void line(ConversationServer server, String text, {String by = 'wren'}) {
+      server.append(text, conversationId: 'swarm-buddy-peer');
+      server.messages.last
+        ..['author'] = {'kind': 'agent', 'id': by, 'name': 'Wren'}
+        ..['source'] = {'kind': 'system'};
+    }
+
+    testWidgets('the bar offers Start again, which starts a fresh Buddy on '
+        'the same machine and engine', (tester) async {
+      final server = swarm();
+      line(server, held);
+      final c = await show(tester, server);
+      expect(find.text(offer), findsOneWidget);
+      // The picker stays: the line is what was learnt, not a lock.
+      expect(picker, findsOneWidget);
+
+      await tester.tap(startAgain);
+      await tester.pumpAndSettle();
+      // A running Buddy refuses a second start (backend BUDDY_EXISTS): it is
+      // removed, then started, as a down one is replaced.
+      expect(commands(server, 'buddy.remove').single, {'type': 'buddy.remove'});
+      expect(commands(server, 'buddy.create').single, {
+        'type': 'buddy.create',
+        'machineId': 'ken-mac',
+        'engine': 'claude',
+      });
+      expect(c.operationError, isNull);
+      // The new Buddy did not write that line: the offer is gone.
+      expect(c.buddy(SuperTabController.kSwarmBuddyKey)!.id, isNot('wren'));
+      expect(find.text(offer), findsNothing);
+      await close(tester, c);
+    });
+
+    testWidgets('it is not offered for another reason, once a later line '
+        'settles it, while a switch is under way, or for an earlier Buddy', (
+      tester,
+    ) async {
+      Future<void> none(ConversationServer server) async {
+        final c = await show(tester, server);
+        expect(find.text(offer), findsNothing);
+        expect(startAgain, findsNothing);
+        await close(tester, c);
+      }
+
+      await none(
+        swarm()..append('Start your Buddy again', conversationId: 'lead'),
+      );
+      final other = swarm();
+      line(
+        other,
+        "Couldn't switch your Buddy: Your Buddy is answering. Try again when "
+        'it has finished. It is still on your subscription.',
+      );
+      await none(other);
+      final later = swarm();
+      line(later, held);
+      line(later, "Peer's Buddy now runs on Kimi K3, which your machine serves.");
+      await none(later);
+      final moving = swarm(
+        modelRequest: {'id': 'req2', 'gridModel': 'kimi-k3', 'name': 'Kimi K3'},
+      );
+      line(moving, held);
+      await none(moving);
+      final earlier = swarm();
+      line(earlier, held, by: 'old-wren');
+      await none(earlier);
+    });
+  });
 }
