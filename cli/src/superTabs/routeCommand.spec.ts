@@ -2320,9 +2320,9 @@ describe('the route answer an agent reads (task #3294)', () => {
     // The first route of a revision adds only its Routing section.
     expect(JSON.stringify(routeAnswer(answer)).length).toBeLessThan(8_000 + routing.length)
     // Each machine once, with what a start there takes; every candidate a line under it, with what a start or an assignment takes.
-    const machines = printed.candidates as Array<{ machine: string; candidates: string[] }>
+    const machines = Object.entries(printed.candidates as Record<string, string[]>)
     expect(machines).toHaveLength(10)
-    const lines = machines.flatMap(m => m.candidates.map(line => ({ machine: m.machine, line })))
+    const lines = machines.flatMap(([machine, rows]) => rows.map(line => ({ machine, line })))
     expect(lines).toHaveLength(40)
     for (const [i, row] of (answer.candidates as Array<{ id: string; kind: string; agentId?: string; machineId: string; engine: string; model: string; effort: string; cwd?: string }>).entries()) {
       const { machine, line } = lines[i]!
@@ -2355,8 +2355,8 @@ describe('the route answer an agent reads (task #3294)', () => {
   it('says a machine\'s own folder only where it differs from the one most share, and no room, which the record keeps', () => {
     const row = (id: string, machineName: string, cwd: string) => ({ id, kind: 'new', machineId: `id-${machineName}`, machineName, cwd, agents: 1, machine: '6 slots free · 14 GB memory free', line: `${id} new` })
     const printed = routeAnswer({ ok: true, candidates: [row('c0', 'a', '/Users/t/repo'), row('c1', 'b', '/home/t/repo'), row('c2', 'c', '/Users/t/repo')] })
-    expect(printed).toMatchObject({ cwd: '/Users/t/repo', candidates: [{ machine: 'a · machineId id-a · 1 agents', candidates: ['c0 new'] },
-      { machine: 'b · machineId id-b · 1 agents · cwd /home/t/repo' }, { machine: 'c · machineId id-c · 1 agents' }] })
+    expect(printed).toEqual({ ok: true, cwd: '/Users/t/repo', candidates: { 'a · machineId id-a · 1 agents': ['c0 new'],
+      'b · machineId id-b · 1 agents · cwd /home/t/repo': ['c1 new'], 'c · machineId id-c · 1 agents': ['c2 new'] } })
     expect(JSON.stringify(printed)).not.toContain('slots')
     // Members only: no folder to say.
     expect(routeAnswer({ ok: true, candidates: [{ id: 'c0', kind: 'member', machineId: 'm', machineName: 'a', line: 'c0 M' }] })).not.toHaveProperty('cwd')
@@ -2364,9 +2364,11 @@ describe('the route answer an agent reads (task #3294)', () => {
   it('says each machine left out in one line, and what is left out of no machine when nothing can run', () => {
     const long = 'z'.repeat(400)
     const printed = routeAnswer({ error: 'NO_CANDIDATE', excluded: [{ title: 'Named model', reason: long }, { title: 't', reason: 'x', machine: 'mac' }],
-      leftOut: [{ machine: 'mac', reasons: ['Machine is offline or unreachable.', 'b', 'c'] }, { machine: 'pi', reasons: [long] }], warnings: [long] })
+      leftOut: [{ machine: 'mac', reasons: ['Machine is offline or unreachable.', 'b', 'c'] }, { machine: 'pi', reasons: [long] },
+        { machine: 'nuc', reasons: ['Machine is offline or unreachable.'] }], warnings: [long] })
     expect(printed).toEqual({ error: 'NO_CANDIDATE', excluded: [`Named model: ${'z'.repeat(119)}…`],
-      leftOut: ['mac: Machine is offline or unreachable. (+2 more)', `pi: ${'z'.repeat(119)}…`], warnings: [`${'z'.repeat(239)}…`] })
+      // Machines left out for the same first reason share its line (a live route: five machines offline).
+      leftOut: ['mac (+2 more reasons), nuc: Machine is offline or unreachable.', `pi: ${'z'.repeat(119)}…`], warnings: [`${'z'.repeat(239)}…`] })
   })
   it('tells two machines of one name apart by id', async () => {
     const twin = fleetScoped(), base = twin.getMockImplementation()!
@@ -2377,7 +2379,7 @@ describe('the route answer an agent reads (task #3294)', () => {
       return { ...answer, value: { ...value, machines: value.machines.map(m => m.machineId === machineIds[1] ? { ...m, name: names[0]! } : m) } }
     })
     const answer = await routeTask(input, twin, where as never, fleetOpener(), () => 'op', undefined, [fit])
-    const machines = (routeAnswer(answer).candidates as Array<{ machine: string }>).map(m => m.machine)
+    const machines = Object.keys(routeAnswer(answer).candidates as Record<string, string[]>)
     expect(machines.filter(m => m.startsWith(names[0]!))).toEqual(expect.arrayContaining([
       expect.stringMatching(new RegExp(`^Ken's MacBook Pro \\[${machineIds[0]}\\] · machineId ${machineIds[0]}`)),
       expect.stringMatching(new RegExp(`^Ken's MacBook Pro \\[${machineIds[1]}\\] · machineId ${machineIds[1]}`))]))
