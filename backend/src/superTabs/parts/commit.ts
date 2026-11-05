@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client'
-import { agentOnly, conversation, fail, isLeads, type AgentStart, type MessageDraft, type SuperTabState } from '../model.js'
+import { agentOnly, conversation, fail, isLeads, type AgentStart, type Conversation, type MessageDraft, type SuperTabState } from '../model.js'
 import { autoJoinOn } from '../autoJoinDomain.js'
 import { split } from './shape.js'
 import { guardedWrite, PartConflict, type HeadColumns, type HostColumns, type PartWrite } from './write.js'
@@ -89,6 +89,18 @@ export function indexesOf(state: SuperTabState) {
   }
 }
 
+/** The project chat whose coordinator [message] reaches, when a person wrote it: the chat itself, any of its threads, or
+ *  another chat of its project where it names the coordinator (task #3022, pmSchedule.ts). Who wrote and whom it names,
+ *  never its words. A project chat not loaded in this write is left as it is. */
+function coordinatorChat(state: SuperTabState, groupId: string, projectId: string | undefined, message: MessageDraft): Conversation | undefined {
+  if (message.author.kind !== 'person' || message.source) return undefined
+  const projects = state.projects ?? [{ id: 'lead', leadConversationId: 'lead' }]
+  const project = projects.find(p => p.leadConversationId === groupId) ?? projects.find(p => p.id === (projectId ?? 'lead'))
+  const home = project && state.conversations.find(c => c.id === project.leadConversationId)
+  if (!home) return undefined
+  return home.id === groupId || (!!home.leadId && message.recipients.includes(home.leadId)) ? home : undefined
+}
+
 /**
  * Numbers each message in its conversation (design section 1.1 D4): the conversation's counter moves by one per message, in
  * draft order. A shown message is the conversation's latest and wakes a dormant one; an agent-only notice is numbered but
@@ -107,6 +119,8 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
       group.lastMainSequence = sequence
       if (message.author.kind === 'person' && !message.source) group.lastPersonSequence = sequence
     }
+    const home = coordinatorChat(state, group.id, group.projectId, message)
+    if (home) home.heardAt = now
     group.lastActivityAt = new Date(now).toISOString()
     delete group.dormant
   }
