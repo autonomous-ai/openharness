@@ -124,8 +124,9 @@ export const TEMPLATE_ROUTING = `## Routing
 - Every assignment (an Engineer, a Reviewer, a Tester, an idle agent reused) picks in this order:
   1. What the work needs: the machine, a model strong enough, a machine not paused.
   2. An account any project's PM runs on (this project's or another's; the route notes it) spends its week in daily
-     shares for that PM: 17% of its weekly quota per day since its reset, unused days carried over. Once it has used its
-     share so far it takes no new work and idle agents there are not reused; the route's note says where it stands.
+     shares for that PM: a seventh (14.3%) of its weekly quota per day since its reset, unused days carried over. Once it
+     has used its share so far it takes no new work and idle agents there are not reused; the route's note says where it
+     stands.
   3. Every other account is used while it has weekly quota left: the one resetting soonest first, then the one with
      the most left.
   4. An idle agent is reused only between candidates equal so far, except the same Reviewer for its next round and

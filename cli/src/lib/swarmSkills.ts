@@ -183,7 +183,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 
 ## Quota
 - Never ask anyone about quota or whose account to use: pick by your project's Routing and go. When no account fits, the work waits for the soonest reset, and the task says so.
-- An account any project's PM runs on (the route notes it) spends its week in daily shares: 17% of its weekly quota per day since its reset, unused days carried over (17% by its first day, 34% by its second, and so on). Once it has used its share so far it takes no new work; the route's note says where it stands. Every other account is used without asking.
+- An account any project's PM runs on (the route notes it) spends its week in daily shares: a seventh (14.3%) of its weekly quota per day since its reset, unused days carried over (14.3% by its first day, 28.6% by its second, all of it by its seventh). Once it has used its share so far it takes no new work; the route's note says where it stands. Every other account is used without asking.
 
 ## Requests and Done
 - When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote. Name the message it came from as well: proposalMessageId for their Buddy's proposal, requestMessageId for their own message in the project chat. That message stays the task's one message in the chat; without one, the Swarm posts the title as them, marked as a task. The Swarm replies in its thread at each change, so you post no progress there.
@@ -522,7 +522,7 @@ When the project owner asks in chat to switch this project's skills (Default or 
 
 ## Quota
 - Never ask anyone about quota or whose account to use: pick by your project's Routing and go. When no account fits, the work waits for the soonest reset, and the task says so.
-- An account any project's PM runs on (the route notes it) spends its week in daily shares: 17% of its weekly quota per day since its reset, unused days carried over (17% by its first day, 34% by its second, and so on). Once it has used its share so far it takes no new work; the route's note says where it stands. Every other account is used without asking.
+- An account any project's PM runs on (the route notes it) spends its week in daily shares: a seventh (14.3%) of its weekly quota per day since its reset, unused days carried over (14.3% by its first day, 28.6% by its second, all of it by its seventh). Once it has used its share so far it takes no new work; the route's note says where it stands. Every other account is used without asking.
 
 ## Requests and Done
 - When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote. Name the message it came from as well: proposalMessageId for their Buddy's proposal, requestMessageId for their own message in the project chat. That message stays the task's one message in the chat; without one, the Swarm posts the title as them, marked as a task. The Swarm replies in its thread at each change, so you post no progress there.

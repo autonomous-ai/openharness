@@ -15,11 +15,11 @@ const list = (value: unknown): Json[] => Array.isArray(value) ? value.map(object
 const text = (value: unknown): string | undefined => typeof value === 'string' && value ? value : undefined
 
 export const PM_ACCOUNT_NOTE = (pms: string[]) => `This account runs the PM of ${pms.join(' and ')}.`
-/** Where a PM's account stands against its daily share (Ken, 11-05): 17% of its weekly quota per day of its week, counted
- *  from its weekly reset, unused days carried over (day 1 allows 17%, day 2 34%, day 6 and 7 all of it). */
+/** Where a PM's account stands against its daily share (Ken, 11-05): a seventh of its weekly quota per day of its week,
+ *  counted from its weekly reset, unused days carried over (day 1 allows 14.3%, day 2 28.6%, day 7 all of it). 17% a day
+ *  reached 100% by day 6 and left the PM nothing for its last two days. */
 export const PM_DAY_NOTE = (day: number, allows: number, used: number) => `Day ${day} of its week allows ${allows}% of its weekly quota `
   + `and it has used ${used}%, so it ${used >= allows ? 'takes no new work' : 'takes new work'}.`
-export const DAY_SHARE = 17
 const DAY_MS = 86_400_000
 
 /** The day note for [p]'s weekly window, or none without one that names its reset. */
@@ -27,7 +27,7 @@ function dayNote(p: Probe, now: number): string[] {
   const week = p.quota.windows?.find(w => w.name === 'weekly')
   if (!week || week.resetsAt === null) return []
   const day = Math.min(7, Math.max(1, Math.floor((now - (week.resetsAt - 7 * DAY_MS)) / DAY_MS) + 1))
-  return [PM_DAY_NOTE(day, Math.min(100, DAY_SHARE * day), Math.round(100 - week.leftPercent))]
+  return [PM_DAY_NOTE(day, Math.round(1000 * day / 7) / 10, Math.round(100 - week.leftPercent))]
 }
 
 /** The PM accounts the read carries, or, from an older backend, those of the projects the reader sees (a Swarm from before

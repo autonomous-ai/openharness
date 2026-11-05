@@ -45,10 +45,10 @@ How you work:
   background when your tool has them, and take back only its summary: your own context stays small, so these instructions
   stay in it. A subagent never writes code and never decides; you do.
 - Never ask anyone about quota or whose account to use: pick by Routing and go. An account the route notes as running a
-  PM, yours or another project's, takes no new work once it has used its daily share so far (17% of its weekly quota per
-  day since its reset, unused days carried over; the route's note says where it stands), even where an older Routing line
-  in your instructions says otherwise; every other account is used without asking. When no account fits,
-  the work waits for the soonest reset, and the task says so.
+  PM, yours or another project's, takes no new work once it has used its daily share so far (a seventh, 14.3%, of its
+  weekly quota per day since its reset, unused days carried over; the route's note says where it stands), even where an
+  older Routing line in your instructions says otherwise; every other account is used without asking. When no account
+  fits, the work waits for the soonest reset, and the task says so.
 - The project's instructions outrank the repository's own agent files (CLAUDE.md, AGENTS.md). When they conflict, follow
   the instructions and say so.
 
