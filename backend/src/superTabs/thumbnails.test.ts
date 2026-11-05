@@ -1,0 +1,109 @@
+import { crc32 } from 'node:zlib'
+import { randomBytes } from 'node:crypto'
+import { describe, expect, it } from 'vitest'
+import sharp from 'sharp'
+import { imageFacts, makeThumbnail, THUMB_LONG_SIDE, thumbKeyOf } from './thumbnails.js'
+
+// Task #3177: the server makes a small copy of a picture when it is uploaded, so a chat draws that and not the whole file.
+
+/** Noise, so the original is large and a thumbnail is clearly smaller. */
+const noise = (width: number, height: number) => ({ raw: { width, height, channels: 3 as const }, data: randomBytes(width * height * 3) })
+async function jpeg(width: number, height: number, orientation?: number) {
+  const { raw, data } = noise(width, height)
+  return sharp(data, { raw }).jpeg({ quality: 95 }).withMetadata(orientation ? { orientation } : {}).toBuffer()
+}
+async function png(width: number, height: number) {
+  const { raw, data } = noise(width, height)
+  return sharp(data, { raw }).png().toBuffer()
+}
+
+/** A PNG whose header claims [width] x [height] and holds no pixels: enough to read its size, never to decode it. */
+function pngClaiming(width: number, height: number): Buffer {
+  const chunk = (type: string, body: Buffer) => {
+    const head = Buffer.alloc(8); head.writeUInt32BE(body.length, 0); head.write(type, 4, 'ascii')
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), body])), 0)
+    return Buffer.concat([head, body, crc])
+  }
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4); ihdr[8] = 8; ihdr[9] = 2
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IEND', Buffer.alloc(0))])
+}
+
+describe('makeThumbnail', () => {
+  it('makes a WebP of 720 px on the long side, with its size, for a large JPEG', async () => {
+    const original = await jpeg(2000, 1500)
+    const facts = await makeThumbnail(original)
+    expect(facts).toMatchObject({ width: 2000, height: 1500, thumb: { width: THUMB_LONG_SIDE, height: 540 } })
+    const meta = await sharp(facts!.thumb!.bytes).metadata()
+    expect({ format: meta.format, width: meta.width, height: meta.height }).toEqual({ format: 'webp', width: 720, height: 540 })
+    expect(facts!.thumb!.bytes.byteLength).toBeLessThan(original.byteLength * 0.8)
+  })
+
+  it('also thumbnails a large PNG, and a tall picture on its height', async () => {
+    const wide = await makeThumbnail(await png(1600, 900))
+    expect(wide?.thumb).toMatchObject({ width: 720, height: 405 })
+    const tall = await makeThumbnail(await jpeg(900, 1800))
+    expect(tall?.thumb).toMatchObject({ width: 360, height: 720 })
+  })
+
+  it('shows a picture as it is held: the facts and the thumbnail follow its EXIF rotation, and carry none', async () => {
+    const facts = await makeThumbnail(await jpeg(1600, 800, 6))
+    expect(facts).toMatchObject({ width: 800, height: 1600, thumb: { width: 360, height: 720 } })
+    const meta = await sharp(facts!.thumb!.bytes).metadata()
+    expect(meta.exif).toBeUndefined()
+    expect(meta.orientation ?? 1).toBe(1)
+  })
+
+  it('keeps width and height but no thumbnail when a smaller copy is not worth it', async () => {
+    const small = await sharp(noise(400, 300).data, { raw: noise(400, 300).raw }).webp({ quality: 80 }).toBuffer()
+    const facts = await makeThumbnail(small)
+    expect(facts).toEqual({ width: 400, height: 300 })
+  })
+
+  it('never enlarges', async () => {
+    const facts = await makeThumbnail(await png(300, 200))
+    expect(facts?.thumb ? facts.thumb.width <= 300 && facts.thumb.height <= 200 : true).toBe(true)
+  })
+
+  it('answers nothing for what is not a picture it handles', async () => {
+    const gif = await sharp(noise(900, 900).data, { raw: noise(900, 900).raw }).gif().toBuffer()
+    expect(await makeThumbnail(gif)).toBeNull()
+    expect(await makeThumbnail(Buffer.from('not a picture at all'))).toBeNull()
+    expect(await makeThumbnail(Buffer.alloc(0))).toBeNull()
+    expect(await makeThumbnail((await jpeg(800, 600)).subarray(0, 300))).toBeNull()
+    expect(await makeThumbnail(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900"></svg>'))).toBeNull()
+  })
+
+  it('gives up on a picture past 64 megapixels without decoding it', async () => {
+    expect(await makeThumbnail(pngClaiming(20_000, 20_000))).toBeNull()
+  })
+
+  it('never throws', async () => {
+    await expect(makeThumbnail(randomBytes(5000))).resolves.toBeNull()
+    await expect(makeThumbnail(pngClaiming(100, 100))).resolves.toBeNull()
+  })
+})
+
+describe('thumbKeyOf', () => {
+  it('sits beside the original, in its folder', () => {
+    expect(thumbKeyOf('super-tabs/tab1/abcd/shot.png')).toBe('super-tabs/tab1/abcd/shot.png.thumb.webp')
+  })
+})
+
+describe('imageFacts', () => {
+  const good = { width: 2000, height: 1500, thumb: { url: 'https://cdn.example.test/super-tabs/t/k/a.png.thumb.webp', width: 720, height: 540, size: 41_000 } }
+
+  it('keeps what a stored row holds', () => {
+    expect(imageFacts(good)).toEqual(good)
+    expect(imageFacts({ width: 400, height: 300 })).toEqual({ width: 400, height: 300 })
+  })
+
+  it('drops anything that is not a size, a thumbnail address or a count', () => {
+    expect(imageFacts(null)).toBeNull()
+    expect(imageFacts('x')).toBeNull()
+    expect(imageFacts({ width: 0, height: 10 })).toBeNull()
+    expect(imageFacts({ width: 1.5, height: 10 })).toBeNull()
+    expect(imageFacts({ width: 10, height: 10, thumb: { url: 5, width: 1, height: 1, size: 1 } })).toEqual({ width: 10, height: 10 })
+    expect(imageFacts({ width: 10, height: 10, thumb: { ...good.thumb, size: -1 } })).toEqual({ width: 10, height: 10 })
+    expect(imageFacts({ ...good, extra: 'x', thumb: { ...good.thumb, extra: 'y' } })).toEqual(good)
+  })
+})
