@@ -17,6 +17,10 @@ const fit = z.object({
   spend: z.object({ '5-hour': amount.optional(), weekly: amount.optional() }).strict(),
   /** The hashed usage key, or `machineId:engine` when the machine reports none. */
   account: z.string().min(1).max(200).optional(),
+  /** The account's weekly window when the route ran (cli route.ts quotaBrief): percent left and reset in epoch ms, null when
+   *  not read. Absent from a CLI from before task #3163. */
+  left: z.number().finite().min(0).max(100).nullable().optional(),
+  resetsAt: z.number().finite().nonnegative().nullable().optional(),
 }).strict()
 export const routeCandidateSchema = z.object({
   id: candidateId,
@@ -76,8 +80,10 @@ export const routeRecordSchema = z.object({
 }).strict().refine(d => d.pick === undefined || d.candidates.some(c => c.id === d.pick), 'The pick must be one of the candidates.')
   .refine(d => new Set(d.candidates.map(c => c.id)).size === d.candidates.length, 'Candidate ids must be unique.')
 
-/** The part of a quota fit every candidate of a record without a pick keeps: what the route history reads of the one that ran. */
-export type KeptFit = Pick<z.infer<typeof fit>, 'account' | 'spend'>
+/** The part of a quota fit every candidate of a record without a pick keeps: what the route history reads of the one that ran,
+ *  and its quota when the route ran (task #3163: with account and spend alone, quota at route time could not be measured).
+ *  Rows written before keep no status, % left or reset. */
+export type KeptFit = Pick<z.infer<typeof fit>, 'account' | 'spend'> & Partial<Pick<z.infer<typeof fit>, 'status' | 'left' | 'resetsAt'>>
 /** A candidate as a decision keeps it: the pick whole; any other only who and where it is and its title, and with no pick its
  *  account and spend too (storedRecord). */
 export type KeptCandidate = Omit<RouteCandidate, 'quality' | 'cost' | 'label' | 'fit'> & Partial<Pick<RouteCandidate, 'quality' | 'cost' | 'label'>>
@@ -98,12 +104,16 @@ export interface StoredRouteRecord extends Omit<ReadRouteRecord, 'excluded'> {
  *  and where it is (a start or assignment matching it, startedAs; a person choosing it, route.override; its Team-work check) and
  *  its title (the chat lines, Desktop's Details). Its label, strength, cost and quota fit are read of the pick only: the route
  *  showed the others when it ran, and the route history takes the account and spend of the pick (cli service.ts routeHistory).
- *  A record with no pick (task #2901) keeps every candidate's account and spend instead, as any of them may be the one that
+ *  A record with no pick (task #2901) keeps every candidate's account, spend and quota instead, as any of them may be the one that
  *  runs and nobody knows which until the start. Each exclusion reason is kept once, with its titles in order. */
+function keptFit({ account, spend, status, left, resetsAt }: z.infer<typeof fit>): KeptFit {
+  return { ...account ? { account } : {}, spend, status, ...left !== undefined ? { left } : {}, ...resetsAt !== undefined ? { resetsAt } : {} }
+}
+
 export function storedRecord(record: RouteRecord): StoredRouteRecord {
   const { excluded, ...rest } = record
   const candidates = record.candidates.map(({ label: _label, quality: _quality, cost: _cost, fit, ...c }, i): KeptCandidate =>
-    record.pick === undefined ? { ...c, ...fit ? { fit: { ...fit.account ? { account: fit.account } : {}, spend: fit.spend } } : {} }
+    record.pick === undefined ? { ...c, ...fit ? { fit: keptFit(fit) } : {} }
       : c.id === record.pick ? record.candidates[i]! : c)
   const byReason = new Map<string, string[]>()
   for (const { title, reason } of excluded) byReason.set(reason, [...byReason.get(reason) ?? [], title])
