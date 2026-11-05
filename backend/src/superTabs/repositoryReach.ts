@@ -37,3 +37,13 @@ export function unknownPushReason(reach: RepositoryReach | undefined): string | 
       + `Team account, and a Team account reaches the repository only through that app. ${install(reach)}; then it runs in your own account.`
     : null
 }
+
+/** What a start needs of [access]: the states that say whether the app reaches the repository; none for a project it cannot be asked of. */
+export function repositoryReachOf(access: ProjectGitHubAccess): RepositoryReach | undefined {
+  switch (access.state) {
+    case 'covered': case 'unknown': return access
+    case 'not-installed': return { state: access.state, repository: access.repository, installUrl: access.installUrl }
+    case 'not-approved': return { state: access.state, repository: access.repository }
+    default: return undefined
+  }
+}

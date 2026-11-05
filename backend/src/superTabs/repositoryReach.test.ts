@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
-import { REPOSITORY_UNREACHABLE, type RepositoryReach } from './repositoryReach.js'
+import { REPOSITORY_UNREACHABLE, repositoryReachOf, type RepositoryReach } from './repositoryReach.js'
 import { TEAM_WRITTEN_WORK } from './teamWritten.js'
 
 // 11-05, Huy's groupme (task #3266): the Harness GitHub App was not on ngochuy13/groupme, so a Reviewer in the Mac's Team
@@ -113,5 +113,16 @@ describe('an assignment whose agent cannot reach the project repository', () => 
     const f = swarm(), task = f.group()
     expect(refused(() => f.run({ type: 'work.assign', conversationId: task, agentId: f.member('teammate-builder', 'mac', 'teammate') }, { repositoryReach: notApproved }))?.code)
       .toBe(REPOSITORY_UNREACHABLE)
+  })
+})
+
+describe('the access Project details reads, as a start reads it', () => {
+  it('keeps what says whether the app reaches the repository, and reads nothing it cannot be asked of', () => {
+    expect(repositoryReachOf({ state: 'not-installed', repository: 'ngochuy13/groupme', installUrl: INSTALL, canApprove: true })).toEqual(notInstalled)
+    expect(repositoryReachOf({ state: 'not-approved', repository: 'ngochuy13/groupme', canApprove: false, approvedFor: ['Other'] })).toEqual(notApproved)
+    expect(repositoryReachOf({ state: 'covered', repository: 'ngochuy13/groupme' })).toEqual({ state: 'covered', repository: 'ngochuy13/groupme' })
+    for (const access of [{ state: 'unavailable' }, { state: 'no-repository' }, { state: 'not-github', repositoryUrl: 'https://gitlab.com/a/b' }] as const) {
+      expect(repositoryReachOf(access)).toBeUndefined()
+    }
   })
 })

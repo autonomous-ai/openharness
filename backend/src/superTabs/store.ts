@@ -16,6 +16,7 @@ import { wavDurationMs } from '../lib/wav.js'
 import { agentText, MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_TYPES, voiceFacts, voiceTranscript, voiceWaveform, type StoredVoice, type VoiceFacts } from './voiceMessages.js'
 import { machineAlive } from '../lib/prisma.js'
 import { pullRequestsIn, type PushOrigin } from '../github/pushOrigin.js'
+import type { RepositoryReach } from './repositoryReach.js'
 import { githubRepository } from '../github/repository.js'
 import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
@@ -357,6 +358,9 @@ export interface SuperTabStoreHooks {
   pushOrigin?: (repositoryUrl: string | null, pullRequestUrls: string[]) => Promise<PushOrigin>
   /** The same for a branch a start names: its open pull request's answer, clean for the default branch, unknown with no pull request. */
   branchPushOrigin?: (repositoryUrl: string | null, branch: string) => Promise<PushOrigin>
+  /** Whether the Harness GitHub App reaches a project's GitHub repository for this Swarm (github/projectAccess.ts), read before
+   *  an agent.start or work.assign (repositoryReach.ts). Absent with no GitHub App. */
+  repositoryReach?: (autonomousEnv: string, tabId: string, projectId: string, repositoryUrl: string) => Promise<RepositoryReach | undefined>
   /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
    *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
   teamAccountsIdle?: boolean
@@ -1501,12 +1505,37 @@ export class SuperTabStore {
     }
   }
 
+  /**
+   * Whether the app reaches the repository of the project an agent.start or work.assign is for (repositoryReach.ts, task
+   * #3266), read outside the command's transaction as GitHub may take seconds. It can only refuse earlier than the machine
+   * would: undefined, refusing nothing, when there is nothing to read or the read fails.
+   */
+  private async repositoryReachFor(user: AuthUser, tabId: string, command: unknown): Promise<RepositoryReach | undefined> {
+    const hook = this.hooks.repositoryReach
+    const asked = command as { type?: unknown; conversationId?: unknown; request?: { conversationId?: unknown } } | null
+    const conversationId = asked?.type === 'agent.start' ? asked.request?.conversationId : asked?.type === 'work.assign' ? asked.conversationId : undefined
+    if (!hook || typeof conversationId !== 'string') return undefined
+    try {
+      const project = await transaction(this.db, async tx => {
+        const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+        const group = state.conversations.find(c => c.id === conversationId)
+        return group ? groupProject(state, group) : undefined
+      })
+      const repositoryUrl = project?.repository?.repositoryUrl
+      if (!project || !repositoryUrl || !githubRepository(repositoryUrl)) return undefined
+      return await hook(user.autonomousEnv, tabId, project.id, repositoryUrl)
+    } catch (error) {
+      if (!(error instanceof SuperTabError)) logger.warn('[super-tab] repository access not read', { tabId, error: error instanceof Error ? error.message : String(error) })
+      return undefined
+    }
+  }
+
   /** [only]: what the store alone may give a command: `overdue` for decision.answer (leaveOverdueDecisions), `movedTo` for
    *  machine.moved (computerSignedIn). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string } } = {}) {
     const { operationId, command } = operationSchema.parse(input)
-    const pushOrigin = await this.pushOriginFor(user, tabId, command)
+    const [pushOrigin, repositoryReach] = await Promise.all([this.pushOriginFor(user, tabId, command), this.repositoryReachFor(user, tabId, command)])
     let ended: WorkHold[] = [], started: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
       // A retried attempt starts again: only the attempt that commits says which tasks ended or started.
@@ -1789,6 +1818,7 @@ export class SuperTabStore {
         if (this.hooks.teamAccountsIdle) context.teamAccountsIdle = true
       }
       if (pushOrigin) context.pushOrigin = pushOrigin
+      if (repositoryReach) context.repositoryReach = repositoryReach
       if (command.type === 'agent.screen' || command.type === 'agent.input') {
         // A machine that is gone or no longer shared refuses at once instead of leaving the request to time out.
         await this.agentGrant(tx, original, agent(original, command.agentId))
