@@ -5988,8 +5988,10 @@ describe('a crew member at rest', () => {
     mkdirSync(join(t.core.dataDir, 'super-tabs'), { recursive: true })
     writeFileSync(join(t.core.dataDir, 'super-tabs', 'crew-folders-machine-1.json'),
       JSON.stringify({ version: 1, folders: [{ tabId: 'tab', harnessId: 'harness', path: '/nowhere/ada', source: '/nowhere/clone' }] }))
-    let finish!: (value: 'restored') => void
-    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    let finish!: (value: 'restored') => void, back = false
+    // As the real restore does, a folder brought back is no longer remembered.
+    const remembers = vi.spyOn(CrewFolders.prototype, 'remembers').mockImplementation(() => !back)
+    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockImplementation(() => new Promise(resolve => { finish = value => { back = true; resolve(value) } }))
     await t.poll()
     await t.poll(10_000)
     expect(restore).toHaveBeenCalledTimes(1)
@@ -5998,6 +6000,23 @@ describe('a crew member at rest', () => {
     await t.poll(10_000)
     expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
     restore.mockRestore()
+    remembers.mockRestore()
+  })
+  it('a restore that keeps failing never holds the keep-alive back for good (review of #3229)', async () => {
+    const t = lifeFixture([crewRow()])
+    const remembers = vi.spyOn(CrewFolders.prototype, 'remembers').mockReturnValue(true)
+    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockResolvedValue('failed')
+    await t.poll()
+    await t.poll(10_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+    // Tried again after its wait, not on every roster.
+    const tries = restore.mock.calls.length
+    await t.poll(10_000)
+    expect(restore.mock.calls.length).toBe(tries)
+    await t.poll(60_000)
+    expect(restore.mock.calls.length).toBe(tries + 1)
+    restore.mockRestore()
+    remembers.mockRestore()
   })
   it('a member woken and put to sleep again is closed again', async () => {
     const rows = [crewRow({ asleep: { since: 1 } })]
