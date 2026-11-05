@@ -1089,6 +1089,7 @@ void main() {
           'degraded': <String>[],
         },
         'agent_close': {'closed': true},
+        'agent_handoff_complete': {'ok': true},
       }, startsAgents)..handshaken = true;
       final focus = await _Focus.open(
         tester,

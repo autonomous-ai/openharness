@@ -70,6 +70,8 @@ void main() {
       'state': 'created',
       'agent': agentJson('b', engine: p['engine'] as String),
     };
+    // The machine records which harness took over, as a current CLI does.
+    answers['agent_handoff_complete'] = (_) => {'ok': true};
     await rig.app.bootstrap();
     await settle();
     rig.app.connectionStatusForTest('m', ConnectionStatus.connected);
@@ -713,6 +715,8 @@ void main() {
       final rig = await rigWith([source()]);
       rig.conn('m').answers['agent_handoff_prepare'] = (_) =>
           throw refusal('UNSUPPORTED');
+      rig.conn('m').answers['agent_handoff_complete'] = (_) =>
+          throw refusal('UNSUPPORTED');
       rig.conn('m').answers['agent_recent'] = (_) => {
         'agentId': 'a',
         'asks': ['the secret plan'],
@@ -732,7 +736,7 @@ void main() {
         'saving and stopping the old agent',
         'the old agent is saved and stopped',
         'starting codex in the same folder (with the handoff)',
-        'the replacement report was not confirmed',
+        'the machine takes no replacement report',
         'switched; b opens',
       ]);
       expect(recording.lines.join('\n'), isNot(contains('secret plan')));

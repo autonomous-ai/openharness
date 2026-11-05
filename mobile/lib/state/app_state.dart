@@ -304,6 +304,10 @@ class _AgentChange {
   /// (cli superTabs/leadSwitch.ts). Never set by the older machines' `agent_recent` road.
   bool handoffPrepared = false;
 
+  /// The machine recorded which harness took over (`agent_handoff_complete`), so a retry of this
+  /// switch reports nothing again.
+  bool replacementReported = false;
+
   /// The switch is held on the handoff, with the old agent still running: only the same engine
   /// carries it on.
   bool handoffHeld = false;
@@ -9340,8 +9344,19 @@ class AppNotifier extends ChangeNotifier {
       );
     }
     // Before the switch is let go: while it is reported, choosing an agent again joins this one
-    // rather than starting a second harness off the stopped one.
-    await _reportReplacement(machineId, change, nextId);
+    // rather than starting a second harness off the stopped one. Unreported, a Swarm Product
+    // Manager's machine never takes the new session in and closes it once its time is up (cli
+    // superTabs/host.ts, SWITCH_ADOPT_MS), so the switch is not done until it is: choosing again
+    // reports it, as the desktop does.
+    if (!change.replacementReported) {
+      if (!await _reportReplacement(machineId, change, nextId)) {
+        return const AgentChangeResult(
+          error: 'The new agent started. Choose it again to finish the switch.',
+        );
+      }
+      change.replacementReported = true;
+      if (!live()) return inactive;
+    }
     _agentChanges.remove((machineId, source.id));
     unawaited(agentPreference.select(change.engine));
     String? notice;
@@ -9355,13 +9370,11 @@ class AppNotifier extends ChangeNotifier {
     return AgentChangeResult(agentId: nextId, notice: notice);
   }
 
-  /// Tells the machine which harness took over (`agent_handoff_complete`) — the desktop's
+  /// Tells the machine which harness took over (`agent_handoff_complete`), the desktop's
   /// replacement report, so a Swarm keeps the same agent on the new session (`agent.rebind`).
-  ///
-  /// Best effort, never a failure of the switch: the new agent already runs, and the machine also
-  /// finds it from the handoff it prepared and the creation receipt, both under the same id. An
-  /// older machine, or one with the Swarm off, answers something else; it changes nothing here.
-  Future<void> _reportReplacement(
+  /// Whether it is done: recorded, or a machine too old to take one (`UNSUPPORTED`), as the
+  /// desktop counts it. A refusal or no answer in time is logged, and the switch waits for it.
+  Future<bool> _reportReplacement(
     String machineId,
     _AgentChange change,
     String replacementId,
@@ -9377,19 +9390,27 @@ class AppNotifier extends ChangeNotifier {
         },
         timeout: const Duration(seconds: 5),
       );
+      final recorded = reply['ok'] == true;
       _logChange(
         change,
-        reply['ok'] == true
+        recorded
             ? 'the machine recorded the replacement'
             : 'the replacement report was not confirmed',
       );
+      return recorded;
     } on WsRequestFailure catch (failure) {
+      if (failure.code == 'UNSUPPORTED') {
+        _logChange(change, 'the machine takes no replacement report');
+        return true;
+      }
       _logChange(
         change,
         'the replacement report was refused (${failure.code})',
       );
+      return false;
     } catch (error) {
       _logChange(change, 'the replacement report was not answered ($error)');
+      return false;
     }
   }
 
