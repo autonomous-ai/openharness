@@ -29,6 +29,9 @@ class FakeFileStorage implements FileService {
   /// The status every answer carries.
   int status = 200;
 
+  /// A status for one address, over [status].
+  final statusFor = <String, int>{};
+
   /// What every answer carries.
   List<int> bytes = pixelPng;
 
@@ -39,7 +42,7 @@ class FakeFileStorage implements FileService {
   }) async {
     asked.add((url: url, headers: headers));
     await hold?.future;
-    return _Answer(status, bytes);
+    return _Answer(statusFor[url] ?? status, bytes);
   }
 }
 
