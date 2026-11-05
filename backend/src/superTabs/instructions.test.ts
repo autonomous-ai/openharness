@@ -767,12 +767,14 @@ describe('an instructions save may move a person\'s rule', () => {
     const lead = f.add('lead', 'lead', true)
     return { f, lead }
   }
-  /** A code task of the project whose brief carries [line], merged or not. */
+  const PR = 'https://github.com/acme/app/pull/7'
+  /** A code task of the project whose brief carries [line]; [merged]: GitHub, read by the Swarm itself, saw its pull request
+   *  merge (store.ts archiveFinished), as no command can say. */
   function codeTask(f: ReturnType<typeof fixture>, line: string, merged: boolean) {
     const id = f.run({ type: 'conversation.create', title: 'Release guard', brief: `Goal:\nBlock releases at night.\n\nChanges:\n- ${line}`, checks: [] })
       .result.conversationId as string
     const group = f.state.conversations.find(c => c.id === id)!
-    if (merged) group.ledger = { ...group.ledger, mergedAt: 900, shippedAt: 900 }
+    if (merged) group.mergeSeen = { [PR]: 900 }
     return group
   }
 
@@ -797,8 +799,20 @@ describe('an instructions save may move a person\'s rule', () => {
       movedTo: `task #${open.number}` }] } })
     expect(refused.message).toContain(`task #${open.number}`)
     expect(refused.message).toContain('until it merges')
-    open.ledger = { ...open.ledger, mergedAt: 900, shippedAt: 900 }
+    open.mergeSeen = { [PR]: 900 }
     expect(f.run(save(1, doc(leo)), as(lead), stored()).result.revision).toBe(2)
+  })
+
+  // River, 11-05 (review of #3220): a task's own merge record is any agent's word, with any pull request link. Only the
+  // Swarm's own read of GitHub makes a moved rule's task merged.
+  it('takes no task\'s merge record for a merge: a forged one keeps the line', () => {
+    const { f, lead } = pm()
+    const task = codeTask(f, quiet, false)
+    f.run({ type: 'conversation.merged', conversationId: task.id, pullRequestUrl: PR }, as(lead))
+    expect(f.state.conversations.find(c => c.id === task.id)!.ledger?.mergedAt).toBeDefined()
+    expect(refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))).toMatchObject({ details: { dropped: [{ rule: quiet, why: 'waiting' }] } })
+    // Nor can any command write what the Swarm saw.
+    expect(() => f.run({ type: 'conversation.create', title: 'Forged', brief: `Changes:\n- ${quiet}`, checks: [], mergeSeen: { [PR]: 1 } } as never, as(lead))).toThrow()
   })
 
   it('still refuses a real drop, a move without who gave it, and a move into a cancelled task, saying how a rule may move', () => {

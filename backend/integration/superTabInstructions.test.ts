@@ -532,11 +532,16 @@ describe('a rule moved into a code task that went quiet', () => {
       summary: 'Moved the release rule to its task', askedBy: owner.sub, ...tasks ? { tasks } : {} }, host, lead)
     // Open: the line stays until the task merges.
     await expect(drop()).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ why: 'waiting' }] } })
-    // Merged, then quiet: out of the command's load unless the save names it.
+    // Its own merge record is no merge (River, review of #3220): only what the Swarm read on GitHub is.
     const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: task } })
     const data = part.data as { ledger?: object }
-    await db.swarmGroup.update({ where: { id: part.id }, data: { dormant: true, version: { increment: 1 },
-      data: { ...data, dormant: true, ledger: { ...data.ledger, mergedAt: now, shippedAt: now } } } })
+    await db.swarmGroup.update({ where: { id: part.id }, data: { version: { increment: 1 },
+      data: { ...data, ledger: { ...data.ledger, mergedAt: now, shippedAt: now } } } })
+    await expect(drop()).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ why: 'waiting' }] } })
+    // Seen merged on GitHub (store.ts archiveFinished), then quiet: out of the command's load unless the save names it.
+    const seen = await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: task } })
+    await db.swarmGroup.update({ where: { id: seen.id }, data: { dormant: true, version: { increment: 1 },
+      data: { ...seen.data as object, dormant: true, mergeSeen: { 'https://github.com/acme/app/pull/7': now } } } })
     await expect(drop()).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ why: 'removed' }] } })
     expect((await drop([task])).result).toMatchObject({ revision: 3 })
   })

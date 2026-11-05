@@ -292,6 +292,20 @@ describe('a finished group', () => {
   }
   const isArchived = async (f: Awaited<ReturnType<typeof swarm>>, key: string) => (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key } })).archived
 
+  // Task #3392 (River, review of #3220): a person's rule moved into a code task may leave the instructions once that task
+  // merged, and only the Swarm's own read of GitHub says so: what the archive read merged in the project's repository.
+  it('records which of its pull requests GitHub says merged in its project\'s repository, and no other', async () => {
+    const f = await swarm()
+    const task = await cancelledIn(f, 'Shipped in the batch')
+    const ours = 'https://github.com/acme/app/pull/41', closed = 'https://github.com/acme/app/pull/42', theirs = 'https://github.com/other/app/pull/43'
+    await f.execute({ type: 'message.send', conversationId: task, text: `Pull requests: ${ours} ${closed} ${theirs}`, replyTo: null, recipientIds: [] })
+    f.clock.now += 40 * MINUTE
+    await archiveFinishedGroups(db, f.timed, github({ [ours]: 'merged', [closed]: 'closed', [theirs]: 'merged' }), f.clock.now)
+    const data = (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: task } })).data as { archived: boolean; mergeSeen?: Record<string, number> }
+    expect(data.archived).toBe(true)
+    expect(data.mergeSeen).toEqual({ [ours]: f.clock.now })
+  })
+
   // Diego, 11-04 (#2602): another repository's number, read in this one, kept the task open forever.
   it('waits on no "PR #N" another repository\'s name sits next to', async () => {
     const f = await swarm()
