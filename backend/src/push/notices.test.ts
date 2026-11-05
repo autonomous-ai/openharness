@@ -102,7 +102,7 @@ describe('phoneNotices: the push rule Tony approved (task #3248)', () => {
     expect(phoneNotices('tab', state, { replies: [{ ...row('a', owner.userId, 'starter'), conversationId: web }], tags: [] }, [line])).toEqual([])
     // The same row for an agent's own words is pushed.
     const words = draft({ id: 'r1', conversationId: web, author: agent, thread: 'root1' })
-    expect(phoneNotices('tab', state, { replies: [{ ...row('a', owner.userId, 'starter'), conversationId: web }], tags: [] }, [words]))
+    expect(phoneNotices('tab', state, { replies: [{ ...row('a', owner.userId, 'starter'), conversationId: web, actorKind: 'agent', actorId: worker }], tags: [] }, [words]))
       .toEqual([expect.objectContaining({ personId: owner.userId, title: 'worker-harness replied in a thread' })])
   })
 
