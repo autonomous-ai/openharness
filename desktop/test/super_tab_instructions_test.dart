@@ -583,8 +583,8 @@ void main() {
               'sequence': 1,
               'text':
                   'owner changed the instructions: Reviews run on Opus.\n\n'
-                  '```diff\n- - Haiku reviews.\n+ - Opus reviews.\n```\n\n'
-                  'and 3 more lines.',
+                  'In Routing › Models:\nRemoved: Haiku reviews.\n'
+                  'Added: Opus reviews.\n\nand 3 more changes.',
               'createdAt': ago(const Duration(minutes: 5)),
               'author': {'kind': 'person', 'id': 'owner', 'name': 'owner'},
               'source': {
@@ -605,7 +605,7 @@ void main() {
         );
         seed(server);
         expect(find.textContaining('Haiku reviews.'), findsOneWidget);
-        expect(find.textContaining('and 3 more lines.'), findsOneWidget);
+        expect(find.textContaining('and 3 more changes.'), findsOneWidget);
         // One link, on the save's line only.
         final link = find.byKey(
           const ValueKey('super-instructions-link-saved'),

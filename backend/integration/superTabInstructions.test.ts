@@ -111,8 +111,8 @@ describe('project instructions storage', () => {
     expect((await post(peer, tab, save(2, 'Reviews run on Opus.\nTests run on the Mac.', 'Tests run on the Mac'))).statusCode).toBe(200)
     const lines = (await store.messages(owner, tab, 'lead', {})).messages.filter(m => (m.source as { kind?: string } | null)?.kind === 'instructions')
     // Each line shows what its save really changed against the stored revision before it (#3021): the first replaced the template.
-    expect(lines.map(m => m.text)).toEqual([expect.stringMatching(/^owner changed the instructions: Reviews run on Opus\.\n\n```diff\n- # Project instructions\n[^]*\n```\n\nand \d+ more lines\.$/),
-      'peer changed the instructions: Tests run on the Mac.\n\n```diff\n+ Tests run on the Mac.\n```'])
+    expect(lines.map(m => m.text)).toEqual([expect.stringMatching(/^owner changed the instructions: Reviews run on Opus\.\n\nRemoved section: Project instructions\n[^]*\n\nand \d+ more changes\.$/),
+      'peer changed the instructions: Tests run on the Mac.\n\nAdded: Tests run on the Mac.'])
     expect((await db.superTabInstructions.findFirstOrThrow({ where: { tabId: tab, projectId: 'lead' } })).revision).toBe(3)
   })
 
