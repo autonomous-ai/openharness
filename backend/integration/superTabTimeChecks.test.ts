@@ -10,7 +10,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
-import { runTimeCheckPass, timeCheckSwarms } from '../src/superTabs/timeChecks.js'
+import { QUIET_CHECK_MS, runTimeCheckPass, timeCheckSwarms } from '../src/superTabs/timeChecks.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 
 // Task #3385 (anh Dee's Swarm redesign, 11-05): the stall, idle and lost-task follow-ups run in the backend worker, so they
@@ -188,5 +188,44 @@ describe('what the PM owes', () => {
     await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Parser ships today.', replyTo: null, recipientIds: [], answers: messageId } as Command, host, f.lead)
     await f.timed.runTimeChecks(f.tab)
     expect(await owedOf(f)).toEqual({ messageId: String(next.result.messageId), since: await sentAt(next.result.messageId) })
+  })
+})
+
+// Reviews of #3213 (Wren, Important 1; SecAlder, Minor 3): the instructions tell the PM to react instead of acknowledging, so
+// a message it reacted to was owed for a day and every long PM turn read as hung.
+describe('what the PM owes, once it reacted', () => {
+  it('is not a message the PM reacted to', async () => {
+    const f = await swarm()
+    const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Thanks for the fix!', replyTo: null, recipientIds: [] } as Command)
+    const messageId = String(sent.result.messageId)
+    await f.timed.runTimeChecks(f.tab)
+    const head = async () => ((await db.swarmHead.findFirstOrThrow({ where: { tabId: f.tab } })).data as { projects?: Array<{ owed?: { messageId: string } }> }).projects![0]!.owed
+    expect((await head())?.messageId).toBe(messageId)
+    await f.execute({ type: 'message.react', conversationId: 'lead', messageId, emoji: 'check', on: true } as Command, host, f.lead)
+    expect((await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, messageId, agentId: f.lead } })).status).toBe('answered')
+    await f.timed.runTimeChecks(f.tab)
+    expect(await head()).toBeUndefined()
+  })
+})
+
+// Review of #3213 (Wren, Important 2; ENGINEERING.md 4: a timer that wakes while nothing changed is a defect): a Swarm whose
+// groups show no new activity is checked every few minutes, not every 30 s.
+describe('the worker\'s pass on a quiet Swarm', () => {
+  it('checks a Swarm again at once when its activity moved, and otherwise only every QUIET_CHECK_MS', async () => {
+    const f = await swarm()
+    const calls: string[] = []
+    const counting = { runTimeChecks: async (tabId: string) => { if (tabId === f.tab) calls.push(tabId); return 0 } }
+    const seen = new Map()
+    await runTimeCheckPass(db, counting, f.clock.now, undefined, seen)
+    await runTimeCheckPass(db, counting, f.clock.now + 30_000, undefined, seen)
+    expect(calls).toHaveLength(1)
+    f.clock.now += 60_000
+    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Any news?', replyTo: null, recipientIds: [] } as Command)
+    await runTimeCheckPass(db, counting, f.clock.now, undefined, seen)
+    expect(calls).toHaveLength(2)
+    await runTimeCheckPass(db, counting, f.clock.now + QUIET_CHECK_MS - 1, undefined, seen)
+    expect(calls).toHaveLength(2)
+    await runTimeCheckPass(db, counting, f.clock.now + QUIET_CHECK_MS, undefined, seen)
+    expect(calls).toHaveLength(3)
   })
 })

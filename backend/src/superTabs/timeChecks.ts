@@ -35,6 +35,7 @@ export async function owedAsk(db: Pick<PrismaClient, 'superTabDelivery'>, tabId:
 export const TIME_CHECK_QUIET_MS = 7 * 24 * 3_600_000
 /** The most Swarms a pass checks, the most recently active first (ENGINEERING.md 4: no read grows without a bound). */
 export const TIME_CHECK_SWARMS = 200
+export const QUIET_CHECK_MS = 0
 
 /** The Swarms to check: those with a conversation awake and active in the last [TIME_CHECK_QUIET_MS], newest first. On the
  *  `[dormant, lastActivityAt]` group index; a deleted Swarm is left to `runTimeChecks`, which reads its row anyway. */
@@ -49,7 +50,7 @@ export async function timeCheckSwarms(db: PrismaClient, now: number, limit = TIM
 }
 
 /** One pass: each Swarm's checks in its own write. One Swarm's failure is logged and skips that Swarm alone. */
-export async function runTimeCheckPass(db: PrismaClient, store: Pick<SuperTabStore, 'runTimeChecks'>, now: number, limit = TIME_CHECK_SWARMS) {
+export async function runTimeCheckPass(db: PrismaClient, store: Pick<SuperTabStore, 'runTimeChecks'>, now: number, limit = TIME_CHECK_SWARMS, _seen?: Map<string, unknown>) {
   const tabIds = await timeCheckSwarms(db, now, limit)
   const pass = { swarms: tabIds.length, written: 0, failed: 0 }
   for (const tabId of tabIds) {
