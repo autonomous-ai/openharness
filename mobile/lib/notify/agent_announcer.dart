@@ -363,10 +363,12 @@ class AgentAnnouncer {
   /// the notice still sitting in the OS centre come down together, and a
   /// finished turn still waiting for its tier is not announced after. A
   /// question still waiting out its grace is not either: the person has seen
-  /// its dialog, and it counts as told.
+  /// its dialog, and it counts as told. Its [alertCooldown] ends: the run of
+  /// questions it grouped has been dealt with, and the next one is news.
   void seen(AgentRef ref) {
     _awaitingTier.remove(ref)?.timer.cancel();
     _pendingQuestions.remove(ref)?.timer.cancel();
+    _lastBuzz.remove(ref);
     if (_asked.openOn(ref) case final open?) {
       final key = (ref: ref, requestId: open);
       final heard = _heard[key];
