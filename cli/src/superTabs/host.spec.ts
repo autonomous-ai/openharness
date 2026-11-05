@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { CrewFolders } from './crewFolders.js'
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -33,6 +34,7 @@ import { ADDED_MAX } from './deliveryContext.js'
 import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
 import { TerminalHost } from './terminal.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
+import { CREW_CONTINUE } from './crew.js'
 import { CONTINUE } from './limitResume.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
@@ -4563,6 +4565,57 @@ describe('ending a Buddy\'s thread sessions', () => {
   })
 })
 
+// Task #3397: the host keeps a project's crew alive as it keeps the PM. A crashed crew session is reopened in place, on its own
+// conversation, and told once to continue the task it still holds; an ordinary agent is left as before.
+describe('keeping a crew member alive', () => {
+  const crewRow = (agent: Record<string, unknown> = {}) => ({ tabId: 'tab', active: false,
+    agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', crew: { role: 'Engineer', at: 1, by: 'pm' }, ...agent } })
+  /** [t]'s host with its task `work` running in the session, and a screen and input the crew keeper reads and types into. */
+  const withTask = (t: ReturnType<typeof lifeFixture>, rows: Record<string, unknown>[]) => {
+    const typed: string[] = []
+    t.core.account.backend = async (_method, path, body) => {
+      if ((body as any)?.command) { t.commands.push(body as Record<string, unknown>); return { status: 200, body: { data: {} } } }
+      if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(rows, { tabs: ['tab'], assignments: [{ tabId: 'tab', assignmentId: 'work', harnessId: 'harness' }] }) } }
+      return { status: 200, body: { data: [] } }
+    }
+    let screen = '❯ '
+    ;(t.core as any).superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
+      screen: vi.fn(async () => ({ ok: true as const, text: screen, hold: null })),
+      input: vi.fn(async (_id: string, text: string) => { typed.push(text); screen = `❯ ${text}`; return { ok: true as const } }),
+      inputIfScreen: vi.fn(async (_id: string, keys: string[], seen: string) => {
+        if (seen !== screen) return { ok: false as const, error: 'SCREEN_CHANGED' }
+        typed.push(keys.join(' ')); screen = '❯ '; return { ok: true as const }
+      }) }
+    return typed
+  }
+
+  it('reopens a crashed crew session in place and tells it once to continue its task', async () => {
+    const rows = [crewRow()]
+    const t = lifeFixture(rows)
+    const typed = withTask(t, rows)
+    t.keepLeadAlive.mockResolvedValue({ ok: true })
+    await t.poll()
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+    t.live(true)
+    await t.poll(1_000)
+    await t.poll(1_000)
+    expect(typed).toEqual([CREW_CONTINUE, 'Enter'])
+    await t.poll(2 * 60_000)
+    expect(typed).toEqual([CREW_CONTINUE, 'Enter'])
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+  })
+
+  it('reopens no ordinary agent, nor a crew member asleep or moved', async () => {
+    for (const row of [crewRow({ crew: undefined }), crewRow({ asleep: { since: 1 } }), crewRow({ movedTo: 'agent-2' })]) {
+      const t = lifeFixture([row])
+      withTask(t, [row])
+      await t.poll()
+      await t.poll(60_000)
+      expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    }
+  })
+})
+
 describe('keeping a Swarm Lead alive', () => {
   it('services a landed PM switch after the source is no longer marked as Lead', async () => {
     const t = lifeFixture([leadRow({ lead: false, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1',
@@ -5881,4 +5934,99 @@ describe('requests per idle agent and machine per minute while the server pushes
     expect(worker).toEqual({ lists: 0.2, pickups: 0 })
     expect(lead.lists).toBe(2)
   }, 60_000)
+})
+
+// Task #3398: a crew member the server put to sleep, moved, or whose folder it dropped is closed on its host, once, and never
+// kept alive; an awake one is left to the keep-alive.
+describe('a crew member at rest', () => {
+  const crewRow = (agent: Record<string, unknown> = {}) => ({ tabId: 'tab', active: true,
+    agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', crew: { role: 'Engineer', at: 1, by: 'owner' }, ...agent } })
+  it('closes an asleep member\'s live session once, keeps its folder, and never reopens it', async () => {
+    const t = lifeFixture([crewRow({ asleep: { since: 1 } })])
+    t.live(true)
+    await t.poll()
+    await t.poll(1_000)
+    await t.poll(60_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+    expect(t.closeMember).toHaveBeenCalledWith('harness')
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+  })
+  it('closes a moving member and one whose folder is dropped; an awake member is not closed', async () => {
+    for (const agent of [{ movedTo: { machineId: 'mini', startId: 's', reason: 'offline', at: 1 } }, { asleep: { since: 1, folderDropped: true } }]) {
+      const t = lifeFixture([crewRow(agent)])
+      t.live(true)
+      await t.poll()
+      expect(t.closeMember).toHaveBeenCalledWith('harness')
+    }
+    const awake = lifeFixture([crewRow()])
+    awake.live(true)
+    await awake.poll()
+    expect(awake.closeMember).not.toHaveBeenCalled()
+  })
+  it('after a host restart, an awake member whose folder was dropped gets it back before it reopens (security review of #3229)', async () => {
+    const t = lifeFixture([crewRow()])
+    mkdirSync(join(t.core.dataDir, 'super-tabs'), { recursive: true })
+    writeFileSync(join(t.core.dataDir, 'super-tabs', 'crew-folders-machine-1.json'),
+      JSON.stringify({ version: 1, folders: [{ tabId: 'tab', harnessId: 'harness', path: '/nowhere/ada', source: '/nowhere/clone' }] }))
+    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockResolvedValue('restored')
+    await t.poll()
+    expect(restore).toHaveBeenCalledWith('tab', 'harness')
+    restore.mockRestore()
+  })
+  it('a folder drop the removal refused is tried again an hour later (review of #3229)', async () => {
+    const t = lifeFixture([crewRow({ asleep: { since: 1, folderDropped: true } })])
+    const drop = vi.spyOn(CrewFolders.prototype, 'drop').mockResolvedValue('kept')
+    await t.poll()
+    await t.poll(60_000)
+    expect(drop).toHaveBeenCalledTimes(1)
+    await t.poll(60 * 60_000)
+    expect(drop).toHaveBeenCalledTimes(2)
+    drop.mockRestore()
+  })
+  it('a woken member whose folder is coming back is not reopened until it is there (review of #3229)', async () => {
+    const t = lifeFixture([crewRow()])
+    mkdirSync(join(t.core.dataDir, 'super-tabs'), { recursive: true })
+    writeFileSync(join(t.core.dataDir, 'super-tabs', 'crew-folders-machine-1.json'),
+      JSON.stringify({ version: 1, folders: [{ tabId: 'tab', harnessId: 'harness', path: '/nowhere/ada', source: '/nowhere/clone' }] }))
+    let finish!: (value: 'restored') => void, back = false
+    // As the real restore does, a folder brought back is no longer remembered.
+    const remembers = vi.spyOn(CrewFolders.prototype, 'remembers').mockImplementation(() => !back)
+    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockImplementation(() => new Promise(resolve => { finish = value => { back = true; resolve(value) } }))
+    await t.poll()
+    await t.poll(10_000)
+    expect(restore).toHaveBeenCalledTimes(1)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    finish('restored')
+    await t.poll(10_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+    restore.mockRestore()
+    remembers.mockRestore()
+  })
+  it('a restore that keeps failing never holds the keep-alive back for good (review of #3229)', async () => {
+    const t = lifeFixture([crewRow()])
+    const remembers = vi.spyOn(CrewFolders.prototype, 'remembers').mockReturnValue(true)
+    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockResolvedValue('failed')
+    await t.poll()
+    await t.poll(10_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+    // Tried again after its wait, not on every roster.
+    const tries = restore.mock.calls.length
+    await t.poll(10_000)
+    expect(restore.mock.calls.length).toBe(tries)
+    await t.poll(60_000)
+    expect(restore.mock.calls.length).toBe(tries + 1)
+    restore.mockRestore()
+    remembers.mockRestore()
+  })
+  it('a member woken and put to sleep again is closed again', async () => {
+    const rows = [crewRow({ asleep: { since: 1 } })]
+    const t = lifeFixture(rows)
+    t.live(true)
+    await t.poll()
+    rows[0] = crewRow()
+    await t.poll(1_000)
+    rows[0] = crewRow({ asleep: { since: 2 } })
+    await t.poll(1_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(2)
+  })
 })
