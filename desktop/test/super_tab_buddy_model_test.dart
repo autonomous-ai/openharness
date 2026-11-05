@@ -588,6 +588,32 @@ void main() {
       await close(tester, c);
     });
 
+    // Review of #3171: the bar reads its chat on every build, so the read is
+    // bounded: a refusal under more than a page of newer messages is not
+    // offered (its person has moved on), and nothing is removed for it.
+    testWidgets('a refusal more than a page back is not offered', (
+      tester,
+    ) async {
+      final server = swarm();
+      line(server, held);
+      for (var i = 0; i < 100; i++) {
+        server.append('later $i', conversationId: 'swarm-buddy-peer');
+        server.messages.last['author'] = {
+          'kind': 'person',
+          'id': 'peer',
+          'name': 'peer@example.com',
+        };
+      }
+      final c = await show(tester, server);
+      while (c.hasOlder('swarm-buddy-peer')) {
+        await c.loadMessages('swarm-buddy-peer', older: true);
+      }
+      await tester.pumpAndSettle();
+      expect(c.messages('swarm-buddy-peer'), hasLength(101));
+      expect(find.text(offer), findsNothing);
+      await close(tester, c);
+    });
+
     // Review of #3171: a Buddy is removed before it starts again, so nothing
     // that would refuse the start may be known when it is removed.
     testWidgets('while new work is paused, Start again removes nothing', (
