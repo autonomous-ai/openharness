@@ -68,6 +68,7 @@ import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
 import { RefusalMemory } from './dispatchRefusals.js'
+import { removedItems } from './instructionsDiff.js'
 import { candidatesFor, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type Skip } from './dispatch.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
@@ -163,6 +164,10 @@ const hash = (value: unknown): string => createHash('sha256').update(JSON.string
  *  for a busy Swarm) until the maintenance script removes it, and every command and read loads this row. */
 /** The most Swarms a rename reaches at once, as many as a host reads (read/host.ts FULL_TABS); its readings do the rest. */
 const MACHINE_RENAME_SWARMS = 500
+/** At most this many pull requests are read on GitHub for one instructions save (pullRequestMergesFor); the rest count as not
+ *  known, and their lines stay. */
+export const MAX_MERGE_READS = 20
+
 /** The writes after which the crew dispatch runs (store.ts dispatchSoon): those that may free a member or open a task. A
  *  status only when it hands the task over or ends it; a progress note, the Swarm's most frequent write, frees nobody. */
 const DISPATCH_TRIGGERS: ReadonlySet<string> = new Set(['work.cancel', 'conversation.create', 'work.define', 'work.priority',
@@ -413,6 +418,10 @@ export interface SuperTabStoreHooks {
   /** The files a handed task's pull requests change and their head (pullRequestFiles.ts), read before its Engineer's Ready so
    *  the server opens its review steps (task #3401). Null with nothing of the project's repository to read. Absent with no GitHub App. */
   pullRequestFiles?: (repositoryUrl: string | null, pullRequestUrls: string[]) => Promise<PullRequestFilesRead | null>
+  /** When GitHub says each of these pull requests merged (ms; null: not merged; absent: not known), read before an
+   *  instructions save that may drop a person's rule kept in a code task (ruleMoves.ts, task #3463). Absent with no GitHub App:
+   *  such a line then stays. */
+  pullRequestMerges?: (autonomousEnv: string, tabId: string, projectId: string, pullRequestUrls: string[]) => Promise<Record<string, number | null>>
   /** The same for a branch a start names: its open pull request's answer, clean for the default branch, unknown with no pull request. */
   branchPushOrigin?: (repositoryUrl: string | null, branch: string) => Promise<PushOrigin>
   /** Whether the Harness GitHub App reaches a project's GitHub repository for this Swarm (github/projectAccess.ts), read before
@@ -1639,13 +1648,44 @@ export class SuperTabStore {
     }
   }
 
+  /**
+   * When GitHub says the pull requests merged that an instructions save's dropped lines may wait on (task #3463): those linked
+   * to the project's code tasks whose brief carries a line the save removes, in the project's own repository (a link
+   * elsewhere is not this task's merge), at most MAX_MERGE_READS. Read before the write, as GitHub may take seconds, whatever
+   * the tidying setting. Undefined when there is nothing to read or no reader; a failure reads as nothing known (the line stays).
+   */
+  private async pullRequestMergesFor(user: AuthUser, tabId: string, command: unknown): Promise<Record<string, number | null> | undefined> {
+    const hook = this.hooks.pullRequestMerges
+    const asked = command as Command | null
+    if (!hook || asked?.type !== 'instructions.save') return undefined
+    try {
+      const urls = await transaction(this.db, async tx => {
+        const { state } = await this.load(tx, user, tabId, namedFor(asked))
+        const project = projectsOf(state).find(p => p.id === asked.projectId)
+        const repositoryUrl = project?.repository?.repositoryUrl
+        if (!project || !repositoryUrl) return []
+        const stored = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, project.id) }, select: { text: true } })
+        const removed = stored ? removedItems(stored.text, asked.text) : []
+        if (!removed.length) return []
+        return [...new Set(state.conversations.filter(c => (c.projectId ?? 'lead') === project.id && !c.reviewOf && c.brief
+          && removed.some(line => c.brief.includes(line)))
+          .flatMap(c => (c.pullRequestUrls ?? []).filter(url => projectPullRequestUrl(url, repositoryUrl) !== null)))].slice(0, MAX_MERGE_READS)
+      })
+      return urls.length ? await hook(user.autonomousEnv, tabId, asked.projectId, urls) : undefined
+    } catch (error) {
+      if (error instanceof SuperTabError) return undefined
+      logger.warn('[swarm-instructions] merges not read; moved rules stay', { tabId, error: error instanceof Error ? error.message : String(error) })
+      return undefined
+    }
+  }
+
   /** [only]: what the store alone may give a command: `overdue` for decision.answer (leaveOverdueDecisions), `movedTo` for
    *  machine.moved (computerSignedIn). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
     const { operationId, command } = operationSchema.parse(input)
-    const [pushOrigin, repositoryReach, pullRequestFiles] = await Promise.all([this.pushOriginFor(user, tabId, command), this.repositoryReachFor(user, tabId, command),
-      this.pullRequestFilesFor(user, tabId, command)])
+    const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([this.pushOriginFor(user, tabId, command),
+      this.repositoryReachFor(user, tabId, command), this.pullRequestFilesFor(user, tabId, command), this.pullRequestMergesFor(user, tabId, command)])
     let ended: WorkHold[] = [], started: WorkHold[] = []
     // Whether the Swarm, as this write leaves it, has a crew: only then may the write start a dispatch pass (dispatchSoon).
     let crewed = false
@@ -1847,6 +1887,7 @@ export class SuperTabStore {
         const stored = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, projectId) }, select: { revision: true, text: true, updatedAt: true } })
         context.instructions = stored && { revision: stored.revision, text: stored.text, ...stored.updatedAt ? { at: stored.updatedAt.getTime() } : {} }
         if (command.type === 'instructions.save' && command.approvals?.length) context.approvals = await readApprovals(tx, tabId, command.approvals)
+      if (command.type === 'instructions.save' && pullRequestMerges) context.pullRequestMerges = pullRequestMerges
       }
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
       // A stale rules save is refused with the newest revision, to merge (policy.ts); null is the seed.
