@@ -2231,7 +2231,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Revision 0 runs on the template (design, Migration); otherwise the stored document of this revision, read by the store.
       const stored = !current ? INSTRUCTIONS_TEMPLATE : context.instructions?.revision === current ? context.instructions.text
         : fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
-      saveInstructions(project, current, appendRouting(stored, command.text), routingSummary(command.text), askedBy)
+      // The line is one more item: one the document already has is refused like a save's, quoting it (#3283, review of #3202).
+      const appended = appendRouting(stored, command.text)
+      refuseRepeats(stored, appended)
+      saveInstructions(project, current, appended, routingSummary(command.text), askedBy)
       break
     }
     case 'rule.remove':
