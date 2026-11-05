@@ -105,10 +105,17 @@ class PushTokens {
   /// Signing out: the backend lets go of the address, and the OS stops delivering to it, so a
   /// backend that missed the first still reaches nothing. Best effort: the phone is signed out
   /// whatever the answer.
-  Future<void> forget(PushTokenApi api) {
+  Future<void> forget(PushTokenApi api) => _forget(api, always: true);
+
+  /// A launch that found the session gone: as [forget], but only when this phone had told the
+  /// backend an address, so a phone never signed in leaves the OS alone.
+  Future<void> forgetIfTold(PushTokenApi api) => _forget(api, always: false);
+
+  Future<void> _forget(PushTokenApi api, {required bool always}) {
     _epoch++;
     return _serial(() async {
       final sent = await _read();
+      if (sent == null && !always) return;
       if (sent != null) await _take(api, sent);
       await _storage.delete(_key);
       _failedAt = null;

@@ -1815,6 +1815,9 @@ class AppNotifier extends ChangeNotifier {
       );
       if (!_authWorkCurrent(revision)) return;
       if (!authStatus.loggedIn) {
+        // The session ended while the app was closed (revoked from another device): the OS stops
+        // delivering this account's pushes to the phone. The backend drop fails without a session.
+        if (_push case final push?) unawaited(push.forgetIfTold(api));
         currentUser = null;
         status = AppStatus.unauthenticated;
         notifyListeners();
@@ -2088,6 +2091,9 @@ class AppNotifier extends ChangeNotifier {
     // who had just pressed Sign out. The sign-out finishes the job itself.
     if (_leftByHand) return;
     _invalidateAuthWork();
+    // As on a sign-out here ([_endSession]): no lock-screen notice of this account after it. The
+    // backend drop fails without a session; the OS one still stops delivery.
+    if (_push case final push?) unawaited(push.forget(api));
     currentUser = null;
     signingIn = false;
     signInProvider = null;
