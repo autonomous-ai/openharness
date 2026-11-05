@@ -9,6 +9,7 @@ import 'package:dio/dio.dart' show CancelToken, DioException, DioExceptionType;
 import 'package:flutter/foundation.dart';
 
 import '../logging/app_log.dart';
+import '../measurement/speed_marks.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
@@ -4740,6 +4741,8 @@ class SuperTabController extends ChangeNotifier {
     // A light check asks only for new messages, which wait while holding.
     if (light && _holding(id)) return;
     final generation = _heldGeneration[id];
+    final readClock = Stopwatch()..start();
+    var requestMs = 0;
     // How far the Swarm's state said the conversation went when this read
     // was asked for.
     final askedUpTo = snapshot!.conversation(id)!.lastMessageSequence;
@@ -4760,6 +4763,7 @@ class SuperTabController extends ChangeNotifier {
               (Object _) => request('GET', '${_messagesPath(id)}$query'),
             )
           : await request('GET', '${_messagesPath(id)}$query');
+      requestMs = readClock.elapsedMilliseconds;
       final arrived =
           !older &&
           !holding &&
@@ -4977,6 +4981,16 @@ class SuperTabController extends ChangeNotifier {
       if (!same || settled) {
         if (id == selectedId) _viewVersion++;
         _changed();
+      }
+      // Speed marks (task #3176): a chat opening and each page read back; a
+      // poll for new messages is not one of them.
+      if (older || replacing || (tail == null && incoming.isNotEmpty)) {
+        speedMarks.messages(
+          kind: older ? 'older' : 'latest',
+          rows: incoming.length,
+          requestMs: requestMs,
+          totalMs: readClock.elapsedMilliseconds,
+        );
       }
     } catch (failure) {
       if (!older) _settleHeld(id, read: false);
