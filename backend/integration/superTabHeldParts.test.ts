@@ -61,6 +61,8 @@ async function write(tabId: string, pick: (all: parts.SwarmParts) => parts.PartW
 
 const liveOf = <T>(list: parts.Part<T>[]) => list.filter(p => !p.deleted)
 const observed = (tabId: string, held: HeldParts) => db.$transaction(tx => parts.loadObserved(tx, tabId, 'host', held))
+/** A command's load (store.ts loadRow), naming one quiet conversation as a command naming it does. */
+const commanded = (tabId: string, held: HeldParts, groupIds: string[] = []) => db.$transaction(tx => parts.loadActive(tx, tabId, { groupIds }, held))
 
 describe('a full report\'s held parts (B3, #2597)', () => {
   it('load what a server holding nothing loads, after every kind of write', { timeout: 120_000 }, async () => {
@@ -123,5 +125,47 @@ describe('a full report\'s held parts (B3, #2597)', () => {
     const live = (await db.swarmMachine.count({ where: { tabId, deleted: false } }))
     expect(entries.map(e => [e.planSummary?.startsWith('IXSCAN') || e.planSummary === 'IDHACK' || e.planSummary === 'EXPRESS_IXSCAN', e.docsExamined, e.nreturned]))
       .toEqual([[true, live, live], [true, 1, 1]])
+  })
+})
+
+describe('a command\'s held conversations (#3146)', () => {
+  it('load what a server holding nothing loads, after every kind of conversation write', { timeout: 120_000 }, async () => {
+    const tabId = await scene()
+    const warm = new HeldParts(), tiny = new HeldParts(1)
+    let n = 0
+    const at = () => Date.now() + ++n
+    const someGroup = (all: parts.SwarmParts) => liveOf(all.groups).find(x => !x.dormant && x.key !== 'lead')!
+    const cases: Array<[string, () => Promise<boolean>]> = [
+      ['a post in a conversation', () => write(tabId, all => { const g = someGroup(all)
+        return { op: 'update', kind: 'group', key: g.key, seen: g.version, data: { ...g.data!, title: `T${n}` } } }, at())],
+      ['a conversation touched (its version alone moves)', () => write(tabId, all => { const g = someGroup(all)
+        return { op: 'touch', kind: 'group', key: g.key, seen: g.version } }, at())],
+      ['a conversation put to sleep', () => write(tabId, all => { const g = liveOf(all.groups).find(x => x.key === 'lead')!
+        return { op: 'update', kind: 'group', key: g.key, seen: g.version, data: { ...g.data!, dormant: true } } }, at())],
+      ['and woken', () => write(tabId, all => { const g = liveOf(all.groups).find(x => x.key === 'lead')!
+        return { op: 'update', kind: 'group', key: g.key, seen: g.version, data: { ...g.data!, dormant: false } } }, at())],
+      ['a conversation removed', () => write(tabId, all => { const g = someGroup(all)
+        return { op: 'remove', kind: 'group', key: g.key, seen: g.version, data: g.data } }, at())],
+      ['a new conversation', () => write(tabId, all => { const g = someGroup(all)
+        return { op: 'insert', kind: 'group', key: `g-${n}`, ordinal: 900 + n, data: { ...g.data!, id: `g-${n}`, title: `New ${n}` } } }, at())],
+      ['a conversation rewritten at the version it had, under a new date', async () => {
+        const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId, deleted: false, dormant: false, key: { not: 'lead' } } })
+        await db.swarmGroup.update({ where: { id: row.id }, data: { changedAt: new Date(at()), data: { ...row.data as object, title: 'rewritten' } } })
+        return true
+      }],
+    ]
+    expect(await commanded(tabId, warm)).toEqual(await commanded(tabId, new HeldParts()))
+    for (const [name, change] of cases) {
+      expect(await change(), name).toBe(true)
+      const fresh = await commanded(tabId, new HeldParts())
+      expect(await commanded(tabId, warm), name).toEqual(fresh)
+      expect(await commanded(tabId, tiny), name).toEqual(fresh)
+      // A command naming a quiet conversation loads it too, and the next one without it does not.
+      const quiet = (await db.swarmGroup.findFirst({ where: { tabId, deleted: false, dormant: true } }))?.key
+      if (quiet) {
+        expect(await commanded(tabId, warm, [quiet]), name).toEqual(await commanded(tabId, new HeldParts(), [quiet]))
+        expect(await commanded(tabId, warm), name).toEqual(fresh)
+      }
+    }
   })
 })
