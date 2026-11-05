@@ -19,9 +19,9 @@ void main() {
   Finder inRow(String row, Finder what) =>
       find.descendant(of: key(row), matching: what);
 
-  Future<({SuperTabActivity activity, List<SuperTabPage> opened})> show(
+  Future<({SuperTabActivity activity, List<SwarmPage> opened})> show(
     WidgetTester tester, {
-    SuperTabPage? page,
+    SwarmPage? page,
   }) async {
     final server = swarm()..state['swarmBuddy'] = true;
     server.ask(['Ship it?']);
@@ -36,7 +36,7 @@ void main() {
     final c = activity.controller;
     final AppNotifier app = createApp();
     addTearDown(app.dispose);
-    final opened = <SuperTabPage>[];
+    final opened = <SwarmPage>[];
     await tester.binding.setSurfaceSize(const Size(280, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
@@ -102,31 +102,36 @@ void main() {
     );
     expect(badge('super-decisions').count, 1);
     expect(badge('super-mentions').count, 2);
-    expect(inRow('super-threads', find.byType(SuperTabCountBadge)), findsNothing);
+    expect(
+      inRow('super-threads', find.byType(SuperTabCountBadge)),
+      findsNothing,
+    );
     expect(inRow('super-threads', find.text('1')), findsOneWidget);
-    final label = tester.widget<Text>(inRow('super-threads', find.text('Threads')));
+    final label = tester.widget<Text>(
+      inRow('super-threads', find.text('Threads')),
+    );
     expect(label.style?.fontWeight, grid.AppFont.semibold);
   });
 
   testWidgets('each row opens its page, and the open one is selected', (
     tester,
   ) async {
-    final shown = await show(tester, page: SuperTabPage.mentions);
+    final shown = await show(tester, page: SwarmPage.mentions);
     await tester.tap(key('super-decisions'));
     await tester.tap(key('super-mentions'));
     await tester.tap(key('super-threads'));
     expect(shown.opened, [
-      SuperTabPage.decisions,
-      SuperTabPage.mentions,
-      SuperTabPage.threads,
+      SwarmPage.decisions,
+      SwarmPage.mentions,
+      SwarmPage.threads,
     ]);
-    expect(
-      tester
-          .getSemantics(key('super-mentions'))
-          .flagsCollection
-          .isSelected,
-      isTrue,
-    );
+    Color? fill(String row) => tester
+        .widget<Material>(
+          find.ancestor(of: key(row), matching: find.byType(Material)).first,
+        )
+        .color;
+    expect(fill('super-mentions'), grid.AppSurface.selectedFill);
+    expect(fill('super-threads'), Colors.transparent);
   });
 
   testWidgets('Projects has no collapse chevron and keeps its filter and +', (
@@ -139,7 +144,10 @@ void main() {
       findsNothing,
     );
     expect(
-      find.descendant(of: heading, matching: find.byIcon(AppIcons.chevronRight)),
+      find.descendant(
+        of: heading,
+        matching: find.byIcon(AppIcons.chevronRight),
+      ),
       findsNothing,
     );
     expect(key('super-unread-only'), findsOneWidget);
@@ -157,14 +165,11 @@ void main() {
     expect(arrow('super-forward').onPressed, isNull);
 
     places
-      ..record(const SuperTabPlace.page(SuperTabPage.threads))
+      ..record(const SuperTabPlace.page(SwarmPage.threads))
       ..record(const SuperTabPlace.chat('lead'));
     await tester.pump();
     expect(arrow('super-back').onPressed, isNotNull);
     await tester.tap(key('super-back'));
-    expect(
-      places.takeStep(),
-      const SuperTabPlace.page(SuperTabPage.threads),
-    );
+    expect(places.takeStep(), const SuperTabPlace.page(SwarmPage.threads));
   });
 }

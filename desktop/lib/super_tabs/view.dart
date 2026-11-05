@@ -49,6 +49,7 @@ import 'attachment_chips.dart' show superTabShowsInPlace;
 import 'attachment_image.dart';
 import 'reminders.dart';
 import 'activity_view.dart';
+import 'places.dart';
 import 'attention.dart';
 import 'controller.dart';
 import 'file_links.dart';
@@ -1833,14 +1834,14 @@ class _SuperTabViewState extends State<SuperTabView>
     app: widget.app,
     onNewProject: widget.onNewProject,
     onNewSwarm: widget.onNewSwarm,
-    notificationsSelected: _notificationsVisible,
+    page: _notificationsVisible ? SwarmPage.decisions : null,
     attention: SuperTabAttention.of(c),
     activity: SuperTabActivity.of(c),
     onManage: _openManage,
     manageSelected: _manageOpen,
     // Activity on every platform (Lead, 10-31): the Mac's menu bar and Dock
     // still say what waits, and the sidebar lists it as Slack does.
-    onNotifications: _openActivity,
+    onPage: (_) => _openActivity(),
     onSelect: (id) {
       setState(() => _showNotifications = _showManage = _showTasks = false);
       // Choosing a conversation leaves the Manage pane: its Devices page left

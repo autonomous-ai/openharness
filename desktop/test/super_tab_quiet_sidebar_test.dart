@@ -9,7 +9,8 @@ import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
 
 /// The design's sidebar (docs/plans/2026-11-02-quiet-swarm-design.md, screen
-/// 1): the Swarm, Activity, Buddy, Projects with its +, and Manage at the foot.
+/// 1), as task #2996 changed it: the Swarm, Decisions, Mentions and Threads,
+/// Projects with its + and Buddy first under it, and Manage at the foot.
 void main() {
   Future<SuperTabController> show(
     WidgetTester tester, {
@@ -36,7 +37,7 @@ void main() {
             onSelect: c.select,
             onNewSwarm: () {},
             onNewProject: onNewProject ?? () {},
-            onNotifications: () {},
+            onPage: (_) {},
             onManage: onManage ?? () {},
             manageSelected: manageSelected,
           ),
@@ -58,9 +59,9 @@ void main() {
     await show(tester);
     final order = [
       'super-swarm-switcher',
-      'super-activity',
-      'super-swarm-buddy',
+      'super-decisions',
       'project-sidebar-projects',
+      'super-swarm-buddy',
       'super-project-lead',
       'super-manage',
     ];
@@ -80,7 +81,6 @@ void main() {
       'New project',
       'Your devices',
       'Your models',
-      'Threads',
       'Machines',
       'Models',
     ]) {

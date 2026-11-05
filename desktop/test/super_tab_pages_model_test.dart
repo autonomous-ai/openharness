@@ -2,7 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/places.dart';
 
-import 'super_tab_activity_lists_test.dart' show load, swarm, unreadThread, wait;
+import 'super_tab_activity_lists_test.dart'
+    show load, swarm, unreadThread, wait;
 import 'support/super_tab_fixture.dart';
 
 Map<String, dynamic> _group(ConversationServer server, String id) =>
@@ -33,16 +34,19 @@ void main() {
       expect(activity.threadsCount, 2);
     });
 
-    test('Mentions stands on the server\'s count until the tags are read', () async {
-      final server = swarm()..state['mentionsWaiting'] = 4;
-      final c = server.controller(account: 'owner');
-      addTearDown(() async {
-        await c.flush();
-        c.dispose();
-      });
-      await c.refresh();
-      expect(SuperTabActivity.of(c).mentionsCount, 4);
-    });
+    test(
+      'Mentions stands on the server\'s count until the tags are read',
+      () async {
+        final server = swarm()..state['mentionsWaiting'] = 4;
+        final c = server.controller(account: 'owner');
+        addTearDown(() async {
+          await c.flush();
+          c.dispose();
+        });
+        await c.refresh();
+        expect(SuperTabActivity.of(c).mentionsCount, 4);
+      },
+    );
   });
 
   group('a typed answer on the Decisions page', () {
@@ -53,7 +57,10 @@ void main() {
       final activity = await load(server);
       final decision = activity.decisions.open.single;
       expect(
-        await activity.decisions.answerInWords(decision, ' Use the Mac Studio '),
+        await activity.decisions.answerInWords(
+          decision,
+          ' Use the Mac Studio ',
+        ),
         isTrue,
       );
       final sent = server.posts
@@ -119,7 +126,7 @@ void main() {
       places = SuperTabPlaces.of(activity.controller);
     });
 
-    const threads = SuperTabPlace.page(SuperTabPage.threads);
+    const threads = SuperTabPlace.page(SwarmPage.threads);
     const chat = SuperTabPlace.chat('lead');
     const thread = SuperTabPlace.chat('offline', root: 'message-1');
 

@@ -11,8 +11,8 @@ places.
 
 **Architecture:**
 
-- `SuperTabPage { decisions, mentions, threads }` names the three pages. The view's `_showNotifications` bool becomes
-  `SuperTabPage? _page`; each page is its own widget over the existing `SuperTabActivity` model, which already reads
+- `SwarmPage { decisions, mentions, threads }` names the three pages. The view's `_showNotifications` bool becomes
+  `SwarmPage? _page`; each page is its own widget over the existing `SuperTabActivity` model, which already reads
   the decisions, tags, reminders and followed threads. `activity_view.dart`'s tabs go; its row (`_ActivityRow`, the
   day headings, the error bar, the read-more sentinel) moves to `page_rows.dart` as public building blocks the pages
   share.
@@ -110,8 +110,8 @@ number | null`.
 
 **Interfaces:** Produces: `SuperTabActivity.mentionsCount`, `threadsCount`, `answeredWaiting(SuperTabNeed)`,
 `answerWaiting(SuperTabNeed, String) -> Future<bool>`; `SuperTabDecisions.answerInWords(SuperTabDecision, String) ->
-Future<bool>`, `refusedWords(SuperTabDecision) -> bool`; `enum SuperTabPage {decisions, mentions, threads}`;
-`SuperTabPlace({SuperTabPage? page, String? conversationId, String? root})`; `SuperTabPlaces.of(controller)` with
+Future<bool>`, `refusedWords(SuperTabDecision) -> bool`; `enum SwarmPage {decisions, mentions, threads}`;
+`SuperTabPlace({SwarmPage? page, String? conversationId, String? root})`; `SuperTabPlaces.of(controller)` with
 `record(SuperTabPlace)`, `canGoBack`, `canGoForward`, `step(int)`, `takeStep() -> SuperTabPlace?`.
 
 - [ ] Failing tests: Mentions and Threads counts; a typed answer sends `note` and no `choice` and the row leaves; a
@@ -125,7 +125,7 @@ Future<bool>`, `refusedWords(SuperTabDecision) -> bool`; `enum SuperTabPage {dec
 **Files:** Modify `desktop/lib/super_tabs/project_sidebar.dart`, `desktop/lib/shared/theme/app_icons.dart` (flag);
 Test `desktop/test/super_tab_sidebar_pages_test.dart`.
 
-**Interfaces:** `ProjectSidebar` takes `onPage(SuperTabPage)`, `page: SuperTabPage?`, `places: SuperTabPlaces?`
+**Interfaces:** `ProjectSidebar` takes `onPage(SwarmPage)`, `page: SwarmPage?`, `places: SuperTabPlaces?`
 in place of `onNotifications` / `notificationsSelected`.
 
 - [ ] Failing tests: rows Decisions, Mentions, Threads in that order under the Swarm row; Decisions and Mentions show

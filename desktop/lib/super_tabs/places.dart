@@ -5,19 +5,19 @@ import 'controller.dart';
 /// The Swarm's three pages in the sidebar, each one thing (anh Dee, 11-05,
 /// task #2996): what waits on the reader's answer, the tags of them, and the
 /// threads they follow.
-enum SuperTabPage { decisions, mentions, threads }
+enum SwarmPage { decisions, mentions, threads }
 
 /// A place the reader was in a Swarm: one of its pages, or a chat with the
 /// thread open beside it ([root]) or none.
 @immutable
 class SuperTabPlace {
-  const SuperTabPlace.page(SuperTabPage this.page)
+  const SuperTabPlace.page(SwarmPage this.page)
     : conversationId = null,
       root = null;
   const SuperTabPlace.chat(String this.conversationId, {this.root})
     : page = null;
 
-  final SuperTabPage? page;
+  final SwarmPage? page;
   final String? conversationId, root;
 
   @override
@@ -36,7 +36,8 @@ class SuperTabPlace {
 
 /// The reader's places in one Swarm, as a browser's history: Back and
 /// Forward (the sidebar's arrows, ⌘[ and ⌘]) step through them. In memory
-/// only, at most [capacity]. The view records where it is; a step is asked
+/// only, at most [capacity]. The view records where it is after each frame; a
+/// step is asked
 /// here ([step]) and taken by the view ([takeStep]), which goes there. One per
 /// controller.
 class SuperTabPlaces extends ChangeNotifier {
@@ -65,6 +66,8 @@ class SuperTabPlaces extends ChangeNotifier {
       ..add(place);
     if (_trail.length > capacity) _trail.removeAt(0);
     _cursor = _trail.length - 1;
+    // The arrows follow; the view records after its frame, never in a build.
+    if (!_disposed) notifyListeners();
   }
 
   /// A page is always there; a chat only while the reader still has it.
