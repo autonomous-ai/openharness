@@ -929,6 +929,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
+  // The spend ledger a PM's share is read from (pmSpend.ts): the Swarm's own, as pmAccounts reads it, never a reader's.
+  for (const pool of visible.machines ?? []) delete pool.spendDays
   // A machine kept for some projects names to each reader only those they may read (machines.ts projects): a private
   // project's id is not another member's to see.
   for (const pool of visible.machines ?? []) {

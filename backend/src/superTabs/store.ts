@@ -92,6 +92,7 @@ import { PM_SCHEDULE_TEXT, recordWake, scheduleRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
+import { addSpend } from './pmSpend.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { costRows, failedStarts, summarizeCosts } from './costs/read.js'
 import { MAX_PROPOSALS, proposalQuestion, proposalTitle, REASK_DAYS, reflectionMessageId, routingReflection, type ReflectionInput } from './costs/reflection.js'
@@ -3501,6 +3502,8 @@ export class SuperTabStore {
       refusable: () => true })
     if (!readingOnly(mine.observation, reading)) return null
     addLent(mine, now, record.lentCount, record.lentProjects)
+    // What the account's week and each session here spent today, a PM's share read from it (pmSpend.ts, #3222).
+    addSpend(mine, reading, now)
     mine.observation = reading
     const suspended = JSON.stringify(mine.engineSuspensions)
     readingClearsSuspensions(mine, now)
@@ -3596,6 +3599,7 @@ export class SuperTabStore {
         preparable: id => !!state.starts?.some(s => s.id === id && preparableStart(s, machineId)),
         refusable: id => !!state.starts?.some(s => s.id === id && refusableStart(s, machineId)) })
       accrueLent(state, pool, now)
+      addSpend(pool, reading, now)
       pool.observation = reading
       // The name its owner gave it in Machines, which a rename there changes (#2308).
       followAccountName(state, pool, accountMachineName(owned))

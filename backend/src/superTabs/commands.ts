@@ -1974,6 +1974,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // What its readings and starts recorded is not a setting: saving the settings keeps the Lent ledger, the engines'
         // failures and suspensions and the last reading (#3043). A machine not listed yet, or Buddy-only, starts clean.
         ...(previous?.lent ? { lent: previous.lent } : {}), ...(previous?.lentDays ? { lentDays: previous.lentDays } : {}),
+        ...(previous?.spendDays ? { spendDays: previous.spendDays } : {}),
         ...(previous?.engineFailures ? { engineFailures: previous.engineFailures } : {}),
         ...(previous?.engineSuspensions ? { engineSuspensions: previous.engineSuspensions } : {}),
         ...(previous?.observation ? { observation: previous.observation } : {}) })

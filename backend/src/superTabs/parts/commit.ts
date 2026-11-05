@@ -151,7 +151,8 @@ export function capReleased(state: SuperTabState): void {
  *  that machine's host needs to hear about. */
 const withoutReading = (data: unknown) => {
   const machine = data as MachineData | undefined
-  return machine && { ...machine, contribution: machine.contribution && { ...machine.contribution, observation: undefined, lent: undefined, lentDays: undefined } }
+  return machine && { ...machine, contribution: machine.contribution && { ...machine.contribution, observation: undefined, lent: undefined, lentDays: undefined,
+    spendDays: undefined } }
 }
 
 /** What a reading moves all the time, measured on production (2026-11-04: of 128 parts moved in 40 s, `resources` in all of them): a
@@ -163,7 +164,7 @@ const steadyPart = (data: unknown) => {
   if (!machine?.contribution) return machine
   const steady: Record<string, unknown> | undefined = observation && { ...observation }
   for (const field of VOLATILE_READING) if (steady) delete steady[field]
-  return { ...machine, contribution: { ...machine.contribution, observation: steady, lent: undefined, lentDays: undefined } }
+  return { ...machine, contribution: { ...machine.contribution, observation: steady, lent: undefined, lentDays: undefined, spendDays: undefined } }
 }
 /** Whether a machine's write changes anything beyond those fields: running sessions, tools, readiness and all the rest. */
 export const machineContentChanged = (before: unknown, after: unknown): boolean => !sameData(steadyPart(before), steadyPart(after))
