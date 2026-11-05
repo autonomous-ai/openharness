@@ -153,6 +153,24 @@ void main() {
     expect(back(), findsNothing);
   });
 
+  testWidgets("the agent's name starts to the right of the chevron's box, so "
+      'its first letter is not under it', (tester) async {
+    home.showHarness();
+    await tester.pumpWidget(terminal());
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final chevron = tester.getRect(back());
+    final name = tester.getRect(
+      find
+          .descendant(
+            of: find.byType(TerminalTitle),
+            matching: find.byType(Text),
+          )
+          .first,
+    );
+    expect(name.left, greaterThanOrEqualTo(chevron.right));
+  });
+
   testWidgets('on iOS, a swipe from the left edge goes back to Swarm', (
     tester,
   ) async {
