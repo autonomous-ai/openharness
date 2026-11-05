@@ -19,7 +19,7 @@ describe('withPmAccounts', () => {
   it('notes every candidate on an account a PM runs on, naming each project and its PM', () => {
     const [onStudio, codex, elsewhere] = withPmAccounts(read(), [probe(), probe({ engine: 'codex' }), probe({ machineId: 'gray', machineName: 'Gray' })])
     expect(onStudio!.notes).toEqual([both])
-    expect(PM_ACCOUNT_NOTE(['lamp (Faye)'])).toBe('This account runs the PM of lamp (Faye).')
+    expect(PM_ACCOUNT_NOTE(['lamp (Faye)'])).toBe('This account runs the PM of lamp (Faye). It keeps 20% of its week for its PM until the PM\'s daily spend is measured (3 days).')
     expect(codex!.notes).toEqual([])
     expect(elsewhere!.notes).toEqual([])
   })
@@ -64,5 +64,37 @@ describe('withPmAccounts', () => {
     const legacy = { name: 'My Swarm', conversations: [{ id: 'lead', leadId: 'x' }], agents: [{ id: 'x', name: 'Lead', machineId: 'studio', configuration: { engine: 'claude' } }] }
     expect(withPmAccounts(legacy, [probe()])[0]!.notes).toEqual([PM_ACCOUNT_NOTE(['My Swarm (Lead)'])])
     expect(withPmAccounts({ conversations: [{ id: 'lead' }], agents: null }, [probe()])[0]!.notes).toEqual([])
+  })
+
+  // Task #3222: the share an account keeps is what its PMs will spend until its weekly reset, measured; 20% until then.
+  describe('the share a PM\'s account keeps', () => {
+    const DAY = 86_400_000, now = Date.parse('2026-11-05T12:00:00Z')
+    const measured = (share: number, extra: Record<string, unknown> = {}) => ({ machineId: 'studio', engine: 'claude', project: 'openharness', pm: 'River',
+      daily: { share, days: 5 }, resetsAt: now + 2.5 * DAY, ...extra })
+    const noteOf = (accounts: unknown[]) => withPmAccounts(read({ pmAccounts: accounts }), [probe()], now)[0]!.notes
+
+    it('is the days to the reset × the PM\'s daily share, and says both', () => {
+      expect(noteOf([measured(3)])).toEqual(['This account runs the PM of openharness (River). It keeps 7.5% of its week for its PM: 2.5 days to the reset × 3% a day.'])
+    })
+
+    it('is never under 5%, and is 20% while any PM on it is not measured', () => {
+      expect(noteOf([measured(1, { resetsAt: now + DAY })])[0]).toContain('It keeps 5% of its week for its PM: 1 day to the reset × 1% a day.')
+      const lamp = { machineId: 'studio', engine: 'claude', project: 'lamp', pm: 'Faye' }
+      expect(noteOf([measured(3), lamp])[0]).toContain('It keeps 20% of its week for its PMs until each PM\'s daily spend is measured (3 days).')
+      // Two measured PMs: their shares add up.
+      expect(noteOf([measured(3), { ...measured(2), project: 'lamp', pm: 'Faye' }])[0]).toContain('It keeps 12.5% of its week for its PMs: 2.5 days to the reset × 5% a day.')
+    })
+
+    it('keeps more than 20% when the measured spend says so, measured or not', () => {
+      expect(noteOf([measured(10)])[0]).toContain('It keeps 25% of its week for its PM: 2.5 days to the reset × 10% a day.')
+      expect(noteOf([measured(10), { machineId: 'studio', engine: 'claude', project: 'lamp', pm: 'Faye' }])[0])
+        .toContain('It keeps 25% of its week for its PMs')
+    })
+
+    it('takes the reset from the candidate\'s own quota when the account names none', () => {
+      const p = probe({ quota: { known: true, leftPercent: 17, resetsAt: now + 4 * DAY } })
+      expect(withPmAccounts(read({ pmAccounts: [measured(2, { resetsAt: undefined })] }), [p], now)[0]!.notes[0])
+        .toContain('It keeps 8% of its week for its PM: 4 days to the reset × 2% a day.')
+    })
   })
 })
