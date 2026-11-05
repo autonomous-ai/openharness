@@ -45,6 +45,8 @@ export const PULL_PATCH_PERMISSIONS = { contents: 'read', pull_requests: 'read',
 const WATCH_KEPT = 2000
 /** The most files GitHub gives for a comparison of two commits (GET /compare/{base}...{head}). */
 export const COMPARE_FILES_MAX = 300
+/** Pages of 100 a pull request's file list reads: GitHub lists at most 3,000 files. */
+const PULL_FILES_PAGES = 30
 const PUSH_ORIGINS_KEPT = 1000
 /** GitHub's files of a comparison as [PullRequestFile]s, or null when one lacks its name, status or blob. */
 function filesOf(body: unknown[]): PullRequestFile[] | null {
@@ -693,6 +695,35 @@ export class GitHubApp {
       if (!Array.isArray(listed) || listed.length >= COMPARE_FILES_MAX) return null
       const files = filesOf(listed)
       return files && { base: branch, files }
+    } catch (error) {
+      if (error instanceof GitHubAppError) return null
+      throw error
+    }
+  }
+
+  /**
+   * The files pull request [number] changes, read with the watch's read-only token (task #3401: its review steps are planned
+   * from them): GET /pulls/{n}/files, 100 a page. A renamed file is listed under its old name too, so moving a file out of a
+   * sensitive path still counts as changing it. Null when GitHub cannot say, or when the list may be cut at GitHub's 3,000.
+   */
+  async pullRequestFiles(repository: GitHubRepository, number: number, token: string): Promise<Array<{ filename: string }> | null> {
+    const names = new Set<string>()
+    const text = (value: unknown) => typeof value === 'string' && value ? value : undefined
+    try {
+      for (let page = 1; page <= PULL_FILES_PAGES; page++) {
+        const answer = await this.call('GET', `/repos/${repository.owner}/${repository.name}/pulls/${number}/files?per_page=100&page=${page}`, `Bearer ${token}`)
+        if (answer.status !== 200 || !Array.isArray(answer.body)) return null
+        for (const file of answer.body as Array<Record<string, unknown>>) {
+          const filename = text(file.filename)
+          if (!filename) return null
+          names.add(filename)
+          const previous = text(file.previous_filename)
+          if (previous) names.add(previous)
+        }
+        if (answer.body.length < 100) return [...names].map(filename => ({ filename }))
+      }
+      // A full last page: GitHub lists at most 3,000 files, so more may exist.
+      return null
     } catch (error) {
       if (error instanceof GitHubAppError) return null
       throw error

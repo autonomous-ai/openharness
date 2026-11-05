@@ -3433,6 +3433,7 @@ class _SuperTabViewState extends State<SuperTabView>
         _tasksSelectedId = id;
         _openThreadFromList(project.leadConversationId, id);
       },
+      onOpenMessage: (id, messageId) => unawaited(_openMessage(id, messageId)),
     );
   }
 

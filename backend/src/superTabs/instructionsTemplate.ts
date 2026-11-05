@@ -80,7 +80,11 @@ export const TEMPLATE_WORKFLOW = `## Workflow
    when the task needs that one agent; when no agent can take a role, it starts one.
    That is the PM's part until the Engineer reports. The PM opens no task to hold, batch, triage or list work: that
    goes in its notes or the project chat.
-2. When the pull request is ready, the Engineer adds a review step to its task, and a test step when the change is
+2. When the pull request is ready, the server opens its review steps from the files it changes and gives each to a free
+   agent of the project that never worked on this task, as strong as its Engineer and with no verdict at that head: a
+   review, two security reviews for sign-in, tokens, encryption, access, the Buddy guard, device links and deletion, and a
+   test step where the change runs. A step nobody was free for waits open, and the PM hears it once.
+   Where it opened none, the Engineer adds a review step to its task, and a test step when the change is
    something a user sees or uses (screens, CLI commands, install and release, sign-in, connections between machines,
    devices). It picks each Reviewer and Tester then, by Routing's order (the one the PM named, if any), never one that
    worked on this task itself, assigns them and messages them directly.
