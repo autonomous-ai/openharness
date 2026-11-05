@@ -120,15 +120,20 @@ describe('assigning a step', () => {
     })
 
     // An existing rule (integration/superTabLiveness.test.ts): a Reviewer's note to a working Engineer keeps no hung Reviewer.
-    it('holds nothing when it\'s a note to an Engineer already working, but a verdict does', () => {
+    // Dee, #3394: its words are not read for a verdict either; a failed check, recorded at the head it read, is the verdict.
+    it('holds nothing when it\'s a note to an Engineer already working, whatever it says; a failed check does', () => {
       const f = reviewing()
       const note = (text: string) => f.f.run({ type: 'message.send', conversationId: f.id, text, replyTo: null, recipientIds: [f.f.dev] } as Command, f.f.as(f.rev))
       note('Still reading the parser changes.')
-      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
       note('Ready to merge: Yes, once CI is green.')
-      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
       note('**Ready to merge: With fixes.** One Important finding.')
-      expect(f.f.group(f.id).assignment!.toldEngineerAt).toBe(f.f.now)
+      note('Ready to merge: No.')
+      expect(f.f.group(f.id).assignment).not.toHaveProperty('toldEngineerAt')
+      expect(f.f.group(f.id).assignment).not.toHaveProperty('changesRequestedAt')
+      f.f.run({ type: 'conversation.agent', conversationId: f.f.task, agentId: f.rev, present: true, lead: false })
+      f.f.run({ type: 'work.check', conversationId: f.f.task, assignmentId: f.f.group(f.f.task).assignment!.id, checkId: f.f.group(f.f.task).checks[0]!.id,
+        passed: false, evidence: 'One Important finding' } as Command, f.f.as(f.rev))
+      expect(f.f.group(f.id).assignment!.changesRequestedAt).toBe(f.f.now)
     })
 
     it('counts whatever it says when the Engineer was waiting on this review, as a Tester\'s verdict has no set form', () => {
