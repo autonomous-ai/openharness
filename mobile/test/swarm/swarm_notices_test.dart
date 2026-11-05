@@ -215,13 +215,13 @@ void main() {
   });
 
   group('a reply in a thread the person is in', () {
-    SwarmActivityEntry reply(String id, {bool read = false}) =>
+    SwarmActivityEntry reply(String id, {bool read = false, String threadId = 'root-1'}) =>
         SwarmActivityEntry.fromJson({
           'id': id,
           'kind': 'reply',
           'conversationId': 'g9',
           'messageId': 'msg-$id',
-          'threadId': 'root-1',
+          'threadId': threadId,
           'actor': {'kind': 'person', 'id': 'person-mia', 'name': 'Mia'},
           'text': "sounds good, I'll ship the copy today",
           'createdAt': DateTime.utc(2026, 11, 4, 9).toIso8601String(),
@@ -282,7 +282,48 @@ void main() {
         project: 'M',
       );
       expect(notices.shown, hasLength(2));
-      expect(notices.shown[0].key, isNot(notices.shown[1].key));
+    });
+
+    test('shares one notification per thread, the push\'s too: a newer '
+        'reply replaces it quietly until the thread is read (task #3248)', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+      announcer.announceReply(swarmId: 'tab-b', entry: reply('a1'), project: 'M');
+      announcer.announceReply(swarmId: 'tab-b', entry: reply('a2'), project: 'M');
+      final slot = threadSlot('tab-b', 'g9', 'root-1');
+      expect(slot, 'thread:tab-b:g9:root-1', reason: 'the server\'s push slot (backend/src/push/notices.ts threadSlot)');
+      expect([for (final n in notices.shown) (n.key, n.quiet)], [(slot, false), (slot, true)]);
+      expect(notices.shown.last.target.messageId, 'msg-a2', reason: 'the tap opens the newest');
+
+      // Read up to a1 only: the thread's notification stays for a2.
+      announcer.repliesRead('tab-b', [reply('a1', read: true), reply('a2')]);
+      expect(notices.cancelled, isEmpty);
+      announcer.repliesRead('tab-b', [reply('a1', read: true), reply('a2', read: true)]);
+      expect(notices.cancelled, [slot]);
+
+      // Read, the next reply there sounds again; a reply in another thread is a notification of its own.
+      announcer.announceReply(swarmId: 'tab-b', entry: reply('a3'), project: 'M');
+      announcer.announceReply(swarmId: 'tab-b', entry: reply('b1', threadId: 'root-2'), project: 'M');
+      expect([for (final n in notices.shown.skip(2)) (n.key, n.quiet)],
+          [(slot, false), (threadSlot('tab-b', 'g9', 'root-2'), false)]);
+    });
+
+    test('is not posted for a thread a push shows: the push already says '
+        'so, until the next look finds it gone (task #3248)', () {
+      final notices = _Recording();
+      final told = SwarmTold();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false, told: told);
+      // Android's FCM push carries the thread's slot as its tag, iOS's the slot and the key it showed.
+      told.pushesShown([threadSlot('tab-b', 'g9', 'root-1'), 'reply:tab-b:a1', 'decision:d1']);
+      announcer.announceReply(swarmId: 'tab-b', entry: reply('a1'), project: 'M');
+      announcer.announceReply(swarmId: 'tab-b', entry: reply('a2'), project: 'M');
+      announcer.announce(decision());
+      expect(notices.shown, isEmpty);
+
+      // Back again: that push is gone (read, or swiped away), so the thread's next reply is news.
+      told.pushesShown(const []);
+      announcer.announceReply(swarmId: 'tab-b', entry: reply('a3'), project: 'M');
+      expect([for (final n in notices.shown) (n.key, n.quiet)], [(threadSlot('tab-b', 'g9', 'root-1'), false)]);
     });
 
     test('is not posted again when its push is already in the notification '
@@ -310,7 +351,7 @@ void main() {
         entry: reply('a2'),
         project: 'M',
       );
-      expect(notices.shown.single.key, 'reply:tab-b:a2');
+      expect(notices.shown.single.key, threadSlot('tab-b', 'g9', 'root-1'));
     });
 
     test('is not posted while the person looks at the Swarm', () {
@@ -338,16 +379,16 @@ void main() {
       );
       announcer.announceReply(
         swarmId: 'tab-b',
-        entry: reply('a2'),
+        entry: reply('a2', threadId: 'root-2'),
         project: 'M',
       );
       final [first, second] = [for (final n in notices.shown) n.key];
 
       announcer.repliesRead('tab-other', const []);
-      announcer.repliesRead('tab-b', [reply('a1'), reply('a2')]);
+      announcer.repliesRead('tab-b', [reply('a1'), reply('a2', threadId: 'root-2')]);
       expect(notices.cancelled, isEmpty, reason: 'both still unread');
 
-      announcer.repliesRead('tab-b', [reply('a1'), reply('a2', read: true)]);
+      announcer.repliesRead('tab-b', [reply('a1'), reply('a2', threadId: 'root-2', read: true)]);
       expect(notices.cancelled, [second]);
 
       announcer.repliesRead('tab-b', const []);

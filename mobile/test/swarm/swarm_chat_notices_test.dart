@@ -69,6 +69,8 @@ void main() {
     backend.move('g1', 5);
     await poll(session);
     expect(told(), [g1Notice, g1Notice]);
+    // Sounds once until the person looks: the next one only replaces it (task #3248).
+    expect([for (final n in notices.shown) n.quiet], [false, true]);
 
     // Read again with nothing new: nothing told again.
     backend.version++;
@@ -137,6 +139,10 @@ void main() {
     backend.version++;
     await poll(session);
     expect(notices.cancelled, [g1Notice]);
+    // Read, the chat's next message sounds again (task #3248).
+    backend.move('g1', 5);
+    await poll(session);
+    expect([for (final n in notices.shown) (n.key, n.quiet)].last, (g1Notice, false));
 
     backend.gone = true;
     await poll(session);
