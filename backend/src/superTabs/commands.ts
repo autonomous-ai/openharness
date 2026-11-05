@@ -625,7 +625,7 @@ export interface CommandContext {
   pushOriginPulls?: string[]
   /** The files a Ready for review's task changes in its pull requests, and the head they were read at, read before the command
    *  (store.ts pullRequestFilesFor): `files` null when GitHub could not say. Absent with nothing to read: no step opens then. */
-  pullRequestFiles?: { urls: string[]; head: string | null; files: string[] | null }
+  pullRequestFiles?: { urls: string[]; head: string | null; files: string[] | null; heads?: Array<{ url: string; head: string | null }> }
   /** Whether the Harness GitHub App reaches the project's repository, read before an agent.start or work.assign (store.ts repositoryReachFor). */
   repositoryReach?: RepositoryReach
   /** The person's role in the Swarm's Workspace, read by the store for invitations (workspaces.ts); absent outside a Workspace. */
@@ -1691,7 +1691,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const id = stableId(operationId, 'review-step', planned.name)
     const number = nextConversationNumber(state)
     state.groupCounter = number
-    const brief = stepBrief(planned, { number: task.number ?? number, title: task.title, urls: read.urls, head: read.head })
+    const pulls = read.heads ?? read.urls.map((url, i) => ({ url, head: i === 0 ? read.head : null }))
+    const brief = stepBrief(planned, { number: task.number ?? number, title: task.title, pulls })
     state.conversations.push({ id, ...(state.projects ? { projectId: project.id } : {}), number, title: planned.name, leadId,
       agentIds: leadId ? [leadId] : [], archived: false, brief, reviewOf: task.id,
       // A step keeps its task's mark, as conversation.create's does (teamWritten.ts stepMark).

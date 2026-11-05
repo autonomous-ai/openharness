@@ -47,12 +47,12 @@ export function sharedFiles(pulls: ReadonlyArray<{ url: string; files: readonly 
 const short = (head: string | null) => head ? head.slice(0, 7) : null
 
 /** What a step's agent is asked to do: which pull requests, at which head, for which task, and why this step. */
-export function stepBrief(step: PlannedStep, task: { number: number; title: string; urls: readonly string[]; head: string | null }): string {
-  const pulls = task.urls.length ? task.urls.join(', ') : 'its pull request'
-  const at = short(task.head) ? ` at head ${short(task.head)}` : ''
+export function stepBrief(step: PlannedStep, task: { number: number; title: string; pulls: ReadonlyArray<{ url: string; head: string | null }> }): string {
+  // Each pull request at the head its own files were read at.
+  const pulls = task.pulls.length ? task.pulls.map(pull => short(pull.head) ? `${pull.url} at head ${short(pull.head)}` : pull.url).join(', ') : 'its pull request'
   const what = step.kind === 'test'
-    ? `Test ${pulls}${at} for task #${task.number} "${task.title}" as a user would, where it changes: ${step.where!.join('; ')}.`
-    : `${step.kind === 'security' ? 'Security-review' : 'Review'} ${pulls}${at} for task #${task.number} "${task.title}".`
+    ? `Test ${pulls} for task #${task.number} "${task.title}" as a user would, where it changes: ${step.where!.join('; ')}.`
+    : `${step.kind === 'security' ? 'Security-review' : 'Review'} ${pulls} for task #${task.number} "${task.title}".`
   const why = step.unread ? ' Its changed files could not be read, so it is reviewed as strictly as the review table goes.'
     : step.kind === 'security' ? ` It changes ${step.areas.join(', ')}: two independent security reviews before merge.` : ''
   return `${what}${why} Record your verdict at the head you read, and send it to the task's Engineer with "Ready to merge: Yes", "No" or "With fixes".`
