@@ -96,6 +96,8 @@ extension SuperTabVoiceSend on SuperTabController {
       owner.remove(file);
     }
     await sending;
+    // Nothing to say once sent: a voice message plays only, and never has
+    // words to go without (anh Dee, 2026-11-04).
     return (sent: true, notice: null);
   }
 
