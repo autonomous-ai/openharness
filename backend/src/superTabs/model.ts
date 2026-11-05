@@ -155,6 +155,10 @@ export interface Agent {
   /** Joined on a Harness Team account's machine: kept, so a machine row that went never brings back the rules of an
    *  ordinary machine (projects.ts teamSessionAccess, security re-review of #2089). */
   teamAccount?: true
+  /** A crew member woken by new work (crewTimes.ts startWake): when, and the task that woke it, until a machine reading shows
+   *  its session running again (`runningAt`, the first reading that did) and the wake's timing row is written (task #3462). Set
+   *  only by the server. */
+  crewWaking?: { at: number; conversationId: string; runningAt?: number }
 }
 /** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). A project session also
  *  names its project (buddies.ts; Dee, 10-31): it reads that project alone, and is the only Buddy that writes into it. */
@@ -429,6 +433,9 @@ export interface Conversation {
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
   ledger?: import('./leaderboard/record.js').GroupLedger
+  /** When a verified release carried its last recorded merge to people, and the release tags that did (releases.ts, task #3405):
+   *  the board's Shipped. Absent while a release it needs has not gone out, and on work merged before the server recorded it. */
+  released?: { at: number; tags: string[] }
   /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
   liveness?: TaskLiveness
   /** Its last step up from a cheaper model: written when a grid attempt's first review fails (commands.ts reviewFailed, goals
@@ -699,6 +706,8 @@ export const NOTICE_READERS = {
   'tidy-request': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
+  // A crew member's finished wake or move, timed for the daily scorecard (crewTimes.ts, task #3462): read by nobody.
+  'crew-timing': 'agent',
   // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
   'notice-digest': 'recipients',
   // An agent's tag, ask or line to a person, routed to the PM instead (crewNeeds.ts): the PM's alone. Never gathered.
@@ -726,6 +735,8 @@ export const NOTICE_READERS = {
   // Their one Buddy cannot start in a person's older project chat, told to them there once per outage (commands.ts buddyDownLine).
   'buddy-cannot-start': 'people',
   'auto-archive': 'people', native: 'people',
+  // A release step the Swarm opened for the Integrator, and its verified release's line (releases.ts, task #3405).
+  release: 'people',
   // The nightly routing reflection, for the project's people; never a Buddy's (buddies.ts routingRow).
   'routing-reflection': 'people',
   // No new agent can start, or soon none will, told to the coordinator; with none in the chat, people read it, tagging who can

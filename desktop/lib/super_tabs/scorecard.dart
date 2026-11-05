@@ -20,6 +20,10 @@ class SuperTabScorecardDay {
   final Map<String, dynamic> figures;
 
   int? number(String key) => (figures[key] as num?)?.round();
+
+  /// A figure with parts, such as crewWake's median and slowest (task #3462).
+  Map<String, dynamic> parts(String key) =>
+      (figures[key] as Map?)?.cast<String, dynamic>() ?? const {};
 }
 
 /// "–" for no figure, "45m" under an hour, "3h10" or "10h" above.
@@ -30,6 +34,25 @@ String scorecardDuration(int? minutes) {
   return rest == 0
       ? '${hours}h'
       : '${hours}h${rest.toString().padLeft(2, '0')}';
+}
+
+/// "–" for no figure, "12s" under a minute, "3m30" or "5m" above.
+String scorecardSeconds(int? seconds) {
+  if (seconds == null) return '–';
+  if (seconds < 60) return '${seconds}s';
+  final minutes = seconds ~/ 60, rest = seconds % 60;
+  return rest == 0
+      ? '${minutes}m'
+      : '${minutes}m${rest.toString().padLeft(2, '0')}';
+}
+
+/// A crew time's median · slowest of the day, or "–" with none (task #3462).
+String _crewTime(SuperTabScorecardDay day, String key) {
+  final figure = day.parts(key);
+  final median = (figure['medianSeconds'] as num?)?.round();
+  final slowest = (figure['slowestSeconds'] as num?)?.round();
+  if (median == null || slowest == null) return '–';
+  return '${scorecardSeconds(median)} · ${scorecardSeconds(slowest)}';
 }
 
 /// One row of the table: its label, the figure it reads and how it says it.
@@ -104,6 +127,16 @@ final scorecardRows = <SuperTabScorecardRow>[
     'ackPosts',
     'Ack-only posts',
     (d) => _count(d, 'ackPosts'),
+  ),
+  SuperTabScorecardRow(
+    'crewWake',
+    'Crew wake time',
+    (d) => _crewTime(d, 'crewWake'),
+  ),
+  SuperTabScorecardRow(
+    'crewMove',
+    'Crew move time',
+    (d) => _crewTime(d, 'crewMove'),
   ),
 ];
 
