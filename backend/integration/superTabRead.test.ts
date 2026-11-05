@@ -1441,6 +1441,14 @@ describe('what a read costs the database (group 3b)', () => {
     await call()
     return Math.max(0, await sent() - start - own)
   }
+  /** A model call held back before it goes out, as CPU load holds one back: a test stalls a read with it and lets it go. */
+  let hold: Promise<void> | null = null
+  beforeAll(() => {
+    db.$use(async (params, next) => {
+      if (params.model && hold) await hold
+      return next(params)
+    })
+  })
   /** The whole Swarm as stored: what a read that reassembles it loads. */
   const swarmBytes = async (tabId: string) => {
     const all = await db.$transaction(tx => parts.loadAll(tx, tabId))
@@ -1456,6 +1464,21 @@ describe('what a read costs the database (group 3b)', () => {
     // What a test that ends before its own background work does: reads of the whole Swarm, still going into the next one.
     const leftover = (async () => { for (let i = 0; i < 40; i++) await db.$transaction(tx => parts.loadAll(tx, s.tabId)) })()
     expect(await databaseBytes(() => new Promise(done => setTimeout(done, 200)))).toBeLessThan(1_000)
+    await leftover
+  })
+
+  it('counts none of the reads an earlier test left that had not reached the database yet', async () => {
+    const s = await scene(f => bulky(f))
+    // A read held back by load: it sends nothing until it is let go, so the database looks quiet while it is still coming.
+    let release = () => {}
+    hold = new Promise<void>(done => { release = done })
+    const letGo = () => { hold = null; release() }
+    const timer = setTimeout(letGo, 1_500)
+    const leftover = (async () => { for (let i = 0; i < 40; i++) await db.$transaction(tx => parts.loadAll(tx, s.tabId)) })()
+    try {
+      // The test's own call lets the held read go, the moment counting starts: a count that began while it was still held counts it.
+      expect(await databaseBytes(() => { letGo(); return new Promise(done => setTimeout(done, 200)) })).toBeLessThan(1_000)
+    } finally { clearTimeout(timer); letGo() }
     await leftover
   })
 
