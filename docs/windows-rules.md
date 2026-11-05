@@ -67,6 +67,10 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
   the composer and every later one waits behind that "draft". Wait for the paste to show on screen (`lib/pasteOnScreen.ts`), not a
   fixed time.
 
+- **An unsigned program is blocked, and the person is told.** Smart App Control refuses it (`spawn UNKNOWN`, thrown by `spawn`, not
+  an `error` event), and each attempt can raise a notice naming Node.js. Never poll an unsigned program: run what it starts, if that
+  is signed (`gridCommand` in `lib/gridBinary.ts`), or stop asking. Check `Microsoft-Windows-CodeIntegrity/Operational` after a change.
+
 ## 3. Files
 
 - **A file's change time moves when its last handle closes**, after a rename that published it. Measured 2026-11-05: `ctimeNs`
