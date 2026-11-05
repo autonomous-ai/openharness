@@ -32,7 +32,9 @@ assignment id, the GitHub token hold and "built by" (the run ledger) do not chan
 | working + reopened | 60 minutes (`REOPEN_OWNER_MS`) with no pick-up, or the Engineer is down (session stopped, machine offline, usage limit) | lost, so the PM (or #3400's dispatcher) hands it to anyone free in the lane |
 | review (handed) | Engineer sets done after merge | done; hold and run released as today |
 
-A handed task is never lost for its Engineer's machine or session: nothing waits on that agent. A step's own Ready
+A handed task is never lost for its Engineer's machine or session: nothing waits on that agent. One exception to the
+reopen: a grid attempt whose review failed is not pinned to its grid agent, since its next attempt steps up to a stronger
+model (decision 8); it stays in review for the coordinator to route, as before. A step's own Ready
 (a Reviewer's or Tester's) is not a handover; steps keep today's rules.
 
 **Why not a new `handed` WorkStatus.** Older CLIs and Desktop read the status and show "Ready for review"; a new value
@@ -51,8 +53,9 @@ agent has no run record while the handed one is open, so the cross-Swarm fence d
 in it is in the agent's hands then.
 
 **Busy checks moved to `occupiesAgent`:** `work.assign` and `work.resume` AGENT_BUSY, `workerIndex.working`
-(awaitingWorkers), the coordinator's idle notice (tidy.ts), `finishWorker` (no "awaiting" mark while another task is in
-its hands). Unchanged (they mean "task open"): archive, deletion, steps' `reviewedBuild`, agent stop/release/remove
+(awaitingWorkers), the coordinator's idle notice (tidy.ts: its own handed task leaves it idle; a Reviewer or Tester in
+someone else's open task is still not idle), `finishWorker` (no "awaiting" mark while another task is in its hands). Light
+reads now keep `reviewOf` (parts/light.ts), since `handed` tells a task from a step. Unchanged (they mean "task open"): archive, deletion, steps' `reviewedBuild`, agent stop/release/remove
 (stopping an Engineer whose task is in review still waits, as today).
 
 ### Design checklist
