@@ -185,6 +185,7 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
 
   final FlutterLocalNotificationsPlugin _plugin;
   Future<void>? _ready;
+  Future<void>? _pushReady;
 
   @override
   final opened = ValueNotifier<AgentRef?>(null);
@@ -202,36 +203,39 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
   /// Android: makes the channels pushes are drawn on, before one can arrive (task #3248). Without
   /// them a push that came before the app's first Swarm notice landed on FCM's default channel, and
   /// a quiet one would sound. Needs no start of the centre; nothing on iOS, whose pushes have no
-  /// channel.
-  Future<void> preparePush() async {
+  /// channel. Shared with notification initialization, so permission checks wait for both channels
+  /// even when eager startup is still preparing them. A failed attempt is logged once per launch.
+  Future<void> preparePush() => _pushReady ??= _makePushChannels()
+      .timeout(const Duration(seconds: 10))
+      .catchError((Object error) {
+        appLog.warn('notify', 'push channels not made', error: error);
+      });
+
+  Future<void> _makePushChannels() async {
     if (!_android) return;
-    try {
-      final android = _plugin
-          .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin
-          >();
-      await android?.createNotificationChannel(
-        const AndroidNotificationChannel(
-          _swarmChannel,
-          _swarmChannelName,
-          description: _swarmChannelDescription,
-          importance: Importance.high,
-        ),
-      );
-      await android?.createNotificationChannel(
-        const AndroidNotificationChannel(
-          _swarmQuietChannel,
-          'Swarm, quiet updates',
-          description:
-              'A newer reply in a thread you have not read yet: it replaces the notice already there.',
-          importance: Importance.low,
-          playSound: false,
-          enableVibration: false,
-        ),
-      );
-    } catch (error) {
-      appLog.warn('notify', 'push channels not made', error: error);
-    }
+    final android = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    await android?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        _swarmChannel,
+        _swarmChannelName,
+        description: _swarmChannelDescription,
+        importance: Importance.high,
+      ),
+    );
+    await android?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        _swarmQuietChannel,
+        'Swarm, quiet updates',
+        description:
+            'A newer reply in a thread you have not read yet: it replaces the notice already there.',
+        importance: Importance.low,
+        playSound: false,
+        enableVibration: false,
+      ),
+    );
   }
 
   /// One Android channel per kind, so a person can silence finished turns and
@@ -284,6 +288,7 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
       ),
       onDidReceiveNotificationResponse: (response) => _open(response.payload),
     );
+    await preparePush();
     // A notice tapped while the app was not running at all launches it; the
     // tap reaches no callback then, only this.
     final launch = await _plugin.getNotificationAppLaunchDetails();

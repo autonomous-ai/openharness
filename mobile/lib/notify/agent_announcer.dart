@@ -53,6 +53,7 @@ class AgentAnnouncer {
     this.questionGrace = const Duration(seconds: 15),
     this.alertCooldown = const Duration(minutes: 5),
     this.reopenWindow = const Duration(minutes: 10),
+    this.inTeamAccount,
     DateTime Function()? now,
   }) : _chime = chime ?? _haptic,
        _inFront = inFront ?? _appInFront,
@@ -61,6 +62,19 @@ class AgentAnnouncer {
   }
 
   final SystemNotices system;
+
+  /// Whether an agent runs in a Harness Team account: a teammate's Swarm work
+  /// on this person's Mac. Its turns and questions are not this person's news
+  /// — it reaches them only through the Swarm rule (tags, decisions asked of
+  /// them, replies in their threads) — so none is announced: no chime, no
+  /// mark, no notice (2026-11-05: Dee's phone showed a banner for a teammate's
+  /// tester in a task she was not part of). Null counts every agent as the
+  /// person's own. Set after construction by the app, which knows the
+  /// machines; read at each turn and question, never remembered.
+  bool Function(AgentRef agent)? inTeamAccount;
+
+  bool _teams(AgentRef ref) => inTeamAccount?.call(ref) ?? false;
+
   final unread = AgentUnread();
   final _asked = AskedQuestions();
 
@@ -153,6 +167,7 @@ class AgentAnnouncer {
     // Whatever it was asking, the turn it asked in is over — and a turn that
     // ends with nothing to say must not leave the question's mark standing.
     questionClosed(agent.ref);
+    if (_teams(agent.ref)) return AgentNotice.none;
     return _announceEnd(agent, end, watching: watching);
   }
 
@@ -167,6 +182,7 @@ class AgentAnnouncer {
   }) {
     questionClosed(agent.ref);
     _awaitingTier.remove(agent.ref)?.timer.cancel();
+    if (_teams(agent.ref)) return;
     if (!isNewsEnd(end)) {
       appLog.debug('notify', 'turn end · ${_short(agent.ref)} · not news');
       return;
@@ -233,6 +249,7 @@ class AgentAnnouncer {
     required bool Function() watching,
   }) {
     final ref = agent.ref;
+    if (_teams(ref)) return AgentNotice.none;
     final now = _now();
     // Before hearing it: heard first, this very request would read as open,
     // and be kept however long ago it was last told.

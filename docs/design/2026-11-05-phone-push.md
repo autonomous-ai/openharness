@@ -172,6 +172,11 @@ Test vectors, pinned in `mobile/test/notify/local_system_notices_test.dart`:
   - iOS 15+: the `aps-environment` entitlement, with an App Store export signed as `production`.
   - Android 7+ (API 24): `firebase-messaging` with its values in `res/values/firebase.xml`, with no
     google-services plugin.
+  - Android 8+: the app prepares `swarm-needs-you` (high importance) and `swarm-quiet` (low importance,
+    no sound or vibration) once per launch. Permission checks wait for that shared preparation before
+    push registration. A failed attempt or a 10-second timeout is logged; local notices still work.
+    A channel not made yet puts the server's push on FCM's own "Misc" channel instead, outside the
+    Swarm switches in Settings. The OS keeps the person's settings for existing channels.
 
 ## Not in this change
 

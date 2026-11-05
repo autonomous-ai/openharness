@@ -31,7 +31,8 @@ String swarmHomeFilterLabel(SwarmHomeFilter filter) => switch (filter) {
 /// its options with a tick on the one chosen. A choice applies at once and the
 /// menu stays. Under them, Mark all read ([onMarkAllRead], greyed while
 /// [unread] says nothing is) and Refresh ([onRefresh]), moved here from the
-/// top bar and the pull (Tony, 2026-11-03): each closes the menu, then runs.
+/// top bar (Tony, 2026-11-03), the pull on Home doing it too: each closes the
+/// menu, then runs.
 /// It holds nothing of a Swarm; signed out, another account, or no Swarm left
 /// to sort, it closes, and a tap changes nothing.
 Future<void> showSwarmHomeViewSheet(
