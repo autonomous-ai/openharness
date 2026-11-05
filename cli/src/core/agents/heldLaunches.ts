@@ -53,6 +53,8 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
   // times in a day, each pass running about four login shells (`zsh -lic`, the launch environment) from the core,
   // whose synchronous spawns held the event loop the terminals' keystrokes wait on.
   let quietPasses = 0
+  let lastPass = ''
+  const lastReason = new Map<string, string>()
   const active = new Map<string, Promise<RestoreSummary>>()
   let nextAgent = 0
   const empty = (): RestoreSummary => ({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] })
@@ -117,8 +119,18 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
     }
     retryContention(summary)
     if (rejected) throw failure
-    log(`[restore] held · ${service ?? 'every service'} · launched ${summary.restored.length} of ${held.length}`
-      + (summary.held.length ? ` · ${summary.held.length} still waiting` : ''))
+    // Each reason an agent stays held, once until it changes: it was dropped, so eight agents waited with nothing to say why.
+    for (const { agentId, reason } of summary.failed) {
+      if (lastReason.get(agentId) === reason) continue
+      lastReason.set(agentId, reason)
+      log(`[restore] ${sid(agentId)} · could not launch from held · ${reason}`)
+    }
+    // A pass runs every 500 ms while the flights are full: on Windows, 2026-11-04, that was two lines a second for good.
+    const pass = `${service ?? 'every service'} · launched ${summary.restored.length} of ${held.length}`
+    if (pass !== lastPass || summary.restored.length) {
+      lastPass = pass
+      log(`[restore] held · ${pass}` + (summary.held.length ? ` · ${summary.held.length} still waiting` : ''))
+    }
     return summary
   }
 

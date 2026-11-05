@@ -36,6 +36,31 @@ function setup() {
   return { tmuxBackend, ptyBackend, listTmuxPanes, backendFor, terminals }
 }
 
+// A row on an old pty host that is draining: it refuses new panes for good, so eight agents stayed held and no message reached
+// them (DESKTOP-0TFH0OJ, 2026-11-04). Its rebuilt pane opens on the host new panes go to.
+describe('a row whose pane was on a host that takes no new panes', () => {
+  const made: TerminalRuntimeRef = { backend: 'ptyhost', instance: 'p2', paneId: '%1' }
+  const row = { agentId: 'a1', engine: 'claude', runtimes: [pty] } as unknown as RegisteredSession
+
+  it('rebuilds it on the host new panes go to', async () => {
+    const draining = fakeBackend('ptyhost', pty), target = fakeBackend('ptyhost', made)
+    const terminals = restoreTerminals({
+      backendFor: () => draining as unknown as TerminalBackend, listTmuxPanes: vi.fn(), cwd: '/home/me', label: () => 'harness',
+      newPanesOn: () => target as unknown as TerminalBackend,
+    })
+    expect(await terminals.createPane(row, { argv: ['claude'] }, { current: () => true })).toEqual({ ok: true, runtime: made })
+    expect(draining.create).not.toHaveBeenCalled()
+  })
+
+  it('stays on its own host when there is no other to go to', async () => {
+    const own = fakeBackend('ptyhost', made)
+    const terminals = restoreTerminals({
+      backendFor: () => own as unknown as TerminalBackend, listTmuxPanes: vi.fn(), cwd: '/home/me', label: () => 'harness', newPanesOn: () => null,
+    })
+    expect(await terminals.createPane(row, { argv: ['claude'] }, { current: () => true })).toEqual({ ok: true, runtime: made })
+  })
+})
+
 const entry = (runtimes: TerminalRuntimeRef[]) => ({ agentId: 'a1', engine: 'claude', runtimes }) as unknown as RegisteredSession
 
 describe('restore, on each pane\'s own backend', () => {

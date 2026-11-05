@@ -151,6 +151,7 @@ Future<Uri?> superTabOpenableLink(
   SuperTabFileRef ref, {
   bool stale = false,
   void Function(String message)? onProblem,
+  void Function(SuperTabFileUnavailable problem)? onUnavailable,
 }) async {
   final source = SuperTabFiles.peek(context);
   bool still() => context.mounted && SuperTabFiles.peek(context) == source;
@@ -158,7 +159,10 @@ Future<Uri?> superTabOpenableLink(
     final link = await ref.link(stale: stale);
     return still() ? link : null;
   } on SuperTabFileUnavailable catch (problem) {
-    if (still()) onProblem?.call(problem.message);
+    if (still()) {
+      onProblem?.call(problem.message);
+      onUnavailable?.call(problem);
+    }
     return null;
   }
 }

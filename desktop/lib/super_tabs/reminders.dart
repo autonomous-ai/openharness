@@ -75,6 +75,7 @@ class SuperTabReminders extends ChangeNotifier {
   DateTime? _next;
   Future<void>? _loading;
   bool _dirty = false, _disposed = false;
+  int _fails = 0;
 
   /// The reminders already told of, by id and due time: one set again on the
   /// same message is news again. One due before this started is not news.
@@ -116,24 +117,24 @@ class SuperTabReminders extends ChangeNotifier {
 
   Future<void> _read() async {
     final Map<String, dynamic> answer;
-    // A failed read is not tried again on each Swarm read; Retry or the next
-    // digest reads it.
+    // A failed read is not tried again on each Swarm read: its own timer
+    // tries, more slowly each time ([_retryAfter]). Retry or a new digest may
+    // read it sooner.
     _next = null;
     try {
       answer = await controller.request('GET', '$_path/reminders');
     } on SuperTabFailure catch (failure) {
       if (_disposed) return;
       if (failure.statusCode == 404) return;
-      error = 'Could not load reminders. Try again.';
-      notifyListeners();
+      _readFailed();
       return;
     } catch (_) {
       if (_disposed) return;
-      error = 'Could not load reminders. Try again.';
-      notifyListeners();
+      _readFailed();
       return;
     }
     if (_disposed) return;
+    _fails = 0;
     final fresh = [
       for (final row in answer['due'] as List? ?? const [])
         SuperTabReminder.fromJson(superTabMap(row)),
@@ -146,6 +147,29 @@ class SuperTabReminders extends ChangeNotifier {
       }
     }
     _schedule(DateTime.tryParse(answer['next'] as String? ?? ''));
+    notifyListeners();
+  }
+
+  /// How long after each failed read in a row the next one runs.
+  static const _retryAfter = [
+    Duration(seconds: 5),
+    Duration(seconds: 15),
+    Duration(seconds: 30),
+    Duration(seconds: 60),
+  ];
+
+  /// Reads again by itself: one slow answer must not leave an error up until
+  /// someone presses Retry. One miss is ordinary on a slow connection, so the
+  /// list says it could not load from the second.
+  void _readFailed() {
+    final wait = _retryAfter[_fails.clamp(0, _retryAfter.length - 1)];
+    _fails++;
+    _wake?.cancel();
+    _wake = Timer(wait, () {
+      if (!_disposed && !controller.accessRevoked) unawaited(load());
+    });
+    if (_fails < 2) return;
+    error = 'Could not load reminders. Try again.';
     notifyListeners();
   }
 

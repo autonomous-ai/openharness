@@ -83,23 +83,36 @@ describe('the shell a Windows engine\'s pane becomes', () => {
 
   it('is given, with the workspace and the names to clear, to an engine\'s pane on Windows only', () => {
     const native = { clearEnvironment: ['CODEX_HOME', 'ANTHROPIC_API_KEY'] }
+    const environment = { PATH: 'C:\\Windows;C:\\Tools' }
+    const env = { PATH: 'C:\\grid;C:\\Windows;C:\\Tools;C:\\node', GRID_NO_UPDATE_CHECK: '1' }
+    const where = { environment, gridBinary: 'C:\\grid\\grid.exe', nodeRuntime: 'C:\\node\\node.exe' }
     expect(windowsPaneLaunch('claude', { cwd: '/work', clearEnv: ['A'] }, 'darwin')).toEqual({})
-    expect(windowsPaneLaunch('claude', { cwd: '/work' }, 'win32')).toEqual({ cwd: '/work', afterExit: windowsAfterExit('claude') })
+    expect(windowsPaneLaunch('claude', { cwd: '/work', ...where }, 'win32'))
+      .toEqual({ cwd: '/work', env, afterExit: windowsAfterExit('claude') })
     // A grid launch's provider keys and the native launch's cleared locations, once each.
-    expect(windowsPaneLaunch('codex', { cwd: null, clearEnv: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], native }, 'win32'))
-      .toEqual({ clearInherited: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CODEX_HOME'], afterExit: windowsAfterExit('codex') })
-    expect(windowsPaneLaunch('codex', { clearEnv: [], native: { clearEnvironment: [] } }, 'win32')).toEqual({ afterExit: windowsAfterExit('codex') })
+    expect(windowsPaneLaunch('codex', { cwd: null, clearEnv: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], native, ...where }, 'win32'))
+      .toEqual({ clearInherited: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CODEX_HOME'], env, afterExit: windowsAfterExit('codex') })
+    expect(windowsPaneLaunch('codex', { clearEnv: [], native: { clearEnvironment: [] }, ...where }, 'win32'))
+      .toEqual({ env, afterExit: windowsAfterExit('codex') })
+    // A grid already on PATH is left to PATH; a Node already there is not added twice.
+    expect(windowsPaneLaunch('claude', { environment: { PATH: 'C:\\node;C:\\Tools' }, gridBinary: 'grid', nodeRuntime: 'C:\\node\\node.exe' }, 'win32').env)
+      .toEqual({ PATH: 'C:\\node;C:\\Tools', GRID_NO_UPDATE_CHECK: '1' })
+    // Windows often spells it `Path`; the pane must replace that entry, not add a second `PATH`
+    // (measured on DESKTOP-0TFH0OJ: the duplicate was ignored and the agent saw no Harness Node).
+    expect(windowsPaneLaunch('claude', { environment: { Path: 'C:\\Tools' }, gridBinary: 'C:\\grid\\grid.exe', nodeRuntime: 'C:\\node\\node.exe' }, 'win32').env)
+      .toEqual({ Path: 'C:\\grid;C:\\Tools;C:\\node', GRID_NO_UPDATE_CHECK: '1' })
     // The command a person would type names it. On Windows Command Code's is `command-code`: `cmd` is the command
     // processor there (F7, B4.13).
-    expect(windowsPaneLaunch('commandcode', {}, 'win32').afterExit?.env).toEqual({ HARNESS_ENGINE_COMMAND: 'command-code' })
+    expect(windowsPaneLaunch('commandcode', { ...where }, 'win32').afterExit?.env).toEqual({ HARNESS_ENGINE_COMMAND: 'command-code' })
     vi.stubEnv('CODEX_PATH', 'C:\\tools\\codex.exe')
     try {
-      expect(windowsPaneLaunch('codex', {}, 'win32').afterExit?.env).toEqual({ HARNESS_ENGINE_COMMAND: 'codex.exe' })
+      expect(windowsPaneLaunch('codex', { ...where }, 'win32').afterExit?.env).toEqual({ HARNESS_ENGINE_COMMAND: 'codex.exe' })
     } finally { vi.unstubAllEnvs() }
     // A terminal's shell, or a held pane, ending is the pane's end; a held pane is told by its flag, never its argv.
-    expect(windowsPaneLaunch('terminal', { cwd: '/work' }, 'win32')).toEqual({ cwd: '/work' })
-    expect(windowsPaneLaunch('codex', { cwd: '/work', held: true }, 'win32')).toEqual({ cwd: '/work' })
-    expect(windowsPaneLaunch('codex', { cwd: '/work' })).toEqual(process.platform === 'win32' ? { cwd: '/work', afterExit: windowsAfterExit('codex') } : {})
+    expect(windowsPaneLaunch('terminal', { cwd: '/work', ...where }, 'win32')).toEqual({ cwd: '/work' })
+    expect(windowsPaneLaunch('codex', { cwd: '/work', held: true, ...where }, 'win32')).toEqual({ cwd: '/work' })
+    expect(windowsPaneLaunch('codex', { cwd: '/work' }, 'win32')).toMatchObject({ cwd: '/work', afterExit: windowsAfterExit('codex') })
+    expect(windowsPaneLaunch('codex', { cwd: '/work' })).toEqual(process.platform === 'win32' ? expect.objectContaining({ cwd: '/work', afterExit: windowsAfterExit('codex') }) : {})
   })
 
   it('tells a held pane by the argv it made, not by what an argv says', () => {

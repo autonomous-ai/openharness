@@ -2858,6 +2858,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // decision 18): nothing is started elsewhere. Written for nobody, this notice once left the round-device group without
         // a worker for an hour (2026-10-27).
         const group = conversation(state, start.request.conversationId)
+        // A Buddy chat is read only by its owner (and its Buddy), so the reason their own Buddy did not start is written
+        // whole, as liveness.ts's buddyNotice does for a start that timed out. The group notice below names neither the
+        // machine nor the folder and promises its starter the reason somewhere they may not be allowed to read it.
+        if (start.request.buddyOf) {
+          message(group.id, `Could not start ${start.request.name}: ${command.error}${suspended ? `\n\n${suspended}` : ''}`,
+            [], null, SYSTEM_ROW)
+          break
+        }
         // The failure that suspends its engine there says so once, and tags the machine's owner (engineHealth.ts).
         const failed = `${failureNotice(start.request.name, command.error, askedModel(start), isSwarmBuddyChat(group) ? undefined : coordinatorNameOf(groupProject(state, group)))}${suspended ? `\n\n${suspended}` : ''}`
         const told = failureRecipients(start, group)
