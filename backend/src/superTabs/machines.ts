@@ -543,6 +543,25 @@ export function teamMachineFor(state: SuperTabState, machineId: string, project:
   return teamPoolOf(state, pool, live)?.machineId ?? machineId
 }
 
+/** The Mac's own entry when [machineId] is its Harness Team account's and its owner lets teammates' work run in their own
+ *  account there (ownAccountWork), for a teammate's [project] whose code no Team agent wrote; else undefined. Such a start
+ *  belongs on the Mac, not the Team account it named (task #3060: a lamp start named Gray's Team entry, both entries named
+ *  'Gray.local', and was placed there as named). */
+export function ownAccountTeamEntry(state: SuperTabState, machineId: string, project: SwarmProject, teamWritten: boolean): ContributedMachine | undefined {
+  if (teamWritten) return undefined
+  const team = state.machines?.find(m => m.machineId === machineId)
+  if (!team?.hostMachineId || team.contributorId === project.ownerId) return undefined
+  const mac = state.machines?.find(m => m.machineId === team.hostMachineId && m.contributorId === team.contributorId && !m.removal)
+  return ownAccountWork(mac) ? mac : undefined
+}
+
+/** Refuses a start that names a Team account's entry its owner's choice keeps teammates' work off (ownAccountTeamEntry), with
+ *  the Mac's own entry to start on. Refused, not moved: a move would put the work in a person's own account, with their files
+ *  and sign-ins, when the start named the isolated one; the starter picks the Mac knowingly, as its route row says. */
+export function failOwnAccountTeamEntry(mac: ContributedMachine): never {
+  fail('OWN_ACCOUNT_WORK', `${mac.name}'s owner runs teammates' work in their own account in this Swarm, so its Harness Team account takes only work a Harness Team agent wrote. Start on ${mac.name} itself (machine ${mac.machineId}).`, 409)
+}
+
 /** The folder a start for [project] uses on [pool]: what admitMachineStart accepts there. */
 export function projectFolder(pool: ContributedMachine, project: SwarmProject): string {
   return pool.scope === 'swarm'

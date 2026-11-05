@@ -151,9 +151,15 @@ void main() {
         find.byKey(const ValueKey('super-machine-agent-mac-a2')),
         findsOneWidget,
       );
-      // The agent in the team account is on the Mac, wherever its machine is named.
+      // The agent in the team account is on the Mac, and says it runs in the Mac's Harness Team account wherever its
+      // machine is named (roster, card, Agent details): task #3060, both read 'Gray.local' and a start picked the wrong one.
       final river = c.snapshot!.agent('a2')!;
-      expect(SuperTabAgentInfo(c, null, river).machine, 'MacBook Pro');
+      expect(
+        SuperTabAgentInfo(c, null, river).machine,
+        'MacBook Pro · Team account',
+      );
+      final own = c.snapshot!.agent('a1')!;
+      expect(SuperTabAgentInfo(c, null, own).machine, 'MacBook Pro');
       expect(c.snapshot!.placeOf('mac-team'), 'mac');
       await _unmount(tester, c);
     },
