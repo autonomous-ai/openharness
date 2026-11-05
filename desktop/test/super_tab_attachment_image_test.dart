@@ -178,6 +178,21 @@ void main() {
     expect(hits, 2);
   });
 
+  test('a kept picture that does not decode is read again', () async {
+    answer = (response) => (response..add(_png)).close();
+    // What a write cut short by a crash may leave.
+    await superTabImageCache.keep(
+      'a1',
+      Uint8List.fromList([1, 2, 3]),
+      const ui.Size(1, 1),
+    );
+
+    expect(await load(link('/a1.png'), side: 360), isA<ui.Image>());
+    expect(hits, 1);
+    await Future<void>.delayed(Duration.zero);
+    expect(await superTabImageCache.read('a1'), _png);
+  });
+
   test('a picture whose load began before sign-out is not kept', () async {
     final gate = Completer<void>();
     answer = (response) async {
