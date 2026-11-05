@@ -31,7 +31,7 @@ function setup() {
   const request = (id: string) => ({ id, conversationId: 'lead', replyTo: null, source: null, author: person })
   const taskFrom = (ask: string) => f.run({ type: 'conversation.create', title: 'From the ask', brief: 'Do it.', checks: [], requestMessageId: ask } as Command,
     f.as(f.lead), { request: request(ask) } as Partial<CommandContext>)
-  return { f, post, owed, react, taskFrom, person }
+  return { f, post, owed, react, taskFrom, person, request }
 }
 
 describe('what the PM owes', () => {
@@ -96,6 +96,16 @@ describe('what the PM owes', () => {
     const ask = post(null, 'lead', 'Show unanswered asks on the board.')
     taskFrom(ask)
     expect(owed()).toEqual([])
+  })
+
+  // River's ruling on Hugo's review of #3209: only a task the PM opens from the ask settles it; one anyone else opens leaves the
+  // PM's answer owed.
+  it('is not settled by a task someone else opens from it', () => {
+    const { f, post, owed, request } = setup()
+    const ask = post(null, 'lead', 'Can we get dark mode?')
+    f.run({ type: 'conversation.create', title: 'Dark mode', brief: 'Dark mode.', checks: [], requestMessageId: ask } as Command, owner,
+      { request: request(ask) } as Partial<CommandContext>)
+    expect(owed()).toEqual([ask])
   })
 
   it('is not settled by another agent\'s reply or reaction', () => {
