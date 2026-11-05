@@ -311,6 +311,39 @@ void main() {
       expect(superTabImageCache.shapeOf('a1'), isNull);
     });
 
+    /// A relaunch: the same folder, a new cache over it.
+    void relaunch() => superTabImageCache = SuperTabImageCache(shelf);
+
+    test('kept across a launch signed in on the same computer', () async {
+      await signedInBefore('machine-a', 'ada');
+      await superTabImageCache.keep('a2', Uint8List(8), const Size(4, 3));
+
+      relaunch();
+      await open('machine-a');
+
+      expect(await superTabImageCache.read('a2'), isNotNull);
+    });
+
+    test('a launch after signing out in a terminal clears them', () async {
+      await signedInBefore('machine-a', 'ada');
+      await superTabImageCache.keep('a2', Uint8List(8), const Size(4, 3));
+
+      relaunch();
+      await open(null, loggedIn: false);
+
+      expect(await shelf.list(), isEmpty);
+    });
+
+    test('a launch as another computer sign-in clears them', () async {
+      await signedInBefore('machine-a', 'ada');
+      await superTabImageCache.keep('a2', Uint8List(8), const Size(4, 3));
+
+      relaunch();
+      await open('machine-b');
+
+      expect(await superTabImageCache.read('a2'), isNull);
+    });
+
     test('a session that ends clears them too', () async {
       await signedInBefore('machine-a', 'ada');
       final again = await open('machine-a');
