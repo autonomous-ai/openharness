@@ -206,6 +206,8 @@ export interface SuperTabHostOptions {
   machines?: Partial<MachineDeps>
   /** What carries out a Buddy's model switch here (superTabs/buddyModel.ts), for a spec. */
   buddyModels?: Pick<BuddyModelRequests, 'serve'>
+  /** What restarts a stuck Product Manager in its own pane, on the same session (watchLead), for a spec. */
+  restartLead?: (harnessId: string) => Promise<{ ok: true } | { ok: false; error: string }>
 }
 
 const defaultAgentCommand = (core: CoreApi, machineId: string) => agentCommandPrefix(core.daemon, machineId,
@@ -374,6 +376,10 @@ const LEAD_RETRY_MS = 5_000
 const LATE_REPLACEMENT_MS = 30 * 60_000
 const LEAD_RETRY_MAX_MS = 30 * 60_000
 const LEAD_REOPEN_WAIT_MS = 60_000
+/** How often a running Product Manager is checked for a hang (watchLead): its owed ask's time is in minutes. */
+const LEAD_WATCH_MS = 30_000
+/** How long a restart of a stuck Product Manager may take: the relaunch waits on the engine's command and its pane. */
+const LEAD_RESTART_TIMEOUT_MS = 60_000
 /** Prod 10-30: acknowledgements failed through two hours of SWARM_BUSY, past the backend's 10-minute claim quiet time
  *  (backend superTabs/deliverySettle.ts CLAIM_QUIET_MS), so its delivery pass ended claims the agents had in fact received and
  *  their senders saw Not sent. A typed delivery the backend ended is acknowledged again after 10 s, doubling to 5 minutes, for
@@ -594,6 +600,11 @@ export class SuperTabHost {
   private missing = new Map<string, number>()
   /** Per Lead harness here: a reopen in progress, its failures, when the next may run, and the reason last logged. */
   private readonly keepAlives = new Map<string, { running: boolean; failures: number; retryAt: number; reason?: string }>()
+  /** Per Product Manager harness here (watchLead): when it was last checked, since when it has been in one turn, whether this
+   *  stuck spell restarted it already, a check or restart in progress, and until when the keep-alive leaves its relaunch be. */
+  private readonly leadWatches = new Map<string, { checkedAt: number; workingSince?: number; restarted: boolean; checking: boolean
+    restarting: boolean; settleUntil: number }>()
+  private readonly restartLead: (harnessId: string) => Promise<{ ok: true } | { ok: false; error: string }>
   /** Per session the backend ends: a close or acknowledgement in progress, how far it got, and when the next try may run. */
   private readonly endings = new Map<string, { running: boolean; closed: boolean; acked: boolean; failures: number; retryAt: number
     forgotten?: boolean; unforgotten?: string; scrub?: PurgeTarget | null; scrubbed?: true }>()
@@ -626,6 +637,15 @@ export class SuperTabHost {
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
+    // Through this machine's own daemon socket, as the apps and the relay recovery ask it (relayRecovery.ts): `agent_restart`
+    // relaunches the agent in its own pane on the same session, so it is never a second one.
+    this.restartLead = options.restartLead ?? (async harnessId => {
+      const local = await openDaemon({ dataDir: core.dataDir, port: core.daemon.port, machineId })
+      try {
+        const answer = await local.request('agent_restart', { agentId: harnessId }, LEAD_RESTART_TIMEOUT_MS)
+        return typeof answer.error === 'string' ? { ok: false, error: answer.error } : { ok: true }
+      } finally { local.close() }
+    })
     // Its pickups follow this host's delivery push lease: the server that pushes deliveries also says when a request waits.
     this.terminal = new TerminalHost(core, machineId, { now: this.now, log: this.log, pushes: () => this.now() < this.pushUntil,
       // Only a Team daemon reads a relay grant: on any other the recovery sees no grant and does nothing.
@@ -1164,6 +1184,7 @@ export class SuperTabHost {
       if (row.lead === true || target.agent.switchLanded) {
         if (row.lead === true) leads.add(target.agent.harnessId)
         this.keepAlive(target.agent.harnessId)
+        if (row.lead === true) this.watchLead(target.agent.harnessId, row.owed)
         void this.leadSwitches.serve(target as unknown as SwitchRow).catch(error => this.log(`PM switch: ${error instanceof Error ? error.name : typeof error}`))
       }
       // Never adopt another live session as a replacement for the recorded harness.
@@ -1277,6 +1298,7 @@ export class SuperTabHost {
     if (this.stopped) return
     // A Lead the roster no longer marks (its project deleted) is never reopened again.
     for (const [harnessId, state] of this.keepAlives) if (!leads.has(harnessId) && !state.running) this.keepAlives.delete(harnessId)
+    for (const [harnessId, watch] of this.leadWatches) if (!leads.has(harnessId) && !watch.checking && !watch.restarting) this.leadWatches.delete(harnessId)
     for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
     for (const deliveryId of this.unreadable) if (!seen.has(deliveryId)) this.unreadable.delete(deliveryId)
     for (const key of this.lists.keys()) if (!running.some(r => `list:${r.tabId}:${r.agent.id}` === key)) this.lists.delete(key)
@@ -1328,6 +1350,10 @@ export class SuperTabHost {
     this.keepAlives.set(harnessId, state)
     if (state.running) return
     const now = this.now()
+    // Being restarted in its own pane (watchLead), its session reads as gone until the relaunch is up: reopening it then would
+    // run a second Product Manager beside it.
+    const watch = this.leadWatches.get(harnessId)
+    if (watch && (watch.restarting || now < watch.settleUntil)) return
     // Its owner switched its engine from its pane (leadSwitch.ts), stopping it once the stop went through.
     const switched = leadSwitchOf(this.core.dataDir, harnessId)
     if (this.core.agents.byAgent(harnessId)) {
@@ -1364,6 +1390,51 @@ export class SuperTabHost {
       state.retryAt = this.now() + LEAD_REOPEN_WAIT_MS
       delete state.reason
     })().catch(error => failed(error instanceof Error ? error.message : String(error))).finally(() => { state.running = false })
+  }
+
+  /**
+   * Task #3385 (anh Dee, 11-05): a Product Manager hung in one turn while five people's asks waited 3 to 10 hours, as the
+   * keep-alive reopens only one whose session is gone. Every LEAD_WATCH_MS, a running one that owes a person an answer
+   * past [owed]'s `restartAfterMs` (the server's number, backend timeChecks.ts), while it has been in one turn that long or its
+   * screen has not changed that long, is restarted in its own pane on the same session: never a second one, and the keep-alive
+   * leaves it be until its relaunch is up. Once per stuck spell: a spell ends when it is seen idle, its turn over, so a PM that
+   * hangs again right after its restart is left to people instead of restarted in a loop. Nothing during an engine switch or a
+   * reopen.
+   */
+  private watchLead(harnessId: string, owed: unknown): void {
+    const watch = this.leadWatches.get(harnessId) ?? { checkedAt: -Infinity, restarted: false, checking: false, restarting: false, settleUntil: -Infinity }
+    this.leadWatches.set(harnessId, watch)
+    const now = this.now()
+    if (watch.checking || watch.restarting || now - watch.checkedAt < LEAD_WATCH_MS) return
+    if (!this.core.agents.byAgent(harnessId) || this.keepAlives.get(harnessId)?.running || leadSwitchOf(this.core.dataDir, harnessId)) return
+    watch.checkedAt = now
+    watch.checking = true
+    const ask = object(owed)
+    const due = identifier(ask.messageId) && typeof ask.since === 'number' && Number.isFinite(ask.since)
+      && typeof ask.restartAfterMs === 'number' && ask.restartAfterMs > 0 ? { since: ask.since, after: ask.restartAfterMs } : null
+    void (async () => {
+      const turn = (await this.core.agents.activity([harnessId]))[harnessId]
+      const at = this.now()
+      if (turn === 'idle') { delete watch.workingSince; watch.restarted = false }
+      else if (turn === 'working') watch.workingSince ??= at
+      if (!due || turn === 'idle' || watch.restarted || at - due.since < due.after) return
+      const shown = this.terminal.progressOf([harnessId])[harnessId]
+      const inTurn = watch.workingSince !== undefined && at - watch.workingSince >= due.after
+      const frozen = typeof shown === 'number' && at - shown >= due.after
+      if (!inTurn && !frozen) return
+      watch.restarted = true
+      watch.restarting = true
+      this.log(`Restarting the Product Manager ${harnessId.slice(0, 8)} in place: it owes an answer sent ${Math.round((at - due.since) / 60_000)} min ago and `
+        + `${inTurn ? `has been in one turn for ${Math.round((at - watch.workingSince!) / 60_000)} min` : `its screen has not changed for ${Math.round((at - shown!) / 60_000)} min`}.`)
+      try {
+        const result = await this.restartLead(harnessId)
+        if (!result.ok) this.log(`Could not restart the Product Manager ${harnessId.slice(0, 8)}: ${result.error}. Not tried again until it ends a turn.`)
+      } finally {
+        delete watch.workingSince
+        watch.restarting = false
+        watch.settleUntil = this.now() + LEAD_REOPEN_WAIT_MS
+      }
+    })().catch(error => this.log(`Product Manager watch: ${error instanceof Error ? error.message : String(error)}`)).finally(() => { watch.checking = false })
   }
 
   /** The new session [switched] started, when it runs here: its native creation receipt is the switch's own change id. */
