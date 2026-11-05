@@ -74,6 +74,7 @@ import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
 import { contractRefusal, missingContract } from './taskContract.js'
 import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
+import { DISPATCH_RULES, laneNamed, pinBuilder, spokenList, stampLane } from './dispatch.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 /** The most steps a task lists (Conversation.stepIds): production's most was 14 (2026-11-05). */
@@ -297,6 +298,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     hold: heldReason.optional() }).strict()
     .refine(c => c.after !== undefined || c.notBefore !== undefined, 'Give the task a place (after) or a not-before date.')
     .refine(c => c.hold === undefined || typeof c.notBefore === 'string', 'A hold reason goes with a not-before date.'),
+  // The lane a task is handed out in (dispatch.ts): one of the lane table's, any case; null for the one its paths choose.
+  z.object({ type: z.literal('work.lane'), conversationId: id, lane: z.string().trim().min(1).max(80).nullable() }).strict(),
   // The Lead's record that a request's pull request merged (leaderboard/record.ts recordMerged); `mergedAt` for a backfill.
   // `fixes`: the merged PR this one fixes, for its model's fixes after merge (leaderboard/record.ts recordFix).
   z.object({ type: z.literal('conversation.merged'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL),
@@ -1678,6 +1681,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const owning = isStep(group) ? state.conversations.find(c => c.id === group.reviewOf) : undefined
     if (owning && !owning.agentIds.includes(worker.id) && joinsProject(state, owning, worker.id)) owning.agentIds.push(worker.id)
     rememberAttempt(group)
+    // Whoever it was pinned to (dispatch.ts), it is in someone's hands now.
+    delete group.pin
     group.assignment = { id: assignmentId, agentId: worker.id, status: 'working', configuration: structuredClone(worker.configuration),
       execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId }, result: null }
     renewLease(group.assignment, context.now)
@@ -2529,6 +2534,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         assignment: null, lastMessageSequence: 0,
         checks: storedChecks(command.checks, operationId),
       })
+      stampLane(state.conversations.at(-1)!)
       recordAsked(state.conversations.at(-1)!, requesterId, context.now)
       if (command.reviewOf) listStep(conversation(state, command.reviewOf), operationId)
       // The reason stands only where nobody is named, and is shown in the task's first row beside its goal.
@@ -2604,6 +2610,19 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         task.notBefore = command.notBefore
         task.hold = command.hold
       }
+      break
+    }
+    case 'work.lane': {
+      chatOnly(command.conversationId)
+      coordinatorOrPerson(state, actor, command.conversationId)
+      const task = open(state, command.conversationId)
+      if (task.id === groupProject(state, task).leadConversationId || task.kind || task.audience || task.reviewOf) {
+        fail('LANE_TASK_ONLY', 'Only a task has a lane: name a task, not a chat or a step.', 400)
+      }
+      if (command.lane === null) delete task.lane
+      else task.lane = laneNamed(DISPATCH_RULES.lanes, command.lane)
+        ?? fail('LANE_UNKNOWN', `Name a lane: ${spokenList(DISPATCH_RULES.lanes.map(l => l.name))}.`, 400)
+      stampLane(task)
       break
     }
     case 'work.priority': {
@@ -3885,6 +3904,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       group.brief = command.task ? renderWorkTask(command.task) : command.brief!
       if (command.task) group.task = command.task
       else delete group.task
+      stampLane(group)
       group.checks = storedChecks(command.checks, operationId)
       message(group.id, group.brief, [], null, SYSTEM_ROW)
       bindTaskCard(group, effects.messages.at(-1)!)
@@ -4188,7 +4208,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (counts && !command.passed && byAssignee && actor.kind === 'agent' && group.reviewOf) {
         const build = state.conversations.find(c => c.id === group.reviewOf)
         if (build) changesRequested(state, build, actor.agentId, context.now)
+        // A handed build goes back to its Engineer (handed.ts, #3399); a build nobody holds waits for its builder to fix what the
+        // step found (dispatch.ts). The pin does nothing once the reopen made it active work.
         if (build) reopen(build)
+        if (build) pinBuilder(build, 'findings', context.now)
       }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       break

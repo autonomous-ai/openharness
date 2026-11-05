@@ -4,7 +4,7 @@
  */
 import type { Prisma } from '@prisma/client'
 import { stableId } from './model.js'
-import { MAX_RULES_REVISIONS, SEED_RULES, type ProjectRules, type RulesChange, type RulesWrite } from './policy.js'
+import { MAX_RULES_REVISIONS, projectRulesSchema, SEED_RULES, type ProjectRules, type RulesChange, type RulesWrite } from './policy.js'
 
 type Transaction = Prisma.TransactionClient
 
@@ -31,7 +31,13 @@ export async function readRules(tx: Transaction, tabId: string, projectId: strin
 /** The record a project runs on now, for a server worker (the merge train, the release schedule): its newest revision, or
  *  the seed at revision 0. Takes the client or a transaction. */
 export async function currentRules(tx: Transaction, tabId: string, projectId: string): Promise<{ revision: number; rules: ProjectRules }> {
-  return await readRules(tx, tabId, projectId) ?? { revision: 0, rules: SEED_RULES }
+  const saved = await readRules(tx, tabId, projectId)
+  if (!saved) return { revision: 0, rules: SEED_RULES }
+  // Checked again on the way out (SecAlder, review of #3250): a stored row the schema refuses (one with no read count, a
+  // pattern from a looser past schema) would read as fewer reads. It throws, and the caller holds: never a partial record.
+  const parsed = projectRulesSchema.safeParse(saved.rules)
+  if (!parsed.success) throw new Error(`project rules revision ${saved.revision} does not pass the schema; save the rules again`)
+  return { revision: saved.revision, rules: parsed.data }
 }
 
 /** Every kept revision, newest first: at most MAX_RULES_REVISIONS rows of the same index. */
