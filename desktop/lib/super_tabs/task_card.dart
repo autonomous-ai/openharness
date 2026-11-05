@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
+import '../state/harness_activity.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/harness_activity_mark.dart';
 
 /// One card of a project's Tasks view, on the Board and as a List row alike:
-/// its title (up to [titleLines]), then its caption, and "Needs you" with a red
-/// dot when it waits on the reader. New replies make the title bold with a dot,
-/// said to a screen reader, so colour is never the only signal.
+/// its title (up to [titleLines]), caption and shared activity mark.
 ///
 /// On the Board it is a [tile] (task #2948): an inset tile set into its
 /// column's panel, one step less rounded than the panel, with no shadow.
@@ -19,6 +19,7 @@ class SuperTabTaskCard extends StatelessWidget {
     required this.caption,
     required this.needsYou,
     required this.unread,
+    required this.activity,
     required this.onOpen,
     this.titleLines = 2,
     this.tile = false,
@@ -28,6 +29,7 @@ class SuperTabTaskCard extends StatelessWidget {
 
   final String title, caption;
   final bool needsYou, unread;
+  final HarnessActivity activity;
   final VoidCallback onOpen;
   final int titleLines;
   final bool tile, selected;
@@ -37,22 +39,20 @@ class SuperTabTaskCard extends StatelessWidget {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final muted = DesktopChrome.metadata();
-    final dot = SizedBox.square(
-      dimension: grid.AppDesktop.controlGap,
-      child: DecoratedBox(
-        decoration: ShapeDecoration(
-          color: grid.AppPalette.dangerFill,
-          shape: const CircleBorder(),
-        ),
-      ),
-    );
     return Semantics(
       button: true,
       selected: selected ? true : null,
       label: [
         title,
         caption,
-        if (needsYou) 'Needs you',
+        if (!needsYou)
+          switch (activity) {
+            HarnessActivity.starting => 'Queued',
+            HarnessActivity.needsInput => 'Waiting on a person',
+            HarnessActivity.offline => 'Blocked or agent lost',
+            HarnessActivity.done => 'Shipped',
+            _ => activity.label,
+          },
         if (unread) 'New replies',
       ].join(', '),
       excludeSemantics: true,
@@ -71,27 +71,17 @@ class SuperTabTaskCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (needsYou)
-                      Row(
-                        children: [
-                          dot,
-                          const SizedBox(width: grid.AppDesktop.menuInset),
-                          Text(
-                            'Needs you',
-                            style: DesktopChrome.metadata(
-                              color: DesktopChrome.foreground,
-                            ),
-                          ),
-                        ],
-                      ),
                     Text(
                       title,
                       maxLines: titleLines,
                       overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.control(
-                        color: DesktopChrome.foreground,
-                        medium: unread,
-                      ),
+                      style:
+                          DesktopChrome.control(color: DesktopChrome.foreground)
+                              .copyWith(
+                                fontWeight: unread
+                                    ? FontWeight.w600
+                                    : FontWeight.w400,
+                              ),
                     ),
                     if (caption.isNotEmpty)
                       Text(
@@ -103,23 +93,12 @@ class SuperTabTaskCard extends StatelessWidget {
                   ],
                 ),
               ),
-              if (unread) ...[
-                const SizedBox(width: grid.AppDesktop.menuInset),
-                Padding(
-                  padding: const EdgeInsets.only(
-                    top: grid.AppDesktop.menuInset,
-                  ),
-                  child: SizedBox.square(
-                    dimension: grid.AppDesktop.controlGap,
-                    child: DecoratedBox(
-                      decoration: ShapeDecoration(
-                        color: grid.AppPalette.accent,
-                        shape: const CircleBorder(),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+              const SizedBox(width: grid.AppDesktop.menuInset),
+              ActivityMark(
+                activity: activity,
+                color: DesktopChrome.foreground,
+                tooltip: false,
+              ),
               ?trailing,
             ],
           ),
