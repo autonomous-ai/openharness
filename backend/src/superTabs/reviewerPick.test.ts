@@ -27,8 +27,8 @@ function fixture(engineer: AgentConfiguration = opus) {
   const dev = add('dev', task, engineer)
   run({ type: 'work.assign', conversationId: task, agentId: dev }, as(lead))
   const group = (id: string) => state.conversations.find(c => c.id === id)!
-  const pick = (kind: 'review' | 'security' | 'test' = 'review', head: string | null = 'abc1234', readyAt = 0) =>
-    reviewerCandidates(state, group(task), kind, head, readyAt).map(a => a.name)
+  const pick = (kind: 'review' | 'security' | 'test' = 'review', head: string | null = 'abc1234') =>
+    reviewerCandidates(state, group(task), kind, head).map(a => a.name)
   return { run, as, add, lead, task, dev, group, pick, get state() { return state } }
 }
 
@@ -99,7 +99,7 @@ describe('reviewerCandidates', () => {
       { by: `agent:${bare}`, passed: true, evidence: 'Yes', at: 50 },
       { by: `agent:${prefix}`, passed: true, evidence: 'Yes', at: 50, head: 'abc1234' } as never,
     ] }]
-    expect(f.pick('security', head, 10).sort()).toEqual(['bare', 'prefix'])
+    expect(f.pick('security', head).sort()).toEqual(['bare', 'prefix'])
   })
 
   it('is never busy, a PM, a Buddy, or holding another step of this task', () => {

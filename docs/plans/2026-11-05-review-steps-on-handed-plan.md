@@ -10,8 +10,9 @@ engineer, never a grid model, at least as strong as the engineer, no verdict yet
 nobody is free for stays open and the PM is told once. A batch asks for a combination read only when two of its pull
 requests touch the same file (task #3401, requested by Dee through Harness).
 
-**Architecture:** A new `reviewTable.ts` holds the table as data (`REVIEW_TABLE`, the one place its numbers live until the
-project rules record, #3393, carries it) and turns a pull request's changed files into the steps it needs (`reviewPlan`), and
+**Architecture:** The table is the project rules record's review section (`policy.ts`, #3393: rows with path globs, test
+rows, untested paths, read through its matcher, which never backtracks; at most `MAX_GLOB_STARS` stars per pattern; Task 6).
+A new `reviewTable.ts` turns a pull request's changed files into the steps it needs (`reviewPlan`), and
 says which files two pull requests of a batch share (`sharedFiles`). A new `reviewerPick.ts` ranks the free agents for a step
 (`reviewerCandidates`). In `commands.ts`, `work.assign`'s checks and its writes split into two closures (`assignRefusal`,
 `assignTo`) so the server's own assignment runs the very same checks and writes; `work.status` `review` on a task (not a
@@ -66,7 +67,7 @@ assigns it to the first candidate `assignRefusal` lets through. The files come i
 
 **Files:** Create `backend/src/superTabs/reviewTable.ts`, test `reviewTable.test.ts`.
 
-**Interfaces:** `REVIEW_TABLE: ReviewTable` = `{ defaultReads: 1, rows: [{ area, reads, paths: glob[] }], test: [{ where,
+**Interfaces (first version; Task 6 moved the table to policy.ts):** `REVIEW_TABLE: ReviewTable` = `{ defaultReads: 1, rows: [{ area, reads, paths: glob[] }], test: [{ where,
 paths: glob[] }] }`; `globMatch(glob, path)`; `reviewPlan(files: string[] | null, table?) => PlannedStep[]` where
 `PlannedStep = { name: 'Review' | 'Security review 1' | 'Security review 2' | 'Test', kind: 'review' | 'security' | 'test',
 areas: string[], where?: string[] }`; `sharedFiles(pulls: Array<{ url, files }>) => Array<{ file, urls }>`.
@@ -117,3 +118,13 @@ areas: string[], where?: string[] }`; `sharedFiles(pulls: Array<{ url, files }>)
 
 The combination read: `sharedFiles` is the batch's question (task #3402, the merge train, calls it); no batch code runs on
 the server before that task lands.
+
+### Task 6: one table, the project rules record (River, after review)
+
+**Files:** `backend/src/superTabs/policy.ts` (matcher without backtracking, star cap), `reviewTable.ts` (reads the record),
+`commands.ts` / `store.ts` (the Ready reads the project's newest rules revision), `reviewerPick.ts` (whole heads only, #3394).
+
+- [x] Test: a many-star pattern fails a long path at once (red: the regex matcher hung); more than 8 stars is refused at save.
+- [x] Test: the plan follows the project's saved rules, in the command and through the store.
+- [x] Test: a verdict naming no head, or a prefix of the head, is not at this head.
+- [x] Code; the local `REVIEW_TABLE` and `globMatch` copy are gone.

@@ -1891,7 +1891,12 @@ export class SuperTabStore {
       }
       if (pushOrigin) Object.assign(context, { pushOrigin: pushOrigin.origin, pushOriginPulls: pushOrigin.pulls })
       if (repositoryReach) context.repositoryReach = repositoryReach
-      if (pullRequestFiles) context.pullRequestFiles = pullRequestFiles
+      if (pullRequestFiles && command.type === 'work.status') {
+        context.pullRequestFiles = pullRequestFiles
+        // Its project's review table plans the steps: one indexed read of the newest rules revision (policyStore.ts).
+        const handed = original.conversations.find(c => c.id === command.conversationId)
+        if (handed) context.projectRules = await readRules(tx, tabId, groupProject(original, handed).id)
+      }
       if (command.type === 'agent.screen' || command.type === 'agent.input') {
         // A machine that is gone or no longer shared refuses at once instead of leaving the request to time out.
         await this.agentGrant(tx, original, agent(original, command.agentId))

@@ -11,6 +11,8 @@ import { z } from 'zod'
 export const MAX_RULES_BYTES = 16_384
 /** Revisions kept per project, the current one included; the save that writes the 51st deletes the oldest. */
 export const MAX_RULES_REVISIONS = 50
+/** The most `*` one path pattern holds: the seed's use four; more says nothing a shorter pattern cannot (task #3401). */
+export const MAX_GLOB_STARS = 8
 const MAX_LIST = 50
 
 const clock = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, 'A time of day as HH:MM, 00:00 to 23:59.')
@@ -23,6 +25,7 @@ const minutes = z.number().int().min(1).max(10_080)
 const reads = z.number().int().min(1).max(5)
 /** A path pattern relative to the repository (globMatch): never absolute, never climbing out of it. */
 const glob = z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9_.*?\/@+ -]+$/, 'A path pattern: letters, digits and _ . * ? / @ + - only.')
+  .refine(g => [...g].filter(c => c === '*').length <= MAX_GLOB_STARS, `A path pattern has at most ${MAX_GLOB_STARS} stars.`)
   .refine(g => !g.startsWith('/') && !g.split('/').includes('..'), 'A path pattern relative to the repository, without "..".')
 const globs = z.array(glob).max(MAX_LIST)
 /** A list whose entries' [key] differ, ignoring case: two rows for one area would leave the table saying two things. */
@@ -142,27 +145,63 @@ export interface RulesWrite {
   at: number
 }
 
-const compiled = new Map<string, RegExp>()
-/** Whether [path] matches [glob], ignoring case: `**` any folders (or none), `*` and `?` within one name; anything else is
- *  itself. The review steps' matcher (#3401 reviewTable.ts globMatch), the same rules, so both read a row alike. */
-export function globMatch(glob: string, path: string): boolean {
-  let pattern = compiled.get(glob)
-  if (!pattern) {
-    let source = ''
-    for (let i = 0; i < glob.length; i++) {
-      const c = glob[i]!
-      if (c === '*' && glob[i + 1] === '*') {
-        if (glob[i + 2] === '/') { source += '(?:.*/)?'; i += 2 } else { source += '.*'; i += 1 }
-      } else if (c === '*') source += '[^/]*'
-      else if (c === '?') source += '[^/]'
-      else source += c.replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    }
-    pattern = new RegExp(`^${source}$`, 'i')
-    // Bounded: a project has at most 50 rows of 50 patterns; the cache only saves recompiling them.
-    if (compiled.size > 10_000) compiled.clear()
-    compiled.set(glob, pattern)
+/** Tokens of a glob, compiled once per pattern: a literal character (lower case), `?`, `*` (within one name), `**` (anything)
+ *  and `**` + `/` (any folders, or none). */
+type GlobToken = { kind: 'char'; c: string } | { kind: 'one' } | { kind: 'star' } | { kind: 'any' } | { kind: 'folders' }
+const compiled = new Map<string, GlobToken[]>()
+function tokens(glob: string): GlobToken[] {
+  let list = compiled.get(glob)
+  if (list) return list
+  list = []
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!
+    if (c === '*' && glob[i + 1] === '*') {
+      if (glob[i + 2] === '/') { list.push({ kind: 'folders' }); i += 2 } else { list.push({ kind: 'any' }); i += 1 }
+    } else if (c === '*') list.push({ kind: 'star' })
+    else if (c === '?') list.push({ kind: 'one' })
+    else list.push({ kind: 'char', c: c.toLowerCase() })
   }
-  return pattern.test(path)
+  // Bounded: a project has at most 50 rows of 50 patterns; the cache only saves tokenizing them again.
+  if (compiled.size > 10_000) compiled.clear()
+  compiled.set(glob, list)
+  return list
+}
+
+/** Whether [path] matches [glob], ignoring case: `**` any folders (or none), `*` and `?` within one name; anything else is
+ *  itself. Run as a set of states over the path, never by backtracking, so it takes at most the glob's length times the
+ *  path's whatever the pattern (task #3401, River: a saved pattern must never stall the worker that reads it). */
+export function globMatch(glob: string, path: string): boolean {
+  const list = tokens(glob), n = list.length
+  // State i: tokens before i matched. inside[i]: within a `**/` at i, after at least one character of its folders.
+  let at = new Uint8Array(n + 1), inside = new Uint8Array(n + 1)
+  const close = (states: Uint8Array) => {
+    // A star of any kind may match nothing: its state reaches the next token's.
+    for (let i = 0; i < n; i++) if (states[i] && list[i]!.kind !== 'char' && list[i]!.kind !== 'one') states[i + 1] = 1
+  }
+  at[0] = 1
+  close(at)
+  for (const raw of path) {
+    const c = raw.toLowerCase()
+    const next = new Uint8Array(n + 1), nextInside = new Uint8Array(n + 1)
+    for (let i = 0; i < n; i++) {
+      const token = list[i]!
+      if (at[i]) {
+        if (token.kind === 'char' ? token.c === c : token.kind === 'one' ? c !== '/' : false) next[i + 1] = 1
+        if (token.kind === 'star' && c !== '/') next[i] = 1
+        if (token.kind === 'any') next[i] = 1
+      }
+      if (token.kind === 'folders' && (at[i] || inside[i])) {
+        // Within its folders any character keeps it; a "/" may also end them.
+        nextInside[i] = 1
+        if (c === '/') next[i + 1] = 1
+      }
+    }
+    close(next)
+    at = next
+    inside = nextInside
+    if (!at.some(Boolean) && !inside.some(Boolean)) return false
+  }
+  return !!at[n]
 }
 
 const matchesAny = (patterns: readonly string[], file: string) => patterns.some(g => globMatch(g, file))

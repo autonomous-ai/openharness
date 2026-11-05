@@ -9,6 +9,7 @@ import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, type SuperTabStoreHooks } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
+import { SEED_RULES } from '../src/superTabs/policy.js'
 
 // Task #3401: a task's Ready reads its pull request's files from GitHub, outside the command's transaction, and the server
 // opens its review steps from them. A fresh loopback replica set, created here.
@@ -67,6 +68,15 @@ describe('a Ready through the store', () => {
     const steps = await stepsIn(tab, task)
     expect(steps.map(step => step.step).sort()).toEqual(['Security review 1', 'Security review 2'])
     expect(steps.map(step => step.assignment?.agentId).sort()).toEqual([...reviewers].sort())
+  })
+
+  it('plans by the project\'s saved rules record', async () => {
+    const pullRequestFiles = vi.fn(async (_repository: string | null, urls: string[]) => ({ urls, head: 'abc1234', files: ['docs/a.md'] }))
+    const { tab, execute, task, dev, assignment } = await swarm({ pullRequestFiles })
+    const rules = { ...SEED_RULES, reviews: { ...SEED_RULES.reviews, defaultReads: 2 } }
+    await execute({ type: 'rules.set', projectId: 'lead', baseRevision: 0, rules, summary: 'Two reads for everything' } as Command)
+    await execute({ type: 'work.status', conversationId: task, assignmentId: assignment, status: 'review', result: `Ready: ${REPO}/pull/7` }, host, dev)
+    expect((await stepsIn(tab, task)).map(step => step.step).sort()).toEqual(['Review 1', 'Review 2'])
   })
 
   it('opens nothing when the Ready names no pull request, and never reads for a step\'s Ready', async () => {

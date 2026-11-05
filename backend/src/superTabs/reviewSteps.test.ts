@@ -123,7 +123,7 @@ describe('a handed task opens its review steps', () => {
   it('plans by the project\'s saved rules, read with the files', () => {
     const f = fixture()
     f.add('rev-a', f.task, 'Reviewer'); f.add('rev-b', f.task, 'Reviewer')
-    f.ready(['docs/a.md'], 'abc1234', true, { projectRules: { ...SEED_RULES, reviews: { ...SEED_RULES.reviews, defaultReads: 2 } } })
+    f.ready(['docs/a.md'], 'abc1234', true, { projectRules: { revision: 1, rules: { ...SEED_RULES, reviews: { ...SEED_RULES.reviews, defaultReads: 2 } } } })
     expect(f.steps().map(s => s.name)).toEqual(['Review 1', 'Review 2'])
   })
 

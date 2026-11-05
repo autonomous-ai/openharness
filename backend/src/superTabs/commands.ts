@@ -554,8 +554,9 @@ export interface CommandContext {
   instructions?: { revision: number; text: string; at?: number } | null
   /** For `instructions.save`: the messages it names as approvals, loaded by id in this tab by the store (ruleGuard.ts). */
   approvals?: ApprovalRow[]
-  /** For `rules.set`: the project's newest stored rules revision, read by the store; null when none is saved yet, which is
-   *  the seed at revision 0 (policyStore.ts). Unread (undefined), nothing is saved. */
+  /** For `rules.set`, and for a task's Ready whose pull request files were read (its review table plans the steps, #3401):
+   *  the project's newest stored rules revision, read by the store; null when none is saved yet, which is the seed at
+   *  revision 0 (policyStore.ts). Unread (undefined), nothing is saved. */
   projectRules?: { revision: number; rules: ProjectRules } | null
   /** For `note.add` and `note.remove`: the project's stored notes, expired ones too, read by the store (instructions.ts). */
   notes?: PmNote[]
@@ -1689,14 +1690,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   const openReviewSteps = (task: Conversation, read: NonNullable<CommandContext['pullRequestFiles']>) => {
     const existing = stepsOf(state, task.id).filter(step => !step.archived)
     const taken = new Set<string>(), unassigned: string[] = []
-    for (const planned of reviewPlan(read.files)) {
+    for (const planned of reviewPlan(read.files, context.projectRules?.rules)) {
       const free = (step: Conversation) => !taken.has(step.id)
       let step = existing.find(s => free(s) && stepName(s) === planned.name) ?? existing.find(s => free(s) && stepKind(s) === planned.kind)
       if (step) taken.add(step.id)
       if (step && activeWork(step)) continue
       step ??= openStep(task, planned, read)
       const previous = step.assignment?.agentId
-      const ranked = reviewerCandidates(state, task, planned.kind, read.head, context.now)
+      const ranked = reviewerCandidates(state, task, planned.kind, read.head)
       const ordered = [...ranked.filter(a => a.id === previous), ...ranked.filter(a => a.id !== previous)]
       const target = step
       const worker = ordered.find(candidate => {
