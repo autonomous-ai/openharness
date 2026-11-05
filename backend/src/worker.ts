@@ -32,6 +32,7 @@ import { announceSwarmHostChanges } from './lib/swarmHostPushes.js'
 import { announceSwarmChanges } from './lib/swarmClientPushes.js'
 import { GitHubApp, githubAppConfig } from './github/app.js'
 import { env } from './config/env.js'
+import { phoneSendersFromEnv, sendPhoneNotices } from './push/send.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
 import { productUsagePeopleRollupService } from './services/ProductUsagePeopleRollupService.js'
 import { startReceiptSweep } from './lib/productUsageReceiptSweep.js'
@@ -131,8 +132,10 @@ async function start(): Promise<void> {
   configureSwarmStamps(redisSwarmStamps(), { reads: false })
   // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once, and of the
   // groups they changed.
+  // Their tags reach the tagged person's phones too (push/send.ts, task #2905).
+  const phones = phoneSendersFromEnv(env)
   const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, terminalWaiting: announceSwarmTerminal, hostsChanged: announceSwarmHostChanges,
-    swarmChanged: announceSwarmChanges })
+    swarmChanged: announceSwarmChanges, phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices) } })
   // Decisions still waiting in work that was over before #2454 closed them where work ends: they counted toward the open
   // limit and came back on a reopen (store.ts withdrawEndedDecisions). Remove in the release after the one that runs it.
   logger.info('[swarm-decisions] closed waiting decisions of finished work', { closed: await swarms.withdrawEndedDecisions() })
