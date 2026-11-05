@@ -78,7 +78,6 @@ class SuperTabMessageRow extends StatefulWidget {
     this.onOpenReply,
     this.references = const {},
     this.onOpenGroup,
-    this.onOpenInstructions,
     this.mentions = const [],
     this.mentionAddresses = const {},
     this.mentionLabels = const {},
@@ -153,9 +152,6 @@ class SuperTabMessageRow extends StatefulWidget {
   final Map<int, String> references;
   final ValueChanged<String>? onOpenGroup;
 
-  /// Opens the revision an instructions save's line names
-  /// ([SuperTabMessage.instructionsSave]), to read the change whole.
-  final ValueChanged<({String projectId, int revision})>? onOpenInstructions;
   final String author;
   final SuperTabAgent? agent;
 
@@ -849,32 +845,6 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                       addresses: widget.mentionAddresses,
                                       labels: widget.mentionLabels,
                                       taggedYou: taggedYou,
-                                    ),
-                                  ),
-                                ),
-                              if ((
-                                    message.deleted
-                                        ? null
-                                        : message.instructionsSave,
-                                    widget.onOpenInstructions,
-                                  )
-                                  case (final saved?, final open?))
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                    top: grid.AppDesktop.menuInset,
-                                  ),
-                                  child: SuperTabLink(
-                                    key: ValueKey(
-                                      'super-instructions-link-${message.id}',
-                                    ),
-                                    label: 'See revision ${saved.revision}',
-                                    onTap: () => open(saved),
-                                    child: Text(
-                                      'See revision ${saved.revision}',
-                                      style: DesktopChrome.control(
-                                        color: DesktopChrome.accent,
-                                        medium: true,
-                                      ),
                                     ),
                                   ),
                                 ),
