@@ -26,6 +26,7 @@ import 'super_tab_attention_test.dart'
         rowText,
         unreadThread;
 import 'support/buddy_fixture.dart';
+import 'super_tab_activity_lists_test.dart' show SuperTabActivityTotals;
 import 'support/super_tab_fixture.dart';
 
 Future<SuperTabController> open(ConversationServer server) async {

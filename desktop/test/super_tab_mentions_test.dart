@@ -611,10 +611,16 @@ void main() {
           findsOneWidget,
         );
         // The answered one is read (this server does not say where it is):
-        // it is not listed, nor folded behind the one that waits (#2887).
+        // it is listed under Read, without the unread dot, and folded
+        // behind nothing (#2887, task #2996).
         expect(find.textContaining('more from Wren'), findsNothing);
         expect(
-          find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
+          find.descendant(
+            of: find.byKey(
+              const ValueKey('super-activity-row-mention:mention-1'),
+            ),
+            matching: find.byKey(const ValueKey('super-activity-dot')),
+          ),
           findsNothing,
         );
       },
@@ -639,12 +645,12 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Mark read'));
       await tester.pumpAndSettle();
-      // Mentions lists only unread tags (#2887): the read row leaves it.
+      // The read row stays, under Read, without its dot (task #2996).
       expect(
         find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
-        findsNothing,
+        findsOneWidget,
       );
-      expect(find.text('No unread mentions'), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-activity-dot')), findsNothing);
       expect(
         find.descendant(of: notificationsEntry(), matching: find.text('1')),
         findsNothing,
@@ -721,7 +727,7 @@ void main() {
         find.text('This message is too far back to open.'),
         findsOneWidget,
       );
-      expect(find.byKey(const ValueKey('super-activity-list')), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-mentions-list')), findsOneWidget);
       expect(c.selectedId, isNot('group'));
     });
 
@@ -914,7 +920,7 @@ void main() {
         find.byKey(const ValueKey('super-message-message-100')).hitTestable(),
         findsOneWidget,
       );
-      expect(find.byKey(const ValueKey('super-activity-list')), findsNothing);
+      expect(find.byKey(const ValueKey('super-mentions-list')), findsNothing);
     });
   });
 

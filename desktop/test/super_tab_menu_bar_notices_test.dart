@@ -19,6 +19,7 @@ import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_launch_test.dart'
     show SuperTabFixtureConnection, SuperTabLaunchFixture, tabId;
+import 'super_tab_activity_lists_test.dart' show SuperTabActivityTotals;
 import 'support/super_tab_fixture.dart';
 import 'swarm_screen_test.dart' show mount;
 import 'swarm_state_test.dart' show MemoryStore;
@@ -575,7 +576,9 @@ void main() {
       await close(tester, view);
     });
 
-    testWidgets('a decision opens Decisions, where it is answered', (tester) async {
+    testWidgets('a decision opens Decisions, where it is answered', (
+      tester,
+    ) async {
       final server = ConversationServer()..ask(['Ship it behind a flag?']);
       final view = await showView(tester, server);
       final c = view.controller;
@@ -1028,7 +1031,10 @@ void main() {
       final f = SuperTabLaunchFixture(local: true);
       final activity = await openWithEverything(f);
       expect((activity.needsCount + activity.mentionsCount), everything.length);
-      expect(statusMenuSwarmEntries(f.app), hasLength((activity.needsCount + activity.mentionsCount)));
+      expect(
+        statusMenuSwarmEntries(f.app),
+        hasLength((activity.needsCount + activity.mentionsCount)),
+      );
     });
 
     test(
@@ -1056,7 +1062,7 @@ void main() {
             body: SuperTabDecisionsPage(
               activity: activity,
               onOpenConversation: (_) {},
-            )),
+            ),
           ),
         ),
       );
@@ -1125,7 +1131,10 @@ void main() {
       expect(heard, greaterThan(0));
       expect(menuRows(f), isNot(contains(('mention', 'mention-2'))));
       expect(activity.notices.map((n) => n.id), isNot(contains('mention-2')));
-      expect(statusMenuSwarmEntries(f.app), hasLength((activity.needsCount + activity.mentionsCount)));
+      expect(
+        statusMenuSwarmEntries(f.app),
+        hasLength((activity.needsCount + activity.mentionsCount)),
+      );
     });
 
     test(
@@ -1140,7 +1149,10 @@ void main() {
         await activity.mentions.load();
         expect(menuRows(f), isNot(contains(('mention', 'mention-3'))));
         expect(activity.notices.map((n) => n.id), isNot(contains('mention-3')));
-        expect(statusMenuSwarmEntries(f.app), hasLength((activity.needsCount + activity.mentionsCount)));
+        expect(
+          statusMenuSwarmEntries(f.app),
+          hasLength((activity.needsCount + activity.mentionsCount)),
+        );
       },
     );
 

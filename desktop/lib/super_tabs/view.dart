@@ -1876,7 +1876,7 @@ class _SuperTabViewState extends State<SuperTabView>
     c.leaveDevices();
     setState(() {
       _page = null;
-        _showManage = false;
+      _showManage = false;
       _showPullRequests = _showTasks = false;
     });
     widget.onCloseTerminal?.call();
@@ -1951,10 +1951,7 @@ class _SuperTabViewState extends State<SuperTabView>
         c.snapshot?.conversation(c.selectedId) == null) {
       return null;
     }
-    return SuperTabPlace.chat(
-      c.selectedId,
-      root: c.threadOnScreen,
-    );
+    return SuperTabPlace.chat(c.selectedId, root: c.threadOnScreen);
   }
 
   /// Records where the reader is once this frame is drawn: a build never
@@ -1987,10 +1984,7 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _listViewHoldsThePane => _notificationsVisible || _manageVisible;
 
   bool get _manageVisible =>
-      _showManage &&
-      _page == null &&
-      !_devicesVisible &&
-      !c.accessRevoked;
+      _showManage && _page == null && !_devicesVisible && !c.accessRevoked;
 
   /// Manage shows, on any of its pages: Devices is one of them, however it
   /// was opened.
@@ -2039,7 +2033,7 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
     setState(() {
       _page = null;
-        _showManage = false;
+      _showManage = false;
       _showPullRequests = _showTasks = false;
     });
     c.select(conversationId);
@@ -2118,7 +2112,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final shownBy = _rowShowing(id, messageId) ?? messageId;
     setState(() {
       _page = null;
-        _showManage = false;
+      _showManage = false;
       _showPullRequests = _showTasks = false;
       _back = null;
       _target = shownBy;

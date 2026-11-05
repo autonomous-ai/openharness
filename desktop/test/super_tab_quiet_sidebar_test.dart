@@ -138,7 +138,7 @@ void main() {
       await tester.pump();
       expect(c.selectedId, 'lead');
       expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
-    await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 1));
     },
   );
 

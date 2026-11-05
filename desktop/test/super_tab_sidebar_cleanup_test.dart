@@ -86,10 +86,10 @@ void main() {
   // Dock. The rest moved
   // into Manage, at the foot (Quiet Swarm, screen 1).
   for (final platform in [TargetPlatform.macOS, TargetPlatform.linux]) {
-    testWidgets('the top reads Activity with its count of asks, and Manage is '
-        'at the foot', (tester) async {
+    testWidgets('the top reads Decisions with its count of asks, Mentions and '
+        'Threads, and Manage is at the foot', (tester) async {
       final c = await showSwarm(tester);
-      expect(topRows(tester), ['Activity1']);
+      expect(topRows(tester), ['Decisions1', 'Mentions', 'Threads']);
       expect(
         tester.getTopLeft(find.byKey(const ValueKey('super-manage'))).dy,
         greaterThan(tester.getTopLeft(find.text('Projects')).dy),
