@@ -200,3 +200,28 @@ describe('scorecardDay', () => {
     expect(day.agentPosts).toBe(4)
   })
 })
+
+// Task #3462: the day's crew wakes and moves, from their timing rows in the project chat.
+describe('crew wake and move times (#3462)', () => {
+  const timing = (what: 'wake' | 'move', runningAt: number, seconds: number, over: Partial<ScorecardMessage> = {}) =>
+    row({ conversationId: 'chat', createdAt: runningAt, source: { kind: 'crew-timing', what, agentId: 'ada', startedAt: runningAt - seconds * 1000,
+      runningAt, reason: what === 'wake' ? 'work on #7' : 'offline' }, text: `${what} ${seconds}s`, ...over })
+
+  it('shows the median and slowest wake and move of the day', () => {
+    const figures = scorecardDay(input({ messages: [timing('wake', at(2), 8), timing('wake', at(5), 30), timing('wake', at(9), 12),
+      timing('move', at(3), 120), timing('move', at(11), 300)] }))
+    expect(figures.crewWake).toEqual({ count: 3, medianSeconds: 12, slowestSeconds: 30 })
+    expect(figures.crewMove).toEqual({ count: 2, medianSeconds: 210, slowestSeconds: 300 })
+  })
+
+  it('counts only the rows of the day, and shows none on a day without any', () => {
+    const figures = scorecardDay(input({ messages: [timing('wake', START - MIN, 50), timing('wake', at(1), 6), timing('move', END, 90)] }))
+    expect(figures.crewWake).toEqual({ count: 1, medianSeconds: 6, slowestSeconds: 6 })
+    expect(figures.crewMove).toEqual({ count: 0, medianSeconds: null, slowestSeconds: null })
+  })
+
+  it('reads timing rows only from the project chat, never one a client could write elsewhere', () => {
+    const figures = scorecardDay(input({ messages: [timing('wake', at(2), 8, { conversationId: 'task7' }), timing('wake', at(3), 9, { author: { kind: 'person', id: 'dee' } })] }))
+    expect(figures.crewWake).toEqual({ count: 0, medianSeconds: null, slowestSeconds: null })
+  })
+})
