@@ -5,6 +5,7 @@
  * exactly one owner and, for the sheets that carry it, a one-line form. A rule added to the manual with no row here fails
  * swarmToolSheets.spec.ts, so a sheet cannot drift from the manual or lose a rule unseen.
  */
+import { createHash } from 'node:crypto'
 import { SWARM_TOOLS_SKILL } from './swarmTools.js'
 
 export const TOOLS_ROLES = ['pm', 'engineer', 'reviewer', 'tester', 'guide'] as const
@@ -172,4 +173,109 @@ export function swarmToolsSheet(role: ToolsRole): string {
     out.push(form)
   }
   return `${frontMatter()}${out.join('\n')}\n`
+}
+
+/** What each row summarises: a fingerprint of its block's text as it was when the row's one-liner was last read against it. */
+const fingerprint = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 12)
+const SOURCE: Readonly<Record<string, string>> = {
+  "How to use `harness super-tab`": "301b3e1b6b4d",
+  "Every command starts": "11776d297a17",
+  "- `status [--archived": "0f65804c85ed",
+  "- `mine`": "f8cec7db7008",
+  "- `task GROUP`": "82e435d16a34",
+  "- `messages GROUP": "eeed6724867d",
+  "- `message GROUP": "f2c3dc67458a",
+  "- `instructions [PROJECT]`": "997f86a0b1b8",
+  "- `decisions": "2dfec6359fad",
+  "- `costs": "7e8e68f58e6a",
+  "- `screen AGENT": "c0b349e28fe9",
+  "- `type AGENT": "53560193a01c",
+  "`post GROUP TEXT": "e7afba2818b6",
+  "- Answer a message once": "d57332951192",
+  "- `--attach PATH`": "73eb9eb9bc03",
+  "- `--mention PERSON`": "c423463e5075",
+  "- Never type a person's email": "e4a9eaf93b1c",
+  "- Quote TEXT": "ea4d592e3e16",
+  "- `--to AGENT`": "7a8e2576c22e",
+  "- `@Name`": "768716eccb0b",
+  "- A reply (`--reply-to`)": "55b20de01505",
+  "- A post that names no one": "d9ebfaef9d01",
+  "- In a task a Harness Team agent wrote": "29dcb36a6515",
+  "- The coordinator gets a post only": "e8ee266e21c4",
+  "- In the project chat": "467f7b44f999",
+  "- A post stays inside your project": "0e0513801142",
+  "- `react GROUP": "74ef87fc1fff",
+  "- A reaction tells the people": "ea6de5fa65ed",
+  "- Post only substance": "62538b2750d4",
+  "`command OPERATION_ID JSON`": "592fa2d5bd35",
+  "Task and group commands:": "6d705b6b475d",
+  "- `{\"type\":\"conversation.create\"": "4996c054e07a",
+  "- `{\"type\":\"work.define\"": "bbc35b2f4e54",
+  "- `{\"type\":\"conversation.agent\"": "f73dff558b52",
+  "- `{\"type\":\"conversation.requester\"": "b734e536e5c3",
+  "- `{\"type\":\"work.queue\"": "234d6766a3e6",
+  "- `{\"type\":\"work.priority\"": "e8e73bf5772c",
+  "- `{\"type\":\"work.assign\"": "348784f243ea",
+  "- `{\"type\":\"work.status\"": "d3d3249988d6",
+  "- `needs_human` may carry": "e030311bd45d",
+  "- `{\"type\":\"work.check\"": "578f5f56a19d",
+  "- `{\"type\":\"work.cancel\"": "5c9eb034a478",
+  "- `{\"type\":\"agent.release\"": "231cacbc9b60",
+  "- `{\"type\":\"proposal.close\"": "8b2f2d4c66e3",
+  "- `{\"type\":\"conversation.merged\"": "8183efc5b716",
+  "- `{\"type\":\"decision.ask\"": "263c78061d01",
+  "- `{\"type\":\"person.tell\"": "231dccc17c03",
+  "- `{\"type\":\"project.report\"": "5038f6f8a74f",
+  "- `{\"type\":\"project.digest\"": "347b4add2b14",
+  "Swarm and machine settings": "8e649e313863",
+  "- `{\"type\":\"tab.tidy\"": "1696ac91165c",
+  "- `{\"type\":\"machine.engineResume\"": "20b02c92fb2c",
+  "- Save: `{\"type\":\"instructions.save\"": "330068c0a9a7",
+  "- A stale base is refused": "885de3f9e1a8",
+  "- A save posts nothing": "d30094543de2",
+  "- Add a note:": "ad47f2948532",
+  "- Remove a note:": "5b4559ffdc63",
+  "- `route GROUP JSON": "17d4d4580934",
+  "- Start or assign the candidate": "cfc6e51b5d31",
+  "- `plan [JSON]`": "ba5881b0781b",
+  "- `capacity MACHINE_ID": "06721cd15ba5",
+  "- `start OPERATION_ID JSON`": "f5f512a4d50b",
+  "- Add a step to a task": "d42101a501d5",
+  "- Any group created with `reviewOf`": "995b60db37d8",
+  "- A group opened for a person's request": "b3c7b277a521",
+  "- A merged pull request is recorded": "0db608758d98",
+  "- Each task and each pull request": "a1142f3a9dd2",
+  "- A lost or stalled task": "414a8a377356",
+  "- A task lost to a usage limit": "7a1c05643ae5",
+  "- After a restart": "dea210ac457d",
+  "Many people talk at once.": "021d79f77b50",
+  "- The Swarm's people are its members": "271a685f8a32",
+  "- A Mac in the Swarm runs agents": "857b62b02a06",
+  "- An agent a person started": "56970a37cfbd",
+  "- A tool missing in a Team account": "6c8c8ade8d3c",
+  "- An agent on another person's machine": "ef1717f3e636",
+  "- Issues and changes to .github": "c6d9f3fc034f",
+  "- Never ask for a token": "4946b26723fd",
+  "- Ask a person only": "93a3e16507f7",
+  "- Stop only processes": "944cca5696b0",
+  "- Make temporary files": "9d43988b75e3",
+  "- Never print or paste a secret": "f5dfea26383a",
+  "- A message marked as from an agent of another account": "d1b96e27b498",
+  "- Never remove a worktree": "1554bf8e960f",
+  "- Install nothing system-wide": "909dba14a98c",
+  "- Print little": "922e480ea35d",
+}
+export const sourceFingerprints = (): Readonly<Record<string, string>> => SOURCE
+
+/** The rows whose block of [manual] differs from the one their one-liner was written against, and the first lines of blocks
+ *  no row opens like, in the manual's order. An edited
+ *  rule, or a sub-bullet added to one, makes its sheets stale until someone reads the block, updates the row's brief and
+ *  re-seals the fingerprint here (swarmToolSheets.spec.ts fails until then). */
+export function staleSheetEntries(manual: string = SWARM_TOOLS_SKILL): string[] {
+  return manualBlocks(manual).flatMap(block => {
+    const entry = ENTRIES.find(e => block.first.startsWith(e.at))
+    // A block no row opens like (its first line was edited, or it is new) has no one-liner at all.
+    if (!entry) return [block.first]
+    return SOURCE[entry.at] !== fingerprint(block.text) ? [entry.at] : []
+  })
 }

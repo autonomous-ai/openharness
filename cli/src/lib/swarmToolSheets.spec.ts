@@ -96,6 +96,8 @@ describe('the role tools sheets', () => {
     expect(staleSheetEntries(changed('  - Starts can be refused when too many starts are pending.', '  - Starts can be refused when too many starts are pending.\n  - A new sub-rule.')))
       .toEqual(['- `start OPERATION_ID JSON`'])
     // An edit to a block with no one-liner is stale too: its row may be switched on later.
-    expect(staleSheetEntries(changed('A post stays inside your project.', 'A post stays in your project.'))).toEqual(['- A post stays inside your project'])
+    expect(staleSheetEntries(changed('A post stays inside your project. Private', 'A post stays inside your project, and private'))).toEqual(['- A post stays inside your project'])
+    // The first line is what names a row: edited, the block matches none, and is reported as it now reads.
+    expect(staleSheetEntries(changed('A post stays inside your project.', 'A post stays in your project.'))).toEqual(['- A post stays in your project. Private chats and Buddy chats keep their own members.'])
   })
 })
