@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -15,7 +15,9 @@ import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { buddyChatId, openSwarmBuddyChat } from '../src/superTabs/buddies.js'
-import { ACTIVITY_EXPIRY_MS, ACTIVITY_READS, resetActivityReads, sweepActivity, writeReplyActivity } from '../src/superTabs/activity.js'
+import { ACTIVITY_EXPIRY_MS, ACTIVITY_READS, activityDigest, resetActivityReads, sweepActivity, writeReplyActivity } from '../src/superTabs/activity.js'
+import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
+import { profiled } from './plans.test-support.js'
 import { SESSION_ENDED_KIND } from '../src/superTabs/buddySessions.js'
 import { threadFacet } from '../src/superTabs/pageReads.js'
 import { CHAT_SETTING_DEFAULT_KEEP_MS, sweepChatSettings } from '../src/superTabs/chatSettings.js'
@@ -617,5 +619,27 @@ describe('Chat notification settings', () => {
     expect(await rows()).toEqual([{ personId: owner.sub, notify: 'mentions' }, { personId: peer.sub, notify: 'muted' }])
     await sweepChatSettings(db, Date.now() + CHAT_SETTING_DEFAULT_KEEP_MS + 1000)
     expect((await db.superTabChatSetting.findMany({ where: { tabId: s.tabId }, select: { personId: true, notify: true } }))).toEqual([{ personId: peer.sub, notify: 'muted' }])
+  })
+})
+
+// Ken's 13:20 VN prod scan, 2026-11-05 (task #3146): SuperTabActivity {tabId, personId, createdAt} was in Atlas's slow log by time
+// (79 ops, 23 s). Its explain(): the digest every person's read asks for examined each of the person's rows of 30 days, 865
+// for the busiest, to return the 26 unread. Through the unread index it examines the unread rows alone.
+describe('the unread-activity digest\'s plan (#3146)', () => {
+  it('examines only the unread rows, a row with no readAt among them, and digests them as before', async () => {
+    await listNamedIndexes(db)
+    const tabId = `tab-${randomUUID()}`, personId = randomUUID().replaceAll('-', '').slice(0, 24), now = Date.now()
+    const row = (i: number, readAt: Date | null) => ({ id: `act-${tabId}-${i}`, tabId, personId, kind: 'reply', conversationId: 'c', messageId: `m${i}`,
+      threadId: null, actorKind: 'person', actorId: 'someone', emoji: null, createdAt: new Date(now - i * 60_000), readAt })
+    await db.superTabActivity.createMany({ data: [...Array.from({ length: 300 }, (_, i) => row(i + 10, new Date(now))), row(1, null), row(2, null)] })
+    // A row written before readAt was kept has no such field at all.
+    await db.$runCommandRaw({ insert: 'SuperTabActivity', documents: [{ _id: `act-${tabId}-3`, tabId, personId, kind: 'reply', conversationId: 'c',
+      messageId: 'm3', actorKind: 'person', actorId: 'someone', createdAt: { $date: new Date(now - 3 * 60_000).toISOString() } }] })
+    let digest = ''
+    const reads = (await profiled(db, async () => { digest = await activityDigest(db, tabId, personId, now) })).filter(e => e.ns.endsWith('.SuperTabActivity'))
+    const unread = [`act-${tabId}-1`, `act-${tabId}-2`, `act-${tabId}-3`]
+    expect(digest).toBe(createHash('sha256').update(unread.sort().join('\n')).digest('base64url').slice(0, 16))
+    expect(reads.map(e => ({ plan: e.planSummary, keys: e.keysExamined, docs: e.docsExamined, returned: e.nreturned })))
+      .toEqual([{ plan: 'IXSCAN { tabId: 1, personId: 1, readAt: 1, createdAt: 1 }', keys: 3, docs: 3, returned: 3 }])
   })
 })
