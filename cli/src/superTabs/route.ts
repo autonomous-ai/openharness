@@ -23,9 +23,11 @@ export type Size = 'small' | 'medium' | 'large'
 export type HeavyWork = 'build' | 'e2e'
 /** `access`: what the work needs to reach, by the names machines list it under (backend superTabs/machineAccess.ts, task #3047). */
 export interface Needs { tools: string[]; devices: string[]; access?: string[]; cwd?: string; heavy?: HeavyWork[]; ci?: { jobs: number; macos: number } }
-/** `unsized`: the agent gave no size (one from before sizes), so the route keeps both models of each slot ([tierOf]). It is the
- *  route's own: the record sends the size as before. */
-export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; local?: boolean; model?: string; needs: Needs; unsized?: true }
+/** `unsized`: the agent gave no size (one from before sizes), so the route keeps both models of each slot ([tierOf]). `ended`:
+ *  how many of the task's attempts ended, as the route read them (routeCommand.ts endedAttempts), null when it could not. Both
+ *  are the route's own: the record sends neither. */
+export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; local?: boolean; model?: string; needs: Needs; unsized?: true
+  ended?: number | null }
 /** A model of the reviewed catalog (backend superTabs/catalog.ts): how strong it is, what it costs, and whether it is offered
  * when nobody names it. */
 export interface CatalogModel { engine: 'claude' | 'codex'; model: string; effort: string; strength: number; cost: number; offered: boolean; engineDefault?: true; note?: string }
@@ -506,11 +508,14 @@ function compare(x: Probe, y: Probe): number {
 export const slotOf = (p: Pick<Probe, 'machineId' | 'engine' | 'gridModel' | 'kind'>) => `${p.machineId}\0${p.gridModel ? 'grid' : p.engine}\0${p.kind}`
 
 /** The work a slot offers a model for, by the project's Routing rules (Models): `strong` for big, hard or risky work, security
- *  or a review; `standard` for small, low or medium work; null for a task with no size that nothing makes strong. */
+ *  or a review, and for any work whose second attempt ended (small work steps up to Opus or Astra after a second failed
+ *  review); `standard` for small, low or medium work; null, both, for a task with no size or whose attempts could not be read
+ *  that nothing makes strong. */
 export type Tier = 'standard' | 'strong'
 export function tierOf(a: Assessment): Tier | null {
-  if (a.size === 'large' || a.difficulty === 'high' || a.risk === 'high' || /(^|-)(security|review)(-|$)/.test(a.kind ?? '')) return 'strong'
-  return a.unsized ? null : 'standard'
+  if (a.size === 'large' || a.difficulty === 'high' || a.risk === 'high' || /(^|-)(security|review)(-|$)/.test(a.kind ?? '')
+    || (a.ended ?? 0) >= 2) return 'strong'
+  return a.unsized || a.ended === null ? null : 'standard'
 }
 /** Each tier's model on each engine, as the Routing rules name them. */
 const TIER_MODELS: Record<Tier, Record<CatalogModel['engine'], { model: string; effort: string }>> = {
