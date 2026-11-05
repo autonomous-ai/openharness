@@ -271,6 +271,10 @@ export interface Assignment {
    *  never written since (phase 4: the server opens and counts no review), kept on older rows. */
   handoffs?: number
   verdicts?: ReviewVerdict[]
+  /** A handed task brought back to its Engineer (handed.ts reopenHanded): when, and why (a No verdict, red CI, a conflict).
+   *  Its Engineer's own status, check or post in the task picks it up and clears it; with none in REOPEN_OWNER_MS the task is
+   *  lost, so anyone free takes it (liveness.ts). The next status clears it too. */
+  reopened?: { at: number; why: string }
   /** Why and when it was lost (status `lost`); after a usage limit whose screen gave a reset time, when its own agent may
    *  take it back (work.resume) unless it was handed on first. */
   lost?: { reason: string; at: number; resumeAt?: string }
@@ -776,8 +780,16 @@ export class SuperTabError extends Error {
 export function fail(code: string, message: string, status = 409, details?: Record<string, unknown>): never { throw new SuperTabError(code, message, status, false, details) }
 export const stableId = (...parts: string[]): string => createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 24)
 export const actorKey = (actor: Actor): string => actor.kind === 'person' ? `person:${actor.userId}` : `agent:${actor.agentId}`
+/** The task is open: assigned, and its attempt not ended. A handed task (below) is open too: archive, steps, deletion and the
+ *  GitHub token hold all read this. Whether its agent is busy is occupiesAgent. */
 export const activeWork = (group: Conversation): boolean => !!group.assignment &&
   !['done', 'stopped', 'cancelled', 'lost'].includes(group.assignment.status)
+/** A task its Engineer handed over (task #3399, handed.ts): its pull request is ready for review, the status its Engineer sets
+ *  when it marks it ready. The task stays open and its Engineer keeps its push access, but the work waits on others, so the
+ *  Engineer is free for new work. A step's own Ready is its verdict, not a hand-over. */
+export const handed = (group: Conversation): boolean => !group.reviewOf && group.assignment?.status === 'review'
+/** Work in its agent's hands, which makes the agent busy: open and not handed over. Every "is this agent busy" check reads it. */
+export const occupiesAgent = (group: Conversation): boolean => activeWork(group) && !handed(group)
 
 /** What awaitingWorkers reads of the conversations, from one pass over them: the agents leading any conversation, those with
  *  active work, and each agent's assigned groups (not lost) in conversation order. Scanning every conversation per agent and
@@ -789,7 +801,8 @@ export function workerIndex(state: SuperTabState): WorkerIndex {
   for (const c of state.conversations) {
     if (c.leadId !== null) leaders.add(c.leadId)
     if (!c.assignment) continue
-    if (activeWork(c)) working.add(c.assignment.agentId)
+    // Busy with work in its hands; a task it handed over leaves it free (task #3399).
+    if (occupiesAgent(c)) working.add(c.assignment.agentId)
     // A lost task's agent did not finish it, even once the task is cancelled: it may be gone.
     if (c.assignment.lost) continue
     const groups = groupsByAgent.get(c.assignment.agentId)
@@ -805,7 +818,7 @@ export function awaitingWorkers(state: SuperTabState, projectId: string, index =
     if (index.leaders.has(a.id) || index.working.has(a.id)) return false
     const groups = index.groupsByAgent.get(a.id) ?? []
     return (a.projectId ?? groups.map(c => groupProject(state, c).id)[0] ?? 'lead') === projectId &&
-      (a.workDecision === 'awaiting' || (!a.workDecision && groups.some(c => !activeWork(c))))
+      (a.workDecision === 'awaiting' || (!a.workDecision && groups.some(c => !occupiesAgent(c))))
   })
 }
 /** A task's work ended: its worker is marked `awaiting`, whatever its kind. People see the mark; no command reads it, so
@@ -814,6 +827,8 @@ export function awaitingWorkers(state: SuperTabState, projectId: string, index =
 export function finishWorker(state: SuperTabState, workerId: string): void {
   const target = state.agents.find(a => a.id === workerId)
   if (!target || state.conversations.some(c => c.leadId === target.id) || target.workDecision === 'stop') return
+  // A handed task that ends while its Engineer works on its next one leaves that Engineer busy (task #3399).
+  if (state.conversations.some(c => occupiesAgent(c) && c.assignment!.agentId === target.id)) return
   target.workDecision = 'awaiting'
 }
 

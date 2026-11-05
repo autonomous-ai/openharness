@@ -12,7 +12,8 @@ function handedFixture() {
   const f = stepsFixture()
   f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: `Ready for review: ${PR} at abc1234` }, f.as(f.dev))
   const next = f.run({ type: 'conversation.create', title: 'Fix logout', brief: 'Sign out works offline.', checks: [] }, f.as(f.lead)).result.conversationId as string
-  return { ...f, next }
+  // Not a spread: it would copy the fixture's `state` getter as a snapshot.
+  return Object.assign(f, { next })
 }
 
 describe('a ready pull request frees its Engineer (#3399)', () => {
@@ -39,7 +40,7 @@ describe('a ready pull request frees its Engineer (#3399)', () => {
 
   it('keeps the handed task\'s GitHub hold, adds the new task\'s, and ends neither', () => {
     const f = handedFixture()
-    const handedAt = f.state
+    const handedAt = structuredClone(f.state)
     expect(workHolds(handedAt)).toEqual([{ agentId: f.dev, assignmentId: f.group(f.task).assignment!.id }])
     f.run({ type: 'work.assign', conversationId: f.next, agentId: f.dev }, f.as(f.lead))
     expect(endedHolds(handedAt, f.state)).toEqual([])

@@ -19,17 +19,18 @@ const running = { $and: [{ $ne: [{ $type: '$data.assignment.status' }, 'missing'
 /**
  * Which conversation fields a light load keeps. `always`: who reads it and who is in it, and how its work ended (a lost
  * task's worker awaits no decision, model.ts awaitingWorkers), with the work's id: a host row tells whether a task lost to a
- * usage limit is still that one before its host resumes it (read/hostRows.ts). `whenRunning`: what other projects' work and host rows read of
+ * usage limit is still that one before its host resumes it (read/hostRows.ts), and whether it is a step, whose Ready is no hand-over
+ * (model.ts handed: a handed task's Engineer reads as free). `whenRunning`: what other projects' work and host rows read of
  * running work. `unread`: what visibility checks, derived values and host rows never read. light.test.ts fails when
  * model.ts gains a field this does not place.
  */
 export const GROUP_FIELDS = {
   always: ['id', 'kind', 'projectId', 'leadId', 'agentIds', 'archived', 'audience', 'dormant', 'assignment.id', 'assignment.agentId', 'assignment.status',
-    'assignment.lost'],
+    'assignment.lost', 'reviewOf'],
   whenRunning: ['title', 'task.owns', 'assignment.execution', 'assignment.result'],
-  unread: ['number', 'brief', 'reviewOf', 'teamWritten', 'step', 'reviewStamp', 'checks', 'lastMessageSequence', 'lastMainSequence', 'lastPersonSequence', 'heardAt', 'pullRequestUrls', 'pullRequestEvents', 'cards', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger', 'reactionSeq', 'proposals', 'buddyName', 'buddySessions', 'buddyDownTold', 'liveness', 'leadAction', 'stepUp', 'queueRank', 'notBefore', 'priority',
+  unread: ['number', 'brief', 'teamWritten', 'step', 'reviewStamp', 'checks', 'lastMessageSequence', 'lastMainSequence', 'lastPersonSequence', 'heardAt', 'pullRequestUrls', 'pullRequestEvents', 'cards', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger', 'reactionSeq', 'proposals', 'buddyName', 'buddySessions', 'buddyDownTold', 'liveness', 'leadAction', 'stepUp', 'queueRank', 'notBefore', 'priority',
     'assignment.configuration', 'assignment.recordingProgress', 'assignment.leaseUntil', 'assignment.progressAt', 'assignment.askedOf', 'assignment.reviewFoundAt', 'assignment.changesRequestedAt', 'assignment.toldEngineerAt',
-    'assignment.handoffs', 'assignment.verdicts'],
+    'assignment.reopened', 'assignment.handoffs', 'assignment.verdicts'],
 } as const
 const LIGHT_GROUP = {
   _id: 0, key: 1, version: 1, changedAt: 1, ordinal: 1, dormant: 1,

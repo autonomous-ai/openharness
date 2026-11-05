@@ -66,6 +66,14 @@ describe('idle agents', () => {
     expect(idleNotices(swarm({ groups: [linked] }), 'lead', at, new Set())).toEqual([])
   })
 
+  it('tells of an Engineer whose own task is handed over for review, which leaves it free (#3399)', () => {
+    const handed = group({ assignment: done({ status: 'review', result: 'Ready for review: PR #7 at abc1234' }) })
+    expect(idleNotices(swarm({ groups: [handed] }), 'lead', at, new Set())).toEqual([expect.objectContaining({ text: 'Rowan has had no open task for 15 minutes.' })])
+    // A step's own Ready is its verdict, no hand-over: its Reviewer is still at work on it.
+    const step = group({ reviewOf: 'g0', assignment: done({ status: 'review' }) })
+    expect(idleNotices(swarm({ groups: [step] }), 'lead', at, new Set())).toEqual([])
+  })
+
   it('waits until a full 15 minutes have passed since the group of its own task last spoke', () => {
     const state = swarm({ groups: [group({ lastActivityAt: iso(START + 5 * MINUTE) })] })
     expect(idleNotices(state, 'lead', at, new Set())).toEqual([])
