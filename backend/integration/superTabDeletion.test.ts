@@ -132,6 +132,16 @@ describe('deleting a Swarm', () => {
     expect(await listed(w, owner)).toContain(personal)
   })
 
+  it('marks only the reader\'s own Personal Swarm on the list', async () => {
+    const w = world(), f = await swarm(w)
+    const mine = (await w.store.create(owner, PERSONAL_SWARM_OPERATION, 'Personal')).id
+    const theirs = (await w.store.create(member, PERSONAL_SWARM_OPERATION, 'Personal')).id
+    const marks = async (who: AuthUser) => Object.fromEntries((await w.store.list(who)).tabs.map(t => [t.id, 'personal' in t ? t.personal : undefined]))
+    expect(await marks(owner)).toMatchObject({ [mine]: true, [f.tab]: undefined })
+    expect(await marks(member)).toMatchObject({ [theirs]: true, [f.tab]: undefined })
+    expect(Object.keys(await marks(member))).not.toContain(mine)
+  })
+
   it('stops its agents through their host and releases the machine, whose host still confirms both', async () => {
     const w = world(), f = await swarm(w)
     await f.execute({ type: 'swarm.delete', name: 'Lampos' })
