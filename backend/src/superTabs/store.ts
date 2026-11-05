@@ -1,6 +1,6 @@
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
-import { phoneNotices, type ReplyRow, type TagRow } from '../push/notices.js'
+import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
 import { joiningTeamMacs, type TeamMachineRow, accountMachineName, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
 import { expireAccess } from './machineAccess.js'
@@ -21,6 +21,7 @@ import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE 
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, notThere } from './deletion.js'
+import type { ApprovalRow, DroppedLine } from './ruleGuard.js'
 import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, SWARM_INVITATION_MS, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
@@ -89,7 +90,7 @@ import { STATUS_LABELS,
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredNotice, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
-import { PM_SCHEDULE_TEXT, recordWake, scheduleRequest } from './pmSchedule.js'
+import { PM_SCHEDULE_TEXT, recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
@@ -165,6 +166,15 @@ function registeredBy(state: SuperTabState, command: Command): Array<{ machineId
   if (command.type !== 'agent.started') return []
   const start = state.starts?.find(s => s.id === command.startId)
   return start ? [{ machineId: start.request.machineId, harnessId: command.harnessId }] : []
+}
+
+/** The messages an instructions save names as people's approvals (ruleGuard.ts), each by its id in this tab as askedIn is read:
+ *  at most MAX_APPROVALS equality reads on _id. Prisma sends `in` as $expr, which no index bounds (backend/AGENTS.md). */
+async function readApprovals(tx: Transaction, tabId: string, ids: string[]): Promise<ApprovalRow[]> {
+  const rows = await Promise.all([...new Set(ids)].map(id => tx.superTabMessage.findFirst({ where: { id, tabId },
+    select: { id: true, author: true, source: true, createdAt: true, conversationId: true } })))
+  return rows.flatMap(row => row ? [{ id: row.id, author: row.author as unknown as Author, source: !!row.source, createdAt: row.createdAt.getTime(),
+    conversationId: row.conversationId }] : [])
 }
 
 function namedFor(command: Command): Named {
@@ -939,6 +949,17 @@ export class SuperTabStore {
       const chat = projectsOf(state).find(p => p.id === projectId)?.leadConversationId
       if (chat) groupIds.push(chat)
     }
+    // A save that names people's approvals of dropped rules tells each of them privately (commands.ts, ruleGuard.ts): their one
+    // Buddy chat and their older one in the project, quiet or not. Only a person's message tells anyone.
+    if (command.type === 'instructions.save' && command.approvals?.length) {
+      for (const row of await readApprovals(tx, tabId, command.approvals)) {
+        // Its conversation, quiet or not: an approval counts only in a conversation of this project (ruleGuard.ts).
+        groupIds.push(row.conversationId)
+        if (row.author.kind !== 'person') continue
+        buddyChat(command.projectId, row.author.id)
+        swarmChat(row.author.id)
+      }
+    }
     // A proposal posts in the chat of the project it goes to, even quiet: the one a Swarm-wide Buddy names, else its session's.
     if (command.type === 'buddy.propose') {
       const self = asAgentId ? state.agents.find(a => a.id === asAgentId) : undefined
@@ -1700,7 +1721,10 @@ export class SuperTabStore {
       // (commands.ts ruleProject: the project it names, quotes or acts in).
       if (command.type === 'instructions.save' || command.type === 'rule.set') {
         const projectId = command.type === 'rule.set' ? ruleProject(original, actor, command).id : command.projectId
-        context.instructions = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, projectId) }, select: { revision: true, text: true } })
+        // When it was saved, too: a person's approval of a dropped rule must come after it (ruleGuard.ts).
+        const stored = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, projectId) }, select: { revision: true, text: true, updatedAt: true } })
+        context.instructions = stored && { revision: stored.revision, text: stored.text, ...stored.updatedAt ? { at: stored.updatedAt.getTime() } : {} }
+        if (command.type === 'instructions.save' && command.approvals?.length) context.approvals = await readApprovals(tx, tabId, command.approvals)
       }
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
@@ -2050,6 +2074,9 @@ export class SuperTabStore {
       if (effects.decisions) {
         const ids = await writeDecisions(tx, tabId, effects.decisions, context.now)
         if (command.type === 'decision.ask') effects.result.decisionIds = ids
+        // A decision new in this write reaches its person's phones (task #3248); one asked again is the open one, told already.
+        const asked = effects.decisions.filter((draft, i) => ids[i] === draft.id)
+        this.tellPhones(tx, tabId, effects.state, { replies: [], tags: [], decisions: asked }, [])
       }
       if (effects.decisionAnswer) await recordAnswer(tx, tabId, effects.decisionAnswer, context.now)
       // Work this command ended (done, cancelled, archived) closes the decisions still waiting there (Dee, 10-31). After this
@@ -2725,8 +2752,9 @@ export class SuperTabStore {
     return this.instructionHistory(user, tabId, projectId, asAgentId, async tx => {
       const row = await tx.superTabInstructionsRevision.findUnique({ where: { id: revisionId(tabId, projectId, revision) } })
       if (!row || row.tabId !== tabId || row.projectId !== projectId) fail('NOT_FOUND', 'This revision is unavailable.', 404)
+      // The lines it dropped, with their kind and who gave it (ruleGuard.ts); none for a revision from before they were kept.
       return { projectId, revision: row.revision, hash: row.hash, text: row.text, summary: row.summary, writtenBy: { kind: row.writtenByKind, id: row.writtenBy },
-        askedBy: row.askedBy, at: row.at }
+        askedBy: row.askedBy, at: row.at, dropped: (row.dropped ?? []) as unknown as DroppedLine[] }
     })
   }
 
@@ -4011,6 +4039,14 @@ export class SuperTabStore {
         recordWake(project, scheduled, this.now(), open ? null : wakeId!)
         afterCommit(tx, () => logger.info('[swarm-deliveries] schedule request', { tabId, slot: scheduled.slot, placed, jobs: scheduled.jobs.join(',') }))
       }
+      // The daily tidy, in its own message (pmSchedule.ts tidyRequest): once a local date, recorded in this same write, so two
+      // racing polls ask once.
+      const tidy = led ? tidyRequest(state, target, this.now()) : null
+      if (tidy) {
+        written.push(tidy.draft)
+        recordTidy(projectOf(state, led!.id), tidy)
+        afterCommit(tx, () => logger.info('[swarm-deliveries] tidy request', { tabId, day: tidy.day, skipped: tidy.skipped }))
+      }
       // The morning digest is due once a day; recording it as sent is part of this same write, so it is sent once.
       const digest = digestRequest(state, target, this.now(), asked)
       if (digest) {
@@ -4575,9 +4611,10 @@ export class SuperTabStore {
   }
 
   /** The phones of whoever `written` tells hear of it once the write commits (push/send.ts). */
-  private tellPhones(tx: Transaction, tabId: string, state: SuperTabState, written: { replies: ReplyRow[]; tags: TagRow[] }, messages: MessageDraft[]): void {
+  private tellPhones(tx: Transaction, tabId: string, state: SuperTabState, written: { replies: ReplyRow[]; tags: TagRow[]; decisions?: DecisionRow[] },
+    messages: MessageDraft[]): void {
     const tell = this.hooks.phoneNotices
-    if (!tell || (!written.replies.length && !written.tags.length)) return
+    if (!tell || (!written.replies.length && !written.tags.length && !written.decisions?.length)) return
     // A notice is never worth a write: one that cannot be made is logged and the write goes on (security review 2).
     let notices: PhoneNotice[]
     try {

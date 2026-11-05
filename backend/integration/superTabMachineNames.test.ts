@@ -136,12 +136,12 @@ describe('a rename after joining', () => {
     const tab = await swarm()
     await contribute(tab, 'studio-2', 'Macs-Mac-Studio-2')
     await contribute(tab, 'studio-2-team', 'Macs-Mac-Studio-2 · Team', dee, { ifMissing: true, maxAgents: 1 })
-    expect(await nameIn(tab, 'studio-2-team')).toBe('Macs-Mac-Studio-2.local')
+    expect(await nameIn(tab, 'studio-2-team')).toBe('Macs-Mac-Studio-2.local · Team account')
     await rename('studio-2', 'Mac 3')
     await report(tab, 'studio-2')
-    expect(await nameIn(tab, 'studio-2-team')).toBe('Mac 3')
+    expect(await nameIn(tab, 'studio-2-team')).toBe('Mac 3 · Team account')
     await report(tab, 'studio-2-team', deeTeam)
-    expect(await nameIn(tab, 'studio-2-team')).toBe('Mac 3')
+    expect(await nameIn(tab, 'studio-2-team')).toBe('Mac 3 · Team account')
   })
 
   it('keeps the Swarm\'s name when its owner clears it back to none', async () => {
@@ -170,7 +170,7 @@ describe('a rename in Machines', () => {
     pushes = []
     await renamed('studio-2')
     for (const tab of [one, two]) {
-      expect([await nameIn(tab, 'studio-2', huy), await nameIn(tab, 'studio-2-team'), await nameIn(tab, 'huy-mini')]).toEqual(['Mac 3', 'Mac 3', 'Huy Mini'])
+      expect([await nameIn(tab, 'studio-2', huy), await nameIn(tab, 'studio-2-team'), await nameIn(tab, 'huy-mini')]).toEqual(['Mac 3', 'Mac 3 · Team account', 'Huy Mini'])
       expect(pushes.find(p => p.tabId === tab)).toMatchObject({ userIds: expect.arrayContaining([dee.sub, huy.sub]), parts: expect.arrayContaining(['main']) })
     }
   })

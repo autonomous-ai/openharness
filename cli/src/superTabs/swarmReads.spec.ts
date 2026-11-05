@@ -83,6 +83,21 @@ describe('the daemon\'s Swarm reads', () => {
     await expect(changed.reads.read(T, LEAD)).rejects.toMatchObject({ code: 'UPDATE_REQUIRED', status: 426 })
   })
 
+  it('recovers from a first reply without a format on the next read', async () => {
+    const { reads } = backendOf({ [FIRST]: [ok({}), ok(readFixture('parts-lead'))] })
+    await expect(reads.read(T, LEAD)).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE', status: 503 })
+    expect((await reads.read(T, LEAD)).state).toEqual(readFixture<{ state: Json }>('legacy-tab-lead').state)
+  })
+
+  it('keeps its cursor through a malformed changes reply and recovers', async () => {
+    const { reads, call } = backendOf({ [FIRST]: [ok(readFixture('parts-lead'))],
+      [CHANGES()]: [ok({}), ok(readFixture('changes-lead'))] })
+    await reads.read(T, LEAD)
+    await expect(reads.read(T, LEAD)).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE', status: 503 })
+    expect(conversations((await reads.read(T, LEAD)).state)).toHaveLength(3)
+    expect(paths(call)).toEqual([FIRST, CHANGES(), CHANGES()])
+  })
+
   it('reads as the person without an agent, and keeps each reader\'s view apart', async () => {
     const person = `/api/super-tabs/${T}/parts`
     const { call, reads } = backendOf({ [person]: [ok(readFixture('parts-builder'))], [FIRST]: [ok(readFixture('parts-lead'))] })

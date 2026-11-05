@@ -123,12 +123,16 @@ final class PushChannel {
         result(self.waiting)
         self.waiting.removeAll()
       case "shown":
-        // The keys of our pushes still in the notification centre: the app does not post them again
-        // (Dart: `PushChannel.shown`). The server keys a push as the app keys its own notice.
+        // The keys of our pushes still in the notification centre, and the slots they show in: the
+        // app does not post them again (Dart: `PushChannel.shown`). The server keys a push as the app
+        // keys its own notice, and a thread's replies share one slot (task #3248).
         UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
           let keys = delivered
             .filter { $0.request.trigger is UNPushNotificationTrigger }
-            .compactMap { $0.request.content.userInfo["key"] as? String }
+            .flatMap { shown -> [String] in
+              let info = shown.request.content.userInfo
+              return [info["key"], info["slot"]].compactMap { $0 as? String }
+            }
           DispatchQueue.main.async { result(keys) }
         }
       default:

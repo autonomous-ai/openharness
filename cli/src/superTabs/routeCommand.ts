@@ -419,11 +419,22 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is that Mac, under its name. A
   // teammate's project starts only in the team account and the Mac's owner's own projects only with the owner, so only one
   // of the two offers new agents here, and the other is not listed as unfit; agents already on either stay members.
+  // Not when the Mac's owner runs teammates' work in their own account (backend machines.ts ownAccountWork, task #3060): a
+  // teammate's work no Team agent wrote starts on the Mac, and the server refuses a start naming the Team account there.
+  // Work a Team agent wrote stays in the Team account (backend teamWritten.ts teamWrittenTask): a step reads its task's mark,
+  // an unknown task counts as written, and so does a task from before the mark whose assignee runs in a Team account.
+  const task = group.reviewOf ? conversations.find(c => c.id === group.reviewOf) : group
+  const assignee = task ? agents.find(a => a.id === object(task.assignment).agentId) : undefined
+  const onTeam = (agent: Json) => agent.teamAccount === true || list(state.machines).some(m => m.machineId === agent.machineId
+    && (typeof m.hostMachineId === 'string' || object(m.observation).sessionKind === 'team'))
+  const teamWritten = group.teamWritten === true || !task || task.teamWritten === true || (!!assignee && onTeam(assignee))
   for (const [team, mac] of macOf) {
     const pool = machines.get(team)?.pool
     if (!pool || !machines.has(mac)) continue
-    // A teammate's task needing only what the owner shared stays on the Mac (backend teamMachineFor): its Team account folds.
-    const onMac = projectOwner === pool.contributorId || (taskNamed && sharedOwnAccess(list(state.machines).find(m => m.machineId === mac), needed))
+    // Its owner runs teammates' work no Team agent wrote in their own account (#3060), or a teammate's task needs only what
+    // the owner shared (backend teamMachineFor): either stays on the Mac, and its Team account folds.
+    const ownAccount = typeof machines.get(mac)!.pool?.ownAccount === 'string' && !teamWritten
+    const onMac = projectOwner === pool.contributorId || ownAccount || (taskNamed && sharedOwnAccess(list(state.machines).find(m => m.machineId === mac), needed))
     machines.get(onMac ? team : mac)!.folded = true
   }
   // Every row of the catalog is probed: one not offered by default is offered when a person names it (route.ts choose).
