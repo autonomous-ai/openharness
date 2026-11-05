@@ -33,7 +33,7 @@ describe('reviewPlan', () => {
   it('gives each sensitive area of the table two security reviews', () => {
     for (const file of ['cli/src/lib/loginPage.ts', 'backend/src/github/holds.ts', 'cli/src/lib/e2ee/core.ts', 'backend/src/superTabs/machineAccess.ts',
       'cli/src/lib/buddyGuard.ts', 'cli/src/device/deviceLink.ts', 'backend/src/superTabs/purge.ts', 'cli/src/lib/worktreeDeletion.ts']) {
-      expect(names([file]), file).toEqual(['Security review 1', 'Security review 2'])
+      expect(reviewPlan([file]).filter(step => step.kind !== 'test').map(step => step.name), file).toEqual(['Security review 1', 'Security review 2'])
     }
   })
 
