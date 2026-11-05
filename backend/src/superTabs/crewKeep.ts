@@ -196,8 +196,8 @@ export function crewMoveRequest(state: SuperTabState, agent: Agent, pool: Contri
 }
 
 /** The note the moved member reads first (the host shows it in its start row): why it moved, and that its task was handed back. */
-function handoffNote(state: SuperTabState, agent: Agent, reason: CrewTrouble, to: ContributedMachine): string {
-  const task = heldTasks(state, agent, Date.now())[0]
+function handoffNote(state: SuperTabState, agent: Agent, reason: CrewTrouble, to: ContributedMachine, now: number): string {
+  const task = heldTasks(state, agent, now)[0]
   const pr = task?.pullRequestUrls?.at(-1)
   return [`You are ${nameOf(agent)}, moved from ${machineName(state, agent.machineId)} to ${to.name} because ${troubleText(state, agent, reason)}.`,
     'This folder is new: fetch your branch before you go on.',
@@ -245,7 +245,7 @@ export function applyCrewKeep(state: SuperTabState, now: number, deps: CrewDeps)
       const start: AgentStart = { poolGeneration: pool.generation, id, creationId: `super-${id}`,
         actorKey: actorKey({ kind: 'person', userId: contributor.id, email: contributor.email }), contributorId: contributor.id,
         membershipGeneration: contributor.generation, machineOwnerId: pool.contributorId, hostGrant: null,
-        request: { ...request, handoffNote: handoffNote(state, agent, action.reason, pool) }, harnessId: null, dispatched: false, error: null, requestedAt: now }
+        request: { ...request, handoffNote: handoffNote(state, agent, action.reason, pool, now) }, harnessId: null, dispatched: false, error: null, requestedAt: now }
       state.starts.push(start)
       // At the head of the list now, before the old session's loss of it (offline, or its host closing it) can come first.
       for (const group of heldTasks(state, agent, now)) toHead(state, group)
