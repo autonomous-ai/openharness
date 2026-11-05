@@ -159,8 +159,31 @@ pub fn user_sid() -> io::Result<String> {
     }
 }
 
-/// The security descriptor `D:P(A;;GA;;;<user SID>)`: a protected DACL that lets the user, and
-/// nobody else, do anything. (`for_directory` adds `OICI`: what is made inside inherits it.)
+/// The SID the owner of a guest host is, when a host runs in another OS account: that account must read the
+/// discovery token and connect to the pipe. The guest host's task sets it; every other host leaves it unset.
+fn shared_sid() -> Option<String> {
+    let sid = std::env::var("HARNESS_PTY_SHARE_SID").ok()?;
+    let bytes = sid.as_bytes();
+    let well_formed = bytes.len() <= 184 && sid.starts_with("S-1-")
+        && bytes.iter().all(|b| b.is_ascii_digit() || *b == b'-' || *b == b'S');
+    if well_formed { Some(sid) } else {
+        log::warn!("HARNESS_PTY_SHARE_SID is not a SID; the host stays private to its account");
+        None
+    }
+}
+
+/// `D:P(A;;GA;;;<user>)` and, for a guest host, the owner's SID too. A directory's entries inherit both.
+fn sddl(directory: bool) -> io::Result<String> {
+    let flags = if directory { "OICI" } else { "" };
+    let mut text = format!("D:P(A;{flags};GA;;;{})", user_sid()?);
+    if let Some(share) = shared_sid() {
+        text.push_str(&format!("(A;{flags};GA;;;{share})"));
+    }
+    Ok(text)
+}
+
+/// The security descriptor: a protected DACL that lets the user, and nobody else but a guest host's owner,
+/// do anything. (`for_directory` adds `OICI`: what is made inside inherits it.)
 pub struct OwnerOnly(PSECURITY_DESCRIPTOR);
 
 // The descriptor is immutable once made, and freed only on drop.
@@ -169,12 +192,12 @@ unsafe impl Sync for OwnerOnly {}
 
 impl OwnerOnly {
     pub fn new() -> io::Result<OwnerOnly> {
-        OwnerOnly::from_sddl(&format!("D:P(A;;GA;;;{})", user_sid()?))
+        OwnerOnly::from_sddl(&sddl(false)?)
     }
 
     /// For a directory: the same entry, inherited by the files and directories made in it.
     pub fn for_directory() -> io::Result<OwnerOnly> {
-        OwnerOnly::from_sddl(&format!("D:P(A;OICI;GA;;;{})", user_sid()?))
+        OwnerOnly::from_sddl(&sddl(true)?)
     }
 
     fn from_sddl(sddl: &str) -> io::Result<OwnerOnly> {
