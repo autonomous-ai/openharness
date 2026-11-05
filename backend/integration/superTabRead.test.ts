@@ -27,6 +27,7 @@ import { sendsEmptyIn, watched, type Query } from '../src/lib/queryRecorder.test
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
+import { profiledReads } from './profiledReads.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -1116,6 +1117,20 @@ describe('decisions asked of one person (v2)', () => {
     expect(expired.mentionsWaiting).toBe(0)
     expect(expired.mentionsDigest).not.toBe(replaced.mentionsDigest)
     expect((await derived(owner)).derived.mentionsDigest).toBe(expired.mentionsDigest)
+  })
+
+  it('reads waiting tags once in a changes poll while keeping its count and digest', async () => {
+    const s = await scene()
+    clock = NOW
+    await db.superTabMention.create({ data: { id: `${s.tabId}-quiet-tag`, tabId: s.tabId, personId: peer.sub, projectId: 'lead',
+      conversationId: s.done, messageId: `${s.tabId}-quiet-message`, authorAgentId: s.lead, createdAt: new Date(NOW - 1_000), resolvedAt: null, resolvedBy: null } })
+    const before = await get(`/api/super-tabs/${s.tabId}/parts`, peer)
+    expect(before.body.data.derived).toMatchObject({ mentionsWaiting: 1 })
+
+    const measured = await profiledReads(db, /\.SuperTabMention$/, () => get(`/api/super-tabs/${s.tabId}/changes?cursor=${before.body.data.cursor}`, peer))
+    expect(measured.value.status).toBe(200)
+    expect(measured.value.body.data.derived).toMatchObject({ mentionsWaiting: 1, mentionsDigest: before.body.data.derived.mentionsDigest })
+    expect(measured.reads).toBe(1)
   })
 
   it('counts every open decision the reader can open, past 200, reading only which ones and where', async () => {
