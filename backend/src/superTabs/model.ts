@@ -746,6 +746,8 @@ export interface CommandEffects {
   result: Record<string, unknown>
   /** `message.edit`'s new text, credentials removed (commands.ts WORDS): what the store writes into the row. */
   messageEdit?: { messageId: string; text: string }
+  /** An agent's reaction settles that agent's own deliveries of the message it reacted to, as an answer does (reactions.ts; the store closes the rows). */
+  settles?: { messageId: string; agentId: string }
   /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
   terminal?: import('./terminal.js').TerminalEffect
   /** A Buddy's proposal closed by hand, written into the open proposals by the store (proposals.ts closeProposal). */
