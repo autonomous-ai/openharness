@@ -2650,9 +2650,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       recordCardMerged(group, pullRequestUrl, mergedAt)
       // A merged task whose builder is gone closes itself with the merge as its result (task #3510): a released builder can
       // no longer set its own Done, and the task would stay in review for good. A live builder still closes its own task, and
-      // a step never closes here, nor its parent through it.
+      // a step never closes here, nor its parent through it. Only a pull request the task already had closes it: a merge of an
+      // unrelated one recorded here is a link, not the task's own work (Aster, review of #3259).
       const assignment = group.assignment
-      if (!isStep(group) && assignment && !['done', 'cancelled'].includes(assignment.status) && builderGone(state, assignment)) {
+      if (linked && !isStep(group) && assignment && !['done', 'cancelled'].includes(assignment.status) && builderGone(state, assignment)) {
         const previous = assignment.status
         assignment.status = 'done'
         assignment.result = `Merged ${pullRequestUrl}. Its builder is no longer running, so the recorded merge closes the task.`
