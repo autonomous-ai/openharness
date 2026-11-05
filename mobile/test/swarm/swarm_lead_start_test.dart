@@ -101,6 +101,71 @@ void main() {
     );
   });
 
+  group('with nothing picked, the plan picks what Desktop\'s card picks '
+      '(task #3042)', () {
+    final earlier = DateTime.utc(2026, 11, 5, 8);
+    final later = DateTime.utc(2026, 11, 5, 9);
+    final latest = DateTime.utc(2026, 11, 5, 10);
+
+    test('the repo\'s folder on the computer used last among those that '
+        'hold it, as Desktop prefers this computer\'s', () async {
+      await open();
+      computers.leadComputers = [
+        computer(
+          'mac-1',
+          'Studio',
+          folders: {repo: '/Users/me/games'},
+          lastUsed: earlier,
+        ),
+        computer('mac-2', 'Air', lastUsed: latest),
+        computer(
+          'mac-3',
+          'Mini',
+          folders: {repo: '/Users/me/src/games'},
+          lastUsed: later,
+        ),
+      ];
+      expect(swarmLeadPlan(reader, computers, personalChat), (
+        machineId: 'mac-3',
+        engine: 'claude',
+        folder: '/Users/me/src/games',
+      ));
+    });
+
+    test('with the repo on none, the computer used last, in a new '
+        'folder', () async {
+      await open();
+      computers.leadComputers = [
+        computer('mac-1', 'Studio', lastUsed: earlier),
+        computer('mac-2', 'Air', lastUsed: later),
+        computer('mac-3', 'Mini'),
+      ];
+      expect(swarmLeadPlan(reader, computers, personalChat), (
+        machineId: 'mac-2',
+        engine: 'claude',
+        folder: null,
+      ));
+    });
+
+    test('a pick still overrides it', () async {
+      await open();
+      computers.leadComputers = [
+        computer('mac-1', 'Studio', lastUsed: earlier),
+        computer('mac-2', 'Air', lastUsed: later),
+      ];
+      expect(
+        swarmLeadPlan(
+          reader,
+          computers,
+          personalChat,
+          machineId: 'mac-1',
+          engine: 'codex',
+        ),
+        (machineId: 'mac-1', engine: 'codex', folder: null),
+      );
+    });
+  });
+
   test('the plan says why there is nothing to start on', () async {
     await open();
     computers.leadComputers = [];

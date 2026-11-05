@@ -298,19 +298,38 @@ void main() {
     expect(find.text('Air'), findsNothing);
   });
 
-  testWidgets('no computer online says why and offers no Start', (
-    tester,
-  ) async {
+  testWidgets('no computer online: the button says to open Harness on '
+      'their Mac, and starts nothing (task #3042)', (tester) async {
     await pump(tester);
     lead.leadComputers = [];
     // The card reads the computers as it draws.
     (host.computers! as ChangeNotifier).notifyListeners();
     await tester.pumpAndSettle();
+    expect(key('swarm-lead-start-button'), findsNothing);
+    final offline = key('swarm-lead-start-offline');
     expect(
-      find.text('Can’t start a Lead: none of your computers is online'),
+      find.descendant(
+        of: offline,
+        matching: find.text('Open Harness on your Mac to start'),
+      ),
       findsOneWidget,
     );
-    expect(key('swarm-lead-start-button'), findsNothing);
+    expect(
+      find.textContaining('none of your computers is online'),
+      findsNothing,
+    );
+    await tester.tap(offline);
+    await tester.pumpAndSettle();
+    expect(sent(), isEmpty);
+    expect(lead.starts, isEmpty);
+    // Once a computer is on, the card offers its start again.
+    lead.leadComputers = [
+      computer('mac-1', 'Studio', folders: {repo: '/Users/me/games'}),
+    ];
+    (host.computers! as ChangeNotifier).notifyListeners();
+    await tester.pumpAndSettle();
+    expect(key('swarm-lead-start-button'), findsOneWidget);
+    expect(offline, findsNothing);
   });
 
   testWidgets('a Team Swarm\'s project chat shows no card', (tester) async {

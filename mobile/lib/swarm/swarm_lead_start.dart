@@ -17,13 +17,15 @@ const swarmPersonalName = 'Personal';
 const swarmLeadStartWindow = Duration(minutes: 10);
 
 /// One of the person's own computers a Lead can start on: its name, the
-/// engines signed in there (Claude Code first), and the folder of each repo
-/// its agents work in, by remote ([swarmNormalizedRemote]).
+/// engines signed in there (Claude Code first), the folder of each repo its
+/// agents work in, by remote ([swarmNormalizedRemote]), and when the person
+/// last opened one of its agents, from any app ([lastUsed]; null if never).
 typedef SwarmLeadComputer = ({
   String id,
   String name,
   List<String> engines,
   Map<String, String> folders,
+  DateTime? lastUsed,
 });
 
 /// What the computer is asked to start: the Lead's engine, the repo's folder

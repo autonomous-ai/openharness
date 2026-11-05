@@ -51,7 +51,14 @@ SwarmLeadComputer computer(
   String name, {
   List<String> engines = const ['claude', 'codex'],
   Map<String, String> folders = const {},
-}) => (id: id, name: name, engines: engines, folders: folders);
+  DateTime? lastUsed,
+}) => (
+  id: id,
+  name: name,
+  engines: engines,
+  folders: folders,
+  lastUsed: lastUsed,
+);
 
 /// A Swarm read with one project whose chat has [leadId] as its Lead, or none.
 Map<String, dynamic> personalLoad({

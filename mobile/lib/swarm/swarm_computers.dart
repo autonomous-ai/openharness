@@ -119,6 +119,7 @@ class AppSwarmComputers extends ChangeNotifier
                 ?swarmNormalizedRemote(project.remote):
                     project.root ?? project.cwd,
           },
+          lastUsed: null,
         ),
   ];
 
