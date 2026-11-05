@@ -1472,16 +1472,11 @@ class SuperTabMessage {
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
 
-  /// The project and revision an instructions save's chat line names, which
-  /// its "See revision" link opens (#3021); null for any other row.
-  ({String projectId, int revision})? get instructionsSave =>
-      switch ((source['kind'], source['projectId'], source['revision'])) {
-        ('instructions', final String projectId, final num revision) => (
-          projectId: projectId,
-          revision: revision.toInt(),
-        ),
-        _ => null,
-      };
+  /// A line the backend posted for an instructions save: no chat row and
+  /// nothing unread, since it gives a person nothing to do (Dee 11-05, task
+  /// #3165). The backend posts none since #3132; the History keeps every
+  /// revision.
+  bool get instructionsSave => source['kind'] == 'instructions';
 
   /// A task's root the server posted in its person's name (plain chat, #2294):
   /// theirs to read, not their own writing, so it reads nothing before it and
