@@ -1,5 +1,11 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:ui' as ui;
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:harness/shared/theme/color_palette.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -14,6 +20,48 @@ import 'support/super_tab_fixture.dart';
 /// an edit shows "(edited)", a delete with replies leaves "This message was
 /// deleted." and one without replies goes.
 void main() {
+  setUpAll(() async {
+    if (Platform.environment['BUDDY_DELETE_SHOTS'] == null) return;
+    final sf = ByteData.sublistView(
+      await File('/System/Library/Fonts/SFNS.ttf').readAsBytes(),
+    );
+    for (final family in {
+      '.AppleSystemUIFont',
+      'Roboto',
+      AppFont.sans,
+      ...AppFont.sansFallback,
+    }) {
+      await (FontLoader(family)..addFont(Future.value(sf))).load();
+    }
+    final manifest =
+        jsonDecode(await rootBundle.loadString('FontManifest.json')) as List;
+    for (final entry in manifest.cast<Map>()) {
+      final loader = FontLoader(entry['family'] as String);
+      for (final font in (entry['fonts'] as List).cast<Map>()) {
+        loader.addFont(rootBundle.load(font['asset'] as String));
+      }
+      await loader.load();
+    }
+  });
+
+  final picture = GlobalKey();
+  var brightness = Brightness.dark;
+
+  Future<void> shot(WidgetTester tester, String platform) async {
+    final folder = Platform.environment['BUDDY_DELETE_SHOTS'];
+    if (folder == null) return;
+    await tester.runAsync(() async {
+      final boundary =
+          picture.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+      final image = await boundary.toImage(pixelRatio: 1.5);
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      await Directory(folder).create(recursive: true);
+      await File('$folder/$platform-buddy-delete-${brightness.name}.png')
+          .writeAsBytes(bytes!.buffer.asUint8List());
+      image.dispose();
+    });
+  }
+
   late SuperTabController c;
 
   Future<void> show(
@@ -27,7 +75,9 @@ void main() {
     await c.refresh();
     await tester.pumpWidget(
       MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        theme: grid.buildAppTheme(brightness: brightness),
+        builder: (context, child) =>
+            RepaintBoundary(key: picture, child: child),
         home: Scaffold(
           body: SuperTabView(
             controller: c,
@@ -117,17 +167,26 @@ void main() {
     );
   });
 
-  testWidgets('your Buddy proposal offers Delete without Edit', (tester) async {
-    final server = ConversationServer()..append('Please fix the menu');
-    server.messages.single['source'] = {
-      'kind': 'buddy-proposal',
-      'personId': 'owner',
-    };
-    await show(tester, server);
-    await openMore(tester, 'message-1');
-    expect(find.text('Delete message'), findsOneWidget);
-    expect(find.text('Edit message'), findsNothing);
-  });
+  for (final appearance in Brightness.values) {
+    testWidgets(
+      'your Buddy proposal offers Delete without Edit (${appearance.name})',
+      (tester) async {
+        brightness = appearance;
+        grid.AppTheme.brightness.value = appearance;
+        addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
+        final server = ConversationServer()..append('Please fix the menu');
+        server.messages.single['source'] = {
+          'kind': 'buddy-proposal',
+          'personId': 'owner',
+        };
+        await show(tester, server);
+        await openMore(tester, 'message-1');
+        expect(find.text('Delete message'), findsOneWidget);
+        expect(find.text('Edit message'), findsNothing);
+        await shot(tester, 'desktop');
+      },
+    );
+  }
 
   for (final entry in <String, Map<String, dynamic>>{
     'another person': {'kind': 'person', 'id': 'huy', 'name': 'Huy'},

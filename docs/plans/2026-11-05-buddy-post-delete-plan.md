@@ -52,6 +52,6 @@ No new storage, synchronization, identity, query or migration. Growth, concurren
 
 ## Validation and handoff
 
-- [ ] Run affected Desktop profile/message tests and phone message edit tests with Flutter 3.47.2/Dart 3.13.2; run `desktop/scripts/check-ui-style.sh`.
+- [ ] Run affected Desktop profile/message tests and phone message edit tests with Flutter 3.47.2/Dart 3.13.2; run `python3 scripts/check-ui-style.py`.
 - [ ] Capture light/dark menus in both apps with in-memory/fake sign-in fixtures.
 - [ ] Add red/green evidence to PR comment, mark Ready and hand off to Integrator for shared security reviews and independent UI testing. CI supplies touched component suites.
