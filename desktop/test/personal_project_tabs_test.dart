@@ -7,13 +7,16 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/launch.dart';
 import 'package:harness/super_tabs/personal_projects.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
 
-import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import 'super_tab_launch_test.dart'
+    show SuperTabLaunchFixture, tabId, withCoordinator;
 
 /// The desk's id rule (backend `lib/desk.ts`).
 final _deskId = RegExp(r'^[A-Za-z0-9_-]{1,64}$');
@@ -112,6 +115,38 @@ Future<({SuperTabController c, String project, String chat})> _withApi(
   return (c: c, project: api.id, chat: api.leadConversationId);
 }
 
+/// New Harness from the chat [chat] of the Swarm on screen, as its project's
+/// "add agent" opens it.
+Future<NewHarnessController> _boxIn(
+  SuperTabLaunchFixture f,
+  String chat,
+) async {
+  final integration = await SuperTabLaunch.open(f.app, f.app.activeSwarm, chat);
+  final box = NewHarnessController(
+    f.app,
+    machineId: 'm',
+    engine: 'codex',
+    folder: '/work/project',
+    task: 'Fix the login page.',
+    integration: integration,
+  );
+  addTearDown(box.dispose);
+  await Future<void>.delayed(Duration.zero);
+  return box;
+}
+
+/// Ordinary tabs until the desk holds [count] (the desk's tabs: every
+/// harness tab that is not a draft).
+void _fillDesk(SuperTabLaunchFixture f, int count) {
+  var i = 0;
+  while (f.app.deskTabCount < count) {
+    _tab(f.app, 'desk-fill-${i++}', []);
+  }
+}
+
+bool _started(SuperTabLaunchFixture f) =>
+    f.connection.calls.any((c) => c.$1 == 'agent_create');
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -188,6 +223,138 @@ void main() {
         ),
       );
       expect(PersonalProjects.of(f.app).projectOfTab(api.c, stray), isNull);
+    });
+  });
+
+  group('a full desk', () {
+    test('refuses a start from a Personal project before any agent runs, '
+        'and lets it go once a tab is closed', () async {
+      final f = SuperTabLaunchFixture();
+      final api = await _withApi(f);
+      _fillDesk(f, 24);
+      final box = await _boxIn(f, api.chat);
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(box.error, kTabsFullMessage);
+      expect(
+        kTabsFullMessage,
+        'Your tabs are full (24). Close a tab to start another agent.',
+      );
+      expect(_started(f), isFalse);
+      expect(f.connection.joins, isEmpty);
+      f.app.swarms.removeWhere((s) => s.id == 'desk-fill-0');
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(_started(f), isTrue);
+    });
+
+    test('takes the start when the project\'s tab still has room', () async {
+      final f = SuperTabLaunchFixture();
+      final api = await _withApi(f);
+      _tab(f.app, personalProjectTabId(api.project), [
+        for (var i = 0; i < 8; i++) _pane('m', 'old-$i'),
+      ], name: 'api');
+      _fillDesk(f, 24);
+      final box = await _boxIn(f, api.chat);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    });
+
+    test('refuses a new Personal project at 24 tabs, and never refuses in '
+        'another Swarm', () async {
+      final f = SuperTabLaunchFixture();
+      await _withApi(f);
+      _fillDesk(f, 24);
+      final integration = await SuperTabLaunch.open(
+        f.app,
+        f.app.activeSwarm,
+        'new-project',
+        newProject: true,
+      );
+      final box = NewHarnessController(
+        f.app,
+        machineId: 'm',
+        engine: 'codex',
+        folder: '/work/project',
+        task: 'A new thing.',
+        integration: integration,
+      );
+      addTearDown(box.dispose);
+      await Future<void>.delayed(Duration.zero);
+      if (integration.leadMachines?.any((m) => m.id == 'm' && m.startable) ??
+          false) {
+        box.chooseLeadMachine('m');
+      }
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(box.error, kTabsFullMessage);
+      expect(
+        _commands(f).where((p) => p['operationId'] != 'make-api'),
+        isEmpty,
+      );
+
+      final team = SuperTabLaunchFixture();
+      withCoordinator(team);
+      team.app.bindSuperTab(team.app.activeSwarmId, tabId, 'Company');
+      _fillDesk(team, 24);
+      final other = await team.box();
+      expect(
+        await other.create(),
+        NewHarnessOutcome.created,
+        reason: other.error,
+      );
+    });
+  });
+
+  group('a start from a Personal project', () {
+    test('lands in the project\'s own tab, named after it, on the desk, '
+        'without leaving the tab on screen', () async {
+      final f = SuperTabLaunchFixture();
+      final api = await _withApi(f);
+      final shown = f.app.activeSwarmId;
+      final box = await _boxIn(f, api.chat);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      await Future<void>.delayed(Duration.zero);
+      final tab = f.app.swarms
+          .where((s) => s.id == personalProjectTabId(api.project))
+          .single;
+      expect(tab.name, 'api');
+      expect(tab.nameIsCustom, isFalse);
+      expect(tab.kind, 'harness');
+      expect(f.app.isDraftSwarm(tab.id), isFalse);
+      expect(tab.panes.map((p) => (p.machineId, p.agentId)), [
+        ('m', 'native-lead'),
+      ]);
+      expect(f.app.activeSwarmId, shown);
+    });
+
+    test('goes to a second tab, "api 2", once the first holds 9', () async {
+      final f = SuperTabLaunchFixture();
+      final api = await _withApi(f);
+      final first = _tab(f.app, personalProjectTabId(api.project), [
+        for (var i = 0; i < 9; i++) _pane('m', 'old-$i'),
+      ], name: 'api');
+      final box = await _boxIn(f, api.chat);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      await Future<void>.delayed(Duration.zero);
+      expect(first.panes, hasLength(9));
+      final second = f.app.swarms
+          .where((s) => s.id == personalProjectTabId(api.project, 2))
+          .single;
+      expect(second.name, 'api 2');
+      expect(second.panes.map((p) => (p.machineId, p.agentId)), [
+        ('m', 'native-lead'),
+      ]);
+    });
+
+    test('in another Swarm makes no project tab', () async {
+      final f = SuperTabLaunchFixture();
+      withCoordinator(f);
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final tabs = f.app.swarms.length;
+      final box = await f.box();
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(
+        f.app.swarms.where((s) => personalProjectTabParts(s.id) != null),
+        isEmpty,
+      );
+      expect(f.app.swarms.length, tabs);
     });
   });
 }
