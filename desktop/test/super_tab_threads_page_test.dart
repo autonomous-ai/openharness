@@ -79,7 +79,17 @@ Map<String, dynamic> _readOnly(String root, DateTime at) =>
 Future<SuperTabActivity> _loaded(
   WidgetTester tester,
   ConversationServer server,
-) async => (await tester.runAsync(() => load(server)))!;
+) async {
+  final activity = (await tester.runAsync(() => load(server)))!;
+  // A card marks its thread read in the test's clock, and the save after it
+  // waits on that clock: it finishes there, before load's tear-down flushes.
+  addTearDown(() async {
+    final saved = activity.controller.flush();
+    await tester.pump(const Duration(milliseconds: 300));
+    await saved;
+  });
+  return activity;
+}
 
 /// Lets the server's answers arrive, then draws them.
 Future<void> _settle(WidgetTester tester) async {
@@ -205,7 +215,10 @@ void main() {
       final line = _key('super-thread-card-new:lead/$id');
       expect(line, findsOneWidget);
       expect(inCard(find.text('New')), findsOneWidget);
-      expect(_top(tester, inCard(find.text(root))), lessThan(_top(tester, line)));
+      expect(
+        _top(tester, inCard(find.text(root))),
+        lessThan(_top(tester, line)),
+      );
       expect(_top(tester, line), lessThan(_top(tester, fifth)));
     });
   });
@@ -464,7 +477,10 @@ void main() {
     final server = swarm();
     final fifty = [
       for (var i = 0; i < 50; i++)
-        _readOnly('read-$i', DateTime(2026, 11, 4).subtract(Duration(minutes: i))),
+        _readOnly(
+          'read-$i',
+          DateTime(2026, 11, 4).subtract(Duration(minutes: i)),
+        ),
     ];
     server.followedThreads = {'unread': [], 'read': fifty, 'more': true};
     final list = find.descendant(
