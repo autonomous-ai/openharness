@@ -174,7 +174,60 @@ void main() {
       hasLength(1),
       reason: "the server's mark, which Desktop's row reads",
     );
+
+    // A whole changed group and an older server mark must not undo the
+    // phone's read while that write is still reaching other devices.
+    await poll(
+      r,
+      version: 21,
+      groups: [lead(main: 9, person: 4)],
+      readMarks: {leadChat: 4},
+    );
+    expect(bold(r), isFalse);
   });
+
+  test(
+    'whole changed groups retain the person counter after a remote read',
+    () async {
+      final r = await rig(readMarks: {leadChat: 4});
+      await poll(r, version: 20, groups: [lead(main: 9, person: 7)]);
+      expect(bold(r), isTrue);
+
+      // The server returns changed groups whole, including the latest agent
+      // message, together with Desktop's read through the person's message.
+      await poll(
+        r,
+        version: 21,
+        groups: [lead(main: 10, person: 7)],
+        readMarks: {leadChat: 7},
+      );
+      expect(bold(r), isFalse);
+
+      // Opening that same point sends nothing: it is already read on the
+      // server. The row must already be quiet (#2950).
+      r.reader.readMarks!.markRead(leadChat, 7);
+      await settle();
+      expect(bold(r), isFalse);
+      expect(r.swarm.calls.where((c) => c.method == 'POST'), isEmpty);
+    },
+  );
+
+  test(
+    'thread-only replies and tags do not make the project chat unread',
+    () async {
+      final r = await rig(
+        groups: [
+          {...lead(main: 4, person: 4), 'lastMessageSequence': 12},
+        ],
+        readMarks: {leadChat: 4},
+        tags: [
+          {...tag('thread-tag', leadChat, 12), 'threadId': 'thread-root'},
+        ],
+      );
+      expect(bold(r), isFalse);
+      expect(row(r)?.tags ?? 0, 0);
+    },
+  );
 
   test("an agent's post in the project chat does not bold it; a person's "
       'does', () async {
