@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HERMES_HOOK_SETTINGS } from '../hermes/contract.js'
 import { installNativeYamlHooks } from './nativeHookYaml.js'
 
@@ -34,6 +34,29 @@ function profileFirst(): void {
   gate.before = async files => { if (files[0] === join(home, 'config.yaml')) await profileDone }
   gate.after = files => { if (files[0] === join(profile, 'config.yaml')) done() }
 }
+
+describe('a large settings file', () => {
+  const rule = () => ({ ...HERMES_HOOK_SETTINGS, home })
+  const command = (at: string) => `node /fixture/notify.mjs --port 4242 --data-dir /fixture/data --hermes-home ${at} --engine hermes`
+  const lines = (count: number) => Array.from({ length: count }, (_, at) => `key_${at}: value # a note`).join('\n') + '\n'
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {}); vi.spyOn(console, 'error').mockImplementation(() => {})
+    writeFileSync(join(profile, 'config.yaml'), 'model: y\n')
+  })
+
+  it('takes the hooks when it is as long as Hermes\'s own, which held every Hermes agent', async () => {
+    writeFileSync(join(home, 'config.yaml'), lines(6_000))
+    expect(await installNativeYamlHooks(rule(), command)).toBe(true)
+    expect(readFileSync(join(home, 'config.yaml'), 'utf8')).toContain(`--hermes-home ${home}`)
+  })
+
+  it('still refuses one past the limit, and leaves it as it is', async () => {
+    const huge = lines(40_000)
+    writeFileSync(join(home, 'config.yaml'), huge)
+    expect(await installNativeYamlHooks(rule(), command)).toBe(false)
+    expect(readFileSync(join(home, 'config.yaml'), 'utf8')).toBe(huge)
+  })
+})
 
 it('says what each home did in the homes\' order, whichever home finishes first', async () => {
   const lines: string[] = []

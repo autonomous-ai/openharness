@@ -23,6 +23,8 @@ export interface RestoreTerminalsOptions {
   backendFor(runtime: TerminalRuntimeRef): TerminalBackend | undefined
   /** tmux's harness panes (`listTmuxPanes`). */
   listTmuxPanes(): Promise<{ ok: true; panes: ReadonlyArray<{ tmuxPane: string }> } | { ok: false }>
+  /** The backend a rebuilt pane opens on when [backend], the row's own, takes no new panes (a draining pty host); else null. */
+  newPanesOn?(backend: TerminalBackend): TerminalBackend | null
   /** Where a rebuilt pane opens (the home folder: the launch `cd`s into the row's own). */
   cwd: string
   /** What a rebuilt pane is called (`buildHarnessSessionLabel`). */
@@ -55,11 +57,14 @@ export function restoreTerminals(options: RestoreTerminalsOptions): RestoreTermi
   const lookup = async (runtime: TerminalRuntimeRef, engine: AgentEngine) => lookupPaneEngineProcess(backendOf(runtime), runtime, engine)
   const survey = () => terminalSurvey(listPanes, lookup)
   const restorable = (runtime: TerminalRuntimeRef): boolean => !!restoring(runtime)
-  /** The backend of the row's own runtime restore rebuilds (`restoreRuntimeOf`): a new pane opens there. */
+  /** The backend of the row's own runtime restore rebuilds (`restoreRuntimeOf`): a new pane opens there, unless that
+   *  one takes none any more (a draining host refuses them for good), when it opens where new panes go. */
   const placed = (entry: { runtimes: readonly TerminalRuntimeRef[] }): RestartableBackend => {
     const runtime = restoreRuntimeOf(entry, restorable)
     if (!runtime) throw new Error('no terminal backend restores this harness')
-    return backendOf(runtime)
+    const own = backendOf(runtime)
+    const instead = options.newPanesOn?.(own)
+    return instead && canRestart(instead) ? instead : own
   }
   return {
     restorable,

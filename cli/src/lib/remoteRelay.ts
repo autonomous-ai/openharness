@@ -34,7 +34,6 @@ import {
   type TerminalP2pData,
   type TerminalP2pPolicy,
 } from './terminalP2p.js'
-import { warmStunUrls } from './stunSelect.js'
 import { RemoteViewerProxy } from './remoteViewerProxy.js'
 import { VIEWER_UP_TYPES } from './viewerWire.js'
 import { isWrapped } from './e2ee/core.js'
@@ -664,21 +663,19 @@ export class RemoteRelayPool {
             if (frame.type === 'connected' && payload?.machineId === machineId) {
               selected = true
               entry.p2pPolicy = p2pPolicy(payload.p2p)
-              // Earliest instant the url list exists. startP2p() fires one round trip later on
-              // e2e_welcome, so the cache is usually still cold — what actually pays off is the
-              // in-flight dedupe: begin() joins THIS race instead of starting a second one, and its
-              // cost hides behind the welcome round trip. Nothing here is load-bearing for
-              // correctness; drop it and the only change is a slightly later first terminal.
-              // Unconditional, one line per machine select. Whether the backend actually handed us a
-              // TURN credential is invisible everywhere else — not in LOG_FRAMES (which only covers
-              // backendSocket, never this relay client), not in the badge, not in p2p_result — and its
-              // absence is indistinguishable from "TURN is configured but ICE preferred direct".
-              // Names only, never the credential itself.
+              // Names only, never the credential: whether the backend handed us a TURN credential
+              // is invisible everywhere else (not in LOG_FRAMES, which covers backendSocket, never
+              // this relay client; not in the badge; not in p2p_result).
+              //
+              // The policy is logged, never pre-warmed here. A STUN race opens UDP sockets bound
+              // to 0.0.0.0, and on Windows the firewall asks about that program the first time —
+              // for a computer the person only selected, not one they are watching. begin() races
+              // when a terminal actually negotiates, inside its 10s budget: the only cost is a
+              // slightly later first terminal, never correctness.
               if (entry.p2pPolicy && this.p2pEnabled) {
                 const p = entry.p2pPolicy
                 console.log(`[p2p] policy · machine=${sid(machineId)} stun=${p.stunUrls.length}`
                   + ` turn=${p.turn ? `${p.turn.urls.length} urls` : 'NONE'} openWait=${p.openWaitMs}ms`)
-                warmStunUrls(p.stunUrls)
               }
               try { ws.send(JSON.stringify(crypto.helloFrame())) } catch { /* the close handler below rejects */ }
               return

@@ -27,6 +27,12 @@ describe('SWARM_TOOLS_SKILL', () => {
   it('says an agent with work in the project posts in its chat without joining it', () => {
     expect(SWARM_TOOLS_SKILL).toContain('In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person\'s answer to its line reaches it; `--to` there adds no agent, so name only the coordinator.')
   })
+  // Task #3057 (Ken, 11-05): an assignee's "Confirmed: I have read the task" and progress notes in its own task still reached the PM.
+  it('says never to post an acknowledgement but react, status goes through work.status, name the PM only to act', () => {
+    const section = SWARM_TOOLS_SKILL.slice(SWARM_TOOLS_SKILL.indexOf('## Reactions'), SWARM_TOOLS_SKILL.indexOf('## Commands (JSON)'))
+    expect(section).toContain('Never post an acknowledgement ("on it", "took it", "confirmed", "thanks", "done"): react instead.')
+    expect(section).toContain('Your status goes through work.status and your results to whoever asked for the work; name the PM with --to only when you need it to act.')
+  })
   // Task #2963 (Ken, 2026-11-04): 402 of 437 agent posts in a day reached the PM as their only recipient; 1 named it.
   it('says a post reaches only who it names, a reply its author, an unnamed one in a task its assignee, and the coordinator by status', () => {
     const at = SWARM_TOOLS_SKILL.indexOf('### Who a post reaches')
@@ -84,6 +90,12 @@ describe('SWARM_TOOLS_SKILL', () => {
     expect(SWARM_TOOLS_SKILL).toContain('- \`mine\`:')
     expect(SWARM_TOOLS_SKILL).toContain('- \`task GROUP\`:')
     expect(SWARM_TOOLS_SKILL).toContain('messages GROUP --thread ROOT')
+  })
+  // Task #3117: the tools say how a task gets its priority and who changes it, as the help does.
+  it('says how a task gets its priority, what P0 to P3 mean, and who changes it', () => {
+    expect(SWARM_TOOLS_SKILL).toContain('- `mine`: what you work on, one line per task, P0 first: its number, priority, title,')
+    expect(SWARM_TOOLS_SKILL).toContain('`"priority":"P0|P1|P2|P3"` (P0 hotfix: something shipped is broken, loses data, or stops people\'s or agents\' work; P1 needed by users soon; P2 planned goal; P3 tools, docs or process; without one the task is P2)')
+    expect(SWARM_TOOLS_SKILL).toContain('- `{"type":"work.priority","conversationId":"GROUP","priority":"P0"}` changes a task\'s priority. Only a person or the project\'s coordinator may send it, and only they set P0.\n')
   })
   // River, 11-04 (task #2926): proposals answered before threads, or built without the task's link, closed by hand.
   it('says how to close a proposal with a reason, posting nothing', () => {

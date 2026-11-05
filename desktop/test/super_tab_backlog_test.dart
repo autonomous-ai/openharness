@@ -312,28 +312,29 @@ void main() {
     ]);
   });
 
-  // Task #2774 (Scholes's mockup): tasks carry no priority field; the badge
-  // reads the title's own marker, which the row then drops.
+  // Task #2774 (Scholes's mockup): a task from before the priority field
+  // reads the title's own marker, which the row then drops; URGENT is P0 and
+  // high is P1 (task #3117).
   test('a title\'s URGENT or "(Name, high)" marker is its priority badge', () {
     for (final (title, priority, shown) in [
       (
         'URGENT: agents\' GitHub tokens also carry workflows',
-        SuperTabTaskPriority.urgent,
+        SuperTabTaskPriority.p0,
         'Agents\' GitHub tokens also carry workflows',
       ),
       (
         'URGENT bug in #2608: the date pill crashes',
-        SuperTabTaskPriority.urgent,
+        SuperTabTaskPriority.p0,
         'Bug in #2608: the date pill crashes',
       ),
       (
         'Manage Backlog tab redesigned (Scholes, high)',
-        SuperTabTaskPriority.high,
+        SuperTabTaskPriority.p1,
         'Manage Backlog tab redesigned',
       ),
       (
         'Round dial fix (Huy, urgent)',
-        SuperTabTaskPriority.urgent,
+        SuperTabTaskPriority.p0,
         'Round dial fix',
       ),
       ('Thread tags (Dee, 2026-11-04)', null, 'Thread tags (Dee, 2026-11-04)'),
@@ -661,11 +662,11 @@ void main() {
         'shipped',
       ]);
       expect(summary(tester), (working: 1, review: 1, shipped: 1));
-      // Scholes's mockup (#2774): number and title; then agent, machine and
-      // state with a project chip; the pull request's chip and how long ago
-      // at the right.
+      // Scholes's mockup (#2774): number, priority (#3117) and title; then
+      // agent, machine and state with a project chip; the pull request's
+      // chip and how long ago at the right.
       final working = rowText(tester, 'working');
-      expect(working, contains('#11 | Sidebar task groups'));
+      expect(working, contains('#11 | P2 | Sidebar task groups'));
       expect(working, contains('Kestrel · Mac Studio · Working'));
       expect(working, contains('web-project'));
       expect(working, contains('PR 2733'));
@@ -872,11 +873,8 @@ void main() {
       conversations.firstWhere((g) => g['id'] == 'review')['title'] =
           'Thread reply bar (Scholes, high)';
       await show(tester, server);
-      expect(
-        rowText(tester, 'working'),
-        contains('URGENT | Sidebar task groups'),
-      );
-      expect(rowText(tester, 'review'), contains('HIGH | Thread reply bar'));
+      expect(rowText(tester, 'working'), contains('P0 | Sidebar task groups'));
+      expect(rowText(tester, 'review'), contains('P1 | Thread reply bar'));
       expect(rowText(tester, 'review'), isNot(contains('Scholes')));
     });
 

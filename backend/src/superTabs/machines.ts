@@ -1,3 +1,4 @@
+import { accessRefusal, sharedOwnAccess, taskAccess } from './machineAccess.js'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { engineUnusable } from './engineHealth.js'
@@ -5,7 +6,7 @@ import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
 import { startFinished } from './parts/write.js'
-import { agentProjectId, canReadAgent, canReadProject, groupProject, ledProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
+import { agentProjectId, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
 export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
@@ -55,6 +56,9 @@ export interface ContributedMachine {
    *  Manager candidate, serves no local models, and no reader sees it (model.ts visibleState). It goes with its last Buddy
    *  (commands.ts dropIdleBuddyMachines), or becomes an ordinary machine when its person adds it with Add machine. */
   buddyOnly?: true
+  /** Who had this computer's entry before the account signed in on it now (commands.ts machine.moved, #3122), and until when:
+   *  Machines says "Was kelvin until 5 Nov". Only the last one; gone with the entry. */
+  previousOwner?: { personId: string; until: string }
   /** Agent-time Swarm agents here spent on other people's tasks, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
   lent?: import('./leaderboard/lent.js').LentWeek[]
   /** The same by day, for the board's rolling periods. Only the leaderboard read gets it (model.ts visibleState). */
@@ -65,6 +69,10 @@ export interface ContributedMachine {
   /** The projects whose agents may run here, set by its owner (commands.ts machine.projects, Tony 11-03); absent: every
    *  project, as before. A Mac's Harness Team account keeps none of its own: it follows its Mac's (machineProjectRefusal). */
   projects?: string[]
+  /** What it can reach, by macOS account (machine.access, machineAccess.ts, task #3047): its own account's and its Harness
+   *  Team account's, both on the Mac's own entry; never on a Team account's. Kept when the contribution is saved again;
+   *  gone with the machine. At most MAX_ACCESS. */
+  access?: import('./machineAccess.js').AccessEntry[]
   /** Per engine, its failed starts here in a row, until one runs or they suspend it (engineHealth.ts). */
   engineFailures?: Record<string, number>
   /** Per engine, a suspension after failed starts: when, and whether its reading already said signed in with quota then. */
@@ -294,7 +302,7 @@ export function observedPrivacy(previous: StoredPrivacy | undefined, reported: M
 }
 
 export type TeamWorkCode = 'TEAM_WRITTEN_WORK' | 'MACHINE_OFFLINE' | 'TEAM_ACCOUNT_REQUIRED' | 'PRIVACY_UNCHECKED' | 'PRIVACY_CHECK_FAILED' | 'PRIVACY_CHECK_STALE'
-  | 'MACHINE_IN_OTHER_WORKSPACE' | 'NOT_SWARM_MACHINE' | 'MACHINE_PROJECTS'
+  | 'MACHINE_IN_OTHER_WORKSPACE' | 'NOT_SWARM_MACHINE' | 'MACHINE_PROJECTS' | 'ACCESS_MISSING' | 'TEAM_ACCOUNT_JOINING'
 export interface TeamWorkRefusal { code: TeamWorkCode; reason: string }
 /** Refusals that hold until a person acts on the machine; a stale check or an offline machine may pass again by itself. */
 export const LASTING_TEAM_REFUSALS: readonly string[] = ['TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED', 'MACHINE_IN_OTHER_WORKSPACE']
@@ -368,20 +376,25 @@ export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow =
  * row is signed in as a team account, read by the store.
  */
 export function teamWorkCheck(state: SuperTabState, machineId: string, contributorId: string, project: SwarmProject, now: number,
-  teamMachines: readonly string[] = [], otherWorkspaceMachines: readonly string[] = []): TeamWorkRefusal | null {
+  teamMachines: readonly string[] = [], otherWorkspaceMachines: readonly string[] = [],
+  /** What the task needs to reach (machineAccess.ts): own-account entries its owner shared let it run in their account. */
+  access: readonly string[] = []): TeamWorkRefusal | null {
   // Its owner kept it for other projects (machine.projects): whoever's project and grant it is.
   const kept = machineProjectRefusal(state, machineId, project)
   if (kept) return kept
   const pool = state.machines?.find(m => m.machineId === machineId)
   // A Buddy-only machine is its person's alone: an agent they added there takes their own projects' work and no other's,
   // whatever the Team account switches say (security re-check 1 of #2234). New starts there are refused in admitMachineStart.
-  if (pool?.buddyOnly) return project.ownerId === pool.contributorId ? null : { code: 'NOT_SWARM_MACHINE', reason: NOT_SWARM_MACHINE }
-  if (project.ownerId === contributorId) return null
+  if (pool?.buddyOnly) return ownsProject(state, pool.contributorId, project) ? null : { code: 'NOT_SWARM_MACHINE', reason: NOT_SWARM_MACHINE }
+  if (ownsProject(state, contributorId, project)) return null
   if (!pool) {
     // Off the Machines list nothing reports a team account (store.ts teamMachines), so this is the switch alone.
     if (!teamAccountRequired()) return null
     return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `This machine is not a Team machine of this Swarm, ${ONLY_OWN}.` }
   }
+  // Its owner shared what this task needs from their own account with teammates: the owner's choice, as ownAccountWork, for
+  // the tasks that need it only (design section 4).
+  if (sharedOwnAccess(pool, access)) return null
   return teamWorkRefusal(pool, now, teamMachines.includes(machineId), teamAccountRequired(), otherWorkspaceMachines.includes(machineId))
 }
 
@@ -449,12 +462,33 @@ export function teamPoolOf(state: SuperTabState, pool: ContributedMachine, live?
  * (2026-10-28). Any other machine, and a Mac without one, reads as itself.
  */
 export function machineTeamWork(state: SuperTabState, pool: ContributedMachine, now: number, teamMachines: readonly string[],
-  otherWorkspaceMachines: readonly string[] = []): TeamWorkRefusal | null {
+  otherWorkspaceMachines: readonly string[] = [], joiningTeams: readonly string[] = []): TeamWorkRefusal | null {
   // Its owner lets teammates' work run in their own account: starts stay on the Mac, so the Mac itself is what routing reads
   // (security review 2 of #2981).
   const team = !pool.hostMachineId && !ownAccountWork(pool) ? teamPoolOf(state, pool, teamMachines) : undefined
   const subject = team ?? pool
-  return teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(), otherWorkspaceMachines.includes(subject.machineId))
+  const refusal = teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(), otherWorkspaceMachines.includes(subject.machineId))
+  // Its owner's Team account is on it and joins on the Mac's next poll (read/hostRows.ts joinTeam): not "not set up" meanwhile,
+  // which offered Set up for those seconds (Scholes, 11-05).
+  if (refusal?.code === 'TEAM_ACCOUNT_REQUIRED' && !team && joiningTeams.includes(pool.machineId)) {
+    return { code: 'TEAM_ACCOUNT_JOINING', reason: `The Harness Team account on ${pool.name} is joining this Swarm, ${ONLY_OWN} until it has.` }
+  }
+  return refusal
+}
+
+/** A Harness Team machine of an account (its account row): the Mac it lives on. */
+export interface TeamMachineRow { machineId: string; userId: string; hostMachineId: string }
+
+/**
+ * The Macs of the Swarm whose owner has a Harness Team account on it that the Swarm does not list yet, and room for it: the
+ * ones its host adds on its next poll (read/hostRows.ts joinTeam), from [teams], those owners' Team machines. A Team account
+ * of another account names that account's own Mac, never this one (#3122).
+ */
+export function joiningTeamMacs(state: SuperTabState, teams: readonly TeamMachineRow[]): string[] {
+  const listed = (machineId: string) => state.machines?.some(m => m.machineId === machineId) || state.machineCleanups?.some(c => c.machineId === machineId)
+  return (state.machines ?? []).filter(mac => !mac.hostMachineId && !mac.removal && !mac.buddyOnly && mac.scope === 'swarm'
+    && teams.some(t => t.hostMachineId === mac.machineId && t.userId === mac.contributorId && !listed(t.machineId))
+    && machineRoom(state, mac.contributorId, { team: true }) > 0).map(mac => mac.machineId)
 }
 
 /** The projects with work on [machineId]: its agents' and its pending starts'. */
@@ -497,13 +531,15 @@ export const movedToTeamAccount = (pool: Pick<ContributedMachine, 'name'>, teamW
 /** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. Not when its owner lets teammates'
  *  work run in their own account there (ownAccountWork), unless a Team agent wrote the code. */
-export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false, live?: readonly string[], teamWritten = false): string {
+export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false, live?: readonly string[], teamWritten = false,
+  /** What the task needs to reach: a teammate's task needing only own-account entries its owner shared stays on the Mac. */
+  access: readonly string[] = []): string {
   // With no GitHub App on this server a team account cannot fetch or push, so the work stays on the Mac, as before.
   if (idle) return machineId
   const pool = state.machines?.find(m => m.machineId === machineId)
   // [teamWritten]: code a Team agent wrote takes the Team account even in its owner's own project (teamWritten.ts, audit H2).
-  if (!pool || (!teamWritten && project.ownerId === pool.contributorId)) return machineId
-  if (!teamWritten && ownAccountWork(pool)) return machineId
+  if (!pool || (!teamWritten && ownsProject(state, pool.contributorId, project))) return machineId
+  if (!teamWritten && (ownAccountWork(pool) || sharedOwnAccess(pool, access))) return machineId
   return teamPoolOf(state, pool, live)?.machineId ?? machineId
 }
 
@@ -531,6 +567,18 @@ export function projectFolder(pool: ContributedMachine, project: SwarmProject): 
   return pool.scope === 'swarm'
     ? project.repository?.machineId === pool.machineId ? project.repository.cwd : `${pool.cwd.replace(/\/+$/, '')}/${project.id}`
     : pool.cwd
+}
+
+/** [request] as [pool] can carry it out for [project]: a project whose folder is recorded without a repository address has
+ *  nothing to clone or branch from on any machine but the one that folder is on, so elsewhere it starts in the project's own
+ *  empty folder without a worktree (task #3211); its host makes that folder (cli superTabs/projectFolder.ts). A project with
+ *  no folder recorded yet is left alone: its first start records one. Any other start is unchanged. */
+export function noRepositoryStart(pool: ContributedMachine | undefined, project: SwarmProject | undefined, request: AgentStartRequest): AgentStartRequest {
+  const repository = project?.repository
+  if (!pool || pool.scope !== 'swarm' || !repository || repository.repositoryUrl || repository.machineId === pool.machineId) return request
+  if (!request.worktree && !request.branchRef) return request
+  const { branchRef: _branchRef, ...rest } = request
+  return { ...rest, worktree: false }
 }
 
 /** What a host reports (`capabilities`) when it runs a Swarm-wide Buddy in its folder of project worktrees (Dee, 10-31). */
@@ -564,8 +612,8 @@ export function buddyProjectsOn(state: SuperTabState, pool: ContributedMachine, 
  * stay with the owner's daemon, and a Mac without a team account here refuses it as before (teamWorkCheck).
  */
 export function teamStartRequest(state: SuperTabState, request: AgentStartRequest, project: SwarmProject, idle = false,
-  live?: readonly string[], teamWritten = false): AgentStartRequest {
-  const machineId = teamMachineFor(state, request.machineId, project, idle, live, teamWritten)
+  live?: readonly string[], teamWritten = false, access: readonly string[] = []): AgentStartRequest {
+  const machineId = teamMachineFor(state, request.machineId, project, idle, live, teamWritten, access)
   if (machineId === request.machineId) return request
   const pool = state.machines!.find(m => m.machineId === request.machineId)!, team = state.machines!.find(m => m.machineId === machineId)!
   return { ...request, machineId, cwd: request.cwd === projectFolder(pool, project) ? projectFolder(team, project) : request.cwd }
@@ -684,7 +732,7 @@ export function removalPreview(state: SuperTabState, actor: Actor, machineId: st
         ...(task ? { task: task.title } : {}) }
     }),
     hiddenAgentCount: members.length - visibleAgents.length,
-    // Their code is only on this machine: no other machine can start agents for them until someone shares a repository.
+    // Their code is only on this machine: agents elsewhere start in an empty folder until someone shares a repository (#3211).
     soleSourceProjects: visibleSoleSourceProjects.map(p => ({ id: p.id, name: p.name })),
     hiddenSoleSourceProjectCount: soleSourceProjects.length - visibleSoleSourceProjects.length,
   }
@@ -835,7 +883,12 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   // Before the request's own fields: a machine that takes none of this project's work says so first. A Buddy is its owner's
   // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it. Nor to
   // a Product Manager outside a Team account: any machine of the Swarm takes it (leadStart.ts, Ken 10-29).
-  if (!request.buddyOf && !(request.leadFor && !teamAccountPool(pool))) requireTeamWork(state, pool.machineId, pool.contributorId, project!, now, teamMachines, otherWorkspaceMachines)
+  // What the task needs to reach, checked here for every start whatever the route sent (an older CLI drops needs.access):
+  // a Buddy and a Product Manager need none (design section 3).
+  const needed = !request.buddyOf && !request.leadFor ? taskAccess(group) : []
+  if (!request.buddyOf && !(request.leadFor && !teamAccountPool(pool))) requireTeamWork(state, pool.machineId, pool.contributorId, project!, now, teamMachines, otherWorkspaceMachines, needed)
+  const missing = project ? accessRefusal(state, pool.machineId, project, needed) : null
+  if (missing) failTeamWork(missing)
   const cwd = project ? projectFolder(pool, project) : buddyHomeFolder(pool, { id: request.buddyOf!.personId })
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.

@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writ
 import { dirname, join, sep, win32 } from 'node:path'
 
 import { env } from '../config/env.js'
-import { gridAvailable, gridChildEnv, gridVersion, managedGridPath, meetsVersionFloor } from './gridExec.js'
+import { gridAvailable, gridChildEnv, gridCommand, gridVersion, managedGridPath, meetsVersionFloor } from './gridExec.js'
 import { installGrid } from './gridInstall.js'
 import { followWindowsGridPin } from './gridWindowsPin.js'
 import { managedNodePath } from './nodeRuntime.js'
@@ -347,7 +347,12 @@ export async function ensureManagedGrid(log: (message: string) => void = () => {
     followsPin: true,
     acceptsVersion: (version) => meetsVersionFloor(version),
     // A minute, not fifteen seconds: a onefile grid unpacks itself the first time it runs.
-    runs: (grid) => runs(grid, 60_000, gridChildEnv()),
+    // `gridCommand` steps past an unsigned launcher and runs the signed python it names, so this
+    // probe never asks Smart App Control to start the very file it would refuse (windows-rules.md §2).
+    runs: (grid) => {
+      const command = gridCommand(grid, ['--version'])
+      return finishesCleanly(command.file, command.args, 60_000, gridChildEnv())
+    },
     readOnly: true,
     log,
   })

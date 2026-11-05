@@ -295,6 +295,9 @@ model Machine {
 
   @@index([userId])
   @@index([userId, computerId])
+  /// A computer's rows of every account (superTabs/computerMoves.ts otherAccountsOnComputer): another account's sign-in there
+  /// moves the computer's Swarm entries to it (#3122).
+  @@index([computerId, userId])
   @@index([managerId, billingStatus])
   @@index([billingStatus, externalSubscriptionStatus, externalSubscriptionEndAt])
   @@map("machines")
@@ -1213,6 +1216,9 @@ model SuperTabActivity {
   @@index([tabId, personId, createdAt])
   /// One thread's or chat's rows of a person, for the read marks that clear them (activity.ts markActivityThreadRead).
   @@index([tabId, personId, conversationId, threadId])
+  /// A person's unread rows, newest first: the digest each of their reads asks for (activity.ts activityDigest). Through the
+  /// index above it examined every row of 30 days to find the unread (task #3146).
+  @@index([tabId, personId, readAt, createdAt])
   /// The sweep's rows past their expiry (activity.ts sweepActivity); no TTL option, which the app user cannot set (#2238).
   @@index([createdAt])
 }
@@ -1933,6 +1939,9 @@ model SwarmGroup {
   @@index([tabId, executionMachineId])
   /// The host signature (read/host.ts inputs) reads every conversation's digest and dormancy from this index alone.
   @@index([tabId, deleted, key, hostDigest, dormant])
+  /// A command's awake conversations, listed by the columns it compares with what it holds (parts/held.ts) from this index alone:
+  /// each command read every awake one whole before (task #3146).
+  @@index([tabId, dormant, deleted, key, version, changedAt])
   /// Removed parts go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
   @@index([purgeAt], map: "part_purge")
 }
@@ -2322,4 +2331,26 @@ model GitHubApprovalRefusal {
 
   @@unique([autonomousEnv, tabId, repository, projectId, userId])
   @@index([tabId])
+}
+
+/// A phone's push token (task #2905): where the server sends a thread reply or a tag for its person while the app is closed
+/// (push/devices.ts). One row per token, `_id` the SHA-256 of platform and token, so a phone signed in as someone else moves
+/// to them. Removed: by the phone at sign-out, when Apple or Google call the token dead, past the 10 newest of a person, and by
+/// the TTL index 90 days after `seenAt` (push_device_expiry); a signed-in phone registers again at every launch. About 300 bytes
+/// a row, at most 10 a person.
+model PushDevice {
+  id       String   @id @map("_id")
+  userId   String
+  /// ios | android
+  platform String
+  token    String
+  /// An iOS token from a development build, which only Apple's sandbox host accepts (push/apns.ts).
+  sandbox  Boolean  @default(false)
+  seenAt   DateTime
+
+  /// A command's told people's phones (devicesOf), and a person's newest ten.
+  @@index([userId])
+  /// Expires these rows (push/devices.ts ensurePushDeviceExpiry, made before the push). Declared so db push keeps it.
+  @@index([seenAt], map: "push_device_expiry")
+  @@map("push_devices")
 }

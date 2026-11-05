@@ -3,13 +3,15 @@ import { describe, expect, it, vi } from 'vitest'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { CODEX_MODEL_MIGRATION, CODEX_SIGN_IN, CODEX_TRUST_PROMPT, CODEX_UPDATE_PROMPT } from '../lib/__fixtures__/takeoverScreens.js'
+import type { RelaySeen } from './relayRecovery.js'
 import { capScreen, limitOf, modelFailing, TerminalHost, typedKeys } from './terminal.js'
 
 const row = (agentId = 'a1', harnessId = 'h1', over: Record<string, unknown> = {}) => ({ tabId: 'tab', agent: { id: agentId, harnessId, machineId: 'm1' }, ...over })
 type Sent = { path: string; body: Record<string, any> }
 
 function setup(options: { live?: string[]; screen?: (harnessId: string) => SuperTabScreen; requests?: unknown[];
-  refuse?: (command: Record<string, any>) => { status: number; code: string } | null } = {}) {
+  refuse?: (command: Record<string, any>) => { status: number; code: string } | null; engine?: string;
+  relay?: { seen: (harnessId: string, engine: string | undefined, read: RelaySeen) => Promise<void>; keep: (ids: ReadonlySet<string>) => void } } = {}) {
   let clock = 1_000_000
   const sent: Sent[] = []
   let pending = options.requests ?? []
@@ -23,11 +25,11 @@ function setup(options: { live?: string[]; screen?: (harnessId: string) => Super
   let screen = options.screen ?? (() => ({ ok: true as const, text: '> ', hold: null }))
   const core = fakeCore({
     account: { backend },
-    agents: { byAgent: vi.fn((id: string) => (options.live ?? ['h1']).includes(id) ? { agentId: id } as never : undefined) },
+    agents: { byAgent: vi.fn((id: string) => (options.live ?? ['h1']).includes(id) ? { agentId: id, engine: options.engine ?? 'claude' } as never : undefined) },
     superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
       screen: vi.fn(async (harnessId: string) => screen(harnessId)), input: vi.fn(async () => ({ ok: true as const })), inputIfScreen: vi.fn(async () => ({ ok: true as const })) },
   })
-  const host = new TerminalHost(core, 'm1', { now: () => clock, log: vi.fn() })
+  const host = new TerminalHost(core, 'm1', { now: () => clock, log: vi.fn(), ...(options.relay ? { relay: options.relay } : {}) })
   return { core, backend, sent, host,
     now: () => clock,
     wait: (ms: number) => { clock += ms },
@@ -317,6 +319,31 @@ describe('the stuck and usage-limit alerts', () => {
     await t.host.tick([row()])
     t.wait(15_000); await t.host.tick([row()])
     expect(t.alerts()).toHaveLength(1)
+  })
+})
+
+describe('a Team agent stranded on its owner\'s relay (task #3106)', () => {
+  const failing = (): SuperTabScreen => ({ ok: true, text: '⎿  Unable to connect to API (ECONNREFUSED) · Retrying in 8 seconds… (attempt 4/10)\n❯ ', hold: null })
+  const prompt = (): SuperTabScreen => ({ ok: true, text: 'Allow edit? 1. Yes 2. No', hold: 'permission_open' })
+
+  it('tells the relay recovery on every read when the agent\'s model began failing, its engine, and whether a prompt is open', async () => {
+    const relay = { seen: vi.fn(async () => {}), keep: vi.fn() }
+    const t = setup({ screen: failing, relay, engine: 'codex' })
+    const began = t.now()
+    await t.host.tick([row()])
+    t.wait(60_000); await t.host.tick([row()])
+    expect(relay.seen.mock.calls).toEqual([['h1', 'codex', { failingSince: began, waiting: false }], ['h1', 'codex', { failingSince: began, waiting: false }]])
+    // Answers came again: not failing now, though the model alert's episode lasts ten more minutes.
+    t.showing(prompt); t.wait(15_000); await t.host.tick([row()])
+    expect(relay.seen.mock.calls[2]).toEqual(['h1', 'codex', { failingSince: null, waiting: true }])
+    expect(relay.keep).toHaveBeenLastCalledWith(new Set(['h1']))
+  })
+
+  it('reads nothing for the recovery from a screen it could not read', async () => {
+    const relay = { seen: vi.fn(async () => {}), keep: vi.fn() }
+    const t = setup({ screen: () => ({ ok: false, error: 'gone' }), relay })
+    await t.host.tick([row()])
+    expect(relay.seen).not.toHaveBeenCalled()
   })
 })
 

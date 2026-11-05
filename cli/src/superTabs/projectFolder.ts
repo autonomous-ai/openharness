@@ -1,4 +1,7 @@
+import { execFile } from 'node:child_process'
+import { lstat, mkdir, realpath } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
+import { promisify } from 'node:util'
 import type { CoreApi } from '../core/api.js'
 import { fetchStartBase } from '../lib/gitProject.js'
 import { otherGitHubTransport, parseProjectFolder, prepareProjectFolder, ProjectFolderError, RepositoryAccessError } from '../lib/projectFolder.js'
@@ -15,6 +18,9 @@ export interface StartGitHub { token: string; repository: string; requester: str
 
 const NO_APP_ON_TEAM = 'This Harness server has no GitHub App, and a Harness Team account has no git login of its own, so it cannot fetch '
   + 'the project. Ask the server\'s administrator to set up the Harness GitHub App (docs/swarm-github-app.md).'
+
+/** How long a clone that failed or stalled waits before its one more try. */
+const CLONE_RETRY_MS = 5_000
 
 /** A start this machine could not prepare yet, as the Harness server gave no answer (a timeout, a 5xx, no connection), which
  *  decides nothing: its host tries again on its next pass, and fails the start only once it has kept failing for as long as
@@ -70,16 +76,24 @@ async function revokeQuietly(token: string, revoke = revokeGitHubToken): Promise
  * core/agents/launches.ts). Returns whom the work is for, for the start; null when this machine's own login is right for it.
  */
 export async function prepareSwarmStart(core: CoreApi, row: Json, start: Json,
-  deps: { backend: Backend; team: boolean; prepare?: typeof prepareProjectFolder; fetch?: typeof fetchStartBase; revoke?: (token: string) => Promise<void> }):
+  deps: { backend: Backend; team: boolean; prepare?: typeof prepareProjectFolder; fetch?: typeof fetchStartBase; revoke?: (token: string) => Promise<void>
+    empty?: typeof prepareEmptyProjectFolder; sleep?: (ms: number) => Promise<void> }):
   Promise<{ requester: string } | null> {
   const request = object(start.request)
   // A person's one Buddy has no project: its launch makes its folder from the checkouts already here and fetches nothing
   // (buddyHome.ts). Asking for a token anyway was refused with a 404, which failed every such start (2026-11-02).
   if (request.buddyScope === 'swarm') return null
+  // Nor does a project with no repository address (task #3211): there is nothing to clone, and the server refuses a token
+  // for it. Its work starts in a folder of its own, made without any login (prepareSwarmProject).
+  const project = startProject(row, request)
+  if (project && typeof object(project.repository).repositoryUrl !== 'string') {
+    if (object(row.machine).scope === 'swarm') await prepareSwarmProject(core, row, start, deps.prepare, undefined, deps.sleep, deps.empty)
+    return null
+  }
   const github = await startGitHub(core, row, start, deps)
   const gitEnv = github ? swarmGitPrepareEnv(github.token) : undefined
   try {
-    if (object(row.machine).scope === 'swarm') await prepareSwarmProject(core, row, start, deps.prepare, gitEnv)
+    if (object(row.machine).scope === 'swarm') await prepareSwarmProject(core, row, start, deps.prepare, gitEnv, deps.sleep, deps.empty)
     if (gitEnv && request.worktree === true && typeof request.cwd === 'string' && isAbsolute(request.cwd)) {
       // The branch the start names, when it names one: a project clone has only the default branch (lib/projectFolder.ts).
       await (deps.fetch ?? fetchStartBase)(resolve(request.cwd), gitEnv, ...(typeof request.branchRef === 'string' ? [request.branchRef] : []))
@@ -98,16 +112,49 @@ function sameFolder(requested: unknown, folder: unknown): boolean {
   return typeof requested === 'string' && typeof folder === 'string' && isAbsolute(requested) && resolve(requested) === resolve(folder)
 }
 
+/** The project a queued start is for, of those this machine was told of. A project session of a person's one Buddy chat
+ *  names its project: that chat is in no project's list (backend hostRows.ts). */
+function startProject(row: Json, request: Json): Json | undefined {
+  const session = object(request.buddySession).projectId
+  return (Array.isArray(row.projects) ? row.projects.map(object) : [])
+    .find(p => session ? p.id === session : Array.isArray(p.conversationIds) && p.conversationIds.includes(request.conversationId))
+}
+
+const NOT_OWN_FOLDER = 'This machine has something that is not this project\'s own folder where its folder goes. Its owner can move it aside, then start again.'
+
+/**
+ * [projectId]'s own folder in [root], a Swarm's folder of project checkouts, for a project with no repository (task #3211):
+ * made empty the first time, found again after. It is `git init`ed, with no remote and no commit, so the trust step that
+ * lets agents work in a Swarm's checkouts (cloneTrust.ts) takes it as it takes a clone, and its work can be committed
+ * there. Anything at that place that is not a plain folder there (a link, a file) is refused, never followed or replaced.
+ */
+export async function prepareEmptyProjectFolder(root: string, projectId: string,
+  init: (folder: string) => Promise<unknown> = folder => promisify(execFile)('git', ['init', '--quiet'], { cwd: folder, timeout: 15_000,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })): Promise<string> {
+  await mkdir(root, { recursive: true })
+  const folder = join(root, projectId)
+  // Its owner's alone, as the work in it is (security review 1 of #3137).
+  await mkdir(folder, { mode: 0o700 }).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error })
+  const found = await lstat(folder)
+  if (!found.isDirectory() || await realpath(folder) !== join(await realpath(root), projectId)) throw new Error(NOT_OWN_FOLDER)
+  const git = await lstat(join(folder, '.git')).catch(error => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  })
+  if (!git) await init(folder)
+  else if (!git.isDirectory()) throw new Error(NOT_OWN_FOLDER)
+  return folder
+}
+
 /** The owner granted a swarm workspace, not caller-selected filesystem paths.
- * Prepare the queued project's repository there before reserving or launching. */
-export async function prepareSwarmProject(core: CoreApi, row: Json, start: Json, prepare = prepareProjectFolder, gitEnv?: NodeJS.ProcessEnv): Promise<void> {
+ * Prepare the queued project's repository there before reserving or launching: a clone, or for a project with no
+ * repository its own empty folder ([empty]). */
+export async function prepareSwarmProject(core: CoreApi, row: Json, start: Json, prepare = prepareProjectFolder, gitEnv?: NodeJS.ProcessEnv,
+  sleep: (ms: number) => Promise<void> = ms => new Promise(done => setTimeout(done, ms)), empty = prepareEmptyProjectFolder): Promise<void> {
   const pool = object(row.machine)
   if (pool.scope !== 'swarm' || start.dispatched) return
   const request = object(start.request)
-  // A project session of a person's one Buddy chat names its project: that chat is in no project's list (backend hostRows.ts).
-  const session = object(request.buddySession).projectId
-  const project = (Array.isArray(row.projects) ? row.projects.map(object) : [])
-    .find(p => session ? p.id === session : Array.isArray(p.conversationIds) && p.conversationIds.includes(request.conversationId))
+  const project = startProject(row, request)
   if (!project || !identifier(project.id) || !identifier(row.tabId)) throw new Error('This start has no authorized project.')
   const repository = object(project.repository)
   const expectedRoot = swarmCloneRoot(core.dataDir, row.tabId, pool.cwd)
@@ -115,8 +162,14 @@ export async function prepareSwarmProject(core: CoreApi, row: Json, start: Json,
   if (repository.machineId === core.daemon.machineId() && sameFolder(request.cwd, repository.cwd)) return
   const expected = join(expectedRoot, project.id)
   if (!sameFolder(request.cwd, expected)) throw new Error('The requested folder is outside this project.')
-  // The Lead reads this from the failed start; it can record its checkout's origin and start again.
-  if (typeof repository.repositoryUrl !== 'string') throw new Error('Share a GitHub repository for this project before starting agents on another machine. Its lead can share its checkout\'s GitHub origin with the project.repository command, then start again.')
+  // Nothing to clone (task #3211): its own empty folder here, with no worktree, which has nothing to branch from. The
+  // backend starts it that way (machines.ts noRepositoryStart); an older one asks for a worktree, refused in words.
+  if (typeof repository.repositoryUrl !== 'string') {
+    if (request.worktree === true) throw new Error('This project has no repository, so its agents on other machines start in an empty folder without a worktree. Start again with worktree off, or share a GitHub repository for the project first.')
+    if (await empty(expectedRoot, project.id) !== expected) throw new Error('The prepared folder does not match the authorized project.')
+    await repairSwarmCloneTrust(core, row, typeof request.codexHome === 'string' ? request.codexHome : undefined)
+    return
+  }
   const source = parseProjectFolder({ projectSource: 'remote', repositoryUrl: repository.repositoryUrl })
   if (source?.source !== 'remote') throw new Error('This project repository is unavailable.')
   let cwd: string
@@ -124,14 +177,26 @@ export async function prepareSwarmProject(core: CoreApi, row: Json, start: Json,
     // With the app's token: over https alone, whatever address was shared, and no other way in if it is refused.
     const ssh = 'git@github.com:'
     const https = source.repositoryUrl.startsWith(ssh) ? `https://github.com/${source.repositoryUrl.slice(ssh.length)}` : source.repositoryUrl
-    try { cwd = await prepare({ ...source, repositoryUrl: https, name: project.id }, { root: expectedRoot, gitEnv }) }
-    catch (error) {
+    const name = project.id
+    const clone = () => prepare({ ...source, repositoryUrl: https, name }, { root: expectedRoot, gitEnv })
+    try {
+      // One more try after a short wait, for a failed or stalled clone only: GitHub or the network often serves it seconds
+      // later (six first starts failed on 11-05). A refusal would fail again, and prepare removes its staging between tries.
+      try { cwd = await clone() }
+      catch (first) {
+        if (!(first instanceof ProjectFolderError) || first instanceof RepositoryAccessError || !['CLONE_FAILED', 'CLONE_TIMEOUT'].includes(first.code)) throw first
+        await sleep(CLONE_RETRY_MS)
+        cwd = await clone()
+      }
+    } catch (error) {
+      if (error instanceof ProjectFolderError && error.code === 'PROJECT_EXISTS') throw folderLeftBehind(expected)
       if (!(error instanceof ProjectFolderError) || !['CLONE_FAILED', 'CLONE_TIMEOUT'].includes(error.code)) throw error
       throw new ProjectFolderError(error.code, `This machine could not clone the project repository with the Harness GitHub App's token: ${error.message}`)
     }
   } else {
     try { cwd = await prepare({ ...source, name: project.id }, { root: expectedRoot }) }
     catch (error) {
+      if (error instanceof ProjectFolderError && error.code === 'PROJECT_EXISTS') throw folderLeftBehind(expected)
       // The shared address names the repository, not how this machine signs in to GitHub: a credential helper for HTTPS,
       // a key for SSH. Desktop shares HTTPS because the daemon's remote no longer says which one the lead used.
       const other = error instanceof RepositoryAccessError ? otherGitHubTransport(source.repositoryUrl) : null
@@ -145,4 +210,11 @@ export async function prepareSwarmProject(core: CoreApi, row: Json, start: Json,
   }
   if (cwd !== expected) throw new Error('The prepared checkout does not match the authorized project.')
   await repairSwarmCloneTrust(core, row, typeof request.codexHome === 'string' ? request.codexHome : undefined)
+}
+
+/** A folder in the place of a project's clone that is no clone of its repository: most likely the empty folder its work
+ *  used here before its repository was shared (task #3211). Its files are the project's, so it is never removed here. */
+function folderLeftBehind(folder: string): ProjectFolderError {
+  return new ProjectFolderError('PROJECT_EXISTS', `This machine already has a folder for this project that is not a clone of its repository (${folder}), `
+    + 'probably one its agents used before its repository was shared. Move it aside so the repository can be cloned there, then start again.')
 }

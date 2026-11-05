@@ -17,7 +17,8 @@ import 'package:dio/dio.dart';
 import 'package:xterm/xterm.dart' show RemoteScrollMemory, Terminal;
 import 'package:flutter/foundation.dart';
 // The 80-character limit on a fork's name counts what a person sees, as the desktop's does.
-import 'package:flutter/widgets.dart' show StringCharacters;
+import 'package:flutter/widgets.dart'
+    show AppLifecycleListener, StringCharacters;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_client.dart';
@@ -52,6 +53,8 @@ import '../logging/startup_trace.dart';
 import '../logging/typing_trace.dart';
 import '../notify/agent_announcer.dart';
 import '../notify/done_notice.dart';
+import '../notify/push_channel.dart';
+import '../notify/push_tokens.dart';
 import '../notify/system_notices.dart';
 import '../settings/config_store.dart';
 import '../stats/harness_stats.dart';
@@ -295,6 +298,15 @@ class _AgentChange {
 
   /// The handoff was settled (the record written, or confirmed empty), so a retry reads nothing.
   bool contextLoaded = false;
+
+  /// The machine prepared the handoff under this switch's id (`agent_handoff_prepare`), so its
+  /// close names the switch — a Swarm Product Manager's machine stops it only for that switch
+  /// (cli superTabs/leadSwitch.ts). Never set by the older machines' `agent_recent` road.
+  bool handoffPrepared = false;
+
+  /// The machine recorded which harness took over (`agent_handoff_complete`), so a retry of this
+  /// switch reports nothing again.
+  bool replacementReported = false;
 
   /// The switch is held on the handoff, with the old agent still running: only the same engine
   /// carries it on.
@@ -1307,6 +1319,7 @@ class AppNotifier extends ChangeNotifier {
     ViewerServices? viewer,
     PaneLayoutStore? paneLayoutStore,
     SystemNotices? systemNotices,
+    PushTokens? pushTokens,
     MachineCache? machineCache,
     KeptScreenStore? keptScreenStore,
     GroupSync? groupSync,
@@ -1376,6 +1389,7 @@ class AppNotifier extends ChangeNotifier {
     addListener(_syncProductMeasurement);
     unawaited(_measurementContext());
     _initDeviceLog();
+    _initPush(pushTokens, paneLayoutStore);
   }
 
   /// Which build this phone's reports come from ([ProductMeasurement.context]): the public release
@@ -1810,6 +1824,9 @@ class AppNotifier extends ChangeNotifier {
       );
       if (!_authWorkCurrent(revision)) return;
       if (!authStatus.loggedIn) {
+        // The session ended while the app was closed (revoked from another device): the OS stops
+        // delivering this account's pushes to the phone. The backend drop fails without a session.
+        if (_push case final push?) unawaited(push.forgetIfTold(api));
         currentUser = null;
         status = AppStatus.unauthenticated;
         notifyListeners();
@@ -2035,6 +2052,7 @@ class AppNotifier extends ChangeNotifier {
           unawaited(_deviceLog?.signedInAs(id));
           _keepAccount(id);
         }
+        _syncPush();
         notifyListeners();
       }
     } catch (error) {
@@ -2082,6 +2100,9 @@ class AppNotifier extends ChangeNotifier {
     // who had just pressed Sign out. The sign-out finishes the job itself.
     if (_leftByHand) return;
     _invalidateAuthWork();
+    // As on a sign-out here ([_endSession]): no lock-screen notice of this account after it. The
+    // backend drop fails without a session; the OS one still stops delivery.
+    if (_push case final push?) unawaited(push.forget(api));
     currentUser = null;
     signingIn = false;
     signInProvider = null;
@@ -2394,6 +2415,12 @@ class AppNotifier extends ChangeNotifier {
     if (_deviceLog case final log?) {
       try {
         await log.leave().timeout(const Duration(seconds: 5));
+      } catch (_) {}
+    }
+    // So does where to push to it: no notice of this account reaches a phone signed out of it.
+    if (_push case final push?) {
+      try {
+        await push.forget(api).timeout(const Duration(seconds: 5));
       } catch (_) {}
     }
     final revision = _invalidateAuthWork();
@@ -3581,6 +3608,57 @@ class AppNotifier extends ChangeNotifier {
       debugPrint('devices: could not save the dismissal: $error');
       _failedDismissals.addAll([...?pubs, ?pub]);
     }
+  }
+
+  // -- where to push to this phone (notify/push_tokens.dart) ---------------------------------------
+
+  /// Null in a test and in the sample, which never reach the OS, and on the web, which has no push.
+  PushTokens? _push;
+  AppLifecycleListener? _pushLifecycle;
+
+  void _initPush(PushTokens? given, PaneLayoutStore? paneLayoutStore) {
+    final push = _push =
+        given ??
+        (kIsWeb || kUnderTest || paneLayoutStore == null
+            ? null
+            : PushTokens(
+                channel: PushChannel(),
+                storage: paneLayoutStore.storage,
+                allowed: () => noticesEnabled(agentNotices.system),
+              ));
+    if (push == null) return;
+    // Before the shell is up, so the push that launched the app is waiting for it as a tapped
+    // notice is.
+    push.channel.listen(
+      onOpened: (data) => openPushed(data, agentNotices.system),
+      onChanged: _syncPush,
+    );
+    if (agentNotices.system case final LocalSystemNotices notices) {
+      notices.onAllowed = _syncPush;
+    }
+    // Back from the phone's Settings, where notices may have been turned on or off.
+    _pushLifecycle = AppLifecycleListener(onResume: _syncPush);
+  }
+
+  /// Tells the backend where to push to this phone while signed in: once the account is known, when
+  /// notices are allowed, when the OS hands over a new address, and back in the app.
+  void _syncPush() {
+    final push = _push;
+    final account = swarmAccountId;
+    if (push == null || _disposed || _signingOut != null || account == null) {
+      return;
+    }
+    final revision = _authRevision;
+    unawaited(
+      push.sync(
+        account: account,
+        api: api,
+        current: () =>
+            _authWorkCurrent(revision) &&
+            _signingOut == null &&
+            status == AppStatus.authenticated,
+      ),
+    );
   }
 
   void _initDeviceLog() {
@@ -9017,6 +9095,18 @@ class AppNotifier extends ChangeNotifier {
   static bool canChangeAgent(Agent agent) =>
       agent.engine != null && agent.dsh == null && agent.engine != 'terminal';
 
+  /// Whether the terminal's menu offers Change agent on [agent] of [machineId]: an agent it can
+  /// switch ([canChangeAgent]), on this person's own machine while it is online, as the desktop's
+  /// pane header does. Another account's shared machine answers the handoff for its owner alone
+  /// (cli superTabs/leadSwitch.ts), so the switch could never go through from here.
+  bool offersChangeAgent(String machineId, Agent agent) {
+    final machine = machineStates[machineId];
+    return canChangeAgent(agent) &&
+        machine != null &&
+        !machine.machine.shared &&
+        machine.nodeOnline != false;
+  }
+
   /// The engines a harness can be switched to, in the desktop picker's order: OpenCode first, the
   /// rest by name. The current one is listed too, as the one it is on.
   static List<String> agentChangeEngines() {
@@ -9042,6 +9132,12 @@ class AppNotifier extends ChangeNotifier {
   /// 2. The old agent is saved and stopped (`agent_close`, `now`). Never before step 1: a switch
   ///    that cannot carry the conversation leaves the old agent running.
   /// 3. The new agent starts in the same folder, in the same permission mode where it has one.
+  /// 4. The machine is told which harness took over (`agent_handoff_complete`), best effort.
+  ///
+  /// Steps 1 to 4 share one id: the handoff's `changeId`, the close's (only once step 1 prepared
+  /// the handoff), the start's `creationId` and the report's. A Swarm Product Manager's machine
+  /// stops it only for a close that names the switch it prepared (otherwise LEAD_PROTECTED), and
+  /// finds its new session by that id (#2493).
   ///
   /// One switch per harness at a time. Choosing the same engine again while one runs joins it;
   /// once one fails it is carried on by the same choice, receipt and all, until it is safe to drop
@@ -9060,6 +9156,13 @@ class AppNotifier extends ChangeNotifier {
     }
     if (source.engine == engine) {
       return Future.value(AgentChangeResult(agentId: agentId));
+    }
+    if (machine.machine.shared) {
+      return Future.value(
+        const AgentChangeResult(
+          error: 'Only the person whose machine runs this agent can change it.',
+        ),
+      );
     }
     if (!canChangeAgent(source) || !allEngines.any((e) => e.id == engine)) {
       return Future.value(
@@ -9188,7 +9291,13 @@ class AppNotifier extends ChangeNotifier {
     change.preservingViews = true;
     if (!latest.isStopped && !change.closed) {
       _logChange(change, 'saving and stopping the old agent');
-      final refused = await _closeAgentNow(machineId, latest);
+      // Named only after its handoff was prepared under this id: a Swarm Product Manager's machine
+      // checks the two belong to one switch, and refuses its close otherwise (LEAD_PROTECTED).
+      final refused = await _closeAgentNow(
+        machineId,
+        latest,
+        changeId: change.handoffPrepared ? change.creation._id : null,
+      );
       if (refused != null) {
         change.preservingViews = false;
         return AgentChangeResult(error: refused);
@@ -9234,6 +9343,20 @@ class AppNotifier extends ChangeNotifier {
         error: target!.launchDetail ?? 'The new agent could not start.',
       );
     }
+    // Before the switch is let go: while it is reported, choosing an agent again joins this one
+    // rather than starting a second harness off the stopped one. Unreported, a Swarm Product
+    // Manager's machine never takes the new session in and closes it once its time is up (cli
+    // superTabs/host.ts, SWITCH_ADOPT_MS), so the switch is not done until it is: choosing again
+    // reports it, as the desktop does.
+    if (!change.replacementReported) {
+      if (!await _reportReplacement(machineId, change, nextId)) {
+        return const AgentChangeResult(
+          error: 'The new agent started. Choose it again to finish the switch.',
+        );
+      }
+      change.replacementReported = true;
+      if (!live()) return inactive;
+    }
     _agentChanges.remove((machineId, source.id));
     unawaited(agentPreference.select(change.engine));
     String? notice;
@@ -9245,6 +9368,50 @@ class AppNotifier extends ChangeNotifier {
           : agentSwitchNoHistoryHint(from, to);
     }
     return AgentChangeResult(agentId: nextId, notice: notice);
+  }
+
+  /// Tells the machine which harness took over (`agent_handoff_complete`), the desktop's
+  /// replacement report, so a Swarm keeps the same agent on the new session (`agent.rebind`).
+  /// Whether it is done: recorded, or a machine too old to take one (`UNSUPPORTED`), as the
+  /// desktop counts it. A refusal or no answer in time is logged, and the switch waits for it.
+  Future<bool> _reportReplacement(
+    String machineId,
+    _AgentChange change,
+    String replacementId,
+  ) async {
+    try {
+      final reply = await _conn(machineId).request(
+        'agent_handoff_complete',
+        payload: {
+          'agentId': change.source.id,
+          'replacementId': replacementId,
+          'changeId': change.creation._id,
+          'targetEngine': change.engine,
+        },
+        timeout: const Duration(seconds: 5),
+      );
+      final recorded = reply['ok'] == true;
+      _logChange(
+        change,
+        recorded
+            ? 'the machine recorded the replacement'
+            : 'the replacement report was not confirmed',
+      );
+      return recorded;
+    } on WsRequestFailure catch (failure) {
+      if (failure.code == 'UNSUPPORTED') {
+        _logChange(change, 'the machine takes no replacement report');
+        return true;
+      }
+      _logChange(
+        change,
+        'the replacement report was refused (${failure.code})',
+      );
+      return false;
+    } catch (error) {
+      _logChange(change, 'the replacement report was not answered ($error)');
+      return false;
+    }
   }
 
   /// Fills [change]'s handoff for the new agent, or says why the switch must not go on — the
@@ -9300,6 +9467,7 @@ class AppNotifier extends ChangeNotifier {
         ..handoffEmpty = accepted.prompt == null
         ..handoffFailed = false
         ..contextLoaded = true
+        ..handoffPrepared = true
         ..handoffHeld = false;
       return null;
     } on WsRequestFailure catch (failure) {
@@ -9379,9 +9547,14 @@ class AppNotifier extends ChangeNotifier {
   ///
   /// ⚠️ **A lost reply never sends a second Stop.** The machine's own list is read instead, and only
   /// a harness it lists as stopped, the same one, counts as closed.
-  Future<String?> _closeAgentNow(String machineId, Agent agent) async {
-    const notChanged =
-        'Could not save and stop this conversation. Its agent has not been changed.';
+  ///
+  /// [changeId]: the switch whose handoff the machine prepared — see
+  /// [_AgentChange.handoffPrepared].
+  Future<String?> _closeAgentNow(
+    String machineId,
+    Agent agent, {
+    String? changeId,
+  }) async {
     final machine = machineStates[machineId];
     final revision = _authRevision;
     try {
@@ -9392,13 +9565,13 @@ class AppNotifier extends ChangeNotifier {
           'sessionId': agent.sessionId ?? '',
           'createdAt': agent.createdAt!.toUtc().toIso8601String(),
           'mode': 'now',
+          'changeId': ?changeId,
         },
         // Saving the conversation and letting the engine exit can take seconds on the machine.
         timeout: const Duration(seconds: 30),
       );
       if (result['closed'] == true) return null;
-      final detail = result['detail'];
-      return detail is String && detail.isNotEmpty ? detail : notChanged;
+      return closeRefusalMessage(result['error'], result['detail']);
     } on WsRequestFailure catch (failure) {
       appLog.info(
         'agents',
@@ -9407,8 +9580,7 @@ class AppNotifier extends ChangeNotifier {
       if (failure.code == 'AGENT_CHANGED') {
         return 'The conversation changed. Reopen Change agent.';
       }
-      final detail = failure.detail;
-      return detail != null && detail.isNotEmpty ? detail : notChanged;
+      return closeRefusalMessage(failure.code, failure.detail);
     } catch (error) {
       appLog.warn(
         'agents',
@@ -9439,6 +9611,27 @@ class AppNotifier extends ChangeNotifier {
 
   static const _closeUnconfirmed =
       'Could not confirm the close. Check the machine connection and try again.';
+
+  /// What Change agent says when the machine will not save and stop the old agent: the machine's
+  /// own [detail] when it sends one, as the desktop does; otherwise the CLI's sentence for [code]
+  /// (lib/closeAgentService.ts), never the bare code. A Swarm Product Manager's machine refuses
+  /// any close but its prepared switch's (LEAD_PROTECTED), and a second switch while one runs
+  /// (LEAD_SWITCHING).
+  @visibleForTesting
+  static String closeRefusalMessage(Object? code, Object? detail) =>
+      detail is String && detail.isNotEmpty
+      ? detail
+      : switch (code) {
+          'LEAD_PROTECTED' =>
+            'This harness is the Product Manager of a Swarm project. '
+                'Delete its project first to stop it.',
+          'LEAD_SWITCHING' =>
+            'This Product Manager is already switching its agent. '
+                'Wait for it to finish.',
+          _ =>
+            'Could not save and stop this conversation. '
+                'Its agent has not been changed.',
+        };
 
   /// How long a lost close waits for its socket to come back before it reads the machine's list.
   static const _closeRecheckReady = Duration(seconds: 15);
@@ -11759,6 +11952,8 @@ class AppNotifier extends ChangeNotifier {
       swarm.panes.clear();
     }
     sessionPreviews.dispose();
+    _pushLifecycle?.dispose();
+    _push?.channel.close();
     agentNotices.dispose();
     _desk.dispose();
     daemonHabits.dispose();

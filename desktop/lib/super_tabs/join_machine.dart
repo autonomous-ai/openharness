@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../core/machine_resources.dart';
+import '../core/models.dart' show sameMachineId;
 import 'controller.dart';
 
 /// What one more agent needs to start, the CLI's own figure
@@ -67,6 +68,8 @@ const _swarmEngines = {'claude', 'codex'};
 /// This computer, added to a Swarm by the join that just let its person in
 /// (Scholes, 2026-10-29): what [SwarmJoinMachine.add] did, for the note the
 /// person sees. [problem]: why it was not added, in a sentence for them.
+/// [teamProblem]: it was added, but its Harness Team account could not be
+/// offered, and where to set it up (task #3160).
 class SwarmJoinedMachine {
   const SwarmJoinedMachine({
     required this.tabId,
@@ -74,11 +77,21 @@ class SwarmJoinedMachine {
     required this.machineId,
     required this.machineName,
     this.problem,
+    this.teamProblem,
   });
 
   final String tabId, swarmName, machineId, machineName;
-  final String? problem;
+  final String? problem, teamProblem;
   bool get added => problem == null;
+
+  /// The same machine, added, whose Team account offer failed.
+  SwarmJoinedMachine withoutTeamOffer() => SwarmJoinedMachine(
+    tabId: tabId,
+    swarmName: swarmName,
+    machineId: machineId,
+    machineName: machineName,
+    teamProblem: 'Set it up from Machines.',
+  );
 }
 
 /// Adds this computer to a Swarm its person just joined, with Add machine's
@@ -90,8 +103,9 @@ class SwarmJoinedMachine {
 /// person's own projects.
 ///
 /// Only a new collaborator's computer, in a Swarm that uses Harness Team
-/// accounts: a viewer, a computer already in the Swarm and a Swarm whose
-/// server does not try Team accounts yet are left as they are.
+/// accounts: a viewer, a computer already in the Swarm, one its person took
+/// out of it, and a Swarm whose server does not try Team accounts yet are left
+/// as they are.
 class SwarmJoinMachine {
   SwarmJoinMachine({
     required this.machineRequest,
@@ -130,6 +144,12 @@ class SwarmJoinMachine {
     final me = snapshot.people.where((p) => p.id == c.accountId).firstOrNull;
     if (me?.role != 'collaborator') return null;
     if (snapshot.machines.any((m) => m['machineId'] == machineId)) return null;
+    // Its person took it out, on any computer, a reinstall of this one
+    // included: it stays out until they add it with Add machine (backend
+    // commands.ts machine.remove; task #3212).
+    if (snapshot.removedMachines.any((id) => sameMachineId(id, machineId))) {
+      return null;
+    }
     SwarmJoinedMachine note([String? problem]) => SwarmJoinedMachine(
       tabId: c.tabId,
       swarmName: snapshot.name,

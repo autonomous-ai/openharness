@@ -42,6 +42,9 @@ class AskedQuestions {
   /// Whether a question is open on [ref] right now.
   bool asking(AgentRef ref) => _asked.containsKey(_key(ref));
 
+  /// The request open on [ref] right now, or null.
+  String? openOn(AgentRef ref) => _asked[_key(ref)];
+
   /// The question stopped being on screen — answered, or its turn ended. An
   /// empty or null [requestId] means whichever one was open; a different one
   /// is a stale close for a question already replaced, and is ignored.
@@ -72,12 +75,30 @@ class AskedQuestions {
 }
 
 /// What a question is worth. Only a NEW one is news; after that it is the same
-/// escalation a finished turn gets.
+/// escalation a finished turn gets — but never a second buzz for what the
+/// person was already told:
+///
+/// - [told]: this very request buzzed, chimed or was posted already, and is
+///   back after its dialog left the pane — a capture mid-repaint reads as no
+///   dialog, and the daemon closes it and opens it again with the same id
+///   (cli `questionController.ts` `noteGone`). Marked and posted quietly.
+/// - [cooling]: the agent buzzed for another question moments ago
+///   (`AgentAnnouncer.alertCooldown`). A run of approvals is one interruption,
+///   then quiet updates of the same notice.
+///
+/// Where the person is looking at the agent, its pane already shows the
+/// dialog: a chime for a new question, nothing for one they were told of.
 AgentNotice decideQuestionNotice({
   required bool isNew,
   required bool inFront,
   required bool watching,
+  bool told = false,
+  bool cooling = false,
 }) {
   if (!isNew) return AgentNotice.none;
-  return escalate(inFront: inFront, watching: watching);
+  final seen = inFront && watching;
+  if (told) return seen ? AgentNotice.none : AgentNotice.quiet;
+  final notice = escalate(inFront: inFront, watching: watching);
+  if (notice == AgentNotice.alert && cooling) return AgentNotice.quiet;
+  return notice;
 }

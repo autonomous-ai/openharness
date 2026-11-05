@@ -21,8 +21,13 @@ export type Size = 'small' | 'medium' | 'large'
  * start (machineFit.ts). `needs.ci`: the CI jobs the work starts at once, and how many of them on macOS runners, held against
  * the account's running-jobs limit; a need above that limit counts as the limit and the route says so (machineFit.ts). Both are left out when not given, so a request without them answers as before. */
 export type HeavyWork = 'build' | 'e2e'
-export interface Needs { tools: string[]; devices: string[]; cwd?: string; heavy?: HeavyWork[]; ci?: { jobs: number; macos: number } }
-export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; local?: boolean; model?: string; needs: Needs }
+/** `access`: what the work needs to reach, by the names machines list it under (backend superTabs/machineAccess.ts, task #3047). */
+export interface Needs { tools: string[]; devices: string[]; access?: string[]; cwd?: string; heavy?: HeavyWork[]; ci?: { jobs: number; macos: number } }
+/** `unsized`: the agent gave no size (one from before sizes), so the route keeps both models of each slot ([tierOf]). `ended`:
+ *  how many of the task's attempts ended, as the route read them (routeCommand.ts endedAttempts), null when it could not. Both
+ *  are the route's own: the record sends neither. */
+export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; local?: boolean; model?: string; needs: Needs; unsized?: true
+  ended?: number | null }
 /** A model of the reviewed catalog (backend superTabs/catalog.ts): how strong it is, what it costs, and whether it is offered
  * when nobody names it. */
 export interface CatalogModel { engine: 'claude' | 'codex'; model: string; effort: string; strength: number; cost: number; offered: boolean; engineDefault?: true; note?: string }
@@ -243,6 +248,9 @@ export function parseAssessment(value: unknown): Assessment | string {
   if (v.kind !== undefined && (typeof v.kind !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(v.kind))) return 'Set kind to one lowercase word, such as ui or docs.'
   if (v.local !== undefined && typeof v.local !== 'boolean') return 'Set local to true only when a person asked for a local model.'
   if (v.model !== undefined && (typeof v.model !== 'string' || !words(v.model).length || v.model.length > 200)) return 'Set model to the model a person named, in their words.'
+  const access = needs.access === undefined ? [] : Array.isArray(needs.access) && needs.access.every(n => typeof n === 'string' && n.trim() && n.trim().length <= 60)
+    ? [...new Set((needs.access as string[]).map(n => n.trim().replace(/\s+/g, ' ')))] : null
+  if (!access) return 'Set needs.access to a list of names of up to 60 characters, such as ["Lamp"].'
   const heavy = needs.heavy
   if (heavy !== undefined && (!Array.isArray(heavy) || !heavy.every(h => HEAVY_WORK.includes(h)))) return 'Set needs.heavy to a list of build and e2e.'
   const ci = needs.ci === undefined ? undefined : object(needs.ci)
@@ -250,9 +258,10 @@ export function parseAssessment(value: unknown): Assessment | string {
   if (ci && (!count(ci.jobs, 100) || (ci.jobs as number) < 1 || (ci.macos !== undefined && !count(ci.macos, ci.jobs as number)))) {
     return 'Set needs.ci to the CI jobs the work starts, as {"jobs": 1 to 100, "macos": how many of them run on macOS}.'
   }
-  return { difficulty: v.difficulty as Level, risk: v.risk as Level, size: size as Size, why, ...(v.kind ? { kind: v.kind as string } : {}),
+  return { difficulty: v.difficulty as Level, risk: v.risk as Level, size: size as Size, why, ...(v.size === undefined ? { unsized: true as const } : {}),
+    ...(v.kind ? { kind: v.kind as string } : {}),
     ...(v.local === true ? { local: true } : {}), ...(typeof v.model === 'string' ? { model: v.model.trim() } : {}),
-    needs: { tools: list(needs.tools), devices: list(needs.devices), ...(cwd ? { cwd } : {}),
+    needs: { tools: list(needs.tools), devices: list(needs.devices), ...(access.length ? { access } : {}), ...(cwd ? { cwd } : {}),
       ...(Array.isArray(heavy) && heavy.length ? { heavy: [...new Set(heavy as HeavyWork[])] } : {}),
       ...(ci ? { ci: { jobs: ci.jobs as number, macos: (ci.macos as number | undefined) ?? 0 } } : {}) } }
 }
@@ -498,13 +507,55 @@ function compare(x: Probe, y: Probe): number {
  *  between (an account, then whether to reuse an agent on it). */
 export const slotOf = (p: Pick<Probe, 'machineId' | 'engine' | 'gridModel' | 'kind'>) => `${p.machineId}\0${p.gridModel ? 'grid' : p.engine}\0${p.kind}`
 
-/** The rows shown: the first new agent and the first member of every engine on every machine in the neutral order, up to
- *  [RECORD_MAX], then the rest up to 12, all in that order. The agent choosing picks between accounts by the project's order;
- *  one row a machine, cut at 12, hid a Claude account with 99% left behind its machine's used-up Codex (Ken, 2026-11-03). */
-function withEveryAccount<T extends Pick<Probe, 'machineId' | 'engine' | 'gridModel' | 'kind'>>(ranked: T[]): T[] {
-  const keep = new Set<T>(), seen = new Set<string>()
-  for (const p of ranked) if (!seen.has(slotOf(p)) && keep.size < RECORD_MAX) { seen.add(slotOf(p)); keep.add(p) }
-  for (const p of ranked) if (keep.size < MAX_SHOWN) keep.add(p)
+/** The work a slot offers a model for, by the project's Routing rules (Models): `strong` for big, hard or risky work, security
+ *  or a review, and for any work whose second attempt ended (small work steps up to Opus or Astra after a second failed
+ *  review); `standard` for small, low or medium work; null, both, for a task with no size or whose attempts could not be read
+ *  that nothing makes strong. */
+export type Tier = 'standard' | 'strong'
+export function tierOf(a: Assessment): Tier | null {
+  if (a.size === 'large' || a.difficulty === 'high' || a.risk === 'high' || /(^|-)(security|review)(-|$)/.test(a.kind ?? '')
+    || (a.ended ?? 0) >= 2) return 'strong'
+  return a.unsized || a.ended === null ? null : 'standard'
+}
+/** Each tier's model on each engine, as the Routing rules name them. */
+const TIER_MODELS: Record<Tier, Record<CatalogModel['engine'], { model: string; effort: string }>> = {
+  standard: { claude: { model: 'sonnet', effort: 'high' }, codex: { model: 'gpt-6.1-sol', effort: 'high' } },
+  strong: { claude: { model: 'opus', effort: 'high' }, codex: { model: 'gpt-6-astra', effort: 'xhigh' } },
+}
+const TIERS = Object.keys(TIER_MODELS) as Tier[]
+/** The tier whose model a candidate runs, at any effort: a member's reported model read through the catalog ([catalogRow]),
+ *  so `claude-opus-4-7` is Opus. Null for a grid model or a model no tier names. */
+function modelTier(p: Probe, catalog: Catalog): Tier | null {
+  if (p.gridModel) return null
+  const model = p.kind === 'member' ? catalogRow(catalog, p.engine, p.model, p.effort)?.model ?? p.model : p.model
+  return TIERS.find(t => TIER_MODELS[t][p.engine].model === model) ?? null
+}
+/** How well a candidate fits [tier]: 0 on the tier's model and effort, 1 on neither tier's model or the tier's at another
+ *  effort, 2 on the other tier's model. */
+function fitRank(p: Probe, catalog: Catalog, tier: Tier): 0 | 1 | 2 {
+  const runs = modelTier(p, catalog)
+  if (runs === null) return 1
+  if (runs !== tier) return 2
+  return p.effort === TIER_MODELS[tier][p.engine].effort ? 0 : 1
+}
+
+/** The rows shown: for every engine on every machine, as a new agent and as an idle member, the candidate that fits the task's
+ *  tier best ([fitRank]), ties by the neutral order, up to [RECORD_MAX]; then more up to 12, none fitting worse than its slot's.
+ *  With no tier, each slot keeps its first row of each tier's model, so both are offered. All come in the neutral order. The
+ *  agent choosing picks between accounts by the project's order; one row a machine, cut at 12, hid a Claude account with 99%
+ *  left behind its machine's used-up Codex (Ken, 2026-11-03). The first row of a slot by title offered Opus and Astra for
+ *  small work 4,366 times against Sonnet and Sol 194 (Ken, 2026-11-05, task #3163). */
+function withEveryAccount<T extends Probe>(ranked: T[], catalog: Catalog, a: Assessment): T[] {
+  const tier = tierOf(a)
+  const rank = (p: T) => tier ? fitRank(p, catalog, tier) : 0
+  const slot = (p: T) => tier ? slotOf(p) : `${slotOf(p)}\0${modelTier(p, catalog) ?? ''}`
+  const best = new Map<string, T>()
+  for (const p of ranked) {
+    const held = best.get(slot(p))
+    if (!held ? best.size < RECORD_MAX : rank(p) < rank(held)) best.set(slot(p), p)
+  }
+  const keep = new Set<T>(best.values())
+  for (const p of ranked) if (keep.size < MAX_SHOWN && rank(p) <= rank(best.get(slot(p))!)) keep.add(p)
   return ranked.filter(p => keep.has(p))
 }
 
@@ -518,15 +569,21 @@ export function machineBrief(room: MachineRoom): string {
   return [...slots, memory, ...disk].join(' · ')
 }
 
+/** A quota's weekly window, the one the project's order compares: its percent left and reset, or a reading with no windows
+ *  named as one; null left when it was not read. */
+function weekly(q: Quota): { left: number | null; resetsAt: number | null } {
+  const week = q.windows?.find(w => w.name === 'weekly')
+  const left = !q.known ? null : week ? week.leftPercent : q.windows?.length ? null : q.leftPercent
+  return { left, resetsAt: week ? week.resetsAt : q.resetsAt }
+}
+
 /** What the agent choosing reads of a row's quota: its fit and its weekly window, the one the project's order compares. */
 export function quotaBrief(p: Pick<Probe, 'quota' | 'gridModel'> & { fit: Pick<Fit, 'status'> }, now: number): string {
   if (p.gridModel) return 'local model, no subscription'
   if (p.quota.metered) return 'metered'
-  const week = p.quota.windows?.find(w => w.name === 'weekly')
-  const left = week ? week.leftPercent : p.quota.windows?.length ? null : p.quota.leftPercent
-  const resetsAt = week ? week.resetsAt : p.quota.resetsAt
+  const { left, resetsAt } = weekly(p.quota)
   // Why it is unknown says what would make it known (River, 2026-11-03): a Team account's reading its owner's machine relays.
-  if (!p.quota.known || left === null) return `${p.fit.status}: ${p.quota.why ? cut(p.quota.why, 200) : 'weekly unknown'}`
+  if (left === null) return `${p.fit.status}: ${p.quota.why ? cut(p.quota.why, 200) : 'weekly unknown'}`
   return `${p.fit.status}: weekly ${Math.round(left)}% left${resetsAt === null ? '' : `, resets in ${weeklyResetsIn(resetsAt, now)}`}`
 }
 
@@ -596,7 +653,7 @@ export function choose(given: Probe[], catalog: Catalog, a: Assessment, now: num
     return [{ ...p, notes: [...p.notes, ...reasons] }]
   }).sort(compare)
   if (!listed.length) return { error: 'NO_CANDIDATE', excluded, ...warned() }
-  const shown = withEveryAccount(listed).map(({ tight, text, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
+  const shown = withEveryAccount(listed, catalog, a).map(({ tight, text, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
   // With nothing first, only one thing is worth saying of quota beside each row's fit: that none of them covers the task.
   const none = listed.every(p => p.fit.status === 'short')
   return { shown, excluded, floor: 1, belowFloor: false, ...(none ? { short: NONE_COVERS } : {}),
@@ -614,23 +671,25 @@ export function decide(choice: Choice): Verdict {
     : { via: 'instructions', p: null, why: choice.adjusted ? `${CHOOSE_BY_INSTRUCTIONS} Plug-ins' findings are in each candidate's notes.` : CHOOSE_BY_INSTRUCTIONS }
 }
 
-/** The record in the shape a backend takes: `current` with the job's kind (what attempts are compared by, backend costs/read.ts)
- *  and no pick (task #2901); `picked` for a backend from before that, which takes a record only with a pick, so `c0` stands in
- *  for one by the old `order`; `unkinded` for a backend from before kinds too, and `v1` without size and fit as well, for one
- *  from before phase 1. Each refuses the newer fields with its strict schema. There is no floor and no policy notes: `floor` 1,
+/** The record in the shape a backend takes: `current` with the job's kind (what attempts are compared by, backend costs/read.ts),
+ *  no pick (task #2901) and each candidate's weekly % left and reset in its fit (task #3163: without them quota at route time
+ *  could not be measured); `unquoted` the same without them, for a backend from before them; `picked` for a backend from before
+ *  task #2901, which takes a record only with a pick, so `c0` stands in for one by the old `order`; `unkinded` for a backend
+ *  from before kinds too, and `v1` without size and fit as well, for one from before phase 1. Each refuses the newer fields with its strict schema. There is no floor and no policy notes: `floor` 1,
  *  `belowFloor` and `notes` false. The server stamps the instructions' revision the decision relied on (phase 4, decision 12). */
-export type RecordShape = 'current' | 'picked' | 'unkinded' | 'v1'
+export type RecordShape = 'current' | 'unquoted' | 'picked' | 'unkinded' | 'v1'
 export function recordOf(choice: Choice, verdict: Verdict, a: Assessment, shape: RecordShape = 'current'): Record<string, unknown> {
-  const v1 = shape === 'v1', kinded = shape === 'current' || shape === 'picked'
+  const v1 = shape === 'v1', kinded = shape !== 'unkinded' && !v1, pickless = shape === 'current' || shape === 'unquoted'
+  const fitOf = (s: Shown) => shape === 'current' ? { ...s.fit, ...weekly(s.quota) } : s.fit
   return {
     assessment: { difficulty: a.difficulty, risk: a.risk, why: a.why, ...(v1 ? {} : { size: a.size }), ...(kinded && a.kind ? { kind: a.kind } : {}),
       ...(kinded && a.local ? { local: true } : {}), ...(kinded && a.model ? { model: a.model } : {}) },
     candidates: choice.shown.map(s => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
-      engine: s.engine, model: s.model, effort: s.effort, quality: s.quality, cost: s.cost, title: s.title, label: s.label, ...(v1 ? {} : { fit: s.fit }),
+      engine: s.engine, model: s.model, effort: s.effort, quality: s.quality, cost: s.cost, title: s.title, label: s.label, ...(v1 ? {} : { fit: fitOf(s) }),
       ...(s.gridModel && s.gridName ? { gridModel: s.gridModel, gridName: s.gridName } : {}) })),
     excluded: choice.excluded.slice(0, 200).map(e => ({ title: e.title, reason: cut(e.reason, 500) })),
     floor: 1, notes: false,
-    ...(shape === 'current' ? { via: verdict.via } : { pick: choice.shown[0]!.id, via: verdict.via === 'only' ? 'only' : 'order' }),
+    ...(pickless ? { via: verdict.via } : { pick: choice.shown[0]!.id, via: verdict.via === 'only' ? 'only' : 'order' }),
     p: verdict.p, belowFloor: false, why: cut(verdict.why, 300),
   }
 }

@@ -1,3 +1,4 @@
+import { RELAY_REASONS } from './relayHealth.js'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -434,6 +435,68 @@ describe('contributed machine executor', () => {
       withEngines(f)
       await f.machine.tick()
       expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: null }])
+    })
+
+    // Task #3106: Kay's Mac read Claude as signed in for its Team account while the owner's relay refused every request, as
+    // the readiness looked only for the relay's file. Routing kept sending work there, and each start lost its task.
+    it('reads a Team account\'s relayed engine as signed out while the relay does not answer, says why, and ready again within a minute', async () => {
+      const f = fixture({}, () => null, () => true)
+      withEngines(f)
+      let health: { ok: true } | { ok: false; reason: string } = { ok: false, reason: RELAY_REASONS.down }
+      const relayHealth = vi.fn(async () => health)
+      const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never)
+      await machine.tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }])
+      health = { ok: true }
+      f.advance(); await machine.tick()
+      // Within the minute the relay's answer is kept for: still read as it was.
+      expect(readings(f)[1]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }])
+      f.step(60_000); await machine.tick()
+      expect(readings(f).at(-1)!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: null }])
+      // The engines themselves were probed once: only the relay is asked again.
+      expect(probes(f)).toHaveLength(1)
+      expect(relayHealth).toHaveBeenCalledTimes(2)
+    })
+
+    // Security review 2 of #3098: the probe asks Claude's path, so an owner sign-in it cannot read is Claude's alone. A Mac
+    // whose owner has only ChatGPT kept getting Codex work before, and must still.
+    it('reads only Claude signed out when the owner\'s Claude sign-in cannot be read, Codex still on the relay', async () => {
+      const f = fixture({}, () => null, () => true)
+      const usage = f.request.getMockImplementation()!
+      f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe'
+        ? { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: false }] } : usage(type, ...rest as []))
+      const relayHealth = vi.fn(async () => ({ ok: false as const, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true as const }))
+      await new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never).tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: true }])
+    })
+
+    // Each probe has the owner's daemon read the owner's Keychain item: while macOS refuses it, it may ask on the owner's screen.
+    it('asks again only five minutes after the owner\'s Claude sign-in could not be read', async () => {
+      const f = fixture({}, () => null, () => true)
+      withEngines(f)
+      const relayHealth = vi.fn(async () => ({ ok: false as const, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true as const }))
+      const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never)
+      await machine.tick()
+      f.step(4 * 60_000); await machine.tick()
+      expect(relayHealth).toHaveBeenCalledOnce()
+      f.step(60_000); await machine.tick()
+      expect(relayHealth).toHaveBeenCalledTimes(2)
+    })
+
+    it('reads a probe that failed outright as a relay that does not answer', async () => {
+      const f = fixture({}, () => null, () => true)
+      withEngines(f)
+      const relayHealth = vi.fn(async () => { throw new Error('unexpected') })
+      await new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never).tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }])
+    })
+
+    it('never asks the relay on a machine without one', async () => {
+      const f = fixture()
+      withEngines(f)
+      const relayHealth = vi.fn(async () => ({ ok: true as const }))
+      await new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never).tick()
+      expect(relayHealth).not.toHaveBeenCalled()
     })
 
     it('reads an engine the probe calls not installed as unknown, since a timed-out shell probe says the same (review of #1743)', async () => {
@@ -2603,6 +2666,22 @@ describe('the allowance a machine reports', () => {
     expect(last(f).quotaReasons).toEqual({ codex: "This account runs on its owner's subscription; its allowance is read on the owner's machine." })
   })
 
+  it("says why a Harness Team account cannot use its owner's subscription when the owner's relay does not answer", async () => {
+    const f = fixture({}, () => null, () => true)
+    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth: async () => ({ ok: false, reason: RELAY_REASONS.refused }) } as never)
+    await machine.tick()
+    expect(last(f).quotaReasons).toEqual({ codex: RELAY_REASONS.refused })
+  })
+
+  it("keeps Codex's reason when only the owner's Claude sign-in cannot be read", async () => {
+    const f = fixture({}, () => null, () => true)
+    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth: async () => ({ ok: false, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true }) } as never)
+    await machine.tick()
+    expect(last(f).quotaReasons).toEqual({ codex: "This account runs on its owner's subscription; its allowance is read on the owner's machine." })
+  })
+
   it('drops the reasons for a backend that refuses them, keeping the allowance, and offers them again ten minutes later', async () => {
     const f = fixture()
     f.request.mockImplementation(limited)
@@ -2854,6 +2933,26 @@ describe('a launched start whose engine stops on a screen', () => {
     await twice(f)
     expect(inputIfScreen).not.toHaveBeenCalled()
     expect(failures()[0]?.error).toBe('Its engine stopped on a folder trust question ("Trust this folder?") that nobody here can answer.')
+  })
+
+  // On 2026-11-04 another program's two hooks stopped every Codex start on DESKTOP-0TFH0OJ at this screen. Esc goes on with
+  // those hooks off: nothing is trusted on the person's behalf, and it applies to any Swarm Codex start, Team-written or not.
+  it.each([
+    ['a Team-written start', { engine: 'codex', projectSettings: 'off' }],
+    ['any other Swarm start', { engine: 'codex' }],
+  ])("skips Codex's review of another program's hooks on %s, with Esc alone", async (_name, request) => {
+    const REVIEW = screens('codex-0163-hooks-review')
+    const { f, inputIfScreen, failures } = launched(REVIEW, 'menu_open', request)
+    await twice(f)
+    expect(inputIfScreen).toHaveBeenCalledWith('launched', ['Escape'], REVIEW)
+    expect(failures()).toEqual([])
+  })
+
+  it('fails, never answers, a screen with those words on another engine', async () => {
+    const { f, inputIfScreen, failures } = launched(screens('codex-0163-hooks-review'), 'menu_open', { engine: 'claude' })
+    await twice(f)
+    expect(inputIfScreen).not.toHaveBeenCalled()
+    expect(failures()[0]?.error).toBe('Its engine stopped on a menu that nobody here can answer.')
   })
 
   // Security review 2 of #3063: the whole screen in a reason carried what a terminal shows only its own session (a sign-in

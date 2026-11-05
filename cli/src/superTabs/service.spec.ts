@@ -383,6 +383,18 @@ it('tells how the instructions are changed, and how the Swarm\'s tidying is turn
   expect(answer.help.commands).toContainEqual({ type: 'tab.tidy', enabled: false, askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } })
   expect(answer.help.command).toContain('tab.tidy turns off, or back on, the Swarm\'s tidying: finished groups archive once their pull requests are merged or closed. The Swarm owner does, or the PM passing on the owner\'s own chat message, with askedIn naming it.')
 })
+// Task #3117: a task is created with its priority, and the PM or a person changes it.
+it('asks for a task\'s priority on conversation.create, says what P0 to P3 mean, and how work.priority changes it', async () => {
+  const t = setup()
+  const answer = await t.ask({ action: 'help' }, owner) as { help: { command: string; mine: string; commands: Array<Record<string, unknown>> } }
+  expect(answer.help.mine).toContain('one line per task, P0 first (number, priority, title,')
+  const creates = answer.help.commands.filter(c => c.type === 'conversation.create')
+  expect(creates.find(c => !('step' in c))).toMatchObject({ title: 'Outcome', priority: 'P0|P1|P2|P3' })
+  // A step carries no priority.
+  expect(creates.find(c => 'step' in c)).not.toHaveProperty('priority')
+  expect(answer.help.commands).toContainEqual({ type: 'work.priority', conversationId: 'GROUP', priority: 'P0' })
+  expect(answer.help.command).toContain('A task\'s priority is P0 (hotfix: something shipped is broken, loses data, or stops people\'s or agents\' work), P1 (needed by users soon), P2 (planned goal) or P3 (tools, docs or process): give one on conversation.create, or it gets P2; only the PM or a person sets P0, or changes a priority later with work.priority.')
+})
 it('tells the Lead that start works only on a machine in the Swarm\'s Machines list', async () => {
   const t = setup()
   const answer = await t.ask({ action: 'help' }, owner) as { help: { start: string } }
@@ -467,6 +479,15 @@ describe('other projects\' work in status', () => {
     expect(state).not.toHaveProperty('otherProjectsWork')
     expect(state).not.toHaveProperty('leadsConversationId')
     expect(list(state.conversations).map(c => c.id)).toEqual(['pilot'])
+  })
+
+  // Task #3117: a task's priority reaches the PM and every other agent as the backend sends it.
+  it('keeps a task\'s priority, for a Lead and for any other agent', async () => {
+    for (const leadId of ['self', 'another-lead']) {
+      const t = setup()
+      swarm(t, leadId === 'self' ? t.agentId : leadId, [{ id: 'hotfix', projectId: 'pilot', number: 7, title: 'Checkout fails', priority: 'P0', agentIds: [] }])
+      expect(list((await status(t)).conversations).find(c => c.id === 'hotfix'), leadId).toMatchObject({ priority: 'P0' })
+    }
   })
 })
 
@@ -1209,7 +1230,7 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     const make = vi.fn(async () => ({ offer, decline: vi.fn() }))
     const service = superTabService(fakeCore(), { teamSetup: make })
     expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, owner)).toEqual({ ok: true, state: 'started' })
-    expect(offer).toHaveBeenCalledWith('join', expect.any(Function), false)
+    expect(offer).toHaveBeenCalledWith('join', expect.any(Function), false, { signInAgain: false })
     for (const asker of [visitor, { local: false, owner: true, accountOwner: true }]) {
       expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, asker as never)).toEqual({ error: 'OWNER_REQUIRED' })
     }
@@ -1219,6 +1240,68 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     await service.requests.super_tabs({ action: 'teamSetup', reason: 'contribute' }, owner)
     expect(make).toHaveBeenCalledTimes(1)
     expect(offer).toHaveBeenCalledTimes(2)
+  })
+
+  it("signs the account in again only when the person's own Set up asks, where it serves another account (#3122)", async () => {
+    const offer = vi.fn(async (_reason: string, _shared: () => Promise<boolean>) => ({ state: 'started' as const }))
+    const service = superTabService(fakeCore(), { teamSetup: vi.fn(async () => ({ offer, decline: vi.fn() })) })
+    await service.requests.super_tabs({ action: 'teamSetup', reason: 'manual', signInAgain: true }, owner)
+    expect(offer).toHaveBeenLastCalledWith('manual', expect.any(Function), false, { signInAgain: true })
+    // Only Set up itself: a check, an automatic moment or anything but true signs nothing in again.
+    await service.requests.super_tabs({ action: 'teamSetupCheck', reason: 'manual', signInAgain: true }, owner)
+    expect(offer).toHaveBeenLastCalledWith('manual', expect.any(Function), true, { signInAgain: false })
+    await service.requests.super_tabs({ action: 'teamSetup', reason: 'join', signInAgain: true }, owner)
+    expect(offer).toHaveBeenLastCalledWith('join', expect.any(Function), false, { signInAgain: false })
+    await service.requests.super_tabs({ action: 'teamSetup', reason: 'manual', signInAgain: 'yes' }, owner)
+    expect(offer).toHaveBeenLastCalledWith('manual', expect.any(Function), false, { signInAgain: false })
+  })
+
+  // Amon, 11-05 (#3215): his Mac's entry was moved into the Swarm by the server (backend computerMoves.ts), so this daemon kept
+  // no host record and never started its host: the Team account it should add sat "joining" for good, and nothing was sent.
+  it("starts its Swarm host when the server says one of its Swarms changed, though it keeps no host record", async () => {
+    const heard = new Set<(notice: never) => void>()
+    const start = vi.fn()
+    const core = fakeCore({ account: { onNotice: vi.fn(fn => { heard.add(fn as never); return () => { heard.delete(fn as never) } }) } })
+    const service = superTabService(core, { team: () => false, host: () => ({ machineId: 'machine-1', start, stop: vi.fn() }) as unknown as SuperTabHost })
+    service.port.connected()
+    expect(start).not.toHaveBeenCalled()
+    // The server's word that it pushes names no Swarm: it says nothing of this machine's.
+    for (const fn of heard) fn({ type: 'swarm_host_changed' } as never)
+    expect(start).not.toHaveBeenCalled()
+    for (const fn of heard) fn({ type: 'swarm_host_changed', tabId: 'tab', lastChangedAt: 1 } as never)
+    expect(start).toHaveBeenCalledOnce()
+    service.port.disconnected()
+    expect(heard.size).toBe(0)
+  })
+
+  it('Retry on the row starts a Swarm host that never ran, and the status says whether it runs', async () => {
+    const start = vi.fn(), retryTeamJoins = vi.fn()
+    const service = superTabService(fakeCore(), { team: () => false,
+      host: () => ({ machineId: 'machine-1', start, stop: vi.fn(), teamJoinFailure: () => null, retryTeamJoins }) as unknown as SuperTabHost })
+    expect(await service.requests.super_tabs({ action: 'teamJoinStatus' }, owner)).toEqual({ ok: true, failure: null, hostRunning: false })
+    expect(await service.requests.super_tabs({ action: 'teamJoinRetry' }, owner)).toEqual({ ok: true })
+    expect(start).toHaveBeenCalledOnce()
+    expect(retryTeamJoins).toHaveBeenCalledOnce()
+    expect(await service.requests.super_tabs({ action: 'teamJoinStatus' }, owner)).toEqual({ ok: true, failure: null, hostRunning: true })
+  })
+
+  // Amon, 11-05 (#3215): his row read "joining" while this host's join of the Team account kept failing, and only the log said
+  // why. This Mac's own Desktop reads the reason, and its Retry tries again at once.
+  it("tells this Mac's Desktop why its Team account has not joined, and retries at once when asked", async () => {
+    const retryTeamJoins = vi.fn()
+    const host = { machineId: 'machine-1', start: vi.fn(), stop: vi.fn(), teamJoinFailure: vi.fn(() => 'Refused: OWNER_REQUIRED'), retryTeamJoins }
+    const service = superTabService(fakeCore(), { host: () => host as unknown as SuperTabHost })
+    // A host that never ran has nothing to say, and is not started by asking.
+    expect(await service.requests.super_tabs({ action: 'teamJoinStatus' }, owner)).toEqual({ ok: true, failure: null, hostRunning: false })
+    await service.requests.super_tabs({ action: 'wake' }, owner)
+    expect(await service.requests.super_tabs({ action: 'teamJoinStatus' }, owner)).toEqual({ ok: true, failure: 'Refused: OWNER_REQUIRED', hostRunning: true })
+    expect(await service.requests.super_tabs({ action: 'teamJoinRetry' }, owner)).toEqual({ ok: true })
+    expect(retryTeamJoins).toHaveBeenCalledOnce()
+    for (const asker of [visitor, { local: false, owner: true, accountOwner: true }]) {
+      expect(await service.requests.super_tabs({ action: 'teamJoinStatus' }, asker as never)).toEqual({ error: 'OWNER_REQUIRED' })
+      expect(await service.requests.super_tabs({ action: 'teamJoinRetry' }, asker as never)).toEqual({ error: 'OWNER_REQUIRED' })
+    }
+    expect(retryTeamJoins).toHaveBeenCalledOnce()
   })
 
   it('tells only Desktop on this Mac why there is no account, asking nothing and starting nothing', async () => {
@@ -1245,7 +1328,7 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     mkdirSync(dirname(hostJournalFile(dataDir, 'machine-1')), { recursive: true })
     writeFileSync(hostJournalFile(dataDir, 'machine-1'), '{}')
     await service.requests.super_tabs({ action: 'teamSetup', reason: 'startup' }, owner)
-    expect(offer).toHaveBeenCalledWith('startup', expect.any(Function), false)
+    expect(offer).toHaveBeenCalledWith('startup', expect.any(Function), false, { signInAgain: false })
   })
 
   it('says whether it is wanted without asking macOS, runs it when the person asks, and remembers "Not now"', async () => {
@@ -1253,9 +1336,9 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     const decline = vi.fn()
     const service = superTabService(fakeCore(), { teamSetup: async () => ({ offer, decline }) })
     expect(await service.requests.super_tabs({ action: 'teamSetupCheck', reason: 'join' }, owner)).toEqual({ ok: true, state: 'wanted' })
-    expect(offer).toHaveBeenLastCalledWith('join', expect.any(Function), true)
+    expect(offer).toHaveBeenLastCalledWith('join', expect.any(Function), true, { signInAgain: false })
     expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'manual' }, owner)).toEqual({ ok: true, state: 'started' })
-    expect(offer).toHaveBeenLastCalledWith('manual', expect.any(Function), false)
+    expect(offer).toHaveBeenLastCalledWith('manual', expect.any(Function), false, { signInAgain: false })
     expect(await service.requests.super_tabs({ action: 'teamSetupDecline' }, owner)).toEqual({ ok: true })
     expect(decline).toHaveBeenCalledOnce()
     for (const action of ['teamSetupCheck', 'teamSetupDecline']) {
@@ -1663,14 +1746,14 @@ describe('mine and task', () => {
     const t = setup()
     withState(t, [{ id: 'g12', number: 12, title: 'Fix login', archived: false, checks: [], assignment: { agentId: t.agentId, status: 'working', result: null } }])
     const answer = await t.ask({ action: 'mine', tabId: 'tab', harnessId: 'native' }, owner) as { value: { text: string } }
-    expect(answer.value.text).toMatch(/^#12 Fix login \(conversation g12\) — working/)
+    expect(answer.value.text).toMatch(/^#12 P2 Fix login \(conversation g12\) — working/)
   })
   it('task reads a dormant group from the group read', async () => {
     const t = setup()
     const dormant = { id: 'g9', number: 9, title: 'Old fix', archived: true, dormant: true, checks: [], brief: 'Goal:\nOld.', assignment: { agentId: t.agentId, status: 'done', result: 'Merged' } }
     withState(t, [], path => path.startsWith('/api/super-tabs/tab/groups/g9?') ? ok({ group: { key: 'g9', version: 1, changedAt: 1, data: dormant } }) : ok({}))
     const answer = await t.ask({ action: 'task', tabId: 'tab', harnessId: 'native', conversationId: 'g9' }, owner) as { value: { text: string } }
-    expect(answer.value.text.split('\n')[0]).toBe('#9 Old fix (conversation g9)')
+    expect(answer.value.text.split('\n')[0]).toBe('#9 P2 Old fix (conversation g9)')
     expect(answer.value.text).toContain('- Dev1, done (current): Merged')
   })
   it('task names a stopped assignee from the task\'s messages', async () => {

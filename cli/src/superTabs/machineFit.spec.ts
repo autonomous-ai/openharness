@@ -30,9 +30,9 @@ describe('the task says its heavy work and its CI', () => {
     expect(parseAssessment({ ...base, needs: { heavy: ['build', 'e2e', 'build'], ci: { jobs: 4, macos: 2 } } }))
       .toMatchObject({ needs: { tools: [], devices: [], heavy: ['build', 'e2e'], ci: { jobs: 4, macos: 2 } } })
     expect(parseAssessment({ ...base, needs: { ci: { jobs: 1 } } })).toMatchObject({ needs: { ci: { jobs: 1, macos: 0 } } })
-    // An empty list says nothing, and a request without either answers exactly as before.
-    expect(parseAssessment({ ...base, needs: { heavy: [] } })).toEqual({ ...base, size: 'medium', needs: { tools: [], devices: [] } })
-    expect(parseAssessment({ ...base, needs: {} })).toEqual({ ...base, size: 'medium', needs: { tools: [], devices: [] } })
+    // An empty list says nothing, and a request without either answers exactly as before (with no size given, `unsized`, task #3163).
+    expect(parseAssessment({ ...base, needs: { heavy: [] } })).toEqual({ ...base, size: 'medium', unsized: true, needs: { tools: [], devices: [] } })
+    expect(parseAssessment({ ...base, needs: {} })).toEqual({ ...base, size: 'medium', unsized: true, needs: { tools: [], devices: [] } })
   })
   it('explains what is wrong with them', () => {
     const base = { difficulty: 'low', risk: 'low', why: 'x' }

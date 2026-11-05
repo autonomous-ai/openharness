@@ -7,6 +7,10 @@ import { isManagedHookCommand } from './notifyHooks.js'
 import { nativeHookHomes, type NativeHookHomes } from './nativeHookHomes.js'
 import { failure, type HookFileRemoval } from './hookRemoval.js'
 
+/** The most YAML tokens a settings file may have. Hermes's own config of 134 KB, 2,438 lines, was over the 4,096 this was, so its
+ *  hooks never installed and every Hermes agent stayed held (DESKTOP-0TFH0OJ, 2026-11-05). The 1 MiB file limit bounds the parse too. */
+const MAX_YAML_TOKENS = 256 * 1024
+
 export interface NativeYamlHooks {
   home: string
   homes: NativeHookHomes
@@ -274,8 +278,9 @@ async function installIn(rule: NativeYamlHooks, cmd: string, home: string, optio
     const budget = new NativeEvidenceBudget()
     let tokens = 0
     for (const _token of new Lexer().lex(config)) {
-      budget.step()
-      if (++tokens > 4096) throw new HookPreparationHeld('the YAML configuration exceeds its structure limit')
+      // Bounded by the deadline and this count, not the budget's operations: those are fewer than an ordinary file's tokens.
+      budget.remaining()
+      if (++tokens > MAX_YAML_TOKENS) throw new HookPreparationHeld('the YAML configuration exceeds its structure limit')
     }
     // Parse before examining markers: marker-like text inside a quoted scalar
     // is somebody else's configuration. Duplicate managed mappings from older

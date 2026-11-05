@@ -22,6 +22,7 @@ import { SESSION_ENDED_KIND } from './buddySessions.js'
 import { canReadGroup, projectOf } from './projects.js'
 import { groupsBy, readBy } from './parts/indexed.js'
 import type { ThreadFacet } from './pageReads.js'
+import type { ReplyRow } from '../push/notices.js'
 import { shownNameOf } from './personNames.js'
 import { FIELDS, readable, row as messageRow, type Row } from './read/inbox.js'
 
@@ -85,9 +86,9 @@ export interface ReplyFanout { state: SuperTabState; threads: ReadonlyMap<string
  *  Reads: the roots and quoted messages by id, the people's thread marks by id and their chat settings by id: three reads
  *  whatever the thread's length, the last two only when someone is told. Writes: one row per person told, in one createMany. */
 export async function writeReplyActivity(tx: Tx, tabId: string, messages: MessageDraft[], sequences: ReadonlyMap<string, number>, now: number,
-  fanout?: ReplyFanout): Promise<void> {
+  fanout?: ReplyFanout): Promise<ReplyRow[]> {
   const replies = messages.filter(m => m.thread && m.thread !== m.id && !agentOnly(m.source ?? null, m.recipients) && m.source?.kind !== SESSION_ENDED_KIND)
-  if (!replies.length) return
+  if (!replies.length) return []
   const ids = [...new Set(replies.flatMap(m => [m.thread!, ...(m.replyTo ? [m.replyTo] : [])]))]
   // By id through its index, as a plain $in (parts/indexed.ts): Prisma's `in` plans slowly.
   const found = new Map((await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: ids }, tabId } }, { $project: { conversationId: 1, author: 1 } }]))
@@ -114,7 +115,7 @@ export async function writeReplyActivity(tx: Tx, tabId: string, messages: Messag
   })
   const markIds = [...new Set(recipients.flatMap(({ message, people }) => people.map(personId =>
     stableId(tabId, message.conversationId, message.thread!, personId))))]
-  if (!markIds.length) return
+  if (!markIds.length) return []
   const marks = await tx.superTabThreadMark.aggregateRaw({ pipeline: [
     { $match: { _id: { $in: markIds } } }, { $project: { _id: 1, follow: 1 } },
   ] }) as unknown as Array<{ _id: string; follow?: boolean | null }>
@@ -132,6 +133,7 @@ export async function writeReplyActivity(tx: Tx, tabId: string, messages: Messag
       ...sequences.has(m.id) ? { sequence: sequences.get(m.id)! } : {}, ...m.alsoInChat ? { alsoInChat: true } : {} }))
   })
   if (data.length) await tx.superTabActivity.createMany({ data })
+  return data
 }
 
 /** The row of the reaction `reactionId`, for the person who wrote the message, unless they reacted themselves: written when the
@@ -151,9 +153,12 @@ export async function writeReactionActivity(tx: Tx, write: { tabId: string; reac
 /** A digest of which of the person's rows are unread, moving when one is written, read or removed: a client reads its list
  *  again when it moves, never on a timer. It carries no count and no chat: only that something changed. */
 export async function activityDigest(tx: Tx, tabId: string, personId: string, now: number): Promise<string> {
-  const rows = await tx.superTabActivity.findMany({ where: { tabId, personId, createdAt: { gt: new Date(now - ACTIVITY_EXPIRY_MS) }, ...unread },
-    orderBy: { createdAt: 'desc' }, take: ACTIVITY_DIGEST_ROWS, select: { id: true } })
-  return createHash('sha256').update(rows.map(r => r.id).sort().join('\n')).digest('base64url').slice(0, 16)
+  // A plain `$match` through the unread index: `readAt: null` matches a row with no readAt too. Prisma's read sent an `$expr`
+  // the index could bound only by person, and examined every row of theirs of 30 days (task #3146).
+  const rows = await readBy(tx, 'SuperTabActivity', 'unread', [
+    { $match: { tabId, personId, readAt: null, createdAt: { $gt: { $date: new Date(now - ACTIVITY_EXPIRY_MS).toISOString() } } } },
+    { $sort: { createdAt: -1 } }, { $limit: ACTIVITY_DIGEST_ROWS }, { $project: { _id: 1 } }])
+  return createHash('sha256').update(rows.map(r => r._id as string).sort().join('\n')).digest('base64url').slice(0, 16)
 }
 
 export interface ActivityItem {

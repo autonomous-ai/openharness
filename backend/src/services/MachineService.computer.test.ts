@@ -180,6 +180,17 @@ describe('destroying a team machine', () => {
     })
   })
 
+  it("ends its team account's remembered sign-ins on every pod, after the session is revoked (#3041)", async () => {
+    findUnique.mockResolvedValue({ machineId: 'm1', userId: 'u1', managerId: '', authMode: 'remote', billingStatus: 'not_required',
+      autonomousEnv: 'prod', computerId: 'b'.repeat(32), sessionKind: 'team' })
+    update.mockResolvedValue({})
+    sessionUpdateMany.mockResolvedValue({ count: 1 })
+    await machineService.destroy('a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4', { sub: 'u1', role: 'user', autonomousEnv: 'prod' })
+    const epoch = redisSet.mock.calls.findIndex(([key]) => key === 'hnauth:epoch:u1')
+    expect(epoch).toBeGreaterThanOrEqual(0)
+    expect(redisSet.mock.invocationCallOrder[epoch]).toBeGreaterThan(sessionUpdateMany.mock.invocationCallOrder[0]!)
+  })
+
   it('touches no session for a machine with no computer', async () => {
     findUnique.mockResolvedValue({ machineId: 'm1', userId: 'u1', managerId: '', authMode: 'remote', billingStatus: 'not_required', autonomousEnv: 'prod' })
     update.mockResolvedValue({})
