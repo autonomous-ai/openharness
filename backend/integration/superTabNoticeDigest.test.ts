@@ -989,6 +989,25 @@ describe('the PM\'s inbox at its turn\'s end', () => {
     expect((await deliveryOf(message, f.lead)).status).toBe('queued')
   })
 
+  // Relay's review of #3278: at idle only people's messages and crew needs go at once; a routine notice keeps the 5-minute
+  // digest, as NOTICE_DIGEST_MS batches them (each message is a new turn of a long-context session).
+  it('keeps a routine notice for the 5-minute digest when the PM is idle, and sends a person\'s message at once', async () => {
+    const f = await swarm({ capable: true })
+    await f.report()
+    const notice = await f.write({ kind: 'work-stalled' }, f.lead)
+    expect((await deliveryOf(notice, f.lead)).status).toBe('gathered')
+    f.clock.now += MIN
+    await listed(f, 'idle')
+    expect(await inboxes(f.tab)).toEqual([])
+    f.clock.now += 4 * MIN
+    await listed(f, 'idle')
+    expect(await inboxes(f.tab)).toHaveLength(1)
+    // A person's message at idle goes in the next read, with no wait.
+    await ask(f, 'One more thing.')
+    await listed(f, 'idle')
+    expect((await inboxes(f.tab)).at(-1)).toContain('One more thing.')
+  })
+
   it('lists a crew need under Crew needs, with its options', async () => {
     const f = await swarm({ capable: true })
     await f.report()

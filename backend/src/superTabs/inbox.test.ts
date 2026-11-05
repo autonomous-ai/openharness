@@ -94,6 +94,15 @@ describe('the sections of the PM\'s inbox', () => {
       .toContain(`${agentName} needs a person: Please approve the spend.`)
   })
 
+  // Relay's review of #3278: a routed tag's crew-need row starts with its own lead-in, which the line drops.
+  it('drops the crew-need row\'s lead-in from a need with no question of its own', () => {
+    const { f } = setup()
+    const line = crewNeedLine(f.state, { conversationId: f.task, messageId: 'c3' }, { agentId: f.dev, personIds: ['owner'], messageId: 'm', conversationId: f.task },
+      'Crew need for owner, through you (people talk only to the PM):\n\nCan I merge the hotfix tonight?')
+    expect(line).toContain(': Can I merge the hotfix tonight?')
+    expect(line).not.toContain('through you')
+  })
+
   it('keeps a person\'s message whole up to 1000 characters, by username', () => {
     const { f } = setup()
     const long = 'x'.repeat(900)
