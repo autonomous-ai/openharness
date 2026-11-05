@@ -48,7 +48,7 @@ function seededWeek(): ReflectionInput {
     groups.push(group(g, [{ assignmentId: `d${i}`, firstReview: false }], { by: `d${i}b`, at: at(daysAgo) + 3 * HOUR }))
   })
   const failed: FailedStart = { engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', at: at(0.2) }
-  return { now: NOW, rows, groups, failedStarts: [failed, { ...failed, at: at(3) }], document: '# Project instructions\n\n## Routing\n\n- Opus builds.\n' }
+  return { now: NOW, rows, groups, failedStarts: [failed, { ...failed, at: at(3) }], evidence: [], truncated: false, document: '# Project instructions\n\n## Routing\n\n- Opus builds.\n' }
 }
 /** [n] more first reviews of a kind on a model, all as [passed], each shipped at $[cost]. */
 function more(week: ReflectionInput, kind: string, engine: string, model: string, effort: string, n: number, passed: boolean) {
