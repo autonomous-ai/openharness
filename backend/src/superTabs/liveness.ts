@@ -300,16 +300,25 @@ export function nextLossAt(state: SuperTabState, machineId: string): number | un
   return ends.length ? Math.min(...ends) : undefined
 }
 
-/** Why a worker has lost its task now, or null while it still holds it. Only a machine that has reported can be offline. */
-function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number, steps: StepIndex): string | null {
+/** Why [worker] cannot work now, whatever it holds: its session stopped (unless [closedOnPurpose]: asleep, task #3398),
+ *  its machine offline, a usage limit, or its model failing. A task its agent holds is lost for it (lostReason); the crew
+ *  dispatch hands such a member nothing (dispatch.ts freeCrew). Only a machine that has reported can be offline. */
+export function unavailableReason(state: SuperTabState, worker: Agent, now: number, closedOnPurpose = false): string | null {
   const pool = state.machines?.find(m => m.machineId === worker.machineId)
-  if (pool?.observation?.stoppedHarnessIds.includes(worker.harnessId)) return sessionStopped(pool.name)
+  if (!closedOnPurpose && pool?.observation?.stoppedHarnessIds.includes(worker.harnessId)) return sessionStopped(pool.name)
   if (pool?.observation && now - pool.observation.receivedAt > OFFLINE_LOST_MS) return machineOffline(pool.name)
   const limited = limitReason(worker, now)
   if (limited) return limited
   // Its host alerts only after ten minutes of retries without an answer (cli superTabs/terminal.ts MODEL_WAIT_MS), so a
   // short burst of failures that recovers never gets here.
   if (worker.alerting?.includes('model')) return 'its model keeps failing'
+  return null
+}
+
+/** Why a worker has lost its task now, or null while it still holds it. */
+function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number, steps: StepIndex): string | null {
+  const gone = unavailableReason(state, worker, now)
+  if (gone) return gone
   if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return null
   // A crew member 3 hours without progress of its own puts its task back in its lane (task #3400), however busy its screen.
   if (crewClock(group, worker, assignment, now, DISPATCH_RULES) === 'return') return returnReason(laneOf(group, DISPATCH_RULES.lanes))

@@ -287,7 +287,7 @@ describe('the crew\'s clocks: 2 hours without progress tells the member, 3 hours
 })
 
 describe('the capacity line per lane', () => {
-  it('counts each lane\'s waiting and busy tasks, its oldest wait, and the waiting tasks in hand-out order', () => {
+  it('counts each lane\'s waiting and busy tasks and its oldest wait, for the pass\'s log line', () => {
     const s = crewSwarm(['Ash'])
     s.state.agents.find(a => a.id === s.ids.Ash)!.crew = { role: 'Engineer', lane: 'desktop', at: 1000, by: 'owner' }
     const [a, b, c] = [s.task('A', ['desktop/lib/a.dart']), s.task('B', ['desktop/lib/b.dart']), s.task('C', ['desktop/lib/c.dart'])]
@@ -297,8 +297,8 @@ describe('the capacity line per lane', () => {
     s.group(b).liveness = { state: 'orphaned', why: 'unstarted', since: NOW - 2.5 * 3_600_000 }
     s.group(c).liveness = { state: 'orphaned', why: 'lost', since: NOW - 3_600_000 }
     expect(laneCapacity(s.state, 'lead', DISPATCH_RULES)).toEqual([
-      { lane: 'backend', waiting: 1, busy: 0, oldestAt: null, taskIds: [s.state.conversations.find(g => g.title === 'Server')!.id] },
-      { lane: 'Desktop', waiting: 2, busy: 1, oldestAt: NOW - 2.5 * 3_600_000, taskIds: [c, b] },
+      { lane: 'backend', waiting: 1, busy: 0, oldestAt: null },
+      { lane: 'Desktop', waiting: 2, busy: 1, oldestAt: NOW - 2.5 * 3_600_000 },
     ])
     const desktop = laneCapacity(s.state, 'lead', DISPATCH_RULES)[1]!
     expect(capacityLine(desktop, NOW)).toBe('Desktop: 2 waiting, 1 busy, oldest 2 h')

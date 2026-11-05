@@ -12,6 +12,7 @@ import { barredFromTeamWritten } from './teamWritten.js'
 import { digestOf, localNow } from './digest.js'
 import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 import { queueOrder, queueSiblings } from './taskQueue.js'
+import { unavailableReason } from './liveness.js'
 import { FAILED, type PullRequestWatch } from './pullRequestEvents.js'
 
 const HOUR_MS = 3_600_000
@@ -121,7 +122,9 @@ export function freeCrew(state: SuperTabState, projectId: string, rules: Dispatc
   return state.agents
     .filter(agent => !!agent.crew && agentProjectId(state, agent) === projectId && !leads.has(agent.id) && !isBuddy(agent)
       && agent.workDecision !== 'stop' && !moving(agent) && (asleep(agent) || !sessionClosed(state, agent, now)) && !launching(agent)
-      && !busy.has(agent.id) && (handedBy.get(agent.id) ?? 0) < rules.maxHanded && reachable(agent))
+      && !busy.has(agent.id) && (handedBy.get(agent.id) ?? 0) < rules.maxHanded && reachable(agent)
+      // A member its machine or engine cannot serve now would lose the task at once (liveness.ts): until that clears.
+      && !unavailableReason(state, agent, now, asleep(agent)))
     .map((agent, at) => ({ agent, at, handed: handedBy.get(agent.id) ?? 0 }))
     .sort((a, b) => a.handed - b.handed || a.at - b.at)
     .map(entry => entry.agent)
@@ -151,16 +154,21 @@ function takes(member: Agent, lane: string | null, rules: DispatchRules): boolea
  *  A task it just lost to the 3-hour clock is not offered to it. */
 export function candidatesFor(state: SuperTabState, member: Agent, rules: DispatchRules, now: number, open = openTasks(state, agentProjectId(state, member)!, now),
   skip: Skip = () => false) {
-  const lostByIt = (group: Conversation) => group.lostAttempt?.agentId === member.id && group.assignment?.status === 'lost'
-    && !!group.assignment.lost?.reason.startsWith(RETURN_PREFIX)
-  const pinned = open.filter(g => g.pin?.agentId === member.id).sort((a, b) => a.pin!.at - b.pin!.at)
+  const lostByIt = (group: Conversation) => group.lostAttempt?.agentId === member.id && lostToClock(group)
+  const pinned = open.filter(g => pinOf(g)?.agentId === member.id).sort((a, b) => pinOf(a)!.at - pinOf(b)!.at)
   const crewIds = new Set(state.agents.filter(a => a.crew).map(a => a.id))
-  const lane = open.filter(g => !pinned.includes(g) && !(g.pin && crewIds.has(g.pin.agentId)) && !lostByIt(g)
+  const lane = open.filter(g => !pinned.includes(g) && !(pinOf(g) && crewIds.has(pinOf(g)!.agentId)) && !lostByIt(g)
     && takes(member, laneOf(g, rules.lanes), rules))
   // Team-written code goes to Team accounts only (teamWritten.ts); a pick refused this round is not sent again (store.ts).
   const allowed = (group: Conversation) => !barredFromTeamWritten(state, group, member) && !skip(group.id, member.id)
   return [...pinned.filter(allowed).map(group => ({ group, why: 'pin' as const })), ...lane.filter(allowed).map(group => ({ group, why: 'lane' as const }))]
 }
+
+/** Lost to the 3-hour clock: its last member gets it not again at once (review 1 of #3230's plan, Review Focus). */
+const lostToClock = (group: Conversation): boolean => group.assignment?.status === 'lost' && !!group.assignment.lost?.reason.startsWith(RETURN_PREFIX)
+/** [group]'s pin, unless it names the member that just lost it to the clock: then it goes to the lane (review 2 of #3230). */
+const pinOf = (group: Conversation): Conversation['pin'] =>
+  group.pin && !(lostToClock(group) && group.lostAttempt?.agentId === group.pin.agentId) ? group.pin : undefined
 
 /** A pick the caller leaves out: one whose work.assign was refused this round (store.ts dispatchCrew). */
 export type Skip = (conversationId: string, agentId: string) => boolean
@@ -188,7 +196,7 @@ export function dispatchPlan(state: SuperTabState, projectId: string, rules: Dis
 
 /** One lane's line of the capacity read: its waiting tasks (open, nobody's, in hand-out order), how many of its tasks are in
  *  someone's hands, and since when the longest-waiting one has waited (null when no wait was recorded). */
-export interface LaneCapacity { lane: string; waiting: number; busy: number; oldestAt: number | null; taskIds: string[] }
+export interface LaneCapacity { lane: string; waiting: number; busy: number; oldestAt: number | null }
 
 /** When [group] began waiting with nobody holding it: as its liveness recorded, else when its last attempt was lost. */
 const waitingSince = (group: Conversation): number | undefined =>
@@ -205,7 +213,7 @@ export function laneCapacity(state: SuperTabState, projectId: string, rules: Dis
     const inHand = busy.filter(g => laneOf(g, rules.lanes) === name).length
     if (!waiting.length && !inHand) return []
     const since = waiting.map(waitingSince).filter((t): t is number => t !== undefined)
-    return [{ lane: name, waiting: waiting.length, busy: inHand, oldestAt: since.length ? Math.min(...since) : null, taskIds: waiting.map(g => g.id) }]
+    return [{ lane: name, waiting: waiting.length, busy: inHand, oldestAt: since.length ? Math.min(...since) : null }]
   })
 }
 
@@ -214,14 +222,6 @@ export function capacityLine(c: LaneCapacity, now: number): string {
   const age = c.oldestAt === null ? null : Math.max(0, now - c.oldestAt)
   const oldest = age === null ? '' : age >= HOUR_MS ? `, oldest ${Math.floor(age / HOUR_MS)} h` : `, oldest ${Math.floor(age / 60_000)} min`
   return `${c.lane}: ${c.waiting} waiting, ${c.busy} busy${oldest}`
-}
-
-/** The read's `derived.lanes`: each project [visible] (the reader's view) shows that has a crew, by project id; undefined when
- *  none has. */
-export function derivedLanes(state: SuperTabState, visible: SuperTabState, now = Date.now()): Record<string, LaneCapacity[]> | undefined {
-  const crewed = new Set(state.agents.filter(a => a.crew).map(a => agentProjectId(state, a)))
-  const lanes = projectsOf(visible).filter(p => crewed.has(p.id)).map(p => [p.id, laneCapacity(state, p.id, DISPATCH_RULES, now)] as const)
-  return lanes.length ? Object.fromEntries(lanes) : undefined
 }
 
 /** What [watch] says its task's builder should come back for: a merge conflict, or a failed check run at its head. */

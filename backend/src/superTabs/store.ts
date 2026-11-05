@@ -61,7 +61,7 @@ import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from
 import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
-import { candidatesFor, DISPATCH_RULES, dispatchPlan, freeCrew, openTasks, pinBuilder, pullRequestPin, roundOf, type Skip } from './dispatch.js'
+import { candidatesFor, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type Skip } from './dispatch.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
 import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
@@ -2214,7 +2214,13 @@ export class SuperTabStore {
     const task = command.type === 'work.assign' ? state.conversations.find(c => c.id === command.conversationId) : undefined
     const project = task && groupProject(state, task)
     if (!pm || !task || !project || pm.workDecision === 'stop' || ledProject(state, agentId)?.id !== project.id) fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
-    if (!openTasks(state, project.id, this.now()).some(open => open.id === task.id)) fail('DISPATCH_STALE', 'This task is no longer one to hand out.', 409)
+    // The pick as this write's state has it: the member still free and in the crew, the task still its candidate (open, its
+    // day come, its lane or pin, not the one it just lost). What moved since the pass read is refused, and the next pass decides.
+    const assigned = command.type === 'work.assign' ? command.agentId : undefined
+    const now = this.now(), member = freeCrew(state, project.id, DISPATCH_RULES, now).find(a => a.id === assigned)
+    if (!member || !candidatesFor(state, member, DISPATCH_RULES, now).some(c => c.group.id === task.id)) {
+      fail('DISPATCH_STALE', 'This task is no longer one to hand out to this member.', 409)
+    }
     await this.agentGrant(tx, state, pm)
     if (onTeamAccount(state, pm)) this.teamCommand(state, pm.machineId, user, command)
     return { kind: 'agent', agentId, machineOwnerId: pm.machineOwnerId }
@@ -2235,6 +2241,8 @@ export class SuperTabStore {
   }
 
   private readonly dispatchWaiting = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Whether a write scheduled a dispatch pass for [tabId] that has not run yet (dispatchSoon). */
+  dispatchScheduled(tabId: string): boolean { return this.dispatchWaiting.has(tabId) }
   /** Runs the crew dispatch for [tabId] a second from now, once however many writes asked: on servers whose hooks turn it on. */
   private dispatchSoon(tabId: string): void {
     if (!this.hooks.dispatch || this.dispatchWaiting.has(tabId)) return
@@ -2255,7 +2263,8 @@ export class SuperTabStore {
    * up to DISPATCH_TRIES. A project with no PM, or no free crew, is left alone.
    */
   async dispatchCrew(tabId: string): Promise<{ assigned: number; skipped: Record<string, number> }> {
-    const out = { assigned: 0, skipped: {} as Record<string, number> }
+    const out = { assigned: 0, skipped: {} as Record<string, number> }, started = performance.now()
+    const load: Record<string, { waiting: number; busy: number }> = {}
     const skipCode = (code: string) => { out.skipped[code] = (out.skipped[code] ?? 0) + 1 }
     const row = await this.db.superTab.findUnique({ where: { id: tabId }, select: { ...SWARM_ROW, autonomousEnv: true } })
     if (!row || row.deletedAt || row.format !== 2) return out
@@ -2265,6 +2274,11 @@ export class SuperTabStore {
     for (const project of projectsOf(state)) {
       const free = freeCrew(state, project.id, rules, now)
       if (!free.length) continue
+      for (const lane of laneCapacity(state, project.id, rules, now)) {
+        const total = load[lane.lane] ??= { waiting: 0, busy: 0 }
+        total.waiting += lane.waiting
+        total.busy += lane.busy
+      }
       const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
       const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
       if (!lead) { skipCode('NO_PM'); continue }
@@ -2298,8 +2312,11 @@ export class SuperTabStore {
         }
       }
     }
-    // One line a pass that did something (backend/AGENTS.md rule 4): counts and codes, never names.
-    if (out.assigned || Object.keys(out.skipped).length) logger.info('[swarm-dispatch] pass', { tabId, ...out })
+    // One line a pass that did something (backend/AGENTS.md rule 4; ENGINEERING.md 8): counts, codes, lane loads and how long
+    // it took, never names or ids but the Swarm's.
+    if (out.assigned || Object.keys(out.skipped).length) {
+      logger.info('[swarm-dispatch] pass', { tabId, ...out, lanes: load, ms: Math.round(performance.now() - started) })
+    }
     return out
   }
 

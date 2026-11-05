@@ -37,6 +37,10 @@ export interface Audience { people: Array<{ id: string; generation: string }> }
 /** A conversation with its own message counter (`lastMessageSequence` and message sequences compare within one group).
  *  `dormant` is set only on a dormant group fetched on demand; `audience` only on a private conversation. */
 export type GroupView = Omit<Conversation, 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'> & {
+  /** A task's lane, as the crew dispatch hands it out (dispatch.ts laneOf: its PM's, else its owned paths'), null when no
+   *  lane owns its paths; absent on a chat or a step. From the group alone, so a change read's changed tasks keep every lane's
+   *  count whole on the reader's side (task #3400). Absent from an older backend. */
+  handOutLane?: string | null
   /** When it shipped (ms): its first Done; absent until it has. Nothing else of its ledger is sent. */
   shippedAt?: number
 }
@@ -128,10 +132,6 @@ export interface Derived {
   /** One Buddy per person per Swarm (Dee, 10-31): a person's one Buddy chat, its Buddy reading every project they read, and New
    *  session in one project. An older server says nothing, and its app keeps a Buddy per project. */
   swarmBuddy?: true
-  /** Each project with a crew the reader reads, by id: its lanes' waiting and busy tasks, the oldest wait (ms) and the waiting
-   *  tasks in the order the Swarm hands them out (dispatch.ts laneCapacity, task #3400). Absent when none has a crew, and from
-   *  an older backend. */
-  lanes?: Record<string, import('../dispatch.js').LaneCapacity[]>
 }
 export interface OtherProjectWorkView {
   conversationId: string; projectName: string; title: string; owns: string[]; status: WorkStatus; agentName: string; pr: string | null
