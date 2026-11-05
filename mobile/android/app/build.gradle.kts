@@ -80,4 +80,7 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // Pushes (PushService.kt). FCM is the only way to wake an Android app that is not running; only
+    // its messaging module, with no Analytics. Its project values are in res/values/firebase.xml.
+    implementation("com.google.firebase:firebase-messaging:26.0.1")
 }

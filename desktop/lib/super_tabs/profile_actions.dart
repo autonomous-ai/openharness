@@ -88,7 +88,7 @@ extension SuperTabProfileActions on SuperTabController {
     return failure;
   }
 
-  /// Whether the reader may edit or delete [message]: their own plain post
+  /// Whether the reader may edit [message]: their own plain post
   /// (no `source`: no task line, route or note the server wrote in their
   /// name), not deleted, in a conversation they may write in. The server
   /// decides (backend messageEdits.ts); this only offers the choices.
@@ -101,6 +101,22 @@ extension SuperTabProfileActions on SuperTabController {
         message.author['kind'] == 'person' &&
         message.authorId == accountId &&
         message.source.isEmpty &&
+        !message.deleted;
+  }
+
+  /// Deletion also permits the reader's own Buddy proposal. Both its
+  /// attribution and source owner must agree; the server authorizes again.
+  bool canDelete(SuperTabMessage message) {
+    final group = snapshot?.conversation(message.conversationId);
+    return canWrite &&
+        group != null &&
+        !group.archived &&
+        !isEarlierBuddyChat(group) &&
+        message.author['kind'] == 'person' &&
+        message.authorId == accountId &&
+        (message.source.isEmpty ||
+            (message.source['kind'] == 'buddy-proposal' &&
+                message.source['personId'] == accountId)) &&
         !message.deleted;
   }
 

@@ -40,6 +40,8 @@ export interface InstructionsWrite {
   writtenBy: { kind: 'person' | 'agent' | 'system'; id: string }
   askedBy: string
   at: number
+  /** The lines this save dropped, with their kind and people (ruleGuard.ts droppedLines); absent when it dropped none. */
+  dropped?: import('./ruleGuard.js').DroppedLine[]
 }
 
 /** A note the coordinator keeps (design, PM notes). Times in epoch ms; `expiresAt` null when it lasts until removed. */

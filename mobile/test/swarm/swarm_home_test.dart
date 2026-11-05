@@ -904,7 +904,7 @@ void main() {
       );
     });
 
-    testWidgets('a project with a task-chat tag stays bold without a number; '
+    testWidgets('a project with a task-chat tag stays quiet without a number; '
         'the rest are quiet; each on one line, with no people and no time', (
       tester,
     ) async {
@@ -913,7 +913,7 @@ void main() {
 
       const mobileRow = 'swarm-project-$tab-$project';
       const webRow = 'swarm-project-$tab-$web';
-      expect(weightOf(tester, mobileRow, 'Mobile'), AppFont.semibold);
+      expect(weightOf(tester, mobileRow, 'Mobile'), isNot(AppFont.semibold));
       expect(inside(mobileRow, find.byType(SwarmTags)), findsNothing);
       expect(find.bySemanticsLabel(RegExp('1 mention')), findsNothing);
       expect(weightOf(tester, webRow, 'Web'), isNot(AppFont.semibold));
@@ -940,50 +940,78 @@ void main() {
       semantics.dispose();
     });
 
-    testWidgets('a project with a chat read since is bold, with a dot and no '
-        'count', (tester) async {
-      final fake = backend();
-      final host = await pump(tester, fake);
-      moveOn(fake, {
-        webLead: {
-          ...groupData(
-            webLead,
-            title: 'Web',
-            agentIds: ['agent-cleo'],
-            leadId: 'agent-cleo',
-            lastMessageSequence: 1,
-          ),
-          'projectId': web,
-        },
-      });
-      await host.session!.inbox.refresh();
-      await tester.pumpAndSettle();
+    testWidgets(
+      'a person writing in the project chat makes it bold, with a dot and no '
+      'count',
+      (tester) async {
+        final fake = backend();
+        final host = await pump(tester, fake);
+        moveOn(fake, {
+          webLead: {
+            ...groupData(
+              webLead,
+              title: 'Web',
+              agentIds: ['agent-cleo'],
+              leadId: 'agent-cleo',
+              lastMessageSequence: 1,
+            ),
+            'projectId': web,
+            'lastPersonSequence': 1,
+          },
+        });
+        await host.session!.inbox.refresh();
+        await tester.pumpAndSettle();
 
-      const webRow = 'swarm-project-$tab-$web';
-      expect(weightOf(tester, webRow, 'Web'), AppFont.semibold);
-      expect(inside(webRow, key('swarm-project-unread')), findsOneWidget);
-      expect(inside(webRow, find.textContaining('@')), findsNothing);
-      expect(inside(webRow, find.byType(SwarmTags)), findsNothing);
-    });
+        const webRow = 'swarm-project-$tab-$web';
+        expect(weightOf(tester, webRow, 'Web'), AppFont.semibold);
+        expect(inside(webRow, key('swarm-project-unread')), findsOneWidget);
+        expect(inside(webRow, find.textContaining('@')), findsNothing);
+        expect(inside(webRow, find.byType(SwarmTags)), findsNothing);
+      },
+    );
 
-    testWidgets('projects newest first, the time off the row', (tester) async {
-      final now = DateTime.utc(2026, 10, 29, 10);
-      int ago(int minutes) =>
-          now.subtract(Duration(minutes: minutes)).millisecondsSinceEpoch;
-      final fake = backend();
-      timed(fake, {for (final id in mobileChats) id: ago(9), webLead: ago(2)});
-      await pump(tester, fake, now: () => now);
-
-      expect(
-        y(tester, 'swarm-project-$tab-$web'),
-        lessThan(y(tester, 'swarm-project-$tab-$project')),
-      );
-      expect(inside('swarm-project-$tab-$web', find.text('2m')), findsNothing);
-      expect(
-        inside('swarm-project-$tab-$project', find.text('9m')),
-        findsNothing,
-      );
-    });
+    testWidgets(
+      'projects stay alphabetical after new activity, the time off the row',
+      (tester) async {
+        final now = DateTime.utc(2026, 10, 29, 10);
+        int ago(int minutes) =>
+            now.subtract(Duration(minutes: minutes)).millisecondsSinceEpoch;
+        final fake = backend();
+        timed(fake, {
+          for (final id in mobileChats) id: ago(9),
+          webLead: ago(2),
+        });
+        final host = await pump(tester, fake, now: () => now);
+        void alphabetical() => expect(
+          y(tester, 'swarm-project-$tab-$project'),
+          lessThan(y(tester, 'swarm-project-$tab-$web')),
+        );
+        alphabetical();
+        moveOn(fake, {
+          webLead: {
+            ...groupData(webLead, title: 'Web', lastMessageSequence: 99),
+            'projectId': web,
+            'lastPersonSequence': 99,
+            'changedAt': now.millisecondsSinceEpoch,
+          },
+        });
+        await host.session!.inbox.refresh();
+        await tester.pumpAndSettle();
+        alphabetical();
+        expect(
+          inside('swarm-project-$tab-$web', key('swarm-project-unread')),
+          findsOneWidget,
+        );
+        expect(
+          inside('swarm-project-$tab-$web', find.text('2m')),
+          findsNothing,
+        );
+        expect(
+          inside('swarm-project-$tab-$project', find.text('9m')),
+          findsNothing,
+        );
+      },
+    );
 
     testWidgets('a project quiet for a day folds under Other projects, which '
         'a tap opens and closes', (tester) async {
@@ -1039,8 +1067,10 @@ void main() {
     testWidgets('a long press pins a project at the top, with no Pinned '
         'heading (anh Dee, 2026-11-04); Unpin puts it back', (tester) async {
       final host = await pump(tester, backend());
+      host.session!.home.setSort(SwarmHomeSort.newest);
+      await tester.pumpAndSettle();
       double top(String id) => y(tester, 'swarm-project-$tab-$id');
-      expect(top(web), lessThan(top(project)), reason: 'newer first');
+      expect(top(web), lessThan(top(project)), reason: 'explicit newest first');
 
       await tester.longPress(key('swarm-project-$tab-$project'));
       await tester.pumpAndSettle();
@@ -1313,8 +1343,8 @@ void main() {
       );
       expect(
         weightOf(tester, 'swarm-project-$tab-$project', 'Mobile'),
-        AppFont.semibold,
-        reason: 'the tag waiting on the person makes it bold',
+        isNot(AppFont.semibold),
+        reason: 'a task tag keeps it listed without bolding its project chat',
       );
     });
 
@@ -1545,8 +1575,8 @@ void main() {
       );
       final order = [
         'swarm-heading-$tab',
-        webRow,
         mobileRow,
+        webRow,
         'swarm-heading-$second',
         backendRow,
       ];

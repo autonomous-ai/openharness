@@ -68,11 +68,15 @@ export interface Derived {
   machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown }; clientVersion?: string
     /** Engines suspended there now after failed starts, with why (engineHealth.ts); absent when none. */
     suspendedEngines?: Record<string, string>
+    /** Pickup timeout cooldown: applies to every new start, including grid models. */
+    machineSuspended?: string
     /** A person reading a teammate's machine: where New Project's Product Manager would run there by engine, the machine
      *  (its Team account or itself), or why it cannot now (leadStart.ts leadChoices). Absent for their own machines. */
     lead?: Record<string, { machineId: string } | { refused: string }> }>
   /** A Lead agent only. */
   otherProjectsWork?: OtherProjectWorkView[]
+  /** A project agent only: the account each project's PM runs on, a project it may not read named "another project". */
+  pmAccounts?: Array<{ machineId: string; hostMachineId?: string; engine: string; project: string; pm: string }>
   /** The Swarm's owner only: projects nobody owns, which they may delete but never read (projects.ts ownerlessProjects). */
   ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
   /** A person only. */

@@ -24,6 +24,8 @@ import android.os.Looper
 import android.provider.Settings
 import java.io.ByteArrayOutputStream
 import java.net.Inet4Address
+import com.google.firebase.FirebaseApp
+import com.google.firebase.messaging.FirebaseMessaging
 import io.flutter.FlutterInjector
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -153,15 +155,111 @@ class MainActivity : FlutterActivity() {
       }
     }
     receiveLink(intent)
+
+    // `harness/push` — this phone's push address, the pushes tapped, and those still shown (Dart:
+    // `lib/notify/push_channel.dart`; drawn by Android itself). `address` turns pushes on and answers
+    // the FCM token; `forget` turns them off and deletes the token, so a phone signed out is reached
+    // by nothing. A tapped push's data waits here until `take`, as a link does; `arrived` says more
+    // wait, `changed` that FCM handed over a new token.
+    push = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "harness/push").also {
+      it.setMethodCallHandler { call, result ->
+        when (call.method) {
+          "address" -> pushAddress(result)
+          "forget" -> forgetPush(result)
+          "take" -> {
+            result.success(ArrayList(waitingPushes))
+            waitingPushes.clear()
+          }
+          // The slots of our pushes still shown: the app does not post them again. The server tags each
+          // push with the slot the app gives its own notice for the same thing: a thread's, a tag's, a
+          // decision's (task #3248); an older server tagged a reply's push with its own key.
+          "shown" -> result.success(
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) emptyList()
+            else getSystemService(android.app.NotificationManager::class.java).activeNotifications
+              .mapNotNull { shown -> shown.tag?.takeIf { tag -> PUSH_SLOTS.any { tag.startsWith(it) } } }
+          )
+          else -> result.notImplemented()
+        }
+      }
+    }
+    PushService.tokenChanged = { push?.invokeMethod("changed", null) }
+    receivePush(intent)
+  }
+
+  override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+    PushService.tokenChanged = null
+    super.cleanUpFlutterEngine(flutterEngine)
   }
 
   private var links: MethodChannel? = null
   private val waitingLinks = mutableListOf<String>()
+  private var push: MethodChannel? = null
+  private val waitingPushes = mutableListOf<Map<String, String>>()
 
-  // singleTop: a link opened while the app runs comes here, not to a new activity.
+  // singleTop: a link opened while the app runs comes here, not to a new activity. So does a tapped
+  // push.
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     receiveLink(intent)
+    receivePush(intent)
+  }
+
+  // The registration token, deprecated since firebase-messaging 25.1.0 for an Installation ID
+  // (`register()`): FCM's HTTP v1 send, which the backend uses, documents tokens only so far.
+  @Suppress("DEPRECATION")
+  private fun pushAddress(result: MethodChannel.Result) {
+    // No Firebase values in this build: no push to give.
+    if (FirebaseApp.getApps(this).isEmpty()) {
+      result.success(null)
+      return
+    }
+    val messaging = FirebaseMessaging.getInstance()
+    messaging.isAutoInitEnabled = true
+    messaging.token.addOnCompleteListener { task ->
+      val token = if (task.isSuccessful) task.result else null
+      if (token.isNullOrEmpty()) {
+        result.error("unregistered", task.exception?.message, null)
+      } else {
+        result.success(mapOf("token" to token, "platform" to "android"))
+      }
+    }
+  }
+
+  @Suppress("DEPRECATION")
+  private fun forgetPush(result: MethodChannel.Result) {
+    if (FirebaseApp.getApps(this).isEmpty()) {
+      result.success(null)
+      return
+    }
+    val messaging = FirebaseMessaging.getInstance()
+    messaging.isAutoInitEnabled = false
+    messaging.deleteToken().addOnCompleteListener { result.success(null) }
+  }
+
+  // The server's push is a notification Android draws itself while the app is away
+  // (backend/src/push/fcm.ts). Its tap starts the app with the push's data as extras, beside FCM's
+  // own `google.message_id`. Only `key` and `link` go on to Dart, which opens nothing but the chat a
+  // `swarm:` link names, as a message link (`receiveLink`) already can.
+  private fun receivePush(intent: Intent?) {
+    if (intent == null) return
+    // Reopened from Recents, Android hands back the intent that first started the app: that push
+    // was opened then.
+    if ((intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
+    // Another app may start the launcher with extras of its own making: ones that cannot be read
+    // are no push, not a crash.
+    val data = HashMap<String, String>()
+    try {
+      val extras = intent.extras ?: return
+      if (extras.getString(PushService.MESSAGE_ID).isNullOrEmpty()) return
+      for (key in PushService.KEYS) extras.getString(key)?.let { data[key] = it }
+      // Taken: the same intent handed back to a recreated activity is not tapped again.
+      intent.removeExtra(PushService.MESSAGE_ID)
+    } catch (error: RuntimeException) {
+      return
+    }
+    waitingPushes.add(data)
+    while (waitingPushes.size > 20) waitingPushes.removeAt(0)
+    push?.invokeMethod("arrived", null)
   }
 
   private fun receiveLink(intent: Intent?) {
@@ -264,6 +362,9 @@ class MainActivity : FlutterActivity() {
   }
 
   private companion object {
+    /** How the server tags a push's notification (backend `push/fcm.ts`, the notice's slot). */
+    val PUSH_SLOTS = listOf("thread:", "mention:", "decision:", "reply:")
+
     /** The long edge a clipboard image leaves here at, at most: `_preferredMaxEdge` in Dart's
      *  `lib/terminal/image_transcode.dart`, which every picture is scaled to before it is sent. */
     const val MAX_EDGE = 1600

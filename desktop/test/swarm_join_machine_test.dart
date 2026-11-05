@@ -116,6 +116,77 @@ void main() {
     c.dispose();
   });
 
+  test('own account is enabled only after a restricted contribution', () async {
+    final c = server.controller(account: 'mate');
+    await c.refresh();
+    final note = await daemon.adder().add(
+      c,
+      machineId: 'mate-mac',
+      machineName: 'MacBook Air',
+      current: () => true,
+      ownAccount: true,
+    );
+    expect(contributions().single['teamAccountOnly'], isTrue);
+    expect(server.posts.map((p) => (p['command'] as Map)['type']), [
+      'machine.contribute',
+      'machine.ownAccountWork',
+    ]);
+    expect(server.posts.last['command'], {
+      'type': 'machine.ownAccountWork',
+      'machineId': 'mate-mac',
+      'allowed': true,
+    });
+    expect(note?.ownAccount, isTrue);
+    expect(note?.accountProblem, isNull);
+    c.dispose();
+  });
+
+  test(
+    'a refused own-account choice is visible and never reported as enabled',
+    () async {
+      server.unknownCommand = (command) =>
+          command['type'] == 'machine.ownAccountWork';
+      final c = server.controller(account: 'mate');
+      await c.refresh();
+      final note = await daemon.adder().add(
+        c,
+        machineId: 'mate-mac',
+        machineName: 'MacBook Air',
+        current: () => true,
+        ownAccount: true,
+      );
+      expect(note?.added, isTrue);
+      expect(note?.ownAccount, isFalse);
+      expect(note?.accountProblem, isNotEmpty);
+      c.dispose();
+    },
+  );
+
+  test('account change after contribution never sends consent', () async {
+    final c = server.controller(account: 'mate');
+    await c.refresh();
+    var active = true;
+    final adder = SwarmJoinMachine(
+      machineRequest: daemon.request,
+      readResources: (_) async => daemon.resources,
+      wake: (_) async {
+        active = false;
+      },
+    );
+    final note = await adder.add(
+      c,
+      machineId: 'mate-mac',
+      machineName: 'MacBook Air',
+      current: () => active,
+      ownAccount: true,
+    );
+    expect(note, isNull);
+    expect(server.posts.map((p) => (p['command'] as Map)['type']), [
+      'machine.contribute',
+    ]);
+    c.dispose();
+  });
+
   test('waits for the folder setup, then falls back to its offer when memory cannot be read', () async {
     daemon.resources = null;
     daemon.prepared = [
@@ -170,6 +241,39 @@ void main() {
       c.dispose();
     }
   });
+
+  // Task #3212: a reinstall added a Mac back to a Swarm its person had taken
+  // it out of. The Swarm tells each reader their own removed computers.
+  test(
+    'leaves out a computer its person took out of the Swarm, and only that one',
+    () async {
+      server.state['removedMachines'] = ['MATE-MAC'];
+      final c = server.controller(account: 'mate');
+      await c.refresh();
+      final note = await daemon.adder().add(
+        c,
+        machineId: 'mate-mac',
+        machineName: 'MacBook Air',
+        current: () => true,
+      );
+      expect(note, isNull);
+      expect(contributions(), isEmpty);
+      expect(daemon.asked, isEmpty);
+
+      // Another of their computers, taken out: this one is still added.
+      server.state['removedMachines'] = ['mate-old-laptop'];
+      await c.refresh();
+      final added = await daemon.adder().add(
+        c,
+        machineId: 'mate-mac',
+        machineName: 'MacBook Air',
+        current: () => true,
+      );
+      expect(added?.added, isTrue);
+      expect(contributions(), hasLength(1));
+      c.dispose();
+    },
+  );
 
   test('says why it could not add it: no Claude Code or Codex, Harness too old, or refused', () async {
     Future<SwarmJoinedMachine?> attempt() async {
@@ -477,6 +581,67 @@ void noteTests() {
     );
     expect(find.byKey(const Key('swarm-joined-machine-pause')), findsNothing);
     expect(find.byKey(const Key('swarm-joined-machine-remove')), findsNothing);
+    c.dispose();
+  });
+
+  // Task #3160: a failed Team account offer was only a log line.
+  testWidgets(
+    'a Team account that could not be offered says where to set it up',
+    (tester) async {
+      final c = await mount(
+        tester,
+        const SwarmJoinedMachine(
+          tabId: 'tab',
+          swarmName: 'Pilot',
+          machineId: 'mate-mac',
+          machineName: 'MacBook Air',
+          teamProblem: 'Set it up from Machines.',
+        ),
+      );
+      expect(
+        find.text(
+          'This Mac was added to Pilot, but Harness could not offer its Harness '
+          'Team account. Set it up from Machines.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('swarm-joined-machine-pause')), findsNothing);
+      c.dispose();
+    },
+  );
+
+  testWidgets('own-account join note discloses actual access', (tester) async {
+    final c = await mount(
+      tester,
+      const SwarmJoinedMachine(
+        tabId: 'tab',
+        swarmName: 'Pilot',
+        machineId: 'mate-mac',
+        machineName: 'MacBook Air',
+        ownAccount: true,
+      ),
+    );
+    expect(find.textContaining('run as you'), findsOneWidget);
+    expect(find.textContaining('only in Harness Team'), findsNothing);
+    expect(find.byKey(const Key('swarm-joined-machine-pause')), findsOneWidget);
+    c.dispose();
+  });
+
+  testWidgets('unconfirmed consent tells the person to check Machines', (
+    tester,
+  ) async {
+    final c = await mount(
+      tester,
+      const SwarmJoinedMachine(
+        tabId: 'tab',
+        swarmName: 'Pilot',
+        machineId: 'mate-mac',
+        machineName: 'MacBook Air',
+        accountProblem: 'Check Machines to confirm the account setting.',
+      ),
+    );
+    expect(find.textContaining('Check Machines'), findsOneWidget);
+    expect(find.textContaining('only in Harness Team'), findsNothing);
     c.dispose();
   });
 

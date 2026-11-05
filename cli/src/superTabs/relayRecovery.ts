@@ -16,6 +16,10 @@
  * A grant that does not answer restarts nothing, since a relaunch would fail the same way. Each agent is restarted at most
  * once per grant, so an agent failing for any other reason is left to its model alert as before.
  *
+ * A signed-out screen counts as a failing model too (./terminal.ts `signedOut`: Claude Code's "Not logged in · Please run
+ * /login" or "API Error: 401", task #3301): a Team agent launched while its owner's grant could not be read, or holding a
+ * token the relay no longer takes, is relaunched the same way once a grant reads and answers.
+ *
  * ⚠️ The token is never logged: a grant is compared only by a digest, held in memory.
  */
 import { createHash } from 'node:crypto'

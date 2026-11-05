@@ -193,6 +193,14 @@ class SwarmReadMarks extends ChangeNotifier {
         max(server, max(_marks[group.id] ?? 0, _held[group.id] ?? 0));
   }
 
+  /// The desktop's project-row rule: only a person's main-stream message
+  /// past the read mark, never agents' progress or system notices.
+  bool unreadForPeople(SuperTabConversation group) =>
+      _loaded &&
+      _started &&
+      !swarmMuted(reader, group) &&
+      group.lastPersonSequence > (readThrough(group.id) ?? 0);
+
   /// How far the person has read [conversationId]: the higher of the
   /// server's mark and this phone's; null until the phone's are read back,
   /// and once access is lost.

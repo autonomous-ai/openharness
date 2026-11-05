@@ -364,7 +364,13 @@ void main() {
         files: [
           {..._file('a1', 'shot.png', 'image/png'), 'unlinked': true},
         ],
-        fileLink: (_) => throw StateError('no longer yours'),
+        // The server's answer for a reader who may no longer read it; an
+        // error of the ask itself is asked again (file_links.dart).
+        fileLink: (_) => throw const SuperTabFailure(
+          'FORBIDDEN',
+          'no longer yours',
+          statusCode: 403,
+        ),
       );
 
       expect(find.text('shot.png can’t be shown here.'), findsOneWidget);

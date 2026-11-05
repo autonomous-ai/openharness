@@ -89,6 +89,16 @@ describe('the built-in template', () => {
     expect(role('Engineer', 'Reviewer')).toContain(line)
     expect(role('Reviewer', 'Tester')).toContain(line)
   })
+  // Ken and Dee, 11-05: lamp-gtm's PM held dee's build behind its weekly line and asked dee three options. Nobody is asked
+  // about quota now; an account any project's PM runs on keeps 20% of its weekly quota for that PM, and every other is used.
+  it('keeps 20% of the week on an account any project\'s PM runs on, uses every other account, and asks no one', () => {
+    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\s+/g, ' ')
+    expect(routing).toContain('2. An account any project\'s PM runs on (this project\'s or another\'s; the route notes it) keeps 20% of its weekly quota for that PM: below 20% left it takes no new work and idle agents there are not reused. Above that it is used like any other account.')
+    expect(routing).toContain('- Nobody is asked about quota or whose account to use. When no account fits, the work waits for the soonest reset, and the task says so.')
+    expect(routing).toContain('or whose account is a PM\'s and falls below 20%, hands its pushed branch')
+    for (const gone of ['share of its week left', 'owner asks for', 'takes work as any other account does']) expect(routing).not.toContain(gone)
+  })
+
   it('describes the spec\'s roles, workflow and routing in one short document', () => {
     for (const heading of ['## Roles', '## Workflow', '## Routing', '### PM', '### Engineer', '### Reviewer', '### Tester']) {
       expect(INSTRUCTIONS_TEMPLATE).toContain(heading)
@@ -109,6 +119,26 @@ describe('the built-in template', () => {
     expect(pm).toContain('- When the project owner answers Yes to a nightly routing proposal, writes its line into Routing, naming the owner as who asked.')
     expect(Buffer.byteLength(INSTRUCTIONS_TEMPLATE)).toBeLessThan(16_384)
   })
+  // Ken, 11-05: openharness's and lamp's PMs own their projects; what made them owners is every new project's PM's now.
+  it('gives every new project\'s PM the owner\'s lines: it owns the project, decides, says no, moves fast and reports what is stuck', () => {
+    const pm = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('### PM'), INSTRUCTIONS_TEMPLATE.indexOf('### Engineer')).replace(/\s+/g, ' ')
+    for (const line of [
+      'Owns the project: its roadmap, deadlines, progress and quality, and every task and pull request.',
+      'Decides, doesn\'t ask: it decides and reports the result.',
+      'It never asks "OK to build?", "should I" or "do you want", and never offers a choice it can make itself: it picks, says why in one line, and goes.',
+      'Says no by default to new features and growing scope: it answers each request Accept, Reshape, Later (and when) or No, naming why.',
+      'Thinks fast and slow:',
+      'A bug that breaks what already ships, or stops people\'s or agents\' work, is a hotfix at once; it never waits for someone to say "urgent".',
+      'Sets deadlines for today, in hours.',
+      'Each hour it finds where work waits and fixes the slowest step itself, without waiting to be told.',
+      'A status gives the goal, what must exist today, and what is stuck (owner and time); never what is already done.',
+      'Before answering a message in a task, reads that task\'s state and its latest messages.',
+      'Links every issue and pull request number it names.',
+    ]) expect(pm).toContain(line)
+    // Shared lines name no person (instructions attribution).
+    expect(pm).not.toMatch(/\((Ken|Dee|Leo)[,)]/)
+  })
+
   it('keeps a Reviewer or Tester working on its step while the Engineer fixes findings: blocked is for a person', () => {
     // Ken, 2026-11-02: 47 of a day's "Stuck" statuses reached the PM from Reviewers waiting on the Engineer's fixes.
     const workflow = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Workflow'), INSTRUCTIONS_TEMPLATE.indexOf('## Routing'))
@@ -132,19 +162,13 @@ describe('the built-in template', () => {
     // window is never hit, so only the weekly quota counts. No plan size here: projects differ.
     const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
     expect(routing).toContain('Every assignment (an Engineer, a Reviewer, a Tester, an idle agent reused) picks in this order:')
-    expect(routing).toContain('The PM\'s own account (the engine it runs on, on its machine) keeps the PM running for the whole week.')
-    expect(routing).toContain('weekly quota left above the share of its week left (with 5 of 7 days to go, above 71%)')
+    expect(routing).toContain('keeps 20% of its weekly quota for that PM')
     expect(routing).toContain('Every other account is used while it has weekly quota left: the one resetting soonest first')
     expect(routing).toContain('An idle agent is reused only between candidates equal so far')
     expect(routing).toContain('"Idle" or "first in the list" is not a reason.')
     expect(routing).toContain('hands its pushed branch to an agent on another account.')
     expect(routing).toContain('Urgent work (production down, security) ignores quota.')
     for (const gone of ['share per day', '5-hour', 'Engineers move to the next model', 'Max 20x']) expect(routing).not.toContain(gone)
-  })
-  it('lets the PM\'s own account take work as any other once no other account has weekly quota left', () => {
-    // Ken, 2026-11-03: with every other account out, work should not wait on the PM's weekly line.
-    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
-    expect(routing).toContain('- When no other account has weekly quota left, the PM\'s account takes work as any other account does.')
   })
   it('says the route lists every engine on every machine with its weekly quota, which the PM orders by itself', () => {
     // Ken, 2026-11-03: the route's rows now carry each account's quota, and no account is cut from them.
@@ -240,15 +264,16 @@ describe('instructions.save', () => {
     expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 1, instructionsHash: instructionsHash(INSTRUCTIONS_TEMPLATE) })
     const effects = f.run(save(1, 'Reviews run on Opus.'))
     expect(effects.result).toMatchObject({ projectId: 'lead', revision: 2, hash: instructionsHash('Reviews run on Opus.') })
+    // Replacing the template drops its lines, which the revision keeps for the History (#3151).
     expect(effects.instructions).toEqual({ projectId: 'lead', revision: 2, hash: instructionsHash('Reviews run on Opus.'), text: 'Reviews run on Opus.',
-      summary: 'Reviews run on Opus', writtenBy: { kind: 'person', id: 'owner' }, askedBy: 'owner', at: 1000 })
+      summary: 'Reviews run on Opus', writtenBy: { kind: 'person', id: 'owner' }, askedBy: 'owner', at: 1000, dropped: expect.any(Array) })
     expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 2, instructionsHash: instructionsHash('Reviews run on Opus.') })
     // Dee and Ken, 11-05 (#3132): a save is read in the Instructions history, never posted in the project chat or any other.
     expect(effects.messages).toEqual([])
   })
 
   // #3132: the chat line #3021 added is gone with the line; what the save changed stays readable as two kept revisions.
-  it('posts nothing for a save that changes lines, a long change or an unreadable earlier revision, and still records each revision', () => {
+  it('posts nothing for a save that changes lines or a long change, and still records each revision', () => {
     const f = fixture()
     const stored = { instructions: { revision: 1, text: '# Rules\n\n- Opus builds.\n- Haiku reviews.' } }
     const effects = f.run(save(1, '# Rules\n\n- Opus builds.\n- Sonnet reviews.\n- Tests run first.'), owner, stored)
@@ -258,9 +283,7 @@ describe('instructions.save', () => {
     const long = f.run(save(2, ['# Rules', ...rules].join('\n')), owner, { instructions: { revision: 2, text: '# Rules' } })
     expect(long.messages).toEqual([])
     expect(long.instructions).toMatchObject({ revision: 3 })
-    const unreadable = f.run(save(3, 'Other.'), owner, { instructions: null })
-    expect(unreadable.messages).toEqual([])
-    expect(unreadable.instructions).toMatchObject({ revision: 4 })
+    // An unreadable earlier revision is refused (#3151): the rule check needs it.
   })
 
   it('refuses a save on an older revision with the current revision and text, so the caller can merge', () => {
@@ -270,7 +293,7 @@ describe('instructions.save', () => {
     let refused: unknown
     try { f.run(save(1, 'Peer text.'), peer, { instructions: { revision: 2, text: 'Owner text.' } }) } catch (error) { refused = error }
     expect(refused).toMatchObject({ code: 'INSTRUCTIONS_STALE', status: 409, details: { revision: 2, text: 'Owner text.' } })
-    expect(f.run(save(2, 'Peer text.'), peer).result.revision).toBe(3)
+    expect(f.run(save(2, 'Peer text.'), peer, { instructions: { revision: 2, text: 'Owner text.' } }).result.revision).toBe(3)
     // A project without a document yet runs on the template, which is what a stale save there merges with.
     f.state.projects![0]!.instructionsRevision = undefined
     let template: unknown
@@ -302,7 +325,7 @@ describe('instructions.save', () => {
     const effects = f.run(save(1, 'Peer text.', { askedBy: 'peer' }))
     expect(effects.instructions).toMatchObject({ writtenBy: { kind: 'person', id: 'owner' }, askedBy: 'peer' })
     expect(effects.messages).toEqual([])
-    const own = f.run(save(2, 'Owner text.', { askedBy: 'owner' }))
+    const own = f.run(save(2, 'Owner text.', { askedBy: 'owner' }), owner, { instructions: { revision: 2, text: 'Peer text.' } })
     expect(own.instructions).toMatchObject({ askedBy: 'owner' })
     expect(own.messages).toEqual([])
   })
@@ -324,6 +347,177 @@ describe('instructions.save', () => {
     const projectId = created.result.projectId as string
     expect(f.state.projects!.find(p => p.id === projectId)).toMatchObject({ instructionsRevision: 1, instructionsHash: instructionsHash(INSTRUCTIONS_TEMPLATE) })
     expect(created.instructions).toMatchObject({ projectId, revision: 1, text: INSTRUCTIONS_TEMPLATE, writtenBy: { kind: 'person', id: 'owner' }, askedBy: 'owner' })
+  })
+})
+
+// Task #3151 (Ken, 11-05, from lamp): a PM's tidy dropped Leo's rule, judging it impossible without asking him, and the
+// "(0xken15, 4 Nov)" of a rule it kept; nothing checked the save, and with instruction-change posts leaving the chat nobody
+// would have seen it.
+describe('an instructions save keeps the rules people gave', () => {
+  const save = (baseRevision: number, text: string, extra: Partial<Extract<Command, { type: 'instructions.save' }>> = {}): Command =>
+    ({ type: 'instructions.save', projectId: 'lead', baseRevision, text, summary: 'Tidied the instructions', ...extra })
+  const leo = 'A bug that reaches stable: the previous build is promoted back within the hour and the fix ships the same day (peer, 2026-11-04).'
+  const tony = 'Every phone app task runs on Tony\'s Mac first, its Engineer and its Tester both (owner, 4 Nov).'
+  const quiet = 'No releases between 18:00 and 09:00 Vietnam time (owner, 2026-11-02).'
+  const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
+  const base = doc(leo, tony, quiet)
+  /** The revision a save replaces, saved at 500: an approval must come after it. */
+  const stored = (text = base, revision = 1) => ({ instructions: { revision, text, at: 500 } })
+  /** A tab with the peer invited and the project's coordinator, whose saves carry askedBy. */
+  function pm() {
+    const f = fixture()
+    f.invite()
+    const lead = f.add('lead', 'lead', true)
+    return { f, lead }
+  }
+  const refusal = (run: () => unknown) => {
+    try { run() } catch (error) { return error as { code: string; status: number; message: string; details: { dropped: unknown[] } } }
+    throw new Error('the save went through')
+  }
+  const approval = (id: string, author: { kind: 'person' | 'agent'; id: string }, source = false, createdAt = 900, conversationId = 'lead') =>
+    ({ id, author: { ...author, name: author.id, membershipGeneration: 'tab' }, source, createdAt, conversationId })
+
+  it('refuses a save that drops an attributed rule, listing it and its person', () => {
+    const { f, lead } = pm()
+    const refused = refusal(() => f.run(save(1, doc(tony, quiet), { askedBy: 'owner' }), as(lead), stored()))
+    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', status: 409,
+      details: { dropped: [{ rule: leo, people: ['peer'], why: 'removed' }] } })
+    expect(refused.message).toContain(leo)
+    expect(refused.message).toContain('peer')
+    expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 1 })
+  })
+
+  it('refuses a save that keeps a rule but drops its (person, date)', () => {
+    const { f, lead } = pm()
+    const unattributed = 'Every phone app task runs on Tony\'s Mac first, its Engineer and its Tester both.'
+    const refused = refusal(() => f.run(save(1, doc(leo, unattributed, quiet), { askedBy: 'owner' }), as(lead), stored()))
+    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ rule: tony, people: ['owner'], why: 'unattributed' }] } })
+    // Another person's save is held to the same: only the rule's own person drops it.
+    expect(refusal(() => f.run(save(1, doc(leo, unattributed, quiet)), peer, stored()))).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+  })
+
+  it('accepts merging two attributed rules that keep both attributions, and a rewording by the same person', () => {
+    const { f, lead } = pm()
+    const merged = 'No releases between 18:00 and 09:00 Vietnam time, and every phone app task runs on Tony\'s Mac first, its Engineer and '
+      + 'its Tester both (owner, 2026-11-02; owner, 4 Nov).'
+    expect(f.run(save(1, doc(leo, merged), { askedBy: 'owner' }), as(lead), stored()).result.revision).toBe(2)
+    const reworded = 'A bug that reaches stable: the previous build is promoted back within the hour, and the fix ships the same day (peer, 4 Nov).'
+    expect(f.run(save(2, doc(reworded, merged), { askedBy: 'owner' }), as(lead), stored(doc(leo, merged), 2)).result.revision).toBe(3)
+  })
+
+  it('lets a drop approved by the rule\'s person go through, and tells that person in one private line', () => {
+    const { f, lead } = pm()
+    const effects = f.run(save(1, doc(tony, quiet), { askedBy: 'owner', approvals: ['yes-from-peer'] }), as(lead),
+      { ...stored(), approvals: [approval('yes-from-peer', { kind: 'person', id: 'peer' })] })
+    expect(effects.result.revision).toBe(2)
+    const notices = effects.messages.filter(m => m.conversationId !== 'lead')
+    expect(notices.length).toBeGreaterThan(0)
+    for (const notice of notices) {
+      expect(notice.recipients).toEqual([])
+      expect(notice.text.split('\n')).toHaveLength(1)
+      expect(notice.text).toContain('A bug that reaches stable')
+      const chat = f.state.conversations.find(c => c.id === notice.conversationId)!
+      expect(chat.audience).toMatchObject({ people: [{ id: 'peer' }] })
+    }
+    // Nothing in the project chat: a save posts no line there (#3132), and the person's notice is theirs alone.
+    expect(effects.messages.filter(m => m.conversationId === 'lead')).toEqual([])
+  })
+
+  it('lets the rule\'s person drop it themselves with no approval and no notice', () => {
+    const { f } = pm()
+    const effects = f.run(save(1, doc(tony, quiet)), peer, stored())
+    expect(effects.result.revision).toBe(2)
+    expect(effects.messages).toEqual([])
+  })
+
+  it('takes only the person\'s own message as approval: never askedBy, another person\'s, an agent\'s or a relayed one', () => {
+    const { f, lead } = pm()
+    const drop = (approvals: ReturnType<typeof approval>[], askedBy = 'owner') =>
+      refusal(() => f.run(save(1, doc(tony, quiet), { askedBy, approvals: approvals.map(a => a.id) }), as(lead), { ...stored(), approvals }))
+    expect(drop([], 'peer')).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    expect(drop([approval('owner-said', { kind: 'person', id: 'owner' })])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    expect(drop([approval('pm-said', { kind: 'agent', id: lead })])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    expect(drop([approval('buddy-said', { kind: 'person', id: 'peer' }, true)])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    // Review of #3112 (Heron21): an old "thanks", from before the revision this save replaces, approves nothing; nor does a
+    // message in a conversation of another project.
+    expect(drop([approval('old-thanks', { kind: 'person', id: 'peer' }, false, 400)])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    expect(drop([approval('elsewhere', { kind: 'person', id: 'peer' }, false, 900, 'another-project-chat')])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    // A message the save names but the store did not find approves nothing.
+    expect(refusal(() => f.run(save(1, doc(tony, quiet), { askedBy: 'owner', approvals: ['missing'] }), as(lead), stored())))
+      .toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+  })
+
+  it('knows a person by their username, shown name or email, and several people each approve their own rule', () => {
+    const { f, lead } = pm()
+    f.state.people.find(p => p.id === 'peer')!.name = 'Leo Tran'
+    const both = 'Phone builds go to Tony\'s Mac (Leo and owner, 2026-11-03).'
+    const text = doc(leo.replace('(peer,', '(Leo,'), both)
+    // Leo is the peer by their shown name: the peer's own save drops their rule.
+    expect(f.run(save(1, doc(both)), peer, stored(text)).result.revision).toBe(2)
+    // A rule of two people needs both.
+    const two = stored(doc(both), 2)
+    expect(refusal(() => f.run(save(2, doc(), { askedBy: 'owner' }), as(lead), { ...two, approvals: [approval('p', { kind: 'person', id: 'peer' })] })))
+      .toMatchObject({ details: { dropped: [{ people: ['Leo', 'owner'] }] } })
+    expect(f.run(save(2, doc(), { askedBy: 'owner', approvals: ['p', 'o'] }), as(lead), { ...two,
+      approvals: [approval('p', { kind: 'person', id: 'peer' }), approval('o', { kind: 'person', id: 'owner' })] }).result.revision).toBe(3)
+  })
+
+  // River, 11-05: with the instruction-change line leaving the chat (#3101), the History keeps every line a save dropped, with
+  // its kind and who gave it, and the summary only counts them.
+  it('keeps every dropped line with the revision: its kind, sorted by the PM or worked out, and who gave it', () => {
+    const { f, lead } = pm()
+    const stale = 'The v0.5.40 release waits for Tony\'s phone test on 4 Nov.'
+    const dup = 'No releases between 18:00 and 09:00 Vietnam time.'
+    const odd = 'Agents greet each other in the chat.'
+    const before = doc(leo, tony, quiet, stale, dup, odd)
+    const effects = f.run(save(1, doc(tony, quiet), { askedBy: 'owner', approvals: ['yes-from-peer'],
+      dropped: [{ text: stale, kind: 'expired' }, { text: dup, kind: 'merged' }, { text: 'A bug that reaches stable', kind: 'expired' }] }), as(lead),
+    { ...stored(before), approvals: [approval('yes-from-peer', { kind: 'person', id: 'peer' })] })
+    expect(effects.instructions!.dropped).toEqual([
+      // A person's rule is one whatever the PM called it.
+      { text: leo, kind: 'rule', people: ['peer'] },
+      { text: stale, kind: 'expired', people: [] },
+      { text: dup, kind: 'merged', people: [] },
+      // Not sorted, and its words are not kept elsewhere: said, never hidden.
+      { text: odd, kind: 'unsorted', people: [] },
+    ])
+    // A line the PM did not sort whose words are still there is merged; a save that drops nothing keeps no list.
+    const both = 'No releases between 18:00 and 09:00 Vietnam time, and every phone app task runs on Tony\'s Mac first, its Engineer and its Tester '
+      + 'both (owner, 2026-11-02; owner, 4 Nov).'
+    const merged = f.run(save(2, doc(both, 'No deploys on Sundays or holidays.'), { askedBy: 'owner' }), as(lead),
+      stored(doc(tony, quiet, 'No deploys on Sundays.', 'No deploys on holidays.'), 2))
+    expect(merged.instructions!.dropped).toEqual([{ text: tony, kind: 'merged', people: ['owner'] }, { text: quiet, kind: 'merged', people: ['owner'] },
+      { text: 'No deploys on Sundays.', kind: 'merged', people: [] }, { text: 'No deploys on holidays.', kind: 'merged', people: [] }])
+    expect(f.run(save(3, `${doc(both)}\n- Tests run first.`, { askedBy: 'owner' }), as(lead), stored(doc(both), 3)).instructions!.dropped).toBeUndefined()
+  })
+
+  // A tidy counts as done only when a save follows it (pmSchedule.ts tidyRequest): the coordinator's save, not a person's.
+  it('marks a pending daily tidy done on the coordinator\'s save that says it is the tidy', () => {
+    const { f, lead } = pm()
+    f.state.projects![0]!.schedule = { lastSlot: 1, tidiedOn: '2026-11-04', tidyPending: true }
+    f.run(save(1, `${base}\n- Tests run first.`, { tidy: true }), peer, stored())
+    expect(f.state.projects![0]!.schedule).toMatchObject({ tidyPending: true })
+    // Review of #3112 (Heron21): a correction the coordinator saves after the request is not the tidy.
+    f.run(save(2, `${base}\n- Tests run first.\n- Lint first.`, { askedBy: 'owner' }), as(lead), stored(`${base}\n- Tests run first.`, 2))
+    expect(f.state.projects![0]!.schedule).toMatchObject({ tidyPending: true })
+    f.run(save(3, base, { askedBy: 'owner', tidy: true }), as(lead), stored(`${base}\n- Tests run first.\n- Lint first.`, 3))
+    expect(f.state.projects![0]!.schedule).toEqual({ lastSlot: 1, tidiedOn: '2026-11-04', tidiedRevision: 4 })
+  })
+
+  // Review of #3112 (Heron21): with the revision it replaces unread, nothing can be checked, so nothing is saved.
+  it('refuses a save when the revision it replaces cannot be read', () => {
+    const { f, lead } = pm()
+    f.run(save(1, base), owner, stored())
+    expect(refusal(() => f.run(save(2, doc(tony), { askedBy: 'owner' }), as(lead), { instructions: null })))
+      .toMatchObject({ code: 'INSTRUCTIONS_UNAVAILABLE', status: 503 })
+  })
+
+  it('leaves a rule whose person is no member to the project\'s owner', () => {
+    const { f, lead } = pm()
+    const ghost = doc('Ship on Fridays (Ghost, 2026-11-01).')
+    expect(refusal(() => f.run(save(1, doc(), { askedBy: 'owner' }), as(lead), stored(ghost)))).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    expect(refusal(() => f.run(save(1, doc()), peer, stored(ghost)))).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    expect(f.run(save(1, doc()), owner, stored(ghost)).result.revision).toBe(2)
   })
 })
 

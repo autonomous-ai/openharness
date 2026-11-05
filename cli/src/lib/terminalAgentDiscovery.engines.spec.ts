@@ -143,6 +143,8 @@ describe('which engine process owns a pane', () => {
     ['cursor', 'node', '/opt/cursor-agent/versions/1.2.3/index.js'],
     ['opencode', 'opencode.exe', '/opt/lib/node_modules/opencode-ai/bin/opencode.exe'],
     ['pi', 'node', '/opt/lib/node_modules/pi-coding-agent/dist/cli.js'],
+    // Pi 1.5.0 moved it, and every new Pi agent then stayed "Starting" (DESKTOP-0TFH0OJ, 2026-11-05).
+    ['pi', 'node', '/opt/lib/node_modules/pi-coding-agent/dist/bundle/cli.js'],
     ['hermes', 'python3', '/opt/hermes-agent/hermes'],
     ['commandcode', 'node', '/opt/lib/node_modules/command-code/dist/index.mjs'],
     ['devin', 'python3', '/opt/devin/cli/_versions/1.2.3/bin/devin'],

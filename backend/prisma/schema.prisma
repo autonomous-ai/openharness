@@ -1409,6 +1409,11 @@ model SuperTabAttachment {
   /// A voice message's facts (superTabs/voiceMessages.ts StoredVoice): its length, waveform and words, read once before it is
   /// sent (store.ts readVoice). Absent on any other file. Removed with its row: the unsent-file sweep's, or its message's.
   voice          Json?
+  /// A picture's size and its thumbnail (superTabs/thumbnails.ts StoredImage): `{ width, height, thumb?: { url, width, height, size } }`,
+  /// made when the picture was uploaded. The thumbnail object sits beside the original (`<objectKey>.thumb.webp`) and goes with
+  /// it: the unsent-file sweep (lib/attachmentSweep.ts) and the Swarm purge (superTabs/purge.ts) remove both. Absent on a file
+  /// that is not a PNG, JPEG or WebP, on one stored before thumbnails, and on one that would not decode. About 150 bytes.
+  image          Json?
   /// When a readVoice call claimed this file to transcribe it; unset once it stored `voice`. A claim older than two minutes
   /// is taken over.
   voiceSince     DateTime?
@@ -1687,7 +1692,9 @@ model SuperTabInstructions {
 
 // Every save of a project's instructions, the current one included: its last 50 (instructions.ts MAX_REVISIONS); the save
 // that writes the 51st deletes the oldest. `writtenBy` is a person's or the coordinator's id (`writtenByKind`), `askedBy` the
-// member whose words it carries. id = stableId(tabId, projectId, revision).
+// member whose words it carries. `dropped`: the lines that save dropped, each with its kind and who gave it, for the History
+// (superTabs/ruleGuard.ts droppedLines): at most 500 of 400 characters, removed with its revision. id = stableId(tabId,
+// projectId, revision).
 model SuperTabInstructionsRevision {
   id            String   @id @map("_id")
   tabId         String
@@ -1700,6 +1707,7 @@ model SuperTabInstructionsRevision {
   writtenBy     String
   askedBy       String?
   at            DateTime
+  dropped       Json?
 
   @@index([tabId, projectId, revision])
 }

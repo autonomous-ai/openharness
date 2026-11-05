@@ -122,6 +122,19 @@ void main() {
 
   final item = find.text('Switch PM…');
 
+  // Task #3194: Project settings shows each row's value.
+  testWidgets('Switch PM… shows the PM\'s name', (tester) async {
+    await mount(tester, swarm(), 'owner');
+    await openMenu(tester);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('super-project-setting-Switch PM…')),
+        matching: find.text('Wren'),
+      ),
+      findsOneWidget,
+    );
+  });
+
   // Screenshots for the pull request, written only when asked: rasterized
   // text differs between machines, so they are not compared here.
   final renderDir = Platform.environment['SWITCH_PM_RENDER_DIR'];

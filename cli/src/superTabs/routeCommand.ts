@@ -9,7 +9,8 @@ import { RELAYED_QUOTA, requiredToolReason, startRequirements, USED_UP_WINDOW } 
 import { START_DEADLINE_MS, START_WINDOW_MS } from './reservations.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, bytes, machineBrief, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, OLD_RECORD_MAX, quotaBrief, quotaOf2, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type Shown, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
+import { withPmAccounts } from './pmAccounts.js'
+import { accountOf, API_BUILDERS, bytes, machineBrief, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, OLD_RECORD_MAX, quotaBrief, quotaLine, quotaOf2, recentStartNotes, UNRATED, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type Shown, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
 import { makePlugins, ROUTE_PLUGIN_MAKERS, type PluginMaker } from './routePlugins.js'
 import { CI_HOLD_OPENING, CI_RETRY_MINUTES, heavyOfStart, MACHINE_FIT_MAKER } from './machineFit.js'
 import { stat } from 'node:fs/promises'
@@ -193,6 +194,7 @@ export function unreadyPool(pool: Json, project: Json | undefined, projectId: st
   const checkout = pool.scope === 'swarm' && repository.machineId !== pool.machineId ? list(readiness.checkouts).find(c => c.folder === projectId) : undefined
   const wanted = typeof repository.repositoryUrl === 'string' ? repositoryKey(repository.repositoryUrl) : null
   const all = [
+    ...(typeof pool.machineSuspended === 'string' ? [pool.machineSuspended] : []),
     ...(NO_SWARM_AGENTS_ON.includes(String(object(observed.resources).os)) ? [`Swarm agents do not run on ${String(object(observed.resources).os)} yet.`] : []),
     ...(checkout?.git === false ? ['The project folder on this machine is not a git checkout. Its owner can remove it, and the next start clones the project.'] : []),
     ...(checkout?.git === true && wanted && typeof checkout.repository === 'string' && checkout.repository !== wanted
@@ -418,11 +420,22 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is that Mac, under its name. A
   // teammate's project starts only in the team account and the Mac's owner's own projects only with the owner, so only one
   // of the two offers new agents here, and the other is not listed as unfit; agents already on either stay members.
+  // Not when the Mac's owner runs teammates' work in their own account (backend machines.ts ownAccountWork, task #3060): a
+  // teammate's work no Team agent wrote starts on the Mac, and the server refuses a start naming the Team account there.
+  // Work a Team agent wrote stays in the Team account (backend teamWritten.ts teamWrittenTask): a step reads its task's mark,
+  // an unknown task counts as written, and so does a task from before the mark whose assignee runs in a Team account.
+  const task = group.reviewOf ? conversations.find(c => c.id === group.reviewOf) : group
+  const assignee = task ? agents.find(a => a.id === object(task.assignment).agentId) : undefined
+  const onTeam = (agent: Json) => agent.teamAccount === true || list(state.machines).some(m => m.machineId === agent.machineId
+    && (typeof m.hostMachineId === 'string' || object(m.observation).sessionKind === 'team'))
+  const teamWritten = group.teamWritten === true || !task || task.teamWritten === true || (!!assignee && onTeam(assignee))
   for (const [team, mac] of macOf) {
     const pool = machines.get(team)?.pool
     if (!pool || !machines.has(mac)) continue
-    // A teammate's task needing only what the owner shared stays on the Mac (backend teamMachineFor): its Team account folds.
-    const onMac = projectOwner === pool.contributorId || (taskNamed && sharedOwnAccess(list(state.machines).find(m => m.machineId === mac), needed))
+    // Its owner runs teammates' work no Team agent wrote in their own account (#3060), or a teammate's task needs only what
+    // the owner shared (backend teamMachineFor): either stays on the Mac, and its Team account folds.
+    const ownAccount = typeof machines.get(mac)!.pool?.ownAccount === 'string' && !teamWritten
+    const onMac = projectOwner === pool.contributorId || ownAccount || (taskNamed && sharedOwnAccess(list(state.machines).find(m => m.machineId === mac), needed))
     machines.get(onMac ? team : mac)!.folded = true
   }
   // Every row of the catalog is probed: one not offered by default is offered when a person names it (route.ts choose).
@@ -487,9 +500,12 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     ...probes.filter(p => p.machineId === failedOn && p.engine === failedEngine && !p.gridModel).map(accountOf)] : [])
   for (const [i, p] of probes.entries()) {
     const notes = [...(outside(p.machineId) ? [ELSEWHERE] : []), ...(p.kind === 'member' && !checked(p.agentId) ? [UNCHECKED_DEVICE] : []),
+      ...(p.kind === 'new' ? recentStartNotes(list(state.starts), p.machineId, p.engine, Date.now()) : []),
       ...(avoid.has(accountOf(p)) ? [AVOIDED] : [])]
     if (notes.length) probes[i] = { ...p, notes: [...p.notes, ...notes] }
   }
+  // Whose PM an account keeps running, any project's (pmAccounts.ts): the project's Routing guards that PM's week.
+  probes.splice(0, probes.length, ...withPmAccounts(state, probes))
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
   const working = (decisions ?? []).filter(d => d.final && d.outcome === null && typeof d.account === 'string')
     .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
@@ -533,7 +549,15 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const publicOf = (s: Shown) => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
     engine: s.engine, model: s.model, effort: s.effort, title: s.title, ...(s.gridModel ? { gridModel: s.gridModel, gridName: s.gridName } : {}),
     ...(s.unrated ? { unrated: true } : {}), quota: quotaBrief(s, now), ...(s.kind === 'new' ? { cwd: cwdOn(s.machineId) } : {}),
-    ...(s.kind === 'new' && s.load?.room ? { machine: machineBrief(s.load.room) } : {}), ...(s.notes.length ? { notes: s.notes } : {}) })
+    ...(s.kind === 'new' && s.load?.room ? { machine: machineBrief(s.load.room) } : {}), ...(s.notes.length ? { notes: s.notes } : {}),
+    machineName: s.machineName, ...(agentsOn.has(s.machineId) ? { agents: agentsOn.get(s.machineId) } : {}), line: lineOf(s) })
+  // The agents on each machine, as any of its rows read them: a member's row may carry no reading of its machine.
+  const agentsOn = new Map(offered.filter(s => typeof s.load?.agents === 'number').map(s => [s.machineId, s.load!.agents!]))
+  // A candidate in one line for the agent choosing (task #3294), under its machine, which says its id, agents, folder and room
+  // once (routeAnswer).
+  const lineOf = (s: Shown) => [`${s.id} ${s.kind === 'new' ? 'new' : `${s.name ?? 'Member'} (agent ${s.agentId}, ${s.activity})`}`,
+    s.gridModel ? `${s.engine} on the grid: gridModel ${s.gridModel}, gridName ${s.gridName}` : `${s.engine} ${s.model} ${s.effort}${s.unrated ? ' (unrated)' : ''}`,
+    quotaLine(s, now), ...s.notes.filter(n => n !== UNRATED).map(noteClause)].join(' · ')
   // Every recorded row: the coordinator may reuse a particular member (the same Reviewer for its next round, Routing rule 3),
   // so none is hidden behind another on its account.
   const shownRows = offered
@@ -555,17 +579,18 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
  *  agent started, each with the chosen row's own fields; RULE is the Routing rule that chose it, which the backend asks for
  *  with a decision that has no pick, and the start or assignment records the candidate it matches. */
 function nextOf(rows: Shown[], conversationId: string, routeDecisionId: string | undefined, instructions: boolean, needs: Assessment['needs']): string {
-  const choose = 'Choose one candidate by the project\'s Routing instructions (Order and quota); the list is by machine name, not by merit.'
+  // Said once and short (task #3294): it rode on every route, 467 a day in one PM's context.
+  const choose = 'Not ranked: listed by machine name. Choose one by the project\'s Routing instructions (Order and quota), and give the rule that chose it as overrideReason.'
   const decided = routeDecisionId ? { routeDecisionId, overrideReason: 'RULE' } : {}
-  const assign = `Assign a member with: command OPERATION_ID ${JSON.stringify({ type: 'work.assign', conversationId, agentId: 'AGENT', ...decided })}`
+  const assign = `Assign a member: command OPERATION_ID ${JSON.stringify({ type: 'work.assign', conversationId, agentId: 'AGENT', ...decided })}`
   // No fixed role name: NAME and ROLE are the agent's to fill from the project's instructions. A backend without instructions
   // takes no roleName (it came with them, phase 2).
-  const start = `Start a new agent with: start OPERATION_ID ${JSON.stringify({ conversationId, name: 'NAME', ...(instructions ? { roleName: 'ROLE' } : {}),
+  const start = `Start a new agent: start OPERATION_ID ${JSON.stringify({ conversationId, name: 'NAME', ...(instructions ? { roleName: 'ROLE' } : {}),
     cwd: 'CWD', worktree: true, requirements: startRequirements(needs), ...(needs.heavy ? { heavy: needs.heavy } : {}),
-    machineId: 'MACHINE', engine: 'ENGINE', model: 'MODEL', effort: 'EFFORT', ...decided })}, then assign the started agent${routeDecisionId ? ' with the same routeDecisionId' : ''}. `
-    + 'Put the chosen row\'s machineId, engine, model, effort and cwd for MACHINE, ENGINE, MODEL, EFFORT and CWD; a row on a model served on the Swarm\'s grid takes its gridModel and gridName in place of model and effort. '
-    + `Put the agent's name for NAME${instructions ? ' and its role in the project\'s instructions for ROLE' : ''}. It starts from the repository's default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" to start from another branch.`
-  const rule = routeDecisionId ? ' Put the Routing rule that chose it for RULE (urgency, context or a machine the work needs where it departs from the order).' : ''
+    machineId: 'MACHINE', engine: 'ENGINE', model: 'MODEL', effort: 'EFFORT', ...decided })}, then assign it${routeDecisionId ? ' with the same routeDecisionId' : ''}. `
+    + 'MACHINE is its machine\'s machineId, CWD the cwd its machine names or else the answer\'s; ENGINE, MODEL and EFFORT its line\'s; a grid line takes its gridModel and gridName in place of model and effort. '
+    + `NAME is the agent's name${instructions ? ', ROLE its role in the instructions' : ''}. It starts from the default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" for another.`
+  const rule = routeDecisionId ? ' RULE: the Routing rule that chose it.' : ''
   return [choose, ...(rows.some(r => r.kind === 'member') ? [assign] : []), ...(rows.some(r => r.kind === 'new') ? [start] : [])].join(' ') + rule
 }
 
@@ -811,3 +836,91 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     return probes
   } finally { target.close() }
 }
+
+/** A note in a candidate's line: its first sentence, cut short. The record for Details keeps it whole. Long enough for the
+ *  name or the cause a note carries (which PM an account runs, what a failed start was preparing; review of #3169). */
+export function noteClause(note: string): string {
+  const first = /^(.*?[^.])(?:\.\s|;\s|\.$|$)/.exec(note.trim())?.[1] ?? note
+  return first.length <= NOTE_MAX ? first : `${first.slice(0, NOTE_MAX - 1)}…`
+}
+const NOTE_MAX = 72, LEFT_OUT_REASON_MAX = 120, WARNING_MAX = 240
+
+/** The section of the instructions headed "Routing" (any level), up to the next heading of its level or higher, with its
+ *  own subsections (Models, Machines, Order and quota); null when the instructions have none. */
+export function routingSection(text: string): string | null {
+  // Line by line, so a shell comment in a fenced block is not taken for a heading (review of #3169).
+  const lines = text.split('\n')
+  let fenced = false, start = -1, level = 0
+  for (const [i, line] of lines.entries()) {
+    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue }
+    const head = fenced ? null : /^(#{1,6})[ \t]+(.*?)[ \t]*$/.exec(line)
+    if (!head) continue
+    if (start >= 0 && head[1]!.length <= level) return lines.slice(start, i).join('\n').trimEnd()
+    if (start < 0 && head[2] === 'Routing') { start = i; level = head[1]!.length }
+  }
+  return start < 0 ? null : lines.slice(start).join('\n').trimEnd()
+}
+
+/** What `harness super-tab route` prints of [answer] (task #3294, Ken 2026-11-05): each answer was ~45k characters, the
+ *  whole instructions (~30k) and every candidate as an object (~15k), 467 a day in one PM's context. It prints the
+ *  instructions' Routing section and revision (the whole text with [fullInstructions]; only the revision when the caller
+ *  already read it, [instructionsRead]), each candidate in one line, each machine's id, start folder and room once, and one
+ *  line per machine left out. The decision recorded for Details is the whole one ([routeTask]). */
+export function routeAnswer(answer: Json, options: { fullInstructions?: boolean; instructionsRead?: number } = {}): Json {
+  const { instructions, candidates, leftOut: out, excluded, warnings, p, why, ...rest } = answer
+  // An unranked route's why is its next's first sentence; the record keeps it whole.
+  const printed: Json = { ...rest, ...(p === null || p === undefined ? {} : { p }), ...(why === undefined || answer.via === 'instructions' ? {} : { why }) }
+  const written = instructions && typeof instructions === 'object' ? object(instructions) : null
+  if (written) {
+    const notes = Array.isArray(written.notes) ? written.notes.map(n => String(object(n).text ?? n)) : []
+    const text = String(written.text ?? ''), routing = routingSection(text)
+    printed.instructions = options.fullInstructions || routing === null ? { revision: written.revision, text, notes }
+      : options.instructionsRead === written.revision
+        // Its notes still come: adding one does not change the revision (backend note.add), and they hold the short-lived
+        // routing facts (a machine away today; review of #3169).
+        ? { revision: written.revision, unchanged: `You read revision ${written.revision}; it is current. Route with --full-instructions to have it again.`, notes }
+        : { revision: written.revision, routing, notes, more: 'The Routing section only: the whole text with the instructions command, or route with --full-instructions. '
+          + `Route with --instructions-read ${written.revision} once you have read this revision.` }
+  }
+  if (Array.isArray(candidates)) {
+    // By machine, in the list's order: the machine's id and agents once, then its candidates' lines. The folder a start takes
+    // is said once, the one most machines share (a live route: 23 machines, one folder of 85 characters), and on a machine
+    // only where it differs. Free slots, memory and disk stay in the record: the route already leaves out what cannot run.
+    const rows = candidates.map(object)
+    const folders = new Map<string, number>()
+    for (const row of rows) if (row.kind === 'new' && typeof row.cwd === 'string') folders.set(row.cwd, (folders.get(row.cwd) ?? 0) + 1)
+    const cwd = [...folders].sort((x, y) => y[1] - x[1])[0]?.[0]
+    if (cwd) printed.cwd = cwd
+    const machines = new Map<string, { machine: string; candidates: string[] }>()
+    // By id: two machines of one name are told apart by the machineId their lines say.
+    for (const row of rows) {
+      const id = String(row.machineId), name = String(row.machineName ?? row.machineId)
+      const at = machines.get(id) ?? machines.set(id, { machine: '', candidates: [] }).get(id)!
+      if (!at.machine || row.kind === 'new' && row.cwd !== cwd && !at.machine.includes(' · cwd ')) {
+        at.machine = [name, `machineId ${row.machineId}`, ...(typeof row.agents === 'number' ? [`${row.agents} agents`] : []),
+          ...(row.kind === 'new' && row.cwd && row.cwd !== cwd ? [`cwd ${row.cwd}`] : [])].join(' · ')
+      }
+      at.candidates.push(String(row.line))
+    }
+    // Keyed by the machine's line: an object per machine cost 30 characters each (a live route: 21 machines).
+    printed.candidates = Object.fromEntries([...machines.values()].map(m => [m.machine, m.candidates]))
+  }
+  if (Array.isArray(excluded)) {
+    // Without a candidate: what is left out of no machine (a named model, the catalog) is said; each machine's is in leftOut.
+    const general = excluded.map(object).filter(e => !e.machine).map(e => `${e.title}: ${cut(String(e.reason), LEFT_OUT_REASON_MAX)}`)
+    if (general.length) printed.excluded = general
+  }
+  if (Array.isArray(out)) {
+    // Machines left out for the same first reason share its line (a live route: five machines offline, five lines).
+    const byReason = new Map<string, string[]>()
+    for (const m of out.map(object)) {
+      const reasons = Array.isArray(m.reasons) ? m.reasons.map(String) : []
+      const reason = cut(reasons[0] ?? 'left out', LEFT_OUT_REASON_MAX)
+      byReason.set(reason, [...byReason.get(reason) ?? [], `${m.machine}${reasons.length > 1 ? ` (+${reasons.length - 1} more reasons)` : ''}`])
+    }
+    printed.leftOut = [...byReason].map(([reason, machines]) => `${machines.join(', ')}: ${reason}`)
+  }
+  if (Array.isArray(warnings) && warnings.length) printed.warnings = warnings.map(w => cut(String(w), WARNING_MAX))
+  return printed
+}
+const cut = (text: string, max: number) => text.length <= max ? text : `${text.slice(0, max - 1)}…`

@@ -1,11 +1,11 @@
 import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, mayName, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
-import { admitByRoom, admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
+import { admitByRoom, admitMachineStart, noRepositoryStart, failOwnAccountTeamEntry, ownAccountTeamEntry, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
-import { agentWrittenNameOf, setName } from './personNames.js'
+import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
@@ -57,9 +57,11 @@ import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, 
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
+import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
-import { BUILT_IN_HEADING } from './pmSchedule.js'
+import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
+import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -218,7 +220,14 @@ export const commandSchema = z.discriminatedUnion('type', [
   // The project's instructions, saved on the revision the writer read (instructions.ts). `askedBy`: the member whose words it
   // carries, required of the coordinator; a person writes in their own.
   z.object({ type: z.literal('instructions.save'), projectId: id, baseRevision: z.number().int().nonnegative().safe(), text: instructionsTextSchema,
-    summary: summarySchema, askedBy: id.optional() }).strict(),
+    summary: summarySchema, askedBy: id.optional(),
+    // A person's own messages approving the drop of their rules (ruleGuard.ts), when the save drops any.
+    approvals: z.array(id).max(MAX_APPROVALS).optional(),
+    // How the writer sorted the lines it dropped, for the History (ruleGuard.ts droppedLines; the daily tidy).
+    dropped: z.array(z.object({ text: z.string().trim().min(1).max(2000), kind: z.enum(['merged', 'expired', 'rule']) }).strict())
+      .max(MAX_DROPPED_LINES).optional(),
+    // The coordinator's daily tidy, done by this save (pmSchedule.ts tidyRequest).
+    tidy: z.literal(true).optional() }).strict(),
   // A small thing a member told the coordinator, kept beside the instructions until it ends, if it does (instructions.ts).
   z.object({ type: z.literal('note.add'), projectId: id, text: noteTextSchema, askedBy: id, expiresAt: z.iso.datetime().optional() }).strict(),
   z.object({ type: z.literal('note.remove'), projectId: id, noteId: id }).strict(),
@@ -239,6 +248,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   // `audience`: a private conversation that only these people and the project's Lead read (projects.ts canReadGroup).
   z.object({ type: z.literal('work.teamWritten'), conversationId: id }).strict(),
   z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(),
+    // How urgent the task is (taskPriority.ts); without one it is P2, and the reply says so.
+    priority: z.enum(TASK_PRIORITIES).optional(),
     // A step of the task `reviewOf` names (task steps design): its name as the instructions give it, free text in any language.
     // No line break or control character: the name is printed in agents' terminals (final review, minor 10).
     step: z.string().trim().min(1).max(40).regex(/^[^\u0000-\u001f\u007f]+$/, 'A step name is one line of text.').optional(), checks: z.array(check).max(40),
@@ -251,6 +262,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
+  // A task's priority, changed by the PM or a person (taskPriority.ts); each change writes a line into the task.
+  z.object({ type: z.literal('work.priority'), conversationId: id, priority: z.enum(TASK_PRIORITIES) }).strict(),
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
   // A task's place in its project's Next up (taskQueue.ts): `after` the open task it goes right after, null for the top, absent
   // to stay; `notBefore` a day it should not start before, null to clear.
@@ -426,7 +439,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'project.create': ['name', 'brief'],
   'project.rename': ['name'],
   'project.report': ['text'],
-  'instructions.save': ['text', 'summary'],
+  'instructions.save': ['text', 'summary', 'dropped[].text'],
   'note.add': ['text'],
   'project.coordinatorName': ['name'],
   'rule.set': ['text'],
@@ -529,7 +542,9 @@ export interface CommandContext {
     text?: string
     shown?: string[] }
   /** For `instructions.save`: the project's stored document, read by the store, which a stale save hands back to merge. */
-  instructions?: { revision: number; text: string } | null
+  instructions?: { revision: number; text: string; at?: number } | null
+  /** For `instructions.save`: the messages it names as approvals, loaded by id in this tab by the store (ruleGuard.ts). */
+  approvals?: ApprovalRow[]
   /** For `note.add` and `note.remove`: the project's stored notes, expired ones too, read by the store (instructions.ts). */
   notes?: PmNote[]
   /** The message a Lead quotes as the owner's request for a rule or skill mode change, loaded from this tab by the store. */
@@ -1133,14 +1148,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** Accepted, kept nowhere: an older client's save of what each project's instructions say now (IGNORED_NOTE). */
   const ignored = () => Object.assign(result, { ignored: true, note: IGNORED_NOTE })
   /** A new revision of [project]'s instructions from revision [current]: what instructions.save and an older client's rule.set
-   *  write. It is kept in the revision history, who wrote it and for whom, and posts nothing in any chat (Dee and Ken,
-   *  2026-11-05, #3132): a change is read and undone in the Instructions history. */
-  const saveInstructions = (project: SwarmProject, current: number, text: string, summary: string, askedBy: string) => {
+   *  write. It is kept in the revision history, who wrote it and for whom, and the lines it dropped (#3151), and posts nothing in
+   *  any chat (Dee and Ken, 2026-11-05, #3132): a change is read and undone in the Instructions history. */
+  const saveInstructions = (project: SwarmProject, current: number, text: string, summary: string, askedBy: string, dropped: DroppedLine[] = []) => {
     const hash = instructionsHash(text)
     mutableProjects(state)
     Object.assign(projectOf(state, project.id), { instructionsRevision: current + 1, instructionsHash: hash })
     effects.instructions = { projectId: project.id, revision: current + 1, hash, text, summary,
-      writtenBy: { kind: sender.kind, id: sender.id }, askedBy, at: context.now }
+      writtenBy: { kind: sender.kind, id: sender.id }, askedBy, at: context.now, ...dropped.length ? { dropped } : {} }
     Object.assign(result, { projectId: project.id, revision: current + 1, hash })
   }
   /** No private channel to the PM: Buddies replaced Chat with PM (Ken, 10-29). A closed one is nobody's to read or post in
@@ -1816,7 +1831,28 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         Object.assign(result, { projectId: project.id, revision: current, hash, unchanged: true })
         break
       }
-      saveInstructions(project, current, command.text, command.summary, askedBy)
+      // The text this save replaces, which the store read for the stale check above: what the rule check compares with. A
+      // project still on the template needs no read. Unread, nothing can be checked, so nothing is saved (review of #3112).
+      const onTemplate = !current || project.instructionsHash === instructionsHash(INSTRUCTIONS_TEMPLATE)
+      const before = context.instructions?.revision === current ? context.instructions.text : onTemplate ? INSTRUCTIONS_TEMPLATE
+        : fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
+      // A person's rule, or who gave it, is dropped only by that person or with their own message approving it (#3151).
+      const { told, rules } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [],
+        context.instructions?.at ?? 0)
+      // Every line it dropped, with its kind and who gave it, kept with the revision for the History (River, 11-05).
+      saveInstructions(project, current, command.text, command.summary, askedBy, droppedLines(before, command.text, command.dropped ?? [], rules))
+      // The coordinator's save that says it is the tidy is that tidy done (pmSchedule.ts tidyRequest); a correction it saves
+      // meanwhile is not (review of #3112).
+      if (actor.kind === 'agent' && command.tidy) tidySaved(projectOf(state, project.id), current + 1)
+      // Each approver is told in one line, privately, as person.tell does: in their one Buddy chat and their older one here.
+      for (const [personId, rules] of told) {
+        const to = person(state, personId)
+        const text = approvedDropNotice(who, project, rules)
+        const id = stableId(operationId, 'rule-approved', personId)
+        message(openSwarmBuddyChat(state, to).id, text, [], null, { kind: PM_LINE_KIND, projectId: project.id }, undefined, undefined, undefined, id)
+        Object.assign(effects.messages.at(-1)!, { buddyProject: project.id })
+        effects.messages.push({ id: stableId(id, 'project-chat'), conversationId: openBuddyChat(state, project.id, to).id, author: sender, text, replyTo: null, recipients: [] })
+      }
       break
     }
     case 'note.add': {
@@ -1970,6 +2006,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // failures and suspensions and the last reading (#3043). A machine not listed yet, or Buddy-only, starts clean.
         ...(previous?.lent ? { lent: previous.lent } : {}), ...(previous?.lentDays ? { lentDays: previous.lentDays } : {}),
         ...(previous?.engineFailures ? { engineFailures: previous.engineFailures } : {}),
+        ...(previous?.engineBackoff ? { engineBackoff: previous.engineBackoff } : {}),
+        ...(previous?.machineFailures ? { machineFailures: previous.machineFailures } : {}),
+        ...(previous?.machineBackoff ? { machineBackoff: previous.machineBackoff } : {}),
+        ...(previous?.machineSuspension ? { machineSuspension: previous.machineSuspension } : {}),
         ...(previous?.engineSuspensions ? { engineSuspensions: previous.engineSuspensions } : {}),
         ...(previous?.observation ? { observation: previous.observation } : {}) })
       // A Mac given other slots or a new name gives its team account the same, and its pause; its own folder, engines and grant stay.
@@ -2205,6 +2245,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.audience) pmChatClosed()
       const leadId = conversation(state, project.leadConversationId).leadId
       if (command.step && !command.reviewOf) fail('INVALID_REQUEST', 'A step belongs to a task: name the task with reviewOf.', 400)
+      // A step and a private chat are no tasks of their own, so they carry no priority (taskPriority.ts).
+      const prioritized = !command.step && !command.audience
+      if (command.priority && !prioritized) fail('PRIORITY_TASK_ONLY', 'Only a task has a priority: leave it out of a step or a private chat.', 400)
+      // A hotfix jumps every queue, so of the agents only the PM marks one (River, task #3117).
+      if (command.priority === 'P0' && actor.kind === 'agent' && ledProject(state, actor.agentId)?.id !== project.id) {
+        fail('PRIORITY_P0', 'Only the PM or a person sets P0. Give this task P1, P2 or P3.', 403)
+      }
       if (command.reviewOf) {
         // A task links to another task of its own project, a linked one included, and to nothing else: the project chat, a
         // Buddy chat, a private chat, the Leads conversation and other projects' tasks read as missing, archived or not, so the
@@ -2242,6 +2289,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // A Team agent's own task is Team-written from its first line, and a step keeps its task's mark (teamWritten.ts, audit H2).
         ...((command.reviewOf ? teamWrittenTask(state, conversation(state, command.reviewOf)) : creator.some(id => onTeamAccount(state, agent(state, id)))) ? { teamWritten: true as const } : {}),
         ...(command.step ? { step: command.step } : {}),
+        ...(prioritized ? { priority: command.priority ?? (proposal ? proposalPriority(proposalNamed(context.proposal)?.source?.priority) : DEFAULT_PRIORITY) } : {}),
         assignment: null, lastMessageSequence: 0,
         checks: storedChecks(command.checks, operationId),
       })
@@ -2255,6 +2303,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (actor.kind === 'agent' && !requesterId && !command.reviewOf) {
         result.requesterUnknown = true
         result.warnings = [REQUESTER_UNKNOWN]
+      }
+      if (prioritized) {
+        result.priority = state.conversations.at(-1)!.priority
+        if (!command.priority && !proposal) result.warnings = [...result.warnings as string[] ?? [], PRIORITY_DEFAULTED]
       }
       if (brief) {
         message(operationId, brief, [], null, SYSTEM_ROW)
@@ -2312,6 +2364,23 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       if (command.notBefore === null) delete task.notBefore
       else if (command.notBefore !== undefined) task.notBefore = command.notBefore
+      break
+    }
+    case 'work.priority': {
+      chatOnly(command.conversationId)
+      coordinatorOrPerson(state, actor, command.conversationId)
+      const task = open(state, command.conversationId)
+      const project = groupProject(state, task)
+      if (task.id === project.leadConversationId || task.kind || task.audience || task.step) {
+        fail('PRIORITY_TASK_ONLY', 'Only a task has a priority: name a task, not a chat or a step.', 400)
+      }
+      // A task from before priorities reads as its title marks it, as every client shows it.
+      const previous: TaskPriority = task.priority ?? titlePriority(task.title) ?? DEFAULT_PRIORITY
+      task.priority = command.priority
+      if (previous === command.priority) break
+      const name = actor.kind === 'person' ? shownNameOf(state, actor.userId) ?? 'Someone'
+        : agentDisplayName(state.agents, actor.agentId) ?? state.agents.find(a => a.id === actor.agentId)?.name ?? 'An agent'
+      message(task.id, priorityLine(name, command.priority, previous), [], null, SYSTEM_ROW)
       break
     }
     case 'conversation.merged': {
@@ -2497,6 +2566,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const startGroup = conversation(state, command.request.conversationId)
       marking(startGroup, () => applyPushOrigin(state, startGroup, context.pushOrigin))
       const written = teamWrittenTask(state, startGroup)
+      // Named the Team account's entry itself, which its owner's choice keeps teammates' work off (task #3060). A branch GitHub
+      // cannot place runs only in a Team account (below), so it counts as Team-written here (security review 2 of #3081).
+      const ownEntry = ownAccountTeamEntry(state, named.machineId, home, written || context.pushOrigin === 'unknown')
+      if (ownEntry) failOwnAccountTeamEntry(ownEntry)
       const moved = teamStartRequest(state, named, home, context.teamAccountsIdle, context.teamMachines, written, taskAccess(startGroup))
       // Moved to the Mac's Team account: the starter is told why in one line (task #2806).
       if (moved.machineId !== named.machineId) {
@@ -2506,7 +2579,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (written) requireTeamWrittenMachine(state, startGroup, moved.machineId)
       // A branch GitHub cannot place stays out of the main account too, unmarked, as it may yet read clean.
       else if (context.pushOrigin === 'unknown' && !teamAccountPool(state.machines?.find(m => m.machineId === moved.machineId))) failPushUnknown()
-      const request: AgentStartRequest = written ? { ...moved, projectSettings: 'off' } : moved
+      const request: AgentStartRequest = noRepositoryStart(state.machines?.find(m => m.machineId === moved.machineId), home,
+        written ? { ...moved, projectSettings: 'off' } : moved)
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
       if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
@@ -2564,9 +2638,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // What goes out is the owner's own message (anh Dee, task #2926): their words, or the one line they saw and okayed, and
       // nothing else of their private chat.
-      const words = command.text ?? fail('PROPOSAL_TEXT', 'Send the words to post as your owner in "text": show them the line first ("I\'ll post this as you: …"), and send it once they say ok.', 400)
+      const words = command.text ?? fail('PROPOSAL_TEXT', 'Send the words to post as your owner in "text": show them the line first with quotes (I\'ll post this as you: "…"), and send it once they say ok.', 400)
       if (!okayedWords(words, ask)) {
-        fail('PROPOSAL_UNSHOWN', 'Post only your owner\'s own words, or the exact line you showed them just before they said ok. Show it to them ("I\'ll post this as you: …") and send it once they agree.', 403)
+        fail('PROPOSAL_UNSHOWN', 'Post only your owner\'s own words, or the exact quoted line you showed them just before they said ok. Show it again with quotes (I\'ll post this as you: "…") and send only that line once they agree.', 403)
       }
       if (chat.proposals?.includes(command.ownerMessageId)) fail('PROPOSAL_SENT', 'A proposal was already sent for that message. Ask your owner before sending another.')
       const attachments = [...new Set(command.attachmentIds ?? [])]
@@ -2824,6 +2898,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // decision 18): nothing is started elsewhere. Written for nobody, this notice once left the round-device group without
         // a worker for an hour (2026-10-27).
         const group = conversation(state, start.request.conversationId)
+        // A Buddy chat is read only by its owner (and its Buddy), so the reason their own Buddy did not start is written
+        // whole, as liveness.ts's buddyNotice does for a start that timed out. The group notice below names neither the
+        // machine nor the folder and promises its starter the reason somewhere they may not be allowed to read it.
+        if (start.request.buddyOf) {
+          message(group.id, `Could not start ${start.request.name}: ${command.error}${suspended ? `\n\n${suspended}` : ''}`,
+            [], null, SYSTEM_ROW)
+          break
+        }
         // The failure that suspends its engine there says so once, and tags the machine's owner (engineHealth.ts).
         const failed = `${failureNotice(start.request.name, command.error, askedModel(start), isSwarmBuddyChat(group) ? undefined : coordinatorNameOf(groupProject(state, group)))}${suspended ? `\n\n${suspended}` : ''}`
         const told = failureRecipients(start, group)

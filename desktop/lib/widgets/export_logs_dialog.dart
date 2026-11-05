@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../core/harness_cli_runner.dart';
 import '../core/reveal_folder.dart';
+import '../core/runtime_platform.dart';
 import '../logging/log_export.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -127,7 +128,11 @@ class _ExportLogsDialogState extends State<_ExportLogsDialog> {
         if (!busy && result.path != null)
           TextButton(
             onPressed: () => unawaited(revealFile(result.path!)),
-            child: const Text('Show in Finder'),
+            child: Text(
+              RuntimePlatform.isWindows
+                  ? 'Show in Explorer'
+                  : 'Show in Finder',
+            ),
           ),
         if (!busy)
           FilledButton(

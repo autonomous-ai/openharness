@@ -30,6 +30,26 @@ void main() {
   });
 
   test(
+    'a computer shared with this account refuses its models once and is not asked again',
+    () async {
+      app.localRefusal = 'GUEST_NOT_ALLOWED';
+      await controller.refresh();
+      expect(
+        controller.error,
+        'Models are not available on a computer shared with you.',
+      );
+      final reads = app.localReads;
+      await controller.refresh();
+      expect(app.localReads, reads);
+      // Try again is a forced read, and a daemon that answers it is shown as usual.
+      app.localRefusal = null;
+      await controller.refresh(force: true);
+      expect(app.localReads, reads + 1);
+      expect(controller.error, isNull);
+    },
+  );
+
+  test(
     'Download is explicit and never falls back to Start on an older daemon',
     () async {
       app.localInventory.remove('supportsDownload');

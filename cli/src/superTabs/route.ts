@@ -84,6 +84,26 @@ export interface Probe {
 }
 export interface Attempt { agent: string; outcome: string; result?: string }
 export interface RecentRoute { title: string; via?: string; outcome: string | null }
+/** The latest start is already in the route's authorized snapshot. Say what kind of setup failed, never copy its reason:
+ *  the coordinator may read paths/account details there that the route log's other readers must not learn. */
+export function recentStartNotes(starts: Json[], machineId: string, engine: string, now: number): string[] {
+  for (let i = starts.length - 1; i >= 0; i--) {
+    const start = starts[i]!, request = object(start.request)
+    if (request.machineId !== machineId || request.engine !== engine) continue
+    const at = finite(start.dispatchedAt) ? start.dispatchedAt : start.requestedAt
+    if (start.harnessId || typeof start.error !== 'string' || !finite(at) || now - at >= 30 * 60_000) return []
+    const reason = start.error
+    const category = /GitHub.*token|token.*GitHub/i.test(reason) ? 'GitHub access'
+      : /clone|repository.*(?:unavailable|access)|access.*repository/i.test(reason) ? 'the repository'
+        : /no commits?|commit.*(?:missing|not found|unknown)/i.test(reason) ? 'a missing commit'
+          : /folder|directory|checkout/i.test(reason) ? 'the project folder'
+            : /permission.*(?:flag|mode)/i.test(reason) ? 'permission flags'
+              : /does not offer|model.*(?:unavailable|not supported)/i.test(reason) ? 'the requested model'
+                : /(?:tool|spawn |command not found|not installed)/i.test(reason) ? 'a missing tool' : null
+    return category ? [`Its last start failed while preparing ${category}. The start has the details; this does not suspend the engine.`] : []
+  }
+  return []
+}
 type Window = '5-hour' | 'weekly'
 /** How a candidate's account would carry the task, as the decision log keeps it. */
 export interface Fit { status: 'fits' | 'unknown' | 'short'; coverage: number | null; effectiveCost: number; expiring: number; spend: Record<Window, number>; account: string }
@@ -585,6 +605,15 @@ export function quotaBrief(p: Pick<Probe, 'quota' | 'gridModel'> & { fit: Pick<F
   // Why it is unknown says what would make it known (River, 2026-11-03): a Team account's reading its owner's machine relays.
   if (left === null) return `${p.fit.status}: ${p.quota.why ? cut(p.quota.why, 200) : 'weekly unknown'}`
   return `${p.fit.status}: weekly ${Math.round(left)}% left${resetsAt === null ? '' : `, resets in ${weeklyResetsIn(resetsAt, now)}`}`
+}
+
+/** [quotaBrief] in a candidate's one line (task #3294): "fits 62% · resets 5d", the weekly window the project's order compares. */
+export function quotaLine(p: Pick<Probe, 'quota' | 'gridModel'> & { fit: Pick<Fit, 'status'> }, now: number): string {
+  if (p.gridModel) return 'free (grid)'
+  if (p.quota.metered) return 'metered'
+  const { left, resetsAt } = weekly(p.quota)
+  if (left === null) return `${p.fit.status === 'unknown' ? '' : `${p.fit.status}, `}weekly unknown${p.quota.why ? ` (${cut(p.quota.why, 40)})` : ''}`
+  return `${p.fit.status} ${Math.round(left)}%${resetsAt === null ? '' : ` · resets ${weeklyResetsIn(resetsAt, now)}`}`
 }
 
 /** One unrated new agent per machine of the named model's engine, on that machine's first row of the engine, which carries

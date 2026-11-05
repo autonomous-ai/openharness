@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
+import { readsRawReason } from './startFailure.js'
 import { sweepLiveness } from './liveness.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
 import { defaultProfileId, hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
@@ -12,6 +13,7 @@ import { modelMatches } from './rules.js'
 import { appendRouting, instructionsHash } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
+import { LEAD_CAPABILITY, leadHost } from './leadStart.js'
 import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fixture.test-support.js'
 import { groupView } from './read/views.js'
 import { weekStart } from './leaderboard/week.js'
@@ -1761,6 +1763,8 @@ describe('saving a machine again', () => {
       lent: [{ week, busyMs: 18_000_000 }],
       lentDays: [{ day: week, projectId: 'lead', busyMs: 18_000_000 }],
       engineFailures: { codex: 1 },
+      engineBackoff: { codex: { level: 3, cause: 'engine' } },
+      machineFailures: 1, machineBackoff: 2, machineSuspension: { at: NOW, durationMs: 3_600_000 },
       engineSuspensions: { claude: { at: NOW, fine: false } },
       observation: { receivedAt: NOW, runningHarnessIds: ['h1'], stoppedHarnessIds: [] } as never,
     }
@@ -3391,6 +3395,39 @@ describe('a failed start\'s reason', () => {
     f.state.starts![0]!.error = 'Its machine was removed from the Swarm.'
     expect(read(owner)).toBe('Its machine was removed from the Swarm.')
   })
+
+  // The reported dead end: a Buddy's owner read only "its machine could not prepare or launch it", while the chat told them
+  // the starter and the PM could read why. A Buddy chat is private to its owner, so the reason belongs there whole.
+  it('writes a Buddy start\'s reason whole in its owner\'s chat, never the group line', () => {
+    const f = fixture(); f.invite()
+    const generation = f.state.people[0]!.generation
+    const chat = { id: 'buddy-chat', kind: 'buddy', number: 1, title: "owner's Buddy", leadId: null, agentIds: [],
+      archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
+      audience: { people: [{ id: 'owner', generation }] } }
+    f.state.conversations.push(chat as never)
+    f.state.starts = [{ id: 's1', actorKey: 'person:owner', contributorId: 'owner', membershipGeneration: generation,
+      machineOwnerId: 'owner', request: { conversationId: chat.id, machineId: 'mac', name: "nsonha777's Buddy",
+        buddyOf: { personId: 'owner', generation } }, harnessId: null, dispatched: true, error: null }] as never
+    const [notice] = f.run({ type: 'agent.startFailed', startId: 's1', error: RAW }, owner).messages
+    expect(notice!.conversationId).toBe(chat.id)
+    expect(notice!.text).toBe(`Could not start nsonha777's Buddy: ${RAW}`)
+    expect(notice!.text).not.toContain('Whoever started it')
+  })
+
+  it('lets a Buddy chat\'s owner read the raw reason even when an agent made the start on another machine', () => {
+    const f = fixture(); f.invite()
+    const generation = f.state.people[0]!.generation
+    const chat = { id: 'buddy-chat', kind: 'buddy', number: 1, title: "owner's Buddy", leadId: null, agentIds: [],
+      archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
+      audience: { people: [{ id: 'owner', generation }] } }
+    f.state.conversations.push(chat as never)
+    f.state.starts = [{ id: 's1', actorKey: 'agent:someone', contributorId: 'owner', membershipGeneration: generation,
+      machineOwnerId: 'someone-else', request: { conversationId: chat.id, machineId: 'host-mac', name: "nsonha777's Buddy",
+        buddyOf: { personId: 'owner', generation } }, harnessId: null, dispatched: true, error: RAW }] as never
+    expect(visibleState(f.state, owner).starts![0]!.error).toBe(RAW)
+    // A Swarm member who is not that chat's owner still reads only what the reason means.
+    expect(readsRawReason(peer, f.state.starts![0]!, chat as never)).toBe(false)
+  })
 })
 
 describe('the owner\'s rules, after review', () => {
@@ -3459,6 +3496,25 @@ describe('machine.remove', () => {
       request: { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
         requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as never]
   }
+
+  // Task #3212: Desktop's join add leaves out a computer its person took out of the Swarm, reading this record; Add machine
+  // brings it back. The record is per Swarm, person and computer, and only that person reads it.
+  it('remembers a machine its person took out, only for them, until they add it again', () => {
+    const f = fixture()
+    f.invite()
+    contribute(f, 'peer', 'peer-mac', null)
+    f.run({ type: 'machine.remove', machineId: 'peer-mac' }, peer)
+    expect(f.state.removedMachines).toEqual([{ machineId: 'peer-mac', contributorId: 'peer' }])
+    expect(visibleState(f.state, peer).removedMachines).toEqual(['peer-mac'])
+    expect(visibleState(f.state, owner).removedMachines).toBeUndefined()
+
+    for (const cleanup of f.state.machineCleanups ?? []) cleanup.requestedAt = new Date(-60 * 60_000).toISOString()
+    f.run({ type: 'machine.contribute', machineId: 'peer-mac', name: 'Peer Mac', cwd: '/repo', scope: 'swarm', engines: ['claude'], maxAgents: 2,
+      teamAccountOnly: true }, peer, { contribution: { machineOwnerId: 'peer', contributorId: 'peer', hostGrant: null } })
+    expect(f.state.machines!.some(m => m.machineId === 'peer-mac' && !m.removal)).toBe(true)
+    expect(f.state.removedMachines).toBeUndefined()
+    expect(visibleState(f.state, peer).removedMachines).toBeUndefined()
+  })
 
   // The phone and the web offer Pause/Resume only to the person who lent the machine; the server holds the same line.
   it('lets only the contributor pause or resume a machine', () => {
@@ -5176,8 +5232,9 @@ describe('an engine that cannot run on a contributed machine', () => {
     expect(late.mentions).toBeUndefined()
     expect(late.text).not.toContain('suspended')
     expect(f.state.machines![0]!.engineSuspensions ?? {}).toEqual({})
-    // A different start that fails next is the second in a row.
-    expect(fail('s2').mentions).toEqual(['owner'])
+    // A different engine failure is only its first; the timeout counted against the machine.
+    expect(fail('s2').mentions).toBeUndefined()
+    expect(fail('s3').mentions).toEqual(['owner'])
   })
 
   // Quota is information, not a gate (project instructions, phase 4).
@@ -5193,6 +5250,33 @@ describe('an engine that cannot run on a contributed machine', () => {
     expect(exhausted.begin().result.startId).toBeTruthy()
     // A reading that says nothing of the engine keeps today's behaviour.
     expect(setup().begin().result.startId).toBeTruthy()
+  })
+
+  it('refuses every engine and grid starts while the machine is suspended', () => {
+    const { f, begin } = setup({ localModels: [{ grid, model: 'qwen3', kind: 'local' }] })
+    f.state.localModels = { grid, enabled: true }
+    f.state.machines![0]!.engines = ['codex', 'claude']
+    for (const startId of ['s1', 's2']) f.run({ type: 'agent.startFailed', startId,
+      error: 'Mac did not start it within 3 minutes' }, owner)
+    for (const extra of [{}, { engine: 'claude' }, { gridModel: 'qwen3', gridName: grid }]) {
+      expect(() => begin(extra)).toThrow('This machine is suspended')
+    }
+  })
+
+  it.each(['owner', 'lead'])('admits starts after the %s resumes a machine cooldown with the owner\'s authority', (who) => {
+    const { f, lead, begin } = setup()
+    for (const startId of ['s1', 's2']) f.run({ type: 'agent.startFailed', startId,
+      error: 'Mac did not start it within 3 minutes' }, owner)
+    const resume = { type: 'machine.engineResume', machineId: 'mac', engine: 'codex' } as Command
+    const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    f.invite()
+    expect(() => f.run(resume, peer)).toThrow('Only the machine\'s owner')
+    expect(() => f.run(resume, leadActor)).toThrow('Only the machine\'s owner')
+    expect(() => begin()).toThrow('This machine is suspended')
+    if (who === 'owner') f.run(resume, owner)
+    else f.run({ ...resume, askedIn: { conversationId: 'lead', messageId: 'm-owner' } } as Command, leadActor,
+      { askedIn: { author: { kind: 'person', id: 'owner' } as never, source: false, createdAt: 1000 } })
+    expect(begin().result.startId).toBeTruthy()
   })
 
   it('is resumed by the machine owner, or by a Lead passing on the owner\'s message, and by nobody else', () => {
@@ -5815,6 +5899,106 @@ describe('the Next-up queue (work.queue)', () => {
   })
 })
 
+// A task's priority, P0-P3 (task #3117): a hotfix for a broken release must not wait behind ordinary work.
+describe('a task\'s priority (conversation.create and work.priority)', () => {
+  function prioritized() {
+    const f = routed()
+    const task = (id: string) => f.state.conversations.find(g => g.id === id)!
+    const create = (fields: Record<string, unknown> = {}, actor: Actor = f.leadActor) =>
+      f.run(commandSchema.parse({ type: 'conversation.create', title: 'Sign-in broken', brief: 'Fix it.', checks: [], ...fields }), actor)
+    const set = (conversationId: string, priority: string) => commandSchema.parse({ type: 'work.priority', conversationId, priority })
+    return { f, task, create, set }
+  }
+
+  it('takes the PM\'s priority when it creates a task', () => {
+    const { task, create } = prioritized()
+    const created = create({ priority: 'P0' })
+    expect(created.result).toMatchObject({ priority: 'P0' })
+    expect(created.result.warnings ?? []).not.toContainEqual(expect.stringContaining('No priority given'))
+    expect(task(created.result.conversationId as string).priority).toBe('P0')
+    expect(groupView(task(created.result.conversationId as string), new Set())).toMatchObject({ priority: 'P0' })
+  })
+
+  it('gives a task created without one P2, and the reply says so', () => {
+    const { task, create } = prioritized()
+    const created = create()
+    expect(task(created.result.conversationId as string).priority).toBe('P2')
+    expect(created.result).toMatchObject({ priority: 'P2',
+      warnings: expect.arrayContaining(['No priority given: this task is P2. Set P0-P3 with work.priority.']) })
+  })
+
+  it('gives no priority to a step, and refuses one there', () => {
+    const { f, task, create } = prioritized()
+    const parent = create().result.conversationId as string
+    const step = create({ title: 'Review', reviewOf: parent, step: 'Review' }).result.conversationId as string
+    expect(task(step)).not.toHaveProperty('priority')
+    expect(() => create({ title: 'Test', reviewOf: parent, step: 'Test', priority: 'P1' }))
+      .toThrow(expect.objectContaining({ code: 'PRIORITY_TASK_ONLY', status: 400 }))
+    expect(f.state.conversations.filter(c => c.step === 'Test')).toEqual([])
+  })
+
+  it('lets only the PM or a person create a P0, while any agent may open a P1-P3 task', () => {
+    const { f, task, create } = prioritized()
+    expect(() => create({ priority: 'P0' }, f.workerActor)).toThrow(expect.objectContaining({ code: 'PRIORITY_P0', status: 403 }))
+    expect(task(create({ priority: 'P1' }, f.workerActor).result.conversationId as string).priority).toBe('P1')
+    expect(task(create({ priority: 'P0' }, owner).result.conversationId as string).priority).toBe('P0')
+  })
+
+  it('changes it for a person or the PM, and records each change in the task as a line', () => {
+    const { f, task, create, set } = prioritized()
+    const id = create().result.conversationId as string
+    const changed = f.run(set(id, 'P0'), owner)
+    expect(task(id).priority).toBe('P0')
+    expect(changed.messages).toEqual([expect.objectContaining({ conversationId: id, recipients: [], source: { kind: 'system' },
+      text: 'owner changed the priority to P0, hotfix: something shipped is broken (was P2).' })])
+    const byPm = f.run(set(id, 'P1'), f.leadActor)
+    expect(task(id).priority).toBe('P1')
+    // The PM by the name the Swarm shows for it.
+    const pm = f.state.agents.find(a => a.id === f.lead)!
+    expect(byPm.messages[0]!.text).toBe(`${pm.displayName ?? pm.name} changed the priority to P1, needed by users soon (was P0).`)
+  })
+
+  it('reads a task from before priorities as P2 when it changes', () => {
+    const { f, task, create, set } = prioritized()
+    const id = create().result.conversationId as string
+    delete task(id).priority
+    expect(f.run(set(id, 'P3'), owner).messages[0]!.text).toBe('owner changed the priority to P3, tools, docs or process (was P2).')
+  })
+
+  it('reads a task from before priorities by its title\'s urgent or high marker, as every client shows it', () => {
+    const { f, task, create, set } = prioritized()
+    const urgent = create({ title: 'Sign-in broken (urgent)' }).result.conversationId as string
+    const high = create({ title: 'Faster sync (Ken, high)' }).result.conversationId as string
+    for (const id of [urgent, high]) delete task(id).priority
+    expect(f.run(set(urgent, 'P2'), owner).messages[0]!.text).toBe('owner changed the priority to P2, planned goal (was P0).')
+    expect(f.run(set(high, 'P2'), owner).messages[0]!.text).toBe('owner changed the priority to P2, planned goal (was P1).')
+  })
+
+  it('posts nothing when the priority is already that one', () => {
+    const { f, task, create, set } = prioritized()
+    const id = create({ priority: 'P1' }).result.conversationId as string
+    expect(f.run(set(id, 'P1'), owner).messages).toEqual([])
+    expect(task(id).priority).toBe('P1')
+  })
+
+  it('is refused to any other agent of the project, and on what is not an open task', () => {
+    const { f, create, set } = prioritized()
+    const id = create().result.conversationId as string
+    const step = create({ title: 'Review', reviewOf: id, step: 'Review' }).result.conversationId as string
+    const before = structuredClone(f.state)
+    expect(() => f.run(set(id, 'P0'), f.workerActor)).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
+    for (const other of ['lead', step]) expect(() => f.run(set(other, 'P0'), owner), other).toThrow(expect.objectContaining({ code: 'PRIORITY_TASK_ONLY', status: 400 }))
+    expect(f.state).toEqual(before)
+  })
+
+  it('takes only P0 to P3', () => {
+    const parse = (priority: unknown) => commandSchema.safeParse({ type: 'work.priority', conversationId: 'task', priority }).success
+    for (const priority of ['P0', 'P1', 'P2', 'P3']) expect(parse(priority)).toBe(true)
+    for (const priority of ['P4', 'p0', 'high', 0, null, undefined]) expect(parse(priority), String(priority)).toBe(false)
+    expect(commandSchema.safeParse({ type: 'conversation.create', title: 'T', brief: 'B', checks: [], priority: 'urgent' }).success).toBe(false)
+  })
+})
+
 // 11-04 13:57 VN on the Mac Studio: the CLI's idle cleanup closed Tern, its machine's next reading listed the session
 // stopped, and six seconds after the close the PM assigned Tern a task, which was lost at once (task #2744).
 describe('assigning an agent whose session was closed', () => {
@@ -5996,5 +6180,49 @@ describe('agent.rename (renaming a harness renames its agent, task #2912)', () =
     const github = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_'), removed: CredentialKind[] = []
     expect(withoutCredentials(rename('a', github), removed)).toMatchObject({ name: CREDENTIAL_MARKER })
     expect(removed).toEqual(['github'])
+  })
+})
+
+// Task #3211 (vie, 11-05): a project whose lead started in a folder with no GitHub origin has nothing to clone, so its work
+// starts on other machines in an empty folder of its own, without a worktree; a project with a repository keeps today's rule.
+describe('a start for a project with no repository', () => {
+  const pool = (machineId: string) => ({ machineId, name: machineId, contributorId: 'owner', membershipGeneration: 'pilot', generation: 'g1',
+    cwd: '/data/swarm-projects/tab', scope: 'swarm' as const, engines: ['claude'], maxAgents: 4, paused: false,
+    observation: { generation: 'g1', receivedAt: 1000, capabilities: [LEAD_CAPABILITY], resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null,
+      diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null, deviceType: null, chip: null, os: null, gpuPercent: null },
+      tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] } })
+  const setUp = (repositoryUrl: string | null) => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    f.state.machines = [{ ...pool('source'), membershipGeneration: f.state.people[0]!.generation }, { ...pool('other'), membershipGeneration: f.state.people[0]!.generation }]
+    f.state.projects![0]!.repository = { machineId: 'source', cwd: '/Users/vie/outreach', repositoryUrl }
+    return { f, lead, group }
+  }
+  const start = (repositoryUrl: string | null, machineId: string, cwd: string) => {
+    const { f, lead, group } = setUp(repositoryUrl)
+    const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const request = { conversationId: group, machineId, engine: 'claude', name: 'Writer', cwd, worktree: true, branchRef: 'refs/remotes/origin/main',
+      requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } }
+    f.run({ type: 'agent.start', request, ...via } as Command, actor, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, ...decisionIn(group) })
+    return f.state.starts!.at(-1)!.request
+  }
+
+  it('starts on another machine in the project\'s own folder there, without a worktree', () => {
+    const request = start(null, 'other', '/data/swarm-projects/tab/lead')
+    expect(request).toMatchObject({ machineId: 'other', cwd: '/data/swarm-projects/tab/lead', worktree: false })
+    expect(request.branchRef).toBeUndefined()
+  })
+
+  it('keeps a worktree on the machine whose folder it started in, and wherever it has a repository', () => {
+    expect(start(null, 'source', '/Users/vie/outreach')).toMatchObject({ worktree: true, branchRef: 'refs/remotes/origin/main' })
+    expect(start('https://github.com/vie/outreach', 'other', '/data/swarm-projects/tab/lead')).toMatchObject({ worktree: true, branchRef: 'refs/remotes/origin/main' })
+  })
+
+  it('starts its Product Manager on another machine without a worktree too', () => {
+    const { f } = setUp(null)
+    const project = f.state.projects![0]!
+    const leadFor = { projectId: project.id, personId: 'owner', generation: f.state.people[0]!.generation }
+    expect(leadHost(f.state, project, 'other', { engine: 'claude' }, leadFor, { now: 1000 })).toMatchObject({ cwd: '/data/swarm-projects/tab/lead', worktree: false })
+    f.state.projects![0]!.repository!.repositoryUrl = 'https://github.com/vie/outreach'
+    expect(leadHost(f.state, project, 'other', { engine: 'claude' }, leadFor, { now: 1000 })).toMatchObject({ worktree: true })
   })
 })

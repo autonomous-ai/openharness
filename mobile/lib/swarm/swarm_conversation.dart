@@ -993,7 +993,7 @@ class SwarmConversation extends ChangeNotifier
 
   String? _startedRoot;
 
-  /// Sends [take] as a voice message, alone, as a reply to [replyingTo] when
+  /// Sends [take] as a voice message with attached files, as a reply to [replyingTo] when
   /// there is one: its clip goes up, the backend reads it once in [lang], and
   /// the post names that file. What is typed stays in the box. Not sent, the
   /// take is the voice row's to keep; a post whose answer was lost is the
@@ -1003,14 +1003,22 @@ class SwarmConversation extends ChangeNotifier
     if (uploading || _disposed || !canPost || group == null) {
       return (sent: false, notice: null);
     }
+    final attached = files.files;
+    if (attached.length >= swarmAttachmentMaxFiles) {
+      return (
+        sent: false,
+        notice: 'Attach at most 9 files with a voice message.',
+      );
+    }
     final clip = SwarmOutgoingFile(swarmVoiceFileName, take.wav);
+    final outgoing = [...attached, clip];
     // A failure says itself in the chat, as a file's does.
-    final ids = await _uploadAll([clip]);
+    final ids = await _uploadAll(outgoing);
     if (ids == null || _disposed) return (sent: false, notice: null);
     final read = await swarmReadVoice(
       reader.request,
       tabId: reader.tabId,
-      attachmentId: ids.single,
+      attachmentId: ids.last,
       lang: lang,
     );
     final voice = read.voice;
@@ -1034,16 +1042,22 @@ class SwarmConversation extends ChangeNotifier
         accountId: reader.accountId,
         operationId: operationId,
       ),
-      files: [clip],
+      files: outgoing,
       voice: voice,
+      held: (voiceFiles: attached),
     );
     _replyingTo = null;
     error = null;
+    for (final file in attached) {
+      files.remove(file);
+    }
     final outcome = await _outbox.add(post);
     _answered(post, outcome);
     final sent =
         outcome == SwarmPostOutcome.taken || outcome == SwarmPostOutcome.lost;
-    return (sent: sent, notice: sent ? swarmVoiceSentNote(voice) : null);
+    // It says nothing once sent: a voice message plays only, and never
+    // has words to go without (anh Dee, 2026-11-04).
+    return (sent: sent, notice: null);
   }
 
   /// The thread whose session the last post started, once the backend took
@@ -1189,7 +1203,7 @@ class SwarmConversation extends ChangeNotifier
     return refused == null;
   }
 
-  /// The person may edit and delete [message]: their own plain post (no
+  /// The person may edit [message]: their own plain post (no
   /// note the server wrote in their name), not deleted, where they may post.
   /// The backend decides again (messageEdits.ts); this only hides the menu.
   bool mayChange(SuperTabMessage message) =>
@@ -1197,6 +1211,17 @@ class SwarmConversation extends ChangeNotifier
       message.author['kind'] == 'person' &&
       message.authorId == reader.accountId &&
       message.source.isEmpty &&
+      !message.deleted;
+
+  /// Buddy proposals are delete-only, for the attributed person whose id
+  /// also matches their source. The backend independently authorizes this.
+  bool mayDelete(SuperTabMessage message) =>
+      canPost &&
+      message.author['kind'] == 'person' &&
+      message.authorId == reader.accountId &&
+      (message.source.isEmpty ||
+          (message.source['kind'] == 'buddy-proposal' &&
+              message.source['personId'] == reader.accountId)) &&
       !message.deleted;
 
   /// Puts [text], trimmed, in place of [message]'s (backend `message.edit`):
@@ -1627,6 +1652,13 @@ class SwarmConversation extends ChangeNotifier
 
   /// A refused post's text back in the draft, before anything typed since.
   void _restore(SwarmPost post) {
+    if (post.held case (voiceFiles: final List<SwarmOutgoingFile> attached)) {
+      final since = files.files;
+      files
+        ..clear()
+        ..add([...attached, ...since]);
+      return;
+    }
     final sent = post.held;
     if (sent
         is! ({

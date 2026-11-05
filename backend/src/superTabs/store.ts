@@ -1,11 +1,11 @@
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
-import { phoneNotices, type ReplyRow, type TagRow } from '../push/notices.js'
+import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
 import { joiningTeamMacs, type TeamMachineRow, accountMachineName, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
 import { expireAccess } from './machineAccess.js'
 import { authorForAgent, lazyUsernames, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
-import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
+import { machineSuspensionReason, readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
@@ -21,6 +21,7 @@ import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE 
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, notThere } from './deletion.js'
+import type { ApprovalRow, DroppedLine } from './ruleGuard.js'
 import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, SWARM_INVITATION_MS, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
@@ -32,9 +33,10 @@ import { threadSummaries } from './threads.js'
 import { closeProposal, databaseProposalReads, openProposalRows, openProposals, proposalChat, type OpenProposal } from './proposals.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
+import { makeThumbnail, MAX_READ_BACK_BYTES, pictureFields, THUMBNAILED_TYPES, thumbKeyOf, thumbnailsReserve, type StoredImage } from './thumbnails.js'
 import { FileLinks } from './fileLinks.js'
 import { randomBytes, randomUUID } from 'node:crypto'
-import type { Readable } from 'node:stream'
+import { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
 import { noteClaim, recordDeliveryCall } from '../lib/deliveryCalls.js'
 import { retryTransient } from './retry.js'
@@ -65,7 +67,7 @@ import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachin
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
 import type { MachineRename } from './machineRenames.js'
-import { movableEntry, otherAccountsOnComputer, sameComputerKey, type ComputerMove, type ComputerSignIn, type MachineKeys } from './computerMoves.js'
+import { otherAccountsOnComputer, sameComputerKey, type ComputerMove, type ComputerSignIn, type LeftMove, type MachineKeys } from './computerMoves.js'
 import { activeMachineKeysOf } from '../lib/deviceKeyLog.js'
 import { commitParts, indexesOf, machineContentChanged, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
@@ -88,7 +90,7 @@ import { STATUS_LABELS,
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredNotice, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
-import { PM_SCHEDULE_TEXT, recordWake, scheduleRequest } from './pmSchedule.js'
+import { PM_SCHEDULE_TEXT, recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
@@ -164,6 +166,15 @@ function registeredBy(state: SuperTabState, command: Command): Array<{ machineId
   if (command.type !== 'agent.started') return []
   const start = state.starts?.find(s => s.id === command.startId)
   return start ? [{ machineId: start.request.machineId, harnessId: command.harnessId }] : []
+}
+
+/** The messages an instructions save names as people's approvals (ruleGuard.ts), each by its id in this tab as askedIn is read:
+ *  at most MAX_APPROVALS equality reads on _id. Prisma sends `in` as $expr, which no index bounds (backend/AGENTS.md). */
+async function readApprovals(tx: Transaction, tabId: string, ids: string[]): Promise<ApprovalRow[]> {
+  const rows = await Promise.all([...new Set(ids)].map(id => tx.superTabMessage.findFirst({ where: { id, tabId },
+    select: { id: true, author: true, source: true, createdAt: true, conversationId: true } })))
+  return rows.flatMap(row => row ? [{ id: row.id, author: row.author as unknown as Author, source: !!row.source, createdAt: row.createdAt.getTime(),
+    conversationId: row.conversationId }] : [])
 }
 
 function namedFor(command: Command): Named {
@@ -938,6 +949,17 @@ export class SuperTabStore {
       const chat = projectsOf(state).find(p => p.id === projectId)?.leadConversationId
       if (chat) groupIds.push(chat)
     }
+    // A save that names people's approvals of dropped rules tells each of them privately (commands.ts, ruleGuard.ts): their one
+    // Buddy chat and their older one in the project, quiet or not. Only a person's message tells anyone.
+    if (command.type === 'instructions.save' && command.approvals?.length) {
+      for (const row of await readApprovals(tx, tabId, command.approvals)) {
+        // Its conversation, quiet or not: an approval counts only in a conversation of this project (ruleGuard.ts).
+        groupIds.push(row.conversationId)
+        if (row.author.kind !== 'person') continue
+        buddyChat(command.projectId, row.author.id)
+        swarmChat(row.author.id)
+      }
+    }
     // A proposal posts in the chat of the project it goes to, even quiet: the one a Swarm-wide Buddy names, else its session's.
     if (command.type === 'buddy.propose') {
       const self = asAgentId ? state.agents.find(a => a.id === asAgentId) : undefined
@@ -1343,13 +1365,14 @@ export class SuperTabStore {
       // out for, and what Desktop can show on the machine.
       const refusal = machineTeamWork(state, stored, now, teamMachines, otherWorkspace, joining)
       const suspended = suspendedEngines(stored, now)
+      const machineSuspended = machineSuspensionReason(stored, now)
       return { ...pool, availableSlots: availableSlots(state, stored, slots(stored)),
         teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const,
           // Its owner lets teammates' work run in their own account (machines.ts ownAccountWork): the route says so.
           ...(ownAccountWork(stored) ? { ownAccount: ownAccountNote(stored, shownNameOf(state, stored.contributorId)) } : {}) },
         ...(facts.versions[pool.machineId] ? { clientVersion: facts.versions[pool.machineId] } : {}),
         // What the route leaves out (cli superTabs/routeCommand.ts unreadyPool).
-        ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}) }
+        ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(machineSuspended ? { machineSuspended } : {}) }
     }) } }
   }
 
@@ -1699,7 +1722,10 @@ export class SuperTabStore {
       // (commands.ts ruleProject: the project it names, quotes or acts in).
       if (command.type === 'instructions.save' || command.type === 'rule.set') {
         const projectId = command.type === 'rule.set' ? ruleProject(original, actor, command).id : command.projectId
-        context.instructions = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, projectId) }, select: { revision: true, text: true } })
+        // When it was saved, too: a person's approval of a dropped rule must come after it (ruleGuard.ts).
+        const stored = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, projectId) }, select: { revision: true, text: true, updatedAt: true } })
+        context.instructions = stored && { revision: stored.revision, text: stored.text, ...stored.updatedAt ? { at: stored.updatedAt.getTime() } : {} }
+        if (command.type === 'instructions.save' && command.approvals?.length) context.approvals = await readApprovals(tx, tabId, command.approvals)
       }
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
@@ -2049,6 +2075,9 @@ export class SuperTabStore {
       if (effects.decisions) {
         const ids = await writeDecisions(tx, tabId, effects.decisions, context.now)
         if (command.type === 'decision.ask') effects.result.decisionIds = ids
+        // A decision new in this write reaches its person's phones (task #3248); one asked again is the open one, told already.
+        const asked = effects.decisions.filter((draft, i) => ids[i] === draft.id)
+        this.tellPhones(tx, tabId, effects.state, { replies: [], tags: [], decisions: asked }, [])
       }
       if (effects.decisionAnswer) await recordAnswer(tx, tabId, effects.decisionAnswer, context.now)
       // Work this command ended (done, cancelled, archived) closes the decisions still waiting there (Dee, 10-31). After this
@@ -2194,8 +2223,9 @@ export class SuperTabStore {
     if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
     const key = await this.uploader(tabId, tx => this.poster(tx, user, tabId, conversationId, asAgentId).then(p => p.actor))
     const row = await this.keep(attachments.store, attachments.prefix, tabId, key, { name: name.data, conversationId },
-      async () => checkedType(mime.data, file.body), file.body, MAX_FORM_ATTACHMENT_BYTES)
-    return { attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }) }
+      async () => checkedType(mime.data, file.body), file.body, MAX_FORM_ATTACHMENT_BYTES, (objectKey, bytes) => this.pictureOf(attachments, objectKey, bytes))
+    return { attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey),
+      ...pictureFields(row.image) }) }
   }
 
   /** A link to put one file of `size` bytes straight into the bucket, for a file too big for this server's form route. The
@@ -2266,9 +2296,9 @@ export class SuperTabStore {
       await this.poster(tx, user, tabId, found!.conversationId, asAgentId)
       return found!
     })
-    const sendable = async (mime: string) => ({ attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime, size: row.size,
-      url: publicUrl(attachments.publicBase, row.objectKey) }) })
-    if (!row.purpose) return sendable(row.mime)
+    const sendable = async (mime: string, image: unknown) => ({ attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime, size: row.size,
+      url: publicUrl(attachments.publicBase, row.objectKey), ...pictureFields(image) }) })
+    if (!row.purpose) return sendable(row.mime, row.image)
     let stored: { size: number } | null, head: Buffer
     try {
       stored = await direct.stored(row.objectKey)
@@ -2284,11 +2314,23 @@ export class SuperTabStore {
       unavailable()
     }
     const mime = typeFromHead(row.mime, head!)
-    const finished = await this.db.superTabAttachment.updateMany({ where: { id: row.id, tabId, purpose: PENDING_UPLOAD_PURPOSE }, data: { purpose: { unset: true }, mime } })
-    if (finished.count === 1) return sendable(mime)
+    // A picture sent straight to the bucket is read back once for its thumbnail, up to a size; any failure only means none.
+    let image: StoredImage | null = null
+    const place = THUMBNAILED_TYPES.has(mime) && stored!.size <= MAX_READ_BACK_BYTES ? thumbnailsReserve() : null
+    if (place) {
+      try { image = await this.pictureOf(attachments, row.objectKey, await direct.read(row.objectKey)) } catch (error) {
+        logger.warn('super-tab upload thumbnail failed', { tabId, code: errorCode(error) })
+      } finally { place() }
+    }
+    const finished = await this.db.superTabAttachment.updateMany({ where: { id: row.id, tabId, purpose: PENDING_UPLOAD_PURPOSE },
+      data: { purpose: { unset: true }, mime, ...image ? { image: image as unknown as Prisma.InputJsonValue } : {} } })
+    if (finished.count === 1) return sendable(mime, image)
     // Another finish of the same upload won: the same answer. The sweep claimed it first: its file is going, so it is refused.
     const now = await this.db.superTabAttachment.findFirst({ where: { id: row.id, tabId } })
-    return now && !now.purpose && !now.usedBy ? sendable(now.mime) : unavailable()
+    if (now && !now.purpose && !now.usedBy) return sendable(now.mime, now.image)
+    // The row will not carry the thumbnail just stored, so nothing would ever remove it: it goes now.
+    if (image?.thumb) await attachments.store.delete(thumbKeyOf(row.objectKey)).catch(() => {})
+    return unavailable()
   }
 
   /**
@@ -2424,14 +2466,26 @@ export class SuperTabStore {
 
   /** Streams one file into the bucket under a random key, as the type `typed` decides from its first bytes, and records it. */
   private async keep(bucket: AttachmentStore, prefix: string, tabId: string, actorKey: string, file: { name: string; conversationId: string; purpose?: string },
-    typed: () => Promise<{ mime: string; body: Readable }>, original: Readable, cap: number) {
+    typed: () => Promise<{ mime: string; body: Readable }>, original: Readable, cap: number,
+    /** Given the stored picture's bytes, its facts and stored thumbnail (pictureOf); a picture is held in memory for it, up to `cap`. */
+    thumbnail?: (objectKey: string, bytes: Buffer) => Promise<StoredImage | null>) {
     const objectKey = objectKeyFor(prefix, tabId, file.name)
     let size: number, mime: string
+    const held: Buffer[] = []
+    // A place to hold the picture whole for its thumbnail, given back when its thumbnail is made or the upload fails.
+    let place: (() => void) | null = null
     try {
       const checked = await typed()
       mime = checked.mime
-      size = await bucket.put(objectKey, { name: file.name, mime }, checked.body, cap)
+      if (thumbnail && THUMBNAILED_TYPES.has(mime)) place = thumbnailsReserve()
+      const tee = place !== null
+      const body = !tee ? checked.body : Readable.from((async function* () {
+        for await (const chunk of checked.body) { held.push(Buffer.from(chunk)); yield chunk }
+      })())
+      size = await bucket.put(objectKey, { name: file.name, mime }, body, cap)
     } catch (error) {
+      place?.()
+      held.length = 0
       if (error instanceof SuperTabError) throw error
       if (error instanceof AttachmentTooLarge) {
         if (file.purpose === AVATAR_PURPOSE) fail('AVATAR_TOO_LARGE', 'An avatar can be at most 1 MB.', 413)
@@ -2442,8 +2496,39 @@ export class SuperTabStore {
       logger.error('super-tab attachment storage failed', { tabId, error: error instanceof Error ? error.message : String(error) })
       fail('ATTACHMENTS_UNAVAILABLE', 'Could not store the file just now. Try again.', 503)
     }
-    return this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId: file.conversationId,
-      actorKey, name: file.name, mime, size, objectKey, ...(file.purpose ? { purpose: file.purpose } : {}) } })
+    // After the original is stored, so a picture that will not decode is just a file. Never fails the upload.
+    // The chunks go as soon as they are one buffer, so a picture waiting for its thumbnail is held once.
+    const whole = thumbnail && held.length ? Buffer.concat(held) : null
+    held.length = 0
+    let image: StoredImage | null = null
+    try { image = whole ? await thumbnail!(objectKey, whole).catch(() => null) : null } finally { place?.() }
+    try {
+      return await this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId: file.conversationId,
+        actorKey, name: file.name, mime, size, objectKey, ...(file.purpose ? { purpose: file.purpose } : {}),
+        ...image ? { image: image as unknown as Prisma.InputJsonValue } : {} } })
+    } catch (error) {
+      // No row will name the thumbnail, so nothing would remove it.
+      if (image?.thumb) await bucket.delete(thumbKeyOf(objectKey)).catch(() => {})
+      throw error
+    }
+  }
+
+  /** A picture's size and its thumbnail, made and stored beside the original; null when it is not a picture this reads. A thumbnail
+   *  that cannot be stored leaves the size and no thumbnail. Never throws. */
+  private async pictureOf(attachments: Attachments, objectKey: string, bytes: Buffer): Promise<StoredImage | null> {
+    const made = await makeThumbnail(bytes)
+    if (!made) return null
+    const image: StoredImage = { width: made.width, height: made.height }
+    if (made.thumb) {
+      const key = thumbKeyOf(objectKey)
+      try {
+        await attachments.store.put(key, { name: 'thumbnail.webp', mime: 'image/webp' }, Readable.from([made.thumb.bytes]), made.thumb.bytes.byteLength)
+        image.thumb = { url: publicUrl(attachments.publicBase, key), width: made.thumb.width, height: made.thumb.height, size: made.thumb.bytes.byteLength }
+      } catch (error) {
+        logger.warn('super-tab thumbnail could not be stored', { code: errorCode(error) })
+      }
+    }
+    return image
   }
 
   /** The actor, once it may post in this conversation. */
@@ -2471,7 +2556,8 @@ export class SuperTabStore {
       const voice = voiceFacts(row.voice)
       if (!voice && row.voiceSince) fail('VOICE_TRANSCRIBING', 'This voice message is still being transcribed. Try again in a moment.', 409)
       if (voice) voiceWords[row.id] = voiceTranscript(row.voice)
-      return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey), ...voice ? { voice } : {} }
+      return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey), ...voice ? { voice } : {},
+        ...pictureFields(row.image) }
     }) }
   }
 
@@ -2505,7 +2591,8 @@ export class SuperTabStore {
       const heard = new Set((await messagesById(tx, state.id, command.conversationId, handed.map(r => r.usedBy!))).filter(m => !m.buddySession).map(m => m.id))
       handed = handed.filter(r => heard.has(r.usedBy!))
     }
-    return { attachments: [...own, ...handed].map(row => ({ id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) })),
+    return { attachments: [...own, ...handed].map(row => ({ id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey),
+        ...pictureFields(row.image) })),
       claimed: own.map(r => r.id), proposed: handed.map(r => r.id) }
   }
 
@@ -2550,7 +2637,9 @@ export class SuperTabStore {
     if (group && !sessionReadsRow(reader, group, state)(message)) return undefined
     if ((await deliveredCopies(tx, tabId, [message])).size) return undefined
     const author = message.author as { kind?: string; id?: string } | null
+    const source = message.source as { kind?: unknown; personId?: unknown } | null
     const target: MessageChangeTarget = { messageId: message.id, author: { kind: String(author?.kind ?? ''), id: String(author?.id ?? '') },
+      proposalOwnerId: source?.kind === 'buddy-proposal' && typeof source.personId === 'string' ? source.personId : undefined,
       plain: message.source == null, deleted: !!message.deletedAt, hasFiles: Array.isArray(message.attachments) && message.attachments.length > 0,
       hasReplies: false, text: message.text, sequence: message.sequence }
     // Only an author's delete reads further; anyone else is refused on the row alone.
@@ -2571,7 +2660,12 @@ export class SuperTabStore {
     const row = await tx.superTabMessage.findUniqueOrThrow({ where: { id: command.messageId }, select: { id: true, conversationId: true, thread: true, attachments: true, mentions: true } })
     const files = Array.isArray(row.attachments) ? (row.attachments as unknown as Attachment[]).map(a => a.id) : []
     // Raw `$in` filters: Prisma sends `in` as $expr, which no index bounds (hotFilters.test.ts). By _id, and by [tabId, messageId].
-    if (files.length) await tx.$runCommandRaw({ update: 'SuperTabAttachment', updates: [{ q: { _id: { $in: files }, tabId }, u: { $set: { usedBy: EXPIRED_UPLOAD } }, multi: true }] })
+    // A proposal can carry its owner's chat files without owning them (#3322 security review): expire only this row's
+    // uploads, and release only its forwarding claim. The original chat message must keep its file through the sweep.
+    if (files.length) await tx.$runCommandRaw({ update: 'SuperTabAttachment', updates: [
+      { q: { _id: { $in: files }, tabId, usedBy: row.id }, u: { $set: { usedBy: EXPIRED_UPLOAD } }, multi: true },
+      { q: { _id: { $in: files }, tabId, proposedBy: row.id }, u: { $unset: { proposedBy: '' } }, multi: true },
+    ] })
     // Activity has no index by message: its rows go by the ids they were written with (activity.ts), each reaction's from its row,
     // the reply's for every member it could have told.
     const reactions = await tx.superTabReaction.findMany({ where: { tabId, messageId: row.id }, select: { id: true } })
@@ -2584,9 +2678,10 @@ export class SuperTabStore {
     await tx.$runCommandRaw({ update: 'SuperTabDelivery', updates: [{ q: { tabId, messageId: row.id, status: { $in: [...CANCELLABLE_DELIVERY] } },
       u: { $set: { status: 'cancelled', holdReason: null, holdSince: null, updatedAt: { $date: new Date(now).toISOString() } } }, multi: true }] })
     if (kept) {
-      // Raw: Prisma writes `{ unset: true }` into a Json field as a value instead of removing it.
+      // Raw: Prisma writes `{ unset: true }` into a Json field as a value instead of removing it. A deleted Buddy proposal's
+      // goal and scope must go too (#3322): they can repeat its text, and its source would still make it an open proposal.
       await tx.$runCommandRaw({ update: 'SuperTabMessage', updates: [{ q: { _id: row.id, tabId }, u: { $set: { text: DELETED_TEXT, mentions: [],
-        deletedAt: { $date: new Date(now).toISOString() } }, $unset: { attachments: '', editedAt: '' } } }] })
+        deletedAt: { $date: new Date(now).toISOString() } }, $unset: { attachments: '', editedAt: '', source: '' } } }] })
       // Its own thread's summary drops the people only this root tagged.
       await refreshThreads(tx, tabId, row.conversationId, [row.id])
       return
@@ -2666,8 +2761,9 @@ export class SuperTabStore {
     return this.instructionHistory(user, tabId, projectId, asAgentId, async tx => {
       const row = await tx.superTabInstructionsRevision.findUnique({ where: { id: revisionId(tabId, projectId, revision) } })
       if (!row || row.tabId !== tabId || row.projectId !== projectId) fail('NOT_FOUND', 'This revision is unavailable.', 404)
+      // The lines it dropped, with their kind and who gave it (ruleGuard.ts); none for a revision from before they were kept.
       return { projectId, revision: row.revision, hash: row.hash, text: row.text, summary: row.summary, writtenBy: { kind: row.writtenByKind, id: row.writtenBy },
-        askedBy: row.askedBy, at: row.at }
+        askedBy: row.askedBy, at: row.at, dropped: (row.dropped ?? []) as unknown as DroppedLine[] }
     })
   }
 
@@ -3502,9 +3598,9 @@ export class SuperTabStore {
     if (!readingOnly(mine.observation, reading)) return null
     addLent(mine, now, record.lentCount, record.lentProjects)
     mine.observation = reading
-    const suspended = JSON.stringify(mine.engineSuspensions)
+    const suspended = JSON.stringify([mine.engineSuspensions, mine.machineSuspension])
     readingClearsSuspensions(mine, now)
-    if (JSON.stringify(mine.engineSuspensions) !== suspended) return null
+    if (JSON.stringify([mine.engineSuspensions, mine.machineSuspension]) !== suspended) return null
     // Its sweep due: the full report runs it, with the slot this reading, which passed the checks, just took.
     if (await this.reports.sweepDue(tabId, now)) return { sweep: true }
     const stamp = clock.next()
@@ -3952,6 +4048,14 @@ export class SuperTabStore {
         recordWake(project, scheduled, this.now(), open ? null : wakeId!)
         afterCommit(tx, () => logger.info('[swarm-deliveries] schedule request', { tabId, slot: scheduled.slot, placed, jobs: scheduled.jobs.join(',') }))
       }
+      // The daily tidy, in its own message (pmSchedule.ts tidyRequest): once a local date, recorded in this same write, so two
+      // racing polls ask once.
+      const tidy = led ? tidyRequest(state, target, this.now()) : null
+      if (tidy) {
+        written.push(tidy.draft)
+        recordTidy(projectOf(state, led!.id), tidy)
+        afterCommit(tx, () => logger.info('[swarm-deliveries] tidy request', { tabId, day: tidy.day, skipped: tidy.skipped }))
+      }
       // The morning digest is due once a day; recording it as sent is part of this same write, so it is sent once.
       const digest = digestRequest(state, target, this.now(), asked)
       if (digest) {
@@ -4357,9 +4461,10 @@ export class SuperTabStore {
    * Another account's sign-in on a computer (computerMoves.ts, #3122): each Swarm with an entry of the computer's previous
    * accounts moves it to [signIn]'s machine, by the store-only machine.moved run as that entry's owner. One Swarm at a time;
    * one that fails is logged and left to the next connect. With [write] false (the cleanup's dry run) nothing is written, and
-   * each entry is decided as machine.moved decides (computerMoves.ts movableEntry). The moves made, or that would be.
+   * each entry is decided as the write decides it (wouldMove). The moves made, or that would be; [left] gets each entry the
+   * Swarm refused to move, with its refusal's code, in both.
    */
-  async computerSignedIn(signIn: ComputerSignIn, { write = true }: { write?: boolean } = {}): Promise<ComputerMove[]> {
+  async computerSignedIn(signIn: ComputerSignIn, { write = true, left }: { write?: boolean; left?: LeftMove[] } = {}): Promise<ComputerMove[]> {
     const others = await otherAccountsOnComputer(this.db, signIn)
     if (!others.length) return []
     const to = await this.db.machine.findFirst({ where: { machineId: signIn.machineId, userId: signIn.ownerId, autonomousEnv: signIn.autonomousEnv, ...machineAlive },
@@ -4378,23 +4483,40 @@ export class SuperTabStore {
       const user: AuthUser = { sub: from.userId, email: person.email, autonomousEnv: signIn.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
       const move = { from: from.machineId, fromOwner: from.userId, to: signIn.machineId, toOwner: signIn.ownerId }
       for (const tabId of await machineSwarms(this.db, signIn.autonomousEnv, from.machineId, MACHINE_RENAME_SWARMS)) {
+        const movedTo = { machineId: signIn.machineId, ownerId: signIn.ownerId }
         try {
-          if (!write) {
-            const swarm = await this.db.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-            if (!swarm || swarm.deletedAt) continue
-            const { state } = await loadRow(this.db as unknown as Transaction, requireParts(swarm))
-            if (movableEntry(state, from.machineId, from.userId, { machineId: signIn.machineId, ownerId: signIn.ownerId }, this.now())) moves.push({ tabId, ...move })
-            continue
-          }
-          const done = await this.executeOnce(user, tabId, { operationId: `computer-move-${randomUUID()}`, command: { type: 'machine.moved', machineId: from.machineId } },
-            undefined, undefined, false, { movedTo: { machineId: signIn.machineId, ownerId: signIn.ownerId } })
-          if (done.result.moved) moves.push({ tabId, ...move })
+          const moved = write
+            ? (await this.executeOnce(user, tabId, { operationId: `computer-move-${randomUUID()}`, command: { type: 'machine.moved', machineId: from.machineId } },
+              undefined, undefined, false, { movedTo })).result.moved === true
+            : await this.wouldMove(user, tabId, from.machineId, movedTo)
+          if (moved) moves.push({ tabId, ...move })
         } catch (error) {
-          logger.warn('[swarm] a computer move did not reach a Swarm', { tabId, machineId: from.machineId, code: error instanceof SuperTabError ? error.code : 'unknown' })
+          const code = error instanceof SuperTabError ? error.code : 'unknown'
+          left?.push({ tabId, ...move, code })
+          logger.warn('[swarm] a computer move did not reach a Swarm', { tabId, machineId: from.machineId, code })
         }
       }
     }
     return moves
+  }
+
+  /**
+   * Whether machine.moved, run by the store as [user] for [movedTo], moves [user]'s entry [machineId] in Swarm [tabId]: the
+   * checks executeOnce makes for it, in its order (the Swarm loaded for [user], their access to it and their membership, the
+   * move read from both account rows), then the command itself on a copy. Nothing is written and no transaction is opened, so
+   * the read-only login runs it. It throws the refusal the write meets. The cleanup's dry run read the entry alone, and on prod
+   * listed a move the write then refused (task #3227).
+   */
+  private async wouldMove(user: AuthUser, tabId: string, machineId: string, movedTo: { machineId: string; ownerId: string }): Promise<boolean> {
+    const reader = this.db as unknown as Transaction
+    const command: Command = { type: 'machine.moved', machineId }
+    const first = await this.load(reader, user, tabId, namedFor(command))
+    const { state: original } = await this.ensure(reader, first, await this.moreNamed(reader, tabId, first.state, command, user.sub))
+    const actor = await this.actor(reader, user, original)
+    author(original, actor)
+    const context: CommandContext = { operationId: `computer-move-${randomUUID()}`, now: this.now(),
+      computerMove: actor.kind === 'person' ? await this.computerMove(reader, original, actor.userId, machineId, movedTo) : undefined }
+    return applyCommand(cloneData(original), actor, command, context).result.moved === true
   }
 
   /** The move [ownerId]'s entry [machineId] makes to [to], read from both account rows in this transaction: the same computer,
@@ -4498,9 +4620,10 @@ export class SuperTabStore {
   }
 
   /** The phones of whoever `written` tells hear of it once the write commits (push/send.ts). */
-  private tellPhones(tx: Transaction, tabId: string, state: SuperTabState, written: { replies: ReplyRow[]; tags: TagRow[] }, messages: MessageDraft[]): void {
+  private tellPhones(tx: Transaction, tabId: string, state: SuperTabState, written: { replies: ReplyRow[]; tags: TagRow[]; decisions?: DecisionRow[] },
+    messages: MessageDraft[]): void {
     const tell = this.hooks.phoneNotices
-    if (!tell || (!written.replies.length && !written.tags.length)) return
+    if (!tell || (!written.replies.length && !written.tags.length && !written.decisions?.length)) return
     // A notice is never worth a write: one that cannot be made is logged and the write goes on (security review 2).
     let notices: PhoneNotice[]
     try {

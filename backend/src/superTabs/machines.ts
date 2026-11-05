@@ -1,7 +1,7 @@
 import { accessRefusal, sharedOwnAccess, taskAccess } from './machineAccess.js'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import { engineUnusable } from './engineHealth.js'
+import { engineUnusable, machineSuspensionReason } from './engineHealth.js'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
@@ -75,8 +75,16 @@ export interface ContributedMachine {
   access?: import('./machineAccess.js').AccessEntry[]
   /** Per engine, its failed starts here in a row, until one runs or they suspend it (engineHealth.ts). */
   engineFailures?: Record<string, number>
-  /** Per engine, a suspension after failed starts: when, and whether its reading already said signed in with quota then. */
-  engineSuspensions?: Record<string, { at: number; fine: boolean }>
+  /** Bounded repeat level (0–6) and cause of the current failure streak. Kept across expiry, removed by success/resume
+   *  or with the machine. A launch failure anywhere in the streak prevents sign-in-only recovery. */
+  engineBackoff?: Record<string, { level: number; cause: 'engine' | 'sign-in' }>
+  /** `fine` keeps the old reader's contract. Records before 11-05 lack duration/cause and retain their six-hour policy. */
+  engineSuspensions?: Record<string, { at: number; fine: boolean; durationMs?: number; cause?: 'engine' | 'sign-in' }>
+  /** Pickup timeouts across all engines. One bounded counter/level/cooldown per machine, removed by any successful start
+   *  or with its contribution. Expiry removes the cooldown only, preserving backoff (0–6) until recovery is proven. */
+  machineFailures?: number
+  machineBackoff?: number
+  machineSuspension?: { at: number; durationMs: number }
 }
 /** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll.
  *  [requestedAt]: when its removal was asked for; none on one recorded before 2026-10-28. */
@@ -543,11 +551,42 @@ export function teamMachineFor(state: SuperTabState, machineId: string, project:
   return teamPoolOf(state, pool, live)?.machineId ?? machineId
 }
 
+/** The Mac's own entry when [machineId] is its Harness Team account's and its owner lets teammates' work run in their own
+ *  account there (ownAccountWork), for a teammate's [project] whose code no Team agent wrote; else undefined. Such a start
+ *  belongs on the Mac, not the Team account it named (task #3060: a lamp start named Gray's Team entry, both entries named
+ *  'Gray.local', and was placed there as named). */
+export function ownAccountTeamEntry(state: SuperTabState, machineId: string, project: SwarmProject, teamWritten: boolean): ContributedMachine | undefined {
+  if (teamWritten) return undefined
+  const team = state.machines?.find(m => m.machineId === machineId)
+  if (!team?.hostMachineId || team.contributorId === project.ownerId) return undefined
+  const mac = state.machines?.find(m => m.machineId === team.hostMachineId && m.contributorId === team.contributorId && !m.removal)
+  return ownAccountWork(mac) ? mac : undefined
+}
+
+/** Refuses a start that names a Team account's entry its owner's choice keeps teammates' work off (ownAccountTeamEntry), with
+ *  the Mac's own entry to start on. Refused, not moved: a move would put the work in a person's own account, with their files
+ *  and sign-ins, when the start named the isolated one; the starter picks the Mac knowingly, as its route row says. */
+export function failOwnAccountTeamEntry(mac: ContributedMachine): never {
+  fail('OWN_ACCOUNT_WORK', `${mac.name}'s owner runs teammates' work in their own account in this Swarm, so its Harness Team account takes only work a Harness Team agent wrote. Start on ${mac.name} itself (machine ${mac.machineId}).`, 409)
+}
+
 /** The folder a start for [project] uses on [pool]: what admitMachineStart accepts there. */
 export function projectFolder(pool: ContributedMachine, project: SwarmProject): string {
   return pool.scope === 'swarm'
     ? project.repository?.machineId === pool.machineId ? project.repository.cwd : `${pool.cwd.replace(/\/+$/, '')}/${project.id}`
     : pool.cwd
+}
+
+/** [request] as [pool] can carry it out for [project]: a project whose folder is recorded without a repository address has
+ *  nothing to clone or branch from on any machine but the one that folder is on, so elsewhere it starts in the project's own
+ *  empty folder without a worktree (task #3211); its host makes that folder (cli superTabs/projectFolder.ts). A project with
+ *  no folder recorded yet is left alone: its first start records one. Any other start is unchanged. */
+export function noRepositoryStart(pool: ContributedMachine | undefined, project: SwarmProject | undefined, request: AgentStartRequest): AgentStartRequest {
+  const repository = project?.repository
+  if (!pool || pool.scope !== 'swarm' || !repository || repository.repositoryUrl || repository.machineId === pool.machineId) return request
+  if (!request.worktree && !request.branchRef) return request
+  const { branchRef: _branchRef, ...rest } = request
+  return { ...rest, worktree: false }
 }
 
 /** What a host reports (`capabilities`) when it runs a Swarm-wide Buddy in its folder of project worktrees (Dee, 10-31). */
@@ -701,7 +740,7 @@ export function removalPreview(state: SuperTabState, actor: Actor, machineId: st
         ...(task ? { task: task.title } : {}) }
     }),
     hiddenAgentCount: members.length - visibleAgents.length,
-    // Their code is only on this machine: no other machine can start agents for them until someone shares a repository.
+    // Their code is only on this machine: agents elsewhere start in an empty folder until someone shares a repository (#3211).
     soleSourceProjects: visibleSoleSourceProjects.map(p => ({ id: p.id, name: p.name })),
     hiddenSoleSourceProjectCount: soleSourceProjects.length - visibleSoleSourceProjects.length,
   }
@@ -879,6 +918,8 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   // A Buddy-only machine is recorded with its Buddy's start, before its host ever read the Swarm: the start waits for it.
   if (machineOffline(pool, now) && !(pool.buddyOnly && !pool.observation)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
   if (!start) admitByRoom(state, pool, slots(pool), request.requirements.memoryBytes)
+  const machineReason = !start ? machineSuspensionReason(pool, now) : null
+  if (machineReason) fail('MACHINE_UNAVAILABLE', machineReason)
   // A new start only: a grid model runs without the engine's subscription, and one already asked for is settled by its host.
   const unusable = !start && !local ? engineUnusable(pool, request.engine, now) : null
   if (unusable) fail('ENGINE_UNAVAILABLE', unusable)
