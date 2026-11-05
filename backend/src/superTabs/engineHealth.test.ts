@@ -20,6 +20,47 @@ const start = (extra: Partial<AgentStart['request']> = {}, error = 'Codex could 
   request: { conversationId: 'g1', machineId: 'm1', engine: 'codex', name: 'Builder', cwd: '/x', ...extra } }) as unknown as AgentStart
 
 describe('an engine whose starts fail on a machine', () => {
+  it.each([
+    'The Harness server answered without a GitHub token for this project.',
+    'This start has no authorized project.',
+    'This project repository is unavailable.',
+    'The project folder does not exist.',
+    'Cannot create a worktree: the repository has no commits.',
+    'Required tool gh is not installed.',
+    'spawn gh ENOENT',
+    "This machine's ChatGPT account (plus) does not offer gpt-6-astra; choose another model.",
+    "This machine held the agent's launch for 3 minutes and stopped it: Waiting to confirm the selected executable’s permission flags.",
+    'This agent does not support that permission mode.',
+    'Its machine is signed in to another account now.',
+    'Request refused by this account.',
+    'Authentication failed while fetching the project.',
+    'Unknown native preparation failure.',
+  ])('does not penalize an engine for setup or an unclassified failure: %s', error => {
+    const pool = machine(), state = stateWith(pool)
+    noteStartFailed(state, start({}, error), NOW)
+    expect(noteStartFailed(state, start({}, error), NOW)).toBeNull()
+    expect(engineUnusable(pool, 'codex', NOW)).toBeNull()
+    // Ignoring setup failures must not erase a real engine failure already counted.
+    noteStartFailed(state, start(), NOW)
+    noteStartFailed(state, start({}, error), NOW)
+    expect(noteStartFailed(state, start(), NOW)).not.toBeNull()
+  })
+
+  it.each([
+    'Codex could not launch.',
+    'codex exited before its engine process became ready. See the terminal output for details.',
+    'Its engine stopped on a question that nobody here can answer.',
+    'Its engine stopped on a sign-in screen that nobody here can answer.',
+    'Codex sign-in failed.',
+    'Codex is installed but cannot run: it exited with status 1',
+    'The agent was created and has since stopped. Create a new start request to continue.',
+  ])('counts the engine’s own failure: %s', error => {
+    const pool = machine(), state = stateWith(pool)
+    expect(noteStartFailed(state, start({}, error), NOW)).toBeNull()
+    expect(noteStartFailed(state, start({}, error), NOW)).toContain('Codex is suspended')
+    expect(engineUnusable(pool, 'claude', NOW)).toBeNull()
+  })
+
   it('is suspended there by its second failed start in a row, with one sentence for the notice', () => {
     const pool = machine(), state = stateWith(pool)
     expect(noteStartFailed(state, start(), NOW)).toBeNull()
