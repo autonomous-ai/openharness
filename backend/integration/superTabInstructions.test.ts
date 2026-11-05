@@ -517,3 +517,27 @@ describe('the migration job', () => {
     expect((await db.superTabInstructions.findFirstOrThrow({ where: { tabId: tab, projectId: 'lead' } })).text).toBe('Our own words.')
   })
 })
+
+// Task #3392 (anh Dee, 11-05, decision 5): a person's rule may move into a code task, its line staying until that task merges.
+// A merged task goes quiet after a day, out of the Swarm a command loads: the save names it, and the store loads it.
+describe('a rule moved into a code task that went quiet', () => {
+  it('counts once the save names the merged task, and not before', async () => {
+    const { tab, lead } = await withLead()
+    const quiet = 'No releases between 18:00 and 09:00 Vietnam time (owner, 2026-11-02).'
+    const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
+    await run(tab, save(1, doc(quiet, 'Tests run first.')))
+    const task = (await run(tab, { type: 'conversation.create', title: 'Release guard', brief: `Goal:\nBlock night releases.\n\nChanges:\n- ${quiet}`,
+      checks: [] })).result.conversationId as string
+    const drop = (tasks?: string[]) => run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 2, text: doc('Tests run first.'),
+      summary: 'Moved the release rule to its task', askedBy: owner.sub, ...tasks ? { tasks } : {} }, host, lead)
+    // Open: the line stays until the task merges.
+    await expect(drop()).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ why: 'waiting' }] } })
+    // Merged, then quiet: out of the command's load unless the save names it.
+    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: task } })
+    const data = part.data as { ledger?: object }
+    await db.swarmGroup.update({ where: { id: part.id }, data: { dormant: true, version: { increment: 1 },
+      data: { ...data, dormant: true, ledger: { ...data.ledger, mergedAt: now, shippedAt: now } } } })
+    await expect(drop()).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ why: 'removed' }] } })
+    expect((await drop([task])).result).toMatchObject({ revision: 3 })
+  })
+})
