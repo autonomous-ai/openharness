@@ -147,4 +147,58 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await c.flush();
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('scrolling up without letting go reads the page above while '
+      'the reader is still screens below the top', (tester) async {
+    final server = chat(400);
+    final older = <double>[];
+    final c = await show(tester, server);
+    server.onRead = (path) {
+      if (path.contains('before=')) {
+        older.add(chatScroll(tester).position.extentBefore);
+      }
+    };
+    final view = find.byKey(const PageStorageKey('super-messages-tab-lead'));
+    final drag = await tester.startGesture(tester.getCenter(view));
+    // A steady drag down the list, as a trackpad scrolls up: never let go.
+    for (var step = 0; step < 400 && older.isEmpty; step++) {
+      await drag.moveBy(const Offset(0, 40));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(older, isNotEmpty);
+    expect(older.first, greaterThan(900));
+    await drag.up();
+    await tester.pumpAndSettle();
+    expect(c.messages('lead').length, greaterThan(100));
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('a page of mostly thread replies reads the next one by itself '
+      'while the rows read stay near the top', (tester) async {
+    final server = ConversationServer()
+      ..threads = true
+      ..messagePage = 20;
+    for (var i = 1; i <= 400; i++) {
+      server.append(text(i));
+      // Nine of every ten are replies in a thread, as in a busy project chat.
+      if (i % 10 != 0) server.messages.last['thread'] = 'message-10';
+    }
+    final reads = <String>[];
+    server.onRead = (path) {
+      if (path.contains('before=')) reads.add(path);
+    };
+    final c = await show(tester, server);
+    final scroll = chatScroll(tester);
+    scroll.jumpTo(scroll.position.minScrollExtent);
+    await tester.pumpAndSettle();
+
+    expect(reads.length, greaterThan(1));
+    expect(
+      chatScroll(tester).position.extentBefore,
+      greaterThan(chatScroll(tester).position.viewportDimension),
+    );
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 }
