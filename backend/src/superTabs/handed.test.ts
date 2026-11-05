@@ -5,6 +5,7 @@ import { awaitingWorkers, workerIndex, type SuperTabState } from './model.js'
 import type { Command } from './commands.js'
 import { sweepLiveness } from './liveness.js'
 import { REOPEN_OWNER_MS, reopenOnEvents } from './handed.js'
+import { currentGroup } from './terminal.js'
 import { workHolds, startedHolds, endedHolds, tokenTask } from '../github/holds.js'
 import { stepsFixture } from './steps.test-support.js'
 
@@ -191,5 +192,15 @@ describe('No, red CI or a conflict reopens the task pinned to its owner (#3399)'
     f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: `Ready for review: ${PR} at def5678` }, f.as(f.dev))
     expect(f.group(f.task).assignment).toMatchObject({ status: 'review' })
     expect(f.group(f.task).assignment!.reopened).toBeUndefined()
+  })
+})
+
+describe('an Engineer\'s terminal rows go to the task in its hands (#3399, review of #3221)', () => {
+  it('names its working task, not the one it handed over, and the handed one when nothing else is open', () => {
+    const f = handedFixture()
+    const dev = () => f.state.agents.find(a => a.id === f.dev)!
+    expect(currentGroup(f.state, dev()).id).toBe(f.task)
+    f.run({ type: 'work.assign', conversationId: f.next, agentId: f.dev }, f.as(f.lead))
+    expect(currentGroup(f.state, dev()).id).toBe(f.next)
   })
 })

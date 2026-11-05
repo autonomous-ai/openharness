@@ -2121,6 +2121,35 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await db.superTabDelivery.findUnique({ where: { id: delivery.id } }))!.status).toBe('cancelled')
   })
 
+  // Task #3399, security review of #3221: a handed task frees its Engineer for the next task, which takes the session's run
+  // record; when that one ends while the handed task is still open, the record goes back to it, so no other Swarm can assign
+  // the session while a No or red CI may bring that task back.
+  it('keeps the cross-tab fence on a handed task once the Engineer\'s next task ends', async () => {
+    const one = await fixture()
+    const two = await fixture()
+    const session = randomUUID()
+    const task = async (tab: string) => String((await run(tab, { type: 'conversation.create', title: 'Task', brief: 'Check the fixture.',
+      checks: [{ description: 'Test passes.', independent: true }] })).result.conversationId)
+    const handedTask = await task(one.tab), next = await task(one.tab), other = await task(two.tab)
+    const attach = (conversationId: string): Command => ({ type: 'agent.add', conversationId, machineId: 'test-host', harnessId: session,
+      name: 'Worker', configuration: config, lead: false })
+    const worker = (await run(one.tab, attach(handedTask))).result.agentId as string
+    await run(one.tab, { type: 'conversation.agent', conversationId: next, agentId: worker, present: true, lead: false })
+    await run(two.tab, attach(other))
+    const handed = (await run(one.tab, { type: 'work.assign', conversationId: handedTask, agentId: worker })).result.assignmentId as string
+    await run(one.tab, { type: 'work.status', conversationId: handedTask, assignmentId: handed, status: 'review', result: 'Ready for review: PR #7 at abc1234' }, host, worker)
+    const following = (await run(one.tab, { type: 'work.assign', conversationId: next, agentId: worker })).result.assignmentId as string
+    expect(await db.superTabRun.findUnique({ where: { id: worker } })).toMatchObject({ tabId: one.tab, assignmentId: following })
+    await expect(run(two.tab, { type: 'work.assign', conversationId: other, agentId: worker })).rejects.toMatchObject({ code: 'AGENT_BUSY' })
+    await run(one.tab, { type: 'work.status', conversationId: next, assignmentId: following, status: 'done', result: 'Merged PR #8' }, host, worker)
+    expect(await db.superTabRun.findUnique({ where: { id: worker } })).toMatchObject({ tabId: one.tab, assignmentId: handed })
+    await expect(run(two.tab, { type: 'work.assign', conversationId: other, agentId: worker })).rejects.toMatchObject({ code: 'AGENT_BUSY' })
+    // Its own end releases the session, as any task's does.
+    await run(one.tab, { type: 'work.status', conversationId: handedTask, assignmentId: handed, status: 'done', result: 'Merged PR #7' }, host, worker)
+    expect(await db.superTabRun.findUnique({ where: { id: worker } })).toBeNull()
+    await run(two.tab, { type: 'work.assign', conversationId: other, agentId: worker })
+  })
+
   it('holds a cross-tab assignment until host-confirmed stop and retains the previous attempt', async () => {
     const one = await fixture()
     const two = await fixture()
