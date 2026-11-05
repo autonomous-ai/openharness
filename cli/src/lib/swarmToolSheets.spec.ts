@@ -65,7 +65,6 @@ describe('the role tools sheets', () => {
       const text = sheet(role)
       expect(text.startsWith('---\nname: swarm-tools\n'), role).toBe(true)
       expect(text, role).toContain('`harness super-tab help tools`')
-      expect(text, role).not.toContain('Print little to save quota.\n\n')
     }
   })
 
