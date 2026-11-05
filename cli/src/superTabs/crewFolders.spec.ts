@@ -76,9 +76,11 @@ describe('branch copies', () => {
     git(work, 'checkout', '-b', 'unpushed', 'origin/main'); writeFileSync(join(work, 'c.txt'), 'c\n'); git(work, 'add', '.'); git(work, 'commit', '-m', 'c')
     // current: the branch the member works on now.
     git(work, 'checkout', '-b', 'current', 'origin/main')
+    // someone-else: made in the clone itself (the person's own checkout), pushed and merged: not this member's to prune.
+    git(r.clone, 'checkout', '-b', 'someone-else'); git(r.clone, 'push', '-u', 'origin', 'someone-else'); git(r.clone, 'checkout', 'main')
     git(work, 'fetch', '--prune')
     expect((await pruneBranches(work)).sort()).toEqual(['gone', 'merged'])
     const left = git(work, 'branch', '--format=%(refname:short)').split('\n').sort()
-    expect(left).toEqual(['current', 'main', 'super-tab/start-1', 'unpushed'].sort())
+    expect(left).toEqual(['current', 'main', 'someone-else', 'super-tab/start-1', 'unpushed'].sort())
   })
 })

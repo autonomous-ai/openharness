@@ -107,3 +107,13 @@ describe('a take-over never joins a conversation its new session is barred from 
     expect(f.state.conversations.find(c => c.id === 'lead')!.agentIds).toContain(moved.id)
   })
 })
+
+describe('a refused move start (security review 2 of #3229)', () => {
+  it('records the machine that refused it, so the next pass tries another', () => {
+    const f = fixture([machine('mac', { signedIn: false }), machine('mini')])
+    applyCrewKeep(f.state, NOW, everywhere)
+    const start = f.state.starts!.find(s => s.request.crewMoveOf === f.ada.id)!
+    f.state = run(f.state, { type: 'agent.startFailed', startId: start.id, error: 'No token' } as Command, 'failed-2', NOW + 5000, host)
+    expect(f.state.agents.find(a => a.id === f.ada.id)!.crewMoveRefused).toEqual({ machineId: 'mini', at: NOW + 5000 })
+  })
+})

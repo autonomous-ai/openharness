@@ -118,3 +118,22 @@ describe('crewKeep: Team-written work stays in Team accounts (security review of
     expect(kinds(f.state)).toEqual([{ kind: 'stuck', agentId: f.ada.id, reason: 'signed-out' }])
   })
 })
+
+describe('crewKeep: account kinds and Team sessions (security review 2 of #3229)', () => {
+  const team = (pool: ReturnType<typeof machine>) => ({ ...pool, hostMachineId: `${pool.machineId}-mac` }) as typeof pool
+  it('a main-account member never moves into a Team account', () => {
+    const f = fixture([machine('mac', { signedIn: false }), team(machine('studio'))])
+    expect(kinds(f.state)).toEqual([{ kind: 'stuck', agentId: f.ada.id, reason: 'signed-out' }])
+  })
+  it('a member in a Team account never sleeps: its close there deletes what a wake would resume', () => {
+    const f = fixture([team(machine('mac')), machine('mini')])
+    expect(kinds(f.state)).toEqual([])
+  })
+  it('a machine that refused the member\'s move start is not picked again for an hour', () => {
+    const f = fixture([machine('mac', { signedIn: false }), machine('mini', { resetIn: 86_400_000 }), machine('late')])
+    f.ada.crewMoveRefused = { machineId: 'mini', at: NOW - 30 * 60_000 }
+    expect(kinds(f.state)).toEqual([{ kind: 'move', agentId: f.ada.id, toMachineId: 'late', reason: 'signed-out' }])
+    f.ada.crewMoveRefused = { machineId: 'mini', at: NOW - 61 * 60_000 }
+    expect(kinds(f.state)).toEqual([{ kind: 'move', agentId: f.ada.id, toMachineId: 'mini', reason: 'signed-out' }])
+  })
+})
