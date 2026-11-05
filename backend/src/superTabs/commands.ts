@@ -1,6 +1,6 @@
 import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, mayName, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
-import type { RepositoryReach } from './repositoryReach.js'
+import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from './repositoryReach.js'
 import { admitByRoom, admitMachineStart, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
@@ -1034,7 +1034,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   const pushedRefusal = (group: Conversation, worker: Agent) => {
     marking(group, () => applyPushOrigin(state, group, context.pushOrigin))
     if (onTeamAccount(state, worker) || ledProject(state, worker.id)?.id === groupProject(state, group).id) return
-    if (context.pushOrigin === 'unknown') failPushUnknown()
+    if (context.pushOrigin === 'unknown') failPushUnknown(unknownPushReason(context.repositoryReach))
     if (context.pushOrigin === 'team') failTeamWritten({ pushed: true })
   }
   /** A session already in the Swarm that a person's agent.add names joins [group] as conversation.agent adds one (security
@@ -2542,9 +2542,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       if (written) requireTeamWrittenMachine(state, startGroup, moved.machineId)
       // A branch GitHub cannot place stays out of the main account too, unmarked, as it may yet read clean.
-      else if (context.pushOrigin === 'unknown' && !teamAccountPool(state.machines?.find(m => m.machineId === moved.machineId))) failPushUnknown()
+      else if (context.pushOrigin === 'unknown' && !teamAccountPool(state.machines?.find(m => m.machineId === moved.machineId))) failPushUnknown(unknownPushReason(context.repositoryReach))
       const request: AgentStartRequest = noRepositoryStart(state.machines?.find(m => m.machineId === moved.machineId), home,
         written ? { ...moved, projectSettings: 'off' } : moved)
+      // Before it is queued: a machine that cannot get the app's token for it would fail it, and count that against its engine.
+      requireRepositoryReach(state, teamAccountPool(state.machines?.find(m => m.machineId === request.machineId)), grant.machineOwnerId, home, context.repositoryReach)
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
       if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
@@ -3613,6 +3615,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // And what the task needs to reach, where it runs (machineAccess.ts): an assignment is held to it as a start is.
       const unreached = accessRefusal(state, worker.machineId, home, taskAccess(group))
       if (unreached) failTeamWork(unreached)
+      requireRepositoryReach(state, onTeamAccount(state, worker), worker.machineOwnerId, home, context.repositoryReach)
       // Team-written code runs only in a Team account, and a Team agent's work marks the task (teamWritten.ts, audit H2).
       pushedRefusal(group, worker)
       requireTeamWrittenAccount(state, group, worker)
