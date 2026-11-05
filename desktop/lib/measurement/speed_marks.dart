@@ -50,6 +50,10 @@ class SpeedMarks {
     _write('launch step=$name ms=${_now()}');
   }
 
+  /// False once the first chat has been marked, so a row's build can skip
+  /// asking for another frame callback.
+  bool get awaitingFirstChat => !_steps.contains('first_chat_painted');
+
   /// The first chat row built on screen. Once per launch.
   void firstChat() => launch('first chat painted');
 

@@ -9,6 +9,7 @@ import 'package:flutter/rendering.dart'
 import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 import 'package:flutter/services.dart';
 
+import '../measurement/speed_marks.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -5661,6 +5662,12 @@ class _BuiltRowState extends State<_BuiltRow> {
   @override
   Widget build(BuildContext context) {
     widget.rows[widget.id] = context;
+    // The first chat on screen after launch: marked once the frame is out.
+    if (speedMarks.awaitingFirstChat) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => speedMarks.firstChat(),
+      );
+    }
     return widget.child;
   }
 }

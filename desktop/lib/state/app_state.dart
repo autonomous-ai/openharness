@@ -1,6 +1,7 @@
 import '../core/home_dir.dart';
 import '../usage/usage_account_key.dart';
 import '../measurement/product_measurement.dart';
+import '../measurement/speed_marks.dart';
 import '../measurement/product_runtime_health.dart';
 import '../measurement/product_connections.dart';
 import '../core/crash_log.dart';
@@ -7022,6 +7023,7 @@ class AppNotifier extends ChangeNotifier {
   final _startupTimings = <String, int>{};
   final _startupClock = Stopwatch();
   void _markStartup(String step) {
+    speedMarks.launch(step);
     if (_startupClock.isRunning)
       _startupTimings[step] = _startupClock.elapsedMilliseconds;
   }
@@ -7661,6 +7663,7 @@ class AppNotifier extends ChangeNotifier {
     }
     try {
       await refreshMachines();
+      speedMarks.launch('machines listed');
     } catch (error) {
       if (!_authWorkCurrent(revision)) return;
       _reportMachineLoadError(error);
