@@ -165,6 +165,20 @@ export async function writeMentions(tx: Tx, tabId: string, state: SuperTabState,
     createdAt: new Date(now), resolvedAt: null, resolvedBy: null, ...(message.holdMentions ? { holdUntil: new Date(now + NO_WORKER_GRACE_MS) } : {}),
   })))
   if (data.length) await tx.superTabMention.createMany({ data })
+  await bringBackUnfollowed(tx, tabId, messages, now)
+}
+
+/** A tag in a thread reply puts the thread back on the tagged person's Threads page, as in Slack: their Unfollow of it is cleared
+ *  (follow back to no choice; updatedAt moves so their other devices read the change), in the write of the tag. A reply that tags
+ *  nobody leaves an Unfollow as it is, and a send that tags nobody in a thread sends no command. At most MAX_MENTIONS ids a message,
+ *  in one raw update by `_id`, which Prisma would send as $expr (hotFilters.test.ts). */
+async function bringBackUnfollowed(tx: Tx, tabId: string, messages: MessageDraft[], now: number): Promise<void> {
+  const ids = [...new Set(messages.flatMap(message => message.thread && message.thread !== message.id ? (message.mentions ?? []).map(personId =>
+    stableId(tabId, message.conversationId, message.thread!, personId)) : []))]
+  if (!ids.length) return
+  const answer = await tx.$runCommandRaw({ update: 'SuperTabThreadMark', updates: [{ q: { _id: { $in: ids }, tabId, follow: false },
+    u: { $set: { follow: null, updatedAt: { $date: new Date(now).toISOString() } } }, multi: true }] }) as { writeErrors?: unknown[] }
+  if (answer.writeErrors?.length) throw new Error('The database refused some thread follows')
 }
 
 /** Any post by the tagged person in that conversation answers every earlier tag there, in a thread or not. */
