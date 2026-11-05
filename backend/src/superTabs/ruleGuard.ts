@@ -5,7 +5,7 @@
  * dropped rule makes the save or wrote a message approving it that the save names. Who a person is comes from the sender or
  * the stored message's author, never the caller's word (askedBy). The approver is then told in one private line.
  */
-import { droppedRules, personKey, type DroppedRule } from './instructionsDiff.js'
+import { attributedRules, droppedRules, ITEM_CHARS, keptIn, personKey, removedItems, type DroppedRule } from './instructionsDiff.js'
 import { fail, type Author, type SuperTabState } from './model.js'
 import { canReadProject, type SwarmProject } from './projects.js'
 import { swarmUsernames } from './usernames.js'
@@ -44,14 +44,14 @@ const WHY: Record<DroppedRule['why'], string> = {
  * the store could not read: nothing to keep, and the chat line says the change could not be shown (instructionsDiff.ts).
  */
 export function allowedDrops(state: SuperTabState, project: SwarmProject, before: string | null, after: string, sender: { kind: Author['kind']; id: string },
-  named: readonly string[], approvals: readonly ApprovalRow[]): Map<string, DroppedRule[]> {
+  named: readonly string[], approvals: readonly ApprovalRow[]): { told: Map<string, DroppedRule[]>; rules: DroppedRule[] } {
   const told = new Map<string, DroppedRule[]>()
-  if (before === null) return told
+  if (before === null) return { told, rules: [] }
   const membersOf = new Map<string, string[]>()
   const members = (name: string) => membersOf.get(name) ?? membersOf.set(name, membersNamed(state, name)).get(name)!
   // One written person for comparing revisions: the members they are, so "0xken15" and "Ken" are one.
   const dropped = droppedRules(before, after, name => members(name).sort().join(',') || `?${personKey(name)}`)
-  if (!dropped.length) return told
+  if (!dropped.length) return { told, rules: [] }
   const saver = sender.kind === 'person' ? sender.id : undefined
   const approvers = new Set(approvals.filter(a => named.includes(a.id) && a.author.kind === 'person' && !a.source).map(a => a.author.id)
     .filter(id => state.people.some(p => p.id === id && canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))))
@@ -74,7 +74,38 @@ export function allowedDrops(state: SuperTabState, project: SwarmProject, before
         + (unknown(rule).length ? ` ${unknown(rule).join(', ')} is no member here, so the project's owner decides.` : '')),
     ].join('\n'), 409, { dropped: refused.map(rule => ({ rule: rule.text, people: rule.people, why: rule.why })) })
   }
-  return told
+  return { told, rules: dropped }
+}
+
+/** Lines one revision's History keeps (River, 11-05): a rewrite of the whole document lists its first 500. */
+export const MAX_DROPPED_LINES = 500
+/** How the coordinator sorted a line it dropped (pmSchedule.ts, the daily tidy): kept elsewhere with who said it, or a step
+ *  or date that passed. `rule`: a person's rule, dropped with their approval. `unsorted`: nobody said, and its words are not
+ *  kept elsewhere; listed so the History never hides a line. */
+export type DropKind = 'merged' | 'expired' | 'rule' | 'unsorted'
+export interface DroppedLine { text: string; kind: DropKind; people: string[] }
+/** What a save may say of the lines it drops: a line's words, or enough of them to find it, and its kind. */
+export interface SortedLine { text: string; kind: Exclude<DropKind, 'unsorted'> }
+
+const words = (text: string) => text.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim()
+
+/**
+ * Every line [after] dropped from [before], for the revision's History, now that the instruction-change line leaves the chat
+ * (#3101): each with who gave it and its kind. A person's rule dropped with their approval ([rules], allowedDrops) is `rule`,
+ * whatever it was called. Otherwise the kind the save gave the line ([sorted]: its words, or a part of them), else `merged`
+ * when its words are all in one line of [after], else `unsorted`.
+ */
+export function droppedLines(before: string | null, after: string, sorted: readonly SortedLine[], rules: readonly DroppedRule[]): DroppedLine[] {
+  if (before === null) return []
+  const kept = keptIn(after)
+  const named = sorted.map(line => ({ key: words(line.text), kind: line.kind })).filter(line => line.key)
+  return removedItems(before, after).slice(0, MAX_DROPPED_LINES).map(text => {
+    const key = words(text)
+    const people = [...new Set(attributedRules(text).flatMap(rule => rule.people))]
+    const kind: DropKind = rules.some(rule => text.includes(rule.text)) ? 'rule'
+      : named.find(line => key.includes(line.key))?.kind ?? (kept(text) ? 'merged' : 'unsorted')
+    return { text: [...text].length <= ITEM_CHARS ? text : `${[...text].slice(0, ITEM_CHARS - 1).join('')}…`, kind, people }
+  })
 }
 
 /** The one line a person is told when [who] changed their [rules] in [project]'s instructions with their approval. */

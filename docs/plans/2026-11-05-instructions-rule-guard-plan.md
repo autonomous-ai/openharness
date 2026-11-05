@@ -29,8 +29,8 @@ one Buddy chat and their older project Buddy chat). `pmSchedule.ts` text changes
 
 ## Design
 
-- growth: no new collection. One boolean on the project's schedule (`tidyPending`), cleared by the next coordinator save;
-  the rule check runs on the two texts of one save.
+- growth: no new collection. One boolean on the project's schedule (`tidyPending`), cleared by the next coordinator save.
+  Each revision row embeds its dropped lines (at most 500 of 400 characters), deleted with the row (last 50 kept).
 - concurrency: N/A because it runs inside the save's existing transaction and revision check.
 - read cost: one indexed read of the named approval messages (by id, at most 20), only when a save names them.
 - scale: 64 KB documents (~1,000 items): segments × items word-set compare, well under a millisecond per save at today's
@@ -106,5 +106,17 @@ save completes a pending tidy), `store.ts` (the poll sends the tidy), their test
   its text sorts dropped lines into the three kinds and checks the save against the previous revision.
 - [ ] Implement.
 
-Known limit: a save's summary is one line of at most 200 characters (instructions.ts), so a long tidy lists its dropped
-lines there in a few words each; the chat line still shows every removed item (#3021).
+## Task 4: The History keeps every dropped line (River, 11-05)
+
+#3101 removes the instruction-change line from the chat, so the chat no longer shows removed lines. Each revision keeps
+the lines its save dropped, each with its kind and who gave it, and the summary only counts them ("3 merged, 1 expired").
+
+**Files:** `ruleGuard.ts` (`droppedLines`), `instructionsDiff.ts` (`removedItems`, `keptIn`), `commands.ts`
+(`instructions.save.dropped`), `instructions.ts` (`InstructionsWrite.dropped`), `instructionsStore.ts`, `store.ts`
+(`instructionRevision` returns `dropped`), `prisma/schema.prisma` (`SuperTabInstructionsRevision.dropped Json?`).
+
+- [ ] Failing tests: the save's effect lists every removed item with its kind (a person's rule dropped with approval is
+  `rule` whatever the PM called it; the PM's kind; else `merged` when its words are in one remaining line; else
+  `unsorted`) and its people; the History read returns it; a revision from before reads none.
+- [ ] Implement. Embedded in the revision row (read together, bounded: at most 500 lines of 400 characters), removed with
+  it.

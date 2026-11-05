@@ -55,7 +55,7 @@ import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, 
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
-import { allowedDrops, approvedDropNotice, MAX_APPROVALS, type ApprovalRow } from './ruleGuard.js'
+import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { instructionsChange } from './instructionsDiff.js'
@@ -204,7 +204,10 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('instructions.save'), projectId: id, baseRevision: z.number().int().nonnegative().safe(), text: instructionsTextSchema,
     summary: summarySchema, askedBy: id.optional(),
     // A person's own messages approving the drop of their rules (ruleGuard.ts), when the save drops any.
-    approvals: z.array(id).max(MAX_APPROVALS).optional() }).strict(),
+    approvals: z.array(id).max(MAX_APPROVALS).optional(),
+    // How the writer sorted the lines it dropped, for the History (ruleGuard.ts droppedLines; the daily tidy).
+    dropped: z.array(z.object({ text: z.string().trim().min(1).max(2000), kind: z.enum(['merged', 'expired', 'rule']) }).strict())
+      .max(MAX_DROPPED_LINES).optional() }).strict(),
   // A small thing a member told the coordinator, kept beside the instructions until it ends, if it does (instructions.ts).
   z.object({ type: z.literal('note.add'), projectId: id, text: noteTextSchema, askedBy: id, expiresAt: z.iso.datetime().optional() }).strict(),
   z.object({ type: z.literal('note.remove'), projectId: id, noteId: id }).strict(),
@@ -412,7 +415,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'project.create': ['name', 'brief'],
   'project.rename': ['name'],
   'project.report': ['text'],
-  'instructions.save': ['text', 'summary'],
+  'instructions.save': ['text', 'summary', 'dropped[].text'],
   'note.add': ['text'],
   'project.coordinatorName': ['name'],
   'rule.set': ['text'],
@@ -1119,12 +1122,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
    *  read it), with one line in its chat in the writer's name, for the member who asked when that is someone else: what
    *  instructions.save and an older client's rule.set write. The line shows the lines really removed and added under the
    *  writer's summary, so nobody takes the summary's word for what was saved (#3021). */
-  const saveInstructions = (project: SwarmProject, current: number, before: string | null, text: string, summary: string, askedBy: string) => {
+  const saveInstructions = (project: SwarmProject, current: number, before: string | null, text: string, summary: string, askedBy: string,
+    dropped: DroppedLine[] = []) => {
     const hash = instructionsHash(text)
     mutableProjects(state)
     Object.assign(projectOf(state, project.id), { instructionsRevision: current + 1, instructionsHash: hash })
     effects.instructions = { projectId: project.id, revision: current + 1, hash, text, summary,
-      writtenBy: { kind: sender.kind, id: sender.id }, askedBy, at: context.now }
+      writtenBy: { kind: sender.kind, id: sender.id }, askedBy, at: context.now, ...dropped.length ? { dropped } : {} }
     // A save for someone else, a coordinator's or a person's, names the member it was for, so the record never names an asker
     // the chat line did not (review of phase 2).
     const asked = askedBy !== sender.id ? ` for ${person(state, askedBy).email.split('@')[0]}` : ''
@@ -1803,8 +1807,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // The text this save replaces, which the store read for the stale check above: what its chat line diffs against.
       const before = !current ? INSTRUCTIONS_TEMPLATE : context.instructions?.revision === current ? context.instructions.text : null
       // A person's rule, or who gave it, is dropped only by that person or with their own message approving it (#3151).
-      const told = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [])
-      saveInstructions(project, current, before, command.text, command.summary, askedBy)
+      const { told, rules } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [])
+      // Every line it dropped, with its kind and who gave it, kept with the revision for the History (River, 11-05).
+      saveInstructions(project, current, before, command.text, command.summary, askedBy, droppedLines(before, command.text, command.dropped ?? [], rules))
       // The coordinator's save after the daily tidy asked for one is that tidy done (pmSchedule.ts tidyRequest).
       if (actor.kind === 'agent') tidySaved(projectOf(state, project.id), current + 1)
       // Each approver is told in one line, privately, as person.tell does: in their one Buddy chat and their older one here.

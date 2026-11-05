@@ -471,7 +471,7 @@ describe('an instructions save keeps the rules people gave', () => {
       stored(doc(tony, quiet, 'No deploys on Sundays.', 'No deploys on holidays.'), 2))
     expect(merged.instructions!.dropped).toEqual([{ text: tony, kind: 'merged', people: ['owner'] }, { text: quiet, kind: 'merged', people: ['owner'] },
       { text: 'No deploys on Sundays.', kind: 'merged', people: [] }, { text: 'No deploys on holidays.', kind: 'merged', people: [] }])
-    expect(f.run(save(3, `${doc(both)}\n- Tests run first.`, { askedBy: 'owner' }), as(lead), stored(doc(both), 3)).instructions!.dropped).toEqual([])
+    expect(f.run(save(3, `${doc(both)}\n- Tests run first.`, { askedBy: 'owner' }), as(lead), stored(doc(both), 3)).instructions!.dropped).toBeUndefined()
   })
 
   // A tidy counts as done only when a save follows it (pmSchedule.ts tidyRequest): the coordinator's save, not a person's.

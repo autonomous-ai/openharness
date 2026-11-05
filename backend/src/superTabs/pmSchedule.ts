@@ -166,7 +166,8 @@ const TIDY_LINES = [
   '- Sort every line you drop into one of three kinds: merged (its meaning is kept elsewhere, with who said it), expired (a step or '
     + 'date that has passed), or a person\'s rule that is gone. Restore a person\'s rule that is gone, or ask the person who gave it '
     + 'and keep it until they answer: never drop or weaken a person\'s rule on your own judgment, even one you think cannot be done.',
-  '- The save\'s summary lists each dropped line, in a few words, and its kind.',
+  '- List every line you drop with its kind in the save\'s dropped list: the History keeps it with the revision. The save\'s '
+    + 'summary only counts them (for example "3 merged, 1 expired").',
   '- After the save, compare it with the previous revision: every person\'s rule, and who gave it, must still be there. The Swarm '
     + 'refuses a save that drops one without that person\'s own approval message.',
   '- The tidy counts as done only when its save is made; without one, tomorrow\'s message says it was skipped.',
