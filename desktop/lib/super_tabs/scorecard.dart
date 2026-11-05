@@ -125,6 +125,11 @@ class SuperTabScorecardReader extends ChangeNotifier {
   final SuperTabRequest request;
 
   List<SuperTabScorecardDay> days = const [];
+
+  /// The last day the project should have a row for (yesterday in its zone),
+  /// as the server says it; the table ends there even when that row is
+  /// missing.
+  String? through;
   String? error;
   bool loading = false;
   String? _projectId;
@@ -137,6 +142,7 @@ class SuperTabScorecardReader extends ChangeNotifier {
     if (projectId != _projectId) {
       _projectId = projectId;
       days = const [];
+      through = null;
       error = null;
     }
     return refresh();
@@ -159,6 +165,7 @@ class SuperTabScorecardReader extends ChangeNotifier {
         for (final row in answer['days'] as List? ?? const [])
           SuperTabScorecardDay.fromJson((row as Map).cast<String, dynamic>()),
       ];
+      through = answer['through'] as String?;
       error = null;
     } on SuperTabFailure catch (failure) {
       if (read != _read) return;

@@ -61,11 +61,15 @@ class _SuperTabScorecardViewState extends State<SuperTabScorecardView> {
       builder: (context, _) {
         final reader = widget.reader;
         final byDay = {for (final d in reader.days) d.on: d};
-        final newest = reader.days.isEmpty
-            ? null
-            : reader.days
-                  .map((d) => d.on)
-                  .reduce((a, b) => a.compareTo(b) > 0 ? a : b);
+        // Yesterday in the project's zone, so a missing last day shows as
+        // "–"; the newest stored day before a server said so.
+        final newest =
+            reader.through ??
+            (reader.days.isEmpty
+                ? null
+                : reader.days
+                      .map((d) => d.on)
+                      .reduce((a, b) => a.compareTo(b) > 0 ? a : b));
         final columns = newest == null
             ? const <String>[]
             : scorecardColumns(newest);
