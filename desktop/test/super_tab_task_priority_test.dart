@@ -74,6 +74,7 @@ Future<SuperTabController> _board(
         needsHuman: (_) => 0,
         onOpenTask: (_) {},
         onOpenProposal: (_) {},
+        onOpenMessage: (_, _) {},
         now: () => _now,
       ),
     ),
