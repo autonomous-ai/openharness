@@ -150,12 +150,30 @@ describe('which messages to the coordinator are gathered', () => {
     expect((await deliveryOf(id, f.lead)).status).toBe('queued')
   })
 
-  it('an agent\'s post, and a status row written before the status was recorded, go at once', async () => {
+  // Anh Dee, 11-05 (#3387): agents' posts to the PM were pasted into its terminal one by one. They wait for its digest now.
+  it('an agent\'s post to the coordinator is gathered; a status row written before the status was recorded goes at once', async () => {
     const f = await swarm()
     const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'A question', replyTo: null, recipientIds: [f.lead] }, host, f.worker)
     const posted = String(sent.result.messageId)
-    expect((await deliveryOf(posted, f.lead)).status).toBe('queued')
-    expect((await deliveryOf(await f.write(undefined, f.lead), f.lead)).status).toBe('queued')
+    expect((await deliveryOf(posted, f.lead)).status).toBe('gathered')
+    expect((await deliveryOf(await f.write(undefined, f.lead), f.lead)).status).toBe('gathered')
+    expect((await deliveryOf(await f.write({ kind: 'system' }, f.lead), f.lead)).status).toBe('queued')
+  })
+
+  it('a person\'s message to the coordinator goes at once', async () => {
+    const f = await swarm()
+    const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Please ship the parser today', replyTo: null, recipientIds: [] })
+    expect((await deliveryOf(String(sent.result.messageId), f.lead)).status).toBe('queued')
+    const reply = await f.execute({ type: 'message.send', conversationId: f.group, text: 'And the docs', replyTo: null, recipientIds: [f.lead] })
+    expect((await deliveryOf(String(reply.result.messageId), f.lead)).status).toBe('queued')
+  })
+
+  it('an agent\'s post to an agent that is not the coordinator goes at once', async () => {
+    const f = await swarm()
+    await f.add(f.group, 'test-host', 'Second')
+    const second = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.name === 'Second')!.id
+    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Your turn', replyTo: null, recipientIds: [f.worker] }, host, second)
+    expect((await deliveryOf(String(sent.result.messageId), f.worker)).status).toBe('queued')
   })
 
   it('never lists a gathered delivery to a host, an old daemon\'s included', async () => {
@@ -219,6 +237,28 @@ describe('the coordinator\'s poll releases what was gathered', () => {
     expect(inbox.map(d => d.messageId)).toContain(digest!.id)
     const claimed = await f.timed.delivery(host, f.tab, f.lead, inbox.find(d => d.messageId === digest!.id)!.id, { type: 'claim', claimId: 'claim-1' })
     expect((claimed as { message: { text: string } }).message.text).toContain('Notices since')
+  })
+
+  it('agents\' posts to the coordinator arrive in one digest, each line naming who wrote it, and none on its own (#3387)', async () => {
+    const f = await swarm()
+    await f.add(f.group, 'test-host', 'Second')
+    const second = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.name === 'Second')!.id
+    const first = String((await f.execute({ type: 'message.send', conversationId: f.group, text: 'Can I take the docs too?', replyTo: null,
+      recipientIds: [f.lead] }, host, f.worker)).result.messageId)
+    const next = String((await f.execute({ type: 'message.send', conversationId: f.group, text: 'Review step refused for Fir', replyTo: null,
+      recipientIds: [f.lead] }, host, second)).result.messageId)
+    expect((await f.poll()).map(d => d.messageId)).not.toContain(first)
+    f.clock.now += DUE
+    const inbox = await f.poll()
+    const [digest, ...more] = await digests(f.tab)
+    expect(more).toEqual([])
+    expect(digest!.source).toMatchObject({ kind: 'notice-digest', count: 2 })
+    expect(digest!.text).toContain(`: Worker: Can I take the docs too? (message ${first} in ${f.group})`)
+    expect(digest!.text).toContain(`: Second: Review step refused for Fir (message ${next} in ${f.group})`)
+    for (const id of [first, next]) expect((await deliveryOf(id, f.lead)).status).toBe('digested')
+    expect(inbox.map(d => d.messageId)).toContain(digest!.id)
+    expect(inbox.map(d => d.messageId)).not.toContain(first)
+    expect(inbox.map(d => d.messageId)).not.toContain(next)
   })
 
   it('keeps each line to 200 characters, and on one line whatever the notice holds', async () => {
