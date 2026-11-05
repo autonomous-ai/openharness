@@ -1,25 +1,41 @@
 import 'model.dart';
 
 /// One piece of work waiting on the reader: its worker needs a person or is
-/// stuck.
+/// stuck, or waits at a prompt in its terminal ([atPrompt], task #3029).
 class SwarmWaitingWork {
-  SwarmWaitingWork(this.conversation, this.project, this.snapshot);
+  SwarmWaitingWork(
+    this.conversation,
+    this.project,
+    this.snapshot, {
+    this.promptAgentId,
+  });
   final SuperTabConversation conversation;
   final SuperTabProject project;
   final SuperTabSnapshot snapshot;
 
-  /// `needs_human` or `blocked`.
-  String get status => conversation.assignment!['status'] as String;
+  /// The agent at a prompt in its terminal, when that is what waits.
+  final String? promptAgentId;
+
+  /// Whether its agent waits at a prompt in its terminal, whatever its status.
+  bool get atPrompt => promptAgentId != null;
+
+  /// `needs_human` or `blocked`; `prompt` for an agent at a prompt.
+  String get status =>
+      atPrompt ? 'prompt' : conversation.assignment!['status'] as String;
 
   /// The worker's name.
-  String get agentName =>
-      snapshot.agentName(conversation.assignment!['agentId'] as String? ?? '');
+  String get agentName => snapshot.agentName(
+    promptAgentId ?? conversation.assignment!['agentId'] as String? ?? '',
+  );
 
   /// What the worker wrote with the status: its question, or why it is stuck.
-  String? get question => switch (conversation.assignment!['result']) {
-    final String text when text.trim().isNotEmpty => text.trim(),
-    _ => null,
-  };
+  /// At a prompt, it says so: the prompt itself is in its terminal.
+  String? get question => atPrompt
+      ? 'Waiting at a prompt in its terminal'
+      : switch (conversation.assignment!['result']) {
+          final String text when text.trim().isNotEmpty => text.trim(),
+          _ => null,
+        };
 }
 
 /// Each conversation's partner, the person its work needs (`partnerId`, named
@@ -59,6 +75,17 @@ List<SwarmWaitingWork> swarmWaitingWork(
         if (snapshot.projectById(conversation.projectId) case final project?)
           if ((partners[conversation.id] ?? project.ownerId) == accountId)
             SwarmWaitingWork(conversation, project, snapshot),
+    // An agent at a prompt in a task of the reader's: the backend chose them
+    // (the task's requester, or the device machine's owner), so no rule here.
+    for (final wait in snapshot.promptsWaiting)
+      if (snapshot.conversation(wait.conversationId) case final conversation?)
+        if (snapshot.projectById(conversation.projectId) case final project?)
+          SwarmWaitingWork(
+            conversation,
+            project,
+            snapshot,
+            promptAgentId: wait.agentId,
+          ),
   ]);
   _kept[snapshot] = (accountId: accountId, partners: partners, work: work);
   return work;

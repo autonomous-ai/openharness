@@ -1,5 +1,7 @@
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
-import { applyCrewKeep, crewMoveRequest, crewNeedsMachine, isCrewMember, type CrewDeps } from './crewKeep.js'
+import { applyCrewKeep, crewMoveRequest, crewNeedsMachine, type CrewDeps } from './crewKeep.js'
+import { finishedWakes } from './crewTimes.js'
+import { isCrew } from './crew.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
@@ -54,7 +56,7 @@ import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } f
 import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
-import { deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
+import { currentRules, deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
 import { SEED_RULES } from './policy.js'
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, FIRST_SUMMARY, liveNotes, MAX_REVISIONS } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
@@ -65,8 +67,11 @@ import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from
 import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
+import { RefusalMemory } from './dispatchRefusals.js'
+import { candidatesFor, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type Skip } from './dispatch.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
+import { settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
 import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
@@ -157,6 +162,28 @@ const hash = (value: unknown): string => createHash('sha256').update(JSON.string
  *  for a busy Swarm) until the maintenance script removes it, and every command and read loads this row. */
 /** The most Swarms a rename reaches at once, as many as a host reads (read/host.ts FULL_TABS); its readings do the rest. */
 const MACHINE_RENAME_SWARMS = 500
+/** The writes after which the crew dispatch runs (store.ts dispatchSoon): those that may free a member or open a task. A
+ *  status only when it hands the task over or ends it; a progress note, the Swarm's most frequent write, frees nobody. */
+const DISPATCH_TRIGGERS: ReadonlySet<string> = new Set(['work.cancel', 'conversation.create', 'work.define', 'work.priority',
+  'work.queue', 'work.lane', 'agent.release', 'crew.add'])
+const FREEING_STATUSES: ReadonlySet<string> = new Set(['done', 'review', 'stopped'])
+const freesOrOpens = (command: Command): boolean =>
+  command.type === 'work.status' ? FREEING_STATUSES.has(command.status) : DISPATCH_TRIGGERS.has(command.type)
+/** How long a refused pick is not sent again in the same round. */
+/** How long a pick refused for a reason its round cannot change (LASTING_REFUSALS) is not sent again. */
+const DISPATCH_REFUSAL_MS = 60 * 60_000
+/** How long any other refusal waits before the dispatch tries again: a PM refused itself (its project waits), or a pick
+ *  refused for what may recover without a new round (repository access, a session reopening...; review 2 of #3230). */
+export const DISPATCH_RETRY_MS = 2 * 60_000
+/** The refusals a task's round cannot change: Team-written code for a member outside a Team account, a Buddy. Named, so
+ *  everything else is retried soon. */
+const LASTING_REFUSALS: ReadonlySet<string> = new Set(['TEAM_WRITTEN_WORK', 'BUDDY_NOT_ASSIGNABLE'])
+/** At most this many refused picks, and as many waiting PMs, are remembered per process; the oldest go first. */
+const DISPATCH_REFUSALS_HELD = 5_000
+/** How long the dispatch waits after a trigger, so a burst of writes runs one pass. */
+const DISPATCH_DEBOUNCE_MS = 1_000
+/** Picks one member tries in a pass before the next member's turn: each refused one is logged by code. */
+const DISPATCH_TRIES = 3
 const SWARM_ROW = { id: true, ownerId: true, revision: true, format: true, deletedAt: true } satisfies Prisma.SuperTabSelect
 export type SwarmRow = Prisma.SuperTabGetPayload<{ select: typeof SWARM_ROW }>
 /** A Swarm whose state still waits for its split into parts (design section 6.1) is not served until it is split. */
@@ -391,6 +418,9 @@ export interface SuperTabStoreHooks {
   /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
    *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
   teamAccountsIdle?: boolean
+  /** Hand free crew members their next task after the writes that may free one or open a task, and from the 30-second sweep
+   *  (store.ts dispatchCrew, task #3400). Off unless a server turns it on. */
+  dispatch?: boolean
   /** A terminal request was answered or refused, after the commit (lib/bus.ts tells every instance). It must not throw. */
   terminalAnswered?: (requestId: string) => void
   /** Calls `onChange` when that request is answered or refused on any instance; resolves to the call that stops listening. */
@@ -1609,11 +1639,13 @@ export class SuperTabStore {
   /** [only]: what the store alone may give a command: `overdue` for decision.answer (leaveOverdueDecisions), `movedTo` for
    *  machine.moved (computerSignedIn). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string } } = {}) {
+    workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     const [pushOrigin, repositoryReach, pullRequestFiles] = await Promise.all([this.pushOriginFor(user, tabId, command), this.repositoryReachFor(user, tabId, command),
       this.pullRequestFilesFor(user, tabId, command)])
     let ended: WorkHold[] = [], started: WorkHold[] = []
+    // Whether the Swarm, as this write leaves it, has a crew: only then may the write start a dispatch pass (dispatchSoon).
+    let crewed = false
     const done = await transaction(this.db, async tx => {
       // A retried attempt starts again: only the attempt that commits says which tasks ended or started.
       ended = []
@@ -1669,6 +1701,9 @@ export class SuperTabStore {
       }
       // A removed agent's or machine's host confirms its close or cleanup as the machine owner, who may have left the Swarm with it.
       const actor: Actor = command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned' ? { kind: 'person', userId: user.sub, email: user.email }
+        // The server's own crew dispatch (dispatchCrew), as the project's PM, with no sign-in of anyone's: only while that
+        // agent still leads a project in this write's state, and only for work.assign. No route reaches it.
+        : only.asProjectPm ? await this.projectPmActor(tx, original, only.asProjectPm, command, user)
         : hostMachineId && 'startId' in command
           ? await this.poolHostActor(tx, user, original, hostMachineId, command.startId)
           : await this.actor(tx, user, original, asAgentId, workspaceLeave && command.type === 'member.remove' && command.userId === user.sub && !asAgentId)
@@ -1923,6 +1958,7 @@ export class SuperTabStore {
         : command.type === 'work.assign' || command.type === 'agent.start' ? command.routeDecisionId : undefined
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
       const effects = applyCommand(original, actor, command, context)
+      crewed = effects.state.agents.some(a => !!a.crew)
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source, message.recipients))
       for (const group of effects.state.conversations) {
@@ -2237,7 +2273,151 @@ export class SuperTabStore {
     })
     this.endWork(tabId, ended)
     this.startWork(tabId, started)
+    // A write that may free a crew member or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
+    if (crewed && freesOrOpens(command)) this.dispatchSoon(tabId)
     return done
+  }
+
+  /**
+   * The project PM the crew dispatch speaks as (dispatchCrew), checked inside the write as the agent path checks an agent:
+   * it still leads the task's own project and is not stopping, its grant holds (Workspace, machine, share: grantHolds), a
+   * PM in a Team account reaches only what its own session could (teamCommand), and the task is still one the dispatch would
+   * hand out now (its state may have moved since the pass read it: postponed, pinned, defined again). It only assigns.
+   */
+  private async projectPmActor(tx: Transaction, state: SuperTabState, agentId: string, command: Command, user: AuthUser): Promise<Actor> {
+    const pm = state.agents.find(a => a.id === agentId)
+    const task = command.type === 'work.assign' ? state.conversations.find(c => c.id === command.conversationId) : undefined
+    const project = task && groupProject(state, task)
+    // A refusal of the PM itself (gone, stopping, its grant or its Team boundary) is the PM's, not this pick's: marked so the
+    // pass waits a little on that PM instead of remembering the pick (dispatchCrew).
+    const pmRefused = (error: unknown): never => {
+      if (error instanceof SuperTabError) throw new SuperTabError(error.code, error.message, error.status, error.unreachable, { ...error.details, pmRefused: true })
+      throw error
+    }
+    if (!pm || !task || !project || pm.workDecision === 'stop' || ledProject(state, agentId)?.id !== project.id) {
+      return pmRefused(new SuperTabError('NOT_FOUND', 'This Super Tab is unavailable.', 404))
+    }
+    // The pick as this write's state has it: the member still free and in the crew, the task still its candidate (open, its
+    // day come, its lane or pin, not the one it just lost). What moved since the pass read is refused, and the next pass decides.
+    const assigned = command.type === 'work.assign' ? command.agentId : undefined
+    const now = this.now(), member = freeCrew(state, project.id, DISPATCH_RULES, now).find(a => a.id === assigned)
+    if (!member || !candidatesFor(state, member, DISPATCH_RULES, now).some(c => c.group.id === task.id)) {
+      fail('DISPATCH_STALE', 'This task is no longer one to hand out to this member.', 409)
+    }
+    try {
+      await this.agentGrant(tx, state, pm)
+      if (onTeamAccount(state, pm)) this.teamCommand(state, pm.machineId, user, command)
+    } catch (error) { return pmRefused(error) }
+    return { kind: 'agent', agentId, machineOwnerId: pm.machineOwnerId }
+  }
+
+  /** Picks whose work.assign was refused, by Swarm, task, round and member: for DISPATCH_REFUSAL_MS when their round cannot
+   *  change the reason (LASTING_REFUSALS), else for DISPATCH_RETRY_MS; and PMs refused themselves, by Swarm and PM, for
+   *  DISPATCH_RETRY_MS, so access that comes back is used within minutes (review 2 of #3230). Pruned every pass and bounded
+   *  (dispatchRefusals.ts). Per process. */
+  private readonly refusedPicks = new RefusalMemory(DISPATCH_REFUSALS_HELD)
+  private readonly waitingPms = new RefusalMemory(DISPATCH_REFUSALS_HELD)
+  private refusedKey(tabId: string, group: Conversation, agentId: string): string { return `${tabId}:${group.id}:${roundOf(group)}:${agentId}` }
+  private refusedSkip(tabId: string, state: SuperTabState, now: number): Skip {
+    return (conversationId, agentId) => {
+      const group = state.conversations.find(c => c.id === conversationId)
+      return !!group && this.refusedPicks.refused(this.refusedKey(tabId, group, agentId), now)
+    }
+  }
+  /** Whether [project]'s PM was refused itself a moment ago: its project waits until DISPATCH_PM_RETRY_MS has passed. */
+  private pmWaiting(tabId: string, state: SuperTabState, project: SwarmProject, now: number): boolean {
+    const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
+    return !!leadId && this.waitingPms.refused(`${tabId}:${leadId}`, now)
+  }
+
+  private readonly dispatchWaiting = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Whether a write scheduled a dispatch pass for [tabId] that has not run yet (dispatchSoon). */
+  dispatchScheduled(tabId: string): boolean { return this.dispatchWaiting.has(tabId) }
+  /** Runs the crew dispatch for [tabId] a second from now, once however many writes asked: on servers whose hooks turn it on. */
+  private dispatchSoon(tabId: string): void {
+    if (!this.hooks.dispatch || this.dispatchWaiting.has(tabId)) return
+    const timer = setTimeout(() => {
+      this.dispatchWaiting.delete(tabId)
+      this.dispatchCrew(tabId).catch(error => logger.warn('[swarm-dispatch] pass failed', { tabId, error: error instanceof Error ? error.message : String(error) }))
+    }, DISPATCH_DEBOUNCE_MS)
+    timer.unref?.()
+    this.dispatchWaiting.set(tabId, timer)
+  }
+
+  /**
+   * Hands each free crew member of [tabId]'s projects its next task (dispatch.ts, task #3400): its pinned task, then its lane's
+   * top one. Reads the Swarm once, outside any write; each pick is the project's own work.assign, sent as its PM (the actor
+   * the PM itself would be), in that command's own transaction, so WORK_ACTIVE and AGENT_BUSY refuse a second assignment
+   * inside the write. The operation id names the task and its round (its last assignment), so passes racing from two servers
+   * replay one receipt or collide, and never assign twice. A refused pick is counted by code and the member's next task tried,
+   * up to DISPATCH_TRIES. A project with no PM, or no free crew, is left alone.
+   */
+  async dispatchCrew(tabId: string): Promise<{ assigned: number; skipped: Record<string, number> }> {
+    const out = { assigned: 0, skipped: {} as Record<string, number> }, started = performance.now()
+    const load: Record<string, { waiting: number; busy: number }> = {}
+    const skipCode = (code: string) => { out.skipped[code] = (out.skipped[code] ?? 0) + 1 }
+    const row = await this.db.superTab.findUnique({ where: { id: tabId }, select: { ...SWARM_ROW, autonomousEnv: true } })
+    if (!row || row.deletedAt || row.format !== 2) return out
+    const { state } = await loadRow(this.db, row)
+    const now = this.now(), rules = DISPATCH_RULES
+    if (state.paused) return out
+    this.refusedPicks.prune(now)
+    this.waitingPms.prune(now)
+    projects: for (const project of projectsOf(state)) {
+      if (this.pmWaiting(tabId, state, project, now)) continue
+      const free = freeCrew(state, project.id, rules, now)
+      if (!free.length) continue
+      for (const lane of laneCapacity(state, project.id, rules, now)) {
+        const total = load[lane.lane] ??= { waiting: 0, busy: 0 }
+        total.waiting += lane.waiting
+        total.busy += lane.busy
+      }
+      const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
+      const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
+      if (!lead) { skipCode('NO_PM'); continue }
+      // No one's sign-in: the Swarm's environment for its reads, and the PM as the actor (executeOnce asProjectPm).
+      const user: AuthUser = { sub: lead.machineOwnerId, email: '', autonomousEnv: row.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
+      const open = openTasks(state, project.id, now), taken = new Set<string>(), skip = this.refusedSkip(tabId, state, now)
+      for (const member of free) {
+        let tries = 0
+        for (const { group } of candidatesFor(state, member, rules, now, open, skip)) {
+          if (taken.has(group.id)) continue
+          if (++tries > DISPATCH_TRIES) break
+          try {
+            await this.executeOnce(user, tabId, { operationId: stableId('dispatch', group.id, roundOf(group)),
+              command: { type: 'work.assign', conversationId: group.id, agentId: member.id } }, undefined, undefined, false, { asProjectPm: lead.id })
+            taken.add(group.id)
+            out.assigned++
+            break
+          } catch (error) {
+            const code = error instanceof SuperTabError ? error.code : 'unknown'
+            skipCode(code)
+            // Another pass took this task, or this member: the next member, or the next task.
+            if (code === 'WORK_ACTIVE' || code === 'OPERATION_REUSED') { taken.add(group.id); continue }
+            if (code === 'unknown') throw error
+            // The PM itself was refused: nothing more for its project now; the sweep tries it again after a short wait.
+            if (error instanceof SuperTabError && error.details?.pmRefused) {
+              this.waitingPms.remember(`${tabId}:${lead.id}`, now + DISPATCH_RETRY_MS)
+              continue projects
+            }
+            // Paused meanwhile: nothing more this pass, and nothing remembered; a resume's next pass hands out work at once.
+            if (code === 'PAUSED') break projects
+            // What another write changed meanwhile (the member took work, its start is settling, the task moved): next pass.
+            if (code === 'AGENT_BUSY' || code === 'START_PENDING') break
+            if (code === 'DISPATCH_STALE') continue
+            // Not sent again for an hour if its round cannot change it, else for a short retry (DISPATCH_RETRY_MS).
+            this.refusedPicks.remember(this.refusedKey(tabId, group, member.id), now + (LASTING_REFUSALS.has(code) ? DISPATCH_REFUSAL_MS : DISPATCH_RETRY_MS))
+            if (code === 'AGENT_CLOSED' || code === 'STOP_REQUESTED') break
+          }
+        }
+      }
+    }
+    // One line a pass that did something (backend/AGENTS.md rule 4; ENGINEERING.md 8): counts, codes, lane loads and how long
+    // it took, never names or ids but the Swarm's.
+    if (out.assigned || Object.keys(out.skipped).length) {
+      logger.info('[swarm-dispatch] pass', { tabId, ...out, lanes: load, ms: Math.round(performance.now() - started) })
+    }
+    return out
   }
 
   private startWork(tabId: string, started: WorkHold[]): void {
@@ -3928,10 +4108,17 @@ export class SuperTabStore {
       // The crew keeper with the Swarm's time checks (crewKeep.ts): sleep, move off a failing machine, drop folders. A move is
       // placed only where a start would be admitted now, Team rules included.
       // The Team facts are read only when a member needs another machine (review of #3229); sleeps and folders need none.
-      const crew = sweep && state.agents.some(isCrewMember)
+      const crew = sweep && state.agents.some(isCrew)
         ? crewNeedsMachine(state, now) ? await this.crewDeps(tx, state, now) : { admits: () => false } : null
       const checked = [...failRefusedStarts(state, machineId, now), ...loseTasks(state, now, worker => worker.machineId === machineId),
-        ...sweep ? sweepLiveness(state, now) : [], ...crew ? applyCrewKeep(state, now, crew) : []]
+        ...sweep ? sweepLiveness(state, now) : [], ...crew ? applyCrewKeep(state, now, crew) : [],
+        // A woken crew member this reading shows running again: its wake's timing row (crewTimes.ts, task #3462).
+        ...finishedWakes(state, now)]
+      // The 30-second sweep also hands out work when the Swarm, as loaded here, has a free crew member and a task for it.
+      if (sweep && this.hooks.dispatch && projectsOf(state).some(p => !this.pmWaiting(tabId, state, p, now)
+        && dispatchPlan(state, p.id, DISPATCH_RULES, now, this.refusedSkip(tabId, state, now)).length)) {
+        afterCommit(tx, () => this.dispatchSoon(tabId))
+      }
       // Then the agents it shows closed leave, those with no active work left: the Lead is told of their tasks above (closedAgents.ts).
       const closedOut = removeClosedAgents(state, state.agents.filter(a => closed.includes(a.id)), now).map(a => a.id)
       removedIds.push(...closedOut)
@@ -4780,6 +4967,10 @@ export class SuperTabStore {
         // Back in its hands: the session's cross-Swarm fence covers it again if nothing does (endRuns).
         await this.restoreRuns(tx, tabId, state, [group.assignment!.agentId])
       }
+      // A task nobody holds whose pull request turned red or conflicts waits for its builder (dispatch.ts); a handed one the
+      // reopen above made active work is not pinned.
+      const pinned = pullRequestPin(watch)
+      if (pinned) pinBuilder(group, pinned, now)
       const ownerId = ownerOf(state, group), owner = ownerId ? state.agents.find(a => a.id === ownerId) : undefined
       // Written as its project's Lead, as the Swarm's own lines are (tidy.ts archiveLine); as the Engineer itself without one.
       const leadId = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId
@@ -4791,6 +4982,35 @@ export class SuperTabStore {
       await this.save(tx, loaded, state, clock.next())
       await this.writeMessages(tx, tabId, state, rows, sequences)
       return rows.length
+    })
+  }
+
+  /** The release list of [projectId] settled with what the worker read from GitHub (releases.ts settleReleases, task #3405), in
+   *  one write: the tasks a verified release carries are marked released, and a due release step opens for the Integrator.
+   *  It loads the project's pending tasks and open steps only, and writes nothing when nothing changed. Null when the Swarm or
+   *  its project's list is gone. */
+  async settleReleases(tabId: string, projectId: string, facts: ReleaseFacts, given?: ReleaseRules): Promise<SettledReleases | null> {
+    const now = this.now()
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt) return null
+      // The list names the groups to load: the head alone first, then one load with them.
+      const head = (await tx.swarmHead.findUnique({ where: { id: `${tabId}:head` }, select: { data: true } }))?.data as { projects?: SwarmProject[] } | undefined
+      const ledger = head?.projects?.find(p => p.id === projectId)?.releases
+      if (!ledger) return null
+      const groupIds = [...new Set([...ledger.pending.map(e => e.groupId), ...Object.values(ledger.steps ?? {}).map(s => s!.groupId)])]
+      const loaded = await loadRow(tx, requireParts(row), { groupIds })
+      const state = cloneData(loaded.state)
+      const before = JSON.stringify(projectsOf(loaded.state).find(p => p.id === projectId)?.releases)
+      // The project's rules record as it reads now: its saved window, pace and backend pause, or the seed until one is saved.
+      const rules = given ?? (await currentRules(tx, tabId, projectId)).rules
+      const outcome = settleReleases(state, projectId, facts, now, rules)
+      if (!outcome.opened && !outcome.shipped.length && !outcome.messages.length
+        && JSON.stringify(projectsOf(state).find(p => p.id === projectId)?.releases) === before) return outcome
+      const sequences = numberMessages(state, outcome.messages, now)
+      await this.save(tx, loaded, state, clock.next())
+      await this.writeMessages(tx, tabId, state, outcome.messages, sequences)
+      return outcome
     })
   }
 
