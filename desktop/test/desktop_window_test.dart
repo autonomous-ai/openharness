@@ -25,18 +25,21 @@ void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
   final calls = <String>[];
   final nativeCalls = <MethodCall>[];
+  final windowCalls = <MethodCall>[];
   Future<Object?> Function(MethodCall)? nativeReply;
   Future<Object?> Function(MethodCall)? windowReply;
 
   setUp(() {
     calls.clear();
     nativeCalls.clear();
+    windowCalls.clear();
     nativeReply = null;
     windowReply = null;
     binding.defaultBinaryMessenger.setMockMethodCallHandler(_windowChannel, (
       call,
     ) async {
       calls.add(call.method);
+      windowCalls.add(call);
       switch (call.method) {
         case 'isFullScreen':
         case 'isMaximized':
@@ -168,5 +171,41 @@ void main() {
     expect(calls, contains('native:configure'));
     expect(calls, isNot(contains('show')));
     expect(calls, isNot(contains('focus')));
+  }, skip: !Platform.isMacOS);
+
+  // Task #3559: the window manager's maximize is AppKit's animated zoom. It
+  // blocks the main thread for ~400-500 ms (release build, M3 Pro) before the
+  // first Flutter frame. The window still ends up maximised, but through the
+  // native channel, which zooms without the animation.
+  testWidgets('macOS maximises through the native instant zoom', (
+    tester,
+  ) async {
+    final setup = configureDesktopWindow();
+    await tester.pump();
+    await setup;
+    expect(calls, contains('native:maximize'));
+    expect(calls, isNot(contains('maximize')));
+    // After show, so the maximise is not dropped on an unshown window.
+    expect(calls.indexOf('show'), lessThan(calls.indexOf('native:maximize')));
+    expect(
+      calls.indexOf('native:maximize'),
+      lessThan(calls.indexOf('focus')),
+    );
+  }, skip: !Platform.isMacOS);
+
+  testWidgets('the window keeps its 1280x800 frame to return to', (
+    tester,
+  ) async {
+    final setup = configureDesktopWindow();
+    await tester.pump();
+    await setup;
+    final sized = windowCalls.where(
+      (call) =>
+          call.method == 'setBounds' &&
+          (call.arguments as Map)['width'] == 1280.0 &&
+          (call.arguments as Map)['height'] == 800.0,
+    );
+    expect(sized, isNotEmpty);
+    expect(calls.indexOf('setBounds'), lessThan(calls.indexOf('show')));
   }, skip: !Platform.isMacOS);
 }
