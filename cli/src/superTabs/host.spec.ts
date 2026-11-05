@@ -5921,6 +5921,16 @@ describe('a crew member at rest', () => {
     expect(restore).toHaveBeenCalledWith('tab', 'harness')
     restore.mockRestore()
   })
+  it('a folder drop the removal refused is tried again an hour later (review of #3229)', async () => {
+    const t = lifeFixture([crewRow({ asleep: { since: 1, folderDropped: true } })])
+    const drop = vi.spyOn(CrewFolders.prototype, 'drop').mockResolvedValue('kept')
+    await t.poll()
+    await t.poll(60_000)
+    expect(drop).toHaveBeenCalledTimes(1)
+    await t.poll(60 * 60_000)
+    expect(drop).toHaveBeenCalledTimes(2)
+    drop.mockRestore()
+  })
   it('a member woken and put to sleep again is closed again', async () => {
     const rows = [crewRow({ asleep: { since: 1 } })]
     const t = lifeFixture(rows)

@@ -117,3 +117,36 @@ describe('a refused move start (security review 2 of #3229)', () => {
     expect(f.state.agents.find(a => a.id === f.ada.id)!.crewMoveRefused).toEqual({ machineId: 'mini', at: NOW + 5000 })
   })
 })
+
+describe('a moved member\'s task reaches the head of the list (review of #3229)', () => {
+  it('also when the old session lost it before the new one started: offline, or its host closed it', () => {
+    const f = fixture([machine('mac', { signedIn: false }), machine('mini')])
+    f.state = run(f.state, { type: 'conversation.create', title: 'Other', brief: 'Other work', checks: [] } as Command, 'other', NOW - 7_200_000)
+    const task = working(f)
+    const other = f.state.conversations.find(c => c.title === 'Other')!
+    applyCrewKeep(f.state, NOW, everywhere)
+    // The old host's report shows the session stopped (or its machine went quiet): liveness loses the task first.
+    const lost = f.state.conversations.find(c => c.id === task.id)!
+    lost.assignment = { ...lost.assignment!, status: 'lost', lost: { reason: 'session stopped', at: NOW + 2000 } }
+    const start = f.state.starts!.find(s => s.request.crewMoveOf === f.ada.id)!
+    f.state = run(f.state, { type: 'agent.started', startId: start.id, harnessId: 'ada-2', configuration: config } as Command, 'started-lost', NOW + 5000, host)
+    const rank = (id: string) => f.state.conversations.find(c => c.id === id)!.queueRank ?? Number.MAX_SAFE_INTEGER
+    expect(rank(task.id)).toBeLessThan(rank(other.id))
+  })
+})
+
+describe('the head of the list when the move is placed (review of #3229, River)', () => {
+  it('an offline machine: liveness lost the task before the move, which puts it at the head at once', () => {
+    const f = fixture([machine('mac', { receivedAt: NOW - 6 * 60_000 }), machine('mini')])
+    f.state = run(f.state, { type: 'conversation.create', title: 'Other', brief: 'Other work', checks: [] } as Command, 'other-2', NOW - 7_200_000)
+    const task = working(f)
+    const other = f.state.conversations.find(c => c.title === 'Other')!
+    // Lost at 2 minutes offline, before the 5-minute move.
+    const lost = f.state.conversations.find(c => c.id === task.id)!
+    lost.assignment = { ...lost.assignment!, status: 'lost', lost: { reason: 'machine offline', at: NOW - 4 * 60_000 } }
+    f.state.agents.find(a => a.id === f.ada.id)!.lostTask = { conversationId: task.id, assignmentId: lost.assignment.id, reason: 'machine offline', at: NOW - 4 * 60_000 }
+    applyCrewKeep(f.state, NOW, everywhere)
+    const rank = (id: string) => f.state.conversations.find(c => c.id === id)!.queueRank ?? Number.MAX_SAFE_INTEGER
+    expect(rank(task.id)).toBeLessThan(rank(other.id))
+  })
+})

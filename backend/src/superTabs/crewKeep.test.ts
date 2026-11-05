@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand } from './commands.js'
-import { crewKeep, type CrewDeps } from './crewKeep.js'
+import { crewKeep, crewNeedsMachine, type CrewDeps } from './crewKeep.js'
 import { config, fixture, GB, machine, NOW, person } from './crewKeep.test-support.js'
 import { FOLDER_ASLEEP_MS, MOVE_LOW_DISK_BYTES, MOVE_OFFLINE_MS, MOVE_QUOTA_OUT_MS, SLEEP_IDLE_MS, DISK_FLOOR_BYTES } from './crewRules.js'
 import type { Agent, SuperTabState } from './model.js'
@@ -135,5 +135,47 @@ describe('crewKeep: account kinds and Team sessions (security review 2 of #3229)
     expect(kinds(f.state)).toEqual([{ kind: 'move', agentId: f.ada.id, toMachineId: 'late', reason: 'signed-out' }])
     f.ada.crewMoveRefused = { machineId: 'mini', at: NOW - 61 * 60_000 }
     expect(kinds(f.state)).toEqual([{ kind: 'move', agentId: f.ada.id, toMachineId: 'mini', reason: 'signed-out' }])
+  })
+})
+
+describe('crewKeep: an asleep member stays where it sleeps (review of #3229)', () => {
+  it('is not moved off a machine that went offline: it has no work there, and moves once woken if it must', () => {
+    const f = fixture([machine('mac', { receivedAt: NOW - MOVE_OFFLINE_MS - 1 }), machine('mini')])
+    f.ada.asleep = { since: NOW - 3_600_000 }
+    expect(kinds(f.state)).toEqual([])
+  })
+  it('says whether any member needs a machine now, so the sweep reads the Team facts only then', () => {
+    const calm = fixture()
+    expect(crewNeedsMachine(calm.state, NOW)).toBe(false)
+    expect(crewNeedsMachine(fixture([machine('mac', { signedIn: false }), machine('mini')]).state, NOW)).toBe(true)
+  })
+})
+
+describe('crewKeep: machine rules apply to moves (review of #3229, River)', () => {
+  const at = (iso: string) => Date.parse(iso)
+  it('never moves a Codex member to Diego\'s Mac; a Claude one may go there', () => {
+    const codex = fixture([machine('mac', { signedIn: false }), machine('001bcba1e7e9deb6f8756c053a951ce2'), machine('other', { resetIn: 6 * 86_400_000 })])
+    codex.ada.configuration = { ...codex.ada.configuration, engine: 'codex' }
+    for (const pool of codex.state.machines!) {
+      pool.engines = ['claude', 'codex']
+      ;(pool.observation as { readiness: { engines: unknown[] } }).readiness.engines = [{ engine: 'codex', installed: true, signedIn: pool.machineId !== 'mac' }]
+      ;(pool.observation as { quotas: Array<{ engine: string }> }).quotas[0]!.engine = 'codex'
+    }
+    expect(crewKeep(codex.state, NOW, everywhere)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'other' })])
+    const claude = fixture([machine('mac', { signedIn: false }), machine('001bcba1e7e9deb6f8756c053a951ce2'), machine('other', { resetIn: 6 * 86_400_000 })])
+    expect(crewKeep(claude.state, NOW, everywhere)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: '001bcba1e7e9deb6f8756c053a951ce2' })])
+  })
+  it('never moves to Ken\'s MacBook Pro while it is away (weekdays 07:30-09:30 and 18:00-21:00 Vietnam time)', () => {
+    const pools = () => [machine('mac', { signedIn: false }), machine('592a20a2275f0b3114c955fabbf19d30'), machine('other', { resetIn: 6 * 86_400_000 })]
+    // Monday 2026-11-09 08:00 in Vietnam (UTC+7) is 01:00 UTC; 10:00 there is 03:00 UTC.
+    const away = at('2026-11-09T01:00:00Z'), back = at('2026-11-09T03:00:00Z')
+    const onAway = fixture(pools()); onAway.state.machines!.forEach(p => { p.observation!.receivedAt = away - 5000 })
+    expect(crewKeep(onAway.state, away, everywhere)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'other' })])
+    const onBack = fixture(pools()); onBack.state.machines!.forEach(p => { p.observation!.receivedAt = back - 5000 })
+    expect(crewKeep(onBack.state, back, everywhere)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: '592a20a2275f0b3114c955fabbf19d30' })])
+  })
+  it('an awake member with no work stays when its machine goes offline: it moves once it holds work', () => {
+    const f = fixture([machine('mac', { receivedAt: NOW - MOVE_OFFLINE_MS - 1 }), machine('mini')], SLEEP_IDLE_MS - 60_000)
+    expect(kinds(f.state)).toEqual([])
   })
 })
