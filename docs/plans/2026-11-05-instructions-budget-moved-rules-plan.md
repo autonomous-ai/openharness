@@ -82,6 +82,18 @@ be saved as long as it does not grow; a rule moved into an open code task keeps 
 - [ ] Run the same tests plus `src/superTabs/removedRefusals.test.ts`. Expected: PASS.
 - [ ] Commit the tests first, then the code.
 
+### Task 1b: The built-in template fits its own budget (River, in the task)
+
+A new project's PM writes its routing line into Routing; the template's core was 6,125 of 6,144 bytes and its PM section
+2,943 of 2,048, so that line would be refused. River: trim the template in this PR, core with at least 1 KB of room and the PM
+section within 2 KB, cutting wording and repetition, never a rule.
+
+**Files:** Modify `backend/src/superTabs/instructionsTemplate.ts`; Test `backend/src/superTabs/instructions.test.ts`
+
+- [ ] Write a failing test: the template's core is at most 5,120 bytes and each role section at most 2,048.
+- [ ] Trim; update the template tests that pinned wrapped or reworded lines, keeping each rule they guard.
+- [ ] Run the template tests and the instructions integration files. Expected: PASS.
+
 ### Task 2: A tagged rule may move
 
 **Files:**

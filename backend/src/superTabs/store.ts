@@ -183,7 +183,9 @@ function namedFor(command: Command): Named {
   const field = (key: string) => (command as Record<string, unknown>)[key] as string | undefined
   const groupIds = [field('conversationId'), command.type === 'agent.start' ? command.request.conversationId : undefined,
     command.type === 'conversation.create' ? command.reviewOf : undefined,
-    'askedIn' in command ? command.askedIn?.conversationId : undefined].filter((id): id is string => !!id)
+    'askedIn' in command ? command.askedIn?.conversationId : undefined,
+    // The code tasks an instructions save's rules moved into, merged ones gone quiet included (ruleGuard.ts; #3392).
+    ...command.type === 'instructions.save' ? command.tasks ?? [] : []].filter((id): id is string => !!id)
   // Deleting a project or changing who reads it reaches every one of its groups, dormant ones too: their terminal
   // contexts are revoked from the groups the command loaded (native.ts revokeNativeContexts).
   return { groupIds, startIds: has('startId') ? [field('startId')!] : [],

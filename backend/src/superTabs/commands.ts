@@ -224,6 +224,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     summary: summarySchema, askedBy: id.optional(),
     // A person's own messages approving the drop of their rules (ruleGuard.ts), when the save drops any.
     approvals: z.array(id).max(MAX_APPROVALS).optional(),
+    // Code tasks the save's rules moved into (ruleGuard.ts rulePlaces), loaded even when quiet (store.ts namedFor; #3392).
+    tasks: z.array(id).max(MAX_APPROVALS).optional(),
     // How the writer sorted the lines it dropped, for the History (ruleGuard.ts droppedLines; the daily tidy).
     dropped: z.array(z.object({ text: z.string().trim().min(1).max(2000), kind: z.enum(['merged', 'expired', 'rule']) }).strict())
       .max(MAX_DROPPED_LINES).optional(),

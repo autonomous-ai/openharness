@@ -6,9 +6,9 @@
  * the stored message's author, never the caller's word (askedBy). The approver is then told in one private line.
  */
 import { attributedRules, budgetParts, droppedRules, INSTRUCTIONS_BUDGET, ITEM_CHARS, keptIn, MAX_REPEATS, personKey, removedItems, repeatedRules,
-  type DroppedRule, type InstructionsBudget } from './instructionsDiff.js'
+  type DroppedRule, type InstructionsBudget, type RulePlace } from './instructionsDiff.js'
 import { fail, type Author, type SuperTabState } from './model.js'
-import { canReadProject, type SwarmProject } from './projects.js'
+import { canReadProject, projectRules, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
 import { swarmUsernames } from './usernames.js'
 
@@ -36,6 +36,20 @@ const WHY: Record<DroppedRule['why'], string> = {
   removed: 'removed',
   unattributed: 'kept without who gave it',
   changed: 'changed beyond a rewording, so its meaning may differ',
+  waiting: 'moved to a code task that has not merged',
+}
+
+/**
+ * Where this project's people's rules may have moved (task #3392): its rules record, by who asked for each, and its code
+ * tasks (a task's brief; not a step, a chat or a task cancelled unmerged), a task counting once it merged. A task that went
+ * quiet is in the state only when the save names it (tasks), which loads it.
+ */
+function rulePlaces(state: SuperTabState, project: SwarmProject): RulePlace[] {
+  const records = projectRules(state, project.id).map(r => ({ text: r.text, people: [r.askedBy], where: 'the rules record', open: false }))
+  const tasks = state.conversations.filter(c => (c.projectId ?? 'lead') === project.id && c.id !== project.leadConversationId && !c.kind
+    && !c.reviewOf && !c.step && !c.audience && c.brief && (c.ledger?.mergedAt !== undefined || c.assignment?.status !== 'cancelled'))
+    .map(c => ({ text: c.brief, people: [], where: c.number ? `task #${c.number}` : `task "${c.title}"`, open: c.ledger?.mergedAt === undefined }))
+  return [...records, ...tasks]
 }
 
 /**
@@ -51,7 +65,7 @@ export function allowedDrops(state: SuperTabState, project: SwarmProject, before
   const membersOf = new Map<string, string[]>()
   const members = (name: string) => membersOf.get(name) ?? membersOf.set(name, membersNamed(state, name)).get(name)!
   // One written person for comparing revisions: the members they are, so "0xken15" and "Ken" are one.
-  const dropped = droppedRules(before, after, name => members(name).sort().join(',') || `?${personKey(name)}`)
+  const dropped = droppedRules(before, after, name => members(name).sort().join(',') || `?${personKey(name)}`, rulePlaces(state, project))
   if (!dropped.length) return { told, rules: [] }
   const saver = sender.kind === 'person' ? sender.id : undefined
   // Written after the revision this save replaces, in a conversation of this project: an old "thanks" approves nothing (review
@@ -74,9 +88,12 @@ export function allowedDrops(state: SuperTabState, project: SwarmProject, before
   if (refused.length) {
     const unknown = (rule: DroppedRule) => rule.people.filter(name => !members(name).length)
     fail('INSTRUCTIONS_RULES_DROPPED', [
-      'Not saved: this drops rules people gave. Keep each rule and who gave it, or ask that person and name their own message '
-        + 'approving the change (approvals). Never drop or weaken a person\'s rule on your own judgment, even one you think cannot be done.',
-      ...refused.map(rule => `- "${cut(rule.text)}" (${rule.people.join(', ')}): ${WHY[rule.why]}.`
+      'Not saved: this drops rules people gave. Keep each rule and who gave it, or move it word for word with who gave it: into '
+        + 'people notes or its role section, into the project\'s rules record, or into a code task, whose line stays until that '
+        + 'task merges (name a quiet one in tasks). Otherwise ask that person and name their own message approving the change '
+        + '(approvals). Never drop or weaken a person\'s rule on your own judgment, even one you think cannot be done.',
+      ...refused.map(rule => `- "${cut(rule.text)}" (${rule.people.join(', ')}): ${WHY[rule.why]}`
+        + (rule.movedTo ? ` (${rule.movedTo}): keep its line until it merges.` : '.')
         + (unknown(rule).length ? ` ${unknown(rule).join(', ')} is no member here, so the project's owner decides.` : '')),
     ].join('\n'), 409, { dropped: refused.map(rule => ({ rule: rule.text, people: rule.people, why: rule.why })) })
   }
