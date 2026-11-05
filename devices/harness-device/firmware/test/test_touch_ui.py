@@ -2768,6 +2768,13 @@ static void swarm_pair_checks(const char *dir) {
     pair_buddy(); assert(swarm_side_buddy("s1")); pair_pm(); assert(!swarm_side_buddy("s1"));
     tap(fake_ms += 1000, 233, 350); assert(s.view == INBOX);
     dispatch((action_t){.kind = A_HOME});
+    // Without Buddies a creature skin keeps its bell where it was, under the companion at HT_NOTIFICATION_Y.
+    pair_face("done", -1, false, "lead", "Lead"); ht_character_select(&character, HT_CHARACTER_TIM);
+    assert(ui_supertab_notice("s1", "B1", HT_CHAT_LEAD, "lead-fw", "", "Flashed.", 1792560001u));
+    scene_take();
+    { bool home = false; for (int i = 0; i < scene.count; i++) if (scene.runs[i].font == &ht_bell_footer) { assert(scene.runs[i].y == HT_NOTIFICATION_Y); home = true; }
+      assert(home && !pair_pill()); }
+    dispatch((action_t){.kind = A_HOME});
     // Audit: a thread face with the pair and the bell holds its card to two lines, clear of the bell at y 346.
     buddy_setup();
     card_begin("s1", "t1", "openharness");

@@ -1657,7 +1657,7 @@ static void render_swarm_face(ht_scene_t *f)
     int bell_y = l->buddies ? 346 : 400;   // clear of the pair
     if (bell && !told) {
         if (focus_face) focus_bell(f, unread, bell_y);
-        else ht_notification_bell_at(f, unread, f_.ink, bell_y);   // a creature skin's too, above the pair
+        else ht_notification_bell_at(f, unread, f_.ink, l->buddies ? bell_y : HT_NOTIFICATION_Y);   // above the pair, else its own row
     }
     if (buddy && !thread) {
         // The avatar stands where the pet does on Focus, at 233, 158 or higher: 8 px clear of the recap's card, which keeps
