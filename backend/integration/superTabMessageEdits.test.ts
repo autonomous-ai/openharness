@@ -12,6 +12,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { EXPIRED_UPLOAD, MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { DELETED_TEXT } from '../src/superTabs/messageEdits.js'
+import { sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
 import { poolRows } from './hostRows.test-support.js'
 import { profiled } from './plans.test-support.js'
 
@@ -192,6 +193,34 @@ describe('message.delete', () => {
       await db.superTabMessage.update({ where: { id }, data: { source } })
       await expect(f.remove(f.web.conversationId, id)).rejects.toThrow(refused('FORBIDDEN'))
     }
+  })
+
+  it.each([false, true])('preserves files handed on from the owner chat when deleting a proposal, with replies: %s', async hasReplies => {
+    const f = await swarm()
+    const { chat, agentId } = await f.buddy()
+    const upload = async (name: string, asBuddy = false) => (await f.store.upload(peer, f.tab, chat,
+      { name, mime: 'text/plain', body: Readable.from([Buffer.from(name)]) }, asBuddy ? agentId : undefined)).attachment.id
+    const handed = await upload('owner-note.txt'), owned = await upload('proposal-note.txt', true)
+    const ask = await f.send(chat, 'Send the notes to the PM', peer, { attachmentIds: [handed] })
+    const id = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, projectId: f.web.projectId,
+      text: 'Send the notes to the PM', goal: 'Fix drafts', scope: 'Desktop', priority: 'normal', attachmentIds: [handed, owned] }, peer, agentId)).result.messageId)
+    expect(await db.superTabAttachment.findUniqueOrThrow({ where: { id: handed } })).toMatchObject({ usedBy: ask, proposedBy: id })
+    expect(await db.superTabAttachment.findUniqueOrThrow({ where: { id: owned } })).toMatchObject({ usedBy: id })
+    if (hasReplies) await f.send(f.web.conversationId, 'I can reproduce it.', other, { replyTo: id })
+    const entries = await profiled(db, () => f.remove(f.web.conversationId, id))
+    const kept = await db.superTabAttachment.findUniqueOrThrow({ where: { id: handed } })
+    expect(kept.usedBy).toBe(ask)
+    expect(kept.proposedBy ?? null).toBeNull()
+    expect((await db.superTabAttachment.findUniqueOrThrow({ where: { id: owned } })).usedBy).toBe(EXPIRED_UPLOAD)
+    expect((await f.page(chat, peer)).messages.find(m => m.id === ask)?.attachments).toEqual([expect.objectContaining({ id: handed })])
+    const updates = entries.filter(e => e.ns.endsWith('.SuperTabAttachment'))
+    expect(updates.length).toBeGreaterThan(0)
+    expect(updates.filter(e => /COLLSCAN/.test(String(e.planSummary)))).toEqual([])
+    await sweepUnsentAttachments(db, { store: f.files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' },
+      new Date(Date.now() + 48 * 3_600_000), { chunk: 100, chunks: 1, pauseMs: 0 })
+    expect(await db.superTabAttachment.findUnique({ where: { id: handed } })).toMatchObject({ usedBy: ask })
+    expect(await f.files.read(kept.objectKey)).toEqual(Buffer.from('owner-note.txt'))
+    expect(await db.superTabAttachment.findUnique({ where: { id: owned } })).toBeNull()
   })
 
   it('removes a message with no replies: its row, reactions, Activity, open deliveries and files', async () => {
