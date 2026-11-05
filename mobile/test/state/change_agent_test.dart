@@ -837,6 +837,27 @@ void main() {
     expect(steps(rig), isEmpty);
   });
 
+  test('a machine another account shares: never switched from the phone, and '
+      'nothing is sent, as on the desktop', () async {
+    final rig = await rigWith([source()]);
+    final state = rig.app.machineStates['m']!;
+    // The desktop offers Change agent on its owner's own machine only, and the machine answers
+    // the handoff for its owner alone (cli superTabs/leadSwitch.ts).
+    state.machine = Machine(
+      machineId: 'm',
+      authMode: state.machine.authMode,
+      name: state.machine.name,
+      status: state.machine.status,
+      shared: true,
+    );
+
+    expect(
+      (await rig.app.changeAgent('m', 'a', 'codex')).error,
+      'Only the person whose machine runs this agent can change it.',
+    );
+    expect(steps(rig), isEmpty);
+  });
+
   test('offered for a plain engine only', () {
     Agent agent(Map<String, dynamic> json) => Agent.fromJson(json);
     expect(AppNotifier.canChangeAgent(agent(source())), isTrue);

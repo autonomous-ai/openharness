@@ -1054,6 +1054,30 @@ void main() {
       await focus.close();
     });
 
+    testWidgets('Change agent is offered on the person\'s own machine, online '
+        'only, as on the desktop', (tester) async {
+      var focus = await _Focus.open(tester, agents: [switchable()]);
+      final state = focus.app.stateOf('m')!;
+      state.machine = Machine(
+        machineId: 'm',
+        authMode: state.machine.authMode,
+        name: state.machine.name,
+        status: state.machine.status,
+        shared: true,
+      );
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      expect(find.text('Change agent'), findsNothing, reason: 'shared');
+      await focus.close();
+
+      focus = await _Focus.open(tester, agents: [switchable()]);
+      focus.app.stateOf('m')!.nodeOnline = false;
+      await tester.tap(find.byKey(const ValueKey('terminal-title')));
+      await frames(tester);
+      expect(find.text('Change agent'), findsNothing, reason: 'offline');
+      await focus.close();
+    });
+
     testWidgets('Change agent: the desktop picker’s rows, then the agent picked '
         'opens in place of this one', (tester) async {
       final conn = EdgeConn({
