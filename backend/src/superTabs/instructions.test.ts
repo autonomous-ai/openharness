@@ -11,6 +11,8 @@ const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'own
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
 const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+/** A save's chat line: its summary line, above the change it shows. */
+const firstLine = (text: string) => text.split('\n')[0]
 
 function fixture() {
   let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
@@ -245,7 +247,8 @@ describe('instructions.save', () => {
     expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 2, instructionsHash: instructionsHash('Reviews run on Opus.') })
     expect(effects.messages).toHaveLength(1)
     expect(effects.messages[0]).toMatchObject({ conversationId: 'lead', author: { kind: 'person', id: 'owner' }, recipients: [],
-      text: 'owner changed the instructions: Reviews run on Opus.', source: { kind: 'instructions', projectId: 'lead', revision: 2 } })
+      source: { kind: 'instructions', projectId: 'lead', revision: 2 } })
+    expect(firstLine(effects.messages[0]!.text)).toBe('owner changed the instructions: Reviews run on Opus.')
   })
 
   // Ken, 11-05: the line named only the PM's summary, so "I wrote it into the instructions" could not be checked (#3021).
@@ -295,7 +298,8 @@ describe('instructions.save', () => {
     expect(() => f.run(save(1, 'PM text.', { askedBy: 'stranger' }), as(lead))).toThrow(expect.objectContaining({ code: 'ASKED_BY_UNAVAILABLE' }))
     const effects = f.run(save(1, 'PM text.', { askedBy: 'peer' }), as(lead))
     expect(effects.instructions).toMatchObject({ writtenBy: { kind: 'agent', id: lead }, askedBy: 'peer' })
-    expect(effects.messages[0]).toMatchObject({ author: { kind: 'agent', id: lead }, text: 'lead changed the instructions for peer: Reviews run on Opus.' })
+    expect(effects.messages[0]).toMatchObject({ author: { kind: 'agent', id: lead } })
+    expect(firstLine(effects.messages[0]!.text)).toBe('lead changed the instructions for peer: Reviews run on Opus.')
     expect(() => f.run(save(2, 'Engineer text.', { askedBy: 'owner' }), as(engineer))).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
     const buddy = f.add('buddy', group)
     f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
@@ -310,8 +314,8 @@ describe('instructions.save', () => {
     f.invite()
     const effects = f.run(save(1, 'Peer text.', { askedBy: 'peer' }))
     expect(effects.instructions).toMatchObject({ writtenBy: { kind: 'person', id: 'owner' }, askedBy: 'peer' })
-    expect(effects.messages[0]!.text).toBe('owner changed the instructions for peer: Reviews run on Opus.')
-    expect(f.run(save(2, 'Owner text.', { askedBy: 'owner' })).messages[0]!.text).toBe('owner changed the instructions: Reviews run on Opus.')
+    expect(firstLine(effects.messages[0]!.text)).toBe('owner changed the instructions for peer: Reviews run on Opus.')
+    expect(firstLine(f.run(save(2, 'Owner text.', { askedBy: 'owner' })).messages[0]!.text)).toBe('owner changed the instructions: Reviews run on Opus.')
   })
 
   it('keeps a document within 64 KB and a summary on one line, and saves nothing new for the same text', () => {

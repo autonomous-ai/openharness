@@ -1829,7 +1829,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await store.read(owner, tab)).state).not.toHaveProperty('rules')
     const rows = (await store.messages(owner, tab, chat, {})).messages.filter(m => m.source).map(m => m.text)
     // After the row naming who added the Lead (#2207).
-    expect(rows).toEqual([expect.stringMatching(/^owner added [^.]+\.$/), 'Lead changed the instructions for owner: Routing: Only this Mac.'])
+    expect(rows).toEqual([expect.stringMatching(/^owner added [^.]+\.$/), 'Lead changed the instructions for owner: Routing: Only this Mac.\n\n```diff\n+ - Only this Mac.\n```'])
     expect((await store.read(owner, tab)).state.projects!.map(p => p.id)).toEqual([projectId])
   })
   it('keeps a new Swarm\'s folder from tab.project on its first project, so the repository can be shared and the host uses it', async () => {
