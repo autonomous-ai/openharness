@@ -292,10 +292,12 @@ const tagRows = (tabId: string, personId: string, now: number, open: boolean | n
 })
 
 /** The fields a changes poll needs both to hold tagged conversations and derive its mention badge from the same read. */
-export type WaitingTagRow = { id: string; conversationId: string; createdAt: Date; resolvedAt: Date | null; holdUntil: Date | null }
+export type WaitingTagRow = { id: string; projectId: string; conversationId: string; messageId: string; authorAgentId: string; createdAt: Date;
+  resolvedAt: Date | null; resolvedBy: string | null; holdUntil: Date | null }
 export async function waitingTagRows(tx: Tx, tabId: string, personId: string, now: number): Promise<WaitingTagRow[]> {
   return await tx.superTabMention.findMany({ ...tagRows(tabId, personId, now, true),
-    select: { id: true, conversationId: true, createdAt: true, resolvedAt: true, holdUntil: true } })
+    select: { id: true, projectId: true, conversationId: true, messageId: true, authorAgentId: true, createdAt: true, resolvedAt: true, resolvedBy: true,
+      holdUntil: true } })
 }
 
 /** The conversations of a person's waiting tags, newest tag first, once each: those [waitingMentions] may read beyond what a
