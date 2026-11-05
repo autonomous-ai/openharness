@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import type { HarnessSession, Prisma, PrismaClient } from '@prisma/client'
 import { pub } from './bus.js'
+import { signInsChanged } from './harnessAuthCache.js'
 import { prisma } from './prisma.js'
 import { ensureIndex } from './db/indexes.js'
 import { decryptMachineCredential, encryptMachineCredential } from './machineCredential.js'
@@ -149,6 +150,7 @@ async function renew(sessionId: string, fresh: (row: HarnessSession, now: number
     } catch (err) {
       if (err instanceof SsoTokenError && err.code === 'INVALID_GRANT' && !unfinished) {
         await writeLive(sessionId, endedSessionData())
+        await signInsChanged(row.userId)
         logger.info('sso sign-in ended a harness session', { sessionId, userId: row.userId })
         return { outcome: 'ended' }
       }
