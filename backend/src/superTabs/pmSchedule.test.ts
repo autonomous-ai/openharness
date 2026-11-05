@@ -240,6 +240,13 @@ describe('the built-in wake\'s jobs for what people teach the coordinator', () =
     expect(text).toContain('say what you changed')
   })
 
+  // Ken, 11-05: a project's own instructions guard only its own PM's account, and a copy made before this rule has none.
+  it('tells the coordinator an account any project\'s PM runs on keeps that PM running for its week', () => {
+    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
+    expect(text).toContain('An account the route notes as running a PM, yours or another project\'s, keeps that PM running for its week')
+    expect(text).toContain('except work that account\'s owner asks for')
+  })
+
   it('says in the built-in section when the Swarm wakes it for them', () => {
     expect(PM_SCHEDULE_TEXT).toContain('when a person wrote to you since the last wake')
     expect(PM_SCHEDULE_TEXT).toContain('Once a day, when the instructions changed')

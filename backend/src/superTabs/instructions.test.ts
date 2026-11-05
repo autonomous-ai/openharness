@@ -94,7 +94,10 @@ describe('the built-in template', () => {
     const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\s+/g, ' ')
     expect(routing).toContain('At or below that line it takes no new work and idle agents there are not reused, except work the account\'s owner asks for, which may use it at once.')
     // Review of #3134: the hand-off line would otherwise move that work off the account as soon as it started.
-    expect(routing).toContain('or whose account is the PM\'s and falls below its line (except work that account\'s owner asked for), hands its pushed branch')
+    expect(routing).toContain('or whose account is a PM\'s and falls below its line (except work that account\'s owner asked for), hands its pushed branch')
+    // Ken, 11-05: any project's PM, not only this one's: work put on another project's PM account could stop that PM.
+    expect(routing).toContain('2. An account any project\'s PM runs on (this project\'s or another\'s; the route notes it) keeps that PM running for the whole week.')
+    expect(routing).toContain('When no other account has weekly quota left, a PM\'s account takes work as any other account does.')
   })
 
   it('describes the spec\'s roles, workflow and routing in one short document', () => {
@@ -140,7 +143,7 @@ describe('the built-in template', () => {
     // window is never hit, so only the weekly quota counts. No plan size here: projects differ.
     const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
     expect(routing).toContain('Every assignment (an Engineer, a Reviewer, a Tester, an idle agent reused) picks in this order:')
-    expect(routing).toContain('The PM\'s own account (the engine it runs on, on its machine) keeps the PM running for the whole week.')
+    expect(routing).toContain('An account any project\'s PM runs on (this project\'s or another\'s; the route notes it) keeps that PM running for the whole week.')
     expect(routing).toContain('weekly quota left above the share of its week left (with 5 of 7 days to go, above 71%)')
     expect(routing).toContain('Every other account is used while it has weekly quota left: the one resetting soonest first')
     expect(routing).toContain('An idle agent is reused only between candidates equal so far')
@@ -152,7 +155,7 @@ describe('the built-in template', () => {
   it('lets the PM\'s own account take work as any other once no other account has weekly quota left', () => {
     // Ken, 2026-11-03: with every other account out, work should not wait on the PM's weekly line.
     const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
-    expect(routing).toContain('- When no other account has weekly quota left, the PM\'s account takes work as any other account does.')
+    expect(routing).toContain('- When no other account has weekly quota left, a PM\'s account takes work as any other account does.')
   })
   it('says the route lists every engine on every machine with its weekly quota, which the PM orders by itself', () => {
     // Ken, 2026-11-03: the route's rows now carry each account's quota, and no account is cut from them.
