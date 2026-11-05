@@ -164,18 +164,15 @@ function waitsOnRevisionOf(step: Conversation, build: Conversation): boolean {
   return assignment?.changesRequestedAt !== undefined || (assignment?.toldEngineerAt !== undefined && !waitingForReview(build.assignment!))
 }
 
-/** The Reviewer's verdict asking for changes, in the form the project's reviewers write (code-reviewer.md). */
-const ASKS_FOR_CHANGES = /ready to merge:\W*(no|with fixes)\b/i
-
-/** [agentId] wrote to its Engineer, in its own linked task's chat or in the build's: it may now wait for the new revision
- *  (waitingForRevision), if the Engineer was waiting on this review (a Tester's verdict has no set form), or it asks for changes
- *  while the Engineer already fixes someone else's. A note to a working Engineer keeps no Reviewer that then hangs. Written in
- *  that post's own write. */
-export function toldEngineer(state: SuperTabState, group: Conversation, agentId: string, recipients: string[], text: string, now: number): void {
+/** [agentId] wrote to its Engineer, in its own linked task's chat or in the build's, while the Engineer was waiting on this
+ *  review: it may now wait for the new revision (waitingForRevision). A note to a working Engineer keeps no Reviewer that then
+ *  hangs. What the post says is not read (Dee, #3394): a verdict asking for changes is a failed check, recorded at the head it
+ *  read (changesRequested). Written in that post's own write. */
+export function toldEngineer(state: SuperTabState, group: Conversation, agentId: string, recipients: string[], now: number): void {
   const own = activeWork(group) && group.assignment!.agentId === agentId && reviewedBuild(state, group) ? [group] : ownLinkedTasks(state, group, agentId)
   for (const step of own) {
     const engineer = reviewedBuild(state, step)!.assignment!
-    if (!recipients.includes(engineer.agentId) || !(waitingForReview(engineer) || ASKS_FOR_CHANGES.test(text))) continue
+    if (!recipients.includes(engineer.agentId) || !waitingForReview(engineer)) continue
     step.assignment!.toldEngineerAt = now
     recordTaskState(state, step, now)
   }

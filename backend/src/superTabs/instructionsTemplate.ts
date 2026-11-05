@@ -92,9 +92,9 @@ export const TEMPLATE_WORKFLOW = `## Workflow
    Tester again in the same step; it adds no new step for a second round.
    While the Engineer fixes them, the Reviewer or Tester stays Working on its step:
    blocked and needs_human are only for something a person must do. A verdict asking for changes, a Tester's too, is a
-   message to the Engineer with the line "Ready to merge: No" or "Ready to merge: With fixes": that line, sent to the
-   Engineer, is how the Swarm keeps the step with its agent while the Engineer fixes, instead of moving it after 30
-   quiet minutes.
+   failed check, recorded at the pull request head it read, with its findings sent to the Engineer: that failed check is
+   how the Swarm keeps the step with its agent while the Engineer fixes, instead of moving it after 30 quiet minutes. A
+   verdict counts only at the head it read, or a head with the same patch (a plain rebase or main merge).
 4. When the review passes, and the test passes where there is one, the Engineer sets its task done with the pull request
    and the evidence in its result: that status is how the PM hears, once. A Reviewer or Tester is heard the same way,
    through its step's result. No agent sends the PM any other message besides a task that needs a person (Workflow 6)
