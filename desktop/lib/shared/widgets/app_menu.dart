@@ -873,8 +873,15 @@ class _AppSubmenuItemState extends State<AppSubmenuItem> {
   MenuController get _controller =>
       widget.controller ?? (_own ??= MenuController());
 
-  void _openMenu() {
+  /// A cancelled [Timer] stays in the field: clear it, or the `??=` below
+  /// would never start another.
+  void _keepOpen() {
     _letGo?.cancel();
+    _letGo = null;
+  }
+
+  void _openMenu() {
+    _keepOpen();
     if (!_controller.isOpen) _controller.open();
   }
 
@@ -893,7 +900,7 @@ class _AppSubmenuItemState extends State<AppSubmenuItem> {
 
   @override
   void dispose() {
-    _letGo?.cancel();
+    _keepOpen();
     _row?.pointer.removeListener(_pointerMoved);
     super.dispose();
   }
@@ -904,7 +911,7 @@ class _AppSubmenuItemState extends State<AppSubmenuItem> {
     final row = _row;
     if (row == null) return;
     if (row.pointer.row == row.index) {
-      _letGo?.cancel();
+      _keepOpen();
       return;
     }
     if (!_controller.isOpen) return;
@@ -928,15 +935,18 @@ class _AppSubmenuItemState extends State<AppSubmenuItem> {
         widget.onOpen?.call();
       },
       onClose: () {
-        _letGo?.cancel();
-        _letGo = null;
+        _keepOpen();
         if (mounted) setState(() => _open = false);
         widget.onClose?.call();
       },
       children: [
         // Reaching the submenu ends the grace.
+        // Rows only: AppDropdown sizes its panel from a list of rows and
+        // dividers it can see through, and a divider is not a place to rest.
         for (final child in widget.menuChildren)
-          MouseRegion(onEnter: (_) => _letGo?.cancel(), child: child),
+          child is AppMenuDivider
+              ? child
+              : MouseRegion(onEnter: (_) => _keepOpen(), child: child),
       ],
       child: MouseRegion(
         onHover: (_) => _openMenu(),
