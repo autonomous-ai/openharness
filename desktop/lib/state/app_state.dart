@@ -1956,10 +1956,7 @@ class AppNotifier extends ChangeNotifier {
       // new here (task #3160).
       _addMachineWhereNew(
         [for (final tab in tabs) tab.id],
-        {
-          for (final swarm in swarms) ?swarm.superTabId,
-          ...hidden,
-        },
+        {for (final swarm in swarms) ?swarm.superTabId, ...hidden},
       );
       var changed = false;
       // Membership and names for the closed list: a tab hidden before a
@@ -2739,7 +2736,7 @@ class AppNotifier extends ChangeNotifier {
     bool alreadyMember = false,
   }) async {
     if (alreadyMember || role != 'collaborator') return;
-    await _addMachineToSwarm(tabId);
+    await _addMachineToSwarm(tabId, joined: true);
   }
 
   /// Swarm discovery's list ([listed]), however each was joined: a domain
@@ -2762,7 +2759,7 @@ class AppNotifier extends ChangeNotifier {
         final fresh = await record.fresh(account, listed, knownHere: knownHere);
         for (final tabId in fresh) {
           if (_disposed || currentUser?.id != account) return;
-          await _addMachineToSwarm(tabId);
+          await _addMachineToSwarm(tabId, joined: false);
         }
       } catch (error) {
         appLog.info('super-tabs', 'joined Swarms not checked: $error');
@@ -2775,7 +2772,12 @@ class AppNotifier extends ChangeNotifier {
   /// The join's add for one Swarm this account is in. The person's role is
   /// read from the Swarm itself: a viewer's Swarm is neither added nor
   /// recorded, so it is asked about again; an owner's is recorded and left.
-  Future<void> _addMachineToSwarm(String tabId) async {
+  /// A step that fails for a collaborator shows them a note saying what to do
+  /// (task #3160). [joined]: they joined it at this computer just now, so
+  /// they are known to be one before the Swarm is read; a Swarm only listed
+  /// that cannot be read says nothing yet, since they may be a viewer, and is
+  /// asked about again on the next discovery.
+  Future<void> _addMachineToSwarm(String tabId, {required bool joined}) async {
     final here = _teamAccountHere();
     final accountId = currentUser?.id;
     if (here == null || accountId == null || !_joinAdding.add(tabId)) return;
@@ -2783,36 +2785,56 @@ class AppNotifier extends ChangeNotifier {
         !_disposed &&
         status == AppStatus.authenticated &&
         currentUser?.id == accountId;
+    final machineName = stateOf(here)?.machine.displayName ?? 'This computer';
+    var collaborator = joined;
+    void failed(String problem) {
+      if (!collaborator || !current()) return;
+      _joinedMachines.add(
+        SwarmJoinedMachine(
+          tabId: tabId,
+          swarmName: superTabName(tabId) ?? 'the Swarm',
+          machineId: here,
+          machineName: machineName,
+          problem: problem,
+        ),
+      );
+    }
+
     try {
       final c = await superTabs.open(tabId);
       if (!current()) return;
       await c.refresh();
       if (!current()) return;
-      final role = c.snapshot?.people
+      final snapshot = c.snapshot;
+      if (snapshot == null) {
+        appLog.info('super-tabs', 'machine not added on join: unread Swarm');
+        failed('Could not reach the Swarm. Add this computer from Machines.');
+        return;
+      }
+      final role = snapshot.people
           .where((p) => p.id == accountId)
           .firstOrNull
           ?.role;
       if (role == null || role == 'viewer') return;
+      collaborator = role == 'collaborator';
       await _joinRecord?.mark(accountId, tabId);
-      if (role != 'collaborator') return;
-      final note =
-          await SwarmJoinMachine(
-            machineRequest: superTabMachineRequest,
-            readResources: readMachineResources,
-            wake: wakeSuperTabHost,
-          ).add(
-            c,
-            machineId: here,
-            machineName: stateOf(here)?.machine.displayName ?? 'This computer',
-            current: current,
-          );
+      if (!collaborator) return;
+      final note = await SwarmJoinMachine(
+        machineRequest: superTabMachineRequest,
+        readResources: readMachineResources,
+        wake: wakeSuperTabHost,
+      ).add(c, machineId: here, machineName: machineName, current: current);
       if (note == null || !current()) return;
       _joinedMachines.add(note);
       // Joined by the person at this computer: the system asks once for the
       // Harness Team account (cli/src/team/autoSetup.ts).
-      if (note.added) await offerTeamAccount('join', tabId: tabId);
+      if (!note.added) return;
+      if (!await offerTeamAccount('join', tabId: tabId) && current()) {
+        _joinedMachines.add(note.withoutTeamOffer());
+      }
     } catch (error) {
       appLog.info('super-tabs', 'machine not added on join: $error');
+      failed('Could not add this computer. Add it from Machines.');
     } finally {
       _joinAdding.remove(tabId);
     }

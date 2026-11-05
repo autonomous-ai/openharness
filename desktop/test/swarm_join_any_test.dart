@@ -36,6 +36,8 @@ SuperTabLaunchFixture _computer({String role = 'collaborator'}) {
 Future<void> _discover(SuperTabLaunchFixture f) async {
   await f.app.superTabs.refreshTabs();
   await f.app.joinAddPassForTest;
+  // The notes reach their listeners after it.
+  await pumpEventQueue();
 }
 
 List<Map> _contributions(SuperTabLaunchFixture f) => [
