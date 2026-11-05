@@ -146,6 +146,41 @@ class NewProjectSwarm {
     statusCode: 403,
   );
 
+  /// What the server's organization check answers for every owner (backend
+  /// routes/superTabs.ts `github/owners/:owner`, task #3373): null for a
+  /// server without the route, which answers 404.
+  String? ownerState;
+  String? installUrl;
+
+  /// Answers New repository's request in place of the server when set:
+  /// throws to refuse it.
+  FutureOr<Object?> Function(Map<String, dynamic> body)? refuseRepository;
+
+  /// Each New repository request's body, in order.
+  final repositoryRequests = <Map<String, dynamic>>[];
+
+  /// The time the last New repository request answered with.
+  int? creationAt;
+
+  /// GitHub's callback came back for the project [projectId]'s last request:
+  /// its `repositoryCreation` reads [state] in every read from now on.
+  void finishCreation(
+    String projectId,
+    String state, {
+    String? repositoryUrl,
+    bool? reachable,
+    String? reason,
+  }) {
+    final row = projects.firstWhere((p) => p['id'] == projectId);
+    row['repositoryCreation'] = {
+      ...row['repositoryCreation'] as Map<String, dynamic>,
+      'state': state,
+      'repositoryUrl': ?repositoryUrl,
+      'reachable': ?reachable,
+      'reason': ?reason,
+    };
+  }
+
   /// Answers a command in place of the Swarm when it returns non-null:
   /// throws to refuse it, or a future to hold its answer.
   FutureOr<Object?>? Function(Map<String, dynamic> command)? answer;
@@ -213,6 +248,32 @@ class NewProjectSwarm {
     fake.routes['/api/super-tabs/$id/conversations/'] = (_) => {
       'messages': <Object>[],
       'next': null,
+    };
+    if (ownerState case final state?) {
+      fake.routes['/api/super-tabs/$id/github/owners/'] = (_) => {
+        'state': state,
+        'installUrl': ?installUrl,
+      };
+    }
+    // New repository's request (backend Task 6): the sign-in to go to, and
+    // the time that names this attempt; the project waits from then on.
+    fake.routes['/api/super-tabs/$id/projects/'] = (body) async {
+      if (refuseRepository case final refuse?) return refuse(body!);
+      repositoryRequests.add(body!);
+      final at = creationAt = 1000 + repositoryRequests.length;
+      final made = projects.lastWhere((p) => p['name'] == 'New project');
+      made['repositoryCreation'] = {
+        'owner': body['owner'],
+        'name': body['name'],
+        'private': body['private'],
+        'by': me,
+        'at': at,
+        'state': 'waiting',
+      };
+      return {
+        'authorizeUrl': 'https://github.com/login/oauth/authorize?state=s$at',
+        'at': at,
+      };
     };
     fake.routes['/api/super-tabs/$id/commands'] = (body) async {
       sent.add(body!);
