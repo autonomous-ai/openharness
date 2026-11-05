@@ -668,6 +668,24 @@ void main() {
       expect(c.openedThread, isNull);
     });
 
+    test('a saved thread whose root cannot be read restores closed', () async {
+      final server = threaded()
+        ..messages.removeWhere((message) => message['id'] == 'message-1')
+        ..forbidMessageReads.add('lead');
+      final c = server.controller(
+        initial: {
+          'tabId': 'tab',
+          'accountId': 'owner',
+          'selectedId': 'lead',
+          'openThread': {'conversationId': 'lead', 'root': 'message-1'},
+        },
+      );
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.loadThread();
+      expect(c.openedThread, isNull);
+    });
+
     test(
       'the newest 500 are kept, and writing in one again makes it newest',
       () async {
