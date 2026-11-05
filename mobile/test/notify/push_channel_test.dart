@@ -154,7 +154,9 @@ void main() {
 
   group('the pushes still in the notification centre (task #2905)', () {
     test('are their keys, so the app does not post them again', () async {
-      answer = (call) => call.method == 'shown' ? ['reply:tab:row1', 'mention:t1', 7, null] : null;
+      answer = (call) => call.method == 'shown'
+          ? ['reply:tab:row1', 'mention:t1', 7, null]
+          : null;
       expect(await PushChannel().shown(), {'reply:tab:row1', 'mention:t1'});
     });
 
