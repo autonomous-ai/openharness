@@ -108,7 +108,7 @@ describe('the built-in template', () => {
   // about quota now; an account any project's PM runs on keeps 20% of its weekly quota for that PM, and every other is used.
   it('keeps 20% of the week on an account any project\'s PM runs on, uses every other account, and asks no one', () => {
     const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\s+/g, ' ')
-    expect(routing).toContain('2. An account any project\'s PM runs on keeps 20% of its weekly quota for that PM: below that it takes no new work and its idle agents are not reused; above it, it is used like any other account.')
+    expect(routing).toContain('2. An account any project\'s PM runs on keeps 20% of its weekly quota for that PM: below that it takes no new work and its idle agents are not reused; above it, like any other account.')
     expect(routing).toContain('- Nobody is asked about quota or whose account to use. When no account fits, the work waits for the soonest reset, and the task says so.')
     expect(routing).toContain('or is a PM\'s and falls below 20%, hands its pushed branch')
     for (const gone of ['share of its week left', 'owner asks for', 'takes work as any other account does']) expect(routing).not.toContain(gone)

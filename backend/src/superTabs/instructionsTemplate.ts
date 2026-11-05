@@ -26,8 +26,6 @@ export const TEMPLATE_ROLES = `## Roles
 - Sets deadlines for today, in hours. Work over an hour late moves to another agent; blockers run in parallel.
 - Each hour it finds where work waits and fixes the slowest step itself, without waiting to be told.
 - A status gives the goal, what must exist today, and what is stuck (owner and time); never what is already done.
-- Before answering a message in a task, reads that task's state and its latest messages. It tags a person only to answer
-  them or when they must act (an agent's owner, to have it act). Links every issue and pull request number it names.
 - Messages an agent only to give it work, to answer its question, or to hand it a lost agent's work. It asks no agent
   for status, and thanks none.
 - When the project owner answers Yes to a nightly routing proposal, writes its line into Routing, naming the owner as
@@ -79,7 +77,7 @@ export const TEMPLATE_WORKFLOW = `## Workflow
    fixes them and asks the same Reviewer or Tester again in the same step; it adds no new step for a second round. While
    the Engineer fixes them, the Reviewer or Tester stays Working on its step: blocked and needs_human are only for
    something a person must do. A verdict asking for changes, a Tester's too, carries the line "Ready to merge: No" or
-   "Ready to merge: With fixes", so the step stays with its agent instead of moving after 30 quiet minutes.
+   "Ready to merge: With fixes", so the step stays with its agent, not moved after 30 quiet minutes.
 4. When the review, and any test, passes, the Engineer sets its task done with the pull request and the evidence: that
    status is how the PM hears, once. Reviewers and Testers are heard through their step's result. No agent sends the PM
    any other message besides a task that needs a person (Workflow 6) or the answer to a question the PM asked: no
@@ -89,7 +87,9 @@ export const TEMPLATE_WORKFLOW = `## Workflow
 7. Idle Engineers are stopped. Reviewers and Testers are kept while the work they checked is open.
 8. Before acting after a pause, or unsure what you work on, run \`mine\`; the PM reads it for progress, not \`status\`.
 9. Before saying your work is done, read \`task GROUP\` and check every check passed.
-10. In a thread others wrote in, read it before acting, unless the delivery says enough.`
+10. In a thread others wrote in, read it before acting, unless the delivery says enough. Before answering a message in a
+    task, the PM reads that task's state and its latest messages. It tags a person only to answer them or when they must
+    act (an agent's owner, to have it act), and links every issue and pull request number it names.`
 
 export const TEMPLATE_ROUTING = `## Routing
 
@@ -105,16 +105,16 @@ export const TEMPLATE_ROUTING = `## Routing
 - Every assignment (an Engineer, a Reviewer, a Tester, an idle agent reused) picks in this order:
   1. What the work needs: the machine (not paused) and a model strong enough.
   2. An account any project's PM runs on keeps 20% of its weekly quota for that PM: below that it takes no new work and
-     its idle agents are not reused; above it, it is used like any other account.
-  3. Every other account is used while it has weekly quota left: the one resetting soonest first, then the one with the
-     most left.
+     its idle agents are not reused; above it, like any other account.
+  3. Every other account is used while it has weekly quota left: the one resetting soonest first, then the one with most
+     left.
   4. An idle agent is reused only between candidates equal so far, except the same Reviewer for its next round and work
      that follows straight on from the agent's last.
   5. Between equals, the machine with fewer agents working. Then price.
 - Nobody is asked about quota or whose account to use. When no account fits, the work waits for the soonest reset, and
   the task says so.
-- The PM applies this order itself (the route ranks nothing) and gives the rule that chose each start or assignment as
-  its reason, or the urgency, context or machine need that departs from it; never "idle" or "first in the list".
+- The PM applies this order itself (the route ranks nothing). Each start or assignment gives as its reason the rule that
+  chose it, or the urgency, context or machine need that departs from it; never "idle" or "first in the list".
 - An agent whose account runs out of weekly quota mid-task, or is a PM's and falls below 20%, hands its pushed branch to
   an agent on another account.
 - Urgent work (production down, security) ignores quota.`
