@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PRIORITY_MEANING, TASK_PRIORITIES, priorityLine, proposalPriority } from './taskPriority.js'
+import { PRIORITY_MEANING, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority } from './taskPriority.js'
 
 // A task's priority, P0-P3 (task #3117): one scale for the PM, people and Buddies' proposals.
 describe('task priorities', () => {
@@ -18,6 +18,14 @@ describe('task priorities', () => {
     expect(proposalPriority('normal')).toBe('P2')
     expect(proposalPriority('low')).toBe('P3')
     for (const other of [undefined, null, '', 'urgent', 'P0', 3]) expect(proposalPriority(other), String(other)).toBe('P2')
+  })
+
+  it('reads a title\'s old urgent or high marker as P0 or P1, as the apps read it', () => {
+    expect(titlePriority('URGENT: Sign-in broken')).toBe('P0')
+    expect(titlePriority('Sign-in broken (urgent)')).toBe('P0')
+    expect(titlePriority('Faster sync (Ken, high)')).toBe('P1')
+    expect(titlePriority('Faster sync (high priority)')).toBe('P1')
+    for (const plain of ['Faster sync', 'URGENT', '(urgent)', 'Fix the (urgent) path']) expect(titlePriority(plain), plain).toBeNull()
   })
 
   it('says a change in one line, naming who changed it and what it was', () => {

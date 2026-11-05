@@ -5883,6 +5883,15 @@ describe('a task\'s priority (conversation.create and work.priority)', () => {
     expect(f.run(set(id, 'P3'), owner).messages[0]!.text).toBe('owner changed the priority to P3, tools, docs or process (was P2).')
   })
 
+  it('reads a task from before priorities by its title\'s urgent or high marker, as every client shows it', () => {
+    const { f, task, create, set } = prioritized()
+    const urgent = create({ title: 'Sign-in broken (urgent)' }).result.conversationId as string
+    const high = create({ title: 'Faster sync (Ken, high)' }).result.conversationId as string
+    for (const id of [urgent, high]) delete task(id).priority
+    expect(f.run(set(urgent, 'P2'), owner).messages[0]!.text).toBe('owner changed the priority to P2, planned goal (was P0).')
+    expect(f.run(set(high, 'P2'), owner).messages[0]!.text).toBe('owner changed the priority to P2, planned goal (was P1).')
+  })
+
   it('posts nothing when the priority is already that one', () => {
     const { f, task, create, set } = prioritized()
     const id = create({ priority: 'P1' }).result.conversationId as string
