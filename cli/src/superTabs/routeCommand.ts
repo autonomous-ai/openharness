@@ -9,6 +9,7 @@ import { RELAYED_QUOTA, requiredToolReason, startRequirements, USED_UP_WINDOW } 
 import { START_DEADLINE_MS, START_WINDOW_MS } from './reservations.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
+import { withPmAccounts } from './pmAccounts.js'
 import { accountOf, API_BUILDERS, bytes, machineBrief, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, OLD_RECORD_MAX, quotaBrief, quotaOf2, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type Shown, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
 import { makePlugins, ROUTE_PLUGIN_MAKERS, type PluginMaker } from './routePlugins.js'
 import { CI_HOLD_OPENING, CI_RETRY_MINUTES, heavyOfStart, MACHINE_FIT_MAKER } from './machineFit.js'
@@ -490,6 +491,8 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
       ...(avoid.has(accountOf(p)) ? [AVOIDED] : [])]
     if (notes.length) probes[i] = { ...p, notes: [...p.notes, ...notes] }
   }
+  // Whose PM an account keeps running, any project's (pmAccounts.ts): the project's Routing guards that PM's week.
+  probes.splice(0, probes.length, ...withPmAccounts(state, probes))
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
   const working = (decisions ?? []).filter(d => d.final && d.outcome === null && typeof d.account === 'string')
     .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)

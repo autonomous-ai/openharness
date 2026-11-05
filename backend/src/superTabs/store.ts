@@ -89,6 +89,7 @@ import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredNotice, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
 import { PM_SCHEDULE_TEXT, recordWake, scheduleRequest } from './pmSchedule.js'
+import { addFooting } from './pmFooting.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
@@ -3969,6 +3970,8 @@ export class SuperTabStore {
         await this.releaseRuns(tx, tabId, await this.staleRuns(tx, tabId, state))
       }
       // One write for all: the time checks' changes, the digest and the wake-ups'.
+      // Every built-in wake ends with where its PM runs and its week's quota (pmFooting.ts), once the wakes are merged.
+      addFooting(state, target, written, this.now())
       const sequences = numberMessages(state, written, this.now())
       // A loss or a start's failure was judged from a machine's report: a newer report makes this write retry.
       await this.save(tx, loaded, state, clock.next(), [...judgedMachines(loaded.state, state, written),
