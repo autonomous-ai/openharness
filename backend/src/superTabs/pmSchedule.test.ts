@@ -226,6 +226,30 @@ describe('the built-in wake\'s jobs for what people teach the coordinator', () =
     expect(wake(state, T + 2 * SCHEDULE_SLOT_MS)).toBeNull()
   })
 
+  // Ken, 11-05: lamp-gtm's PM saved dee's "start what dee asks at once, on the PM's account if needed" (revision 14) beside
+  // the older routing line that keeps the PM's own account for the PM, left both, and then asked dee three options.
+  it('tells the coordinator to fix a contradicted line in the same save, and to settle a conflict without asking', () => {
+    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
+    expect(text).toContain('fix every line it contradicts in that same save')
+    // Review of #3134: replacing a line drops another person's rule, which the tidy keeps.
+    expect(text).toContain('replace a line only when it names no one or the same person gave both')
+    expect(text).toContain('When two rules still disagree, don\'t ask; settle it by the first that applies')
+    // A rule that says to ask a person (spending money, say) is never overridden by this order.
+    expect(text).toContain('a rule that says to ask a person still holds')
+    expect(text).toContain('an account owner\'s rule beats a default about their account; the newer beats the older')
+    expect(text).toContain('say what you changed')
+  })
+
+  // Ken, 11-05: a project's own instructions guard only its own PM's account, and a copy made before this rule has none.
+  it('tells the coordinator an account any project\'s PM runs on keeps that PM running for its week', () => {
+    const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
+    expect(text).toContain('Never ask anyone about quota or whose account to use: pick by Routing and go.')
+    expect(text).toContain('An account the route notes as running a PM, yours or another project\'s, takes no new work while it has less than 20% of its weekly quota left')
+    // Review of #3134: a project copied before this keeps an older line about its own PM's account; this one still holds.
+    expect(text).toContain('even where an older Routing line in your instructions says otherwise')
+    expect(text).not.toContain('except work that account\'s owner asks for')
+  })
+
   it('says in the built-in section when the Swarm wakes it for them', () => {
     expect(PM_SCHEDULE_TEXT).toContain('when a person wrote to you since the last wake')
     expect(PM_SCHEDULE_TEXT).toContain('Once a day, when the instructions changed')

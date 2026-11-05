@@ -246,6 +246,9 @@ class _SuperTabViewState extends State<SuperTabView>
   final _anchors = <String, ({String messageId, double top})>{};
   // Each list's dividing row: see [_splitAt].
   final _split = <String, SuperTabMessage>{};
+  // Each list's rebuilds around a new dividing row ([_restartAtEnd]): its
+  // rows' slivers are keyed by it, so a restart lays out no old row.
+  final _restarts = <String, int>{};
   final _newerRows = UniqueKey();
   // The composer's completions are drawn by builders of their own, so typing
   // and choosing among them never rebuild the transcript.
@@ -446,6 +449,7 @@ class _SuperTabViewState extends State<SuperTabView>
       }
       _scroll.clear();
       _split.clear();
+      _restarts.clear();
       _latest.clear();
       _following.clear();
       _newAfter.clear();
@@ -559,6 +563,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final request = ++_scrollRequest;
     final sequence = _latest[id] ?? 0;
     _jumpingToEnd = true;
+    _scroll[id]?.holdEnd(request);
     void advance(int attempt) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final scroll = _scroll[id];
@@ -567,6 +572,7 @@ class _SuperTabViewState extends State<SuperTabView>
             c.selectedId != id ||
             scroll == null ||
             !scroll.hasClients) {
+          scroll?.releaseEnd(request);
           return;
         }
         scroll.jumpTo(scroll.position.maxScrollExtent);
@@ -577,12 +583,20 @@ class _SuperTabViewState extends State<SuperTabView>
               request != _scrollRequest ||
               c.selectedId != id ||
               !scroll.hasClients) {
+            scroll.releaseEnd(request);
             return;
           }
-          if (scroll.position.extentAfter > 1 && attempt < 12) {
+          // Short of the end, or past it: an end estimated from rows not yet
+          // laid out moves once they are, and on a Mac's bouncing scroll a
+          // view left past it shows no row until it springs back.
+          final position = scroll.position;
+          if ((position.extentAfter > 1 ||
+                  position.pixels > position.maxScrollExtent + 1) &&
+              attempt < 12) {
             advance(attempt + 1);
           } else {
             _jumpingToEnd = false;
+            scroll.releaseEnd(request);
             if (scroll.position.extentAfter < 40) {
               _readToEnd(id, sequence);
             }
@@ -1001,13 +1015,51 @@ class _SuperTabViewState extends State<SuperTabView>
   void _jumpToLatest() {
     final id = c.selectedId;
     _focus.requestFocus();
-    if (!c.hasNewer(id)) return _followEnd(id);
+    if (!c.hasNewer(id)) {
+      if (_farFromEnd(id)) _restartAtEnd(id);
+      return _followEnd(id);
+    }
     // More are waiting than were read: the latest page first, then its end.
     unawaited(
       c.showLatest(id).then((_) {
-        if (mounted && c.selectedId == id) _followEnd(id);
+        if (!mounted || c.selectedId != id) return;
+        _restartAtEnd(id);
+        _followEnd(id);
       }),
     );
+  }
+
+  /// At most this many rows lie below a list's dividing row after a
+  /// restart: all a jump to the end lays out.
+  static const _restartRows = 40;
+
+  /// Whether more rows lie below the top of [id]'s view than a restart
+  /// keeps below its dividing row. A list reaches a row of unknown height
+  /// only by laying out every row on the way, so a jump across thousands
+  /// of them took seconds, and an end estimated from rows of very different
+  /// heights left the view past the last row, showing none (Huy, #3049).
+  bool _farFromEnd(String id) {
+    final top = _rowAtTop();
+    final own = _ownShown(id);
+    final at = top == null ? -1 : own.indexWhere((m) => m.id == top);
+    return at < 0 ? own.length > _restartRows : own.length - at > _restartRows;
+  }
+
+  /// Rebuilds [id]'s list around its newest rows instead of travelling to
+  /// them: the dividing row moves to the newest [_restartRows], both of its
+  /// slivers start empty, and the view starts at the dividing row. The rows
+  /// above it read back as the reader scrolls up, as from a first open.
+  void _restartAtEnd(String id) {
+    final own = _ownShown(id);
+    if (own.isEmpty) return;
+    final first = own[(own.length - _restartRows).clamp(0, own.length - 1)];
+    _split[id] = first;
+    c.keepFrom(id, first);
+    _restarts[id] = (_restarts[id] ?? 0) + 1;
+    _anchors.remove(id);
+    _scrollRequest++;
+    _scroll[id]?.restart();
+    setState(() {});
   }
 
   void _noticesLeave(SuperTabController controller) {
@@ -1535,9 +1587,36 @@ class _SuperTabViewState extends State<SuperTabView>
 
   Future<void> _earlier() => _loadEarlier(c.selectedId);
 
-  /// A scroll ending near the top reads the earlier page with no click.
-  void _readEarlierNearTop(String id, ScrollMetrics metrics) {
-    if (metrics.extentBefore > 400 ||
+  /// Older pages are read while fewer rows than this are above the view: a
+  /// page takes about a second to arrive, and in a busy chat most of its
+  /// rows are thread replies, so a reader who scrolled to the top waited at
+  /// a spinner every few rows (#3049). Counted in rows, not pixels: the
+  /// height above the rows laid out is an estimate, and one not laid out
+  /// again while the view stands still.
+  static const _readAheadRows = 40;
+
+  /// The list's rows as last built, by row key: their place in it.
+  Map<String, int> _rowPlaces = const {};
+
+  /// Whether the reader is near the top of what is read: once a scroll
+  /// ends, within 400 px; reading [ahead] (moving up, or pages read on),
+  /// fewer than [_readAheadRows] rows above the view, never by pixels.
+  bool _nearTop(ScrollMetrics metrics, {required bool ahead}) {
+    if (!ahead) return metrics.extentBefore <= 400;
+    final top = _rowAtTop();
+    final at = top == null ? null : _rowPlaces[_rowKey(c.messageIdentity(top))];
+    return at != null && at < _readAheadRows;
+  }
+
+  /// A scroll near the top reads the earlier page with no click: [ahead]
+  /// while it moves up or pages read on, and once it ends. A scroll that
+  /// ends at the bottom, as opening a chat does, reads nothing ahead.
+  void _readEarlierNearTop(
+    String id,
+    ScrollMetrics metrics, {
+    bool ahead = false,
+  }) {
+    if (!_nearTop(metrics, ahead: ahead) ||
         _finding != null ||
         _find?.reading != null ||
         _loadingOlder.contains(id) ||
@@ -1545,11 +1624,13 @@ class _SuperTabViewState extends State<SuperTabView>
         !c.hasOlder(id)) {
       return;
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && c.selectedId == id && !_loadingOlder.contains(id)) {
-        unawaited(_loadEarlier(id));
-      }
-    });
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) {
+        if (mounted && c.selectedId == id && !_loadingOlder.contains(id)) {
+          unawaited(_loadEarlier(id));
+        }
+      })
+      ..scheduleFrame();
   }
 
   /// Reads the page before those loaded, keeping what is on screen in place:
@@ -1585,7 +1666,23 @@ class _SuperTabViewState extends State<SuperTabView>
         _olderFailed.remove(id);
       }
     });
-    if (anchor != null) await _keepRow(id, anchor, request: request);
+    // While the reader scrolls, the list keeps their place as it lays the
+    // page out (SuperTabChatScroll); a jump now would cut their scroll short.
+    final scrolling =
+        scroll.hasClients && scroll.position.isScrollingNotifier.value;
+    if (anchor != null && !scrolling) {
+      await _keepRow(id, anchor, request: request);
+    }
+    // Still near the top once the page is laid out, as after a page of
+    // thread replies: the next one.
+    if (!mounted || c.selectedId != id) return;
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) {
+        if (mounted && c.selectedId == id && scroll.hasClients) {
+          _readEarlierNearTop(id, scroll.position, ahead: true);
+        }
+      })
+      ..scheduleFrame();
   }
 
   /// The row of [keep] when it is built, else the topmost row, and its top.
@@ -4521,6 +4618,7 @@ class _SuperTabViewState extends State<SuperTabView>
       for (final (index, message) in messages.indexed)
         _rowKey(c.messageIdentity(message.id)): index,
     };
+    _rowPlaces = rowIndex;
     // A row stays the same row as pages arrive above it, state and all.
     int? rowOf(Key key) => key is ValueKey<String> ? rowIndex[key.value] : null;
     final split = _splitAt(c.selectedId, ownMessages);
@@ -4778,15 +4876,22 @@ class _SuperTabViewState extends State<SuperTabView>
                                     event.dragDetails != null) {
                                   _scrollRequest++;
                                   _jumpingToEnd = false;
+                                  _scroll[c.selectedId]?.holdEnd(null);
                                 }
                                 if (_jumpingToEnd) return false;
                                 final id = c.selectedId;
                                 final atEnd = event.metrics.extentAfter < 40;
                                 _follow(id, atEnd);
-                                // Once the scroll ends, so keeping the place never
-                                // cuts a drag short.
+                                // Moving up, or once the scroll ends.
                                 if (event is ScrollEndNotification) {
                                   _readEarlierNearTop(id, event.metrics);
+                                } else if (event is ScrollUpdateNotification &&
+                                    (event.scrollDelta ?? 0) < 0) {
+                                  _readEarlierNearTop(
+                                    id,
+                                    event.metrics,
+                                    ahead: true,
+                                  );
                                 }
                                 if (atEnd) {
                                   // A row still sending has no place in the transcript.
@@ -4831,6 +4936,9 @@ class _SuperTabViewState extends State<SuperTabView>
                                           ),
                                     ),
                                     LaidOutSliverList(
+                                      key: ValueKey(
+                                        'super-older-rows-${_restarts[c.selectedId] ?? 0}',
+                                      ),
                                       delegate: SliverChildBuilderDelegate(
                                         (context, index) =>
                                             row(split - 1 - index),
@@ -4849,6 +4957,9 @@ class _SuperTabViewState extends State<SuperTabView>
                                         bottom: grid.AppDesktop.controlGap,
                                       ),
                                       sliver: LaidOutSliverList(
+                                        key: ValueKey(
+                                          'super-newer-rows-${_restarts[c.selectedId] ?? 0}',
+                                        ),
                                         delegate: SliverChildBuilderDelegate(
                                           // Messages on their way end the list.
                                           (context, index) =>
