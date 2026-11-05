@@ -22,6 +22,10 @@ SuperTabImageShelf defaultImageShelf() => DirectoryImageShelf(
 /// write goes to a temporary of its own and is renamed into place, so two
 /// windows never read half a picture; the time a file was last changed is
 /// when it was last shown.
+///
+/// A write is not synced to the disk: an fsync per picture cost a first open
+/// about 5 ms a picture (chat_image_benchmark.dart), and a picture a power cut
+/// leaves short fails to decode and is read again (`AttachmentImage`).
 class DirectoryImageShelf implements SuperTabImageShelf {
   DirectoryImageShelf(this.directory);
 
@@ -83,7 +87,7 @@ class DirectoryImageShelf implements SuperTabImageShelf {
       if (PosixFileMode.supported) {
         PosixFileMode.createExclusive(temporary.path, 0x180);
       }
-      await temporary.writeAsBytes(bytes, flush: true);
+      await temporary.writeAsBytes(bytes);
       await temporary.rename(_path(name));
     } catch (_) {
       await _delete(temporary);

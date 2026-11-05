@@ -224,6 +224,21 @@ class SuperTabImageCache {
     }
   }
 
+  /// [fileId]'s picture gone: what was kept did not read as a picture.
+  Future<void> drop(String fileId) async {
+    final kept = _kept[fileId];
+    if (kept == null) return;
+    _forget(fileId);
+    try {
+      await _shelf.delete(kept.name);
+    } catch (error) {
+      appLog.warn(
+        'super-tabs',
+        'image cache drop failed: ${error.runtimeType}',
+      );
+    }
+  }
+
   /// Every picture gone, and their shapes: signing out.
   Future<void> clear() async {
     _generation++;

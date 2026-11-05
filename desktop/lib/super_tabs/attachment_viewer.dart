@@ -294,26 +294,20 @@ class AttachmentImage extends ImageProvider<AttachmentPictureKey> {
     final cache = superTabImageCache;
     final began = cache.generation;
     try {
-      final kept = await cache.read(fileId);
+      if (await cache.read(fileId) case final kept?) {
+        try {
+          return (await _decode(kept, key, decode)).codec;
+        } catch (_) {
+          // A write a crash cut short: read it again.
+          await cache.drop(fileId);
+        }
+      }
       // Only a real download is timed (readPicture): a picture this computer
       // already had costs no fetch.
-      final bytes = kept ?? await readPicture(url);
-      Size? shape;
-      final codec = await decode(
-        await ui.ImmutableBuffer.fromUint8List(bytes),
-        getTargetSize: (width, height) {
-          shape = Size(width.toDouble(), height.toDouble());
-          final pixels = key.pixels;
-          if (pixels == null || math.max(width, height) <= pixels) {
-            return const ui.TargetImageSize();
-          }
-          return width >= height
-              ? ui.TargetImageSize(width: pixels)
-              : ui.TargetImageSize(height: pixels);
-        },
-      );
-      if (kept == null && shape != null) {
-        unawaited(cache.keep(fileId, bytes, shape!, generation: began));
+      final bytes = await readPicture(url);
+      final (:codec, :shape) = await _decode(bytes, key, decode);
+      if (shape != null) {
+        unawaited(cache.keep(fileId, bytes, shape, generation: began));
       }
       return codec;
     } catch (_) {
@@ -322,6 +316,30 @@ class AttachmentImage extends ImageProvider<AttachmentPictureKey> {
       PaintingBinding.instance.imageCache.evict(key);
       rethrow;
     }
+  }
+
+  /// [bytes] decoded no larger than [key]'s pixels, and the picture's own
+  /// width and height.
+  static Future<({ui.Codec codec, Size? shape})> _decode(
+    Uint8List bytes,
+    AttachmentPictureKey key,
+    ImageDecoderCallback decode,
+  ) async {
+    Size? shape;
+    final codec = await decode(
+      await ui.ImmutableBuffer.fromUint8List(bytes),
+      getTargetSize: (width, height) {
+        shape = Size(width.toDouble(), height.toDouble());
+        final pixels = key.pixels;
+        if (pixels == null || math.max(width, height) <= pixels) {
+          return const ui.TargetImageSize();
+        }
+        return width >= height
+            ? ui.TargetImageSize(width: pixels)
+            : ui.TargetImageSize(height: pixels);
+      },
+    );
+    return (codec: codec, shape: shape);
   }
 
   @override
