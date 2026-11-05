@@ -796,6 +796,9 @@ async function jobStart(deps: TeamCommandDeps, file: string | undefined): Promis
     try { deps.writeStatus(statusFile, update) } catch (error) { log(`could not write ${statusFile}: ${(error as Error).message}`) }
   }
   const label = `${deps.hostname().slice(0, 60)} · Team`
+  if (mine && deps.session()?.kind !== 'team') {
+    report({ signIn: { state: 'signed-out', at: deps.now(), detail: 'The Team sign-in is no longer available. Run harness team setup --sign-in-again.' } })
+  }
   if (file) {
     let code: string | null = null
     try {
