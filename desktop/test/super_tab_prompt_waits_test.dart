@@ -14,7 +14,8 @@ import 'support/super_tab_fixture.dart';
 
 final _now = DateTime(2026, 11, 5, 10, 30);
 
-const _screen = 'Pairing the iPhone with the board.\n'
+const _screen =
+    'Pairing the iPhone with the board.\n'
     'Open Settings > Glinks on the iPhone, check the password,\n'
     'press Connect, then tell me "connect rồi".\n'
     '\n'
@@ -121,7 +122,12 @@ void main() {
       // Its last lines, as its terminal shows them, blank ones trimmed.
       final lines = _key('super-prompt-lines:wren');
       expect(
-        tester.widget<Text>(find.descendant(of: lines, matching: find.byType(Text))).data,
+        tester
+            .widget<Text>(
+              find.descendant(of: lines, matching: find.byType(Text)),
+            )
+            .data,
+        'Pairing the iPhone with the board.\n'
         'Open Settings > Glinks on the iPhone, check the password,\n'
         'press Connect, then tell me "connect rồi".\n'
         '>',
@@ -164,7 +170,9 @@ void main() {
       await _show(tester, await _loaded(tester, server));
       expect(_key('super-activity-row-prompt:wren'), findsOneWidget);
       expect(
-        find.text('Its terminal isn\'t shown to you. Open the task to answer it.'),
+        find.text(
+          'Its terminal isn\'t shown to you. Open the task to answer it.',
+        ),
         findsOneWidget,
       );
       expect(_key('super-prompt-lines:wren'), findsNothing);
