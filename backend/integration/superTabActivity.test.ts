@@ -21,6 +21,7 @@ import { threadFacet } from '../src/superTabs/pageReads.js'
 import { CHAT_SETTING_DEFAULT_KEEP_MS, sweepChatSettings } from '../src/superTabs/chatSettings.js'
 import type { Command, SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import type { PhoneNotice } from '../src/push/sender.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -32,6 +33,8 @@ let store: SuperTabStore
 let measured: PrismaClient
 let measuredStore: SuperTabStore
 let tally: Record<string, number> | null = null
+// What each write would tell phones, after its commit (push/notices.ts, task #2905).
+const phones: PhoneNotice[] = []
 const user = (actor: { userId: string; email: string }): AuthUser => ({ sub: actor.userId, email: actor.email, autonomousEnv: 'prod', role: 'user' })
 const [owner, peer, outsider] = [ownerActor, peerActor, outsiderActor].map(user) as [AuthUser, AuthUser, AuthUser]
 const ownerTeam: AuthUser = { ...owner, harnessSessionId: 'owner-team-session', harnessSessionKind: 'team' }
@@ -49,7 +52,7 @@ beforeAll(async () => {
   db = new PrismaClient({ datasources: { db: { url: uri } } })
   for (const each of [owner, peer, outsider]) await db.user.create({ data: { id: each.sub, externalId: `fixture-${each.sub}`, email: each.email, autonomousEnv: 'prod' } })
   await db.machine.create({ data: { machineId: 'host', userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-  store = new SuperTabStore(db)
+  store = new SuperTabStore(db, Date.now, null, { phoneNotices: notices => { phones.push(...notices) } })
   measured = new PrismaClient({ datasources: { db: { url: uri } }, log: [{ emit: 'event', level: 'query' }] })
   measuredStore = new SuperTabStore(measured)
   measured.$on('query', (event: { query: string }) => {
@@ -178,6 +181,37 @@ describe('Activity: replies to a person\'s messages', () => {
     const s = await scene()
     await send(s.tabId, s.web, 'Top level by peer', peer)
     expect(await items(s.tabId)).toEqual([])
+  })
+})
+
+describe('Phone push: a write tells the phones of whoever its rows tell (task #2905)', () => {
+  const tagging = async (tabId: string, conversationId: string, text: string, as: AuthUser, replyTo: string | null, mentions: string[]) =>
+    (await run(tabId, { type: 'message.send', conversationId, text, replyTo, recipientIds: [], mentions }, as)).result.messageId as string
+  const told = async (write: () => Promise<unknown>) => {
+    phones.length = 0
+    await write()
+    return phones.map(n => ({ personId: n.personId, kind: n.key.split(':')[0], link: n.link, title: n.title }))
+  }
+
+  it('tells the thread\'s starter of a reply, linking the reply in its thread, and nobody of a message outside threads', async () => {
+    const s = await scene()
+    let root = ''
+    expect(await told(async () => { root = await send(s.tabId, s.web, 'Owner root') })).toEqual([])
+    let reply = ''
+    const notices = await told(async () => { reply = await send(s.tabId, s.web, 'Peer answers', peer, root) })
+    expect(notices).toEqual([{ personId: owner.sub, kind: 'reply', link: `swarm:${s.tabId}/${s.web}/message/${reply}/thread/${root}`, title: expect.stringMatching(/ replied in a thread$/) }])
+    const row = await db.superTabActivity.findFirst({ where: { tabId: s.tabId, personId: owner.sub, messageId: reply } })
+    expect(phones[0]!.key).toBe(`reply:${s.tabId}:${row!.id}`)
+  })
+
+  it('tells a person who muted the chat of a tag alone, never of a reply', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Peer root', peer)
+    expect((await notify(s.tabId, s.web, 'muted', peer)).status).toBe(200)
+    expect(await told(() => send(s.tabId, s.web, 'Owner answers', owner, root))).toEqual([])
+    let tag = ''
+    expect(await told(async () => { tag = await tagging(s.tabId, s.web, 'Peer, please check', owner, root, [peer.sub]) }))
+      .toEqual([{ personId: peer.sub, kind: 'mention', link: `swarm:${s.tabId}/${s.web}/message/${tag}/thread/${root}`, title: expect.stringMatching(/ tagged you$/) }])
   })
 })
 
