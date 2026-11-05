@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
@@ -7,15 +8,19 @@ import 'controller.dart';
 /// What a Decisions prompt row shows of its agent's terminal (task #3029):
 /// its last lines, read once through the terminal read the backend checks
 /// (terminal.ts mayDrive), so nobody sees a screen here they could not watch
-/// in its terminal. The read writes nothing to any chat.
+/// in its terminal. The read writes nothing to any chat. On the web, whose
+/// transport refuses terminal reads (backend_transport.dart), it reads
+/// nothing and points to the terminal instead.
 class SuperTabPromptLines extends StatefulWidget {
   const SuperTabPromptLines({
     super.key,
     required this.controller,
     required this.agentId,
+    this.web = kIsWeb,
   });
   final SuperTabController controller;
   final String agentId;
+  final bool web;
 
   /// How many of its last lines with text show.
   static const lines = 6;
@@ -27,6 +32,9 @@ class SuperTabPromptLines extends StatefulWidget {
 
   /// Said when its machine did not answer.
   static const failed = 'Its last lines could not be read.';
+
+  /// Said on the web, which reads no terminal here.
+  static const onWeb = 'Open its terminal to see what it asks.';
 
   /// The last [count] lines of [screen] with text, right-trimmed.
   static String lastLines(String screen, {int count = lines}) {
@@ -41,7 +49,7 @@ class SuperTabPromptLines extends StatefulWidget {
   State<SuperTabPromptLines> createState() => _PromptLinesState();
 }
 
-enum _Read { reading, shown, refused, failed }
+enum _Read { reading, shown, refused, failed, web }
 
 class _PromptLinesState extends State<SuperTabPromptLines> {
   _Read _read = _Read.reading;
@@ -74,6 +82,8 @@ class _PromptLinesState extends State<SuperTabPromptLines> {
     void show(_Read read) {
       if (turn == _turn) _show(read);
     }
+
+    if (widget.web) return show(_Read.web);
 
     try {
       final sent = await widget.controller.request(
@@ -125,6 +135,10 @@ class _PromptLinesState extends State<SuperTabPromptLines> {
         ),
         _Read.failed => Text(
           SuperTabPromptLines.failed,
+          style: DesktopChrome.metadata(),
+        ),
+        _Read.web => Text(
+          SuperTabPromptLines.onWeb,
           style: DesktopChrome.metadata(),
         ),
         _Read.shown => Container(
