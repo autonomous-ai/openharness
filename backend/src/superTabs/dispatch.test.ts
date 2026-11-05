@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type Conversation, type MessageDraft } from './model.js'
-import { DISPATCH_RULES, dispatchPlan, freeCrew, laneOf, nudgeLine, returnReason } from './dispatch.js'
+import { capacityLine, derivedLanes, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, laneOf, nudgeLine, returnReason } from './dispatch.js'
 import { sweepLiveness } from './liveness.js'
 
 const NOW = Date.parse('2026-11-05T15:00:00Z')
@@ -233,5 +233,36 @@ describe('the crew\'s clocks: 2 hours without progress tells the member, 3 hours
     delete s.state.agents.find(a => a.id === s.ids.Ash)!.crew
     expect(s.lines(s.sweep(AT + 6 * HOUR))).toEqual([])
     expect(s.group(s.api).assignment!.status).toBe('working')
+  })
+})
+
+describe('the capacity line per lane', () => {
+  it('counts each lane\'s waiting and busy tasks, its oldest wait, and the waiting tasks in hand-out order', () => {
+    const s = crewSwarm(['Ash'])
+    s.state.agents.find(a => a.id === s.ids.Ash)!.crew = { role: 'Engineer', lane: 'desktop', at: 1000, by: 'owner' }
+    const [a, b, c] = [s.task('A', ['desktop/lib/a.dart']), s.task('B', ['desktop/lib/b.dart']), s.task('C', ['desktop/lib/c.dart'])]
+    s.task('Server', ['backend/src/x.ts'])
+    s.run({ type: 'work.priority', conversationId: c, priority: 'P0' })
+    s.run({ type: 'work.assign', conversationId: a, agentId: s.ids.Ash! }, s.as(s.pm))
+    s.group(b).liveness = { state: 'orphaned', why: 'unstarted', since: NOW - 2.5 * 3_600_000 }
+    s.group(c).liveness = { state: 'orphaned', why: 'lost', since: NOW - 3_600_000 }
+    expect(laneCapacity(s.state, 'lead', DISPATCH_RULES)).toEqual([
+      { lane: 'backend', waiting: 1, busy: 0, oldestAt: null, taskIds: [s.state.conversations.find(g => g.title === 'Server')!.id] },
+      { lane: 'Desktop', waiting: 2, busy: 1, oldestAt: NOW - 2.5 * 3_600_000, taskIds: [c, b] },
+    ])
+    const desktop = laneCapacity(s.state, 'lead', DISPATCH_RULES)[1]!
+    expect(capacityLine(desktop, NOW)).toBe('Desktop: 2 waiting, 1 busy, oldest 2 h')
+    expect(capacityLine({ ...desktop, oldestAt: NOW - 25 * 60_000 }, NOW)).toBe('Desktop: 2 waiting, 1 busy, oldest 25 min')
+    expect(capacityLine({ ...desktop, oldestAt: null }, NOW)).toBe('Desktop: 2 waiting, 1 busy')
+  })
+
+  it('is read for each project with a crew that the reader reads, and for no other', () => {
+    const s = crewSwarm(['Ash'])
+    s.task('Server', ['backend/src/x.ts'])
+    expect(derivedLanes(s.state, s.state)).toBeUndefined()
+    s.state.agents.find(a => a.id === s.ids.Ash)!.crew = { role: 'Engineer', at: 1000, by: 'owner' }
+    expect(derivedLanes(s.state, s.state)).toEqual({ lead: laneCapacity(s.state, 'lead', DISPATCH_RULES) })
+    // A reader who reads no project reads no lanes.
+    expect(derivedLanes(s.state, { ...s.state, projects: [] })).toBeUndefined()
   })
 })
