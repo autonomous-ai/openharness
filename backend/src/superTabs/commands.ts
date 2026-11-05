@@ -57,6 +57,7 @@ import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
+import { instructionsChange } from './instructionsDiff.js'
 import { BUILT_IN_HEADING } from './pmSchedule.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 
@@ -1107,9 +1108,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   }
   /** Accepted, kept nowhere: an older client's save of what each project's instructions say now (IGNORED_NOTE). */
   const ignored = () => Object.assign(result, { ignored: true, note: IGNORED_NOTE })
-  /** A new revision of [project]'s instructions from revision [current], with one line in its chat in the writer's name, for
-   *  the member who asked when that is someone else: what instructions.save and an older client's rule.set write. */
-  const saveInstructions = (project: SwarmProject, current: number, text: string, summary: string, askedBy: string) => {
+  /** A new revision of [project]'s instructions from revision [current], whose text was [before] (null when the store could not
+   *  read it), with one line in its chat in the writer's name, for the member who asked when that is someone else: what
+   *  instructions.save and an older client's rule.set write. The line shows the lines really removed and added under the
+   *  writer's summary, so nobody takes the summary's word for what was saved (#3021). */
+  const saveInstructions = (project: SwarmProject, current: number, before: string | null, text: string, summary: string, askedBy: string) => {
     const hash = instructionsHash(text)
     mutableProjects(state)
     Object.assign(projectOf(state, project.id), { instructionsRevision: current + 1, instructionsHash: hash })
@@ -1118,7 +1121,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // A save for someone else, a coordinator's or a person's, names the member it was for, so the record never names an asker
     // the chat line did not (review of phase 2).
     const asked = askedBy !== sender.id ? ` for ${person(state, askedBy).email.split('@')[0]}` : ''
-    message(project.leadConversationId, `${who} changed the instructions${asked}: ${summary}${/[.!?]$/.test(summary) ? '' : '.'}`, [], null,
+    message(project.leadConversationId, `${who} changed the instructions${asked}: ${summary}${/[.!?]$/.test(summary) ? '' : '.'}\n\n${instructionsChange(before, text)}`, [], null,
       { kind: 'instructions', projectId: project.id, revision: current + 1 })
     Object.assign(result, { projectId: project.id, revision: current + 1, hash })
   }
@@ -1789,7 +1792,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         Object.assign(result, { projectId: project.id, revision: current, hash, unchanged: true })
         break
       }
-      saveInstructions(project, current, command.text, command.summary, askedBy)
+      // The text this save replaces, which the store read for the stale check above: what its chat line diffs against.
+      const before = !current ? INSTRUCTIONS_TEMPLATE : context.instructions?.revision === current ? context.instructions.text : null
+      saveInstructions(project, current, before, command.text, command.summary, askedBy)
       break
     }
     case 'note.add': {
@@ -2109,7 +2114,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Revision 0 runs on the template (design, Migration); otherwise the stored document of this revision, read by the store.
       const stored = !current ? INSTRUCTIONS_TEMPLATE : context.instructions?.revision === current ? context.instructions.text
         : fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
-      saveInstructions(project, current, appendRouting(stored, command.text), routingSummary(command.text), askedBy)
+      saveInstructions(project, current, stored, appendRouting(stored, command.text), routingSummary(command.text), askedBy)
       break
     }
     case 'rule.remove':

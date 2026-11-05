@@ -50,6 +50,7 @@ import 'swarm_link_previews.dart';
 import 'swarm_message_edit.dart';
 import 'swarm_message_link.dart';
 import 'swarm_message_receipt.dart';
+import 'swarm_instructions_page.dart' show openSwarmInstructionsRevision;
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_paste.dart';
@@ -2266,6 +2267,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               readerId: c.reader.accountId,
               references: references,
               onOpenConversation: (id) => _openNumberedConversation(c, id),
+              onOpenInstructions: (saved) => openSwarmInstructionsRevision(
+                context,
+                reader: c.reader,
+                projectId: saved.projectId,
+                revision: saved.revision,
+              ),
               grouped: grouped,
               lit: lit,
               followed: followed,
