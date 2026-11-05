@@ -1,6 +1,7 @@
 import 'identity.dart' show superTabPersonName;
 import 'live_card_model.dart';
 import 'profile_model.dart';
+import 'pulse_model.dart';
 
 export 'profile_model.dart';
 
@@ -751,6 +752,7 @@ class SuperTabSnapshot {
       autoJoin = row['autoJoin'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
+      pulses = SuperTabPulse.readAll(row['pulse']),
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
       activityDigest = row['activityDigest'] as String?,
@@ -865,6 +867,14 @@ class SuperTabSnapshot {
   /// Which tags wait, as a digest that moves when they change though the
   /// count may not; null from a backend before it (superTabs/mentions.ts).
   final String? mentionsDigest;
+
+  /// Each project's board pulse by project id (backend superTabs/pulse.ts,
+  /// read `derived.pulse`); empty from a server before it.
+  final Map<String, SuperTabPulse> pulses;
+
+  /// [projectId]'s board pulse; null where the server sent none, and the
+  /// board draws no strip.
+  SuperTabPulse? pulseOf(String projectId) => pulses[projectId];
 
   /// Decisions asked of the reader and not yet answered, Swarm-wide; 0 from a
   /// backend before decisions (backend superTabs/decisions.ts).
