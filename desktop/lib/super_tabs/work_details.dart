@@ -71,7 +71,7 @@ Future<void> _showWork(
                   ),
                   if (check['evidence'] is String)
                     SuperTabMessageText(check['evidence'] as String),
-                  Text(check['passedBy'] == null ? 'Not verified' : 'Verified'),
+                  Text(superTabCheckLabel(check)),
                   if (c.canWrite && assignment != null)
                     TextButton(
                       onPressed: c.saving || c.hasPendingAction
@@ -184,4 +184,34 @@ Future<void> _record(
       ),
     ),
   );
+}
+
+/// A check's line (Dee, #3394): a verdict counts only at the pull request
+/// head it read, so a pass names that head, and a check whose verdicts all
+/// stopped counting at a newer head says so. Verdicts from before heads read
+/// as they did (backend checkVerdicts.ts).
+String superTabCheckLabel(Map<String, dynamic> check) {
+  final verdicts = (check['verdicts'] as List? ?? const [])
+      .whereType<Map>()
+      .toList();
+  String short(Object? head) =>
+      head is String && head.length > 7 ? head.substring(0, 7) : '$head';
+  final passedBy = check['passedBy'];
+  if (passedBy != null) {
+    final pass = verdicts.lastWhere(
+      (v) => v['by'] == passedBy && v['passed'] == true && v['stale'] == null,
+      orElse: () => const {},
+    );
+    return pass['head'] is String
+        ? 'Yes at ${short(pass['head'])}'
+        : 'Verified';
+  }
+  if (verdicts.any((v) => v['stale'] == null)) return 'Not verified';
+  final stale = verdicts.lastWhere(
+    (v) => v['head'] is String && v['stale'] is String,
+    orElse: () => const {},
+  );
+  return stale.isEmpty
+      ? 'Not verified'
+      : 'Stale: read ${short(stale['head'])}, PR is at ${short(stale['stale'])}';
 }
