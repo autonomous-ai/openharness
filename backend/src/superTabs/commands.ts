@@ -69,6 +69,9 @@ const NO_REASON = 'No reason given.'
 const ONLY_CANDIDATE = 'Only candidate that can run this task.'
 /** What an older client's policy, skill-set, role or rule-removal save answers: accepted, kept nowhere (project instructions,
  *  phase 4, decision 3). The old rules, policy rows and role texts stay in place, unread. */
+/** How long a Swarm invitation stays open; its sent time is its expiry minus this (store.ts invite.accept). */
+export const SWARM_INVITATION_MS = 7 * 86_400_000
+
 export const IGNORED_NOTE = 'Routing and roles live in each project\'s instructions now. Update Harness to edit them there.'
 const title = z.string().trim().min(1).max(160)
 const reason = z.string().trim().min(1).max(300)
@@ -3211,7 +3214,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (context.inviteeRemoved) fail('WORKSPACE_ROLE_REQUIRED', `This person was removed from the ${WORKSPACE_LABEL}. Only its owners and admins can invite them back.`, 403)
       state.invitations = state.invitations.filter(i => i.email !== email)
       state.invitations.push({ id: operationId, email, role: command.role, conversationId: landing,
-        expiresAt: context.now + 7 * 86_400_000, ...(actor.kind === 'person' ? { invitedBy: actor.userId } : {}) })
+        expiresAt: context.now + SWARM_INVITATION_MS, ...(actor.kind === 'person' ? { invitedBy: actor.userId } : {}) })
       result.inviteId = operationId
       break
     }

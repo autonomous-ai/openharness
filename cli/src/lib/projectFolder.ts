@@ -326,7 +326,10 @@ export function cloneRepository(url: string, destination: string, gitEnv?: NodeJ
     })
     child.on('close', (code) => {
       clearTimeout(stall)
-      if (stalled) reject(new ProjectFolderError('CLONE_TIMEOUT', 'Cloning stopped making progress. Check the connection and retry.'))
+      if (stalled) {
+        const last = lastLine(diagnostic)
+        reject(new ProjectFolderError('CLONE_TIMEOUT', `Cloning stopped making progress${last ? ` (git's last words: ${last})` : ''}. Check the connection and retry.`))
+      }
       else if (code !== 0) reject(cloneFailure(diagnostic))
       else {
         execFile(git, ['-C', destination, 'config', 'remote.origin.fetch', ALL_BRANCHES], { env, timeout: 10_000, killSignal: 'SIGKILL' },
@@ -344,6 +347,21 @@ export class RepositoryAccessError extends ProjectFolderError {}
  *  refusal, so the apps never call it "No access", and it may mean the key changed. Another way in checks its own key. */
 export class RepositoryHostKeyError extends ProjectFolderError {}
 
+/** Credentials and tokens cut from a line of git's, which may quote the address it used or a helper's answer. */
+function plain(line: string): string {
+  return line.replace(/\/\/[^/@\s]*@/g, '//').replace(/\b(gh[pousr]_|github_pat_)\w+/g, '').replace(/x-access-token\S*/gi, '').trim().slice(0, 200)
+}
+/** The last thing git said, a progress line or not (carriage returns are its progress redraws). */
+function lastLine(diagnostic: string): string {
+  return plain(diagnostic.split(/[\r\n]+/).map(line => line.trim()).filter(Boolean).at(-1) ?? '')
+}
+/** Why git says it failed: its last `fatal:` or `error:` line, else nothing. Six first starts on 11-05 failed with "Could not
+ *  clone the repository" and no way to tell GitHub's 5xx from a DNS failure. */
+function gitsReason(diagnostic: string): string {
+  const lines = diagnostic.split(/[\r\n]+/).map(line => /^(?:fatal|error):\s*(.+)$/i.exec(line.trim())?.[1]).filter((line): line is string => !!line)
+  return plain(lines.at(-1) ?? '')
+}
+
 /** What git's diagnostic of a failed clone becomes. A private GitHub repository answers "not found" without access. */
 export function cloneFailure(diagnostic: string): ProjectFolderError {
   // First: ssh's warning about a changed key also says "Password authentication is disabled".
@@ -352,7 +370,7 @@ export function cloneFailure(diagnostic: string): ProjectFolderError {
   }
   return /authentication|permission denied|could not read username|repository not found/i.test(diagnostic)
     ? new RepositoryAccessError('CLONE_FAILED', 'Could not access this repository. Check the URL and GitHub access on the selected machine.')
-    : new ProjectFolderError('CLONE_FAILED', 'Could not clone the repository. Check the URL and connection, then retry.')
+    : new ProjectFolderError('CLONE_FAILED', `Could not clone the repository${gitsReason(diagnostic) ? ` (git said: ${gitsReason(diagnostic)})` : ''}. Check the URL and connection, then retry.`)
 }
 
 /** The same GitHub repository over the other transport, for parseProjectFolder's two forms; null for anything else. */
