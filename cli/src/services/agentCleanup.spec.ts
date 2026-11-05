@@ -94,6 +94,23 @@ it('never closes a Swarm Lead, idle or orphaned, even once its roster has lapsed
   t.cleanup.port.stop()
 })
 
+// Task #3397: a crew member stands by between tasks, in no open group: the idle close never takes it, as long as the roster
+// marks it crew; the same harness off the crew is closed as before.
+it('never closes a crew member idle in no open group, and closes the same harness once it is off the crew', async () => {
+  const sessions = [kid('crew'), kid('member')]
+  const t = setup(sessions, { crew: 2 * IDLE_CLOSE_MS, member: 2 * IDLE_CLOSE_MS })
+  const crewRow = { tabId: 'tab', active: false, agent: { harnessId: 'crew', machineId: 'machine-1', crew: { role: 'Reviewer', at: 1, by: 'pm' } } }
+  retainContributions(dir, 'machine-1', [crewRow, { tabId: 'tab', active: false, agent: { harnessId: 'member', machineId: 'machine-1' } }])
+  await t.cleanup.look()
+  t.advance(IDLE_CLOSE_MS + MIN)
+  await t.cleanup.look()
+  expect(t.closeStarted.mock.calls).toEqual([['member', 'idle']])
+  retainContributions(dir, 'machine-1', [{ ...crewRow, agent: { harnessId: 'crew', machineId: 'machine-1' } }])
+  await t.cleanup.look()
+  expect(t.closeStarted.mock.calls).toEqual([['member', 'idle'], ['crew', 'idle']])
+  t.cleanup.port.stop()
+})
+
 // HARNESS_SWARM=off: the Swarm hands in no members, its saved roster is not read, and a harness it kept is an ordinary
 // one another agent started: closed with its starter, closed once idle, and closable by the core. The review of #1765
 // found it kept, where the same harness on a computer without the Swarm is closed.
