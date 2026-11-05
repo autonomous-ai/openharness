@@ -1495,6 +1495,9 @@ model SuperTabDelivery {
   // Optional on older records: backend first, then Desktop's inline receipt.
   holdReason            String?
   holdSince             DateTime?
+  // Until when its agent's host holds it while the agent works (turnEnd.ts, task #3403): another agent's post to a crew member.
+  // Cleared by the agent's own status change; unset on older rows and on what goes at once.
+  waitsUntil            DateTime?
   // A queued delivery whose claims keep answering SWARM_BUSY (prod 10-30, v1.3.71): written outside the failed claim, unset by
   // the claim that gets in. The settle pass alarms on them and page reads show the sender (store.ts recordFailedClaim).
   claimFailingSince     DateTime?
