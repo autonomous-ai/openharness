@@ -11,7 +11,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import { runTimeCheckPass, timeCheckSwarms } from '../src/superTabs/timeChecks.js'
-import { poolRows } from './hostRows.test-support.js'
+import { poolRows, rosterRows } from './hostRows.test-support.js'
 
 // Task #3385 (anh Dee's Swarm redesign, 11-05): the stall, idle and lost-task follow-ups run in the backend worker, so they
 // keep running while the PM is down. Before, only the PM's own poll ran them: with the PM hung, five people's asks waited 3 to
@@ -154,5 +154,37 @@ describe('the worker\'s pass', () => {
     expect(await quiet.rows('work-stalled')).toEqual([])
     // A week later nothing there is read again.
     expect(await timeCheckSwarms(db, f.clock.now + 8 * 24 * 60 * MINUTE)).not.toContain(f.tab)
+  })
+})
+
+describe('what the PM owes', () => {
+  const owedOf = async (f: Awaited<ReturnType<typeof swarm>>) => {
+    const head = await db.swarmHead.findFirstOrThrow({ where: { tabId: f.tab } })
+    return ((head.data as { projects?: Array<{ owed?: unknown }> }).projects ?? [])[0]?.owed
+  }
+  const pmRow = async (f: Awaited<ReturnType<typeof swarm>>, agentId = f.lead) =>
+    (await rosterRows(f.timed, host, agentId === f.lead ? 'lead-host' : 'test-host')).find(r => r.tabId === f.tab && 'agent' in r && r.agent.id === agentId) as Record<string, unknown>
+
+  it('is the oldest message a person sent it that it has not answered, until it answers, and only its own host row carries it', async () => {
+    const f = await swarm()
+    // An agent's message to the PM is never an ask it owes a person.
+    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Halfway there.', replyTo: null, recipientIds: [f.lead] } as Command, host, f.worker)
+    await f.timed.runTimeChecks(f.tab)
+    expect(await owedOf(f)).toBeUndefined()
+    const asked = f.clock.now
+    const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Where is my parser?', replyTo: null, recipientIds: [] } as Command)
+    f.clock.now += MINUTE
+    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'And the docs?', replyTo: null, recipientIds: [] } as Command)
+    f.clock.now += MINUTE
+    await f.timed.runTimeChecks(f.tab)
+    const messageId = String(sent.result.messageId)
+    expect(await owedOf(f)).toEqual({ messageId, since: asked })
+    expect((await pmRow(f)).owed).toEqual({ messageId, since: asked, restartAfterMs: 20 * MINUTE })
+    expect((await pmRow(f, f.worker)).owed).toBeNull()
+    // Readers never see it: it may name a message in a person's private chat with the PM.
+    expect((await f.timed.read(owner, f.tab)).state.projects![0]).not.toHaveProperty('owed')
+    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Parser ships today.', replyTo: null, recipientIds: [], answers: messageId } as Command, host, f.lead)
+    await f.timed.runTimeChecks(f.tab)
+    expect((await owedOf(f) as { messageId: string; since: number }).since).toBe(asked + MINUTE)
   })
 })
