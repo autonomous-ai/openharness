@@ -565,7 +565,9 @@ void main() {
 
     testWidgets('Move to the top brings the unread project over a newer read '
         'one, and the row says so', (tester) async {
-      await pump(tester, backend());
+      final host = await pump(tester, backend());
+      host.session!.home.setSort(SwarmHomeSort.newest);
+      await tester.pumpAndSettle();
       double top(String id) => tester.getTopLeft(project_(id)).dy;
       expect(top(web), lessThan(top(project)));
 
@@ -575,7 +577,7 @@ void main() {
 
       expect(
         text(tester, 'swarm-view-sort-current'),
-        'Sections. Unreads on top.',
+        'Newest to oldest. Unreads on top.',
       );
       expect(top(project), lessThan(top(web)));
     });
