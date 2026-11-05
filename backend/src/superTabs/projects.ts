@@ -163,6 +163,33 @@ export function ledProject(state: SuperTabState, agentId: string): SwarmProject 
   return led.size ? projectsOf(state).find(p => led.has(p.leadConversationId)) : undefined
 }
 
+/** Gives each project whose owner is gone a new owner (task #3073, River's ruling 2026-11-05): its owner left or was
+ *  removed, or is in the Swarm at a later membership. It passes to the earliest listed member still in the Swarm at the
+ *  membership they were listed with, who reads it already (one who can manage it first, else a viewer); else, for a public
+ *  project, to the Swarm's owner, who reads it too; else it is nobody's ('' owner): nobody reads it, and the Swarm's owner
+ *  sees only that it exists and may delete it (deletableProject). A project from before ownerGeneration whose owner is still
+ *  here gets their membership now, which is how the migration fills it. Each project that changed hands, in order. */
+export function settleOwners(state: SuperTabState): Array<{ projectId: string; from: string; to: string }> {
+  const changed: Array<{ projectId: string; from: string; to: string }> = []
+  const people = new Map(state.people.map(p => [p.id, p]))
+  for (const project of state.projects ?? []) {
+    if (!project.ownerId) continue
+    const current = people.get(project.ownerId)
+    if (current && project.ownerGeneration === undefined) project.ownerGeneration = current.generation
+    if (current && project.ownerGeneration === current.generation) continue
+    const listed = project.members.filter(m => m.id !== project.ownerId && people.get(m.id)?.generation === m.generation)
+    const next = listed.find(m => people.get(m.id)!.role !== 'viewer') ?? listed[0]
+    const swarmOwner = people.get(state.ownerId)
+    const to = next ? people.get(next.id)! : project.visibility === 'public' && swarmOwner ? swarmOwner : undefined
+    changed.push({ projectId: project.id, from: project.ownerId, to: to?.id ?? '' })
+    project.ownerId = to?.id ?? ''
+    if (to) project.ownerGeneration = to.generation
+    else delete project.ownerGeneration
+    if (next) project.members = project.members.filter(m => m !== next)
+  }
+  return changed
+}
+
 /** Whose active work other projects' Leads see and are alerted about. A private project's work stays with its own people. */
 export const sharedWithLeads = (project: SwarmProject): boolean => project.visibility !== 'private'
 
