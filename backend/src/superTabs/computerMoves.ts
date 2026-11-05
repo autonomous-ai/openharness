@@ -20,6 +20,23 @@ export async function otherAccountsOnComputer(db: Reader, { computerId, ownerId,
   return rows.map(row => ({ machineId: row.machineId, userId: row.userId }))
 }
 
+/** Each account's active device keys (lib/deviceKeyLog.ts activeMachineKeysOf): only `machine` keys are read here. */
+export type MachineKeys = (userIds: string[]) => Promise<Map<string, ReadonlyArray<{ pub: string; kind: string; machineId: string }>>>
+
+/**
+ * Whether [from] and [to] are machines of one computer: each account's log holds the same machine key for its machine. The
+ * key is the computer's (cli e2ee/store.ts identity.json, never touched by a sign-in), and every add is signed by the key
+ * itself for that one account (deviceLogCore.ts), so only a holder of its private key can list it under a second account.
+ * The computer id alone is self-declared (security review 1 of #3100). A machine with no key proves nothing.
+ */
+export async function sameComputerKey(keys: MachineKeys, from: { userId: string; machineId: string }, to: { userId: string; machineId: string }):
+  Promise<boolean> {
+  const held = await keys([from.userId, to.userId])
+  const of = (side: { userId: string; machineId: string }) => held.get(side.userId)?.find(k => k.kind === 'machine' && k.machineId === side.machineId)?.pub
+  const pub = of(from)
+  return !!pub && pub === of(to)
+}
+
 /** An account's ordinary sign-in connecting from a computer (lib/adapterWs.ts): never a Harness Team session's. */
 export interface ComputerSignIn { machineId: string; ownerId: string; computerId: string; autonomousEnv: string }
 

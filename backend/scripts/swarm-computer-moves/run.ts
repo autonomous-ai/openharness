@@ -1,6 +1,9 @@
 // One row per computer (#3122): computers listed in Swarms under two accounts before a sign-in moved them. From this release a
 // sign-in moves the computer's entries by itself (superTabs/computerMoves.ts); this moves the ones listed twice already, once.
 // Dry run by default: it prints each computer's account seen last and the other accounts' machines, and writes nothing.
+// Rows count as one computer by their computer id alone, which is self-declared: a pinned ADAPTER_COMPUTER_ID shared by
+// containers under different accounts reads as one computer here. The write moves an entry only where both accounts' logs
+// hold the same machine key for it (computerMoves.ts sameComputerKey), so those containers are listed and left alone.
 //   cd backend && DATABASE_URL="$(read-only URL from its environment file)" npx tsx scripts/swarm-computer-moves/run.ts
 // `--write` is a production write: run it only in the backend release Ken says go for, with the release's own login.
 //   cd backend && npx tsx scripts/swarm-computer-moves/run.ts --write

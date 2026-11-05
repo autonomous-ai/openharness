@@ -64,7 +64,8 @@ import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachin
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
 import type { MachineRename } from './machineRenames.js'
-import { otherAccountsOnComputer, type ComputerSignIn } from './computerMoves.js'
+import { otherAccountsOnComputer, sameComputerKey, type ComputerSignIn, type MachineKeys } from './computerMoves.js'
+import { activeMachineKeysOf } from '../lib/deviceKeyLog.js'
 import { commitParts, indexesOf, machineContentChanged, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
@@ -339,6 +340,9 @@ async function abandonedStarts(tx: Transaction, tabId: string, state: SuperTabSt
 }
 
 export interface SuperTabStoreHooks {
+  /** Accounts' active machine keys, for a computer's move to the account signed in on it (computerMoves.ts sameComputerKey).
+   *  Without it, their device key logs (lib/deviceKeyLog.ts). */
+  machineKeys?: MachineKeys
   /** The client for reads that tolerate a few seconds of lag (lib/prisma.ts prismaSecondary, task #2970): older history
    *  pages and the costs report. Without it they read the store's own client. */
   replica?: PrismaClient
@@ -624,6 +628,7 @@ export class SuperTabStore {
     this.polls = hooks.polls ?? localPollMemory(now)
     this.autoJoins = hooks.autoJoins ?? localAutoJoinMemory(now)
     this.reports = hooks.reports ?? localReportMemory(now)
+    this.machineKeys = hooks.machineKeys ?? activeMachineKeysOf
     this.native = new SuperTabNativeStore({
       transaction: body => transaction(db, body),
       load: (tx, user, tabId, groupIds) => this.load(tx, user, tabId, { groupIds }),
@@ -3415,6 +3420,7 @@ export class SuperTabStore {
   }
 
   private readonly reports: ReportMemory
+  private readonly machineKeys: MachineKeys
 
   /** The caller's own account row for the machine and the host checks that need no Swarm: once per report call, which a
    *  batch of readings shares (DB 2.5). */
@@ -4352,6 +4358,12 @@ export class SuperTabStore {
     if (to?.computerId !== signIn.computerId || to.sessionKind === 'team') return 0
     let moved = 0
     for (const from of others) {
+      // Only the computer's own key proves it is the same computer; machine.moved checks again in its transaction.
+      if (!await sameComputerKey(this.machineKeys, from, { userId: signIn.ownerId, machineId: signIn.machineId })) {
+        logger.warn('[swarm] a sign-in names a computer another account is on, without that computer\'s machine key: nothing moved',
+          { machineId: signIn.machineId, otherMachineId: from.machineId })
+        continue
+      }
       const person = await this.db.user.findUnique({ where: { id: from.userId }, select: { email: true } })
       if (!person) continue
       const user: AuthUser = { sub: from.userId, email: person.email, autonomousEnv: signIn.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
@@ -4378,6 +4390,7 @@ export class SuperTabStore {
       select: { computerId: true, sessionKind: true, name: true } })
     const [from, next] = await Promise.all([row(machineId, ownerId), row(to.machineId, to.ownerId)])
     if (!from?.computerId || from.computerId !== next?.computerId || from.sessionKind === 'team' || next.sessionKind === 'team') return undefined
+    if (!await sameComputerKey(this.machineKeys, { userId: ownerId, machineId }, { userId: to.ownerId, machineId: to.machineId })) return undefined
     return { to: { ...to, name: accountMachineName(next) } }
   }
 
