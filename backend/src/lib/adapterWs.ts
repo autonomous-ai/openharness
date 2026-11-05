@@ -71,6 +71,7 @@ import { ShortTurnGuard } from './shortTurnGuard.js'
 import { markCpuKind } from './selfProfile.js'
 import { createConnectionRoutes } from './terminalRoute.js'
 import { recordRelay } from './relayStats.js'
+import { computerSignedIn } from '../superTabs/computerMoves.js'
 
 const wss = createWss(WS_LIMITS.adapter, { echoFirstProtocol: true })
 
@@ -220,6 +221,12 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
     if (!(await claimMachineOwner(machineId, computerId, PRESENCE_TTL_SEC))) { denyBusy(); return }
     const row = machine
     wss.handleUpgrade(req, socket, head, (ws) => void attachAdapter(ws, row, label, computerId, clientVersion, countryCode, user.harnessSessionId, team))
+    // A computer is signed in as one account at a time: Swarm entries of the account signed in here before move to this one
+    // (superTabs/computerMoves.ts, #3122). Never awaited: the connect does not wait on Swarms.
+    if (!team) {
+      void computerSignedIn({ machineId, ownerId: user.sub, computerId, autonomousEnv: user.autonomousEnv })
+        .catch(error => logger.warn('[swarm] computer move failed', { machineId, error: String(error) }))
+    }
   })().catch((err) => {
     if (err instanceof AppError) {
       // 403 is the revoked-machine answer from `resolveOrCreateForComputer`, 429 its new-id rate limit

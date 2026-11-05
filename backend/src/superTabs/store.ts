@@ -32,7 +32,7 @@ import { closeProposal, databaseProposalReads, openProposalRows, openProposals, 
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { FileLinks } from './fileLinks.js'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
 import { noteClaim, recordDeliveryCall } from '../lib/deliveryCalls.js'
@@ -64,6 +64,7 @@ import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachin
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
 import type { MachineRename } from './machineRenames.js'
+import { otherAccountsOnComputer, type ComputerSignIn } from './computerMoves.js'
 import { commitParts, indexesOf, machineContentChanged, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
@@ -712,7 +713,7 @@ export class SuperTabStore {
       if (target && target.machineId !== team && !onTeamAccount(state, target)) refuse(target)
     }
     switch (command.type) {
-      case 'machine.contribute': case 'machine.pause': case 'machine.remove': case 'machine.engineResume': case 'machine.projects':
+      case 'machine.contribute': case 'machine.pause': case 'machine.remove': case 'machine.moved': case 'machine.engineResume': case 'machine.projects':
       case 'machine.ownAccountWork': return refuse()
       case 'machine.cleaned': case 'tab.project': case 'agent.add':
         if (command.machineId !== team) refuse()
@@ -941,7 +942,7 @@ export class SuperTabStore {
     // that read by dormant would not do: its index has no dormant, so it examines them all, and removals need them (design D8).
     if ((command.type === 'agent.input' || command.type === 'agent.alert' || command.type === 'agent.rebind') && !ledProject(state, command.agentId)) agentIds.push(command.agentId)
     if (command.type === 'agent.remove') startAgentIds.push(command.agentId)
-    if (command.type === 'machine.remove') {
+    if (command.type === 'machine.remove' || command.type === 'machine.moved') {
       const pool = state.machines?.find(m => m.machineId === command.machineId)
       const machines = new Set([command.machineId, ...(pool ? state.machines!.filter(m => m.hostMachineId === pool.machineId).map(m => m.machineId) : [])])
       agentIds.push(...state.agents.filter(a => machines.has(a.machineId)).map(a => a.id))
@@ -1378,7 +1379,7 @@ export class SuperTabStore {
         if (!autonomousEnv || !person) { result.skipped++; continue }
         const user: AuthUser = { sub: row.personId, email: person.email, autonomousEnv, role: 'user' }
         await this.executeOnce(user, row.tabId, { operationId: `overdue-decision-${row.id}`, command: { type: 'decision.answer', decisionId: row.id, delegate: true } },
-          undefined, undefined, false, true)
+          undefined, undefined, false, { overdue: true })
         result.answered++
       } catch (error) {
         const code = error instanceof SuperTabError ? error.code : 'unknown'
@@ -1480,8 +1481,10 @@ export class SuperTabStore {
     }
   }
 
+  /** [only]: what the store alone may give a command: `overdue` for decision.answer (leaveOverdueDecisions), `movedTo` for
+   *  machine.moved (computerSignedIn). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    workspaceLeave = false, overdue = false) {
+    workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string } } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     const pushOrigin = await this.pushOriginFor(user, tabId, command)
     let ended: WorkHold[] = [], started: WorkHold[] = []
@@ -1581,7 +1584,10 @@ export class SuperTabStore {
       }
       if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed' && command.type !== 'machine.cleaned') author(original, actor)
       const context: CommandContext = { operationId, now: this.now(), ...(leavingDeleted ? { workspaceLeave: true as const } : {}),
-        ...(overdue && command.type === 'decision.answer' ? { overdue: true as const } : {}) }
+        ...(only.overdue && command.type === 'decision.answer' ? { overdue: true as const } : {}) }
+      if (command.type === 'machine.moved' && only.movedTo && actor.kind === 'person') {
+        context.computerMove = await this.computerMove(tx, original, actor.userId, command.machineId, only.movedTo)
+      }
       if (command.type === 'swarm.restore' && original.deletion && original.workspaceId) {
         const lost: string[] = []
         for (const person of original.people) if (!await hasWorkspaceAccess(tx, original, person.id)) lost.push(person.id)
@@ -1940,7 +1946,7 @@ export class SuperTabStore {
         if (start?.routeDecisionId) await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'failed', context.now)
       }
       // Starts a removed machine failed, whether its owner removed it or left the Swarm with it, release their route holds.
-      if (command.type === 'machine.remove' || command.type === 'member.remove' || command.type === 'swarm.delete') {
+      if (command.type === 'machine.remove' || command.type === 'machine.moved' || command.type === 'member.remove' || command.type === 'swarm.delete') {
         for (const start of original.starts ?? []) {
           if (!start.routeDecisionId || start.harnessId || start.error) continue
           if (effects.state.starts?.find(s => s.id === start.id)?.error) {
@@ -4317,6 +4323,48 @@ export class SuperTabStore {
       }
     }
     return renamed
+  }
+
+  /**
+   * Another account's sign-in on a computer (computerMoves.ts, #3122): each Swarm with an entry of the computer's previous
+   * accounts moves it to [signIn]'s machine, by the store-only machine.moved run as that entry's owner. One Swarm at a time;
+   * one that fails is logged and left to the next connect. The Swarms moved.
+   */
+  async computerSignedIn(signIn: ComputerSignIn): Promise<number> {
+    const others = await otherAccountsOnComputer(this.db, signIn)
+    if (!others.length) return 0
+    const to = await this.db.machine.findFirst({ where: { machineId: signIn.machineId, userId: signIn.ownerId, autonomousEnv: signIn.autonomousEnv, ...machineAlive },
+      select: { computerId: true, sessionKind: true } })
+    if (to?.computerId !== signIn.computerId || to.sessionKind === 'team') return 0
+    let moved = 0
+    for (const from of others) {
+      const person = await this.db.user.findUnique({ where: { id: from.userId }, select: { email: true } })
+      if (!person) continue
+      const user: AuthUser = { sub: from.userId, email: person.email, autonomousEnv: signIn.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
+      for (const tabId of await machineSwarms(this.db, signIn.autonomousEnv, from.machineId, MACHINE_RENAME_SWARMS)) {
+        try {
+          const done = await this.executeOnce(user, tabId, { operationId: `computer-move-${randomUUID()}`, command: { type: 'machine.moved', machineId: from.machineId } },
+            undefined, undefined, false, { movedTo: { machineId: signIn.machineId, ownerId: signIn.ownerId } })
+          if (done.result.moved) moved++
+        } catch (error) {
+          logger.warn('[swarm] a computer move did not reach a Swarm', { tabId, machineId: from.machineId,
+            code: error instanceof SuperTabError ? error.code : error instanceof Error ? error.message : String(error) })
+        }
+      }
+    }
+    return moved
+  }
+
+  /** The move [ownerId]'s entry [machineId] makes to [to], read from both account rows in this transaction: the same computer,
+   *  two accounts, neither a Team sign-in. None otherwise, which machine.moved refuses. */
+  private async computerMove(tx: Transaction, state: SuperTabState, ownerId: string, machineId: string, to: { machineId: string; ownerId: string }):
+    Promise<CommandContext['computerMove']> {
+    if (ownerId === to.ownerId) return undefined
+    const row = (id: string, userId: string) => tx.machine.findFirst({ where: { machineId: id, userId, autonomousEnv: state.environment, ...machineAlive },
+      select: { computerId: true, sessionKind: true, name: true } })
+    const [from, next] = await Promise.all([row(machineId, ownerId), row(to.machineId, to.ownerId)])
+    if (!from?.computerId || from.computerId !== next?.computerId || from.sessionKind === 'team' || next.sessionKind === 'team') return undefined
+    return { to: { ...to, name: accountMachineName(next) } }
   }
 
   /**

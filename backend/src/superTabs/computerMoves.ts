@@ -19,3 +19,20 @@ export async function otherAccountsOnComputer(db: Reader, { computerId, ownerId,
   options: { hint: { computerId: 1, userId: 1 } } }) as unknown as Array<{ machineId: string; userId: string }>
   return rows.map(row => ({ machineId: row.machineId, userId: row.userId }))
 }
+
+/** An account's ordinary sign-in connecting from a computer (lib/adapterWs.ts): never a Harness Team session's. */
+export interface ComputerSignIn { machineId: string; ownerId: string; computerId: string; autonomousEnv: string }
+
+type Listener = (signIn: ComputerSignIn) => Promise<unknown>
+let listener: Listener | null = null
+
+/** The Swarm routes' store takes sign-ins from here (routes/superTabs.ts), so the adapter socket loads no Swarm code. */
+export function onComputerSignedIn(next: Listener | null): void {
+  listener = next
+}
+
+/** Tells the Swarms an entry of this computer's previous account is in. Never fails the connect: a Swarm missed is logged, and
+ *  the next connect tries again. Nothing to do when no Swarm routes run here. */
+export async function computerSignedIn(signIn: ComputerSignIn): Promise<void> {
+  await listener?.(signIn)
+}
