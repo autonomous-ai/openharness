@@ -550,6 +550,18 @@ export function projectFolder(pool: ContributedMachine, project: SwarmProject): 
     : pool.cwd
 }
 
+/** [request] as [pool] can carry it out for [project]: a project whose folder is recorded without a repository address has
+ *  nothing to clone or branch from on any machine but the one that folder is on, so elsewhere it starts in the project's own
+ *  empty folder without a worktree (task #3211); its host makes that folder (cli superTabs/projectFolder.ts). A project with
+ *  no folder recorded yet is left alone: its first start records one. Any other start is unchanged. */
+export function noRepositoryStart(pool: ContributedMachine | undefined, project: SwarmProject | undefined, request: AgentStartRequest): AgentStartRequest {
+  const repository = project?.repository
+  if (!pool || pool.scope !== 'swarm' || !repository || repository.repositoryUrl || repository.machineId === pool.machineId) return request
+  if (!request.worktree && !request.branchRef) return request
+  const { branchRef: _branchRef, ...rest } = request
+  return { ...rest, worktree: false }
+}
+
 /** What a host reports (`capabilities`) when it runs a Swarm-wide Buddy in its folder of project worktrees (Dee, 10-31). */
 export const SWARM_BUDDY_CAPABILITY = 'swarmBuddy'
 /** At most this many projects' worktrees in a Swarm-wide Buddy's folder (spec: Staying within one context). */

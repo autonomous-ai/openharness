@@ -1,6 +1,6 @@
 import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, mayName, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
-import { admitByRoom, admitMachineStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
+import { admitByRoom, admitMachineStart, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
@@ -2503,7 +2503,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (written) requireTeamWrittenMachine(state, startGroup, moved.machineId)
       // A branch GitHub cannot place stays out of the main account too, unmarked, as it may yet read clean.
       else if (context.pushOrigin === 'unknown' && !teamAccountPool(state.machines?.find(m => m.machineId === moved.machineId))) failPushUnknown()
-      const request: AgentStartRequest = written ? { ...moved, projectSettings: 'off' } : moved
+      const request: AgentStartRequest = noRepositoryStart(state.machines?.find(m => m.machineId === moved.machineId), home,
+        written ? { ...moved, projectSettings: 'off' } : moved)
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
       if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
