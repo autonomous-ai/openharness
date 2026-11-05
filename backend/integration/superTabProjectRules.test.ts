@@ -9,6 +9,7 @@ import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { MAX_RULES_REVISIONS, SEED_RULES, type ProjectRules } from '../src/superTabs/policy.js'
+import { currentRules } from '../src/superTabs/policyStore.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
 // Task #3393 (anh Dee's Swarm redesign, 11-05): a project's rules record, its revisions and who may change it, against real
@@ -92,6 +93,14 @@ describe('a project\'s rules record', () => {
       askedIn: { conversationId: 'lead', messageId } })
     // The PM reads the record it saves on.
     expect((await get(host, tab, lead)).json().data).toMatchObject({ revision: 1 })
+  })
+
+  // The merge train (#3402) and the release schedule (#3405) read a project's rules from their workers.
+  it('gives a worker the newest record, or the seed at revision 0', async () => {
+    const { tab } = await swarm()
+    expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 0, rules: SEED_RULES })
+    await run(tab, set(0, rules('10:00')))
+    expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 1, rules: rules('10:00') })
   })
 
   it('keeps one of two saves on the same revision, refusing the other', async () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { RULE_MESSAGE_MS } from './rules.js'
-import { MAX_RULES_BYTES, projectRulesSchema, rulesDiff, rulesEqual, SEED_RULES, type ProjectRules } from './policy.js'
+import { globMatch, MAX_RULES_BYTES, projectRulesSchema, requiredReads, rulesDiff, rulesEqual, SEED_RULES, testsFor, type ProjectRules } from './policy.js'
 
 const copy = (): ProjectRules => structuredClone(SEED_RULES)
 const refused = (value: unknown) => projectRulesSchema.safeParse(value).success === false
@@ -12,12 +12,17 @@ describe('the project rules record', () => {
   it('seeds today\'s numbers', () => {
     expect(projectRulesSchema.parse(SEED_RULES)).toEqual(SEED_RULES)
     expect(SEED_RULES.releaseWindow).toEqual({ start: '09:00', end: '18:00', timeZone: 'Asia/Ho_Chi_Minh' })
-    expect(SEED_RULES.releasePace).toEqual({ backendEveryMinutes: 120, appsAfterVisibleBatch: true })
+    // The backend stays off the morning peak (Shipper, #3405).
+    expect(SEED_RULES.releasePace).toEqual({ backendEveryMinutes: 120, appsAfterVisibleBatch: true, backendPause: { start: '09:00', end: '10:00' } })
     expect(SEED_RULES.reviews.defaultReads).toBe(1)
-    expect(SEED_RULES.reviews.rows).toEqual(['Sign-in', 'Tokens', 'Encryption', 'Access', 'Buddy guard', 'Device links', 'Deletion']
-      .map(area => ({ area, reads: 2 })))
-    expect(SEED_RULES.reviews.test).toBe('Where the change runs')
-    expect(SEED_RULES.mergeTrain).toEqual({ enabled: true, everyMinutes: 30 })
+    expect(SEED_RULES.reviews.rows.map(r => [r.area, r.reads])).toEqual(['Sign-in', 'Tokens', 'Encryption', 'Access', 'Buddy guard', 'Device links', 'Deletion']
+      .map(area => [area, 2]))
+    // Every security row has its paths, so a change there is counted (#3401, #3402: fail closed).
+    for (const row of SEED_RULES.reviews.rows) expect(row.paths.length).toBeGreaterThan(0)
+    expect(SEED_RULES.reviews.test.map(t => t.where)).toEqual(['Desktop on a Mac', 'The CLI on a Mac and on a Linux machine',
+      'The phone app in a simulator', 'The web in a browser', 'Install and update on a Mac', 'Firmware on the device plugged into a machine'])
+    // The merge train is opt-in per project (River, #3402).
+    expect(SEED_RULES.mergeTrain).toEqual({ enabled: false, everyMinutes: 10 })
     expect(SEED_RULES).toMatchObject({ caps: [], paths: [], crew: [], lanes: [] })
   })
 
@@ -34,9 +39,18 @@ describe('the project rules record', () => {
     expect(refused({ ...copy(), releaseWindow: { ...SEED_RULES.releaseWindow, timeZone: 'Mars/Base' } })).toBe(true)
     expect(refused({ ...copy(), releasePace: { ...SEED_RULES.releasePace, backendEveryMinutes: 0 } })).toBe(true)
     expect(refused({ ...copy(), releasePace: { ...SEED_RULES.releasePace, backendEveryMinutes: 1.5 } })).toBe(true)
+    expect(refused({ ...copy(), releasePace: { ...SEED_RULES.releasePace, backendPause: { start: '10:00', end: '09:00' } } })).toBe(true)
+    expect(refused({ ...copy(), releasePace: { ...SEED_RULES.releasePace, backendPause: { start: '9:00', end: '10:00' } } })).toBe(true)
+    expect(projectRulesSchema.safeParse({ ...copy(), releasePace: { ...SEED_RULES.releasePace, backendPause: null } }).success).toBe(true)
     expect(refused({ ...copy(), reviews: { ...SEED_RULES.reviews, defaultReads: 0 } })).toBe(true)
-    expect(refused({ ...copy(), reviews: { ...SEED_RULES.reviews, rows: [{ area: '', reads: 2 }] } })).toBe(true)
-    expect(refused({ ...copy(), reviews: { ...SEED_RULES.reviews, rows: [{ area: 'Tokens', reads: 2 }, { area: 'tokens', reads: 1 }] } })).toBe(true)
+    expect(refused({ ...copy(), reviews: { ...SEED_RULES.reviews, rows: [{ area: '', reads: 2, paths: ['**/*auth*'] }] } })).toBe(true)
+    expect(refused({ ...copy(), reviews: { ...SEED_RULES.reviews, rows: [{ area: 'Tokens', reads: 2, paths: [] }, { area: 'tokens', reads: 1, paths: [] }] } })).toBe(true)
+    // A glob is a relative path pattern: never absolute, never climbing out, at most 50 a row.
+    for (const glob of ['/etc/**', '../**', 'a/../b', '']) {
+      expect(refused({ ...copy(), reviews: { ...SEED_RULES.reviews, rows: [{ area: 'Tokens', reads: 2, paths: [glob] }] } })).toBe(true)
+    }
+    expect(refused({ ...copy(), reviews: { ...SEED_RULES.reviews, rows: [{ area: 'Tokens', reads: 2, paths: Array.from({ length: 51 }, (_, i) => `a${i}/**`) }] } })).toBe(true)
+    expect(refused({ ...copy(), reviews: { ...SEED_RULES.reviews, test: [{ where: 'Mac', paths: ['desktop/**'] }, { where: 'mac', paths: [] }] } })).toBe(true)
     expect(refused({ ...copy(), mergeTrain: { enabled: 'yes', everyMinutes: 30 } })).toBe(true)
     expect(refused({ ...copy(), caps: Array.from({ length: 51 }, (_, i) => ({ name: `Cap ${i}`, value: i })) })).toBe(true)
     expect(refused({ ...copy(), caps: [{ name: 'Agents', value: -1 }] })).toBe(true)
@@ -52,12 +66,12 @@ describe('the project rules record', () => {
   it('lists what changed, by path, and nothing for an equal record', () => {
     const after = copy()
     after.releaseWindow.start = '10:00'
-    after.reviews.rows = [...after.reviews.rows, { area: 'Payments', reads: 2 }]
-    after.mergeTrain.enabled = false
+    after.reviews.rows = [...after.reviews.rows, { area: 'Payments', reads: 2, paths: ['**/payments/**'] }]
+    after.mergeTrain.enabled = true
     expect(rulesDiff(SEED_RULES, after)).toEqual([
       { path: 'releaseWindow.start', before: '09:00', after: '10:00' },
       { path: 'reviews.rows', before: SEED_RULES.reviews.rows, after: after.reviews.rows },
-      { path: 'mergeTrain.enabled', before: true, after: false },
+      { path: 'mergeTrain.enabled', before: false, after: true },
     ])
     expect(rulesDiff(SEED_RULES, copy())).toEqual([])
     expect(rulesEqual(SEED_RULES, copy())).toBe(true)
@@ -95,6 +109,35 @@ const set = (baseRevision: number, rules: ProjectRules, extra: Partial<Extract<C
   ({ type: 'rules.set', projectId: 'lead', baseRevision, rules, summary: 'Releases start at 10', ...extra })
 const code = (run: () => unknown): unknown => { try { run() } catch (error) { return (error as { code?: string }).code ?? 'INVALID' } return undefined }
 
+describe('reads and tests a change needs', () => {
+  it('matches globs as the review steps do: ** any folders, * and ? in one name, ignoring case', () => {
+    expect(globMatch('**/*auth*', 'backend/src/lib/ssoAuth.ts')).toBe(true)
+    expect(globMatch('**/*auth*', 'oauth.ts')).toBe(true)
+    expect(globMatch('desktop/**', 'desktop/lib/a.dart')).toBe(true)
+    expect(globMatch('desktop/*', 'desktop/lib/a.dart')).toBe(false)
+    expect(globMatch('a?c.ts', 'abc.ts')).toBe(true)
+    expect(globMatch('a?c.ts', 'a/c.ts')).toBe(false)
+    expect(globMatch('**/e2ee/**', 'mobile/lib/e2ee/box.dart')).toBe(true)
+    expect(globMatch('docs/a.md', 'docs/aXmd')).toBe(false)
+  })
+
+  it('asks the most reads any touched row asks, at least the default, and fails closed on files it cannot read', () => {
+    expect(requiredReads(SEED_RULES, ['desktop/lib/super_tabs/view.dart'])).toBe(1)
+    expect(requiredReads(SEED_RULES, ['desktop/lib/super_tabs/view.dart', 'backend/src/lib/ssoAuth.ts'])).toBe(2)
+    expect(requiredReads(SEED_RULES, ['backend/src/superTabs/deletion.ts'])).toBe(2)
+    expect(requiredReads(SEED_RULES, [])).toBe(1)
+    expect(requiredReads(SEED_RULES, null)).toBe(2)
+    const three = { ...copy(), reviews: { ...copy().reviews, defaultReads: 3 } }
+    expect(requiredReads(three, ['backend/src/lib/ssoAuth.ts'])).toBe(3)
+  })
+
+  it('names where a change runs, never for tests, fixtures and docs alone', () => {
+    expect(testsFor(SEED_RULES, ['desktop/lib/a.dart', 'cli/src/b.ts'])).toEqual(['Desktop on a Mac', 'The CLI on a Mac and on a Linux machine'])
+    expect(testsFor(SEED_RULES, ['desktop/test/a_test.dart', 'cli/src/b.spec.ts', 'docs/plans/x.md', 'backend/src/a.ts'])).toEqual([])
+    expect(testsFor(SEED_RULES, null)).toEqual([])
+  })
+})
+
 describe('rules.set', () => {
   it('validates, versions and records who, when, the diff and why, and changes no state or chat', () => {
     const f = fixture()
@@ -107,9 +150,9 @@ describe('rules.set', () => {
     expect(effects.messages).toEqual([])
     expect(f.state.projects).toEqual(before)
     // The next revision diffs against the stored one, not the seed.
-    const next = { ...later(), mergeTrain: { enabled: false, everyMinutes: 30 } }
-    const second = f.run(set(1, next, { summary: 'Merge train off' }), owner, { projectRules: { revision: 1, rules: later() } })
-    expect(second.projectRules).toMatchObject({ revision: 2, diff: [{ path: 'mergeTrain.enabled', before: true, after: false }], summary: 'Merge train off' })
+    const next = { ...later(), mergeTrain: { enabled: true, everyMinutes: 10 } }
+    const second = f.run(set(1, next, { summary: 'Merge train on' }), owner, { projectRules: { revision: 1, rules: later() } })
+    expect(second.projectRules).toMatchObject({ revision: 2, diff: [{ path: 'mergeTrain.enabled', before: false, after: true }], summary: 'Merge train on' })
   })
 
   it('refuses bad values and a summary that is not one line, storing nothing', () => {
