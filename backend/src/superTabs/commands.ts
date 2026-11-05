@@ -54,9 +54,10 @@ import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liv
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, okayedWords, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalBrief, proposalSentText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
-import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
+import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
+import { instructionsChange } from './instructionsDiff.js'
 import { BUILT_IN_HEADING } from './pmSchedule.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 
@@ -1107,9 +1108,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   }
   /** Accepted, kept nowhere: an older client's save of what each project's instructions say now (IGNORED_NOTE). */
   const ignored = () => Object.assign(result, { ignored: true, note: IGNORED_NOTE })
-  /** A new revision of [project]'s instructions from revision [current], with one line in its chat in the writer's name, for
-   *  the member who asked when that is someone else: what instructions.save and an older client's rule.set write. */
-  const saveInstructions = (project: SwarmProject, current: number, text: string, summary: string, askedBy: string) => {
+  /** A new revision of [project]'s instructions from revision [current], whose text was [before] (null when the store could not
+   *  read it), with one line in its chat in the writer's name, for the member who asked when that is someone else: what
+   *  instructions.save and an older client's rule.set write. The line shows the lines really removed and added under the
+   *  writer's summary, so nobody takes the summary's word for what was saved (#3021). */
+  const saveInstructions = (project: SwarmProject, current: number, before: string | null, text: string, summary: string, askedBy: string) => {
     const hash = instructionsHash(text)
     mutableProjects(state)
     Object.assign(projectOf(state, project.id), { instructionsRevision: current + 1, instructionsHash: hash })
@@ -1118,7 +1121,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // A save for someone else, a coordinator's or a person's, names the member it was for, so the record never names an asker
     // the chat line did not (review of phase 2).
     const asked = askedBy !== sender.id ? ` for ${person(state, askedBy).email.split('@')[0]}` : ''
-    message(project.leadConversationId, `${who} changed the instructions${asked}: ${summary}${/[.!?]$/.test(summary) ? '' : '.'}`, [], null,
+    message(project.leadConversationId, `${who} changed the instructions${asked}: ${summary}${/[.!?]$/.test(summary) ? '' : '.'}\n\n${instructionsChange(before, text)}`, [], null,
       { kind: 'instructions', projectId: project.id, revision: current + 1 })
     Object.assign(result, { projectId: project.id, revision: current + 1, hash })
   }
@@ -1634,7 +1637,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!machineId) fail('MACHINE_REQUIRED', `Choose the machine the ${name} runs on.`, 400)
       // Its person named no model: the coordinator's built-in default for this engine (Claude Opus 5.5 at xhigh), since the
       // project's instructions cannot choose a model before any agent reads them (project instructions, design call).
-      const asked = withRoleDefaults(request, BUILT_IN_ROLE_DEFAULTS.lead)
+      const asked = leadEffort(withRoleDefaults(request, BUILT_IN_ROLE_DEFAULTS.lead), name)
       const start = placeLead(state, project, person(state, actor.userId), machineId, asked, operationId, context)
       // A branch a Team agent pushed, or GitHub cannot place, never starts a PM in the main account (audit H2).
       if (context.pushOrigin && context.pushOrigin !== 'clean' && !teamAccountPool(state.machines?.find(m => m.machineId === start.request.machineId))) failTeamWritten()
@@ -1677,11 +1680,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (machineOffline(pool, context.now)) fail('MACHINE_OFFLINE', `Wait for a fresh reading from ${pool.name}.`)
       if (!pool.observation!.capabilities?.includes(SWITCH_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${pool.name} to move the ${name}.`, 409)
       if (pm.switchRequest) fail('LEAD_SWITCHING', `The ${name} is already being moved.`, 409)
+      // At high effort or above (leadStart.ts leadEffort), before anything is placed.
+      const { type: _type, projectId: _projectId, ...asked } = leadEffort(command, name)
       let destination = pool
       if (command.machineId && command.machineId !== pool.machineId) {
         const previousPlacement = project.lead
         const start = placeLead(state, project, person(state, actor.userId), command.machineId,
-          { engine: command.engine, ...(command.model ? { model: command.model } : {}), ...(command.effort ? { effort: command.effort } : {}) },
+          { engine: asked.engine, ...(asked.model ? { model: asked.model } : {}), ...(asked.effort ? { effort: asked.effort } : {}) },
           stableId(operationId, 'switch-start'), context)
         if (previousPlacement) project.lead = previousPlacement
         else delete project.lead
@@ -1706,7 +1711,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const start = state.starts!.find(candidate => candidate.request.leadFor?.switchId === operationId)!
         start.request.profileId = profileId
       }
-      const { type: _type, projectId: _projectId, ...asked } = command
       pm.switchRequest = { id: operationId, ...asked, profileId, ...(destination.machineId !== pool.machineId ? { targetMachineId: destination.machineId } : {}),
         requestedBy: actor.userId, at: new Date(context.now).toISOString() }
       break
@@ -1789,7 +1793,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         Object.assign(result, { projectId: project.id, revision: current, hash, unchanged: true })
         break
       }
-      saveInstructions(project, current, command.text, command.summary, askedBy)
+      // The text this save replaces, which the store read for the stale check above: what its chat line diffs against.
+      const before = !current ? INSTRUCTIONS_TEMPLATE : context.instructions?.revision === current ? context.instructions.text : null
+      saveInstructions(project, current, before, command.text, command.summary, askedBy)
       break
     }
     case 'note.add': {
@@ -2109,7 +2115,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Revision 0 runs on the template (design, Migration); otherwise the stored document of this revision, read by the store.
       const stored = !current ? INSTRUCTIONS_TEMPLATE : context.instructions?.revision === current ? context.instructions.text
         : fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
-      saveInstructions(project, current, appendRouting(stored, command.text), routingSummary(command.text), askedBy)
+      saveInstructions(project, current, stored, appendRouting(stored, command.text), routingSummary(command.text), askedBy)
       break
     }
     case 'rule.remove':

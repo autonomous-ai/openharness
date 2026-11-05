@@ -1467,6 +1467,17 @@ class SuperTabMessage {
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
 
+  /// The project and revision an instructions save's chat line names, which
+  /// its "See revision" link opens (#3021); null for any other row.
+  ({String projectId, int revision})? get instructionsSave =>
+      switch ((source['kind'], source['projectId'], source['revision'])) {
+        ('instructions', final String projectId, final num revision) => (
+          projectId: projectId,
+          revision: revision.toInt(),
+        ),
+        _ => null,
+      };
+
   /// A task's root the server posted in its person's name (plain chat, #2294):
   /// theirs to read, not their own writing, so it reads nothing before it and
   /// is unread for them as anyone else's message is.

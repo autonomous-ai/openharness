@@ -49,25 +49,39 @@ bool _overLimit(String text) {
 
 /// The project's instruction document in the Swarm's details frame: every member reads it, and a member who can
 /// write saves a change with a one-line summary on the revision they read (spec: The instruction document).
+/// With [revision], it opens on History with that revision shown: what an
+/// instructions save's chat line links to (#3021).
 Future<void> showSuperTabInstructions(
   BuildContext context,
   SuperTabController c,
-  String projectId,
-) => showAppDialog<void>(
+  String projectId, {
+  int? revision,
+}) => showAppDialog<void>(
   context: context,
   builder: (context) => SuperTabDialogScope(
     controller: c,
     projectId: projectId,
     requireWrite: false,
-    child: _InstructionsPanel(controller: c, projectId: projectId),
+    child: _InstructionsPanel(
+      controller: c,
+      projectId: projectId,
+      revision: revision,
+    ),
   ),
 );
 
 class _InstructionsPanel extends StatefulWidget {
-  const _InstructionsPanel({required this.controller, required this.projectId});
+  const _InstructionsPanel({
+    required this.controller,
+    required this.projectId,
+    this.revision,
+  });
 
   final SuperTabController controller;
   final String projectId;
+
+  /// The revision to open on, in History; null opens the document.
+  final int? revision;
 
   @override
   State<_InstructionsPanel> createState() => _InstructionsPanelState();
@@ -120,6 +134,11 @@ class _InstructionsPanelState extends State<_InstructionsPanel> {
     super.initState();
     c.addListener(_onSwarm);
     unawaited(_read());
+    if (widget.revision case final revision?) {
+      _view = _View.history;
+      unawaited(_readHistory());
+      unawaited(_pick(revision));
+    }
   }
 
   @override

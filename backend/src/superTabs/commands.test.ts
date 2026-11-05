@@ -3077,7 +3077,7 @@ describe('the owner\'s rules', () => {
       writtenBy: { kind: 'agent', id: f.lead }, askedBy: 'owner', at: 1000 })
     expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 2, instructionsHash: instructionsHash(text) })
     // One line, as any save: in the writer's name, for the member who asked.
-    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', text: 'lead changed the instructions for owner: Routing: No Haiku.',
+    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', text: 'lead changed the instructions for owner: Routing: No Haiku.\n\nIn Routing:\nAdded: No Haiku.',
       source: { kind: 'instructions', projectId: 'lead', revision: 2 } })])
     expect(f.state).not.toHaveProperty('rules')
     // A project at revision 0 runs on the template: the rule lands in its copy, as revision 1. A person asks for themselves.
@@ -3085,7 +3085,7 @@ describe('the owner\'s rules', () => {
     const first = f.run(set({ kind: 'preferIdle' }, 'Idle agents first.'))
     expect(first.instructions).toMatchObject({ revision: 1, text: appendRouting(INSTRUCTIONS_TEMPLATE, 'Idle agents first.'), askedBy: 'owner',
       writtenBy: { kind: 'person', id: 'owner' } })
-    expect(first.messages.map(m => m.text)).toEqual(['owner changed the instructions: Routing: Idle agents first.'])
+    expect(first.messages.map(m => m.text)).toEqual(['owner changed the instructions: Routing: Idle agents first.\n\nIn Routing:\nAdded: Idle agents first.'])
     // The stored document must be the revision the state names, or nothing is written.
     expect(() => f.run(set({ kind: 'preferIdle' }), owner, { instructions: { revision: 7, text: doc } }))
       .toThrow(expect.objectContaining({ code: 'INSTRUCTIONS_UNAVAILABLE' }))
@@ -3225,7 +3225,7 @@ describe('the owner\'s rules in a Swarm of projects', () => {
     const added = f.run(machines(f.app), f.lead, { ...said(), ...doc() })
     expect(added.instructions).toMatchObject({ projectId: projectOfChat(f, f.app).id, revision: 2, text: appendRouting('# Doc\n\n## Routing\n\n- Opus.', 'Only m1.'),
       askedBy: 'owner', summary: 'Routing: Only m1.' })
-    expect(added.messages).toEqual([expect.objectContaining({ conversationId: f.app, text: 'app-lead changed the instructions for owner: Routing: Only m1.',
+    expect(added.messages).toEqual([expect.objectContaining({ conversationId: f.app, text: 'app-lead changed the instructions for owner: Routing: Only m1.\n\nIn Routing:\nAdded: Only m1.',
       source: { kind: 'instructions', projectId: projectOfChat(f, f.app).id, revision: 2 } })])
     expect(f.state).not.toHaveProperty('rules')
     expect(f.run({ type: 'rule.remove', ruleId: 'any', askedIn: { conversationId: f.app, messageId: 'm2' } }, f.lead, said()).result).toMatchObject({ ignored: true })
@@ -3263,7 +3263,7 @@ describe('the owner\'s rules in a Swarm of projects', () => {
     const mine = f.run({ type: 'project.create', name: 'Peer', visibility: 'private', brief: '' }, peer).result as { projectId: string; conversationId: string }
     const added = f.run(forbid(mine.projectId, 'haiku'), peer, doc())
     expect(added.instructions).toMatchObject({ projectId: mine.projectId, askedBy: 'peer' })
-    expect(added.messages).toEqual([expect.objectContaining({ conversationId: mine.conversationId, text: 'peer changed the instructions: Routing: No haiku.' })])
+    expect(added.messages).toEqual([expect.objectContaining({ conversationId: mine.conversationId, text: 'peer changed the instructions: Routing: No haiku.\n\nIn Routing:\nAdded: No haiku.' })])
     expect(() => f.run(forbid(mine.projectId, 'opus'), owner, doc())).toThrow('unavailable')
     // Public, any member who reads it writes its instructions, the Swarm owner too.
     f.run({ type: 'project.sharing', projectId: mine.projectId, visibility: 'public', memberIds: [] }, peer)
@@ -5351,6 +5351,29 @@ describe('lead.switch', () => {
     const missing = setup()
     missing.f.state.machines![0]!.engines = ['claude']
     expect(code(() => missing.f.run(missing.request))).toBe('ENGINE_NOT_OFFERED')
+  })
+
+  // Task #3022 (Ken, 11-05): a PM runs at high effort or above, whoever moves it.
+  it('refuses an effort below high, and asks for high when a model is named with none', () => {
+    for (const effort of ['medium', 'low', 'minimal']) {
+      const s = setup()
+      expect(code(() => s.f.run({ ...s.request, model: 'gpt-6-astra', effort }))).toBe('EFFORT_TOO_LOW')
+      expect(s.agent().switchRequest).toBeUndefined()
+    }
+    const named = setup()
+    named.f.run({ ...named.request, model: 'gpt-6-astra' })
+    expect(named.agent().switchRequest).toMatchObject({ model: 'gpt-6-astra', effort: 'high' })
+    const xhigh = setup()
+    xhigh.f.run({ ...xhigh.request, model: 'gpt-6-astra', effort: 'xhigh' })
+    expect(xhigh.agent().switchRequest).toMatchObject({ effort: 'xhigh' })
+    // Review of #3066, 3: Claude Opus named with no effort keeps the coordinator's own default, as its start does.
+    const opus = setup()
+    opus.f.run({ ...opus.request, engine: 'claude', profileId: 'default', model: 'opus' })
+    expect(opus.agent().switchRequest).toMatchObject({ model: 'opus', effort: 'xhigh' })
+    // No model named: the engine's own model and effort, as before.
+    const own = setup()
+    own.f.run(own.request)
+    expect(own.agent().switchRequest).not.toHaveProperty('effort')
   })
 
   it('works while the Swarm is paused', () => {
