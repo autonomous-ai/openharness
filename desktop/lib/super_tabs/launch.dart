@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path/path.dart' as p;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../core/first_task.dart';
 import '../logging/app_log.dart';
@@ -19,6 +21,7 @@ import 'controller.dart';
 import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
+import 'new_repository.dart';
 import 'personal_projects.dart' show PersonalProjects;
 import 'launch_prompt.dart';
 import 'identity.dart' show superTabMachineName;
@@ -109,6 +112,7 @@ class SuperTabLaunch {
     // Read from the open Swarm when there is one; each submit reads afresh.
     List<LeadMachine>? leadMachines;
     LeadModelList? leadModels;
+    List<String>? newRepositoryOwners;
     if (saved['newProject'] == true && tab.superTabId != null) {
       final id = tab.superTabId!;
       final policy = launch.readRoutingPolicy(id);
@@ -116,6 +120,7 @@ class SuperTabLaunch {
           app.superTabs.peek(id)?.snapshot ??
           await app.superTabs.readSnapshot(id);
       leadMachines = launch.leadMachinesOf(snapshot);
+      newRepositoryOwners = await launch.newRepositoryOwnersOf(snapshot);
       leadModels = LeadModelList.of(await policy);
     }
     late final HarnessLaunchIntegration integration;
@@ -160,6 +165,24 @@ class SuperTabLaunch {
                           saved['creationRequest'] != null;
                     }
                   },
+            checkRepositoryOwner: launch.checkRepositoryOwner,
+            createRepository: leadMachines == null
+                ? null
+                : (ask, task) async {
+                    if (saved['projectPrepared'] != true &&
+                        saved['creationRequest'] == null) {
+                      saved['visibility'] =
+                          integration.projectVisibility ?? 'public';
+                    }
+                    try {
+                      return await launch.createRepository(ask, task);
+                    } finally {
+                      integration.projectVisibilityLocked =
+                          saved['projectPrepared'] == true ||
+                          saved['creationRequest'] != null;
+                    }
+                  },
+            checkRepositoryAgain: launch.checkRepositoryAgain,
             creationId: saved['creationId'] as String? ?? superTabOperationId(),
             initialTask: saved['initialMessage'] as String?,
             swarmRole: saved['lead'] == true ? 'lead' : 'dev',
@@ -289,7 +312,8 @@ class SuperTabLaunch {
           )
           ..pending = recovering
           ..leadMachines = leadMachines
-          ..leadModels = leadModels;
+          ..leadModels = leadModels
+          ..newRepositoryOwners = newRepositoryOwners;
     if (recovering) {
       integration
         ..machineId = saved['machineId'] as String?
@@ -743,6 +767,180 @@ class SuperTabLaunch {
     checkAccount();
     controller.select(conversationId);
     await app.superTabs.storage.delete(key);
+  }
+
+  /// Opens GitHub's sign-in in the system browser, in tests a fake.
+  @visibleForTesting
+  static Future<bool> Function(Uri url)? openLinkForTest;
+
+  /// New Repository's organizations for New Project (task #3374): the
+  /// Swarm's own, or null when this server cannot create repositories, which
+  /// one organization's check tells (an older server answers 404).
+  Future<List<String>?> newRepositoryOwnersOf(SuperTabSnapshot snapshot) async {
+    final owners = newRepositoryOwners(snapshot.projects);
+    if (owners.isEmpty) return owners;
+    try {
+      final check = await checkRepositoryOwner(owners.first);
+      return check.state == 'not-configured' ? null : owners;
+    } catch (_) {
+      // Unanswered says nothing of the server: the prompt checks again.
+      return owners;
+    }
+  }
+
+  /// Whether [owner] lets Harness create a repository there.
+  Future<NewRepositoryOwnerCheck> checkRepositoryOwner(String owner) async {
+    checkAccount();
+    try {
+      final answer = await app.superTabs.map(
+        'GET',
+        '/api/super-tabs/${saved['tabId']}/github/owners/'
+            '${Uri.encodeComponent(owner)}',
+      );
+      checkAccount();
+      return NewRepositoryOwnerCheck.read(owner, answer);
+    } on SuperTabFailure catch (failure) {
+      if (failure.statusCode == 404 && failure.code != 'NOT_AVAILABLE') {
+        return NewRepositoryOwnerCheck('not-configured', owner: owner);
+      }
+      rethrow;
+    }
+  }
+
+  /// The Swarm a create waits on, which Check again reads.
+  SuperTabController? _repositoryWait;
+
+  Future<void> checkRepositoryAgain() async => _repositoryWait?.refresh();
+
+  /// New Project's New Repository (task #3374, design
+  /// docs/plans/2026-11-05-new-repository-design.md): creates the project
+  /// once, asks the server for the person's GitHub sign-in, opens it in their
+  /// browser, and waits for the outcome on the project in the Swarm state.
+  /// What was made stays in the journal, so a retry never creates it again;
+  /// one after a failure asks anew.
+  Future<NewRepositoryCreated> createRepository(
+    NewRepositoryAsk ask,
+    String task,
+  ) async {
+    checkAccount();
+    if (saved['newRepository']
+        case {
+          'slug': final String slug,
+          'repositoryUrl': final String url,
+          'reachable': final bool reachable,
+        }
+        when slug == ask.slug) {
+      return NewRepositoryCreated(url, reachable: reachable);
+    }
+    saved['initialMessage'] = task;
+    await _createProject(task);
+    final tabId = saved['tabId'] as String;
+    final projectId = saved['projectId'] as String;
+    final Map<String, dynamic> link;
+    try {
+      link = await app.superTabs.map(
+        'POST',
+        '/api/super-tabs/$tabId/projects/$projectId/github/repository',
+        body: {'owner': ask.owner, 'name': ask.name, 'private': ask.private},
+      );
+    } on SuperTabFailure catch (failure) {
+      throw await _repositoryRefusal(failure, ask);
+    }
+    checkAccount();
+    final at = (link['at'] as num).toInt();
+    final open =
+        openLinkForTest ??
+        (Uri url) => launchUrl(url, mode: LaunchMode.externalApplication);
+    if (!await open(Uri.parse(link['authorizeUrl'] as String))) {
+      throw const SuperTabFailure(
+        'GITHUB_NOT_OPENED',
+        'Couldn’t open GitHub. Try again.',
+      );
+    }
+    final made = await _repositoryOutcome(tabId, projectId, ask, at);
+    saved['newRepository'] = {
+      'slug': ask.slug,
+      'repositoryUrl': made.repositoryUrl,
+      'reachable': made.reachable,
+    };
+    await persist();
+    return made;
+  }
+
+  /// The ask's refusal before any sign-in, in the design's words.
+  Future<SuperTabFailure> _repositoryRefusal(
+    SuperTabFailure failure,
+    NewRepositoryAsk ask,
+  ) async => switch (failure.code) {
+    'GITHUB_APP_NOT_INSTALLED' => NewRepositoryRefusal(
+      failure.code,
+      newRepositoryNotInstalled(ask.owner),
+      installUrl: await checkRepositoryOwner(ask.owner)
+          .then((check) => check.installUrl, onError: (Object _) => null),
+    ),
+    'GITHUB_APP_PERMISSIONS' => NewRepositoryRefusal(
+      failure.code,
+      newRepositoryNotAccepted(ask.owner),
+    ),
+    'GITHUB_APP_NOT_CONFIGURED' || 'GITHUB_APPROVAL_NOT_CONFIGURED' =>
+      NewRepositoryRefusal(failure.code, kNewRepositoryUnavailable),
+    'REPOSITORY_NAME' => NewRepositoryRefusal(
+      failure.code,
+      newRepositoryNameProblem(ask.name) ?? failure.message,
+    ),
+    _ => failure,
+  };
+
+  /// What the project's `repositoryCreation` says of the ask made at [at], as
+  /// the open Swarm syncs it: nothing polls, and Check again reads it once.
+  Future<NewRepositoryCreated> _repositoryOutcome(
+    String tabId,
+    String projectId,
+    NewRepositoryAsk ask,
+    int at,
+  ) async {
+    final controller = await app.superTabs.open(tabId);
+    checkAccount();
+    // An open Swarm may not have read the project made just now.
+    await controller.refresh();
+    checkAccount();
+    final done = Completer<NewRepositoryOutcome>();
+    void read() {
+      final snapshot = controller.snapshot;
+      if (done.isCompleted || snapshot == null) return;
+      final project = snapshot.projects
+          .where((p) => p.id == projectId)
+          .firstOrNull;
+      final outcome = project == null
+          ? const NewRepositoryFailed(kNewRepositoryProjectGone)
+          : newRepositoryOutcome(
+              project.repositoryCreation,
+              ask,
+              at: at,
+              now: DateTime.now(),
+            );
+      if (outcome is! NewRepositoryWaiting) done.complete(outcome);
+    }
+
+    _repositoryWait = controller;
+    controller.addListener(read);
+    // Only the clock moves an ask past its link's life: this reads nothing.
+    final clock = Timer.periodic(const Duration(seconds: 15), (_) => read());
+    read();
+    try {
+      return switch (await done.future) {
+        final NewRepositoryCreated made => made,
+        NewRepositoryFailed(:final message) => throw SuperTabFailure(
+          'REPOSITORY_NOT_CREATED',
+          message,
+        ),
+        NewRepositoryWaiting() => throw StateError('Still waiting'),
+      };
+    } finally {
+      clock.cancel();
+      controller.removeListener(read);
+      if (identical(_repositoryWait, controller)) _repositoryWait = null;
+    }
   }
 
   /// Sends the journal's request [key] exactly as it was first written: the

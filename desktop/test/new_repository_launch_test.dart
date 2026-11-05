@@ -213,7 +213,8 @@ void main() {
         (await integration.checkRepositoryOwner!('acme')).problem,
         startsWith('An owner of acme needs to accept'),
       );
-      expect(github.ownerChecks, ['Acme', 'acme', 'acme']);
+      // The first, as New Project opens, says whether this server can create.
+      expect(github.ownerChecks, ['autonomous-ai', 'Acme', 'acme', 'acme']);
     },
   );
 

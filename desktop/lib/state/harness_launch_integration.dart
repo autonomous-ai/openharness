@@ -1,3 +1,4 @@
+import '../super_tabs/new_repository.dart';
 import 'harness_attachments.dart';
 import 'lead_placement.dart';
 
@@ -41,6 +42,9 @@ class HarnessLaunchIntegration {
     this.roleSuggestions,
     this.roleName,
     this.startInSwarm,
+    this.checkRepositoryOwner,
+    this.createRepository,
+    this.checkRepositoryAgain,
   });
   final String creationId, actionLabel;
   String? swarmRole;
@@ -76,6 +80,27 @@ class HarnessLaunchIntegration {
 
   /// With [leadMachines]: the Swarm's model list for its engine and model.
   LeadModelList? leadModels;
+
+  /// With [leadMachines]: the GitHub organizations New Repository offers (the
+  /// Swarm's own, in its order; empty when it uses none yet). Null hides New
+  /// Repository: a server that cannot create repositories (task #3374).
+  List<String>? newRepositoryOwners;
+
+  /// Whether an organization lets Harness create a repository there.
+  final Future<NewRepositoryOwnerCheck> Function(String owner)?
+  checkRepositoryOwner;
+
+  /// Creates the project, once, then the repository through the person's
+  /// own GitHub sign-in in their browser, and gives what was made. Throws
+  /// with the line to show when nothing was made.
+  final Future<NewRepositoryCreated> Function(
+    NewRepositoryAsk ask,
+    String task,
+  )?
+  createRepository;
+
+  /// Reads the Swarm again while a create waits on GitHub (Check again).
+  final Future<void> Function()? checkRepositoryAgain;
 
   /// Before anything is created: the prompt for [task], which a destination
   /// may refuse for [machineId] and [engine], the engine about to start.

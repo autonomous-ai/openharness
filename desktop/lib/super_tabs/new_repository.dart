@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../core/github_repository.dart';
+import 'controller.dart';
 import 'model.dart';
 
 /// New Project's New Repository (task #3374; design
@@ -182,3 +183,50 @@ String newRepositoryOwnerMessage(String owner, {String? installUrl}) =>
           'repositories there? $installUrl'
     : 'Could you accept Harness’s new permission on $owner once? '
           'GitHub Settings → GitHub Apps → Harness.';
+
+/// Whether an organization lets Harness create a repository there (backend
+/// `GET /api/super-tabs/:tabId/github/owners/:owner`).
+@immutable
+class NewRepositoryOwnerCheck {
+  const NewRepositoryOwnerCheck(this.state, {this.owner = '', this.installUrl});
+
+  static NewRepositoryOwnerCheck read(String owner, Map<String, dynamic> row) =>
+      NewRepositoryOwnerCheck(
+        switch (row['state']) {
+          final String state => state,
+          _ => 'not-configured',
+        },
+        owner: owner,
+        installUrl: switch (row['installUrl']) {
+          final String url => url,
+          _ => null,
+        },
+      );
+
+  /// `ready`, `not-installed` (F4), `not-accepted` (F5) or `not-configured`
+  /// (F6: this server cannot create repositories, so New Repository hides).
+  final String state;
+  final String owner;
+
+  /// With `not-installed`: where an owner installs Harness.
+  final String? installUrl;
+
+  /// The line to show for it, or null when it is ready.
+  String? get problem => switch (state) {
+    'ready' => null,
+    'not-installed' => newRepositoryNotInstalled(owner),
+    'not-accepted' => newRepositoryNotAccepted(owner),
+    _ => kNewRepositoryUnavailable,
+  };
+}
+
+/// F6, for someone who reaches it anyway.
+const kNewRepositoryUnavailable =
+    'This Harness server can’t create repositories yet.';
+
+/// An ask the server refused before any sign-in, with what an owner of the
+/// organization does: [installUrl] for F4.
+class NewRepositoryRefusal extends SuperTabFailure {
+  const NewRepositoryRefusal(super.code, super.message, {this.installUrl});
+  final String? installUrl;
+}
