@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Redis } from 'ioredis'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { redisStamps, STAMP_TTL_MS, type StampScope } from './cache.js'
+import { ALL_HOSTS, redisStamps, STAMP_TTL_MS, type StampScope } from './cache.js'
 
 // A real Redis: REDIS_TEST_URL, e.g. redis://127.0.0.1:6379/15 (CI's Redis service; skipped without one, which CI's
 // redis-tests-ran step refuses). Only keys of this run are touched, and they are removed afterwards.
@@ -110,6 +110,38 @@ describe.skipIf(!url)('redisStamps', () => {
     const ttl = await redis.pttl(`swarm:stamp:${a}`)
     expect(ttl).toBeGreaterThan(STAMP_TTL_MS - 60_000)
     expect(ttl).toBeLessThanOrEqual(STAMP_TTL_MS)
+  })
+
+  it('moves the host stamps a bump names, and tells nobody of them (task #3119)', async () => {
+    const stamps = redisStamps(redis, bus), id = tab()
+    used.push(id)
+    await stamps.bump(id, ['main'], ['m1'])
+    const first = await stamps.readHost(id, 'm1')
+    expect(first.host).toBeGreaterThan(0)
+    expect(first.hosted).toBe(first.main)
+    expect([first.all, first.uncovered, (await stamps.readHost(id, 'm2')).host]).toEqual([0, 0, 0])
+    await stamps.bump(id, ['main'], ['m2', ALL_HOSTS])
+    const second = await stamps.readHost(id, 'm1')
+    expect(second.host).toBe(first.host)
+    expect(second.all).toBeGreaterThan(0)
+    expect(second.main).toBeGreaterThan(first.main)
+    expect((await stamps.readHost(id, 'm2')).host).toBeGreaterThan(first.host)
+    expect(published.at(-1)).toEqual({ tabId: id, scopes: ['main'] })
+  })
+
+  it('records a bump of the release before, found by the next bump, as uncovered', async () => {
+    const stamps = redisStamps(redis, bus), id = tab()
+    used.push(id)
+    await stamps.bump(id, ['main'], ['m1'])
+    // The release before's script moves `main` alone.
+    const older = String((await stamps.readHost(id, 'm1')).main + 5)
+    await redis.hset(`swarm:stamp:${id}`, 'main', older)
+    const between = await stamps.readHost(id, 'm1')
+    expect(between.hosted).toBeLessThan(between.main)
+    await stamps.bump(id, ['machine'])
+    const after = await stamps.readHost(id, 'm1')
+    expect(after.uncovered).toBe(Number(older))
+    expect(after.hosted).toBe(after.main)
   })
 
   it('tells the other processes which Swarm moved, and which stamps', async () => {
