@@ -1464,6 +1464,11 @@ class SuperTabMessage {
   /// What was typed into an agent's terminal, a scheduled prompt too: no chat
   /// row (Ken 11-04, task #2849; the desktop's). Its answer still is one.
   bool get terminalPrompt => fromTerminal && source['phase'] == 'prompt';
+
+  /// A terminal's recording gap: no chat row and nothing unread, since it gives
+  /// a person nothing to do (Dee 11-05, task #3127). The server keeps it for
+  /// diagnosis, and a required recovery still reaches the coordinator.
+  bool get terminalGap => fromTerminal && source['phase'] == 'gap';
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
 

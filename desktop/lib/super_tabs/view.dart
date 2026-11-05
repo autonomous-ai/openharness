@@ -30,7 +30,6 @@ import 'leaderboard/reader.dart';
 import 'jump_to_latest.dart';
 import 'unread_line.dart';
 import 'roster.dart';
-import 'recording_notice.dart';
 import 'profile_actions.dart';
 import 'live_card.dart';
 import 'personal_lead.dart';
@@ -844,11 +843,10 @@ class _SuperTabViewState extends State<SuperTabView>
   /// Whether [messageId]'s row in [id]'s list is below [position]'s view, by
   /// its place in the list.
   bool _below(String id, String messageId, ScrollPosition position) {
-    final entries = superTabTranscriptEntries(_shownMessages(id));
-    final row = _rowShowing(id, messageId);
-    final index = entries.indexWhere((e) => e.message.id == row);
+    final shown = _shownMessages(id);
+    final index = shown.indexWhere((m) => m.id == messageId);
     return index >= 0 &&
-        _estimate(position, index, entries.length) > position.pixels;
+        _estimate(position, index, shown.length) > position.pixels;
   }
 
   /// Esc: everything loaded in the open conversation is read, line and all.
@@ -1632,12 +1630,10 @@ class _SuperTabViewState extends State<SuperTabView>
       final row = _built[anchor.messageId];
       final top = row != null && row.mounted ? _topInList(row) : null;
       if (top == null) {
-        final entries = superTabTranscriptEntries(_shownMessages(id));
-        final index = entries.indexWhere(
-          (e) => e.message.id == anchor.messageId,
-        );
+        final shown = _shownMessages(id);
+        final index = shown.indexWhere((m) => m.id == anchor.messageId);
         if (index < 0) return;
-        scroll.jumpTo(_estimate(position, index, entries.length));
+        scroll.jumpTo(_estimate(position, index, shown.length));
         continue;
       }
       if ((top - anchor.top).abs() < .5) return;
@@ -2109,13 +2105,12 @@ class _SuperTabViewState extends State<SuperTabView>
       c.openThread(message.thread!, at: message.id);
       if (!message.inMainStream) return;
     }
-    final shownBy = _rowShowing(id, messageId) ?? messageId;
     setState(() {
       _page = null;
       _showManage = false;
       _showPullRequests = _showTasks = false;
       _back = null;
-      _target = shownBy;
+      _target = messageId;
       _openedAtMessage = id;
       // Stop following the end: the linked message is what to see.
       _scrollRequest++;
@@ -2308,12 +2303,12 @@ class _SuperTabViewState extends State<SuperTabView>
         return _landed(landing!);
       }
       final scroll = _scroll[id];
-      final entries = superTabTranscriptEntries(_shownMessages(id));
-      final index = entries.indexWhere((e) => e.message.id == _target);
+      final shown = _shownMessages(id);
+      final index = shown.indexWhere((m) => m.id == _target);
       if (scroll == null || !scroll.hasClients || index < 0 || attempt > 20) {
         return _landed(landing!);
       }
-      scroll.jumpTo(_estimate(scroll.position, index, entries.length));
+      scroll.jumpTo(_estimate(scroll.position, index, shown.length));
       _revealTarget(id, attempt + 1, arrived: arrived, landing: landing);
     });
     WidgetsBinding.instance.scheduleFrame();
@@ -2376,24 +2371,10 @@ class _SuperTabViewState extends State<SuperTabView>
   static bool _shown(SuperTabMessage m) =>
       !_neverShown.contains(m.source['kind']);
 
-  /// The row of [id]'s list that shows [messageId]: its own, or the notice
-  /// that folds it in. Null while the message is not loaded.
-  String? _rowShowing(String id, String messageId) {
-    final message = _shownMessages(id)
-        .where((m) => m.id == messageId)
-        .firstOrNull;
-    if (message == null) return null;
-    // A step's row is a row of its own: no notice of the task folds it in.
-    if (message.conversationId != id) return message.id;
-    final shown = _ownShown(id);
-    return superTabTranscriptEntries(shown)
-        .lastWhere(
-          (e) => superTabMessageOrder(e.message, message) <= 0,
-          orElse: () => (message: message, interruptions: 0),
-        )
-        .message
-        .id;
-  }
+  /// The row of [id]'s list that shows [messageId], its own. Null while the
+  /// message is not loaded.
+  String? _rowShowing(String id, String messageId) =>
+      _shownMessages(id).any((m) => m.id == messageId) ? messageId : null;
 
   /// The top of [row] within the message list.
   double? _topInList(BuildContext row) {
@@ -2507,10 +2488,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (_find != null && _findIn == id) return _findFocus.requestFocus();
     _closeFind(refocus: false);
     final find = SuperTabChatFind(
-      rows: () => [
-        for (final entry in superTabTranscriptEntries(_shownMessages(id)))
-          if (entry.interruptions == 0) entry.message,
-      ],
+      rows: () => _shownMessages(id),
       hasOlder: () => c.hasOlder(id),
       readOlder: () async {
         final loaded = c.messages(id).length;
@@ -4205,20 +4183,15 @@ class _SuperTabViewState extends State<SuperTabView>
   /// Where [id]'s list divides: the first row drawn when it opened. Older
   /// pages go above it and newer messages below, so neither moves the rows
   /// already there.
-  int _splitAt(
-    String id,
-    List<({SuperTabMessage message, int interruptions})> entries,
-  ) {
-    if (entries.isEmpty) return 0;
+  int _splitAt(String id, List<SuperTabMessage> messages) {
+    if (messages.isEmpty) return 0;
     final split = _split[id];
     final at = split == null
         ? -1
-        : entries.indexWhere(
-            (e) => superTabMessageOrder(e.message, split) >= 0,
-          );
+        : messages.indexWhere((m) => superTabMessageOrder(m, split) >= 0);
     if (at >= 0) return at;
-    _split[id] = entries.first.message;
-    c.keepFrom(id, entries.first.message);
+    _split[id] = messages.first;
+    c.keepFrom(id, messages.first);
     return 0;
   }
 
@@ -4438,18 +4411,14 @@ class _SuperTabViewState extends State<SuperTabView>
         if (m.conversationId == c.selectedId) m,
     ];
     final ownWithOutgoing = [...ownMessages, ...outgoing.map(_outgoingMessage)];
-    final entries = superTabTranscriptEntries(messages);
     final byId = {for (final message in messages) message.id: message};
     final rowIndex = {
-      for (final (index, entry) in entries.indexed)
-        _rowKey(c.messageIdentity(entry.message.id)): index,
+      for (final (index, message) in messages.indexed)
+        _rowKey(c.messageIdentity(message.id)): index,
     };
     // A row stays the same row as pages arrive above it, state and all.
     int? rowOf(Key key) => key is ValueKey<String> ? rowIndex[key.value] : null;
-    final split = _splitAt(
-      c.selectedId,
-      superTabTranscriptEntries(ownMessages),
-    );
+    final split = _splitAt(c.selectedId, ownMessages);
     // Rows on their way group by the same rule, so a quick line keeps the
     // shape it will have once confirmed; one Not sent keeps its name and
     // actions.
@@ -4464,12 +4433,8 @@ class _SuperTabViewState extends State<SuperTabView>
     // Find matches the rows as they are drawn now.
     final search = _findIn == c.selectedId ? (_find?..refresh()) : null;
     Widget row(int index) {
-      final entry = entries[index];
-      final message = entry.message;
-      final agent = message.fromAgent
-          ? c.snapshot?.agent(message.authorId)
-          : null;
-      final previous = index > 0 ? entries[index - 1].message : null;
+      final message = messages[index];
+      final previous = index > 0 ? messages[index - 1] : null;
       // Grouping is decided on the task's own rows; a step's row drawn between
       // two of them still ends the group, or the next would read as its agent's.
       final joined =
@@ -4505,15 +4470,6 @@ class _SuperTabViewState extends State<SuperTabView>
                           pendingById[message.id]!,
                           byId,
                           grouped: joined,
-                        )
-                      : entry.interruptions > 0
-                      ? SuperTabRecordingNotice(
-                          key: ValueKey('super-message-${message.id}'),
-                          author: _shownAuthor(c, message),
-                          count: entry.interruptions,
-                          onOpenTerminal: agent == null
-                              ? null
-                              : () => _openAgent(agent),
                         )
                       : _message(
                           message,
@@ -4792,7 +4748,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                           // Messages on their way end the list.
                                           (context, index) =>
                                               row(split + index),
-                                          childCount: entries.length - split,
+                                          childCount: messages.length - split,
                                           findChildIndexCallback: (key) =>
                                               switch (rowOf(key)) {
                                                 final i? when i >= split =>

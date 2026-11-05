@@ -2067,7 +2067,9 @@ class SuperTabController extends ChangeNotifier {
   );
 
   static bool _listed(SuperTabMessage m) =>
-      m.source['kind'] != 'update-request' && !m.terminalPrompt;
+      m.source['kind'] != 'update-request' &&
+      !m.terminalPrompt &&
+      !m.terminalGap;
 
   /// [id]'s messages with its steps' rows merged in by time (task steps
   /// design): each step keeps its own conversation, shown inside its task.
