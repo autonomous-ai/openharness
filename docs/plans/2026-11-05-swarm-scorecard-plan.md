@@ -38,8 +38,9 @@ its figures, so a row says what it measured and a later change of limit never re
   stable id (`stableId('scorecard', tabId, projectId, on)`), so a pass that runs twice writes the same row once.
 - **Read cost:** the job reads only groups active in the day (`[tabId, projectId, dormant, lastActivityAt, key]`), each
   group's messages backwards from its newest until the day starts plus one earlier status row (capped at 5,000 rows a
-  group), route decisions by `[tabId, createdAt]`, starts by `[tabId, changedAt]`, deliveries by `[tabId, messageId]`.
-  All on the secondaries. Candidates: one `$group` over `SwarmGroup [dormant, lastActivityAt]`. The Desktop read is one
+  task, 20,000 for the project chat's 7-day ask lookback), route decisions by `[tabId, createdAt]`, starts by `[tabId, changedAt]`, deliveries by `[tabId, messageId]`.
+  All on the secondaries. Candidates: one `$group` over `SwarmGroup [dormant, lastActivityAt]` (groups active in the last
+  7 days), read again every 3 hours. The Desktop read is one
   indexed find of at most 14 rows per project.
 - **Scale:** 10x projects = 10x one small pass per project per day, spread over the night by time zone. The warning
   metric is the pass's logged duration and `capped` count (a group that hit the 5,000-row cap).
