@@ -80,10 +80,11 @@ String swarmRepositoryStuck(String owner, String name) =>
 bool swarmRepositoryStuckAt(int at, DateTime now) =>
     now.millisecondsSinceEpoch - at > swarmRepositoryStuckAfter.inMilliseconds;
 
-/// F11: the project was deleted while the person was in GitHub.
-String swarmRepositoryProjectGone(String owner, String name) =>
-    'The project was deleted meanwhile. $owner/$name was still made on '
-    'GitHub.';
+/// F11: the project was deleted while the person was in GitHub. The callback
+/// checks the ask is still current before it calls GitHub, so nothing was
+/// made (the design's table, as #3201 has it now).
+const swarmRepositoryProjectGone =
+    'The project was deleted meanwhile. Nothing was created.';
 
 final _name = RegExp(r'^[A-Za-z0-9._-]{1,100}$');
 final _owner = RegExp(r'^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$');

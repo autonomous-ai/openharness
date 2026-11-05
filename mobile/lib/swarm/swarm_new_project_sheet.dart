@@ -1118,13 +1118,8 @@ class SwarmNewProjectSteps with ChangeNotifier {
   /// GitHub, the repository may still have been made (F11).
   Never _gone() {
     forget();
-    if (_creation case final asked?) {
-      throw SwarmRepositoryFailure(
-        swarmRepositoryProjectGone(
-          asked.repository.owner,
-          asked.repository.name,
-        ),
-      );
+    if (_creation != null) {
+      throw const SwarmRepositoryFailure(swarmRepositoryProjectGone);
     }
     throw const SuperTabFailure(
       'PROJECT_GONE',
