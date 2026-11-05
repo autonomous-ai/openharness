@@ -557,7 +557,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // once (routeAnswer).
   const lineOf = (s: Shown) => [`${s.id} ${s.kind === 'new' ? 'new' : `${s.name ?? 'Member'} (agent ${s.agentId}, ${s.activity})`}`,
     s.gridModel ? `${s.engine} on the grid: gridModel ${s.gridModel}, gridName ${s.gridName}` : `${s.engine} ${s.model} ${s.effort}${s.unrated ? ' (unrated)' : ''}`,
-    quotaLine(s, now), ...s.notes.filter(n => n !== UNRATED).map(clause)].join(' · ')
+    quotaLine(s, now), ...s.notes.filter(n => n !== UNRATED).map(noteClause)].join(' · ')
   // Every recorded row: the coordinator may reuse a particular member (the same Reviewer for its next round, Routing rule 3),
   // so none is hidden behind another on its account.
   const shownRows = offered
@@ -837,21 +837,28 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
   } finally { target.close() }
 }
 
-/** A note in a candidate's line: its first sentence, cut short. The record for Details keeps it whole. */
-function clause(note: string): string {
+/** A note in a candidate's line: its first sentence, cut short. The record for Details keeps it whole. Long enough for the
+ *  name or the cause a note carries (which PM an account runs, what a failed start was preparing; review of #3169). */
+export function noteClause(note: string): string {
   const first = /^(.*?[^.])(?:\.\s|;\s|\.$|$)/.exec(note.trim())?.[1] ?? note
   return first.length <= NOTE_MAX ? first : `${first.slice(0, NOTE_MAX - 1)}…`
 }
-const NOTE_MAX = 48, LEFT_OUT_REASON_MAX = 120, WARNING_MAX = 240
+const NOTE_MAX = 72, LEFT_OUT_REASON_MAX = 120, WARNING_MAX = 240
 
 /** The section of the instructions headed "Routing" (any level), up to the next heading of its level or higher, with its
  *  own subsections (Models, Machines, Order and quota); null when the instructions have none. */
 export function routingSection(text: string): string | null {
-  const head = /^(#{1,6})[ \t]+Routing[ \t]*$/m.exec(text)
-  if (!head) return null
-  const rest = text.slice(head.index + head[0].length)
-  const end = new RegExp(`^#{1,${head[1]!.length}}[ \\t]`, 'm').exec(rest)
-  return (head[0] + (end ? rest.slice(0, end.index) : rest)).trimEnd()
+  // Line by line, so a shell comment in a fenced block is not taken for a heading (review of #3169).
+  const lines = text.split('\n')
+  let fenced = false, start = -1, level = 0
+  for (const [i, line] of lines.entries()) {
+    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue }
+    const head = fenced ? null : /^(#{1,6})[ \t]+(.*?)[ \t]*$/.exec(line)
+    if (!head) continue
+    if (start >= 0 && head[1]!.length <= level) return lines.slice(start, i).join('\n').trimEnd()
+    if (start < 0 && head[2] === 'Routing') { start = i; level = head[1]!.length }
+  }
+  return start < 0 ? null : lines.slice(start).join('\n').trimEnd()
 }
 
 /** What `harness super-tab route` prints of [answer] (task #3294, Ken 2026-11-05): each answer was ~45k characters, the
@@ -869,7 +876,9 @@ export function routeAnswer(answer: Json, options: { fullInstructions?: boolean;
     const text = String(written.text ?? ''), routing = routingSection(text)
     printed.instructions = options.fullInstructions || routing === null ? { revision: written.revision, text, notes }
       : options.instructionsRead === written.revision
-        ? { revision: written.revision, unchanged: `You read revision ${written.revision}; it is current. Route with --full-instructions to have it again.` }
+        // Its notes still come: adding one does not change the revision (backend note.add), and they hold the short-lived
+        // routing facts (a machine away today; review of #3169).
+        ? { revision: written.revision, unchanged: `You read revision ${written.revision}; it is current. Route with --full-instructions to have it again.`, notes }
         : { revision: written.revision, routing, notes, more: 'The Routing section only: the whole text with the instructions command, or route with --full-instructions. '
           + `Route with --instructions-read ${written.revision} once you have read this revision.` }
   }
@@ -915,4 +924,3 @@ export function routeAnswer(answer: Json, options: { fullInstructions?: boolean;
   return printed
 }
 const cut = (text: string, max: number) => text.length <= max ? text : `${text.slice(0, max - 1)}…`
-export const noteClause = (note: string) => note

@@ -192,7 +192,7 @@ it('prints the compact route answer: the Routing section, not the whole instruct
   await superTabCommand(['--tab', 'tab', 'route', 'g1', '{"difficulty":"low","risk":"low","why":"x"}', '--full-instructions'], deps)
   expect(JSON.parse(print.mock.calls.at(-1)![0] as string)).toMatchObject({ instructions: { revision: 7, text } })
   await superTabCommand(['--tab', 'tab', 'route', 'g1', '{"difficulty":"low","risk":"low","why":"x"}', '--instructions-read', '7'], deps)
-  expect(JSON.parse(print.mock.calls.at(-1)![0] as string).instructions).toEqual({ revision: 7, unchanged: expect.any(String) })
+  expect(JSON.parse(print.mock.calls.at(-1)![0] as string).instructions).toEqual({ revision: 7, unchanged: expect.any(String), notes: [] })
 })
 it('routes through the caller and prints the decision, or the parse failure as an error', async () => {
   const print = vi.fn(), close = vi.fn()
