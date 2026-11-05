@@ -151,4 +151,18 @@ void main() {
       expect(waiting, isNotEmpty);
     });
   });
+
+  group('the pushes still in the notification centre (task #2905)', () {
+    test('are their keys, so the app does not post them again', () async {
+      answer = (call) => call.method == 'shown' ? ['reply:tab:row1', 'mention:t1', 7, null] : null;
+      expect(await PushChannel().shown(), {'reply:tab:row1', 'mention:t1'});
+    });
+
+    test('are none where the native side is missing or fails', () async {
+      answer = (call) => throw PlatformException(code: 'shown');
+      expect(await PushChannel().shown(), isEmpty);
+      messenger.setMockMethodCallHandler(method, null);
+      expect(await PushChannel().shown(), isEmpty);
+    });
+  });
 }
