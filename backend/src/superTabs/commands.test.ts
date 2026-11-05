@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
+import { readsRawReason } from './startFailure.js'
 import { sweepLiveness } from './liveness.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
 import { defaultProfileId, hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
@@ -3390,6 +3391,39 @@ describe('a failed start\'s reason', () => {
     expect(read(peer)).toBe('Studio stopped reporting while preparing it')
     f.state.starts![0]!.error = 'Its machine was removed from the Swarm.'
     expect(read(owner)).toBe('Its machine was removed from the Swarm.')
+  })
+
+  // The reported dead end: a Buddy's owner read only "its machine could not prepare or launch it", while the chat told them
+  // the starter and the PM could read why. A Buddy chat is private to its owner, so the reason belongs there whole.
+  it('writes a Buddy start\'s reason whole in its owner\'s chat, never the group line', () => {
+    const f = fixture(); f.invite()
+    const generation = f.state.people[0]!.generation
+    const chat = { id: 'buddy-chat', kind: 'buddy', number: 1, title: "owner's Buddy", leadId: null, agentIds: [],
+      archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
+      audience: { people: [{ id: 'owner', generation }] } }
+    f.state.conversations.push(chat as never)
+    f.state.starts = [{ id: 's1', actorKey: 'person:owner', contributorId: 'owner', membershipGeneration: generation,
+      machineOwnerId: 'owner', request: { conversationId: chat.id, machineId: 'mac', name: "nsonha777's Buddy",
+        buddyOf: { personId: 'owner', generation } }, harnessId: null, dispatched: true, error: null }] as never
+    const [notice] = f.run({ type: 'agent.startFailed', startId: 's1', error: RAW }, owner).messages
+    expect(notice!.conversationId).toBe(chat.id)
+    expect(notice!.text).toBe(`Could not start nsonha777's Buddy: ${RAW}`)
+    expect(notice!.text).not.toContain('Whoever started it')
+  })
+
+  it('lets a Buddy chat\'s owner read the raw reason even when an agent made the start on another machine', () => {
+    const f = fixture(); f.invite()
+    const generation = f.state.people[0]!.generation
+    const chat = { id: 'buddy-chat', kind: 'buddy', number: 1, title: "owner's Buddy", leadId: null, agentIds: [],
+      archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
+      audience: { people: [{ id: 'owner', generation }] } }
+    f.state.conversations.push(chat as never)
+    f.state.starts = [{ id: 's1', actorKey: 'agent:someone', contributorId: 'owner', membershipGeneration: generation,
+      machineOwnerId: 'someone-else', request: { conversationId: chat.id, machineId: 'host-mac', name: "nsonha777's Buddy",
+        buddyOf: { personId: 'owner', generation } }, harnessId: null, dispatched: true, error: RAW }] as never
+    expect(visibleState(f.state, owner).starts![0]!.error).toBe(RAW)
+    // A Swarm member who is not that chat's owner still reads only what the reason means.
+    expect(readsRawReason(peer, f.state.starts![0]!, chat as never)).toBe(false)
   })
 })
 
