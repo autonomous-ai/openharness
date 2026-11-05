@@ -149,6 +149,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
       roleName: roleNameOf(state, state.agents.find(a => a.id === seen.id)!) }])),
     machines: Object.fromEntries((visible.machines ?? []).map(machine)),
     ...(visible.otherProjectsWork ? { otherProjectsWork: visible.otherProjectsWork } : {}),
+    ...(visible.ownerlessProjects ? { ownerlessProjects: visible.ownerlessProjects } : {}),
     ...(actor.kind === 'person' && extras.mentionsWaiting !== undefined ? { mentionsWaiting: extras.mentionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.mentionsDigest !== undefined ? { mentionsDigest: extras.mentionsDigest } : {}),
     ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
