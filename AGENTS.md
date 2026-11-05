@@ -49,7 +49,17 @@ For product names, terminology, and visible copy, follow the
     Do the code review while CI runs, and keep review independent of implementation.
   - Base the branch on current `main`. A branch older than #991 runs the old
     planner and fails `ci/required`; use **Update branch** or rebase first.
-  - Merge with `make merge-pr ARGS="N --reviewed-head SHA --reviewed-base SHA --merge"`.
+  - In a Swarm project whose rules switch the merge train on, the server merges routine
+    work: every 10 minutes it batches PRs that are ready, have every review and test
+    step passed at their current head (as many reads as the review table asks), a
+    green `ci/required`, no conflict and no `hold` label. It builds a `harness-train/`
+    branch from main, squash-merges it when its CI is green and the heads are
+    unchanged, closes the originals with a link and records the merges. A red batch
+    splits by component; a PR red on its own, or one that conflicts, gets a message
+    in its task: fix and push, or merge main once. Docs and scripts merge on their own
+    green CI. Never push to a `harness-train/` branch. Add the `hold` label to keep a
+    PR out; the rules' `mergeTrain.enabled` is the kill switch. Hand merges still work.
+  - Merge by hand with `make merge-pr ARGS="N --reviewed-head SHA --reviewed-base SHA --merge"`.
     It verifies automatic `ci/required` evidence and directly squash-merges the
     reviewed head. A merge queue is not a prerequisite for merging or releasing;
     do not add `--queue` or ask for queue setup. The helper respects a queue only
