@@ -558,7 +558,15 @@ class PersonalProjects extends ChangeNotifier {
     if (known == null || known.isEmpty || _unresolvedPanes(app)) {
       return const {};
     }
-    final shown = {for (final entry in personalPanes(app)) ?known[entry.repo]};
+    // A pane in a listed project's own tab is that project's, as panesFor
+    // reads it (#3090): counted for it, never for its repo.
+    final shown = {
+      for (final entry in personalPanes(app, projectTabs: _projectTabs(c)))
+        if (_isProjectTab(entry.repo))
+          ?projectOfTab(c, entry.repo.substring(4))?.id
+        else
+          ?known[entry.repo],
+    };
     final snapshot = c.snapshot!;
     return {
       for (final id in known.values)
