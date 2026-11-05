@@ -473,5 +473,6 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
     expect(added, 'A Prisma in/has filter on a hot Swarm collection is sent as $expr, which no index bounds. Read through a named index (parts/indexed.ts readBy) with a plan test instead. An `unresolved` call is one whose collection this test cannot tell: name the delegate (db.swarmGroup, or a parameter typed Prisma.XDelegate), or list it after checking it is not a hot collection.').toEqual([])
     const fewer = Object.entries(allowed).filter(([key, count]) => count > (current[key] ?? 0)).map(([key, count]) => `${key}: ${current[key] ?? 0} (listed ${count})`)
     expect(fewer, 'Fewer uses than listed: lower them in hotFilters.allowed.json (UPDATE_HOT_FILTERS=1 rewrites it).').toEqual([])
-  })
+    // It parses every file under src/ (about 1.5 s alone), and a CI runner running the whole suite took over the default 5 s.
+  }, 60_000)
 })
