@@ -153,6 +153,49 @@ void main() {
       },
     );
 
+    test('$where keeps image when the post is refused, and Retry sends it '
+        'once', () async {
+      final image = HarnessAttachment('picture.png', Uint8List.fromList([1]));
+      files().add([image]);
+      server
+        ..refuse = {'code': 'INVALID_RECIPIENT', 'message': 'Refused.'}
+        ..refuseStatus = 400;
+      await c.sendVoice(
+        conversationId: 'lead',
+        root: root,
+        wav: _wav,
+        lang: 'en',
+      );
+      expect(files().files, [image]);
+      server.refuse = null;
+      final row = c.outgoing('lead').single;
+      expect(row.state, SuperTabOutgoingState.refused);
+      expect(await c.retryOutgoing(row), isNotNull);
+      expect(sent()!['attachmentIds'], ['attachment-1', 'attachment-2']);
+      expect(server.uploads, hasLength(2));
+      expect(files().files, isEmpty);
+    });
+
+    test('$where keeps image until a lost answer is retried, posting '
+        'once', () async {
+      final image = HarnessAttachment('picture.png', Uint8List.fromList([1]));
+      files().add([image]);
+      server.loseReply = true;
+      await c.sendVoice(
+        conversationId: 'lead',
+        root: root,
+        wav: _wav,
+        lang: 'en',
+      );
+      expect(files().files, [image]);
+      expect(await c.retry(), isNotNull);
+      final sends = server.posts.where(
+        (p) => (p['command'] as Map)['type'] == 'message.send',
+      );
+      expect(sends.map((p) => p['operationId']).toSet(), hasLength(1));
+      expect(files().files, isEmpty);
+    });
+
     test('$where counts clip toward ten-file limit before uploading', () async {
       files().add([
         for (var i = 0; i < 10; i++)
