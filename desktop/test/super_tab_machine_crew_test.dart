@@ -9,7 +9,11 @@ import 'package:harness/super_tabs/model.dart';
 
 import 'support/super_tab_fixture.dart';
 
-Map<String, dynamic> _pool({DateTime? observedAt, num? diskFree = 42e9, num? projectDiskFree}) => {
+Map<String, dynamic> _pool({
+  DateTime? observedAt,
+  num? diskFree = 42e9,
+  num? projectDiskFree,
+}) => {
   'machineId': 'm',
   'name': 'Mac 3',
   'contributorId': 'owner',
@@ -60,12 +64,22 @@ int _hoursAgo(num hours) => DateTime.now()
     .millisecondsSinceEpoch;
 
 List<Map<String, dynamic>> _crew() => [
-  _agent('a1', 'tk', displayName: 'TestKeep', asleep: {'since': _hoursAgo(5.4)}),
+  _agent(
+    'a1',
+    'tk',
+    displayName: 'TestKeep',
+    asleep: {'since': _hoursAgo(5.4)},
+  ),
   _agent('a2', 'Keeper'),
   _agent(
     'a3',
     'Heron',
-    movedTo: {'machineId': 'mini', 'startId': 's', 'reason': 'offline', 'at': 1},
+    movedTo: {
+      'machineId': 'mini',
+      'startId': 's',
+      'reason': 'offline',
+      'at': 1,
+    },
   ),
   _agent('a4', 'Sorrel', asleep: {'since': _hoursAgo(1.2)}),
   // Not crew, or not on this machine: never counted.
@@ -185,16 +199,19 @@ void main() {
     },
   );
 
-  test('an asleep record without a time still reads asleep, with no idle hours', () {
-    final agent = SuperTabAgent.fromJson(
-      _agent('a1', 'tk', asleep: {'folderDropped': true}),
-    );
-    expect(agent.crewAsleep, isTrue);
-    expect(agent.crewAsleepSince, isNull);
-    expect(agent.crewMoving, isFalse);
-    final moving = SuperTabAgent.fromJson(
-      _agent('a3', 'Heron', movedTo: {'machineId': 'mini'}),
-    );
-    expect(moving.crewMoving, isTrue);
-  });
+  test(
+    'an asleep record without a time still reads asleep, with no idle hours',
+    () {
+      final agent = SuperTabAgent.fromJson(
+        _agent('a1', 'tk', asleep: {'folderDropped': true}),
+      );
+      expect(agent.crewAsleep, isTrue);
+      expect(agent.crewAsleepSince, isNull);
+      expect(agent.crewMoving, isFalse);
+      final moving = SuperTabAgent.fromJson(
+        _agent('a3', 'Heron', movedTo: {'machineId': 'mini'}),
+      );
+      expect(moving.crewMoving, isTrue);
+    },
+  );
 }

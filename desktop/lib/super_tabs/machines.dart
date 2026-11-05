@@ -1620,6 +1620,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       name: name,
       problem: problem,
       history: superTabMachineHistory(shared, snapshot.people),
+      crew: superTabMachineCrew(agents),
+      crewLine: superTabMachineCrewLine(
+        agents,
+        diskFree: dim ? null : diskFree?.toDouble(),
+      ),
       // Set up would ask for the password again while one setup runs.
       setUpTeam:
           ((setUpTeam || restartTeam) && progress == null) || joinLine != null,
@@ -2325,6 +2330,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   ? 'Cleaning up'
                   : superTabMachineStateLabel(view.status),
               ?view.history,
+              ?view.crewLine,
               ?view.problem,
               if (view.tip.isNotEmpty) view.tip,
             ].join(', '),
@@ -2914,6 +2920,8 @@ class _MachineView {
     required this.tip,
     this.problem,
     this.history,
+    this.crew = const [],
+    this.crewLine,
     this.setUpTeam = false,
     this.retryJoin = false,
     this.setUpTeamLabel = 'Set up',
@@ -2941,6 +2949,11 @@ class _MachineView {
 
   /// Who had this computer's row before (superTabMachineHistory); null for a row never moved.
   final String? history;
+
+  /// Its crew members, in their details' order ([superTabMachineCrew]), and the row's line about them
+  /// ([superTabMachineCrewLine]); empty and null on a machine without crew (task #3412).
+  final List<SuperTabAgent> crew;
+  final String? crewLine;
   final SuperTabPerson? owner;
   final String? contributor;
   final Map<String, dynamic>? shared;
@@ -3079,6 +3092,56 @@ String? superTabMachineHistory(
       ? ''
       : ' ${local.year}';
   return 'Was ${person.shownName} until ${local.day} ${months[local.month - 1]}$year';
+}
+
+/// The crew members among a machine's [agents] (task #3412): awake first, then moving, then asleep from the most
+/// recently asleep to the longest; otherwise in the Swarm's order.
+List<SuperTabAgent> superTabMachineCrew(List<SuperTabAgent> agents) {
+  int rank(SuperTabAgent a) => a.crewAsleep ? 2 : (a.crewMoving ? 1 : 0);
+  final crew = [
+    for (final a in agents)
+      if (a.crewRole != null) a,
+  ];
+  final order = {for (final (i, a) in crew.indexed) a.id: i};
+  return crew..sort((a, b) {
+    final byState = rank(a).compareTo(rank(b));
+    if (byState != 0) return byState;
+    final since = (
+      a.crewAsleepSince?.millisecondsSinceEpoch,
+      b.crewAsleepSince?.millisecondsSinceEpoch,
+    );
+    if (since case (final int x, final int y) when x != y) {
+      return y.compareTo(x);
+    }
+    return order[a.id]!.compareTo(order[b.id]!);
+  });
+}
+
+/// A machine row's line about its crew: "3 crew · 1 asleep · 42 GB free" (task #3412, anh Dee 11-05). Null without
+/// crew. [diskFree] is the row's current reading; null while its readings are old, and the line then leaves it out.
+String? superTabMachineCrewLine(
+  List<SuperTabAgent> agents, {
+  double? diskFree,
+}) {
+  final crew = superTabMachineCrew(agents);
+  if (crew.isEmpty) return null;
+  final asleep = crew.where((a) => a.crewAsleep).length;
+  return [
+    '${crew.length} crew',
+    if (asleep > 0) '$asleep asleep',
+    if (diskFree != null) '${resourceBytes(diskFree)} free',
+  ].join(' · ');
+}
+
+/// A crew member's state in its machine's details: "awake", "moving", or "asleep · idle 5 h" (whole hours asleep).
+String superTabCrewMemberState(SuperTabAgent agent, {DateTime? now}) {
+  if (agent.crewAsleep) {
+    final since = agent.crewAsleepSince;
+    if (since == null) return 'asleep';
+    final hours = (now ?? DateTime.now()).difference(since).inHours;
+    return 'asleep · idle ${hours < 0 ? 0 : hours} h';
+  }
+  return agent.crewMoving ? 'moving' : 'awake';
 }
 
 /// One engine's allowance on a machine: its mark and remaining share on the row, its windows on hover.
@@ -3279,7 +3342,10 @@ class _MachineLine extends StatelessWidget {
                         )
                       : text;
                   final problem = view.problem, history = view.history;
-                  if (problem == null && history == null) return title;
+                  final crew = view.crewLine;
+                  if (problem == null && history == null && crew == null) {
+                    return title;
+                  }
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
@@ -3289,6 +3355,14 @@ class _MachineLine extends StatelessWidget {
                         Text(
                           history,
                           key: ValueKey('super-machine-history-${view.id}'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.metadata(),
+                        ),
+                      if (crew != null)
+                        Text(
+                          crew,
+                          key: ValueKey('super-machine-crew-${view.id}'),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: DesktopChrome.metadata(),
@@ -3559,6 +3633,9 @@ class _MachineReadings extends StatelessWidget {
         ),
     ];
     final sections = <(String, String?, Widget Function(double))>[
+      // First, what runs here and for how long it has slept (task #3412).
+      if (view.crew.isNotEmpty)
+        ('Crew', '${view.crew.length}', (_) => _crew(view)),
       if (hardware.isNotEmpty)
         (
           'Hardware',
@@ -3676,6 +3753,54 @@ class _MachineReadings extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  /// One line per crew member: its name, then awake, moving, or asleep with its idle hours; an asleep one muted.
+  static Widget _crew(_MachineView view) {
+    final now = DateTime.now();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final (index, member) in view.crew.indexed)
+          Padding(
+            padding: EdgeInsets.only(top: index == 0 ? 0 : 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    member.displayName?.trim().isNotEmpty == true
+                        ? member.displayName!.trim()
+                        : member.name,
+                    key: ValueKey(
+                      'super-machine-crew-member-${view.id}-$index',
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.text(
+                      size: 12,
+                      height: 1.3,
+                      color: member.crewAsleep
+                          ? DesktopChrome.muted
+                          : DesktopChrome.foreground,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  superTabCrewMemberState(member, now: now),
+                  key: ValueKey('super-machine-crew-state-${view.id}-$index'),
+                  style: DesktopChrome.text(
+                    size: 11,
+                    height: 1.3,
+                    color: DesktopChrome.muted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 

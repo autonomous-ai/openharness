@@ -208,6 +208,13 @@ class SuperTabAgent {
         _ => null,
       },
       crewAsleep = row['asleep'] != null,
+      crewAsleepSince = switch (row['asleep']) {
+        {'since': final num since} => DateTime.fromMillisecondsSinceEpoch(
+          since.toInt(),
+        ),
+        _ => null,
+      },
+      crewMoving = row['movedTo'] != null,
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
@@ -255,6 +262,13 @@ class SuperTabAgent {
 
   /// A crew member put to sleep on purpose (task #3398): its session is closed and nothing reopens it.
   final bool crewAsleep;
+
+  /// Since when it sleeps (backend crewKeep.ts `asleep.since`): its idle hours on its machine's row (task #3412). Null
+  /// when awake, or when the server sent no time.
+  final DateTime? crewAsleepSince;
+
+  /// A crew member on its way to another machine (backend `movedTo`, task #3398): its new session takes over there.
+  final bool crewMoving;
 
   /// Its session is closed on its machine and someone chose to keep the agent: the backend removes every other closed
   /// agent from the list (backend closedAgents.ts), so this one is shown as closed, never as Idle.
