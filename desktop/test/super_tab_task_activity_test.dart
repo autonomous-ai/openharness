@@ -54,6 +54,7 @@ Future<SuperTabController> _show(
           needsHuman: (task) => asking.contains(task.id) ? 1 : 0,
           onOpenTask: (_) {},
           onOpenProposal: (_) {},
+          onOpenMessage: (_, _) {},
           now: () => _now,
         ),
       ),

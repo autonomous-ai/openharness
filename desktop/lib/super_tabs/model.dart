@@ -1,6 +1,7 @@
 import 'identity.dart' show superTabPersonName;
 import 'live_card_model.dart';
 import 'profile_model.dart';
+import 'pulse.dart';
 
 export 'profile_model.dart';
 
@@ -665,6 +666,7 @@ class SuperTabSnapshot {
       decisionsDigest = row['decisionsDigest'] as String?,
       activityDigest = row['activityDigest'] as String?,
       remindersDigest = row['remindersDigest'] as String?,
+      _pulses = SuperTabPulse.readAll(row['pulse']),
       chatSettings = Map.unmodifiable({
         if (row['chatSettings'] case final Map settings)
           for (final MapEntry(:key, :value) in settings.entries)
@@ -806,6 +808,11 @@ class SuperTabSnapshot {
   /// Which reminders the reader has set and when each is due, as a digest that moves when one is set, replaced or
   /// cleared; null from a backend before reminders (superTabs/reminders.ts).
   final String? remindersDigest;
+
+  /// [projectId]'s board pulse (task #3384); null from a server before it,
+  /// or when its pulse could not be read.
+  SuperTabPulse? pulseOf(String projectId) => _pulses[projectId];
+  final Map<String, SuperTabPulse> _pulses;
 
   /// The reader's own notification setting by conversation (backend chatSettings.ts); a chat not listed is at
   /// [SuperTabNotify.mentions]. Never another person's.
