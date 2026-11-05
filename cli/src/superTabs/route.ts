@@ -21,7 +21,8 @@ export type Size = 'small' | 'medium' | 'large'
  * start (machineFit.ts). `needs.ci`: the CI jobs the work starts at once, and how many of them on macOS runners, held against
  * the account's running-jobs limit; a need above that limit counts as the limit and the route says so (machineFit.ts). Both are left out when not given, so a request without them answers as before. */
 export type HeavyWork = 'build' | 'e2e'
-export interface Needs { tools: string[]; devices: string[]; cwd?: string; heavy?: HeavyWork[]; ci?: { jobs: number; macos: number } }
+/** `access`: what the work needs to reach, by the names machines list it under (backend superTabs/machineAccess.ts, task #3047). */
+export interface Needs { tools: string[]; devices: string[]; access?: string[]; cwd?: string; heavy?: HeavyWork[]; ci?: { jobs: number; macos: number } }
 export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; local?: boolean; model?: string; needs: Needs }
 /** A model of the reviewed catalog (backend superTabs/catalog.ts): how strong it is, what it costs, and whether it is offered
  * when nobody names it. */
@@ -243,6 +244,9 @@ export function parseAssessment(value: unknown): Assessment | string {
   if (v.kind !== undefined && (typeof v.kind !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(v.kind))) return 'Set kind to one lowercase word, such as ui or docs.'
   if (v.local !== undefined && typeof v.local !== 'boolean') return 'Set local to true only when a person asked for a local model.'
   if (v.model !== undefined && (typeof v.model !== 'string' || !words(v.model).length || v.model.length > 200)) return 'Set model to the model a person named, in their words.'
+  const access = needs.access === undefined ? [] : Array.isArray(needs.access) && needs.access.every(n => typeof n === 'string' && n.trim() && n.trim().length <= 60)
+    ? [...new Set((needs.access as string[]).map(n => n.trim().replace(/\s+/g, ' ')))] : null
+  if (!access) return 'Set needs.access to a list of names of up to 60 characters, such as ["Lamp"].'
   const heavy = needs.heavy
   if (heavy !== undefined && (!Array.isArray(heavy) || !heavy.every(h => HEAVY_WORK.includes(h)))) return 'Set needs.heavy to a list of build and e2e.'
   const ci = needs.ci === undefined ? undefined : object(needs.ci)
@@ -252,7 +256,7 @@ export function parseAssessment(value: unknown): Assessment | string {
   }
   return { difficulty: v.difficulty as Level, risk: v.risk as Level, size: size as Size, why, ...(v.kind ? { kind: v.kind as string } : {}),
     ...(v.local === true ? { local: true } : {}), ...(typeof v.model === 'string' ? { model: v.model.trim() } : {}),
-    needs: { tools: list(needs.tools), devices: list(needs.devices), ...(cwd ? { cwd } : {}),
+    needs: { tools: list(needs.tools), devices: list(needs.devices), ...(access.length ? { access } : {}), ...(cwd ? { cwd } : {}),
       ...(Array.isArray(heavy) && heavy.length ? { heavy: [...new Set(heavy as HeavyWork[])] } : {}),
       ...(ci ? { ci: { jobs: ci.jobs as number, macos: (ci.macos as number | undefined) ?? 0 } } : {}) } }
 }
