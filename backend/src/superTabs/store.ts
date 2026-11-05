@@ -20,6 +20,7 @@ import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE 
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, notThere } from './deletion.js'
+import type { ApprovalRow } from './ruleGuard.js'
 import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
@@ -161,6 +162,13 @@ function registeredBy(state: SuperTabState, command: Command): Array<{ machineId
   if (command.type !== 'agent.started') return []
   const start = state.starts?.find(s => s.id === command.startId)
   return start ? [{ machineId: start.request.machineId, harnessId: command.harnessId }] : []
+}
+
+/** The messages an instructions save names as people's approvals (ruleGuard.ts), each by its id in this tab as askedIn is read:
+ *  at most MAX_APPROVALS equality reads on _id. Prisma sends `in` as $expr, which no index bounds (backend/AGENTS.md). */
+async function readApprovals(tx: Transaction, tabId: string, ids: string[]): Promise<ApprovalRow[]> {
+  const rows = await Promise.all([...new Set(ids)].map(id => tx.superTabMessage.findFirst({ where: { id, tabId }, select: { id: true, author: true, source: true } })))
+  return rows.flatMap(row => row ? [{ id: row.id, author: row.author as unknown as Author, source: !!row.source }] : [])
 }
 
 function namedFor(command: Command): Named {
@@ -918,6 +926,15 @@ export class SuperTabStore {
       const chat = projectsOf(state).find(p => p.id === projectId)?.leadConversationId
       if (chat) groupIds.push(chat)
     }
+    // A save that names people's approvals of dropped rules tells each of them privately (commands.ts, ruleGuard.ts): their one
+    // Buddy chat and their older one in the project, quiet or not. Only a person's message tells anyone.
+    if (command.type === 'instructions.save' && command.approvals?.length) {
+      for (const row of await readApprovals(tx, tabId, command.approvals)) {
+        if (row.author.kind !== 'person') continue
+        buddyChat(command.projectId, row.author.id)
+        swarmChat(row.author.id)
+      }
+    }
     // A proposal posts in the chat of the project it goes to, even quiet: the one a Swarm-wide Buddy names, else its session's.
     if (command.type === 'buddy.propose') {
       const self = asAgentId ? state.agents.find(a => a.id === asAgentId) : undefined
@@ -1671,6 +1688,7 @@ export class SuperTabStore {
       if (command.type === 'instructions.save' || command.type === 'rule.set') {
         const projectId = command.type === 'rule.set' ? ruleProject(original, actor, command).id : command.projectId
         context.instructions = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, projectId) }, select: { revision: true, text: true } })
+        if (command.type === 'instructions.save' && command.approvals?.length) context.approvals = await readApprovals(tx, tabId, command.approvals)
       }
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'

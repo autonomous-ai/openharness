@@ -55,6 +55,7 @@ import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, 
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
+import { allowedDrops, approvedDropNotice, MAX_APPROVALS, type ApprovalRow } from './ruleGuard.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { instructionsChange } from './instructionsDiff.js'
@@ -201,7 +202,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   // The project's instructions, saved on the revision the writer read (instructions.ts). `askedBy`: the member whose words it
   // carries, required of the coordinator; a person writes in their own.
   z.object({ type: z.literal('instructions.save'), projectId: id, baseRevision: z.number().int().nonnegative().safe(), text: instructionsTextSchema,
-    summary: summarySchema, askedBy: id.optional() }).strict(),
+    summary: summarySchema, askedBy: id.optional(),
+    // A person's own messages approving the drop of their rules (ruleGuard.ts), when the save drops any.
+    approvals: z.array(id).max(MAX_APPROVALS).optional() }).strict(),
   // A small thing a member told the coordinator, kept beside the instructions until it ends, if it does (instructions.ts).
   z.object({ type: z.literal('note.add'), projectId: id, text: noteTextSchema, askedBy: id, expiresAt: z.iso.datetime().optional() }).strict(),
   z.object({ type: z.literal('note.remove'), projectId: id, noteId: id }).strict(),
@@ -510,6 +513,8 @@ export interface CommandContext {
     shown?: string[] }
   /** For `instructions.save`: the project's stored document, read by the store, which a stale save hands back to merge. */
   instructions?: { revision: number; text: string } | null
+  /** For `instructions.save`: the messages it names as approvals, loaded by id in this tab by the store (ruleGuard.ts). */
+  approvals?: ApprovalRow[]
   /** For `note.add` and `note.remove`: the project's stored notes, expired ones too, read by the store (instructions.ts). */
   notes?: PmNote[]
   /** The message a Lead quotes as the owner's request for a rule or skill mode change, loaded from this tab by the store. */
@@ -1797,7 +1802,18 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // The text this save replaces, which the store read for the stale check above: what its chat line diffs against.
       const before = !current ? INSTRUCTIONS_TEMPLATE : context.instructions?.revision === current ? context.instructions.text : null
+      // A person's rule, or who gave it, is dropped only by that person or with their own message approving it (#3151).
+      const told = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [])
       saveInstructions(project, current, before, command.text, command.summary, askedBy)
+      // Each approver is told in one line, privately, as person.tell does: in their one Buddy chat and their older one here.
+      for (const [personId, rules] of told) {
+        const to = person(state, personId)
+        const text = approvedDropNotice(who, project, rules)
+        const id = stableId(operationId, 'rule-approved', personId)
+        message(openSwarmBuddyChat(state, to).id, text, [], null, { kind: PM_LINE_KIND, projectId: project.id }, undefined, undefined, undefined, id)
+        Object.assign(effects.messages.at(-1)!, { buddyProject: project.id })
+        effects.messages.push({ id: stableId(id, 'project-chat'), conversationId: openBuddyChat(state, project.id, to).id, author: sender, text, replyTo: null, recipients: [] })
+      }
       break
     }
     case 'note.add': {
