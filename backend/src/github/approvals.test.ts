@@ -78,6 +78,20 @@ describe('the app\'s GitHub sign-in', () => {
     expect(refused.calls).toHaveLength(1)
   })
 
+  it('says when the person\'s token could not be revoked, never the token itself', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith('/login/oauth/access_token')) return new Response(JSON.stringify({ access_token: 'ghu_secret_fixture' }), { status: 200 })
+      return new Response(null, { status: init?.method === 'DELETE' ? 500 : 200 })
+    }) as unknown as typeof globalThis.fetch
+    const signIn = new GitHubSignIn({ clientId: 'Iv23client', clientSecret: 'secret', fetch, webUrl: 'https://gh.test', apiUrl: 'https://api.gh.test' })
+    await signIn.withUserToken('c', async () => 1)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0])).toContain('not revoked')
+    expect(String(warn.mock.calls[0])).not.toContain('ghu_secret_fixture')
+    warn.mockRestore()
+  })
+
   it('is on with both its client id and secret, off with neither, and refuses one alone', () => {
     expect(githubSignIn({ GITHUB_APP_CLIENT_ID: '', GITHUB_APP_CLIENT_SECRET: '' })).toBeNull()
     expect(githubSignIn({ GITHUB_APP_CLIENT_ID: 'Iv23', GITHUB_APP_CLIENT_SECRET: 's' })).toBeInstanceOf(GitHubSignIn)

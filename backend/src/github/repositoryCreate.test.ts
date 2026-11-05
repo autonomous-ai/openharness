@@ -1,7 +1,8 @@
 import { createHmac, randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { readState, signState, STATE_TTL_MS, type ApprovalRequest, type UserCall } from './approvals.js'
-import { createRepository, readCreateState, repositoryNameProblem, signCreateState, type CreateRequest } from './repositoryCreate.js'
+import { createRepository, createStateSecret, readCreateState, repositoryNameProblem, signCreateState, type CreateRequest } from './repositoryCreate.js'
+import { stateSecret } from './approvals.js'
 import { fakeApp, fakeGitHub, throwawayKey } from './fakeGitHub.js'
 
 const key = throwawayKey()
@@ -52,6 +53,15 @@ describe('a create sign-in\'s state', () => {
     expect(readCreateState(secret, sign({ ...request, kind: 'create', owner: '-bad', exp: AT + 1000 }), AT)).toBeNull()
     expect(readCreateState(secret, sign({ ...request, kind: 'create', private: 'yes', exp: AT + 1000 }), AT)).toBeNull()
     expect(readCreateState(secret, `${created.split('.')[0]}.forged`, AT)).toBeNull()
+  })
+})
+
+describe('the key create states are signed with', () => {
+  it('is its own, apart from approvals\' (security review 2 of #3201), and the same each time', () => {
+    const config = { appId: '1', privateKey: key.privateKey, slug: null }
+    expect(createStateSecret(config)).toEqual(createStateSecret(config))
+    expect(createStateSecret(config)).toHaveLength(32)
+    expect(createStateSecret(config).equals(stateSecret(config))).toBe(false)
   })
 })
 

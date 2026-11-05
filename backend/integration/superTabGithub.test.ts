@@ -14,6 +14,7 @@ import type { Approvals, GitHubSignIn } from '../src/github/approvals.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { GitHubTokens, MemoryTokenCache } from '../src/github/tokens.js'
+import { OWNER_CHECKS_PER_MINUTE, resetOwnerChecks } from '../src/github/repositoryCreate.js'
 import { fakeApp, fakeGitHub, throwawayKey } from '../src/github/fakeGitHub.js'
 import { poolRows } from './hostRows.test-support.js'
 import { logger } from '../src/utils/logger.js'
@@ -811,18 +812,24 @@ describe('a new repository from New Project (task #1788)', () => {
     'GET /user': { status: 200, body: { login: 'olive' } },
     'POST /orgs/acme/repos': { status: 201, body: { id: 555, full_name: 'acme/notes', html_url: 'https://github.com/acme/notes' } },
   }
-  /** The app's sign-in, answering the person's calls from [script]; a code 'bad' is one GitHub refuses. */
-  const signInWith = (script: () => Script) => ({
-    authorizeUrl: (state: string) => `https://github.test/login/oauth/authorize?state=${state}`,
-    permission: async () => ({ login: 'olive', push: true }),
-    withUserToken: async (code: string, use: (call: (m: string, p: string, b?: unknown) => Promise<{ status: number; body: Record<string, unknown> }>) => Promise<unknown>) => {
-      if (code === 'bad') return null
-      return use(async (method, path) => {
-        const answer = script()[`${method} ${path}`] ?? { status: 404, body: { message: 'Not Found' } }
-        return { status: answer.status, body: answer.body ?? {} }
-      })
-    },
-  }) as unknown as GitHubSignIn
+  /** The app's sign-in, answering the person's calls from [script]; a code 'bad' is one GitHub refuses, and each code works
+   *  once, as GitHub's do. [onCreate] runs while the create call is in flight. */
+  const signInWith = (script: () => Script, onCreate?: () => Promise<void>) => {
+    const used = new Set<string>()
+    return {
+      authorizeUrl: (state: string) => `https://github.test/login/oauth/authorize?state=${state}`,
+      permission: async () => ({ login: 'olive', push: true }),
+      withUserToken: async (code: string, use: (call: (m: string, p: string, b?: unknown) => Promise<{ status: number; body: Record<string, unknown> }>) => Promise<unknown>) => {
+        if (code === 'bad' || used.has(code)) return null
+        used.add(code)
+        return use(async (method, path) => {
+          if (method === 'POST' && onCreate) await onCreate()
+          const answer = script()[`${method} ${path}`] ?? { status: 404, body: { message: 'Not Found' } }
+          return { status: answer.status, body: answer.body ?? {} }
+        })
+      },
+    } as unknown as GitHubSignIn
+  }
   async function project(env: Env) {
     const tab = (await env.store.create(owner, randomUUID(), 'Pilot')).id
     const projectId = String((await env.run(tab, { type: 'project.create', name: 'Notes', visibility: 'public', brief: '' } as Command)).result.projectId)
@@ -857,7 +864,7 @@ describe('a new repository from New Project (task #1788)', () => {
       repositoryUrl: 'https://github.com/acme/notes', reachable: true })
     expect(env.approved).toEqual([expect.objectContaining({ tabId: tab, projectId, repository: 'acme/notes', scope: 'project', login: 'olive' })])
     // The same link again changes nothing and creates nothing more.
-    const again = await callback(env, `code=c&state=${stateOf(authorizeUrl)}`)
+    const again = await callback(env, `code=c2&state=${stateOf(authorizeUrl)}`)
     expect(again.body).toContain('This link has expired')
     expect(env.approved).toHaveLength(1)
   })
@@ -924,12 +931,12 @@ describe('a new repository from New Project (task #1788)', () => {
 
     asked = await start()
     script = { ...made, 'POST /orgs/acme/repos': { status: 422, body: { message: 'Repository creation failed.', errors: [{ message: 'name already exists on this account' }] } } }
-    expect((await callback(env, `code=c&state=${stateOf(asked.authorizeUrl)}`)).body).toContain('acme/notes already exists')
+    expect((await callback(env, `code=c3&state=${stateOf(asked.authorizeUrl)}`)).body).toContain('acme/notes already exists')
     expect(await creation(env, tab, projectId)).toMatchObject({ state: 'taken' })
 
     asked = await start()
     script = { ...made, 'POST /orgs/acme/repos': { status: 403, body: { message: 'Members cannot create repositories.' } } }
-    expect((await callback(env, `code=c&state=${stateOf(asked.authorizeUrl)}`)).body).toContain('Members cannot create repositories.')
+    expect((await callback(env, `code=c4&state=${stateOf(asked.authorizeUrl)}`)).body).toContain('Members cannot create repositories.')
     expect(await creation(env, tab, projectId)).toMatchObject({ state: 'refused', reason: 'Members cannot create repositories.' })
 
     asked = await start()
@@ -951,6 +958,59 @@ describe('a new repository from New Project (task #1788)', () => {
     expect(late.body).toContain('This link has expired')
     expect(creates).toBe(0)
     expect(await creation(env, tab, projectId)).toMatchObject({ name: 'notes2', state: 'waiting' })
+  })
+
+  it('a replayed callback while the first is still creating changes nothing (security review 2 of #3201)', async () => {
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    let entered!: () => void
+    const inside = new Promise<void>(resolve => { entered = resolve })
+    const env = await fresh({ approveAll: false, signIn: signInWith(() => made, async () => { entered(); await held }) })
+    ready(env)
+    env.github.installed.set('acme/notes', 91)
+    const { tab, projectId } = await project(env)
+    const asked = (await askCreate(env, tab, projectId)).json().data as { authorizeUrl: string; at: number }
+    const first = callback(env, `code=c&state=${stateOf(asked.authorizeUrl)}`)
+    await inside
+    expect(await creation(env, tab, projectId)).toMatchObject({ state: 'creating' })
+    const replay = await callback(env, `code=c&state=${stateOf(asked.authorizeUrl)}`)
+    expect(replay.body).toContain('This link has expired')
+    release()
+    expect((await first).body).toContain('acme/notes is ready')
+    expect(await creation(env, tab, projectId)).toMatchObject({ state: 'created', repositoryUrl: 'https://github.com/acme/notes' })
+    expect(env.approved).toHaveLength(1)
+  })
+
+  it('allows nothing for a project deleted while GitHub was creating its repository (security review 1 of #3201)', async () => {
+    let deleteNow: () => Promise<void> = async () => {}
+    const env = await fresh({ approveAll: false, signIn: signInWith(() => made, () => deleteNow()) })
+    ready(env)
+    const { tab, projectId } = await project(env)
+    const asked = (await askCreate(env, tab, projectId)).json().data as { authorizeUrl: string }
+    deleteNow = async () => { await env.run(tab, { type: 'project.delete', projectId } as Command) }
+    const done = await callback(env, `code=c&state=${stateOf(asked.authorizeUrl)}`)
+    expect(done.body).toContain('The project was deleted meanwhile')
+    expect(env.approved).toEqual([])
+  })
+
+  it('asks GitHub nothing for someone who may not create, and limits organization checks per person (security reviews of #3201)', async () => {
+    const env = await fresh({ approveAll: false, signIn: signInWith(() => made) })
+    ready(env)
+    const { tab, projectId } = await project(env)
+    await invited(env, tab, host)
+    const lookups = () => env.github.calls.filter(c => c.path.startsWith('/orgs/')).length
+    expect((await askCreate(env, tab, projectId, undefined, host)).statusCode).toBe(403)
+    expect(lookups()).toBe(0)
+    resetOwnerChecks()
+    onTestFinished(() => { resetOwnerChecks() })
+    const owners = (name: string) => env.app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/github/owners/${name}`, headers: { authorization: `Bearer ${owner.sub}` } })
+    for (let i = 0; i < OWNER_CHECKS_PER_MINUTE; i++) expect((await owners(`org${i}`)).statusCode).toBe(200)
+    const before = lookups()
+    const limited = await owners('one-more')
+    expect(limited.statusCode).toBe(429)
+    expect(limited.json().error.code).toBe('RATE_LIMITED')
+    expect((await askCreate(env, tab, projectId, { owner: 'another', name: 'notes', private: true })).statusCode).toBe(429)
+    expect(lookups()).toBe(before)
   })
 
   it('a project deleted while its person was in GitHub is said, and nothing is created', async () => {
