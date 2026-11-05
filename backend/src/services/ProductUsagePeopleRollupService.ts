@@ -1,6 +1,7 @@
 import { peopleCounters } from '../analytics/peopleCounters.js'
 import { ACTIVITY_DAYS } from '../types/productUsageActivity.js'
 import { prisma } from '../lib/prisma.js'
+import { setUsageTotals } from '../lib/productUsageWrite.js'
 import { logger } from '../utils/logger.js'
 
 const DAY = 86_400_000
@@ -16,10 +17,7 @@ export async function rollupPeople(now = new Date()): Promise<number> {
     select: { subject: true, dayUtc: true, surfaces: true, worked: true, hosting: true, signupDay: true, staff: true },
   })
   const counters = peopleCounters(marks, now)
-  for (const { day, metric, value } of counters) {
-    const dayUtc = new Date(day)
-    await prisma.productUsageTotal.upsert({ where: { dayUtc_metric: { dayUtc, metric } }, create: { dayUtc, metric, value }, update: { value } })
-  }
+  await setUsageTotals(prisma, counters.map(({ day, metric, value }) => ({ dayUtc: new Date(day), metric, value })))
   return counters.length
 }
 
