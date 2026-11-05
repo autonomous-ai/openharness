@@ -14,7 +14,7 @@ import { CommandRetries, permanentRefusal } from './retries.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
 import { attachedFiles, attachmentsOf, formatSize, type FilesInFlight, type Relink } from './attachments.js'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import { BUDDY_HOME_MANIFEST, BUDDY_HOMES, buddyHomeDue, buddyHomeHoldsLost, buddyHomeRefreshing, pruneBuddyHome, refreshBuddyHome, removeBuddyHome, stopBuddyHomeRefresh } from './buddyHome.js'
@@ -451,6 +451,28 @@ export const BUDDY_SESSION_GONE_MS = 60_000
  *  idle time counts from the wake, so a Mac that slept through 30 minutes never ends a working session as it wakes (security
  *  review 1 of #2345). */
 export const BUDDY_SESSION_SLEEP_GAP_MS = 2 * 60_000
+/** The temporary files saves of [file] left behind (writeJournal names them `<file>.<pid>.<uuid>.next`): those of this
+ *  process, which saves synchronously, so none is in flight as its host starts, and those of a process no longer running.
+ *  Never a live process's, which may be saving through it now, nor any other file. Removes them; their names. */
+export function removeStaleJournalTemps(file: string): string[] {
+  const folder = dirname(file), base = basename(file)
+  if (!existsSync(folder)) return []
+  const removed: string[] = []
+  for (const name of readdirSync(folder)) {
+    const match = name.startsWith(`${base}.`) ? /^(\d+)\.[0-9a-f-]{36}\.next$/.exec(name.slice(base.length + 1)) : null
+    if (!match) continue
+    const pid = Number(match[1])
+    if (pid !== process.pid && running(pid)) continue
+    rmSync(join(folder, name), { force: true })
+    removed.push(name)
+  }
+  return removed
+}
+/** Whether process [pid] is running: signal 0 checks without signalling; EPERM is a running process of another user. */
+function running(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' }
+}
+
 /** Saves [journal] whole, through a temporary file of its own: a fixed `.next` name let another writer's save move it away
  *  first, and every save then failed (task #3514: Mac 3's Team host, 11-06, ENOENT on the rename). A save that fails leaves
  *  no temporary file behind. */
@@ -682,6 +704,11 @@ export class SuperTabHost {
       post: (tabId, agentId, operationId, command) => backend(core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId, asAgentId: agentId, command }),
       transcript: harnessId => core.agents.byAgent(harnessId)?.transcriptPath, tokens: conversationTokens })
     this.sources = options.sources ?? { feed: new HostFeed(core, machineId, { now: this.now }), reads: new SwarmReads(core) }
+    // A save that crashed between its write and its rename left its temporary file behind (writeJournal): gone as the host starts.
+    try {
+      const removed = removeStaleJournalTemps(this.file)
+      if (removed.length) this.log(`Removed ${removed.length} leftover temporary journal ${removed.length === 1 ? 'file' : 'files'}.`)
+    } catch (error) { this.log(`Leftover temporary journal files: ${error instanceof Error ? error.message : String(error)}`) }
     this.journal = { version: 1, machineId, entries: {} }
     if (existsSync(this.file)) {
       const raw = readFileSync(this.file, 'utf8')

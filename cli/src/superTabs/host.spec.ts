@@ -29,7 +29,7 @@ vi.mock('../lib/buddyGuard.js', async original => {
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
-import { backend, writeJournal, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { backend, writeJournal, removeStaleJournalTemps, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { ADDED_MAX } from './deliveryContext.js'
 import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
 import { TerminalHost } from './terminal.js'
@@ -1325,6 +1325,30 @@ describe('Super Tab native delivery handoff', () => {
     expect(readFileSync(`${file}.next`, 'utf8')).toBe('theirs')
     // Its own temporary file does not stay behind.
     expect(readdirSync(dirname(file)).sort()).toEqual(['host-machine-1.json', 'host-machine-1.json.next'])
+  })
+
+  // Task #3514 follow-up (River): a save that crashed between its write and its rename leaves its own temporary file; the
+  // host removes those as it starts, but never one a live process may still be saving through.
+  it('removes its own leftover temporary journal files as it starts, never a live process\'s or another file\'s', () => {
+    const t = setup()
+    const file = hostJournalFile(t.dir, 'machine-1'), folder = dirname(file), base = basename(file)
+    mkdirSync(folder, { recursive: true })
+    const dead = 2 ** 22 + 12_345
+    const left = [`${base}.${dead}.${randomUUID()}.next`, `${base}.${process.pid}.${randomUUID()}.next`]
+    // A live process's, the old fixed name, another machine's (even one a dead process left) and other files: never removed.
+    const kept = [`${base}.${process.ppid}.${randomUUID()}.next`, `${base}.next`, `host-machine-2.json.${dead}.${randomUUID()}.next`,
+      'observers-machine-1.json.next']
+    for (const name of [...left, ...kept]) writeFileSync(join(folder, name), 'x')
+    expect(() => process.kill(dead, 0)).toThrow()
+    t.open()
+    const now = readdirSync(folder)
+    for (const name of left) expect(now).not.toContain(name)
+    for (const name of kept) expect(now).toContain(name)
+    // The live journal stays, as the host read it.
+    expect(now).toContain(base)
+    expect(t.saved()).toMatchObject({ machineId: 'machine-1' })
+    // The same as one call, which the host makes once.
+    expect(removeStaleJournalTemps(file)).toEqual([])
   })
 
   it('does not type again after a crash between submission and its native acknowledgement', async () => {
