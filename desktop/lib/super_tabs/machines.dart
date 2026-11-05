@@ -606,6 +606,9 @@ Future<void> _machineSettingsDialog(
   int atMostValue() {
     if (atMostEdited != null) return atMostEdited!;
     final stored = storedSlots(existingId);
+    if (stored != null && storedRow(existingId)?['agents'] == 'atMost') {
+      return stored.clamp(_agentSlotsMin, atMostMaximum());
+    }
     final maximum = memoryMaximum();
     if (stored != null && (maximum == null || stored < maximum)) {
       return _clampAgentSlots(stored);
