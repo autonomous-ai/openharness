@@ -31,6 +31,16 @@ describe('projectPullRequestFiles', () => {
     expect((await projectPullRequestFiles(app)(REPO, [`${REPO}/pull/7`]))?.files).toBeNull()
   })
 
+  // Security review 2 of #3227 (Elm): only the first five were read, so a sixth changing sign-in planned an ordinary review.
+  it('plans as unread when a task links more of the project\'s pull requests than it reads', async () => {
+    const urls = Array.from({ length: 6 }, (_, i) => `${REPO}/pull/${i + 1}`)
+    const app = fakeApp(Object.fromEntries(urls.map((_, i) => [i + 1, ['docs/a.md']])), Object.fromEntries(urls.map((_, i) => [i + 1, 'abc1234'])))
+    const read = await projectPullRequestFiles(app)(REPO, urls)
+    expect(read?.files).toBeNull()
+    expect(read?.urls).toEqual(urls)
+    expect(app.pullRequestFiles).not.toHaveBeenCalled()
+  })
+
   it('has nothing to read with no pull request of the project\'s repository', async () => {
     const app = fakeApp({})
     expect(await projectPullRequestFiles(app)(REPO, ['https://github.com/other/repo/pull/9'])).toBeNull()
