@@ -332,7 +332,7 @@ describe('a Buddy through the store', () => {
     await expect(f.store.costSummary(peer, f.tab, 7, agentId)).rejects.toThrow('A Buddy reads no routing')
   })
 
-  it('never reads the nightly routing reflection, which says what each engine and model cost: routing too', async () => {
+  it('receives no nightly report and still cannot read historical routing reports', async () => {
     const f = await swarm()
     const { agentId } = await buddy(f)
     const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Parser', brief: '', checks: [] })).result.conversationId)
@@ -340,11 +340,16 @@ describe('a Buddy through the store', () => {
     await db.superTabRouteDecision.create({ data: { id: randomUUID(), tabId: f.tab, conversationId: group, assignmentId: randomUUID(), outcome: 'done',
       createdAt: new Date(at), final: { kind: 'member' }, record: { assessment: { kind: 'parser' } }, run: { machineId: 'peer-mac', harnessId: 'h',
         engine: 'claude', model: 'opus', effort: 'high', billing: 'subscription', startedAt: at, start: {}, endedAt: at + 60_000, end: {} } } })
-    expect(await f.store.postReflection(f.tab, 'lead', '2026-10-30')).toBe('posted')
-    const report = (await f.store.messages(peer, f.tab, 'lead', {})).messages.find(m => (m.source as { kind?: unknown } | null)?.kind === 'routing-reflection')
-    expect(report?.text).toContain('- claude opus high, parser: 1 attempt, 0 shipped')
-    expect((await f.store.messages(peer, f.tab, 'lead', {}, agentId)).messages.map(m => m.id)).not.toContain(report!.id)
-    await expect(f.store.messages(peer, f.tab, 'lead', { messageId: report!.id }, agentId)).resolves.toMatchObject({ messages: [] })
+    expect(await f.store.postReflection(f.tab, 'lead', '2026-10-30')).toBe('empty')
+    expect((await f.store.messages(peer, f.tab, 'lead', {})).messages.some(m => (m.source as { kind?: unknown } | null)?.kind === 'routing-reflection')).toBe(false)
+    const report = await db.superTabMessage.create({ data: { id: randomUUID(), tabId: f.tab, conversationId: 'lead', sequence: 1,
+      author: { kind: 'agent', id: f.lead, name: 'Lead' }, recipientIds: [], mentions: [], text: 'Routing reflection: an old report.',
+      source: { kind: 'routing-reflection', projectId: 'lead', on: '2026-10-29' } } })
+    expect((await f.store.messages(peer, f.tab, 'lead', { messageId: report.id })).messages).toEqual([
+      expect.objectContaining({ id: report.id, text: report.text }),
+    ])
+    expect((await f.store.messages(peer, f.tab, 'lead', {}, agentId)).messages.map(m => m.id)).not.toContain(report.id)
+    await expect(f.store.messages(peer, f.tab, 'lead', { messageId: report.id }, agentId)).resolves.toMatchObject({ messages: [] })
   })
 
   it('never reads the routing proposals asked of its person: not in its decisions, nor as the PM\'s line when its person leaves one to the PM (review of #2276)', async () => {
