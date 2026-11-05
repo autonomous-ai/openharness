@@ -19,9 +19,9 @@ import '../voice_fakes.dart';
 import '../swarm/swarm_fixture.dart';
 
 /// Renders a phone Swarm chat's voice messages (task #2584) — the mic at
-/// rest, a take recording, a voice message with its words hidden and shown,
-/// and the mic refused — in light and dark, at iPhone 14 size in the system
-/// fonts, to PNGs a reviewer can look at without a phone.
+/// rest, a take recording, a voice message and the mic refused — in light
+/// and dark, at iPhone 14 size in the system fonts, to PNGs a reviewer can
+/// look at without a phone.
 ///
 /// Skipped unless PHONE_RENDER_DIR names a directory to write into:
 ///
@@ -233,15 +233,6 @@ void main() {
     ) async {
       final key = await chat(tester, _MeteredRecorder());
       await shoot(tester, key, 'swarm-voice-message-$look');
-    });
-
-    testWidgets('a voice message\'s words open ($look)', skip: skip, (
-      tester,
-    ) async {
-      final key = await chat(tester, _MeteredRecorder());
-      await tester.tap(find.byKey(const ValueKey('swarm-voice-words-toggle')));
-      await tester.pumpAndSettle();
-      await shoot(tester, key, 'swarm-voice-words-$look');
     });
 
     testWidgets('recording ($look)', skip: skip, (tester) async {

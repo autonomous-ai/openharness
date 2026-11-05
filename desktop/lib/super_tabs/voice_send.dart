@@ -11,12 +11,6 @@ import 'voice_take.dart';
 /// for it, as a file (the phone's swarmVoiceFileName).
 const superTabVoiceFileName = 'Voice message.wav';
 
-/// What the composer says when a voice message went without its words.
-const superTabVoiceOverLimit =
-    "Sent without words: today's voice limit is used";
-const superTabVoiceNotTranscribed =
-    "Sent without words: they couldn't be heard";
-
 /// What it says when the clip's read got no answer; the take is kept.
 const superTabVoiceNoAnswer = "Not sent · couldn't reach the server";
 
@@ -85,14 +79,9 @@ extension SuperTabVoiceSend on SuperTabController {
       'attachmentIds': [id],
       if (oneBuddy) 'oneBuddy': true,
     });
-    return (
-      sent: true,
-      notice: voice.transcribed
-          ? null
-          : voice.failure == 'limit'
-          ? superTabVoiceOverLimit
-          : superTabVoiceNotTranscribed,
-    );
+    // Nothing to say once sent: a voice message plays only, and never has
+    // words to go without (anh Dee, 2026-11-04).
+    return (sent: true, notice: null);
   }
 
   /// Has the server read the uploaded clip [attachmentId] as a voice message,
