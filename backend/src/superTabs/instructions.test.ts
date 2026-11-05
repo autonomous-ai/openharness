@@ -4,6 +4,7 @@ import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { appendRouting, instructionsHash, legacyRoleName, MAX_INSTRUCTIONS_BYTES, roleNameOf, routingSummary, summarySchema } from './instructions.js'
 import type { SwarmProject } from './projects.js'
 import { INSTRUCTIONS_TEMPLATE, TEMPLATE_WORKFLOW } from './instructionsTemplate.js'
+import { budgetParts, INSTRUCTIONS_BUDGET } from './instructionsDiff.js'
 import { hostTab } from './read/hostRows.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
 
@@ -32,6 +33,14 @@ function fixture() {
 }
 
 describe('the built-in template', () => {
+  // Task #3392 (River, 11-05): a new project's PM must be able to add its routing line, so the template keeps 1 KB of room in
+  // its core and every role section within its budget.
+  it('keeps to the size budget, with 1 KB of room in its core', () => {
+    const parts = budgetParts(INSTRUCTIONS_TEMPLATE)
+    expect(parts.find(p => p.part === 'core')!.bytes).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET.core - 1024)
+    for (const role of parts.filter(p => p.part.startsWith('role '))) expect(role.bytes, role.part).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET.role)
+    expect(parts.filter(p => p.part.startsWith('role ')).map(p => p.part)).toEqual(['role PM', 'role Engineer', 'role Reviewer', 'role Tester'])
+  })
   // Ken, 2026-11-02: one pull request showed as three tasks (#1835, its review #1918, its test #1919), and the PM opened
   // groups to hold, batch and triage work. Agents forgot which task they were on (agent context design, section 3).
   it('the template workflow has one task per request, steps, and the context tools', () => {
