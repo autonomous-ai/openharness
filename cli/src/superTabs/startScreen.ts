@@ -8,8 +8,8 @@
  *   it restricted, which keeps the branch's settings off: that exact screen alone is answered (engines/codex/screen.ts
  *   `openRestrictedKeys`), and only while the pane still shows it (inCore/terminal.ts `inputIfScreen`).
  * - Any other screen that waits for a person (terminal.ts `WAITING`) fails the start at once, saying what kind of screen it
- *   was and its plain option labels ([hiddenPromptReason]): who started it, its coordinator and its machine's owner read
- *   that (backend startFailure.ts); members read only that the machine could not prepare or launch it.
+ *   was, in fixed words ([hiddenPromptReason]): who started it, its coordinator and its machine's owner read that (backend
+ *   startFailure.ts); members read only that the machine could not prepare or launch it.
  */
 import type { CoreApi } from '../core/api.js'
 import { openRestrictedKeys } from '../engines/codex/screen.js'
@@ -18,27 +18,22 @@ import type { MessageHold } from '../engines/facets/screen.js'
 
 type Terminal = Pick<NonNullable<CoreApi['superTabs']>, 'screen' | 'inputIfScreen'>
 
-/** What each screen that waits for a person is called in a reason. */
+/** Each screen that waits for a person, as a reason names it: fixed words, the engine's own heading where it has one. */
 const KINDS: Partial<Record<MessageHold, string>> = {
-  trust_open: 'a folder trust question', sign_in_open: 'a sign-in screen', update_prompt_open: 'an update prompt',
-  model_prompt_open: 'a model choice', permission_open: 'a permission question', question_open: 'a question', menu_open: 'a menu',
+  trust_open: 'a folder trust question ("Trust this folder?")', sign_in_open: 'a sign-in screen',
+  update_prompt_open: 'an update prompt ("Update available")', model_prompt_open: 'a model choice',
+  permission_open: 'a permission question', question_open: 'a question', menu_open: 'a menu',
 }
-const MAX_OPTIONS = 5, MAX_OPTION = 60
-/** Words a terminal shows only its own session: a link (whole or wrapped onto the next line), a query's key=value, an email,
- *  and an opaque code or token (letters and digits mixed, such as a device code). */
-const PRIVATE = /:\/\/|www\.|[?&=@]|\b(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{8,}\b|\b[A-Z0-9]{4}-[A-Z0-9]{4}\b/
 
 /**
- * A failed start's reason: the kind of screen its engine stopped on and the screen's own option labels, nothing else. Security
- * review 2 of #3063: the whole screen carried what a terminal shows only its own session (a sign-in link's state wrapped onto
- * the next line, a device code, an account's email) to the start's maker and coordinator, across the terminal's privacy
- * boundary; and a malformed link threw before the failure was sent. An option that reads like any of those is left out, and
- * nothing here can throw.
+ * A failed start's reason: a fixed summary of the kind of screen its engine stopped on, and none of the screen's words.
+ * Security review 2 of #3063: the screen's text carried what a terminal shows only its own session (a sign-in link's state
+ * wrapped onto the next line, a device code), and on its second read so did its option labels ("Use code 123456", a name, a
+ * private file's path): no list of patterns makes a terminal's words safe to send to the start's maker and coordinator.
+ * The kind is what they act on; the screen itself stays on its machine.
  */
-export function hiddenPromptReason(text: string, hold: MessageHold): string {
-  const options = text.split('\n').map(line => /^\s*[›❯>]?\s*(\d+)\.\s+(.+?)\s*$/u.exec(line)).flatMap(row =>
-    row && row[2]!.length <= MAX_OPTION && !PRIVATE.test(row[2]!) ? [`${row[1]}. ${row[2]}`] : []).slice(0, MAX_OPTIONS)
-  return `Its engine stopped on ${KINDS[hold] ?? 'a screen'} nobody here can answer${options.length ? ` (${options.join('; ')})` : ''}.`
+export function hiddenPromptReason(hold: MessageHold): string {
+  return `Its engine stopped on ${KINDS[hold] ?? 'a screen'} that nobody here can answer.`
 }
 
 /** What the host did with the screen: answered it, failed the start for it, or nothing (no screen waits, or none read). */
@@ -54,7 +49,7 @@ export async function settleHiddenScreen(terminal: Terminal | undefined, harness
     if (typed?.ok) log(`Opened the Team-written checkout restricted for session ${harnessId.slice(0, 8)}, as its engine asked`)
     return typed?.ok ? 'answered' : null
   }
-  const reason = hiddenPromptReason(read.text, read.hold as MessageHold)
+  const reason = hiddenPromptReason(read.hold as MessageHold)
   await fail(reason)
   log(`Failed a start at once: session ${harnessId.slice(0, 8)} stopped on a ${read.hold.replace(/_open$/, '')} screen`)
   return 'failed'
