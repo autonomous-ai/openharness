@@ -755,7 +755,9 @@ class SwarmThread extends ChangeNotifier
     _answered(post, outcome, current);
     final sent =
         outcome == SwarmPostOutcome.taken || outcome == SwarmPostOutcome.lost;
-    return (sent: sent, notice: sent ? swarmVoiceSentNote(voice) : null);
+    // It says nothing once sent: a voice message plays only, and never
+    // has words to go without (anh Dee, 2026-11-04).
+    return (sent: sent, notice: null);
   }
 
   /// Sends the draft to the thread's root, to the agents it names and tagging

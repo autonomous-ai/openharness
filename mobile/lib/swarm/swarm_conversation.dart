@@ -1055,7 +1055,9 @@ class SwarmConversation extends ChangeNotifier
     _answered(post, outcome);
     final sent =
         outcome == SwarmPostOutcome.taken || outcome == SwarmPostOutcome.lost;
-    return (sent: sent, notice: sent ? swarmVoiceSentNote(voice) : null);
+    // It says nothing once sent: a voice message plays only, and never
+    // has words to go without (anh Dee, 2026-11-04).
+    return (sent: sent, notice: null);
   }
 
   /// The thread whose session the last post started, once the backend took

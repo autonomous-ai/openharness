@@ -25,19 +25,17 @@ import 'voice_bubble.dart';
 /// browser. Links last minutes (backend fileLinks.ts): one about to end is
 /// asked for again, of message [messageId] in [conversationId], before it is
 /// opened. A voice message's file is a bubble that plays it
-/// (`voice_bubble.dart`), with the message's [words] behind its →A.
+/// (`voice_bubble.dart`) and nothing more: it plays only.
 class SuperTabAttachments extends StatelessWidget {
   const SuperTabAttachments(
     this.attachments, {
     super.key,
     this.conversationId,
     this.messageId,
-    this.words = '',
   });
 
   final List<SuperTabAttachment> attachments;
   final String? conversationId, messageId;
-  final String words;
 
   @override
   Widget build(BuildContext context) {
@@ -66,7 +64,6 @@ class SuperTabAttachments extends StatelessWidget {
           SuperTabVoiceBubble(
             key: ValueKey('super-attachment-voice:${file.id}'),
             file: ref(file),
-            words: words,
           ),
         for (final file in pictures)
           SuperTabInlineImage(
