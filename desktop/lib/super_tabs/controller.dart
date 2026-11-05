@@ -238,7 +238,6 @@ class SuperTabController extends ChangeNotifier {
         (initial['decisionsAside'] as List? ?? const []).whereType<String>(),
       );
       devicesSelected = initial['devicesSelected'] == true;
-      projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
       unreadOnly = initial['unreadOnly'] == true;
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
       buddiesGroupOpen = initial['buddiesGroupOpen'] as bool? ?? true;
@@ -1044,7 +1043,7 @@ class SuperTabController extends ChangeNotifier {
   final _reading = <(String, bool), Future<void>>{};
   final expandedMachines = <String>{};
   bool devicesSelected = false;
-  bool projectsGroupOpen = true, machinesGroupOpen = true;
+  bool machinesGroupOpen = true;
 
   /// The sidebar's Buddies and Models, collapsed and remembered like Projects
   /// and Machines (Dee, 2026-10-30: every section the same).
@@ -1112,12 +1111,6 @@ class SuperTabController extends ChangeNotifier {
     final before = _decisionsAside.length;
     _decisionsAside.removeWhere(gone);
     if (_decisionsAside.length != before) _saveSoon();
-  }
-
-  void toggleProjectsGroup() {
-    projectsGroupOpen = !projectsGroupOpen;
-    _saveSoon();
-    _changed();
   }
 
   void toggleMachinesGroup() {
@@ -2722,7 +2715,6 @@ class SuperTabController extends ChangeNotifier {
     'expandedMachines': expandedMachines.toList(),
     'decisionsAside': _decisionsAside.toList(),
     'devicesSelected': devicesSelected,
-    'projectsGroupOpen': projectsGroupOpen,
     'unreadOnly': unreadOnly,
     'machinesGroupOpen': machinesGroupOpen,
     'buddiesGroupOpen': buddiesGroupOpen,

@@ -106,6 +106,7 @@ abstract final class AppIcons {
   static const fileText = LucideIcons.fileText400;
   static const fileType = LucideIcons.fileType400;
   static const film = LucideIcons.film400;
+  static const flag = LucideIcons.flag400;
   static const flaskConical = LucideIcons.flaskConical400;
   static const folder = LucideIcons.folder400;
   static const folderKanban = LucideIcons.folderKanban400;

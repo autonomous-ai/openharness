@@ -59,7 +59,7 @@ void main() {
   });
 
   testWidgets(
-    'clicking around the Swarm screen and toggling Projects logs no error',
+    'clicking around the Swarm screen and toggling Buddies logs no error',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1300, 500));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -102,27 +102,23 @@ void main() {
       }
 
       for (var round = 0; round < 3; round++) {
-        await click(find.byTooltip('Collapse Projects'));
-        expect(controller.projectsGroupOpen, isFalse);
-        await click(find.byTooltip('Expand Projects'));
-        expect(controller.projectsGroupOpen, isTrue);
-        // Hover a project's row, then close Projects as its tooltip opens: the
-        // row leaves the list.
-        await mouse.moveTo(
-          tester.getCenter(find.byKey(const ValueKey('super-group-lead'))),
-        );
-        await tester.pump();
-        await tester.binding.delayed(_pastHoverWait);
-        controller.toggleProjectsGroup();
-        await tester.pump();
-        expect(tester.takeException(), isNull);
-        // And open it again as a row under it, moved down, is hovered.
+        await click(find.byTooltip('Collapse Buddies'));
+        expect(controller.buddiesGroupOpen, isFalse);
+        await click(find.byTooltip('Expand Buddies'));
+        expect(controller.buddiesGroupOpen, isTrue);
+        // Hover a Buddy's row, then close Buddies as its tooltip opens: the
+        // row leaves the list. (Projects no longer folds, task #2996.)
         await mouse.moveTo(
           tester.getCenter(find.byKey(const ValueKey('super-buddy-lead'))),
         );
         await tester.pump();
         await tester.binding.delayed(_pastHoverWait);
-        controller.toggleProjectsGroup();
+        controller.toggleBuddiesGroup();
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+        // And open it again while the place it left is hovered.
+        await tester.binding.delayed(_pastHoverWait);
+        controller.toggleBuddiesGroup();
         await tester.pump();
         expect(tester.takeException(), isNull);
         await mouse.moveTo(const Offset(100, 60));
