@@ -53,7 +53,8 @@ export interface DecisionTarget {
   withdrawn?: boolean
 }
 /** `delegated`: the person asked left it to the PM, who took the recommended option. */
-export interface DecisionAnswer { id: string; choice: number; note: string | null; delegated?: true
+/** `choice` null with a `note`: the person typed their own answer instead of choosing an option (task #2996). */
+export interface DecisionAnswer { id: string; choice: number | null; note: string | null; delegated?: true
   /** Left to the PM by the hourly sweep after 24 hours unanswered, not by the person (overdueDecisions.ts). */
   overdue?: true }
 
@@ -122,12 +123,15 @@ export const closedChatDelegatedNotice = (name: string) => `A decision you asked
 /** How an answer reads in the decisions list: a delegated one never as the person's own choice. */
 const answerText = (option: string, delegated: boolean) => delegated ? `PM decided: ${option}` : option
 
-/** The asked person's one answer, or their leaving it to the PM (`delegate`), which takes the recommended option; the notice
+/** The asked person's one answer (an option, their own words as `note` alone, or both), or their leaving it to the PM
+ *  (`delegate`), which takes the recommended option; the notice
  *  for the asking agent and the Lead, in the conversation it was asked in or, for a closed Chat with PM nobody reads, in
  *  the project chat (`noticeIn`); and for a delegated one, the Lead's line in the person's Buddy chat. */
 export function answerDecision(state: SuperTabState, actor: Actor, decision: DecisionTarget | undefined,
   given: { choice?: number; note: string | null; delegate: boolean; overdue?: boolean }) {
-  if ((given.choice === undefined) === !given.delegate) fail('INVALID_DECISION', 'Choose one of its options, or leave it to the PM.', 400)
+  if (given.choice !== undefined ? given.delegate : !given.delegate && given.note === null) {
+    fail('INVALID_DECISION', 'Choose one of its options, type an answer, or leave it to the PM.', 400)
+  }
   if (given.overdue && !given.delegate) fail('INVALID_DECISION', 'Only a decision left to the PM can be overdue.', 400)
   const group = answerable(state, actor, decision)
   const asked = decision!
@@ -136,8 +140,8 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
   if (given.delegate && !(asked.recommended >= 0 && asked.recommended < asked.options.length)) {
     fail('INVALID_DECISION', 'This decision has no recommended option to leave to the PM.', 400)
   }
-  const choice = given.delegate ? asked.recommended : given.choice!
-  if (choice >= asked.options.length) fail('INVALID_DECISION', 'Choose one of its options.', 400)
+  const choice = given.delegate ? asked.recommended : given.choice ?? null
+  if (choice !== null && choice >= asked.options.length) fail('INVALID_DECISION', 'Choose one of its options.', 400)
   const project = groupProject(state, group)
   const lead = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
   const closed = isClosedPmChat(group)
@@ -148,7 +152,7 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
   const recipients = [...new Set([asked.askerAgentId, ...lead ? [lead] : []])].filter(id => noticeIn.agentIds.includes(id))
   const answer: DecisionAnswer = { id: asked.id, choice, note: given.note, ...given.delegate ? { delegated: true as const, ...given.overdue ? { overdue: true as const } : {} } : {} }
   // A routing reflection's never reaches the Buddy chat: the person's Buddy reads it (review of #2276).
-  const line = given.delegate && lead && asked.kind !== REFLECTION_DECISION ? delegatedLine(state, project.id, lead, asked, choice) : null
+  const line = given.delegate && lead && asked.kind !== REFLECTION_DECISION ? delegatedLine(state, project.id, lead, asked, asked.recommended) : null
   return { answer, noticeIn: noticeIn.id, notice, recipients, source: { ...AGENT_ONLY, decisionId: asked.id }, line }
 }
 
@@ -397,6 +401,8 @@ export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState,
       delegated: row.delegated === true, overdue: row.overdue === true,
       // What the 24-hour sweep can take: the sweep skips a reflection and a recommended option that is not one of the options.
       pmTakesOver: row.kind !== REFLECTION_DECISION && row.recommended >= 0 && row.recommended < row.options.length,
-      answer: row.choice == null || row.options[row.choice] === undefined ? null : answerText(row.options[row.choice]!, row.delegated === true) }
+      // A typed answer (no option) reads as its words.
+      answer: row.choice == null ? (row.answeredAt ? row.note ?? null : null)
+        : row.options[row.choice] === undefined ? null : answerText(row.options[row.choice]!, row.delegated === true) }
   }) }
 }
