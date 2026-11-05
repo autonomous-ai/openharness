@@ -157,7 +157,7 @@ describe('an engine whose starts fail on a machine', () => {
       readiness: { engines: [{ engine: 'codex', installed: true, signedIn: null }] } })
     readingClearsSuspensions(pool, NOW + 1)
     expect(suspendedEngines(pool, NOW + 1)).toHaveProperty('codex')
-    pool.observation!.readiness!.engines[0]!.signedIn = true
+    pool.observation!.readiness!.engines![0]!.signedIn = true
     readingClearsSuspensions(pool, NOW + 2)
     expect(suspendedEngines(pool, NOW + 2)).toEqual({})
   })
