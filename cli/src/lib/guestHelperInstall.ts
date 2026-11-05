@@ -17,6 +17,7 @@ import { HOOK_SCRIPT } from '../engines/kit/notifyHooks.js'
 import { GUEST_HELPER_PATH, runGuestCommand, type GuestRunner } from './guestAccounts.js'
 import { guestHelperScript, guestSudoersTemplate, helperScriptVersion } from './guestHelperAssets.js'
 import { managedNodePath } from './nodeRuntime.js'
+import type { RunAdmin } from '../team/admin.js'
 
 export const GUEST_SUDOERS_PATH = '/etc/sudoers.d/harness-guests'
 export const GUEST_NODE_DIR = '/usr/local/lib/harness/node'
@@ -123,10 +124,20 @@ export interface GuestHelperInstallOptions {
   hookScript?: string | null
   /** Whether `pkexec` and a desktop session are there (Linux). */
   graphical?: boolean
+  /** A test's stand-in for the Windows UAC runner. */
+  admin?: RunAdmin
+  /** Windows: the owner's profile, `%USERPROFILE%`. */
+  ownerHome?: string
 }
 
 export async function installGuestHelper(options: GuestHelperInstallOptions = {}): Promise<GuestHelperInstallResult> {
   const platform = options.platform ?? process.platform
+  // Windows's script builders (and the Team imports they bring) are loaded only there: every other platform, and
+  // every service sharing the edge host's process, must not carry them (src/leanEntry.spec.ts).
+  if (platform === 'win32') {
+    const { installWindowsGuestHelper } = await import('./windows/guestHelperInstallWin.js')
+    return installWindowsGuestHelper(options, GUEST_HELPER_PROMPT)
+  }
   if (platform !== 'darwin' && platform !== 'linux') {
     return { ok: false, code: 'UNSUPPORTED', message: 'Sharing this computer needs macOS or Linux.' }
   }
@@ -190,6 +201,7 @@ export interface GuestHelperStatus { state: GuestHelperState; version: number | 
 
 export interface GuestHelperStatusDeps {
   runner?: GuestRunner
+  platform?: NodeJS.Platform
   helperPath?: string
   /** The installed helper's text, or null when there is none (no sudo needed: it is 0755). */
   read?: (path: string) => string | null
@@ -204,6 +216,11 @@ export async function guestHelperStatus(deps: GuestHelperStatusDeps = {}): Promi
       return null
     }
   })
+  const platform = deps.platform ?? process.platform
+  if (platform === 'win32') {
+    const { windowsGuestHelperStatus } = await import('./windows/guestHelperInstallWin.js')
+    return windowsGuestHelperStatus(deps, read)
+  }
   const text = read(helperPath)
   if (text === null) return { state: 'missing', version: null }
   const version = helperScriptVersion(text)

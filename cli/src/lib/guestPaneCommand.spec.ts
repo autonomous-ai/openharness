@@ -55,6 +55,20 @@ describe('a guest\'s pane', () => {
   it('is for the engines whose subscription the relay spends', () => {
     expect(GUEST_LAUNCH_ENGINES).toEqual(['claude', 'codex'])
   })
+
+  it('is made by the guest\'s own host on Windows: the engine itself, with only the relay\'s variables', () => {
+    const claude = guestPaneCommand({ account, engine: 'claude', relayUrl: relay, token: 'guest-token', bypassPermission: true, platform: 'win32' })
+    // No helper, no `/bin/sh` bootstrap, and the token never on the command line.
+    expect(claude.argv).toEqual(['claude', '--dangerously-skip-permissions'])
+    expect(claude.argv.join(' ')).not.toContain('guest-token')
+    expect(claude.env).toEqual({ ANTHROPIC_BASE_URL: `${relay}/claude`, ANTHROPIC_AUTH_TOKEN: 'guest-token' })
+    const codex = guestPaneCommand({ account, engine: 'codex', relayUrl: relay, token: 'guest-token', bypassPermission: false,
+      permissionFlags: ['--approve-for-me'], prompt: 'Fix the tests', platform: 'win32' })
+    expect(codex.argv[0]).toBe('codex')
+    expect(codex.argv).toContain(`model_providers.harness_owner.base_url="${relay}/codex"`)
+    expect(codex.argv.slice(-2)).toEqual(['--approve-for-me', 'Fix the tests'])
+    expect(codex.env).toEqual({ HARNESS_RELAY_TOKEN: 'guest-token' })
+  })
 })
 
 // The bootstrap runs for real, with a fake `sudo` on PATH that logs what it is asked and answers whether the

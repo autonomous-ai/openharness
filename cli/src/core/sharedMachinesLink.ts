@@ -6,6 +6,7 @@
  * The argv and the variables are checked here, as strings, because the core runs them in a pane.
  */
 import { GUEST_LAUNCH_UNAVAILABLE, type GuestLaunch, type SharedMachinesCorePort } from './api.js'
+import { isGuestUser } from '../lib/guestAccounts.js'
 
 /** Ask shared machines' process (core/serviceLinks.ts `call`, for `sharedMachines`): never rejects. */
 export type CallSharedMachines = (type: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -18,8 +19,10 @@ export function createSharedMachinesLink(call: CallSharedMachines): SharedMachin
   return {
     guestLaunch: async (input): Promise<GuestLaunch> => {
       const answer = await call('guestLaunch', { ...input })
-      if (answer.ok === true && typeof answer.workspace === 'string' && strings(answer.argv) && stringMap(answer.env)) {
-        return { ok: true, workspace: answer.workspace, argv: answer.argv, env: answer.env }
+      if (answer.ok === true && typeof answer.workspace === 'string' && strings(answer.argv) && stringMap(answer.env)
+        && (answer.guestHostUser === undefined || (typeof answer.guestHostUser === 'string' && isGuestUser(answer.guestHostUser)))) {
+        return { ok: true, workspace: answer.workspace, argv: answer.argv, env: answer.env,
+          ...(typeof answer.guestHostUser === 'string' ? { guestHostUser: answer.guestHostUser } : {}) }
       }
       if (answer.ok === false && typeof answer.error === 'string') {
         return { ok: false, error: answer.error, ...(typeof answer.detail === 'string' ? { detail: answer.detail } : {}) }

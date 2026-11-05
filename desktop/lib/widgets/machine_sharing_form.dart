@@ -451,7 +451,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
 
   Future<String?> _pickFolder(BuildContext context) {
     final typed = _folderValue.text.trim();
-    final start = typed.startsWith('/') ? typed : null;
+    final start = isAbsoluteGuestPath(typed) ? typed : null;
     return app.stateOf(widget.machineId)?.isLocalMachine == true
         ? whileNativePicker(
             () => getDirectoryPath(
@@ -488,13 +488,14 @@ class MachineSharingFormState extends State<MachineSharingForm> {
       await _chooseFolder();
       return;
     }
-    final path = typed.length > 1 && typed.endsWith('/')
+    // The folder itself, whichever separator this machine writes (`/` on macOS and Linux, `\` on Windows).
+    final path = typed.length > 1 && (typed.endsWith('/') || typed.endsWith('\\'))
         ? typed.substring(0, typed.length - 1)
         : typed;
     String? problem;
-    if (!path.startsWith('/')) {
+    if (!isAbsoluteGuestPath(path)) {
       problem =
-          'Enter the folder’s full path on $_name, like /Users/you/project.';
+          'Enter the folder’s full path on $_name, like /Users/you/project or C:\\Users\\you\\project.';
     } else if (_folders.any((folder) => folder.path == path)) {
       problem = '${_folderName(path)} is already shared.';
     } else if (_folders.length >= machineSharedFoldersMax) {
@@ -1388,12 +1389,12 @@ class MachineSharingFormState extends State<MachineSharingForm> {
 
 /// A folder's own name: what a person recognises it by.
 String _folderName(String path) {
-  final parts = path.split('/').where((part) => part.isNotEmpty);
+  final parts = path.split(RegExp(r'[\\/]')).where((part) => part.isNotEmpty);
   return parts.isEmpty ? '/' : parts.last;
 }
 
 /// Where it is: the folder that holds it.
 String _folderParent(String path) {
-  final cut = path.lastIndexOf('/');
+  final cut = path.lastIndexOf(RegExp(r'[\\/]'));
   return cut <= 0 ? '/' : path.substring(0, cut);
 }

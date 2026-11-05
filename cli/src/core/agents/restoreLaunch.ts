@@ -5,6 +5,7 @@ import type { LaunchOverrides, LaunchOverridesResult } from '../../lib/launchOve
 import type { RestoreAgentsDeps, RestoreLaunch } from '../../lib/restoreAgents.js'
 import { windowsLaunchRefusal } from '../../lib/windows/launch.js'
 import type { AdoptSwarmSkill } from '../api.js'
+import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
 /** What a harness held for its Swarm role says in its pane, in the person's words. */
 export const SWARM_ROLE_HELD = 'Waiting for the Swarm to confirm this agent\'s role. It starts by itself once the Swarm answers.'
@@ -23,6 +24,10 @@ interface RestoreLaunchDeps {
 
 export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps['buildLaunch'] {
   return async (given, { current, prepare, ...opts }) => {
+    // A guest's harness is never relaunched this way: every relaunch builds an owner's launch, which would run
+    // the guest's conversation as the owner, with the owner's keys (core/guestPolicy.ts GUEST_HARNESS_REFUSAL).
+    // On Windows the pane also belonged to the guest's own host, whose task may be gone.
+    if (given.guest) return { error: GUEST_HARNESS_REFUSAL.error, detail: GUEST_HARNESS_REFUSAL.detail }
     if (externalResumePending(given.externalResume)) return { held: 'search', holdScope: 'workspace',
       detail: given.launch?.state === 'held' ? given.launch.detail : 'Waiting to verify this external conversation.' }
     const missing = deps.workspaceMissing(given.cwd)

@@ -400,6 +400,10 @@ export interface Conversation {
   heardAt?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
+  /** Its pull requests the Swarm itself read as merged on GitHub in its project's repository, by link: when it read them
+   *  (store.ts archiveFinished). Unlike the merge record (conversation.merged, any agent's word), no command writes it; it
+   *  is what makes a person's rule moved into this task leave the instructions (ruleGuard.ts, #3392). */
+  mergeSeen?: Record<string, number>
   /** What its Engineer was already told of each linked pull request, newest first (pullRequestEvents.ts): absent until read. */
   pullRequestEvents?: Record<string, string[]>
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
@@ -1103,7 +1107,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     visible.conversations = visible.conversations.filter(c => canReadGroup(state, actor, c))
     // The status card is read exactly by those who read the project chat (projects.ts SwarmProject.status); without the chat
     // loaded, by nobody.
-    visible.projects = visible.projects.map(p => {
+    visible.projects = visible.projects.map(({ owed: _owed, ...p }) => {
+      // What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
       if (p.status === undefined) return p
       const chat = state.conversations.find(c => c.id === p.leadConversationId)
       if (chat && canReadGroup(state, actor, chat)) return p

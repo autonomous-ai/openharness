@@ -69,6 +69,7 @@ import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
 import { buildEngineLaunchArgv, engineLaunchEnv, supportsFirstPrompt } from '../lib/engineLaunch.js'
 import { isWindowsHeldPane, windowsPaneLaunch } from '../lib/windows/engineStart.js'
+import { createGuestHostBackend } from '../lib/windows/guestHostBackend.js'
 import { workspaceMissing } from '../lib/workspaceCheck.js'
 import { HERMES_SYSTEM_MANAGED_DIR, type GridLaunchMachine } from '../lib/gridLaunchWire.js'
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
@@ -3013,9 +3014,38 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       log: (line) => console.log(line),
     })
   }
+  // One host per guest, reached on its first launch and kept: a launch must not open a new pipe connection (and a new
+  // reconnect timer) for a host that is already there.
+  const guestHosts = new Map<string, Promise<ReturnType<typeof createGuestHostBackend> | null>>()
+  const guestBackendFor = (user: string): Promise<ReturnType<typeof createGuestHostBackend> | null> => {
+    const known = guestHosts.get(user)
+    if (known) return known
+    const reached = (async () => {
+      const backend = createGuestHostBackend({ user })
+      try {
+        const prepared = await backend.prepare({ ownedPanes: new Map() })
+        if (prepared.state !== 'ready') { backend.dispose(); return null }
+      } catch (error) {
+        // A task that is gone, or a host that cannot start, is no host: the create says "turn sharing on again"
+        // rather than throwing out of the request.
+        console.warn(`[guest] ${user} host unavailable · ${error instanceof Error ? error.message : String(error)}`)
+        backend.dispose()
+        return null
+      }
+      terminals.addBackend(backend)
+      return backend
+    })()
+    guestHosts.set(user, reached)
+    void reached.then((backend) => { if (!backend) guestHosts.delete(user) })
+    return reached
+  }
   const guestCreate = createGuestCreate({
     launch: (input) => (ports.sharedMachines ?? SHARED_MACHINES_OFF).guestLaunch(input),
-    tmuxBackend: () => tmuxBackend, registry, announceSession, watchNewPane,
+    tmuxBackend: () => tmuxBackend,
+    // Windows: a guest's panes are made on the guest's own host, which runs as that account; there is no owner
+    // pane to hand over (lib/windows/guestHostBackend.ts).
+    ...(process.platform === 'win32' ? { guestBackend: guestBackendFor } : {}),
+    registry, announceSession, watchNewPane,
   })
   // The requests that start an agent's process, and the receipts of those asked with a creationId
   // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.

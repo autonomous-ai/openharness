@@ -66,6 +66,19 @@ describe('a guest\'s harness, as shared machines builds it', () => {
     await launches.stop()
   })
 
+  it('on Windows names the guest\'s own host and runs the engine directly, with no owner pane or helper', async () => {
+    const relay = { port: 1, url: 'http://127.0.0.1:1', adoptToken: () => {}, mintToken: () => 't', revoke: () => {}, close: async () => {} }
+    const launches = createGuestLaunches({
+      accounts: { ensureGuest: async () => ({ user: KIM, home: `C:\\Users\\${KIM}`, workspace: `C:\\Users\\${KIM}\\work` }), shareFolders: async () => {}, guests: () => [KIM] } as unknown as GuestAccounts,
+      helperState: async () => 'ready', startRelay: async () => relay, platform: 'win32',
+    })
+    const launched = await launches.launch(input)
+    expect(launched).toEqual({ ok: true, workspace: `C:\\Users\\${KIM}\\work`, argv: ['claude', '--dangerously-skip-permissions'],
+      env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:1/claude', ANTHROPIC_AUTH_TOKEN: 't' }, guestHostUser: KIM })
+    // Every other platform leaves the pane to the owner's backend and the helper.
+    expect(await setup().launches.launch(input)).not.toHaveProperty('guestHostUser')
+  })
+
   it('starts nothing for a session whose guest it cannot name, or an engine whose subscription it cannot spend', async () => {
     const { launches, accounts } = setup()
     expect(await launches.launch({ ...input, email: ' ' })).toEqual({ ok: false, error: 'NOT_YOUR_HARNESS', detail: expect.any(String) })
