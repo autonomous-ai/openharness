@@ -31,11 +31,14 @@ instructions read or any prompt.
   reads the project. No other agent, no Buddy, no viewer.
 - New refusals get new names: `RULES_EDITOR_REQUIRED`, `RULES_ASKED_IN_REQUIRED`, `RULES_STALE`, `RULES_UNAVAILABLE`. None
   of `removedRefusals.test.ts`'s codes is used; that test stays green. Each refusal's message names the next step.
-- The record is at most 8 KB of JSON; unknown keys are refused (strict schema); lists at most 50 entries.
+- The record is at most 16 KB of JSON; unknown keys are refused (strict schema); lists at most 50 entries.
 - Seed (revision 0, never stored until a first save): release window 09:00–18:00 Asia/Ho_Chi_Minh; backend at most every
-  120 minutes, Desktop/CLI/web after each visible batch; reviews: 1 read by default, 2 for sign-in, tokens, crypto, access,
-  Buddy guard, device links, deletion; test where the change runs; merge train on, every 30 minutes; caps, paths, crew and
-  lanes empty.
+  120 minutes and never 09:00–10:00 (`backendPause`, Shipper #3405), Desktop/CLI/web after each visible batch; reviews: 1 read
+  by default, 2 for sign-in, tokens, crypto, access, Buddy guard, device links, deletion, each with its path globs, test rows by
+  where a change runs and the paths that need no test (the review steps' table, #3401 reviewTable.ts); merge train off, every
+  10 minutes (opt-in per project, River via #3402); caps, paths, crew and lanes empty. The record is at most 16 KB.
+- For server workers: `currentRules(tx, tabId, projectId)` (policyStore.ts), `requiredReads(rules, files)`,
+  `testsFor(rules, files)`, `globMatch` (policy.ts); unreadable files (null) fail closed.
 - Desktop tests use a memory store and a fake sign-in; never the real CLI sign-in.
 
 ## Design

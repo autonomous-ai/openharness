@@ -8,7 +8,7 @@
 import { z } from 'zod'
 
 /** The record as stored, as JSON: small enough that a reader reads every revision kept. */
-export const MAX_RULES_BYTES = 8_192
+export const MAX_RULES_BYTES = 16_384
 /** Revisions kept per project, the current one included; the save that writes the 51st deletes the oldest. */
 export const MAX_RULES_REVISIONS = 50
 const MAX_LIST = 50
@@ -21,6 +21,10 @@ const timeZone = z.string().min(1).max(64).refine(zone => {
 const line = (max: number) => z.string().trim().min(1).max(max).regex(/^[^\x00-\x1f\x7f]*$/, 'One line, without control characters.')
 const minutes = z.number().int().min(1).max(10_080)
 const reads = z.number().int().min(1).max(5)
+/** A path pattern relative to the repository (globMatch): never absolute, never climbing out of it. */
+const glob = z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9_.*?\/@+ -]+$/, 'A path pattern: letters, digits and _ . * ? / @ + - only.')
+  .refine(g => !g.startsWith('/') && !g.split('/').includes('..'), 'A path pattern relative to the repository, without "..".')
+const globs = z.array(glob).max(MAX_LIST)
 /** A list whose entries' [key] differ, ignoring case: two rows for one area would leave the table saying two things. */
 const distinct = <T extends z.ZodTypeAny>(item: T, key: (entry: z.infer<T>) => string, what: string) =>
   z.array(item).max(MAX_LIST).refine(list => new Set(list.map(e => key(e).toLowerCase())).size === list.length, `Each ${what} once.`)
@@ -30,12 +34,17 @@ export const projectRulesSchema = z.object({
   releaseWindow: z.object({ start: clock, end: clock, timeZone }).strict()
     .refine(w => w.start < w.end, 'The release window ends after it starts, the same day.'),
   /** The backend at most every N minutes (each release reconnects everyone); Desktop, CLI and web after each visible batch. */
-  releasePace: z.object({ backendEveryMinutes: minutes, appsAfterVisibleBatch: z.boolean() }).strict(),
-  /** How many independent reads a change gets: the default, more for the areas listed; and where it is tested. */
+  /** `backendPause`: a part of the window, in its time zone, when no backend release goes out (the morning peak); null for none. */
+  releasePace: z.object({ backendEveryMinutes: minutes, appsAfterVisibleBatch: z.boolean(),
+    backendPause: z.object({ start: clock, end: clock }).strict().refine(p => p.start < p.end, 'The pause ends after it starts.').nullable() }).strict(),
+  /** How many independent reads a change gets: the default, more for a change to the paths of an area listed; where a change
+   *  runs, for its test; and the paths whose change alone needs no test (tests, fixtures, docs). requiredReads and testsFor
+   *  read it. */
   reviews: z.object({
     defaultReads: reads,
-    rows: distinct(z.object({ area: line(80), reads }).strict(), row => row.area, 'area'),
-    test: line(200),
+    rows: distinct(z.object({ area: line(80), reads, paths: globs }).strict(), row => row.area, 'area'),
+    test: distinct(z.object({ where: line(200), paths: globs }).strict(), row => row.where, 'place'),
+    untested: globs,
   }).strict(),
   /** The batch merge: on or off, and how often it runs. */
   mergeTrain: z.object({ enabled: z.boolean(), everyMinutes: minutes }).strict(),
@@ -61,13 +70,33 @@ function deepFreeze<T>(value: T): T {
 /** Today's numbers (task #3393; project instructions, 2026-11-05): what a project reads until its first save. */
 export const SEED_RULES: ProjectRules = deepFreeze({
   releaseWindow: { start: '09:00', end: '18:00', timeZone: 'Asia/Ho_Chi_Minh' },
-  releasePace: { backendEveryMinutes: 120, appsAfterVisibleBatch: true },
+  releasePace: { backendEveryMinutes: 120, appsAfterVisibleBatch: true, backendPause: { start: '09:00', end: '10:00' } },
+  // The review table the review steps plan by (#3401, reviewTable.ts at c935c0665): two security reviews for these areas
+  // (project instructions, Ken 2026-10-29), a test where the change runs (Workflow 2).
   reviews: {
     defaultReads: 1,
-    rows: ['Sign-in', 'Tokens', 'Encryption', 'Access', 'Buddy guard', 'Device links', 'Deletion'].map(area => ({ area, reads: 2 })),
-    test: 'Where the change runs',
+    rows: [
+      { area: 'Sign-in', reads: 2, paths: ['**/*auth*', '**/*login*', '**/*logout*', '**/*signin*', '**/*sign_in*', '**/middlewares/**'] },
+      { area: 'Tokens', reads: 2, paths: ['**/*token*', '**/*credential*', '**/*secret*', '**/*keychain*', 'backend/src/github/**'] },
+      { area: 'Encryption', reads: 2, paths: ['**/*crypto*', '**/*encrypt*', '**/e2ee/**', '**/*seal*', '**/*pake*'] },
+      { area: 'Access', reads: 2, paths: ['**/*access*', '**/*permission*', '**/*authority*', '**/*trust*', '**/teamWritten*'] },
+      { area: 'Buddy guard', reads: 2, paths: ['**/*buddyguard*', '**/*buddy_guard*'] },
+      { area: 'Device links', reads: 2, paths: ['**/*devicelink*', '**/*device_link*', '**/*deviceauth*', '**/*pairing*'] },
+      { area: 'Deletion', reads: 2, paths: ['**/*delet*', '**/*purge*', '**/*cleanup*', '**/*tombstone*', '**/*wipe*'] },
+    ],
+    test: [
+      { where: 'Desktop on a Mac', paths: ['desktop/**'] },
+      { where: 'The CLI on a Mac and on a Linux machine', paths: ['cli/**', 'pty/**', 'term/**', 'tui/**', 'daemons/**'] },
+      { where: 'The phone app in a simulator', paths: ['mobile/**'] },
+      { where: 'The web in a browser', paths: ['website/**'] },
+      { where: 'Install and update on a Mac', paths: ['installer/**'] },
+      { where: 'Firmware on the device plugged into a machine', paths: ['devices/**', 'serial/**'] },
+    ],
+    untested: ['**/*.test.*', '**/*.spec.*', '**/*_test.*', '**/test/**', '**/tests/**', '**/integration/**', '**/__fixtures__/**',
+      '**/*.md', 'docs/**'],
   },
-  mergeTrain: { enabled: true, everyMinutes: 30 },
+  // Opt-in per project (River, #3402): a project turns it on with a rules save.
+  mergeTrain: { enabled: false, everyMinutes: 10 },
   caps: [],
   paths: [],
   crew: [],
@@ -111,4 +140,47 @@ export interface RulesWrite {
   askedBy: string
   askedIn: { conversationId: string; messageId: string } | null
   at: number
+}
+
+const compiled = new Map<string, RegExp>()
+/** Whether [path] matches [glob], ignoring case: `**` any folders (or none), `*` and `?` within one name; anything else is
+ *  itself. The review steps' matcher (#3401 reviewTable.ts globMatch), the same rules, so both read a row alike. */
+export function globMatch(glob: string, path: string): boolean {
+  let pattern = compiled.get(glob)
+  if (!pattern) {
+    let source = ''
+    for (let i = 0; i < glob.length; i++) {
+      const c = glob[i]!
+      if (c === '*' && glob[i + 1] === '*') {
+        if (glob[i + 2] === '/') { source += '(?:.*/)?'; i += 2 } else { source += '.*'; i += 1 }
+      } else if (c === '*') source += '[^/]*'
+      else if (c === '?') source += '[^/]'
+      else source += c.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    }
+    pattern = new RegExp(`^${source}$`, 'i')
+    // Bounded: a project has at most 50 rows of 50 patterns; the cache only saves recompiling them.
+    if (compiled.size > 10_000) compiled.clear()
+    compiled.set(glob, pattern)
+  }
+  return pattern.test(path)
+}
+
+const matchesAny = (patterns: readonly string[], file: string) => patterns.some(g => globMatch(g, file))
+
+/** The review rows a change to [files] touches; every row when its files could not be read (null): fail closed. */
+export function touchedRows(rules: ProjectRules, files: readonly string[] | null): ProjectRules['reviews']['rows'] {
+  return files === null ? [...rules.reviews.rows] : rules.reviews.rows.filter(row => files.some(file => matchesAny(row.paths, file)))
+}
+
+/** The independent reads a change to [files] needs: the most any touched row asks, at least the default. Files that could
+ *  not be read (null) need the most any row asks (the merge train and the review steps fail closed, #3401, #3402). */
+export function requiredReads(rules: ProjectRules, files: readonly string[] | null): number {
+  return Math.max(rules.reviews.defaultReads, ...touchedRows(rules, files).map(row => row.reads))
+}
+
+/** Where a change to [files] runs, for its test, in the table's order: none for tests, fixtures and docs alone, and none when
+ *  its files could not be read (where it runs is unknown). */
+export function testsFor(rules: ProjectRules, files: readonly string[] | null): string[] {
+  const running = (files ?? []).filter(file => !matchesAny(rules.reviews.untested, file))
+  return rules.reviews.test.filter(row => running.some(file => matchesAny(row.paths, file))).map(row => row.where)
 }

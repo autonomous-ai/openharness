@@ -157,7 +157,7 @@ describe('rules.set', () => {
 
   it('refuses bad values and a summary that is not one line, storing nothing', () => {
     const f = fixture()
-    expect(code(() => f.run(set(0, { ...copy(), releasePace: { backendEveryMinutes: -5, appsAfterVisibleBatch: true } }), owner, { projectRules: null }))).toBe('INVALID')
+    expect(code(() => f.run(set(0, { ...copy(), releasePace: { ...SEED_RULES.releasePace, backendEveryMinutes: -5 } }), owner, { projectRules: null }))).toBe('INVALID')
     expect(code(() => f.run(set(0, { ...copy(), surprise: true } as ProjectRules), owner, { projectRules: null }))).toBe('INVALID')
     expect(code(() => f.run(set(0, later(), { summary: 'two\nlines' }), owner, { projectRules: null }))).toBe('INVALID')
   })
