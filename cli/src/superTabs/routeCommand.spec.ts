@@ -325,7 +325,8 @@ describe('routeTask', () => {
       const { result, candidates } = await route([...marked, healthy],
         [earlier({ id: 'y', agentId: 'a3', status: 'working' }, { lostAttempt: { id: 'x', agentId: 'a1' } })])
       expect(lineOf(candidates, 'Multiply')).toContain(note)
-      expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', agentId: 'a1', notes: [note] })]) })
+      // a1 shares the Lead's account (m1, Claude), so the PM-account note sits beside it (pmAccounts.ts).
+      expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', agentId: 'a1', notes: [note, PM_ACCOUNT_NOTE(['lead (Lead)'])] })]) })
     })
     it('carries no note once it finished a new task, which clears its mark', async () => {
       const { candidates } = await route([...agents, healthy],
