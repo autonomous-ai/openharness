@@ -52,6 +52,8 @@ import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, routingRow } f
 import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
+import { deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
+import { SEED_RULES } from './policy.js'
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, FIRST_SUMMARY, liveNotes, MAX_REVISIONS } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
@@ -1759,9 +1761,11 @@ export class SuperTabStore {
         if (command.type === 'instructions.save' && command.approvals?.length) context.approvals = await readApprovals(tx, tabId, command.approvals)
       }
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
+      // A stale rules save is refused with the newest revision, to merge (policy.ts); null is the seed.
+      if (command.type === 'rules.set') context.projectRules = await readRules(tx, tabId, command.projectId)
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
         || command.type === 'machine.engineResume' || command.type === 'machine.projects' || command.type === 'machine.ownAccountWork'
-        || command.type === 'machine.access') && command.askedIn) {
+        || command.type === 'machine.access' || command.type === 'rules.set') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
@@ -2045,7 +2049,9 @@ export class SuperTabStore {
       if (command.type === 'project.delete') await tx.superTabRoleText.deleteMany({ where: { tabId, projectId: command.projectId } })
       if (effects.instructions) await writeInstructions(tx, tabId, effects.instructions)
       if (effects.notes) await writeNotes(tx, tabId, effects.notes, context.now)
+      if (effects.projectRules) await writeRules(tx, tabId, effects.projectRules)
       if (command.type === 'project.delete') await deleteInstructions(tx, tabId, command.projectId)
+      if (command.type === 'project.delete') await deleteRules(tx, tabId, command.projectId)
       if (effects.terminal) await this.writeTerminal(tx, tabId, effects.terminal, context.now)
       // A deleted Swarm's observer sockets, on any instance, check again and close (deletion.ts).
       if (this.hooks.accessChanged && (watchersLost.length || command.type === 'swarm.delete')) {
@@ -2796,6 +2802,16 @@ export class SuperTabStore {
       // The lines it dropped, with their kind and who gave it (ruleGuard.ts); none for a revision from before they were kept.
       return { projectId, revision: row.revision, hash: row.hash, text: row.text, summary: row.summary, writtenBy: { kind: row.writtenByKind, id: row.writtenBy },
         askedBy: row.askedBy, at: row.at, dropped: (row.dropped ?? []) as unknown as DroppedLine[] }
+    })
+  }
+
+  /** A project's rules record and its kept revisions, newest first (policy.ts): the seed at revision 0 until a first save.
+   *  Anyone who reads the project reads them; a Buddy reads nothing, since the history names who asked for what. */
+  async projectRules(user: AuthUser, tabId: string, projectId: string, asAgentId?: string) {
+    return this.instructionHistory(user, tabId, projectId, asAgentId, async tx => {
+      const history = await readRulesHistory(tx, tabId, projectId)
+      const newest = history[0]
+      return { projectId, revision: newest?.revision ?? 0, rules: newest?.rules ?? SEED_RULES, seeded: !newest, history }
     })
   }
 
