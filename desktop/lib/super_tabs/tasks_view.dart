@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../core/local_key_value_store.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../state/harness_activity.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'attention.dart';
@@ -326,12 +327,54 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     }
     final task = entry.task!;
     final agentId = task.assignment?['agentId'];
+    final agent = agentId is String && snapshot != null
+        ? snapshot.agentName(agentId, fallback: '')
+        : '';
+    final waitingOnReader =
+        entry.needsYou &&
+        !superTabTaskShipped(task) &&
+        (task.assignment?['status'] == 'needs_human' ||
+            task.liveness?['why'] == 'person');
     return [
       ?_person(task.requesterId),
       if (agentId is String && snapshot != null)
-        snapshot.agentName(agentId, fallback: 'Agent unavailable'),
-      ?entry.state,
+        if (agent.isNotEmpty)
+          agent
+        else if (!superTabTaskShipped(task))
+          'Agent unavailable',
+      if (entry.needsYou) 'Needs you',
+      if (!waitingOnReader) ?entry.state,
     ].join(' · ');
+  }
+
+  HarnessActivity _activity(SuperTabTaskEntry entry) {
+    if (entry.needsYou) return HarnessActivity.needsInput;
+    final task = entry.task;
+    if (task == null) return HarnessActivity.starting;
+    if (superTabTaskShipped(task)) return HarnessActivity.done;
+    final status = task.assignment?['status'];
+    final state = task.liveness?['state'];
+    final why = task.liveness?['why'];
+    if (status == 'failed') return HarnessActivity.failed;
+    if (status == 'blocked' ||
+        status == 'lost' ||
+        state == 'orphaned' ||
+        state == 'quiet' ||
+        state == 'waiting' && why == 'blocked') {
+      return HarnessActivity.offline;
+    }
+    if (status == 'needs_human' ||
+        status == 'review' ||
+        status == 'done' ||
+        state == 'waiting' &&
+            (why == 'person' || why == 'review' || why == 'revision')) {
+      return HarnessActivity.needsInput;
+    }
+    if (task.assignment?['agentId'] is! String ||
+        state == 'waiting' && why == 'queued') {
+      return HarnessActivity.starting;
+    }
+    return HarnessActivity.working;
   }
 
   Widget _card(SuperTabTaskEntry entry, DateTime now, {required bool list}) {
@@ -343,6 +386,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       caption: _caption(entry, now),
       needsYou: entry.needsYou,
       unread: task != null && widget.controller.unreadShown(task),
+      activity: _activity(entry),
       titleLines: list ? 1 : 3,
       tile: !list,
       selected: id == widget.selectedId,
