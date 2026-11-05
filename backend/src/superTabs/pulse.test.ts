@@ -8,7 +8,7 @@ import type { Command, CommandContext } from './commands.js'
 import type { Author } from './model.js'
 import { sweepForLead } from './liveness.js'
 import { projectsOf } from './projects.js'
-import { projectPulse } from './pulse.js'
+import { recordPulse, storedPulse } from './pulse.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 
 const MINUTE = 60_000
@@ -114,7 +114,10 @@ describe('what the PM owes', () => {
 })
 
 describe('the pulse', () => {
-  const pulseOf = (f: ReturnType<typeof stepsFixture>) => projectPulse(f.state, projectsOf(f.state)[0]!, f.now)
+  /** The pulse as the next command or sweep records it on the project's chat (state edited by hand is counted too). */
+  const pulseOf = (f: ReturnType<typeof stepsFixture>) => { recordPulse(f.state, f.now); return storedPulse(f.state, projectsOf(f.state)[0]!)! }
+  /** The pulse as recorded, without working it out again. */
+  const stored = (f: ReturnType<typeof stepsFixture>) => storedPulse(f.state, projectsOf(f.state)[0]!)!
   /** A task the PM opens, unassigned (Next up). */
   const open = (f: ReturnType<typeof stepsFixture>, title: string, extra: { notBefore?: string } = {}) => {
     const id = f.run({ type: 'conversation.create', title, brief: `${title}.`, checks: [] } as Command, f.as(f.lead)).result.conversationId as string
@@ -218,7 +221,8 @@ describe('the pulse', () => {
     const idleAt = f.now
     f.tick(MINUTE)
     f.run({ type: 'message.send', conversationId: 'lead', text: 'Anyone?', replyTo: null, recipientIds: [] } as Command)
-    expect(pulseOf(f).idleSince).toBe(idleAt)
+    expect(stored(f).idleSince).toBe(idleAt)
+    expect(stored(f).asks.count).toBe(1)
     expect(pulseOf(f).redAt.idle).toBe(idleAt + 10 * MINUTE)
     const task = pulseOf(f).nextUp.conversationIds[0]!
     f.run({ type: 'work.assign', conversationId: task, agentId: f.dev }, f.as(f.lead))
@@ -231,6 +235,7 @@ describe('the pulse', () => {
     f.group(f.task).assignment!.status = 'lost'
     f.group(f.task).assignment!.lost = { reason: 'its session stopped', at: f.now }
     sweepForLead(f.state, f.now)
-    expect(pulseOf(f).idleSince).toBe(f.now)
+    expect(stored(f).idleSince).toBe(f.now)
+    expect(stored(f).lost.count).toBe(1)
   })
 })

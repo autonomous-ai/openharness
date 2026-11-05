@@ -73,8 +73,6 @@ export interface SwarmProject {
   /** A Personal Swarm project chat with no Lead: its person's messages sent there, delivered to its Lead once it joins
    *  (leadStart.ts leadWaits). Ids and times only, at most MAX_LEAD_WAITING; cleared when a Lead joins. */
   leadWaiting?: Array<{ id: string; at: number }>
-  /** When Working fell to 0 while work waits (pulse.ts markIdle); absent otherwise. Readers get it in the pulse. */
-  idleSince?: number
   /** The one start of its Lead a Desktop of its person's claimed (lead.claim), from [machineId]; cleared when a Lead joins. */
   leadClaim?: { id: string; machineId: string; at: number }
   /** What its chat was last told of new Reviewers (reviewCapacity.ts), under `any`: none can start, or they soon will not.

@@ -152,36 +152,49 @@ function countWork(state: SuperTabState, project: SwarmProject, now: number, pro
 /** Working is 0 while work waits (Next up or lost). */
 const idle = (counts: Counts): boolean => !counts.working.size && (counts.nextUp.length > 0 || counts.lost.length > 0)
 
-/** Marks on each project when Working fell to 0 while work waits, and clears it once either ends: run where every open group is
- *  loaded, after each command and on the PM's sweep, so the board reddens on time without anyone's poll. Writes only on a
- *  change. */
-export function markIdle(state: SuperTabState, now: number): void {
+/** The most of each list a stored pulse keeps (its counts stay whole): a growth bound on the project chat's part. */
+export const PULSE_LIST_MAX = 50
+
+/**
+ * Works out each project's pulse and keeps it on the project's chat, where every read finds it: a change poll reads only the
+ * light base (the project chats and running work, light fields: parts/light.ts), so a pulse derived at read time from it lost
+ * the asks and Next up a full read showed (Hugo's review of #3209). Run where every open group is loaded, after each command
+ * and on the PM's sweep, so the board reddens on time without anyone's poll. Writes only on a change. When Working fell to 0
+ * while work waits is kept in it (`idleSince`) from one run to the next.
+ */
+export function recordPulse(state: SuperTabState, now: number): void {
   const projectOfAgent = agentProjects(state)
   for (const project of state.projects ?? []) {
-    const waiting = idle(countWork(state, project, now, projectOfAgent))
-    if (waiting && project.idleSince === undefined) project.idleSince = now
-    else if (!waiting && project.idleSince !== undefined) delete project.idleSince
+    const chat = state.conversations.find(c => c.id === project.leadConversationId)
+    if (!chat) continue
+    const pulse = projectPulse(state, project, now, PULSE_LIMITS, projectOfAgent, chat.pulse?.idleSince ?? null)
+    if (JSON.stringify(pulse) !== JSON.stringify(chat.pulse)) chat.pulse = pulse
   }
 }
 
-/** [project]'s pulse at [now], from what is loaded. */
+/** [project]'s pulse as last recorded on its chat (recordPulse), or none. */
+export const storedPulse = (state: SuperTabState, project: SwarmProject): Pulse | undefined =>
+  state.conversations.find(c => c.id === project.leadConversationId)?.pulse
+
+/** [project]'s pulse at [now], from what is loaded: every open group, as a command or the PM's sweep loads them. [idleBefore]:
+ *  when Working fell to 0 while work waits, as last recorded. */
 export function projectPulse(state: SuperTabState, project: SwarmProject, now: number, limits: PulseLimits = PULSE_LIMITS,
-  projectOfAgent = agentProjects(state)): Pulse {
+  projectOfAgent = agentProjects(state), idleBefore: number | null = null): Pulse {
   const counts = countWork(state, project, now, projectOfAgent)
   const asks = state.conversations.filter(c => !c.archived && c.owed && (c.projectId ?? 'lead') === project.id)
     .flatMap(c => c.owed!.map(ask => ({ conversationId: c.id, messageId: ask.id, personId: ask.personId, at: ask.at })))
     .sort((a, b) => a.at - b.at)
   const oldest = asks[0]
   const lostAt = counts.lost.length ? Math.min(...counts.lost.map(l => l.since)) : null
-  const idleSince = idle(counts) ? project.idleSince ?? null : null
+  const idleSince = idle(counts) ? idleBefore ?? now : null
   const withoutReason = counts.held.filter(h => h.reason === null).length
   return {
     pmId: pmOf(state, project),
-    asks: { count: asks.length, oldestAt: oldest?.at ?? null, personId: oldest?.personId ?? null, list: asks },
-    working: { count: counts.working.size, crew: counts.crew.length, agentIds: counts.crew.filter(id => counts.working.has(id)) },
-    nextUp: { count: counts.nextUp.length, conversationIds: counts.nextUp },
-    lost: { count: counts.lost.length, since: lostAt, conversationIds: counts.lost.map(l => l.id) },
-    held: { count: counts.held.length, withoutReason, list: counts.held },
+    asks: { count: asks.length, oldestAt: oldest?.at ?? null, personId: oldest?.personId ?? null, list: asks.slice(0, PULSE_LIST_MAX) },
+    working: { count: counts.working.size, crew: counts.crew.length, agentIds: counts.crew.filter(id => counts.working.has(id)).slice(0, PULSE_LIST_MAX) },
+    nextUp: { count: counts.nextUp.length, conversationIds: counts.nextUp.slice(0, PULSE_LIST_MAX) },
+    lost: { count: counts.lost.length, since: lostAt, conversationIds: counts.lost.map(l => l.id).slice(0, PULSE_LIST_MAX) },
+    held: { count: counts.held.length, withoutReason, list: counts.held.slice(0, PULSE_LIST_MAX) },
     idleSince,
     redAt: {
       asks: oldest ? oldest.at + limits.askMinutes * MINUTE : null,

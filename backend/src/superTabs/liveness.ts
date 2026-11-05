@@ -1,4 +1,4 @@
-import { markIdle } from './pulse.js'
+import { recordPulse } from './pulse.js'
 import { activeWork, forRecipients, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
 import { failedSessionStart } from './buddySessions.js'
@@ -433,7 +433,7 @@ function unpurged(state: SuperTabState, now: number): MessageDraft[] {
 export function sweepForLead(state: SuperTabState, now: number): MessageDraft[] {
   const drafts = [...sweepLiveness(state, now), ...recordTaskStates(state, now)]
   // Where the whole active Swarm is loaded, as for a command: a task lost here may leave Working at 0 (pulse.ts).
-  markIdle(state, now)
+  recordPulse(state, now)
   return drafts
 }
 
