@@ -65,9 +65,9 @@ describe('the open-proposal read', () => {
   it('lists the unanswered proposals, oldest first, from the chat the database holds', async () => {
     const chat = state.conversations.find(c => c.id === CHAT)!
     expect(await openProposals(state, chat, databaseProposalReads(db, TAB, CHAT))).toEqual([
-      { messageId: 'open', title: 'Sync edits', personId: 'peer', at: T0 + 1000 },
-      { messageId: 'old', title: 'Old proposal', personId: 'peer', at: T0 + 9000 },
-      { messageId: 'newest', title: 'Newest', personId: 'peer', at: expect.any(Number) },
+      { messageId: 'open', title: 'Sync edits', personId: 'peer', priority: 'P2', at: T0 + 1000 },
+      { messageId: 'old', title: 'Old proposal', personId: 'peer', priority: 'P2', at: T0 + 9000 },
+      { messageId: 'newest', title: 'Newest', personId: 'peer', priority: 'P2', at: expect.any(Number) },
     ])
   })
 

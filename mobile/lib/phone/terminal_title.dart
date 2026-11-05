@@ -42,10 +42,16 @@ class TerminalTitle extends StatelessWidget {
     this.daemon,
     this.away = false,
     this.sample = false,
+    this.backInset = 0,
   });
 
   final String name;
   final bool sample;
+
+  /// Room kept at the left for the back chevron the page draws over the title's corner
+  /// (`terminal_page.dart`, only while Swarm Home is behind the terminal), so the name does not
+  /// run under it. Zero otherwise: the title is as it was.
+  final double backInset;
 
   /// `machine:folder` — where the harness works.
   final String? place;
@@ -193,7 +199,10 @@ class TerminalTitle extends StatelessWidget {
           child: ConstrainedBox(
             constraints: BoxConstraints(minHeight: height),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: Tty.origin),
+              padding: EdgeInsets.only(
+                left: Tty.origin + backInset,
+                right: Tty.origin,
+              ),
               child: Row(
                 children: [
                   Expanded(

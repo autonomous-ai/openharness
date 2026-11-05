@@ -549,12 +549,17 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('#196 Offline editing'), findsNothing);
-      // The header's alone: the sidebar lists no tasks (task #2569).
-      final name = tester.widget<Text>(find.text('196  Offline editing'));
+      // The header's alone: the sidebar lists no tasks (task #2569). Its
+      // priority sits between number and title (task #3117).
+      final title = find.byKey(const ValueKey('super-task-title'));
       expect(
-        (name.textSpan! as TextSpan).children!.first.style?.color,
-        DesktopChrome.muted,
+        find.descendant(of: title, matching: find.text('Offline editing')),
+        findsOneWidget,
       );
+      final number = tester.widget<Text>(
+        find.descendant(of: title, matching: find.text('196')),
+      );
+      expect(number.style?.color, DesktopChrome.muted);
       await close(tester, c);
     });
 
