@@ -17,7 +17,7 @@ import { HostReads } from '../src/superTabs/read/host.js'
 import { buddyChatId, openSwarmBuddyChat } from '../src/superTabs/buddies.js'
 import { ACTIVITY_EXPIRY_MS, ACTIVITY_READS, activityDigest, resetActivityReads, sweepActivity, writeReplyActivity } from '../src/superTabs/activity.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
-import { profiled } from './plans.test-support.js'
+import { plan, profiled, reads } from './plans.test-support.js'
 import { SESSION_ENDED_KIND } from '../src/superTabs/buddySessions.js'
 import { threadFacet } from '../src/superTabs/pageReads.js'
 import { CHAT_SETTING_DEFAULT_KEEP_MS, sweepChatSettings } from '../src/superTabs/chatSettings.js'
@@ -29,6 +29,7 @@ import { sendPhoneNotices } from '../src/push/send.js'
 import { apnsSender, type ApnsRequest } from '../src/push/apns.js'
 import { fcmSender } from '../src/push/fcm.js'
 import { registerPushDevice } from '../src/push/devices.js'
+import { quietRepeats } from '../src/push/repeats.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -264,6 +265,65 @@ describe('Phone push end to end on the server: a write, its phones, and what App
     // Nothing written in the chat leaves the server.
     expect(JSON.stringify([apple, google])).not.toContain('secret plan')
     expect(JSON.stringify(apple)).not.toContain(authors)
+  })
+})
+
+describe('Phone push: a thread sounds once until it is read (task #3248)', () => {
+  const readThrough = async (tabId: string, conversationId: string, root: string, messageId: string, as: AuthUser) => {
+    const { sequence } = await db.superTabMessage.findUniqueOrThrow({ where: { id: messageId } })
+    expect((await call('POST', `/api/super-tabs/${tabId}/conversations/${conversationId}/threads/${root}/read`, as, { sequence })).status).toBe(200)
+  }
+  /** The notices a write made, as they go out: each person's, and whether it is quiet. */
+  const sent = async (write: () => Promise<unknown>) => {
+    phones.length = 0
+    await write()
+    return (await quietRepeats(db, [...phones])).map(n => ({ to: n.personId, kind: n.key.split(':')[0], quiet: n.quiet === true }))
+  }
+
+  it('sends a thread\'s next reply quietly while one before it is unread, and with sound again once the thread is read', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Owner root')
+    let second = ''
+    expect(await sent(() => send(s.tabId, s.web, 'Peer answers', peer, root))).toEqual([{ to: owner.sub, kind: 'reply', quiet: false }])
+    expect(await sent(async () => { second = await send(s.tabId, s.web, 'Peer again', peer, root) })).toEqual([{ to: owner.sub, kind: 'reply', quiet: true }])
+    await readThrough(s.tabId, s.web, root, second, owner)
+    expect(await sent(() => send(s.tabId, s.web, 'Peer a third time', peer, root))).toEqual([{ to: owner.sub, kind: 'reply', quiet: false }])
+  })
+
+  it('keeps each person and each thread apart, and never quiets a tag', async () => {
+    const s = await scene()
+    const first = await send(s.tabId, s.web, 'Owner root')
+    const other = await send(s.tabId, s.web, 'Owner second root')
+    await send(s.tabId, s.web, 'Peer answers', peer, first)
+    // Another thread of the owner's has no unread reply yet: it sounds.
+    expect(await sent(() => send(s.tabId, s.web, 'Peer answers there', peer, other))).toEqual([{ to: owner.sub, kind: 'reply', quiet: false }])
+    // Outsider, tagged in the first thread now, hears of its next reply with sound: the unread replies are the owner's.
+    expect(await sent(() => run(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Outsider, look', replyTo: first, recipientIds: [], mentions: [outsider.sub] })))
+      .toEqual([{ to: outsider.sub, kind: 'mention', quiet: false }, { to: peer.sub, kind: 'reply', quiet: false }])
+    expect((await sent(() => send(s.tabId, s.web, 'Peer once more', peer, first))).sort((a, b) => a.to.localeCompare(b.to)))
+      .toEqual([{ to: owner.sub, kind: 'reply', quiet: true }, { to: outsider.sub, kind: 'reply', quiet: false }].sort((a, b) => a.to.localeCompare(b.to)))
+  })
+
+  it('reads a thread\'s unread replies once, through the Activity thread index', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Owner root')
+    for (let i = 0; i < 3; i++) await send(s.tabId, s.web, `Peer answers ${i}`, peer, root)
+    // Another thread's rows, which the read must not examine.
+    const other = await send(s.tabId, s.web, 'Owner other root')
+    for (let i = 0; i < 3; i++) await send(s.tabId, s.web, `Peer elsewhere ${i}`, peer, other)
+    phones.length = 0
+    await send(s.tabId, s.web, 'Peer last', peer, root)
+    const notices = [...phones]
+    const rows = reads(await profiled(db, () => quietRepeats(db, notices)), 'SuperTabActivity', ['threadId'])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, personId: 1, conversationId: 1, threadId: 1 \}/)
+    expect(rows[0]!.docsExamined).toBeLessThanOrEqual(4)
+  })
+
+  it('reads nothing when no reply is pushed', async () => {
+    const tag: PhoneNotice = { personId: owner.sub, key: 'mention:t', title: 't', subtitle: '', body: '', link: 'swarm:t/c/message/m', slot: 'mention:t' }
+    const rows = await profiled(db, async () => { expect(await quietRepeats(db, [tag])).toEqual([tag]) })
+    expect(rows.filter(e => e.ns.endsWith('.SuperTabActivity'))).toEqual([])
   })
 })
 
