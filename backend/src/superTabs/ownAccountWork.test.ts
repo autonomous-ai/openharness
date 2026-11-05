@@ -277,6 +277,15 @@ describe('a start that names a Mac\'s Team account entry while its owner runs te
     expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team', cwd: '/team-swarm/lead' })
   })
 
+  // Security review 2 of #3081: a branch GitHub cannot place runs only in a Team account (commands.ts failPushUnknown), so it
+  // is not sent to the Mac, which would refuse it in turn.
+  it('still starts work whose push GitHub cannot place in the Team account, as Team-written work', () => {
+    const f = swarm()
+    f.choose(true)
+    f.run({ type: 'agent.start', request: { ...f.request(f.group(), 'gray-team'), cwd: '/team-swarm/lead' } }, f.leadActor, { ...f.joined, pushOrigin: 'unknown' })
+    expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team', cwd: '/team-swarm/lead' })
+  })
+
   it('starts there as before when its owner has not turned own-account work on, or turned it off', () => {
     const f = swarm()
     startOnTeam(f, f.group())
