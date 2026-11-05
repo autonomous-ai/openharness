@@ -420,10 +420,10 @@ export interface Conversation {
   heardAt?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
-  /** Its pull requests the Swarm itself read as merged on GitHub in its project's repository, by link: when it read them
-   *  (store.ts archiveFinished). Unlike the merge record (conversation.merged, any agent's word), no command writes it; it
-   *  is what makes a person's rule moved into this task leave the instructions (ruleGuard.ts, #3392). */
-  mergeSeen?: Record<string, number>
+  /** When its brief was last set (conversation.create, work.define): a person's rule moved into this task leaves the
+   *  instructions only for a pull request GitHub says merged after it (ruleGuard.ts rulePlaces, #3463). No command writes
+   *  it otherwise. Absent on a task from before. */
+  briefAt?: number
   /** What its Engineer was already told of each linked pull request, newest first (pullRequestEvents.ts): absent until read. */
   pullRequestEvents?: Record<string, string[]>
   /** Each linked pull request's head and patch id as the PR watch last read them (#3394): what check verdicts count against.
