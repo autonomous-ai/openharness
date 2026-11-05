@@ -114,6 +114,18 @@ describe('the crew dispatch pass', () => {
     expect(await s.holders()).toEqual({ Api: null })
   })
 
+  it('assigns as a PM that runs in a Harness Team account, with no one\'s sign-in', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    // The PM's machine becomes a Team account's: an ordinary sign-in may no longer speak as its agents (store.ts notTeamMachine).
+    await db.machine.updateMany({ where: { machineId: 'owner-mac', userId: owner.sub }, data: { sessionKind: 'team' } })
+    try {
+      expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+      expect(await s.holders()).toEqual({ Api: 'Ash' })
+    } finally {
+      await db.machine.updateMany({ where: { machineId: 'owner-mac', userId: owner.sub }, data: { sessionKind: null } })
+    }
+  })
+
   it('skips a task the member may not take (Team-written code, main account) and gives it its next one', async () => {
     const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts', Store: 'backend/src/b.ts' })
     // Team-written code goes only to a Team account's agent: Ash runs in the main account.
