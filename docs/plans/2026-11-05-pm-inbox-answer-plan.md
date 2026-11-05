@@ -23,8 +23,18 @@
 - **Rollback:** the new stored fields, `SuperTabDelivery.waitsUntil` and `Conversation.answered`, are optional and need no
   migration. Rolling the code back leaves them unread: an older backend ignores both, and an older host never sees
   `waitsForTurnEnd`. Rows written with them stay valid.
-- **Task 2** in part: the PM's digest now starts with its owed asks (`inbox.ts owedLines`). The crew-needs section and
-  releasing the inbox at the PM's turn end are a follow-up task built on Relay's #3404 once its code lands (River, 11-05).
+- **Task 2** in two parts. #3403: the PM's digest starts with its owed asks (`inbox.ts owedLines`). #3545, the rest:
+  - Sections in order, empty ones left out: Owed asks, New from people (by username, up to 1000 characters), Crew needs (the
+    question, the options, the one recommended; `crewNeedOf` reads crew-need rows and needs_human rows), then the notices.
+  - People's messages and crew needs to a PM are gathered only when its machine reports `turnInbox`, which its host sends
+    once it sends the PM's turn. An older host is unchanged: nothing more is gathered for it, so nothing is delayed.
+  - With `?turn=idle|busy` on the PM's list read, the inbox is due at idle when anything is gathered, or once its oldest row
+    is TURN_END_WAIT_MS old. A read with no turn keeps the 5-minute notice clock, and on a `turnInbox` machine it puts the
+    people's messages and crew needs it gathered back in the queue in that same read.
+  - An idle read with something gathered skips the fast answer (one indexed read), so the inbox goes in the read after the
+    turn ends. The host reads the PM's list on the tick its turn ends. It waits at most 200 ms for the core's activity read,
+    one at a time per PM, so a slow core never holds the machine's deliveries.
+  - The inbox stays the digest message with its stable id, so it is written once.
 
 **Goal:** The PM gets one inbox per turn and answers each ask once, in its place; crew members get their messages at turn end,
 on a status change or within 15 minutes, never typed mid-task; stop and cancel still go at once.
