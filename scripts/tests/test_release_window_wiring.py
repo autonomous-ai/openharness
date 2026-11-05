@@ -104,7 +104,9 @@ class ScriptTests(unittest.TestCase):
 
     def run_script(self, kind, *args, code=0):
         # Relative, as `make release-cli` runs it: the script changes directory before it sources the guard.
-        env = {**os.environ, "STUB_LOG": str(self.log), "STUB_CODE": str(code), "BRANCH": "main"}
+        env = {**os.environ, "STUB_LOG": str(self.log), "STUB_CODE": str(code), "BRANCH": "main",
+               # A CI runner has no git identity, and the backend script makes an annotated tag.
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
         return subprocess.run(["bash", SCRIPT_OF[kind], *args], capture_output=True, text=True,
                               env=env, cwd=self.repo, timeout=60)
 
