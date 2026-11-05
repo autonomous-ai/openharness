@@ -59,7 +59,7 @@ describe('the template\'s workflow', () => {
 
     // The coordinator opens the task with its two checks and assigns the Engineer.
     const T = String((await as(P)({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts across a restart.',
-      checks: [{ description: 'Review passes', independent: false }, { description: 'Test passes', independent: false }] })).result.conversationId)
+      checks: [{ description: 'Review passes', independent: false }, { description: 'Test passes', independent: false }], priority: 'P2', requesterId: owner.sub })).result.conversationId)
     const assignment = String((await as(P)({ type: 'work.assign', conversationId: T, agentId: E })).result.assignmentId)
     const [review, test] = (await task(T)).checks
     expect([review!.description, test!.description]).toEqual(['Review passes', 'Test passes'])

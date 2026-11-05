@@ -389,11 +389,15 @@ it('asks for a task\'s priority on conversation.create, says what P0 to P3 mean,
   const answer = await t.ask({ action: 'help' }, owner) as { help: { command: string; mine: string; commands: Array<Record<string, unknown>> } }
   expect(answer.help.mine).toContain('one line per task, P0 first (number, priority, title,')
   const creates = answer.help.commands.filter(c => c.type === 'conversation.create')
-  expect(creates.find(c => !('step' in c))).toMatchObject({ title: 'Outcome', priority: 'P0|P1|P2|P3' })
+  expect(creates.find(c => !('step' in c))).toMatchObject({ title: 'Outcome', priority: 'P0|P1|P2|P3', requesterId: 'PERSON' })
   // A step carries no priority.
   expect(creates.find(c => 'step' in c)).not.toHaveProperty('priority')
   expect(answer.help.commands).toContainEqual({ type: 'work.priority', conversationId: 'GROUP', priority: 'P0' })
-  expect(answer.help.command).toContain('A task\'s priority is P0 (hotfix: something shipped is broken, loses data, or stops people\'s or agents\' work), P1 (needed by users soon), P2 (planned goal) or P3 (tools, docs or process): give one on conversation.create, or it gets P2; only the PM or a person sets P0, or changes a priority later with work.priority.')
+  // Task #3389: an agent\'s task needs its goal, a check, a priority and who asked, or a reason nobody did.
+  expect(answer.help.command).toContain('TASK_CONTRACT_MISSING')
+  expect(answer.help.command).toContain('noRequesterReason')
+  expect(answer.help.command).not.toContain('checks may be empty')
+  expect(answer.help.command).toContain('A task\'s priority is P0 (hotfix: something shipped is broken, loses data, or stops people\'s or agents\' work), P1 (needed by users soon), P2 (planned goal) or P3 (tools, docs or process): give one on conversation.create (a person\'s without one gets P2); only the PM or a person sets P0, or changes a priority later with work.priority.')
 })
 it('tells the Lead that start works only on a machine in the Swarm\'s Machines list', async () => {
   const t = setup()

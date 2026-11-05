@@ -66,9 +66,6 @@ export interface Agent {
   workDecision?: 'awaiting' | 'keep' | 'stop'
   /** When its Lead last decided keep: a kept worker is idle from then (tidy.ts). */
   keptAt?: number
-  /** A crew member (task #3397, crew.ts): the role it fills, the lane it takes work in (task #3400, dispatch.ts), when and by
-   *  whom it was marked. Declared the same in both tasks' branches; the second to merge drops its copy. */
-  crew?: { role: string; lane?: string; at: number; by: string }
   /** When its last idle spell began, once its coordinator was told of it (tidy.ts idleNotices): one notice per spell. */
   idleNoticedAt?: number
   /** Set while its stop was the server's idle stop, written before project instructions (phase 4: idle agents are a notice),
@@ -76,6 +73,9 @@ export interface Agent {
    *  close it (agent.stopRefused). */
   idleStop?: { previous: 'awaiting' | 'keep' | null }
   releaseId?: string
+  /** Set while it is one of its project's crew (crew.ts): its host keeps it alive, and no idle path closes or removes it.
+   *  `by` is the person's or PM agent's id that marked it. */
+  crew?: { role: string; lane?: 'backend' | 'cli' | 'desktop' | 'mobile' | 'docs'; at: number; by: string }
   /** A person's request to move this Product Manager to another engine or account (lead.switch), carried out by its host.
    *  `id` is the operation that asked; `claimedUntil` is set once the host took it (agent.switchClaim). */
   /** The switch request the last rebind settled, until its result arrives: that result is the one line the chat gets, and
@@ -627,6 +627,9 @@ export interface MessageDraft {
   mentions?: string[]
   /** Its tags wait until the group has had no worker and no Lead action for a while (mentions.ts NO_WORKER_GRACE_MS). */
   holdMentions?: true
+  /** Written by message.send: a post, not a notice the server writes under an agent's name. Never stored; an agent's post to its
+   *  project's coordinator waits for its digest (noticeDigest.ts gatheredMessage). */
+  post?: true
   /** The root of the thread this reply is in; absent on a top-level message, which is its own thread (writeMessages). */
   thread?: string
   /** A thread reply also shown in the conversation's main stream. */
@@ -766,6 +769,8 @@ export interface CommandEffects {
   result: Record<string, unknown>
   /** `message.edit`'s new text, credentials removed (commands.ts WORDS): what the store writes into the row. */
   messageEdit?: { messageId: string; text: string }
+  /** An agent's reaction settles that agent's own deliveries of the message it reacted to, as an answer does (reactions.ts; the store closes the rows). */
+  settles?: { messageId: string; agentId: string }
   /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
   terminal?: import('./terminal.js').TerminalEffect
   /** A Buddy's proposal closed by hand, written into the open proposals by the store (proposals.ts closeProposal). */

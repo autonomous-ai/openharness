@@ -4,6 +4,10 @@ import { createSuperTab, type Actor, type AgentConfiguration, type Conversation,
 import { capacityLine, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, laneOf, nudgeLine, pinBuilder, pullRequestPin, returnReason } from './dispatch.js'
 import type { PullRequestWatch } from './pullRequestEvents.js'
 import { sweepLiveness } from './liveness.js'
+import type { Agent } from './model.js'
+
+/** A lane a crew mark names (crew.ts, #3397). */
+type CrewLane = NonNullable<NonNullable<Agent['crew']>['lane']>
 import { groupView } from './read/views.js'
 
 const NOW = Date.parse('2026-11-05T15:00:00Z')
@@ -76,7 +80,7 @@ describe('a task\'s lane', () => {
 
 describe('what a free crew member gets', () => {
   /** A crew of [names] (Engineers with no lane unless [lanes] gives one), and four tasks: two backend, one Desktop, one CLI. */
-  function crew(names: string[], lanes: Record<string, string> = {}) {
+  function crew(names: string[], lanes: Record<string, CrewLane> = {}) {
     const s = crewSwarm(names)
     for (const name of names) {
       const member = s.state.agents.find(a => a.id === s.ids[name])!

@@ -25,10 +25,9 @@ message names it. This section is not part of the project's document: never save
   person gets that person asked by name, with a default and a time. Ask no agent whether it is stalled: \`mine\` and the
   task's thread show it. Then archive every finished group the Swarm left open: one with no pull request linked, which the
   auto-archive never takes.
-- Every wake: reread the instructions whole before its jobs, so their rules stay fresh in a long session and after your
-  context is compacted.
-- Every 30 minutes, when a person wrote to you since the last wake: read what people sent you since then, and save each
-  correction or lasting rule the instructions don't have yet.
+- Every 30 minutes, when a person wrote to you since the last wake: read only what people sent you since then, and save
+  each correction or lasting rule the instructions don't have yet. Don't reread the whole instructions for it: when they
+  change, Harness tells you, and you read them again then.
 - Once a day, when the instructions changed, at 23:00 in its own message: the tidy. In one save, merge duplicate lines and
   drop stale ones, so they get shorter. Every line you drop is merged (kept elsewhere with who said it), expired (a step or
   date that passed), or a person's rule that is gone: restore that one or ask its person. Never drop or weaken a person's
@@ -111,19 +110,16 @@ export type ScheduleJob = 'sweep' | 'heard'
 const JOB_LINES: Record<ScheduleJob, string> = {
   sweep: '- Open-task sweep: every open task ends with an owner, a question to a person with a default and a time, or a close with its reason; '
     + 'then archive the finished groups the Swarm left open (see the built-in PM schedule in your instructions).',
-  heard: '- What people taught you: read what people sent you since the last wake, and save each correction or lasting rule the '
+  heard: '- What people taught you: read only what people sent you since the last wake, and save each correction or lasting rule the '
     + 'instructions don\'t have yet, naming who said it.',
 }
-/** Said first in every wake (Ken, 11-05, #3151): in a long session, and after compaction, a PM worked from rules it no longer
- *  had in mind. About 7-9k tokens a wake, 20-30 wakes a day: accepted. */
-const REREAD = 'Before these jobs, reread your project\'s instructions whole (the instructions command), so their rules are fresh, even '
-  + 'after your context was compacted.'
 
-/** The wake's words: the slot's local time, the jobs due, and that the project's own schedule wins. */
+/** The wake's words: the slot's local time, the jobs due, and that the project's own schedule wins. It names no reread of the
+ *  instructions (anh Dee, 11-05, #3387, undoing #3151's 7-9k tokens a wake): the CLI tells the coordinator when they change
+ *  (cli swarmInstructionsSkill.ts). */
 export function scheduleText(project: SwarmProject, slot: number, jobs: readonly ScheduleJob[] = ['sweep']): string {
   const zone = digestOf(project)?.timeZone ?? DEFAULT_TIME_ZONE
   return [`Built-in schedule, ${localNow(zone, slot * SCHEDULE_SLOT_MS).time} (${zone}). This is a scheduled request from the Swarm, not a new task.`,
-    REREAD,
     ...jobs.map(job => JOB_LINES[job]),
     // Said here too: a CLI older than the built-in section shows its PM only this message.
     'Skip a job your project\'s instructions schedule on their own clock. Set no timer of your own for this one, and delete one you set before.'].join('\n')
