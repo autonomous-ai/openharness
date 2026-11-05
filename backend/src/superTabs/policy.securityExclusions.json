@@ -131,12 +131,11 @@
    ]
   },
   {
-   "reason": "Keyboard keys and storage or cache keys outside backend/src and cli/src: key and keys are held only there.",
+   "reason": "Keyboard keys, cache and image keys, and a hash that keeps account ids out of logs, outside backend/src and cli/src (key and keys are held only there). Account storage forgotten at sign-out stays held as deletion (account_keys).",
    "files": [
     "desktop/lib/finder/widgets/finder_diff_keys.dart",
     "desktop/lib/finder/widgets/finder_tree_keys.dart",
     "desktop/lib/shortcuts/text_editing_keys.dart",
-    "desktop/lib/super_tabs/account_keys.dart",
     "desktop/lib/usage/usage_account_key.dart",
     "desktop/third_party/xterm/lib/src/core/input/keys.dart",
     "mobile/lib/phone/question_keys.dart",

@@ -171,8 +171,8 @@ describe('the seed asks two reads wherever the merge train did', () => {
   // areas fails this until a review adds it there.
   it('holds every file of this repository the old patterns held, at two reads, except the reviewed exclusions', () => {
     const DROPPED_BY_RULE: ReadonlyArray<{ reason: string; test: (file: string) => boolean }> = [
-      { reason: 'Runs no code: images, video, 3D models, Markdown, docs/, samples/, output/',
-        test: file => /\.(png|jpe?g|gif|webp|svg|ico|icns|mp4|mov|webm|stl|step|stp|3mf|obj|glb|gltf|f3d|md)$|^(docs|samples|output)\//i.test(file) },
+      { reason: 'Runs no code: images (not SVG, which can carry script), video, 3D models, Markdown, docs/, samples/, output/',
+        test: file => /\.(png|jpe?g|gif|webp|ico|icns|mp4|mov|webm|stl|step|stp|3mf|obj|glb|gltf|f3d|md)$|^(docs|samples|output)\//i.test(file) },
       { reason: 'Firmware and hardware under devices/ that is not a link file (cable, pair, link and key files stay held)',
         test: file => file.startsWith('devices/') },
       { reason: 'Accessibility is not access control', test: file => /accessib/i.test(file) },
@@ -201,6 +201,29 @@ describe('a saved record can raise a security area, never lower it below two rea
       expect(requiredReads(rules, null)).toBe(2)
       expect(requiredReads(rules, ['backend/src/superTabs/cards.ts'])).toBe(1)
     }
+  })
+
+  // SecAlder, re-review of #3250: the non-code and accessibility filter trims the built-in patterns only. A path a person puts
+  // in a security row of their record counts exactly as written.
+  it('counts a path a person added to a security row as written, non-code and accessibility too', () => {
+    const added = (area: string, glob: string): ProjectRules => ({ ...copy(), reviews: { ...copy().reviews,
+      rows: SEED_RULES.reviews.rows.map(row => row.area === area ? { ...row, paths: [...row.paths, glob] } : row) } })
+    expect(requiredReads(added('Sign-in', 'samples/**'), ['samples/x.ts'])).toBe(2)
+    expect(requiredReads(added('Sign-in', 'web/**/*.svg'), ['web/a/login-form.svg'])).toBe(2)
+    expect(requiredReads(added('Sign-in', 'web/**/*.svg'), ['web/a/icon.svg'])).toBe(2)
+    expect(requiredReads(added('Access', '**/accessibility/**'), ['desktop/accessibility/main.dart'])).toBe(2)
+    expect(requiredReads(added('Access', 'docs/**'), ['docs/plan.md'])).toBe(2)
+    // The seed's own patterns still leave those out.
+    expect(requiredReads(SEED_RULES, ['samples/x.ts', 'desktop/accessibility/main.dart', 'docs/token.md'])).toBe(1)
+  })
+
+  // ReviewLinnea, re-review of #3250: account_keys decides which stored Swarm data is forgotten at sign-out (deletion).
+  it('holds the account storage keys forgotten at sign-out at two reads', () => {
+    expect(requiredReads(SEED_RULES, ['desktop/lib/super_tabs/account_keys.dart'])).toBe(2)
+  })
+
+  it('holds an SVG named for a security area: an SVG can carry script', () => {
+    expect(requiredReads(SEED_RULES, ['website/public/auth-logo.svg'])).toBe(2)
   })
 
   it('takes a record that raises a security area', () => {
