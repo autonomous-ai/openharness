@@ -385,8 +385,9 @@ export interface Conversation {
   /** Each linked pull request's head and patch id as the PR watch last read them (#3394): what check verdicts count against.
    *  Absent until the watch reads one. */
   pullRequestHeads?: Record<string, PullRequestHead>
-  /** Its steps and reviews (groups whose reviewOf is this one), newest last, at most 50: what a new pull request head re-derives
-   *  the checks of, dormant ones included (#3394). Absent before its first step since this was added. */
+  /** Its steps and reviews (groups whose reviewOf is this one), newest last, at most 200 (production's most was 14): what a new
+   *  pull request head re-derives the checks of, dormant ones included (#3394). Empty from a task's start; absent on a task
+   *  from before, whose PR watch looks them up once (pullRequestEvents.ts listedSteps). */
   stepIds?: string[]
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
   cards?: import('./cards.js').GroupCards

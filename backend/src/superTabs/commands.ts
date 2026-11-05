@@ -66,6 +66,8 @@ import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, pr
 import { placeAfter, queueSiblings } from './taskQueue.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
+/** The most steps a task lists (Conversation.stepIds): production's most was 14 (2026-11-05). */
+const STEPS_LISTED = 200
 /** A route override's reason when its agent gave none: following another candidate needs none (project instructions). */
 const NO_REASON = 'No reason given.'
 /** What a pick-less route's only candidate is chosen for, when its start gives no reason (task #2901). */
@@ -2295,6 +2297,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         for (const id of creator) if (!owning.agentIds.includes(id)) owning.agentIds.push(id)
       }
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
+        // A task lists its steps from its start (#3394): only a task from before lists none, which its PR watch looks up once.
+        ...(!command.reviewOf && !command.audience ? { stepIds: [] } : {}),
         number, title: command.title, leadId, agentIds: [...leadId ? [leadId] : [], ...creator],
         archived: false, brief, ...(command.task ? { task: command.task } : {}), ...(command.reviewOf ? { reviewOf: command.reviewOf } : {}),
         // A step keeps its task's mark (teamWritten.ts, audit H2). Opening a task writes none of its code (#3304).
@@ -2308,7 +2312,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Its task lists it, so a new head of the task's pull request re-derives its checks even once it is dormant (#3394).
       if (command.reviewOf) {
         const reviewedTask = conversation(state, command.reviewOf)
-        reviewedTask.stepIds = [...reviewedTask.stepIds ?? [], operationId].slice(-50)
+        reviewedTask.stepIds = [...reviewedTask.stepIds ?? [], operationId].slice(-STEPS_LISTED)
       }
       if (proposal) recordProposal(state.conversations.at(-1)!, { buddyId: proposal.buddyId, messageId: proposal.messageId })
       // The asker's message is the task's root; its thread takes the task's replies (taskLine.ts).

@@ -661,9 +661,10 @@ export class GitHubApp {
    *  (superTabs/pullRequestPatch.ts, #3394), read with the watch's token ([PULL_WATCH_PERMISSIONS]) once per new head. Null
    *  when GitHub cannot say, or lists as many as it ever lists ([PULL_FILES_MAX]), as it may then have left some out. With
    *  [head], null too unless the pull request's head is still that one once the files are read: a push in between would
-   *  give a newer head's files to the older head; and unless each file listed is [head]'s (its contents link's ref). */
+   *  give a newer head's files to the older head; and unless each file listed is [head]'s (its contents link's ref: the head,
+   *  or for a removed file the pull request's base). */
   async pullRequestFiles(repository: GitHubRepository, number: number, token: string, head?: string): Promise<PullRequestFile[] | null> {
-    const files: PullRequestFile[] = []
+    const files: PullRequestFile[] = [], refs: Array<string | undefined> = []
     const text = (value: unknown) => typeof value === 'string' ? value : undefined
     try {
       for (let page = 1; files.length < PULL_FILES_MAX; page++) {
@@ -672,16 +673,19 @@ export class GitHubApp {
         for (const file of answer.body as Array<Record<string, unknown>>) {
           const filename = text(file.filename), status = text(file.status), sha = text(file.sha), patch = text(file.patch), previousFilename = text(file.previous_filename)
           if (!filename || !status || sha === undefined) return null
-          // Each file listed is [head]'s (security review of #3218): a push and a push back between pages, or a diff GitHub has
-          // not recomputed yet, would list another head's.
-          if (head !== undefined && refOf(file.contents_url)?.toLowerCase() !== head.toLowerCase()) return null
           files.push({ filename, status, sha, ...patch === undefined ? {} : { patch }, ...previousFilename === undefined ? {} : { previousFilename } })
+          refs.push(refOf(file.contents_url)?.toLowerCase())
         }
         if (answer.body.length < 100) {
           if (head === undefined) return files
+          // Each file listed is [head]'s (security review of #3218): a push and a push back between pages, or a diff GitHub has
+          // not recomputed yet, would list another head's. A removed file's contents link names the base, where it still is
+          // (review of #3218, as GitHub answers for #3147); every other file's names the head. Both read after the files.
           const pull = await this.call('GET', `/repos/${repository.owner}/${repository.name}/pulls/${number}`, `Bearer ${token}`)
-          const now = pull.status === 200 ? (pull.body as { head?: { sha?: unknown } }).head?.sha : undefined
-          return typeof now === 'string' && now.toLowerCase() === head.toLowerCase() ? files : null
+          const shas = pull.status === 200 ? pull.body as { head?: { sha?: unknown }; base?: { sha?: unknown } } : {}
+          const now = text(shas.head?.sha)?.toLowerCase(), base = text(shas.base?.sha)?.toLowerCase()
+          if (now !== head.toLowerCase() || !base) return null
+          return files.every((file, i) => refs[i] === (file.status === 'removed' ? base : now)) ? files : null
         }
       }
       return null

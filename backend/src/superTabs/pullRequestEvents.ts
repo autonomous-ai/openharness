@@ -8,6 +8,7 @@ import { githubRepository, type GitHubRepository } from '../github/repository.js
 import type { SuperTabStore } from './store.js'
 import type { PullRequestHead } from './model.js'
 import { patchId } from './pullRequestPatch.js'
+import { watchedLinks } from './checkVerdicts.js'
 import { logger } from '../utils/logger.js'
 
 /** What GitHub says of one pull request, as the watch reads it (github/app.ts watchPullRequest). */
@@ -124,8 +125,9 @@ export const WATCH_QUIET_MS = 7 * 24 * 3_600_000
 /** The most tasks a pass reads, the most recently active first (ENGINEERING.md 4: no read grows without a bound). */
 export const WATCH_GROUPS = 200
 /** The most done tasks a pass also reads for their heads (#3394): done before the PM merges, their verdicts must still go
- *  stale on a push. Production had 15, with 18 links (2026-11-05). */
-export const WATCH_DONE_GROUPS = 50
+ *  stale on a push, however long the pull request stays open. Production had 31 with links, 11 quiet over a week, of 51
+ *  finished, unarchived groups in all (2026-11-05). */
+export const WATCH_DONE_GROUPS = 100
 /** A head whose patch GitHub could not give is asked again after this long, not every pass. */
 export const PATCH_RETRY_MS = 15 * 60_000
 
@@ -175,15 +177,16 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
   try {
     // The finished mark's index, [workFinished, archived, lastActivityAt]: equality, equality, then the range, which also
     // gives the sort; the rest filters what it fetches. A step's reviewOf is a string and a task has none (null matches it).
-    // Open tasks, then done ones, each read by that index (#3394: a done task's pull request is not merged yet).
+    // Open tasks, then done ones, each read by that index (#3394: a done task's pull request is not merged yet, and its verdicts
+    // must go stale on a push however long it waits: no activity range, as only finished, unarchived groups match).
+    const since = { lastActivityAt: { $gte: { $date: new Date(now - WATCH_QUIET_MS).toISOString() } } }
     const read = (workFinished: boolean, cap: number, more: Record<string, unknown> = {}) => cap <= 0 ? Promise.resolve([]) : db.swarmGroup.aggregateRaw({ pipeline: [
-      { $match: { workFinished, archived: false, lastActivityAt: { $gte: { $date: new Date(now - WATCH_QUIET_MS).toISOString() } },
-        deleted: false, kind: null, 'data.reviewOf': null, 'data.pullRequestUrls.0': { $exists: true }, ...more } },
+      { $match: { workFinished, archived: false, ...more, deleted: false, kind: null, 'data.reviewOf': null, 'data.pullRequestUrls.0': { $exists: true } } },
       { $sort: { lastActivityAt: -1 } },
       { $limit: cap },
       { $project: { _id: 0, tabId: 1, key: 1, urls: '$data.pullRequestUrls', heads: '$data.pullRequestHeads', steps: '$data.stepIds' } },
     ] }) as unknown as Promise<Array<{ tabId: string; key: string; urls: string[]; heads?: Record<string, PullRequestHead> | null; steps?: string[] | null }>>
-    const rows = [...await read(false, limit), ...await read(true, doneLimit, { 'data.assignment.status': 'done' })]
+    const rows = [...await read(false, limit, since), ...await read(true, doneLimit, { 'data.assignment.status': 'done' })]
     if (!rows.length) return 0
     const bot = await reader.botLogin()
     // One read per pull request a pass, however many tasks link it.
@@ -199,17 +202,24 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
     }
     const patchNeeded = (known: PullRequestHead | undefined, head: string) =>
       known?.head !== head || (known.patch === null && now - known.at >= PATCH_RETRY_MS)
-    let posted = 0
+    // Each task's newest links (watchedLinks), with their pull request as GitHub has it now and a patch where one is needed.
+    const seen: Array<{ row: typeof rows[number]; watch: PullRequestWatch; patch: string | null | undefined }> = []
     for (const row of rows) {
-      for (const url of row.urls) {
-        try {
-          const watch = await watchOf(url)
-          if (watch?.state !== 'open') continue
-          const patch = patchNeeded(row.heads?.[url] ?? undefined, watch.head) ? await patchOf(url, watch.head) : undefined
-          posted += await store.pullRequestSeen(row.tabId, row.key, watch, bot, patch, row.steps ?? [])
-        } catch (error) {
-          logger.warn('[swarm-pr-events] group skipped', { tabId: row.tabId, group: row.key, error: error instanceof Error ? error.message : String(error) })
-        }
+      for (const url of watchedLinks(row.urls)) {
+        const watch = await watchOf(url)
+        if (watch?.state !== 'open') continue
+        seen.push({ row, watch, patch: patchNeeded(row.heads?.[url] ?? undefined, watch.head) ? await patchOf(url, watch.head) : undefined })
+      }
+    }
+    // A task from before steps were listed, at a new head: its dormant steps are looked up once, then listed (listedSteps).
+    const listed = await listedSteps(db, seen.filter(s => s.patch !== undefined && !Array.isArray(s.row.steps)).map(s => s.row))
+    let posted = 0
+    for (const { row, watch, patch } of seen) {
+      try {
+        const lookedUp = listed.get(`${row.tabId}:${row.key}`)
+        posted += await store.pullRequestSeen(row.tabId, row.key, watch, bot, patch, row.steps ?? lookedUp ?? [], lookedUp !== undefined)
+      } catch (error) {
+        logger.warn('[swarm-pr-events] group skipped', { tabId: row.tabId, group: row.key, error: error instanceof Error ? error.message : String(error) })
       }
     }
     const unreadable = (await Promise.all(reads.values())).filter(watch => watch === null).length
@@ -220,6 +230,23 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
     else if (posted) logger.info('[swarm-pr-events] pass', line)
     return posted
   } finally { await reader.done() }
+}
+
+/** The dormant steps of [tasks] that list none (Conversation.stepIds absent: tasks from before steps were listed), by
+ *  `tabId:key`, an empty list for one with none: one read for the pass, by the awake-groups index's tabId, dormant and
+ *  deleted, examining a Swarm's dormant groups once (production's largest Swarm had 3,060 groups, 2026-11-05). Each task then
+ *  lists its steps (store.ts pullRequestSeen), so this runs again only for another task from before, at its first new head.
+ *  Awake steps need no lookup: they load with the task. */
+export async function listedSteps(db: PrismaClient, tasks: ReadonlyArray<{ tabId: string; key: string }>): Promise<Map<string, string[]>> {
+  const listed = new Map<string, string[]>()
+  if (!tasks.length) return listed
+  for (const task of tasks) listed.set(`${task.tabId}:${task.key}`, [])
+  const rows = await db.swarmGroup.aggregateRaw({ pipeline: [
+    { $match: { tabId: { $in: [...new Set(tasks.map(t => t.tabId))] }, dormant: true, deleted: false, 'data.reviewOf': { $in: [...new Set(tasks.map(t => t.key))] } } },
+    { $project: { _id: 0, tabId: 1, key: 1, task: '$data.reviewOf' } },
+  ] }) as unknown as Array<{ tabId: string; key: string; task: string }>
+  for (const step of rows) listed.get(`${step.tabId}:${step.task}`)?.push(step.key)
+  return listed
 }
 
 /** Runs the pass every minute in the singleton worker, one at a time. */

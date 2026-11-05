@@ -4646,7 +4646,7 @@ export class SuperTabStore {
    *  give it (undefined: not read, null: unreadable). [stepIds]: the task's steps (Conversation.stepIds), loaded even when
    *  dormant, as a new head re-derives their checks. A done task records its heads and posts nothing (#3394). */
   async pullRequestSeen(tabId: string, groupId: string, watch: PullRequestWatch, botLogin: string | null, patch?: string | null,
-    stepIds: readonly string[] = []): Promise<number> {
+    stepIds: readonly string[] = [], lookedUp = false): Promise<number> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       if (!row || row.deletedAt) return 0
@@ -4661,7 +4661,13 @@ export class SuperTabStore {
       const known = group.pullRequestHeads?.[watch.url], newHead = known?.head !== watch.head
       const repatched = !newHead && patch !== undefined && known!.patch === null
       if (newHead || repatched) {
-        group.pullRequestHeads = keepHead(group.pullRequestHeads, watch.url, { head: watch.head, patch: patch ?? null, at: now }, group.pullRequestUrls)
+        // A task from before steps were listed lists the ones its watch looked up, with its awake ones (#3394).
+        if (lookedUp && !group.stepIds) {
+          group.stepIds = [...new Set([...state.conversations.filter(c => c.reviewOf === group.id).map(c => c.id), ...stepIds])]
+        }
+        // A head the pass gave no patch for (its read already ended) is read again at the next pass, never kept unread.
+        group.pullRequestHeads = keepHead(group.pullRequestHeads, watch.url, { head: watch.head, patch: patch ?? null, at: patch === undefined ? 0 : now },
+          group.pullRequestUrls)
         for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
           refreshChecks(checked.checks, watch.url, newHead ? known : undefined, group.pullRequestHeads)
         }

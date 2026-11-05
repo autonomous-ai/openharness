@@ -23,7 +23,7 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   const renamed = new Map<string, string>()
   const protection = new Map<string, { rules?: unknown[]; protected?: boolean; branch?: string; fail?: boolean }>()
   /** Pull requests by `owner/name#number`, lower case: GitHub's state and when it was merged, and what a watch reads. */
-  const pulls = new Map<string, { state: 'open' | 'closed'; merged_at: string | null; draft?: boolean; head?: { sha: string }; base?: { ref: string };
+  const pulls = new Map<string, { state: 'open' | 'closed'; merged_at: string | null; draft?: boolean; head?: { sha: string }; base?: { ref: string; sha?: string };
     mergeable?: boolean | null; html_url?: string }>()
   /** A head's latest check runs and its check suites, by `owner/name@sha`, lower case. */
   const checkRuns = new Map<string, Array<{ name: string; status: string; conclusion: string | null; completed_at: string | null }>>()

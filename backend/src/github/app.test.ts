@@ -568,7 +568,7 @@ describe('who pushed a pull request, through the app', () => {
 describe('watching a pull request', () => {
   const HEAD = 'abc1234def5678'
   const seed = (github: ReturnType<typeof fakeGitHub>) => {
-    github.pulls.set('acme/app#12', { state: 'open', merged_at: null, draft: false, head: { sha: HEAD }, base: { ref: 'main' }, mergeable: false,
+    github.pulls.set('acme/app#12', { state: 'open', merged_at: null, draft: false, head: { sha: HEAD }, base: { ref: 'main', sha: 'base000' }, mergeable: false,
       html_url: 'https://github.com/acme/app/pull/12' })
     github.checkRuns.set(`acme/app@${HEAD}`, [{ name: 'build', status: 'completed', conclusion: 'failure', completed_at: '2026-10-24T11:59:00Z' },
       { name: 'lint', status: 'in_progress', conclusion: null, completed_at: null }])

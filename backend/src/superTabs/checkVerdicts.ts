@@ -41,11 +41,15 @@ export function verdictCounts(verdict: CheckVerdict, heads: PullRequestHeads | u
   return sameHead(current.head, verdict.head) || (!!verdict.patch && current.patch === verdict.patch)
 }
 
-/** [heads] with [url] at [entry]: only the pull requests the task still [links], at most HEADS_KEPT, the most recently read
- *  kept (review of #3218: one task links 369 pull requests in production). A verdict on one dropped is unverified
- *  (verdictCounts), never valid for every head. */
+/** The links of a task its PR watch reads: its newest HEADS_KEPT (review of #3218: one task links 369 pull requests in
+ *  production), the same each pass until it links another, so the heads kept are exactly the heads read (keepHead). */
+export const watchedLinks = (links: readonly string[]): string[] => links.slice(-HEADS_KEPT)
+
+/** [heads] with [url] at [entry]: only the pull requests the watch reads of the task's [links] (watchedLinks), so never more
+ *  than HEADS_KEPT, and never one dropped that the next pass reads again (review of #3218, round 2). A verdict on one no
+ *  longer read is unverified (verdictCounts), never valid for every head. */
 export function keepHead(heads: PullRequestHeads | undefined, url: string, entry: PullRequestHead, links: readonly string[]): Record<string, PullRequestHead> {
-  const linked = new Set(links)
+  const linked = new Set(watchedLinks(links))
   const kept = Object.entries({ ...heads, [url]: entry }).filter(([key]) => key === url || linked.has(key))
     .sort(([, a], [, b]) => b.at - a.at).slice(0, HEADS_KEPT)
   return Object.fromEntries(kept)

@@ -289,9 +289,10 @@ describe('the pull request watch', () => {
   })
 })
 
-// #3394: done tasks are read too, for their pull requests' heads, by the same index with workFinished true.
+// #3394: done tasks are read too, for their pull requests' heads, by the same index with workFinished true, at any age: a pull
+// request left open must still make their verdicts stale (review of #3218, round 2).
 describe('the pull request watch of done tasks', () => {
-  it('reads the done tasks active this week by the finished mark index, capped', async () => {
+  it('reads the done tasks of any age by the finished mark index, the newest first, capped', async () => {
     const { watchPullRequests } = await import('../src/superTabs/pullRequestEvents.js')
     let n = 0
     const group = (activeAt: number, status: string, workFinished = true) => {
@@ -299,7 +300,7 @@ describe('the pull request watch of done tasks', () => {
       return { id: `tab-d:${key}`, tabId: 'tab-d', key, version: 1, changedAt: new Date(NOW), ordinal: n, agentIds: [], lastActivityAt: new Date(activeAt),
         workFinished, data: { pullRequestUrls: [`https://github.com/acme/done/pull/${n}`], assignment: { status } } }
     }
-    // Done work quiet for a month, which the index's range leaves out; open work, which the other read takes.
+    // Done work quiet for a month, read last; open work, which the other read takes.
     await db.swarmGroup.createMany({ data: [
       ...Array.from({ length: 20 }, () => group(NOW - 30 * DAY, 'done')), ...Array.from({ length: 5 }, () => group(NOW - DAY, 'working', false)),
       group(NOW - 3 * 3_600_000, 'done'), group(NOW - 2 * 3_600_000, 'cancelled'), group(NOW - 60_000, 'done'),
@@ -307,15 +308,43 @@ describe('the pull request watch of done tasks', () => {
     const asked: string[] = []
     const reader = { watch: async (url: string) => { asked.push(url); return null }, patch: async () => null, botLogin: async () => null, done: async () => {} }
     const entries = await profiled(db, () => watchPullRequests(db, { pullRequestSeen: async () => 0 }, reader, NOW, 0, 5))
-    expect(asked.filter(url => url.includes('/done/'))).toEqual(['https://github.com/acme/done/pull/28', 'https://github.com/acme/done/pull/26'])
-    const rows = reads(entries, 'SwarmGroup', ['workFinished', 'lastActivityAt'])
+    const done = asked.filter(url => url.includes('/done/'))
+    expect(done.slice(0, 2)).toEqual(['https://github.com/acme/done/pull/28', 'https://github.com/acme/done/pull/26'])
+    expect(done).toHaveLength(5)
+    const rows = reads(entries, 'SwarmGroup', ['workFinished', 'archived'])
     expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
     expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ workFinished: 1, archived: 1, lastActivityAt: 1/)
-    // Only this week's finished, unarchived tasks are examined (other tests' too, as the read spans Swarms); the month-old ones
-    // never are, and the cancelled one among them is filtered.
-    const inWindow = await db.swarmGroup.count({ where: { workFinished: true, archived: false, lastActivityAt: { gte: new Date(NOW - 7 * DAY) } } })
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(inWindow)
-    expect(inWindow).toBeLessThan(30)
+    // Only finished, unarchived groups are examined (other tests' too, as the read spans Swarms), newest first until the cap;
+    // the cancelled one among them is filtered. Production had 51 of them in all (2026-11-05).
+    const finished = await db.swarmGroup.count({ where: { workFinished: true, archived: false } })
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(finished)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(30)
+  })
+})
+
+// #3394, review of #3218 round 2: a task from before steps were listed looks up its dormant steps once, by the awake-groups
+// index's tabId, dormant and deleted: a Swarm's dormant groups are examined, never its awake ones or other Swarms'.
+describe('the dormant steps of a task that lists none', () => {
+  it('are read by tabId, dormant and deleted', async () => {
+    const { listedSteps } = await import('../src/superTabs/pullRequestEvents.js')
+    let n = 0
+    const group = (dormant: boolean, data: Record<string, unknown>, tabId = 'tab-s') => {
+      const key = `s${++n}`
+      return { id: `${tabId}:${key}`, tabId, key, version: 1, changedAt: new Date(NOW), ordinal: n, agentIds: [], lastActivityAt: new Date(NOW), dormant, data }
+    }
+    await db.swarmGroup.createMany({ data: [
+      ...Array.from({ length: 3 }, () => group(true, { reviewOf: 'task-s' })), ...Array.from({ length: 4 }, () => group(true, {})),
+      ...Array.from({ length: 20 }, () => group(false, { reviewOf: 'task-s' })), ...Array.from({ length: 20 }, () => group(true, { reviewOf: 'task-s' }, 'tab-other')),
+    ] })
+    const entries = await profiled(db, async () => {
+      const listed = await listedSteps(db, [{ tabId: 'tab-s', key: 'task-s' }])
+      expect(listed.get('tab-s:task-s')).toEqual(['s1', 's2', 's3'])
+    })
+    const rows = reads(entries, 'SwarmGroup', ['dormant', 'data.reviewOf'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, dormant: 1, deleted: 1/)
+    // This Swarm's dormant groups only: its 3 steps and 4 other dormant groups.
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(7)
   })
 })
 
