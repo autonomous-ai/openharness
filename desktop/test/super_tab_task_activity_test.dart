@@ -168,6 +168,14 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     });
 
+    testWidgets('$layout reader decision caption does not repeat who waits', (tester) async {
+      await _show(tester, _server(taskFixture('task', 'A decision', 36,
+        requester: 'ken', status: 'needs_human',
+        liveness: {'state': 'waiting', 'why': 'person', 'personId': 'owner'})), list: list);
+      expect(tester.widget<SuperTabTaskCard>(_card('task')).caption, 'ken15 · Finch2 · Needs you');
+      await tester.pumpWidget(const SizedBox());
+    });
+
     testWidgets('$layout shipped missing agent is omitted, known agent stays', (
       tester,
     ) async {
@@ -267,6 +275,7 @@ void main() {
         addTearDown(clock.dispose);
         await tester.pumpWidget(
           MaterialApp(
+            theme: grid.buildAppTheme(brightness: Brightness.light),
             home: MediaQuery(
               data: MediaQueryData(disableAnimations: reduceMotion),
               child: ActivityMark(
