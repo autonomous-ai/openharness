@@ -127,7 +127,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       voice: VoiceInputScope.maybeOf(context) == null
           ? MicVoiceRecorder.new
           : null,
-    )..foreground = state == null || _inFront(state);
+    )..foreground = _swarmFront = state == null || _inFront(state);
     _swarmFiles = SwarmAttachmentKeeper(_swarm);
     _swarmNotices.openedSwarm.addListener(_openNoticedSwarm);
     // A message link (Desktop's Copy link to message): one that launched the
@@ -429,6 +429,18 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   }
 
   /// In front of the person: resumed, or only covered for a moment (the app switcher, a call).
+  /// Whether Swarm was last told the app is in front ([didChangeAppLifecycleState]).
+  bool _swarmFront = true;
+
+  /// Back in front: what pushes showed while the app was away is told already
+  /// (task #2905), so the reads that start now post none of it again.
+  Future<void> _swarmToFront() async {
+    final shown = await widget.notifier.pushesShown();
+    if (!mounted || !_swarmFront) return;
+    _swarm.toldElsewhere(shown);
+    _swarm.foreground = true;
+  }
+
   static bool _inFront(AppLifecycleState state) =>
       state == AppLifecycleState.resumed || state == AppLifecycleState.inactive;
 
@@ -459,7 +471,13 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Swarm is read only in front of the person.
-    _swarm.foreground = _inFront(state);
+    if (!_inFront(state)) {
+      _swarmFront = false;
+      _swarm.foreground = false;
+    } else if (!_swarmFront) {
+      _swarmFront = true;
+      unawaited(_swarmToFront());
+    }
     if (state == AppLifecycleState.inactive) {
       // The app switcher coming up is `inactive`, and a swipe there can end the app without it
       // ever reaching `paused` — so the machine cache is written here as well. See

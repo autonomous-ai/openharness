@@ -401,6 +401,7 @@ class SwarmMessageRow extends StatelessWidget {
     return SwarmAttachment(
       file: file,
       link: link,
+      thumb: ref.currentThumb,
       fileRef: ref,
       chip: SwarmFileChip(file: file, link: link, fileRef: ref),
     );

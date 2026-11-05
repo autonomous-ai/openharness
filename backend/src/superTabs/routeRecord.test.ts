@@ -126,9 +126,10 @@ describe('a route decision of every engine on every machine, as stored (task #27
   }
 
   // Measured 11-04: 14,568 bytes, of which the 42 slim fits are 5,376 (128 bytes a candidate, its 64-character account most of it);
-  // 15,282 bytes since each keeps its fit status too (task #3163), from a CLI that sends no % left or reset.
-  it('stores a record that names no pick, 42 candidates each with its account, spend and status, in under 16 KB (measured 15,282 bytes)', () => {
-    expect(size(storedRecord(pickless()))).toBeLessThan(16_000)
+  // 15,282 bytes since each keeps its fit status too (task #3163), from a CLI that sends no % left or reset; 16,038 with its
+  // coverage (task #3255, 18 bytes a candidate).
+  it('stores a record that names no pick, 42 candidates each with its account, spend, status and coverage, in under 16.5 KB (measured 16,038 bytes)', () => {
+    expect(size(storedRecord(pickless()))).toBeLessThan(16_500)
   })
 
   it('keeps of every candidate of a record that names no pick who and where it is, its title and its account, spend and status', () => {
@@ -136,7 +137,7 @@ describe('a route decision of every engine on every machine, as stored (task #27
     for (const [i, c] of r.candidates.entries()) {
       const kept = back.candidates[i]!
       expect(kept).toEqual({ id: c.id, kind: c.kind, ...c.agentId ? { agentId: c.agentId } : {}, machineId: c.machineId, engine: c.engine, model: c.model,
-        effort: c.effort, title: c.title, fit: { account: c.fit!.account, spend: c.fit!.spend, status: c.fit!.status } })
+        effort: c.effort, title: c.title, fit: { account: c.fit!.account, spend: c.fit!.spend, status: c.fit!.status, coverage: c.fit!.coverage } })
     }
   })
 
@@ -158,12 +159,30 @@ describe('a route decision of every engine on every machine, as stored (task #27
   it('keeps of every candidate of a record that names no pick its fit status, weekly % left and reset beside its account and spend', () => {
     const r = quoted(), back = readRecord(storedRecord(r))
     for (const [i, c] of r.candidates.entries()) {
-      expect(back.candidates[i]!.fit).toEqual({ account: c.fit!.account, spend: c.fit!.spend, status: c.fit!.status, left: c.fit!.left, resetsAt: c.fit!.resetsAt })
+      expect(back.candidates[i]!.fit).toEqual({ account: c.fit!.account, spend: c.fit!.spend, status: c.fit!.status, coverage: c.fit!.coverage,
+        left: c.fit!.left, resetsAt: c.fit!.resetsAt })
     }
   })
-  // Measured 11-05: 16,742 bytes, the 42 candidates' status, % left and reset 2,174 of it (about 52 bytes a candidate).
-  it('stores a record that names no pick, 42 candidates each with its quota, in under 17 KB (measured 16,742 bytes)', () => {
-    expect(size(storedRecord(quoted()))).toBeLessThan(17_000)
+  // Task #3255 (Ken, 2026-11-05): quota at route time is measured on every candidate, a Codex as much as a Claude, and how far
+  // its quota covers the task (coverage) was still dropped. A candidate whose quota was not read keeps its null coverage.
+  it('keeps of a recorded Codex and Claude candidate the whole quota fit: status, coverage, weekly % left and reset', () => {
+    const r = quoted()
+    r.candidates[2]!.fit = { ...r.candidates[2]!.fit!, status: 'unknown', coverage: null, left: null, resetsAt: null }
+    const back = readRecord(storedRecord(r)).candidates
+    for (const engine of ['claude', 'codex'] as const) {
+      const i = r.candidates.findIndex(c => c.engine === engine && c.kind === 'new')
+      const { status, coverage, left, resetsAt } = r.candidates[i]!.fit!
+      expect(back[i]!.fit, engine).toMatchObject({ status, coverage, left, resetsAt })
+      expect(status, engine).toEqual(expect.any(String))
+    }
+    expect(back[2]!.engine).toBe('claude')
+    expect(back[2]!.fit).toMatchObject({ status: 'unknown', coverage: null, left: null, resetsAt: null })
+    for (const c of back) expect(c.fit).toHaveProperty('coverage')
+  })
+  // Measured 11-05: 16,742 bytes, the 42 candidates' status, % left and reset 2,174 of it (about 52 bytes a candidate); 17,228
+  // with their coverage (task #3255).
+  it('stores a record that names no pick, 42 candidates each with its quota, in under 17.5 KB (measured 17,228 bytes)', () => {
+    expect(size(storedRecord(quoted()))).toBeLessThan(17_500)
   })
 
   it('keeps no fit of a candidate that had none, and no account of one that had none', () => {
@@ -172,7 +191,7 @@ describe('a route decision of every engine on every machine, as stored (task #27
     delete r.candidates[1]!.fit!.account
     const [first, second] = storedRecord(r).candidates
     expect(first).not.toHaveProperty('fit')
-    expect(second!.fit).toEqual({ spend: { '5-hour': 2.5, weekly: 1 }, status: r.candidates[1]!.fit!.status })
+    expect(second!.fit).toEqual({ spend: { '5-hour': 2.5, weekly: 1 }, status: r.candidates[1]!.fit!.status, coverage: r.candidates[1]!.fit!.coverage })
   })
 
   it('keeps a grid model on a candidate that runs one', () => {
