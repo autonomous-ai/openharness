@@ -17,6 +17,8 @@ import { prepareSwarmSkill } from './swarmSkills.js'
 import { swarmEngineArgs } from './swarmEngineArgs.js'
 import { swarmGitHubLaunch } from './swarmGitHub.js'
 import { writeMachineMcp } from './machineMcp.js'
+import { NO_CLAUDE_RELAY, teamRelayLaunch, type TeamRelayGrant } from '../team/relay.js'
+import type { TeamConfig } from '../team/config.js'
 
 const GRID: GridLaunchOverride = {
   networkId: 'grid-abc',
@@ -240,6 +242,29 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     ownerRelay.mockClear()
     await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { gridLaunch: GRID }, 'a')
     expect(ownerRelay).not.toHaveBeenCalled()
+  })
+
+  // Task #3301: a CLI release restarts the owner's daemon, which publishes a new grant a little later, and the Team daemon,
+  // which restores its agents meanwhile. A Claude restored in that gap started with no credentials and sat signed out.
+  it('in the Harness Team account, holds a Claude relaunch across the owner\'s daemon restart and launches it on the new grant', async () => {
+    const config = { user: 'harnessteam', owner: 'owner', ownerHome: '/Users/owner' } as TeamConfig
+    const before: TeamRelayGrant = { url: 'http://127.0.0.1:41001', token: 'b'.repeat(43) }
+    const after: TeamRelayGrant = { url: 'http://127.0.0.1:41002', token: 'c'.repeat(43) }
+    let published: TeamRelayGrant | null = before
+    const ownerRelay = (engine: Parameters<typeof teamRelayLaunch>[0], home?: string) => teamRelayLaunch(engine, {
+      team: () => true, config: () => config, signedIn: async () => false, read: () => published, onboarded: () => {}, codexHome: async () => {},
+    }, home)
+    const relaunch = () => buildLaunchOverrides(deps({ ownerRelay }).d, 'claude', {}, 'agent-1')
+    // Mid-session, on the grant it was launched with.
+    expect(await relaunch()).toMatchObject({ ok: true, overrides: { env: { ANTHROPIC_BASE_URL: `${before.url}/claude`, ANTHROPIC_AUTH_TOKEN: before.token } } })
+    // The owner's daemon restarts: its grant is gone until it publishes again. The Team daemon's restore is held, with why.
+    published = null
+    expect(await relaunch()).toEqual({ ok: false, error: 'OWNER_RELAY_UNAVAILABLE', unavailable: 'native', detail: NO_CLAUDE_RELAY })
+    // Published again on a new port and token: the held pass (core/agents/heldLaunches.ts) launches it on that one.
+    published = after
+    const resumed = await relaunch()
+    expect(resumed).toMatchObject({ ok: true, overrides: { env: { ANTHROPIC_BASE_URL: `${after.url}/claude`, ANTHROPIC_AUTH_TOKEN: after.token } } })
+    expect(JSON.stringify(resumed)).not.toContain(before.token)
   })
 
   it('builds OpenCode overrides without optional code and uses the requested engine facts', async () => {

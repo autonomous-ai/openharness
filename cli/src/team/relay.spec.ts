@@ -9,7 +9,7 @@ import { engineAccount } from '../lib/engineAccount.js'
 import type { TeamConfig } from './config.js'
 import {
   publishTeamRelay, publishWindowsTeamRelay, readRememberedGrant, readTeamRelay, writeRememberedGrant, readWindowsTeamRelay, setfaclGrant, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile,
-  teamRelayLaunch, teamRelayPublished, NO_PM_RELAY, type OwnerRelayLaunch, TeamRelayPublisher, prepareCodexHome, installedCodexVersion,
+  teamRelayLaunch, teamRelayPublished, NO_PM_RELAY, NO_CLAUDE_RELAY, type OwnerRelayLaunch, TeamRelayPublisher, prepareCodexHome, installedCodexVersion,
   CODEX_CLIENT_VERSION_FALLBACK, settleCodexModel, offeredCodexModels, codexModelNotOffered,
   type TeamRelayGrant, type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps, type WindowsRelayFs,
 } from './relay.js'
@@ -473,7 +473,22 @@ describe('a launch in the team account', () => {
     expect(await teamRelayLaunch('claude', launchDeps({ team: () => false }))).toBeNull()
     expect(await teamRelayLaunch('claude', launchDeps({ config: () => null }))).toBeNull()
     expect(await teamRelayLaunch('claude', launchDeps({ signedIn: async () => true }))).toBeNull()
-    expect(await teamRelayLaunch('claude', launchDeps({ read: () => null }))).toBeNull()
+    expect(await teamRelayLaunch('claude', launchDeps({ signedIn: async () => true, read: () => null }))).toBeNull()
+  })
+
+  // Task #3301: each CLI release restarts the owner's daemon and its relay, and a Team Claude launched before the grant read
+  // again started with no credentials ("Not logged in · Please run /login", Quince, 2026-11-05). It is refused with why, as
+  // a Codex Product Manager's home is: a relaunch is held until the grant reads (lib/launchOverrides.ts), a new agent is
+  // refused (core/agents/create.ts), never started signed out.
+  it('refuses a Claude that neither the owner\'s relay nor a sign-in of its own can sign in', async () => {
+    expect(await teamRelayLaunch('claude', launchDeps({ read: () => null }))).toEqual({ refused: NO_CLAUDE_RELAY })
+    // A sign-in that cannot be read is no sign-in: with no grant either, nothing would sign it in.
+    expect(await teamRelayLaunch('claude', launchDeps({ read: () => null, signedIn: async () => { throw new Error('keychain') } }))).toEqual({ refused: NO_CLAUDE_RELAY })
+    expect(NO_CLAUDE_RELAY).toBe('Waiting for the owner\'s subscription relay on this machine: Claude Code cannot sign in here without it.')
+    // Its first-run screens are recorded only for a launch on the relay.
+    const deps = launchDeps({ read: () => null })
+    await teamRelayLaunch('claude', deps)
+    expect(deps.onboarded).not.toHaveBeenCalled()
   })
 })
 
