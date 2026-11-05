@@ -37,8 +37,8 @@ class SwarmHomeProject {
   String get key => swarmHomeProjectKey(swarmId, project.id);
 }
 
-/// Home's projects in their groups, each newest first: those the person
-/// pinned ([pinned]); then the others ([recent]), save those quiet for more
+/// Home's projects alphabetically in their groups: those the person pinned
+/// ([pinned]); then the others ([recent]), save those quiet for more
 /// than [swarmQuietAfter], which fold under "Other projects" ([quiet]).
 typedef SwarmHomeLists = ({
   List<SwarmHomeProject> pinned,
@@ -48,11 +48,11 @@ typedef SwarmHomeLists = ({
 
 /// [projects], in the order read, as Home groups them (Tony, 2026-10-29):
 /// pinned ones by their [pins] key at the top, quiet or not; the others by
-/// latest activity, those quiet for a day folded. A project whose time is not
-/// known comes after those whose is, in the order read, and is never folded,
-/// nor is one with something new in it. Nothing is folded when nothing else
-/// would be listed. [sort] newest folds nothing; [unreadsFirst] brings those
-/// with something new to the top of each list, in the same order among them.
+/// name, ignoring a leading # and case, with quiet projects folded for a day.
+/// A project with unknown activity or something new is never folded. Nothing
+/// is folded when nothing else would be listed. [sort] newest orders by
+/// activity and folds nothing; [unreadsFirst] brings those with something new
+/// to the top of each list, in the same order among them.
 SwarmHomeLists swarmHomeLists(
   Iterable<SwarmHomeProject> projects, {
   required Set<String> pins,
@@ -76,12 +76,20 @@ SwarmHomeLists swarmHomeLists(
       recent.add(project);
     }
   }
-  // Stable: what is not known keeps the order read, after the rest.
-  List<SwarmHomeProject> newest(List<SwarmHomeProject> list) {
+  List<SwarmHomeProject> ordered(List<SwarmHomeProject> list) {
     final order = {for (final (i, p) in list.indexed) p: i};
     return list..sort((a, b) {
       if (unreadsFirst && _hasNews(a) != _hasNews(b)) {
         return _hasNews(a) ? -1 : 1;
+      }
+      if (sort == SwarmHomeSort.sections) {
+        String name(SwarmHomeProject p) =>
+            (p.project.name.startsWith('#')
+                    ? p.project.name.substring(1).trimLeft()
+                    : p.project.name)
+                .toLowerCase();
+        final byName = name(a).compareTo(name(b));
+        return byName != 0 ? byName : a.key.compareTo(b.key);
       }
       final (x, y) = (a.active, b.active);
       if (x != null && y != null && x != y) return y.compareTo(x);
@@ -91,9 +99,13 @@ SwarmHomeLists swarmHomeLists(
   }
 
   if (pinned.isEmpty && recent.isEmpty) {
-    return (pinned: const [], recent: newest(quiet), quiet: const []);
+    return (pinned: const [], recent: ordered(quiet), quiet: const []);
   }
-  return (pinned: newest(pinned), recent: newest(recent), quiet: newest(quiet));
+  return (
+    pinned: ordered(pinned),
+    recent: ordered(recent),
+    quiet: ordered(quiet),
+  );
 }
 
 bool _hasNews(SwarmHomeProject p) =>
