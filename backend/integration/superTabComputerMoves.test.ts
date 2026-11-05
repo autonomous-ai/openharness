@@ -235,16 +235,28 @@ describe('the cleanup\'s dry run and its write', () => {
 // Task #3227: on prod the script printed its JSON and never exited, and its env check refused to start without billing's
 // credential key. Run as Ken runs it, with only the database's URL, and Redis nowhere to be reached.
 describe('the cleanup script', () => {
+  const script = (env: NodeJS.ProcessEnv) => new Promise<{ code: number; stdout: string; stderr: string }>(resolve => {
+    execFile(join(process.cwd(), 'node_modules/.bin/tsx'), ['scripts/swarm-computer-moves/run.ts'],
+      { env: { PATH: process.env.PATH, HOME: process.env.HOME, DATABASE_URL: uri, REDIS_URL: 'redis://127.0.0.1:1', ...env }, timeout: 60_000 },
+      (error, stdout, stderr) => resolve({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, stdout, stderr }))
+  })
+
   it('runs without billing\'s environment and exits once it has printed', async () => {
-    const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: process.env.HOME, DATABASE_URL: uri, REDIS_URL: 'redis://127.0.0.1:1' }
     const started = Date.now()
-    const { stdout } = await new Promise<{ stdout: string }>((resolve, reject) => {
-      execFile(join(process.cwd(), 'node_modules/.bin/tsx'), ['scripts/swarm-computer-moves/run.ts'], { env, timeout: 60_000 },
-        (error, stdout, stderr) => error ? reject(Object.assign(error, { stdout, stderr })) : resolve({ stdout }))
-    })
+    const { code, stdout } = await script({ SWARM_WORKSPACES_REQUIRED: '0' })
+    expect(code).toBe(0)
     const printed = JSON.parse(stdout.slice(stdout.indexOf('{'))) as { write: boolean; env: string; moves: unknown[]; left: unknown[] }
     expect(printed).toMatchObject({ write: false, env: 'prod', moves: expect.any(Array), left: expect.any(Array) })
     expect(Date.now() - started).toBeLessThan(60_000)
+  }, 90_000)
+
+  // Security review 1 of #3146: the Workspace check reads anything but '1' as not required, so a run that forgot the server's
+  // setting would pass a Swarm the server refuses, in its dry run and its write alike. It must be said, either way.
+  it('will not start unless told whether this server requires Workspaces', async () => {
+    const { code, stdout, stderr } = await script({})
+    expect(code).toBe(1)
+    expect(stdout).toBe('')
+    expect(stderr).toContain('SWARM_WORKSPACES_REQUIRED')
   }, 90_000)
 })
 
