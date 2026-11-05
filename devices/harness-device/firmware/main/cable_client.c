@@ -330,6 +330,8 @@ static void send_hello(void)
     // A face in a thread (spec 2026-11-03-dial-thread-face): each Lead's `thread`, `threadTitle`, `threadReplies`, a recap
     // that names its thread, and `supertab.thread.leave` back. Older daemons ignore it and send none.
     msg_string(&root, "swarmThread", "v1");
+    // A Swarm card may be the reader's own (`personal`); older daemons ignore the field.
+    msg_string(&root, "swarmNeedsYou", "v1");
     // No swarmReview: words for a Swarm chat are sent as any harness's are and reviewed only when held (Diego's dial,
     // 2026-10-29), and a daemon that heard it would refuse every word not reviewed (docs/device-voice-swarm-chat.md).
     // Which of the two dials this is (board.h) — informational, so a log or a bug report can say. A
@@ -989,6 +991,7 @@ static void handle_supertab(const cJSON *p)
     // The Swarm's side, from a swarmBuddy daemon (review of #2218): the dial follows it. Anything else is none.
     const char *side = str_of(p, "side");
     card.side = !side ? HT_SIDE_NONE : !strcmp(side, "buddy") ? HT_SIDE_BUDDY : !strcmp(side, "pm") ? HT_SIDE_PM : HT_SIDE_NONE;
+    card.personal = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "personal"));
     const cJSON *l = NULL;
     cJSON_ArrayForEach(l, cJSON_GetObjectItemCaseSensitive(p, "leads")) {
         if (card.lead_n >= HT_SUPERTAB_LEADS_MAX) break;
