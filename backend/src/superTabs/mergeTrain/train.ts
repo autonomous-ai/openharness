@@ -175,9 +175,8 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
     return line
   }
   const code = reads.filter(r => r.lane === 'code').map(r => r.member)
-  const groups = memory.splits.length
-    ? memory.splits.map(urls => code.filter(m => urls.includes(m.url))).filter(group => group.length)
-    : code.length ? [code.slice(0, TRAIN_MAX_BATCH)] : []
+  const groups = (memory.splits.length ? memory.splits.map(urls => code.filter(m => urls.includes(m.url))) : [code])
+    .map(disjoint).filter(group => group.length)
   memory.splits = []
   for (const [index, group] of groups.entries()) {
     const branch = `${prefix}${now}-${index}`
@@ -204,6 +203,20 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
     }
   }
   return line
+}
+
+/** The first members of [group], up to [TRAIN_MAX_BATCH], that share no file with an earlier one: two pull requests changing
+ *  one file would need a read of their combination, so the later one waits for the next batch and is tested on top of the
+ *  first once it merged (task #3401: a combination read only where files are shared). */
+function disjoint(group: Member[]): Member[] {
+  const taken = new Set<string>(), kept: Member[] = []
+  for (const member of group) {
+    if (kept.length === TRAIN_MAX_BATCH) break
+    if (member.files.some(file => taken.has(file))) continue
+    for (const file of member.files) taken.add(file)
+    kept.push(member)
+  }
+  return kept
 }
 
 const tellConflict = (swarm: TrainSwarm, member: Member) => swarm.tell(member.taskId, member.url, `train-conflict:${member.head}`,
