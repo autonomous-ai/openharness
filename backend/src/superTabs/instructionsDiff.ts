@@ -76,8 +76,15 @@ export interface AttributedRule {
   people: string[]
 }
 /** How a save lost a rule: gone, kept without who gave it, or changed so its meaning may differ (a negation, a number, a
- *  condition, more than a rewording). The last is "can't tell", refused like the others. */
-export interface DroppedRule extends AttributedRule { why: 'removed' | 'unattributed' | 'changed' }
+ *  condition, more than a rewording). The last is "can't tell", refused like the others. `waiting`: moved into a code task
+ *  that has not merged, named by `movedTo` (#3392): its line stays until that task merges. */
+export interface DroppedRule extends AttributedRule { why: 'removed' | 'unattributed' | 'changed' | 'waiting'; movedTo?: string }
+/**
+ * A place outside the document a person's rule may move to (task #3392, anh Dee 11-05, decision 5): the project's rules record
+ * or a code task, its words as written there. `people`: who is known to have given what it holds, as `identify` names them
+ * (a rules record's asker), besides any attribution in its words. `open`: a code task not merged yet, which keeps the line.
+ */
+export interface RulePlace { text: string; people: readonly string[]; where: string; open: boolean }
 
 const MONTH = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?'
 const DATE = `(?:\\d{4}-\\d{1,2}-\\d{1,2}|\\d{1,2}[-/]\\d{1,2}(?:[-/]\\d{2,4})?|\\d{1,2}\\s+${MONTH}(?:\\s+\\d{4})?|${MONTH}\\s+\\d{1,2}(?:,?\\s+\\d{4})?)`
@@ -172,7 +179,8 @@ const contains = (whole: readonly string[], part: readonly string[]) => occurren
  * same people. [identify] says who a written name is (commands.ts: a member's id), so "0xken15" and "Ken" can be one person;
  * by default a name is itself, honorifics aside.
  */
-export function droppedRules(before: string, after: string, identify: (name: string) => string = personKey): DroppedRule[] {
+export function droppedRules(before: string, after: string, identify: (name: string) => string = personKey,
+  places: readonly RulePlace[] = []): DroppedRule[] {
   const next = items(after).map(i => segments(i.text))
   const flat = next.flat()
   const ids = new Map<Segment, Set<string>>(flat.map(s => [s, new Set(s.people.map(identify))]))
@@ -180,19 +188,33 @@ export function droppedRules(before: string, after: string, identify: (name: str
   // A segment says only what the rules it names said: each of its words lies in one of them, word for word and in order, or
   // joins two of them (a merge). Anything else (a word changed, moved, added: "unless the PM judges it urgent") is a change
   // nobody can tell is harmless, so every rule in it counts as changed (review of #3112).
-  const faithful = new Map<Segment, boolean>()
-  const isFaithful = (s: Segment) => faithful.get(s) ?? faithful.set(s, (() => {
+  const faithfulTo = (s: Segment, who: Set<string>) => {
     const covered = s.seq.map(word => JOINERS.has(word))
     for (const { rule, people } of rules) {
-      if (!rule.seq.length || !people.every(p => ids.get(s)!.has(p))) continue
+      if (!rule.seq.length || !people.every(p => who.has(p))) continue
       for (const at of occurrences(s.seq, rule.seq)) for (let k = 0; k < rule.seq.length; k++) covered[at + k] = true
     }
     return covered.every(Boolean)
-  })()).get(s)!
+  }
+  const faithful = new Map<Segment, boolean>()
+  const isFaithful = (s: Segment) => faithful.get(s) ?? faithful.set(s, faithfulTo(s, ids.get(s)!)).get(s)!
+  // Each place's segments with who gave them: its attributions and the people it is known to hold. A rule moved there is
+  // held to the same test as in the document: its words in order, with its people, and nothing else said in that segment.
+  // Read only when a rule is not kept in the document, and a place that keeps it for good (the rules record, a merged task)
+  // wins over an open task that holds it too (review of #3220).
+  let moves: { place: RulePlace; at: { s: Segment; who: Set<string> }[] }[] | undefined
+  const movedTo = (rule: Segment, people: string[]) => {
+    moves ??= [...places].sort((a, b) => Number(a.open) - Number(b.open)).map(place => ({ place, at: items(place.text)
+      .flatMap(i => segments(i.text)).map(s => ({ s, who: new Set([...s.people.map(identify), ...place.people]) })) }))
+    return moves.find(({ at }) => at.some(({ s, who }) => people.every(p => who.has(p)) && contains(s.seq, rule.seq) && faithfulTo(s, who)))?.place
+  }
   const dropped: DroppedRule[] = []
   for (const { rule, people } of rules) {
     const theirs = flat.filter(s => people.every(p => ids.get(s)!.has(p)))
     if (theirs.some(s => contains(s.seq, rule.seq) && isFaithful(s))) continue
+    const place = rule.seq.length ? movedTo(rule, people) : undefined
+    if (place && !place.open) continue
+    if (place) { dropped.push({ text: rule.text, people: rule.people, why: 'waiting', movedTo: place.where }); continue }
     // Its words still there, in order: with its people that is a change of meaning, without them a lost attribution.
     const kept = next.find(item => contains(item.flatMap(s => s.seq), rule.seq))
     const why = kept ? (kept.some(s => theirs.includes(s)) ? 'changed' : 'unattributed')
@@ -221,6 +243,42 @@ export function keptIn(after: string): (text: string) => boolean {
     const words = new Set(segments(text).flatMap(s => [...s.words]))
     return kept.some(set => covers(words, set))
   }
+}
+
+/**
+ * The size budget of a project's instructions, in UTF-8 bytes (task #3392, anh Dee 11-05, decision 5: these instructions stay
+ * as small as possible). Core is everything outside the role sections and people notes. One object, passed in, so a project's
+ * own numbers can replace it.
+ */
+export const INSTRUCTIONS_BUDGET = { core: 6 * 1024, role: 2 * 1024, people: 3 * 1024, total: 20 * 1024 } as const
+export type InstructionsBudget = { readonly [K in keyof typeof INSTRUCTIONS_BUDGET]: number }
+/** One part of a document and its size: `core`, `role <heading>` (a ### under ## Roles), `people notes` (a ## People notes
+ *  section) or `total` (the whole document). */
+export interface BudgetPart { part: string; bytes: number; budget: number }
+
+const ROLES = /^roles$/i
+const PEOPLE_NOTES = /^people notes$/i
+
+/** [text]'s budget parts in document order, `total` last. A line belongs to the section its heading opened; a heading in a
+ *  fenced block is text. */
+export function budgetParts(text: string, budget: InstructionsBudget = INSTRUCTIONS_BUDGET): BudgetPart[] {
+  const bytes = new Map<string, number>([['core', 0]])
+  let h2 = '', h3 = '', fenced = false
+  const lines = text.split('\n')
+  lines.forEach((line, i) => {
+    if (FENCE.test(line)) fenced = !fenced
+    else if (!fenced) {
+      const heading = HEADING.exec(line)
+      if (heading?.[1]!.length === 2) { h2 = heading[2]!.trim(); h3 = '' }
+      else if (heading?.[1]!.length === 1) { h2 = ''; h3 = '' }
+      else if (heading?.[1]!.length === 3) h3 = heading[2]!.trim()
+    }
+    const part = PEOPLE_NOTES.test(h2) ? 'people notes' : ROLES.test(h2) && h3 ? `role ${h3}` : 'core'
+    bytes.set(part, (bytes.get(part) ?? 0) + Buffer.byteLength(line) + (i < lines.length - 1 ? 1 : 0))
+  })
+  const of = (part: string) => part === 'core' ? budget.core : part === 'people notes' ? budget.people : budget.role
+  return [...[...bytes].filter(([part, n]) => n || part === 'core').map(([part, n]) => ({ part, bytes: n, budget: of(part) })),
+    { part: 'total', bytes: Buffer.byteLength(text), budget: budget.total }]
 }
 
 /** A line [after] adds that repeats one it keeps: the added line's words and the existing line's, as the document has them. */

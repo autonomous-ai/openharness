@@ -223,7 +223,9 @@ function namedFor(command: Command): Named {
   const field = (key: string) => (command as Record<string, unknown>)[key] as string | undefined
   const groupIds = [field('conversationId'), command.type === 'agent.start' ? command.request.conversationId : undefined,
     command.type === 'conversation.create' ? command.reviewOf : undefined,
-    'askedIn' in command ? command.askedIn?.conversationId : undefined].filter((id): id is string => !!id)
+    'askedIn' in command ? command.askedIn?.conversationId : undefined,
+    // The code tasks an instructions save's rules moved into, merged ones gone quiet included (ruleGuard.ts; #3392).
+    ...command.type === 'instructions.save' ? command.tasks ?? [] : []].filter((id): id is string => !!id)
   // Deleting a project or changing who reads it reaches every one of its groups, dormant ones too: their terminal
   // contexts are revoked from the groups the command loaded (native.ts revokeNativeContexts).
   return { groupIds, startIds: has('startId') ? [field('startId')!] : [],
@@ -5125,6 +5127,12 @@ export class SuperTabStore {
       // Only the group it reviews as the pass read it: one this write did not load would hide its open pull requests.
       const review = !finished && !!reviewOf && group.reviewOf === reviewOf && reviewClosable(state, group, now) && read(reviewPullRequests(state, group))
       if (!finished && !review) return false
+      // What GitHub said merged in its project's repository, as this read saw it: what a person's rule moved into this task
+      // waits for (ruleGuard.ts rulePlaces, #3392). A link elsewhere, or a step's, is not this task's merge.
+      const repositoryUrl = groupProject(state, group).repository?.repositoryUrl
+      const merged = finished && githubRepository(repositoryUrl) ? Object.keys(checked)
+        .filter(url => checked[url] === 'merged' && projectPullRequestUrl(url, repositoryUrl) !== null) : []
+      if (merged.length) group.mergeSeen = { ...group.mergeSeen, ...Object.fromEntries(merged.map(url => [url, now])) }
       // Its work is over: a decision still waiting there waits no more (Dee, 10-31), as when the work ended by a command.
       await withdrawIn(tx, tabId, [groupId], now)
       group.archived = true
