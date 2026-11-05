@@ -44,7 +44,9 @@ const DAY = 86_400_000
 beforeAll(async () => {
   replica = await MongoMemoryReplSet.create({ binary: { version: '7.0.24', downloadDir: join(tmpdir(), 'harness-super-tab-mongodb-binaries') },
     replSet: { count: 1, ip: '127.0.0.1', storageEngine: 'wiredTiger' } })
-  const uri = replica.getUri(`swarm_read_test_${randomUUID().replaceAll('-', '_')}`)
+  // The driver's heartbeat (every ten seconds, two answers of about 745 bytes) is traffic the byte count of 'what a read costs' would
+  // take for a read's: this client asks once an hour instead. The one node never changes, so nothing here needs the heartbeat.
+  const uri = `${replica.getUri(`swarm_read_test_${randomUUID().replaceAll('-', '_')}`)}&heartbeatFrequencyMS=3600000`
   await promisify(execFile)(join(process.cwd(), 'node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'], {
     env: { ...process.env, DATABASE_URL: uri }, timeout: 60000,
   })
