@@ -20,7 +20,7 @@ import { logger } from '../src/utils/logger.js'
 import { fakeApp, fakeGitHub, throwawayKey } from '../src/github/fakeGitHub.js'
 import { appPullRequests } from '../src/superTabs/archive.js'
 
-// Nobody tidies a Swarm by hand: an agent idle for 15 minutes is told to its coordinator on its poll, and finished groups
+// Nobody tidies a Swarm by hand: an agent idle for 15 minutes is told to its coordinator by the worker's time checks, and finished groups
 // archive. A fresh loopback replica set, created here.
 let replica: MongoMemoryReplSet
 let db: PrismaClient
@@ -98,13 +98,13 @@ async function swarm() {
 // Project instructions, phase 4 (decision 7): the server stops no idle agent. Its coordinator is told once per idle spell,
 // whether tidying is on or off, and the instructions say whether it stops or keeps the agent.
 describe('an agent left idle', () => {
-  it('is told to its coordinator on its poll 15 minutes after its last activity, once, and nothing stops it', async () => {
+  it('is told to its coordinator by the time checks 15 minutes after its last activity, once, and nothing stops it', async () => {
     const f = await swarm()
     f.clock.now += 14 * MINUTE
-    await f.timed.deliveries(host, f.tab, f.lead)
+    await f.timed.runTimeChecks(f.tab)
     expect(await f.lines()).toEqual([])
     f.clock.now += MINUTE + 1_000
-    await f.timed.deliveries(host, f.tab, f.lead)
+    await f.timed.runTimeChecks(f.tab)
     const lines = await f.lines()
     expect(lines).toEqual([expect.objectContaining({ conversationId: 'lead', recipientIds: [f.lead], text: 'Worker has had no open task for 15 minutes.',
       source: { kind: 'idle', agentId: f.worker } })])
@@ -116,14 +116,14 @@ describe('an agent left idle', () => {
     expect((await rosterRows(f.timed, host, 'test-host')).find(r => r.agent.id === f.worker)!.agent.releaseId ?? null).toBeNull()
     // The same idle spell is told once, however many polls follow.
     f.clock.now += 30 * MINUTE
-    await f.timed.deliveries(host, f.tab, f.lead)
+    await f.timed.runTimeChecks(f.tab)
     expect(await f.lines()).toHaveLength(1)
   })
 
   it('is told to the coordinator alone: no person or other agent reads it', async () => {
     const f = await swarm()
     f.clock.now += 15 * MINUTE + 1_000
-    await f.timed.deliveries(host, f.tab, f.lead)
+    await f.timed.runTimeChecks(f.tab)
     const [line] = await f.lines()
     const page = async (user: AuthUser, conversationId: string, query: { messageId?: string } = {}, asAgentId?: string) =>
       (await f.timed.messages(user, f.tab, conversationId, query, asAgentId)).messages.map(m => m.id)
@@ -142,10 +142,10 @@ describe('an agent left idle', () => {
     // Written straight into the queue, as a delivery from a moment ago that its host has not picked up yet.
     const waiting = await db.superTabDelivery.create({ data: { id: randomUUID(), tabId: f.tab, conversationId: f.group, messageId: randomUUID(), agentId: f.worker,
       machineId: 'test-host', machineOwnerId: host.sub, assignmentId: null, membershipGeneration: 'g', authorKind: 'person', authorId: owner.sub, authorGeneration: 'g' } })
-    await f.timed.deliveries(host, f.tab, f.lead)
+    await f.timed.runTimeChecks(f.tab)
     expect(await f.lines()).toEqual([])
     await db.superTabDelivery.update({ where: { id: waiting.id }, data: { status: 'delivered' } })
-    await f.timed.deliveries(host, f.tab, f.lead)
+    await f.timed.runTimeChecks(f.tab)
     expect(await f.lines()).toHaveLength(1)
   })
 
@@ -163,12 +163,12 @@ describe('an agent left idle', () => {
     f.clock.now += 20 * MINUTE
     // The Builder's session is at work: its machine's report keeps its task's lease (liveness.ts).
     await f.observe('test-host', [f.harness.worker, builderHarness], { harnessProgress: { [builderHarness]: f.clock.now } })
-    await f.timed.deliveries(host, f.tab, f.lead)
+    await f.timed.runTimeChecks(f.tab)
     expect(await told()).toEqual([])
     await f.execute({ type: 'work.cancel', conversationId: reviewed, assignmentId: work, reason: 'Dropped' })
     await f.delivered()
     f.clock.now += 15 * MINUTE + 1_000
-    await f.timed.deliveries(host, f.tab, f.lead)
+    await f.timed.runTimeChecks(f.tab)
     expect(await told()).toHaveLength(1)
   })
 
@@ -188,7 +188,7 @@ describe('an agent left idle', () => {
     const recent = new Date(f.clock.now - 10 * MINUTE)
     await db.swarmGroup.update({ where: { id: part.id }, data: { dormant: true, lastActivityAt: recent,
       data: { ...part.data as object, dormant: true, lastActivityAt: recent.toISOString() } } })
-    await f.timed.deliveries(host, f.tab, f.lead)
+    await f.timed.runTimeChecks(f.tab)
     const named = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === reviewer)!
     expect((await f.lines()).filter(m => (m.source as { agentId?: string }).agentId === reviewer))
       .toEqual([expect.objectContaining({ conversationId: 'lead', text: `${named.displayName ?? named.name} has had no open task for 15 minutes.` })])
@@ -199,7 +199,7 @@ describe('an agent left idle', () => {
     const f = await swarm()
     await f.execute({ type: 'tab.tidy', enabled: false })
     f.clock.now += 20 * MINUTE
-    await f.timed.deliveries(host, f.tab, f.lead)
+    await f.timed.runTimeChecks(f.tab)
     expect(await f.lines()).toHaveLength(1)
     expect((await f.member()).workDecision).toBe('awaiting')
   })
