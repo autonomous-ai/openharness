@@ -63,6 +63,7 @@ import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefus
 import { sessionRows } from './memberRows.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
+import { RELEASE_RULES, settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
 import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
@@ -4661,6 +4662,32 @@ export class SuperTabStore {
       await this.save(tx, loaded, state, clock.next())
       await this.writeMessages(tx, tabId, state, rows, sequences)
       return rows.length
+    })
+  }
+
+  /** The release list of [projectId] settled with what the worker read from GitHub (releases.ts settleReleases, task #3405), in
+   *  one write: the tasks a verified release carries are marked released, and a due release step opens for the Integrator.
+   *  It loads the project's pending tasks and open steps only, and writes nothing when nothing changed. Null when the Swarm or
+   *  its project's list is gone. */
+  async settleReleases(tabId: string, projectId: string, facts: ReleaseFacts, rules: ReleaseRules = RELEASE_RULES): Promise<SettledReleases | null> {
+    const now = this.now()
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt) return null
+      const head = await loadRow(tx, requireParts(row), { groupIds: [] })
+      const ledger = projectsOf(head.state).find(p => p.id === projectId)?.releases
+      if (!ledger) return null
+      const groupIds = [...new Set([...ledger.pending.map(e => e.groupId), ...Object.values(ledger.steps ?? {}).map(s => s!.groupId)])]
+      const loaded = groupIds.length ? await loadRow(tx, requireParts(row), { groupIds }) : head
+      const state = cloneData(loaded.state)
+      const before = JSON.stringify(projectsOf(loaded.state).find(p => p.id === projectId)?.releases)
+      const outcome = settleReleases(state, projectId, facts, now, rules)
+      if (!outcome.opened && !outcome.shipped.length && !outcome.messages.length
+        && JSON.stringify(projectsOf(state).find(p => p.id === projectId)?.releases) === before) return outcome
+      const sequences = numberMessages(state, outcome.messages, now)
+      await this.save(tx, loaded, state, clock.next())
+      await this.writeMessages(tx, tabId, state, outcome.messages, sequences)
+      return outcome
     })
   }
 
