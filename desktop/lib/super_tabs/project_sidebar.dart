@@ -234,25 +234,22 @@ class ProjectSidebar extends StatelessWidget {
   }
 
   /// Back and forward over the reader's places (⌘[ and ⌘]), at the top.
-  Widget _arrows(SuperTabPlaces places) => Padding(
-    padding: const EdgeInsets.only(bottom: 2),
-    child: Row(
-      children: [
-        SizedBox(width: SuperTabSectionHeading.indentFor(0)),
-        AppIconButton(
-          key: const ValueKey('super-back'),
-          icon: AppIcons.arrowLeft,
-          tooltip: 'Back',
-          onPressed: places.canGoBack ? () => places.step(-1) : null,
-        ),
-        AppIconButton(
-          key: const ValueKey('super-forward'),
-          icon: AppIcons.arrowRight,
-          tooltip: 'Forward',
-          onPressed: places.canGoForward ? () => places.step(1) : null,
-        ),
-      ],
-    ),
+  Widget _arrows(SuperTabPlaces places) => Row(
+    children: [
+      SizedBox(width: SuperTabSectionHeading.indentFor(0)),
+      AppIconButton(
+        key: const ValueKey('super-back'),
+        icon: AppIcons.arrowLeft,
+        tooltip: 'Back',
+        onPressed: places.canGoBack ? () => places.step(-1) : null,
+      ),
+      AppIconButton(
+        key: const ValueKey('super-forward'),
+        icon: AppIcons.arrowRight,
+        tooltip: 'Forward',
+        onPressed: places.canGoForward ? () => places.step(1) : null,
+      ),
+    ],
   );
 
   /// A project reads as a channel; a private one keeps its lock in this mark slot.

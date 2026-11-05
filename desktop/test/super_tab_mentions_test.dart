@@ -214,7 +214,7 @@ Future<void> showText(
   ),
 );
 
-Finder notificationsEntry() => find.byKey(const ValueKey('super-activity'));
+Finder notificationsEntry() => find.byKey(const ValueKey('super-mentions'));
 
 void main() {
   setUpAll(() async {
@@ -596,11 +596,7 @@ void main() {
           find.descendant(of: notificationsEntry(), matching: find.text('1')),
           findsOneWidget,
         );
-        await tester.tap(notificationsEntry());
-        await tester.pumpAndSettle();
-        await tester.tap(
-          find.byKey(const ValueKey('super-activity-tab-mentions')),
-        );
+        await tester.tap(find.byKey(const ValueKey('super-mentions')));
         await tester.pumpAndSettle();
         final waiting = find.byKey(
           const ValueKey('super-activity-row-mention:mention-2'),
@@ -630,11 +626,7 @@ void main() {
         ..append('Ship it?')
         ..tag('message-1', text: 'Ship it?', createdAt: minutesAgo(3));
       await showView(tester, server);
-      await tester.tap(notificationsEntry());
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-tab-mentions')),
-      );
+      await tester.tap(find.byKey(const ValueKey('super-mentions')));
       await tester.pumpAndSettle();
       expect(find.text('Mark read'), findsNothing);
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
@@ -752,11 +744,7 @@ void main() {
         server.append('Note $i', conversationId: 'group');
       }
       server.tag('message-150', conversationId: 'group', text: 'Note 150');
-      await tester.tap(notificationsEntry());
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-tab-mentions')),
-      );
+      await tester.tap(find.byKey(const ValueKey('super-mentions')));
       await tester.pumpAndSettle();
       await tester.tap(
         find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
@@ -792,11 +780,7 @@ void main() {
         server.append('Note $i', conversationId: 'group');
       }
       server.tag('message-120', conversationId: 'group', text: 'Note 120');
-      await tester.tap(notificationsEntry());
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-tab-mentions')),
-      );
+      await tester.tap(find.byKey(const ValueKey('super-mentions')));
       await tester.pumpAndSettle();
       await tester.tap(
         find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
@@ -833,11 +817,7 @@ void main() {
         server.append('Note $i', conversationId: 'group');
       }
       server.tag('message-650', conversationId: 'group', text: 'Note 650');
-      await tester.tap(notificationsEntry());
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-tab-mentions')),
-      );
+      await tester.tap(find.byKey(const ValueKey('super-mentions')));
       await tester.pumpAndSettle();
       await tester.tap(
         find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
@@ -878,11 +858,7 @@ void main() {
         }
         expect(c.hasNewer('group'), isTrue);
         server.tag('message-650', conversationId: 'group', text: 'Note 650');
-        await tester.tap(notificationsEntry());
-        await tester.pumpAndSettle();
-        await tester.tap(
-          find.byKey(const ValueKey('super-activity-tab-mentions')),
-        );
+        await tester.tap(find.byKey(const ValueKey('super-mentions')));
         await tester.pumpAndSettle();
         // A background poll is reading the rows held when the tag opens.
         final held = server.holdReads = Completer<void>();

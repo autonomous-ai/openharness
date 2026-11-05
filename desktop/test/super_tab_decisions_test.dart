@@ -88,7 +88,7 @@ Future<SuperTabController> showView(
   return c;
 }
 
-Finder notificationsEntry() => find.byKey(const ValueKey('super-activity'));
+Finder notificationsEntry() => find.byKey(const ValueKey('super-decisions'));
 Finder option(String id, int index) =>
     find.byKey(ValueKey('super-decision-$id-$index'));
 Finder activityOption(String id, int index) =>
@@ -319,7 +319,7 @@ void main() {
         );
         await tester.tap(notificationsEntry());
         await tester.pumpAndSettle();
-        expect(find.text('Needs you'), findsOneWidget);
+        expect(find.text('Decisions'), findsWidgets);
         expect(find.text('Behind a flag · Recommended'), findsNWidgets(2));
 
         await tester.tap(activityOption('decision-2', 1));

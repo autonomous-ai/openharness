@@ -11,7 +11,8 @@ import 'package:harness/super_tabs/decisions.dart';
 import 'package:harness/super_tabs/message_link.dart'
     show swarmMessageLinkInbox;
 import 'package:harness/super_tabs/activity.dart';
-import 'package:harness/super_tabs/activity_view.dart';
+import 'package:harness/super_tabs/decisions_page.dart';
+import 'package:harness/super_tabs/mentions_page.dart';
 import 'package:harness/super_tabs/notifications.dart';
 import 'package:harness/super_tabs/reminders.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -247,6 +248,11 @@ const everything = [
   ('mention', 'mention-3'),
 ];
 
+/// Decisions or Mentions in the main pane.
+final _aPage = find.byWidgetPredicate(
+  (w) => w is SuperTabDecisionsPage || w is SuperTabMentionsPage,
+);
+
 void main() {
   test('the menu bar lists what needs the person in each Swarm: decisions, '
       'then tags, with where they were asked', () async {
@@ -313,7 +319,7 @@ void main() {
       await c.refresh();
       expect(c.snapshot!.conversation('offline'), isNull);
       final activity = SuperTabActivity.of(c);
-      expect(activity.count, 2);
+      expect((activity.needsCount + activity.mentionsCount), 2);
       expect(menuRows(f), [
         for (final n in activity.notices) (n.kind.name, n.id),
       ]);
@@ -481,7 +487,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(c.selectedId, 'lead');
       expect(c.noticeRequest, isNull);
-      expect(find.byType(SuperTabActivityView), findsNothing);
+      expect(_aPage, findsNothing);
       expect(find.text('Please confirm the release.'), findsWidgets);
       await close(tester, view);
     });
@@ -528,7 +534,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(c.selectedId, 'lead');
       expect(c.noticeRequest, isNull);
-      expect(find.byType(SuperTabActivityView), findsNothing);
+      expect(_aPage, findsNothing);
       expect(find.text('Answered later'), findsWidgets);
       expect(
         SuperTabActivity.of(c).notices.map((n) => n.id),
@@ -546,7 +552,7 @@ void main() {
       await tester.runAsync(() => pumpEventQueue());
       await tester.pumpAndSettle();
       expect(c.selectedId, 'lead');
-      expect(find.byType(SuperTabActivityView), findsNothing);
+      expect(_aPage, findsNothing);
       expect(
         SuperTabActivity.of(c).notices.map((n) => n.kind),
         isNot(contains(SuperTabNoticeKind.reminder)),
@@ -563,20 +569,19 @@ void main() {
       c.openNotice('agent', 'offline');
       await tester.pumpAndSettle();
       expect(c.selectedId, 'offline');
-      expect(find.byType(SuperTabActivityView), findsNothing);
+      expect(_aPage, findsNothing);
       expect(c.agentTerminalRequest?.agentId, 'kestrel');
       expect(c.agentTerminalRequest?.conversationId, 'offline');
       await close(tester, view);
     });
 
-    testWidgets('a decision opens the Swarm\'s notifications, where it is '
-        'answered', (tester) async {
+    testWidgets('a decision opens Decisions, where it is answered', (tester) async {
       final server = ConversationServer()..ask(['Ship it behind a flag?']);
       final view = await showView(tester, server);
       final c = view.controller;
       c.openNotice('decision', 'decision-1');
       await tester.pumpAndSettle();
-      expect(find.byType(SuperTabActivityView), findsOneWidget);
+      expect(find.byType(SuperTabDecisionsPage), findsOneWidget);
       expect(find.text('Ship it behind a flag?'), findsOneWidget);
       expect(c.noticeRequest, isNull);
       await close(tester, view);
@@ -1022,8 +1027,8 @@ void main() {
     test('its count is Activity\'s red number', () async {
       final f = SuperTabLaunchFixture(local: true);
       final activity = await openWithEverything(f);
-      expect(activity.count, everything.length);
-      expect(statusMenuSwarmEntries(f.app), hasLength(activity.count));
+      expect((activity.needsCount + activity.mentionsCount), everything.length);
+      expect(statusMenuSwarmEntries(f.app), hasLength((activity.needsCount + activity.mentionsCount)));
     });
 
     test(
@@ -1038,8 +1043,8 @@ void main() {
       },
     );
 
-    testWidgets('Activity draws the same list, in the same order, folding '
-        'only neighbouring tags from one author', (tester) async {
+    testWidgets('Decisions and Mentions draw the same list, in the same '
+        'order', (tester) async {
       final f = SuperTabLaunchFixture(local: true);
       final activity = (await tester.runAsync(() => openWithEverything(f)))!;
       await tester.binding.setSurfaceSize(const Size(1000, 900));
@@ -1048,12 +1053,10 @@ void main() {
         MaterialApp(
           theme: grid.buildAppTheme(brightness: Brightness.dark),
           home: Scaffold(
-            body: SuperTabActivityView(
+            body: SuperTabDecisionsPage(
               activity: activity,
-              onOpenMention: (_) {},
-              onOpenThread: (_, _) {},
               onOpenConversation: (_) {},
-            ),
+            )),
           ),
         ),
       );
@@ -1076,23 +1079,21 @@ void main() {
           },
       ];
       final needs = drawn();
-      await tester.tap(
-        find.byKey(const ValueKey('super-activity-tab-mentions')),
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SuperTabMentionsPage(
+              activity: activity,
+              onOpenMention: (_) {},
+            ),
+          ),
+        ),
       );
       await tester.pumpAndSettle();
       final tags = drawn();
-      expect(
-        [...needs, ...tags],
-        [
-          ('reminder', 'reminder-message-1'),
-          ('agent', 'offline'),
-          ('decision', 'decision-1'),
-          ('mention', 'mention-1'),
-          ('mention', 'mention-3'),
-        ],
-      );
-      // The folded one is mention-2, right behind mention-1 in the menu.
-      expect(find.text('+1 more from Wren'), findsOneWidget);
+      // Each tag is its own row now (task #2996), as each is in the menu.
+      expect([...needs, ...tags], everything);
       expect(menuRows(f), everything);
       await tester.pumpWidget(const SizedBox());
       f.dispose();
@@ -1124,7 +1125,7 @@ void main() {
       expect(heard, greaterThan(0));
       expect(menuRows(f), isNot(contains(('mention', 'mention-2'))));
       expect(activity.notices.map((n) => n.id), isNot(contains('mention-2')));
-      expect(statusMenuSwarmEntries(f.app), hasLength(activity.count));
+      expect(statusMenuSwarmEntries(f.app), hasLength((activity.needsCount + activity.mentionsCount)));
     });
 
     test(
@@ -1139,7 +1140,7 @@ void main() {
         await activity.mentions.load();
         expect(menuRows(f), isNot(contains(('mention', 'mention-3'))));
         expect(activity.notices.map((n) => n.id), isNot(contains('mention-3')));
-        expect(statusMenuSwarmEntries(f.app), hasLength(activity.count));
+        expect(statusMenuSwarmEntries(f.app), hasLength((activity.needsCount + activity.mentionsCount)));
       },
     );
 

@@ -114,3 +114,22 @@ class SuperTabPlaces extends ChangeNotifier {
     super.dispose();
   }
 }
+
+/// ⌘[ and ⌘] in a Swarm tab (task #2996): its places first. True when
+/// [controller]'s places stepped [direction]; false leaves the step to the
+/// tabs and panes, as everywhere else.
+bool stepSwarmPlaces(SuperTabController? controller, int direction) {
+  if (controller == null) return false;
+  final places = SuperTabPlaces.of(controller);
+  if (direction < 0 ? !places.canGoBack : !places.canGoForward) return false;
+  places.step(direction);
+  return true;
+}
+
+/// Whether ⌘[ (direction -1) or ⌘] (1) has a place to go in [controller]'s
+/// Swarm.
+bool canStepSwarmPlaces(SuperTabController? controller, int direction) {
+  if (controller == null) return false;
+  final places = SuperTabPlaces.of(controller);
+  return direction < 0 ? places.canGoBack : places.canGoForward;
+}

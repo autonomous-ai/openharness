@@ -315,21 +315,6 @@ class SuperTabActivity extends ChangeNotifier {
   int get mentionsUnread =>
       [...mentions.waiting, ...mentions.earlier].where(mentionUnread).length;
 
-  /// The Activity row's red number: Needs you and the unread tags, so it
-  /// always agrees with the tabs (Diego, #2887). Until the tags are read the
-  /// server's waiting ones stand in for them.
-  int get count {
-    if (_snapshot case final snapshot?) {
-      return needsCount +
-          (mentions.loaded ? mentionsUnread : snapshot.mentionsWaiting);
-    }
-    return 0;
-  }
-
-  /// Whether the Activity row is bold: something needs the reader, or a
-  /// thread they follow has news they have not read.
-  bool get unread => count > 0 || attention.threadsUnread;
-
   /// What the reader's PM answered for them today, newest first: decisions
   /// they left to the PM, or that waited 24 hours.
   List<SuperTabDecision> get handledToday {

@@ -522,7 +522,7 @@ void main() {
       (tester) async {
         final c = await show(tester, riverSwarm());
         Future<void> shortcutOverNotifications() async {
-          await tester.tap(find.byKey(const ValueKey('super-activity')));
+          await tester.tap(find.byKey(const ValueKey('super-decisions')));
           await tester.pumpAndSettle();
           expect(find.text('Message your Buddy'), findsNothing);
           // What ⇧⌘K runs (openActiveBuddyChat).
@@ -562,7 +562,7 @@ void main() {
       tester,
     ) async {
       final c = await show(tester, pmChatSwarm());
-      await tester.tap(find.byKey(const ValueKey('super-activity')));
+      await tester.tap(find.byKey(const ValueKey('super-decisions')));
       await tester.pumpAndSettle();
       expect(find.text('Message your Buddy'), findsNothing);
 

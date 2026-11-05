@@ -98,7 +98,7 @@ void main() {
       // The foot lines up with the list, and ends on the chat box's bottom line.
       final manage = tester.getRect(find.byKey(const ValueKey('super-manage')));
       final activity = tester.getRect(
-        find.byKey(const ValueKey('super-activity')),
+        find.byKey(const ValueKey('super-decisions')),
       );
       final sidebar = tester.getRect(find.byType(ProjectSidebar));
       expect(manage.left, activity.left);

@@ -111,7 +111,7 @@ class _MentionsPageState extends State<SuperTabMentionsPage> {
     final style = DesktopChrome.metadata();
     final rest = inside == null ? name : '$name › $inside';
     return Padding(
-      padding: const EdgeInsets.only(top: 3),
+      padding: const EdgeInsets.only(top: grid.AppDesktop.listRowGap),
       child: project?.isPrivate == true
           ? Text.rich(
               TextSpan(

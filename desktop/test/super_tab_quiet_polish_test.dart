@@ -63,7 +63,7 @@ void main() {
       server.ask(['Ship it?'], conversationId: 'lead');
       await showView(tester, server);
       final activity = find.descendant(
-        of: _key('super-activity'),
+        of: _key('super-decisions'),
         matching: find.byType(SuperTabCountBadge),
       );
       expect(
@@ -104,7 +104,7 @@ void main() {
           y(find.text('second-project').first) -
           y(find.text('web-project').first);
       expect(
-        y(_key('super-swarm-buddy')) - y(_key('super-activity')),
+        y(_key('super-swarm-buddy')) - y(_key('super-decisions')),
         rows.abs() - 4,
       );
     });
@@ -123,7 +123,7 @@ void main() {
 
     testWidgets('Activity has no Members', (tester) async {
       await showView(tester, swarm());
-      await tester.tap(_key('super-activity'));
+      await tester.tap(_key('super-decisions'));
       await tester.pumpAndSettle();
       expect(_key('super-members-button'), findsNothing);
     });
@@ -177,7 +177,7 @@ void main() {
         'more': false,
       };
       await showView(tester, server);
-      await tester.tap(_key('super-activity'));
+      await tester.tap(_key('super-decisions'));
       await tester.pumpAndSettle();
       for (final glyph in ['↳', '✓', '◐']) {
         expect(find.text(glyph), findsNothing);
@@ -201,7 +201,7 @@ void main() {
         ).toUtc().toIso8601String(),
       );
       await showView(tester, server);
-      await tester.tap(_key('super-activity'));
+      await tester.tap(_key('super-decisions'));
       await tester.pumpAndSettle();
       expect(find.text('8:08 PM'), findsOneWidget);
     });
@@ -222,7 +222,7 @@ void main() {
         'more': false,
       };
       await showView(tester, server);
-      await tester.tap(_key('super-activity'));
+      await tester.tap(_key('super-decisions'));
       await tester.pumpAndSettle();
       double y(String text) => tester.getCenter(find.text(text)).dy;
       final under = y('Older root') - y('Earlier');
