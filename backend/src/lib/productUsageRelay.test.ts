@@ -27,6 +27,16 @@ describe('relay totals', () => {
       ['2026-10-29', 'relay_machine_connections', 40], ['2026-10-29', 'relay_tui_opens', 300], ['2026-10-30', 'relay_tui_opens', 7]])
   })
 
+  it('adds a counted value, so a report of 4 turns is one increment of 4 beside the connects', async () => {
+    const write = vi.fn<Write>(async () => {})
+    const totals = setup(write)
+    totals.add(day, 'turns_started', 4)
+    totals.add(day, 'turns_started', 8)
+    totals.add(day, 'relay_tui_opens')
+    await totals.flush()
+    expect(sorted(write.mock.calls[0][1])).toEqual([['2026-10-29', 'relay_tui_opens', 1], ['2026-10-29', 'turns_started', 12]])
+  })
+
   it('writes nothing when nothing was counted', async () => {
     const write = vi.fn<Write>(async () => {})
     await setup(write).flush()

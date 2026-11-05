@@ -314,6 +314,57 @@ describe('aggregate ingestion', () => {
   })
 })
 
+describe('report totals wait in memory', () => {
+  const updates = (): Array<[string, string, number]> => db.$runCommandRaw.mock.calls.flatMap(([command]) =>
+    (command as { updates: Array<{ q: { dayUtc: { $date: string }; metric: string }; u: { $inc: { value: number } } }> }).updates
+      .map(u => [u.q.dayUtc.$date.slice(0, 10), u.q.metric, u.u.$inc.value] as [string, string, number])).sort()
+
+  it('N reports cost no totals write, then one write per counter a minute later, with no read before it', async () => {
+    for (let i = 0; i < 40; i++) expect(await ingestProductUsage('a', { ...report, id: `receipt-${i}` }, now)).toEqual({ accepted: true })
+    expect(db.$runCommandRaw).not.toHaveBeenCalled()
+    await flushRelayUsage()
+    expect(db.$runCommandRaw).toHaveBeenCalledOnce()
+    expect(updates()).toEqual([['2026-10-13', 'turns_ended', 120], ['2026-10-13', 'turns_started', 160]])
+    for (const reads of ['findMany', 'groupBy', 'update', 'upsert'] as const) expect(db.productUsageTotal[reads]).not.toHaveBeenCalled()
+    await flushRelayUsage()
+    expect(db.$runCommandRaw).toHaveBeenCalledOnce()
+  })
+
+  it('a day boundary still splits the counts: each report lands on its own day', async () => {
+    await ingestProductUsage('a', { ...report, id: 'r1', day: '2026-10-12' }, now)
+    await ingestProductUsage('a', { ...report, id: 'r2', day: '2026-10-13' }, now)
+    await ingestProductUsage('a', { ...report, id: 'r3', day: '2026-10-13' }, now)
+    await flushRelayUsage()
+    expect(updates()).toEqual([['2026-10-12', 'turns_ended', 3], ['2026-10-12', 'turns_started', 4],
+      ['2026-10-13', 'turns_ended', 6], ['2026-10-13', 'turns_started', 8]])
+  })
+
+  it('a transaction that is retried counts its report once', async () => {
+    // The first attempt gets as far as its totals, then the commit fails: whatever it counted must be thrown away.
+    db.$transaction.mockImplementationOnce(async (fn: (tx: typeof db) => unknown) => { await fn(db); throw { code: 'P2034' } })
+    expect(await ingestProductUsage('a', report, now)).toEqual({ accepted: true })
+    expect(db.$transaction).toHaveBeenCalledTimes(2)
+    await flushRelayUsage()
+    expect(updates()).toEqual([['2026-10-13', 'turns_ended', 3], ['2026-10-13', 'turns_started', 4]])
+  })
+
+  it('a refused or already received report adds nothing', async () => {
+    choices({ userId: 'a', enabled: false, revision: 1 })
+    await ingestProductUsage('a', report, now)
+    db.productUsageReceipt.findMany.mockResolvedValue([{ id: report.id }])
+    await ingestProductUsage('a', report, now)
+    await flushRelayUsage()
+    expect(db.$runCommandRaw).not.toHaveBeenCalled()
+  })
+
+  it('keeps staff and testing totals apart in memory too', async () => {
+    accounts('Dee@Autonomous.AI')
+    await ingestProductUsage('team', { ...report, id: 'r1' }, now)
+    await flushRelayUsage()
+    expect(updates().map(([, metric]) => metric)).toEqual(['staff:turns_ended', 'staff:turns_started'])
+  })
+})
+
 describe('relay connects', () => {
   const sent = (): Array<[string, string, number]> => db.$runCommandRaw.mock.calls.flatMap(([command]) =>
     (command as { updates: Array<{ q: { dayUtc: { $date: string }; metric: string }; u: { $inc: { value: number } } }> }).updates
