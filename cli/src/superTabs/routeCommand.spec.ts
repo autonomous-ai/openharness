@@ -1439,6 +1439,19 @@ describe('routing contributed capacity', () => {
       expect(recordedText).not.toContain('private-account')
     })
 
+    it('drops setup notes after a later success or 30 minutes, without noting another engine', async () => {
+      const failed = { requestedAt: Date.now(), error: 'The project folder does not exist.', request: { machineId: 'm1', engine: 'claude' } }
+      for (const starts of [
+        [{ ...failed, requestedAt: Date.now() - 30 * 60_000 }],
+        [failed, { ...failed, harnessId: 'created', error: null }],
+        [{ ...failed, request: { machineId: 'm1', engine: 'codex' } }],
+      ]) {
+        const { answer } = await runPool(swarm(), false, {}, project, { state: { starts } })
+        expect(answer.ok).toBe(true)
+        expect(JSON.stringify(answer.candidates)).not.toContain('Its last start failed while preparing')
+      }
+    })
+
     it('still offers a local model on a machine whose engine is signed out, since the grid needs no subscription', async () => {
       const grid = 'swarm-0123456789ab', pool = swarm(undefined, [{ engine: 'claude', installed: true, signedIn: false }])
       pool.observation.localModels = [{ grid, model: 'qwen3' }]
