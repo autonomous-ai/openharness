@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../state/harness_attachments.dart';
 import 'controller.dart';
 import 'model.dart';
+import 'attachment_upload.dart' show kSuperTabAttachmentMaxFiles;
 import 'voice_take.dart';
 
 /// The name a voice message's clip is uploaded under: what an older app shows
@@ -51,16 +52,28 @@ extension SuperTabVoiceSend on SuperTabController {
     required String lang,
   }) async {
     if (!canWrite) return (sent: false, notice: null);
-    if (saving || hasPendingAction) {
+    if (saving || uploading || hasPendingAction) {
       return (sent: false, notice: superTabVoiceBusy);
     }
-    final String id;
-    try {
-      final answer = await uploadFile(
-        conversationId,
-        HarnessAttachment(superTabVoiceFileName, wav),
+    final owner = root == null
+        ? attachments(conversationId)
+        : threadAttachments(conversationId, root);
+    final attached = owner.files;
+    if (attached.length >= kSuperTabAttachmentMaxFiles) {
+      return (
+        sent: false,
+        notice: 'Attach at most 9 files with a voice message.',
       );
-      id = superTabMap(answer['attachment'])['id'] as String;
+    }
+    final ids = <String>[];
+    try {
+      for (final file in [
+        ...attached,
+        HarnessAttachment(superTabVoiceFileName, wav),
+      ]) {
+        final answer = await uploadFile(conversationId, file);
+        ids.add(superTabMap(answer['attachment'])['id'] as String);
+      }
     } on SuperTabFailure catch (failure) {
       return (sent: false, notice: failure.message);
     } on TimeoutException {
@@ -68,23 +81,27 @@ extension SuperTabVoiceSend on SuperTabController {
     } on Object {
       return (sent: false, notice: superTabVoiceNoAnswer);
     }
-    final read = await _readVoice(id, lang);
+    final read = await _readVoice(ids.last, lang);
     final voice = read.voice;
     if (voice == null) return (sent: false, notice: read.refused);
-    if (saving || hasPendingAction) {
+    if (saving || uploading || hasPendingAction) {
       return (sent: false, notice: superTabVoiceBusy);
     }
     // Answered or not, the message is now the chat's: a lost answer or a
     // refusal shows it there with Retry, under the same receipt.
-    await command({
+    final sending = command({
       'type': 'message.send',
       'conversationId': conversationId,
       'text': '',
       'replyTo': root,
       'recipientIds': const <String>[],
-      'attachmentIds': [id],
+      'attachmentIds': ids,
       if (oneBuddy) 'oneBuddy': true,
     });
+    for (final file in attached) {
+      owner.remove(file);
+    }
+    await sending;
     return (
       sent: true,
       notice: voice.transcribed
