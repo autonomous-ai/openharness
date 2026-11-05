@@ -14,6 +14,8 @@ import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
 import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fixture.test-support.js'
 import { groupView } from './read/views.js'
+import { weekStart } from './leaderboard/week.js'
+import { lentIn, weekSpan } from './leaderboard/rolling.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 /** What an older client's routing, policy, skill-set or role save answers (project instructions, phase 4). */
@@ -1747,6 +1749,34 @@ it('keeps a paused machine paused when its owner saves other settings, until the
   f.run({ type: 'machine.pause', machineId: 'host', paused: false })
   f.run(save(3), owner, owners)
   expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host', maxAgents: 3, paused: false })])
+})
+describe('saving a machine again', () => {
+  const owners = { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }
+  const save = (maxAgents: number): Command => ({ type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents })
+  it('keeps its Lent hours, engine health and last reading when its owner saves other settings', () => {
+    const f = fixture()
+    f.run(save(2), owner, owners)
+    const week = weekStart(NOW)
+    const kept = {
+      lent: [{ week, busyMs: 18_000_000 }],
+      lentDays: [{ day: week, projectId: 'lead', busyMs: 18_000_000 }],
+      engineFailures: { codex: 1 },
+      engineSuspensions: { claude: { at: NOW, fine: false } },
+      observation: { receivedAt: NOW, runningHarnessIds: ['h1'], stoppedHarnessIds: [] } as never,
+    }
+    Object.assign(f.state.machines[0]!, structuredClone(kept))
+    const lentThisWeek = () => lentIn(f.state.machines[0]!, weekSpan(week), NOW, { projects: new Set(['lead']), unsplit: true })
+    expect(lentThisWeek()).toBe(18_000_000)
+    f.run(save(3), owner, owners)
+    expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host', maxAgents: 3, ...kept })])
+    expect(lentThisWeek()).toBe(18_000_000)
+  })
+  it('gives a first-time contribution a clean record', () => {
+    const f = fixture()
+    f.run(save(2), owner, owners)
+    const record = f.state.machines[0]!
+    for (const key of ['lent', 'lentDays', 'engineFailures', 'engineSuspensions', 'observation']) expect(record).not.toHaveProperty(key)
+  })
 })
 it('restricts recording a legacy project to the owner or controlling lead', () => {
   const f = fixture(); f.invite()
