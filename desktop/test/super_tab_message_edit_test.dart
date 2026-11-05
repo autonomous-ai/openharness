@@ -5,7 +5,6 @@ import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:harness/shared/theme/color_palette.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -28,8 +27,8 @@ void main() {
     for (final family in {
       '.AppleSystemUIFont',
       'Roboto',
-      AppFont.sans,
-      ...AppFont.sansFallback,
+      grid.AppFont.sans,
+      ...grid.AppFont.sansFallback,
     }) {
       await (FontLoader(family)..addFont(Future.value(sf))).load();
     }
