@@ -335,7 +335,7 @@ Future<void> removeSwarmMachine(
     preview = _Preview.parse(
       await reader.request(
         'GET',
-      '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/machines/${Uri.encodeComponent(machineId)}/removal/v2',
+        '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/machines/${Uri.encodeComponent(machineId)}/removal/v2',
       ),
     );
   } on SuperTabFailure catch (failure) {

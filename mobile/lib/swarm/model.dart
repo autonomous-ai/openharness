@@ -684,6 +684,14 @@ class SuperTabSnapshot {
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
+      promptsWaiting = List.unmodifiable([
+        for (final wait in row['promptsWaiting'] as List? ?? const [])
+          if (wait case {
+            'agentId': final String agentId,
+            'conversationId': final String conversationId,
+          })
+            (agentId: agentId, conversationId: conversationId),
+      ]),
       activityDigest = row['activityDigest'] as String?,
       remindersDigest = row['remindersDigest'] as String?,
       chatSettings = Map.unmodifiable({
@@ -804,6 +812,11 @@ class SuperTabSnapshot {
   /// Which decisions wait, as a digest that moves when they change though the
   /// count may not; null from a backend before it (superTabs/decisions.ts).
   final String? decisionsDigest;
+
+  /// The task agents at a prompt in their terminals that wait for the reader,
+  /// as the backend chose them (superTabs/promptWaits.ts, task #3029); empty
+  /// from a backend before it.
+  final List<({String agentId, String conversationId})> promptsWaiting;
 
   /// Which of the reader's Activity rows are unread, as a digest (backend superTabs/activity.ts); null from a backend
   /// before it. Read as the desktop's model reads it; the phone shows no Activity yet.

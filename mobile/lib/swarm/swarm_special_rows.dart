@@ -257,9 +257,8 @@ class SwarmTerminalRow extends StatelessWidget {
               : _NoteAction(
                   key: const ValueKey('swarm-limit-switch-pm'),
                   label: 'Switch PM…',
-                  onTap: () => unawaited(
-                    showSwarmSwitchPm(context, reader!, projectId),
-                  ),
+                  onTap: () =>
+                      unawaited(showSwarmSwitchPm(context, reader!, projectId)),
                 ),
         );
       },
@@ -316,7 +315,12 @@ class SwarmTerminalRow extends StatelessWidget {
           Expanded(
             child: action == null
                 ? text
-                : Row(children: [Flexible(child: text), action]),
+                : Row(
+                    children: [
+                      Flexible(child: text),
+                      action,
+                    ],
+                  ),
           ),
         ],
       ),

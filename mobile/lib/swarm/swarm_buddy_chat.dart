@@ -200,12 +200,8 @@ class SwarmBuddyBar extends StatelessWidget {
         key: const ValueKey('swarm-buddy-failed'),
         text: "Couldn't start: $error",
         again: canWrite && machineId.isNotEmpty
-            ? () => unawaited(
-                actions.start(
-                  machineId: machineId,
-                  engine: engine,
-                ),
-              )
+            ? () =>
+                  unawaited(actions.start(machineId: machineId, engine: engine))
             : null,
         busy: actions.busy,
       );

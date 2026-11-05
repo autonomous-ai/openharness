@@ -27,6 +27,11 @@ SwarmNoticeMessage swarmNotice(SwarmNeed need) {
       mention.projectName,
       'Open Harness to read it.',
     ),
+    SwarmWorkNeed(:final work) when work.atPrompt => (
+      '${work.agentName} is waiting at a prompt',
+      work.project.name,
+      'Open Harness to answer it.',
+    ),
     SwarmWorkNeed(:final work) when work.status == 'blocked' => (
       '${work.agentName} is stuck',
       work.project.name,
