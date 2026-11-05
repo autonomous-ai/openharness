@@ -10,7 +10,7 @@ import { groupsBy, readBy } from '../parts/indexed.js'
 import { ms } from '../parts/light.js'
 import { prismaRow } from '../rawRows.js'
 import { messagesPast } from '../pageReads.js'
-import { SCORECARD_LIMITS, type ScorecardInput, type ScorecardMessage, type ScorecardTask } from './figures.js'
+import { isAsk, SCORECARD_LIMITS, type ScorecardInput, type ScorecardMessage, type ScorecardTask } from './figures.js'
 
 type Transaction = Prisma.TransactionClient
 
@@ -101,7 +101,7 @@ export async function scorecardRecords(tx: Transaction, at: { tabId: string; pro
     const found = await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: wanted.slice(i, i + PAGE) } } }])
     messages.push(...found.map(row => prismaRow<SuperTabMessage>('SuperTabMessage', row)).filter(row => row.tabId === tabId).map(asMessage))
   }
-  const asks = messages.filter(m => m.conversationId === chatId && m.author.kind === 'person' && !m.source).map(m => m.id)
+  const asks = messages.filter(m => m.conversationId === chatId && isAsk(m)).map(m => m.id)
   const answeredDeliveries: ScorecardInput['answeredDeliveries'] = []
   for (let i = 0; i < asks.length; i += PAGE) {
     const found = await readBy(tx, 'SuperTabDelivery', 'byMessage', [{ $match: { tabId, messageId: { $in: asks.slice(i, i + PAGE) }, answeredAt: { $ne: null } } },

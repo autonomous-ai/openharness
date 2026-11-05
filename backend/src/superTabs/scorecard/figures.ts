@@ -115,6 +115,11 @@ export function ackOnly(text: string): boolean {
   return words ? ACKS.has(words) : text.trim().length > 0
 }
 
+/** A person's own post, or the proposal their Buddy wrote for them: what a person asks the project. A task card's line is
+ *  the person's too, and asks nothing. */
+export const isAsk = (m: Pick<ScorecardMessage, 'author' | 'source'>): boolean =>
+  m.author.kind === 'person' && (!m.source || m.source.kind === 'buddy-proposal')
+
 const median = (values: number[]): number | null => {
   if (!values.length) return null
   const sorted = [...values].sort((a, b) => a - b), mid = sorted.length >> 1
@@ -164,7 +169,7 @@ export function scorecardDay(input: ScorecardInput): ScorecardFigures {
   }
 }
 
-/** People's top-level posts in the project chat in the lookback that nothing answered by day end: no agent's row in their
+/** People's top-level asks in the project chat in the lookback (isAsk) that nothing answered by day end: no agent's row in their
  *  thread or replying to them, no delivery answered, no task opened from them. */
 function unansweredAsks(input: ScorecardInput, messages: ScorecardMessage[], limits: ScorecardLimits): ScorecardMessage[] {
   const { end } = input
@@ -177,7 +182,7 @@ function unansweredAsks(input: ScorecardInput, messages: ScorecardMessage[], lim
   for (const d of input.answeredDeliveries) if (d.answeredAt < end) answered.add(d.messageId)
   for (const t of input.tasks) if (t.askedAt === undefined || t.askedAt < end) t.requestMessageIds.forEach(id => answered.add(id))
   const from = end - limits.askLookbackDays * DAY
-  return messages.filter(m => m.conversationId === input.chatId && m.author.kind === 'person' && !m.source && !m.replyTo
+  return messages.filter(m => m.conversationId === input.chatId && isAsk(m) && !m.replyTo
     && (!m.thread || m.thread === m.id) && m.createdAt >= from && m.createdAt < end && !answered.has(m.id))
 }
 
