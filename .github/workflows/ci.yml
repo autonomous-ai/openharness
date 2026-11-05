@@ -175,7 +175,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04]
-        shard: [1, 2, 3, 4]
+        # Six shards split by measured file times (scripts/desktop-test-durations.json): each needs about 6 of its 10
+        # minutes on a slow runner, so the suite can grow a fifth before one runs short (task #3458;
+        # scripts/tests/test_desktop_tests.py checks the split keeps a quarter of the limit free).
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -217,10 +220,15 @@ jobs:
       - uses: ./.github/actions/desktop-flutter
         with:
           version: ${{ steps.toolchain.outputs.version }}
+      - name: Every Desktop shard keeps a quarter of its time limit (task #3458)
+        if: matrix.shard == 1
+        # Named in full: a renamed test then fails here instead of matching nothing and passing (review of #3241).
+        working-directory: scripts/tests
+        run: python3 -m unittest -v test_desktop_tests.DurationSplitTests.test_ci_split_leaves_every_shard_a_quarter_of_its_time_limit
       - name: Run bounded Desktop VM shard
         env:
           DESKTOP_SHARD: ${{ matrix.shard }}
-        run: python3 scripts/test-desktop.py --shard "$DESKTOP_SHARD/4" --workers 4 --timeout 600
+        run: python3 scripts/test-desktop.py --shard "$DESKTOP_SHARD/6" --workers 4 --timeout 600
       - name: Preserve complete test logs and receipts
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

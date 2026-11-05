@@ -1,4 +1,11 @@
 import { OBSERVER_VALID_MS, publishObservers } from './observers.js'
+import { CrewFolders, crewRest, pruneBranches } from './crewFolders.js'
+/** How often a crew member's finished branch copies are pruned (crewFolders.ts). */
+const CREW_PRUNE_EVERY_MS = 60 * 60_000
+/** How long a folder drop the Swarm's removal refused waits before it is tried again. */
+const CREW_DROP_RETRY_MS = 60 * 60_000
+/** How long a folder restore that failed waits before it is tried again. */
+const CREW_RESTORE_RETRY_MS = 60_000
 import { ContributedMachines, uncommittedIn, type MachineDeps } from './machines.js'
 import { SwarmGrids } from './swarmGrids.js'
 import { retainContributions } from './retention.js'
@@ -1167,6 +1174,29 @@ export class SuperTabHost {
         void this.releaseWorker(target)
         continue
       }
+      // A crew member the server put to sleep, is moving, or whose folder it dropped (backend crewKeep.ts): closed here once,
+      // its folder kept or dropped, and never kept alive. An awake one may need its dropped folder back before it reopens.
+      const rest = crewRest(target.agent as Parameters<typeof crewRest>[0])
+      const restKey = `${target.tabId}:${target.agent.harnessId}`
+      if (rest) {
+        // A drop the Swarm's removal refused (work not committed or pushed) is tried again an hour on (review of #3229).
+        if (rest === 'drop' && this.rested.get(restKey) === 'drop' && (this.dropRetry.get(restKey) ?? Infinity) <= this.now()) {
+          this.rested.delete(restKey)
+          this.dropRetry.delete(restKey)
+        }
+        void this.crewRest(target, rest)
+        continue
+      }
+      // Rested here, or dropped before this host restarted (its record is on disk): the folder comes back first.
+      // One restore at a time, and the keep-alive below waits for it, so the session reopens in its folder, not a missing one.
+      // A failed one waits CREW_RESTORE_RETRY_MS, so the keep-alive (which backs off itself) is never held back for good.
+      if (!this.restoring.has(restKey) && (this.restoreRetryAt.get(restKey) ?? 0) <= this.now() && (this.rested.delete(restKey)
+        || ((target.agent as { crew?: unknown }).crew && this.crewFolders().remembers(target.tabId, target.agent.harnessId)))) {
+        this.restoring.set(restKey, this.crewFolders().restore(target.tabId, target.agent.harnessId).catch(() => 'failed' as const)
+          .then(result => { if (result === 'failed') this.restoreRetryAt.set(restKey, this.now() + CREW_RESTORE_RETRY_MS); else this.restoreRetryAt.delete(restKey) })
+          .finally(() => { this.restoring.delete(restKey) }))
+      }
+      if ((target.agent as { crew?: unknown }).crew) this.pruneCrewBranches(target.tabId, target.agent.harnessId)
       if (row.lead === true || target.agent.switchLanded) {
         if (row.lead === true) leads.add(target.agent.harnessId)
         this.keepAlive(target.agent.harnessId)
@@ -1174,7 +1204,7 @@ export class SuperTabHost {
       } else if (isCrewRow(row)) {
         // A project's crew is kept alive as its PM is (task #3397): reopened in place, then told to continue its task.
         leads.add(target.agent.harnessId)
-        this.keepAlive(target.agent.harnessId, true)
+        if (!this.restoring.has(restKey)) this.keepAlive(target.agent.harnessId, true)
       }
       // Never adopt another live session as a replacement for the recorded harness.
       if (!this.core.agents.byAgent(target.agent.harnessId) || !this.core.agents.terminalAvailable(target.agent.harnessId)) continue
@@ -1331,6 +1361,48 @@ export class SuperTabHost {
   /** The owner, 2026-10-23: the Lead of an active project stays alive. One whose session is gone (a machine restart, a
    *  kill) is reopened on its own conversation; nothing is typed into it, so no old input is replayed. A failure backs
    *  off, so an engine that cannot start never spins. */
+  /** Crew members closed for rest, by tab and harness, with what closed them: closed once per rest, and when one wakes, its
+   *  dropped folder comes back before its keep-alive reopens it (crewFolders.ts). */
+  private readonly rested = new Map<string, 'sleep' | 'drop' | 'moving'>()
+  /** A dropped folder being brought back, by the same key: its keep-alive waits for it (review of #3229). */
+  private readonly restoring = new Map<string, Promise<unknown>>()
+  /** When a failed folder restore is tried again, by the same key. */
+  private readonly restoreRetryAt = new Map<string, number>()
+  /** When a refused folder drop is tried again, by the same key. */
+  private readonly dropRetry = new Map<string, number>()
+  private crewFoldersInstance?: CrewFolders
+  private crewFolders(): CrewFolders {
+    return this.crewFoldersInstance ??= new CrewFolders({ dataDir: this.core.dataDir, machineId: this.machineId,
+      worktree: (tabId, harnessId) => this.contributed().worktreeOf(tabId, harnessId),
+      removeWorktree: (tabId, harnessId) => this.contributed().removeStoppedWorktree(tabId, harnessId), log: line => this.log(line) })
+  }
+  /** When each crew member's folder last had its finished branch copies pruned (crewFolders.ts pruneBranches): hourly. */
+  private readonly pruned = new Map<string, number>()
+  private pruneCrewBranches(tabId: string, harnessId: string): void {
+    const key = `${tabId}:${harnessId}`, now = this.now()
+    if (now - (this.pruned.get(key) ?? 0) < CREW_PRUNE_EVERY_MS) return
+    this.pruned.set(key, now)
+    const folder = this.contributed().worktreeOf(tabId, harnessId)?.path
+    if (folder) void pruneBranches(folder).then(gone => { if (gone.length) this.log(`Dropped ${gone.length} finished branch copies of a crew member`) },
+      () => this.log('Could not prune a crew member\'s branches'))
+  }
+  private async crewRest(row: HostAgent, rest: 'sleep' | 'drop' | 'moving'): Promise<void> {
+    const key = `${row.tabId}:${row.agent.harnessId}`
+    if (this.rested.get(key) === rest) return
+    this.rested.set(key, rest)
+    try {
+      if (this.core.agents.byAgent(row.agent.harnessId)) {
+        const closed = await this.core.agents.closeMember?.(row.agent.harnessId)
+        if (closed && 'error' in closed && closed.error) throw new Error(closed.error)
+      }
+      if (rest === 'drop' && await this.crewFolders().drop(row.tabId, row.agent.harnessId) === 'kept') this.dropRetry.set(key, this.now() + CREW_DROP_RETRY_MS)
+    } catch (error) {
+      // Tried again on the next roster: the server still says it rests.
+      this.rested.delete(key)
+      this.log(`Crew rest: ${error instanceof Error ? error.message.slice(0, 80) : typeof error}`)
+    }
+  }
+
   private keepAlive(harnessId: string, crew = false): void {
     const reopen = this.core.agents.keepLeadAlive
     if (!reopen) return

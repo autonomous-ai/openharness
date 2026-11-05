@@ -10,6 +10,7 @@ vi.mock('../team/config.js', async (original) => ({ ...await original<object>(),
 const started = vi.hoisted(() => ({ owner: 'peer' as string | null }))
 vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => started.owner }))
 import { SWARM_TOOLS_SKILL } from './swarmTools.js'
+import { swarmToolsSheet, type ToolsRole } from './swarmToolSheets.js'
 import { prepareSwarmSkill, parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill, roleFromWire, skillFile } from './swarmSkills.js'
 import { agentLaunchArgs } from './agentAttribution.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
@@ -31,12 +32,14 @@ describe('built-in Swarm skills', () => {
       const workspace = fixture(), saved = { role, key: `${role}-${mode}`, mode }
       const prepared = prepareSwarmSkill(workspace, saved)
       const tools = join(dirname(dirname(prepared.file)), 'swarm-tools', 'SKILL.md')
-      expect(readFileSync(tools, 'utf8')).toBe(SWARM_TOOLS_SKILL)
+      // Task #3448: the coordinator is launched with the PM sheet, an agent with the Engineer sheet, a fallback Reviewer with the Reviewer's.
+      const sheet = swarmToolsSheet(({ lead: 'pm', dev: 'engineer', review: 'reviewer' } as Record<string, ToolsRole>)[role]!)
+      expect(readFileSync(tools, 'utf8')).toBe(sheet)
       expect(skillFile(workspace, saved, 'swarm-tools', false)).toBe(tools)
       expect(readFileSync(prepared.file, 'utf8')).toContain(`name: swarm-${role}`)
       expect(prepared.instructions).toBe(`Use the built-in swarm-tools skill for Harness's Swarm commands: read ${JSON.stringify(tools)} before working. Your role and how this project works are in its instructions: read them with the instructions command (harness super-tab --tab TAB instructions), and work by them. If that command says this Swarm has no project instructions, use the swarm-${role} skill instead: read ${JSON.stringify(prepared.file)}.`)
       const record = JSON.parse(readFileSync(join(dirname(tools), 'version.json'), 'utf8'))
-      expect(record).toEqual({ text: sha256(SWARM_TOOLS_SKILL), notified: sha256(SWARM_TOOLS_SKILL), change: 0, toldChange: 0 })
+      expect(record).toEqual({ text: sha256(sheet), notified: sha256(sheet), change: 0, toldChange: 0 })
       // A relaunch keeps both files' bytes, even after the agent's edits.
       writeFileSync(prepared.file, 'edited role\n')
       writeFileSync(tools, 'edited tools\n')

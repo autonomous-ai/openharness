@@ -181,6 +181,10 @@ function globTokens(glob: string): GlobToken[] {
  *  whatever a project saves (security review of #3216: the regex it replaced took 19 s on `*a` ten times). */
 export function globMatch(glob: string, path: string): boolean {
   const tokens = globTokens(glob), end = tokens.length
+  // A double star and a slash matches no folders, or any characters ending in a slash, as the regex `(?:.*/)?` did. So it
+  // has two positions: at its token i (it may still match nothing and move on), and inside it, -(i + 1), having read
+  // characters, which it leaves only by reading a slash. Without the inside position `a/**/b` matched `a/xb` (Reviewers).
+  const inside = (i: number) => -(i + 1)
   // Every position reachable from [from] without reading a character: a wildcard may match nothing.
   const close = (from: Iterable<number>): Set<number> => {
     const seen = new Set<number>(), stack = [...from]
@@ -188,7 +192,7 @@ export function globMatch(glob: string, path: string): boolean {
       const i = stack.pop()!
       if (seen.has(i)) continue
       seen.add(i)
-      const t = tokens[i]
+      const t = i >= 0 ? tokens[i] : undefined
       if (t && (t.kind === 'name' || t.kind === 'any' || t.kind === 'dirs')) stack.push(i + 1)
     }
     return seen
@@ -197,14 +201,20 @@ export function globMatch(glob: string, path: string): boolean {
   for (const raw of path) {
     const c = raw.toLowerCase(), next: number[] = []
     for (const i of states) {
+      if (i < 0) {
+        // Inside a double star and a slash: any characters, leaving only after a slash.
+        next.push(i)
+        if (c === '/') next.push(-i)
+        continue
+      }
       const t = tokens[i]
       if (!t) continue
       if (t.kind === 'char') { if (t.c === c) next.push(i + 1) }
       else if (t.kind === 'one') { if (c !== '/') next.push(i + 1) }
       else if (t.kind === 'name') { if (c !== '/') next.push(i) }
       else if (t.kind === 'any') next.push(i)
-      // A double star and a slash: any characters, leaving after a slash.
-      else { next.push(i); if (c === '/') next.push(i + 1) }
+      else if (c === '/') next.push(i + 1, inside(i))
+      else next.push(inside(i))
     }
     if (!next.length) return false
     states = close(next)
