@@ -1957,8 +1957,7 @@ class AppNotifier extends ChangeNotifier {
       _addMachineWhereNew(
         [for (final tab in tabs) tab.id],
         {
-          for (final swarm in swarms)
-            if (swarm.superTabId case final id?) id,
+          for (final swarm in swarms) ?swarm.superTabId,
           ...hidden,
         },
       );
