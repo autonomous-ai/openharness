@@ -85,7 +85,9 @@ thumbnails with width and height) is a separate task and is not built here.
     `class DirectoryImageShelf implements SuperTabImageShelf` (`Directory`; private 0700/0600, temp-and-rename writes,
     `.part` files removed by `list`).
   - `class SuperTabImageCache` — `SuperTabImageCache(SuperTabImageShelf shelf, {int capBytes})`;
-    `Future<Uint8List?> read(String fileId)`; `void keep(String fileId, Uint8List bytes, Size shape)`;
+    `Future<Uint8List?> read(String fileId)`;
+    `Future<void> keep(String fileId, Uint8List bytes, Size shape, {int? generation})`;
+    `Future<void> drop(String fileId)` (a kept picture that does not decode);
     `Size? shapeOf(String fileId)` (synchronous, null until the folder is listed); `Future<void> get ready`;
     `Future<void> clear()`; `int get generation`.
   - `SuperTabImageCache superTabImageCache` (`@visibleForTesting` settable): disk shelf off the web, memory on it.
@@ -104,8 +106,8 @@ thumbnails with width and height) is a separate task and is not built here.
     listed, is deleted by `list()`, and the folder mode is 0700 where POSIX modes are supported.
 - [ ] **Step 2: Run** `flutter test test/super_tab_image_cache_test.dart` — FAIL (no `image_cache.dart`).
 - [ ] **Step 3: Implement** `image_cache.dart`. `keep` writes after the read it came from (no await by the caller),
-  skipped when `generation` moved since the caller's load began (the caller passes nothing: the cache records the
-  generation when `read` missed). Eviction lists the shelf again, sorts by `usedAt`, deletes oldest until ≤ cap.
+  skipped when `generation` moved since the caller's load began (the caller passes the `generation` it read when the
+  load began). Eviction lists the shelf again, sorts by `usedAt`, deletes oldest until ≤ cap.
   Failures log through `appLog.warn('super-tabs', 'image cache …')` with no id or path.
 - [ ] **Step 4: Run** the same command — PASS.
 - [ ] **Step 5: Commit** test first (`test(desktop): chat image cache …` — failing), then code.
@@ -192,9 +194,10 @@ thumbnails with width and height) is a separate task and is not built here.
 ### Task 5: Before and after numbers
 
 **Files:**
-- Test: `desktop/test/super_tab_image_load_bench_test.dart` (a measurement, tagged so the suite skips it)
+- Test: `desktop/test/benchmarks/chat_image_benchmark.dart` (a measurement; not a `_test` file, so the suite skips
+  it)
 
-- [ ] **Step 1:** An image-heavy chat on a local server (40 pictures, 1–3 MB each, 4000×3000): open it, scroll it,
+- [ ] **Step 1:** An image-heavy chat on a local server (30 screenshot-like pictures, 2400×1600, about 0.5 MB each): open it, scroll it,
   reopen it with fresh links, relaunch (new memory cache, same shelf). Record downloads, bytes downloaded, and decoded
   bytes held, on main (before) and on this branch (after), with task A's image marks (#3125) when it has merged.
 - [ ] **Step 2:** Post the table in the task and the pull request; a run on a real Mac against production with task
