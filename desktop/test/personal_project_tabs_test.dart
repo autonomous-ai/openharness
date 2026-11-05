@@ -465,6 +465,50 @@ void main() {
       ]);
     });
 
+    // Reed's review of #3090: a pane with a repo started from a project is
+    // that project's, not a new project for its repo.
+    test('with a repo stays in that project: no project is made for its '
+        'repo, on this computer or another', () async {
+      final f = SuperTabLaunchFixture()
+        ..connection.nativeProject = {
+          'name': 'web',
+          'cwd': '/work/web',
+          'root': '/work/web',
+          'remote': 'github.com/acme/web',
+        };
+      final api = await _withApi(f);
+      final box = await _boxIn(f, api.chat);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      await Future<void>.delayed(Duration.zero);
+      final tab = f.app.swarms
+          .where((s) => s.id == personalProjectTabId(api.project))
+          .single;
+      final pane = tab.panes.single;
+      final before = _commands(f).length;
+      await PersonalProjects.of(f.app).sync(api.c);
+      expect(_commands(f).skip(before), isEmpty);
+      expect(
+        PersonalProjects.of(f.app).knownForTest('owner', tabId).keys,
+        isNot(contains('github.com/acme/web')),
+      );
+      expect(PersonalProjects.of(f.app).panesFor(api.c, api.chat), [pane]);
+    });
+
+    test('a repo pane in the tab of a project Personal does not list joins '
+        'its repo\'s project', () async {
+      final f = SuperTabLaunchFixture();
+      final api = await _withApi(f);
+      f.app.machineStates['m']!.agents = [
+        _agent('w', remote: 'https://github.com/acme/web', cwd: '/w/web'),
+      ];
+      _tab(f.app, personalProjectTabId('gone'), [_pane('m', 'w')], name: 'x');
+      await PersonalProjects.of(f.app).sync(api.c);
+      expect(
+        PersonalProjects.of(f.app).knownForTest('owner', tabId).keys,
+        contains('github.com/acme/web'),
+      );
+    });
+
     test('in another Swarm makes no project tab', () async {
       final f = SuperTabLaunchFixture();
       withCoordinator(f);
