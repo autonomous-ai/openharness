@@ -860,7 +860,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   )
                                   case (final saved?, final open?))
                                 Padding(
-                                  padding: const EdgeInsets.only(top: 4),
+                                  padding: const EdgeInsets.only(
+                                    top: grid.AppDesktop.menuInset,
+                                  ),
                                   child: SuperTabLink(
                                     key: ValueKey(
                                       'super-instructions-link-${message.id}',
