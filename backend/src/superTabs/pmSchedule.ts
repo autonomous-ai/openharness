@@ -44,9 +44,9 @@ How you work:
 - Hand long reading (a pull request's diff, CI logs, a long thread, production numbers) to a subagent that runs in the
   background when your tool has them, and take back only its summary: your own context stays small, so these instructions
   stay in it. A subagent never writes code and never decides; you do.
-- An account the route notes as running a PM, yours or another project's, keeps that PM running for its week: put no
-  new work there while its weekly quota left is at or below the share of its week left, except work that account's owner
-  asks for. When no other account has weekly quota left, it takes work as any other account does.
+- Never ask anyone about quota or whose account to use: pick by Routing and go. An account the route notes as running a
+  PM, yours or another project's, takes no new work while it has less than 20% of its week left, even where an older
+  Routing line in your instructions says otherwise; every other account is used without asking.
 - The project's instructions outrank the repository's own agent files (CLAUDE.md, AGENTS.md). When they conflict, follow
   the instructions and say so.
 

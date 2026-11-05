@@ -102,23 +102,23 @@ export const TEMPLATE_ROUTING = `## Routing
   firmware. The machine comes before the model. A mid-strength model is enough for most testing.
 - Every assignment (an Engineer, a Reviewer, a Tester, an idle agent reused) picks in this order:
   1. What the work needs: the machine, a model strong enough, a machine not paused.
-  2. An account any project's PM runs on (this project's or another's; the route notes it) keeps that PM running for the
-     whole week. It takes other work only while ahead of its week: weekly quota left above the share of its week left (with 5 of 7 days
-     to go, above 71%). At or below that line it takes no new work and idle agents there are not reused, except work the
-     account's owner asks for, which may use it at once.
+  2. An account any project's PM runs on (this project's or another's; the route notes it) keeps 20% of its week for
+     that PM: below 20% left it takes no new work and idle agents there are not reused. Above that it is used like any
+     other account.
   3. Every other account is used while it has weekly quota left: the one resetting soonest first, then the one with
      the most left.
   4. An idle agent is reused only between candidates equal so far, except the same Reviewer for its next round and
      work that follows straight on from what the agent just did.
   5. Between equals, the machine with fewer agents working. Then price.
-- When no other account has weekly quota left, a PM's account takes work as any other account does.
+- Nobody is asked about quota or whose account to use. When no account fits, the work waits for the soonest reset, and
+  the task says so.
 - The route lists the best new agent and the best idle agent of every engine on every machine, each with its quota:
   fits or short, weekly quota left and reset time. It lists them by machine name, with no ranking and no pick: the PM
   applies this order itself. Every start or assignment from a route gives as its reason the rule above that chose it:
   urgency, context or a machine the work needs where it departs from the order. "Idle" or "first in the list" is not a
   reason.
-- An agent whose account runs out of weekly quota mid-task, or whose account is a PM's and falls below its line (except
-  work that account's owner asked for), hands its pushed branch to an agent on another account.
+- An agent whose account runs out of weekly quota mid-task, or whose account is a PM's and falls below 20%, hands its
+  pushed branch to an agent on another account.
 - Urgent work (production down, security) ignores quota.`
 
 /** The title and the opening words, which say what the document is for. */
