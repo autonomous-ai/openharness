@@ -147,6 +147,12 @@ describe('a task waiting for review', () => {
     const notCrew = crewStopped(CREW_REOPEN_GRACE_MS - 1)
     delete notCrew.agents[0]!.crew
     expect(status(notCrew, handedOver + MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its session on Mac stopped' } })
+    // Asleep (closed on purpose) or moved to another machine (task #3398): nothing reopens it here, so no grace.
+    for (const gone of [{ asleep: { since: 1 } }, { movedTo: 'w2' }]) {
+      const away = crewStopped(CREW_REOPEN_GRACE_MS - 1)
+      Object.assign(away.agents[0]!, gone)
+      expect(status(away, handedOver + MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its session on Mac stopped' } })
+    }
     const offline = quiet('working', 1)
     offline.agents[0]!.crew = { role: 'Engineer', at: 1, by: 'p' }
     expect(status(offline, handedOver + 4 * MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its machine Mac has been offline for 2 minutes' } })
