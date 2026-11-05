@@ -12,7 +12,7 @@ import { canReadProject, groupProject, ledProject } from './projects.js'
 import { usernameOf } from './usernames.js'
 
 /** "3d", "5h", "20m": how long until [ms] from [now], as the Machines screen says a reset. */
-export function until(ms: number, now: number): string {
+function until(ms: number, now: number): string {
   const left = Math.max(0, ms - now)
   if (left >= 86_400_000) return `${Math.floor(left / 86_400_000)}d`
   if (left >= 3_600_000) return `${Math.floor(left / 3_600_000)}h`

@@ -80,10 +80,8 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
     // Its own first: a machine's report also judges the others', and one not heard from in 2 minutes loses its work.
     for (const machineId of ['test-host', 'lead-host']) await timed.observeMachine(host, tab, machineId, { generation: generations.get(machineId)!,
       resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
-      quotas: machineId === 'lead-host' ? readings.lead : [], tools: {}, runningHarnessIds: [harnessOf.get(machineId)!], stoppedHarnessIds: [] })
+      quotas: [], tools: {}, runningHarnessIds: [harnessOf.get(machineId)!], stoppedHarnessIds: [] })
   }
-  /** What the coordinator's machine reports of its week: nothing, until a test sets it. */
-  const readings = { lead: [] as unknown[] }
   const poll = async () => {
     // Its worker keeps saying where it is, as a live one does; a finished task refuses the line and nothing changes.
     await execute({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: randomUUID() }, host, worker).catch(() => {})
@@ -112,7 +110,7 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
     })
     return id
   }
-  return { timed, tab, execute, lead, group, worker, assignmentId, clock, poll, status, write, add, readings }
+  return { timed, tab, execute, lead, group, worker, assignmentId, clock, poll, status, write, add }
 }
 
 const rowsOf = (tabId: string, where: Record<string, unknown> = {}) => db.superTabDelivery.findMany({ where: { tabId, ...where }, orderBy: { createdAt: 'asc' } })
@@ -143,26 +141,6 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     await f.poll()
     expect(await schedules(f.tab)).toHaveLength(1)
     expect((await projectOf(f)).schedule).toMatchObject({ lastSlot: scheduleSlot(f.clock.now) })
-  })
-
-  it('ends the wake with where the coordinator runs and its week left when its machine reports it, and says nothing when it does not (Ken, 11-05)', async () => {
-    const reported = { engine: 'codex', known: true, windows: [{ name: 'weekly', usedPercent: 30, resetsAt: Date.parse('2026-11-04T06:30:00.000Z') + 4 * 86_400_000 }] }
-    const f = await swarm()
-    f.readings.lead = [reported]
-    wantSchedule()
-    await unassigned(f)
-    await f.poll()
-    const [known] = await schedules(f.tab)
-    expect(known!.text).toMatch(/\n\nYou run on Lead Mac, host's own account: weekly 70% left, resets in \d+[dhm]\.$/)
-    expect(known!.text).not.toContain('@')
-    // The same wake with no reading: the line is left out, not guessed.
-    const g = await swarm()
-    wantSchedule()
-    await unassigned(g)
-    await g.poll()
-    const [unknown] = await schedules(g.tab)
-    expect(unknown).toBeDefined()
-    expect(unknown!.text).not.toContain('You run on')
   })
 
   it('is the coordinator\'s alone: no person sees it in the chat, and no other agent reads it', async () => {
