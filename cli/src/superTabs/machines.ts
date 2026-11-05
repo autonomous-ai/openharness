@@ -197,6 +197,9 @@ CAPABILITIES.push('leadSwitch')
 /** What this host does for a Buddy's model switch (task #2354, superTabs/buddyModel.ts): the backend refuses a switch to a host
  *  that does not say so. */
 CAPABILITIES.push('buddyModel')
+/** This host sends its PM's turn with the PM's delivery list read (host.ts, task #3545): only then does the backend keep people's
+ *  messages and crew needs to that PM for its inbox, which goes when its turn ends. */
+CAPABILITIES.push('turnInbox')
 /** The backend's answer that this machine may no longer act in the Swarm: signed out, its contribution revoked or its host
  *  unavailable (backend store.ts observeMachine), or the Swarm gone. */
 const lostAccess = (error: unknown) => error instanceof SuperTabHostError && [401, 403, 404].includes(error.status)

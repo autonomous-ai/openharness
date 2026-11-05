@@ -48,7 +48,7 @@ afterAll(async () => {
 
 /** A Swarm whose coordinator runs on one machine and whose worker, on another, works on task "Ship the parser". The coordinator's
  *  first update request (for the assignment) has gone, so nothing merges with a digest in the next 15 minutes, unless [fresh]. */
-async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[] } = {}) {
+async function swarm({ fresh = false, told, capable = false }: { fresh?: boolean; told?: string[]; capable?: boolean } = {}) {
   let now = Date.parse('2026-11-02T06:30:00.000Z')
   const timed = new SuperTabStore(db, () => now, null, told ? { deliveriesWaiting: w => { told.push(w.agentId) } } : {})
   const tab = (await timed.create(owner, randomUUID(), 'Digest', 'public')).id
@@ -78,7 +78,9 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
     // Its own first: a machine's report also judges the others', and one not heard from in 2 minutes loses its work.
     for (const machineId of ['test-host', 'lead-host']) await timed.observeMachine(host, tab, machineId, { generation: generations.get(machineId)!,
       resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
-      quotas: [], tools: {}, runningHarnessIds: [harnessOf.get(machineId)!], stoppedHarnessIds: [] })
+      quotas: [], tools: {}, runningHarnessIds: [harnessOf.get(machineId)!], stoppedHarnessIds: [],
+      // The PM's host sends its turn with its list read (#3545): people's messages and crew needs then wait for its inbox.
+      ...capable && machineId === 'lead-host' ? { capabilities: ['turnInbox'] } : {} })
   }
   const poll = async () => {
     // Its worker keeps saying where it is, as a live one does; a finished task refuses the line and nothing changes.
@@ -108,7 +110,7 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
     })
     return id
   }
-  return { timed, tab, execute, lead, group, worker, assignmentId, clock, poll, status, write, add }
+  return { timed, tab, execute, lead, group, worker, assignmentId, clock, poll, status, write, add, report }
 }
 
 const rowsOf = (tabId: string, where: Record<string, unknown> = {}) => db.superTabDelivery.findMany({ where: { tabId, ...where }, orderBy: { createdAt: 'asc' } })
@@ -925,5 +927,96 @@ describe('a crew member\'s messages wait for its turn to end', () => {
     const f = await swarm()
     const question = await f.write(undefined, f.lead, 'lead', 'A question for the PM.', f.worker)
     expect((await deliveryOf(question, f.lead)).waitsUntil).toBeNull()
+  })
+})
+
+// Task #3545 (follow-up of #3403): a PM whose host sends its turn gets people's messages and its crew's needs in its inbox, one
+// message when its turn ends, or after 15 minutes of one long turn; an older host, or a read that sends no turn, gets them at
+// once, as before. The inbox stays the digest message with its stable id, so it is written once.
+describe('the PM\'s inbox at its turn\'s end', () => {
+  const MIN = 60_000
+  /** A person's message to the PM in the project chat. */
+  const ask = async (f: Awaited<ReturnType<typeof swarm>>, text: string) =>
+    String((await f.execute({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })).result.messageId)
+  const inboxes = async (tab: string) => (await digests(tab)).map(m => m.text)
+  const listed = async (f: Awaited<ReturnType<typeof swarm>>, turn?: 'idle' | 'busy') =>
+    (await f.timed.deliveries(host, f.tab, f.lead, turn) as Array<{ messageId: string }>).map(d => d.messageId)
+
+  it('waits while the PM works, then goes in one inbox when its turn ends, under New from people', async () => {
+    const f = await swarm({ capable: true })
+    await f.report()
+    const message = await ask(f, 'Is the parser release out yet?')
+    expect((await deliveryOf(message, f.lead)).status).toBe('gathered')
+    expect(await listed(f, 'busy')).not.toContain(message)
+    expect(await inboxes(f.tab)).toEqual([])
+    f.clock.now += MIN
+    expect(await listed(f, 'idle')).not.toContain(message)
+    const [inbox] = await inboxes(f.tab)
+    expect(inbox).toContain('New from people (1)')
+    expect(inbox).toContain('Is the parser release out yet?')
+    expect((await deliveryOf(message, f.lead)).status).toBe('digested')
+    // Its next idle read writes no second inbox.
+    await listed(f, 'idle')
+    expect(await inboxes(f.tab)).toHaveLength(1)
+  })
+
+  it('goes after 15 minutes of one long turn', async () => {
+    const f = await swarm({ capable: true })
+    await f.report()
+    const message = await ask(f, 'Still there?')
+    f.clock.now += 14 * MIN
+    await listed(f, 'busy')
+    expect(await inboxes(f.tab)).toEqual([])
+    f.clock.now += 2 * MIN
+    await listed(f, 'busy')
+    expect((await inboxes(f.tab)).join('\n')).toContain('Still there?')
+    expect((await deliveryOf(message, f.lead)).status).toBe('digested')
+  })
+
+  it('goes at once in the same read when the read sends no turn: an older host is unchanged', async () => {
+    const f = await swarm({ capable: true })
+    await f.report()
+    const message = await ask(f, 'Quick one.')
+    expect(await listed(f)).toContain(message)
+    expect((await deliveryOf(message, f.lead)).status).toBe('queued')
+    expect(await inboxes(f.tab)).toEqual([])
+  })
+
+  it('is never gathered for a PM whose host does not send its turn', async () => {
+    const f = await swarm()
+    await f.report()
+    const message = await ask(f, 'Hello?')
+    expect((await deliveryOf(message, f.lead)).status).toBe('queued')
+  })
+
+  // Relay's review of #3278: at idle only people's messages and crew needs go at once; a routine notice keeps the 5-minute
+  // digest, as NOTICE_DIGEST_MS batches them (each message is a new turn of a long-context session).
+  it('keeps a routine notice for the 5-minute digest when the PM is idle, and sends a person\'s message at once', async () => {
+    const f = await swarm({ capable: true })
+    await f.report()
+    const notice = await f.write({ kind: 'work-stalled' }, f.lead)
+    expect((await deliveryOf(notice, f.lead)).status).toBe('gathered')
+    f.clock.now += MIN
+    await listed(f, 'idle')
+    expect(await inboxes(f.tab)).toEqual([])
+    f.clock.now += 4 * MIN
+    await listed(f, 'idle')
+    expect(await inboxes(f.tab)).toHaveLength(1)
+    // A person's message at idle goes in the next read, with no wait.
+    await ask(f, 'One more thing.')
+    await listed(f, 'idle')
+    expect((await inboxes(f.tab)).at(-1)).toContain('One more thing.')
+  })
+
+  it('lists a crew need under Crew needs, with its options', async () => {
+    const f = await swarm({ capable: true })
+    await f.report()
+    const need = await f.write({ kind: 'crew-need', crewNeed: { agentId: f.worker, personIds: [owner.sub], messageId: 'asked', conversationId: f.group,
+      question: 'Ship on Friday or Monday?', options: ['Friday', 'Monday'], recommended: 1 } }, f.lead, 'lead', 'Crew need for owner…', f.worker)
+    expect((await deliveryOf(need, f.lead)).status).toBe('gathered')
+    await listed(f, 'idle')
+    const [inbox] = await inboxes(f.tab)
+    expect(inbox).toContain('Crew needs (1)')
+    expect(inbox).toContain('Ship on Friday or Monday? Options: Friday / Monday (recommended)')
   })
 })

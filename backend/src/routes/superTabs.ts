@@ -160,6 +160,8 @@ function githubPage(title: string, text: string): string {
     + `<body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p></body></html>`
 }
 const deliveryParams = tabParams.extend({ agentId: id })
+/** A PM's host says whether its turn is open with its delivery list read (store.ts deliveries, #3545); an older host sends nothing. */
+const deliveryListQuery = z.object({ turn: z.enum(['idle', 'busy']).optional() }).strict()
 const deliveryActionParams = deliveryParams.extend({ deliveryId: id })
 const deliveryAction = z.discriminatedUnion('type', [
   z.object({ type: z.literal('claim'), claimId: id }).strict(),
@@ -874,9 +876,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof decisionParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/route-decisions/:decisionId',
     { preHandler: [validateParams(decisionParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.routeDecision(req.user!, req.params.tabId, req.params.decisionId, req.query.asAgentId)))
-  app.get<{ Params: z.infer<typeof deliveryParams> }>('/api/super-tabs/:tabId/agents/:agentId/deliveries',
-    { preHandler: validateParams(deliveryParams) },
-    (req, reply) => respond(reply, noting(req, () => store.deliveries(req.user!, req.params.tabId, req.params.agentId), open => !open.length)))
+  app.get<{ Params: z.infer<typeof deliveryParams>; Querystring: z.infer<typeof deliveryListQuery> }>('/api/super-tabs/:tabId/agents/:agentId/deliveries',
+    { preHandler: [validateParams(deliveryParams), validateQuery(deliveryListQuery)] },
+    (req, reply) => respond(reply, noting(req, () => store.deliveries(req.user!, req.params.tabId, req.params.agentId, req.query.turn), open => !open.length)))
   app.post<{ Params: z.infer<typeof deliveryActionParams>; Body: z.infer<typeof deliveryAction> }>('/api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId',
     { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(deliveryActionParams), validateBody(deliveryAction)] },
     (req, reply) => respond(reply, () => store.delivery(req.user!, req.params.tabId, req.params.agentId, req.params.deliveryId, req.body)))

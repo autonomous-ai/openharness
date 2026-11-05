@@ -371,6 +371,8 @@ const LEAD_LIST_MS = 30_000
  *  again, and the log says so once (review of #2977, Important 1). It allows one lost renewal. Against a server from before
  *  the minute renewal, it lapses for 1.5 of every 4 minutes, reading each second then: the cost of an old server only. */
 const PUSH_LEASE_MS = 150_000
+/** How long a tick waits for the core to say whether a PM works (leadTurn, #3545) before its list read goes without it. */
+const LEAD_TURN_WAIT_MS = 200
 /** Spec 2026-11-02-poll-cost Part 3: a delivery the core refused to write (a running turn, a draft, a dialog) was claimed again
  *  every second for as long as it was held, up to a day (prod 2026-11-02: 414 claim POSTs a minute). The claimed message is
  *  kept and written again on each tick; the claim is renewed only this often, well inside the backend's 10-minute claim quiet
@@ -558,6 +560,8 @@ export class SuperTabHost {
   private readonly withheld = new WithheldDeliveries()
   private readonly stopHearing: () => void
   private readonly stopNotices: () => void
+  /** Each PM's turn at its last tick (leadTurn), so the tick it ends reads its list. */
+  private readonly leadTurns = new Map<string, { state?: 'idle' | 'busy'; ended?: boolean; read?: Promise<void> }>()
   /** Until when the server is known to push deliveries (PUSH_LEASE_MS). */
   private pushUntil = 0
   /** Whether the log has said the lease lapsed since it was last held: said once per lapse, not each second. */
@@ -1126,6 +1130,30 @@ export class SuperTabHost {
     }
   }
 
+  /** A PM's turn as its list read says it (#3545): busy while the core says it works, else idle, and whether it ended since the
+   *  last tick. One read at a time per PM, waited for at most LEAD_TURN_WAIT_MS and only by the tick that started it, so a slow core never holds this machine's
+   *  deliveries: until a read has answered, the list read says no turn, as an older host's does. Unknown or a failed read is
+   *  idle: the inbox goes rather than waits. */
+  private async leadTurn(harnessId: string): Promise<{ state: 'idle' | 'busy'; ended: boolean } | null> {
+    let turn = this.leadTurns.get(harnessId)
+    if (!turn) this.leadTurns.set(harnessId, turn = {})
+    const known = turn
+    // A read still out from an earlier tick is not waited for again: its answer is used once it comes (Relay's review).
+    const waiting = !known.read
+    known.read ??= this.working(harnessId).then(working => {
+      const state = working ? 'busy' : 'idle'
+      if (known.state === 'busy' && state === 'idle') known.ended = true
+      known.state = state
+    }).finally(() => { known.read = undefined })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    if (waiting) await Promise.race([known.read, new Promise<void>(settle => { timer = setTimeout(settle, LEAD_TURN_WAIT_MS); timer.unref?.() })])
+    clearTimeout(timer)
+    if (!known.state) return null
+    const ended = !!known.ended
+    known.ended = false
+    return { state: known.state, ended }
+  }
+
   /** Whether the core says this agent is working now; unknown or a failed read is not working, so nothing is held for it. */
   private async working(harnessId: string): Promise<boolean> {
     return (await this.core.agents.activity([harnessId]).catch(() => ({} as Record<string, string>)))[harnessId] === 'working'
@@ -1275,7 +1303,9 @@ export class SuperTabHost {
       const last = this.lists.get(listKey)
       // A read that failed is due again once its backoff (checked above) ends, told or not: it was no list read.
       const every = last?.held ? HELD_LIST_MS : row.lead === true ? LEAD_LIST_MS : null
-      const due = !last || pushAll || last.busy || pushes.has(listKey) || this.deliveryRetries.has(listKey)
+      // The PM's turn goes with its list read, and a turn that just ended reads the list now: its inbox goes then (#3545).
+      const turn = row.lead === true ? await this.leadTurn(target.agent.harnessId) : null
+      const due = !last || pushAll || last.busy || pushes.has(listKey) || this.deliveryRetries.has(listKey) || !!turn?.ended
         || (every !== null && this.now() - last.readAt >= every)
       if (!due) {
         // Unread this time, its deliveries are as the last read left them: none is taken as gone.
@@ -1286,7 +1316,7 @@ export class SuperTabHost {
       try {
         let deliveries: unknown[]
         if (due) {
-          const answer = await backend(this.core, 'GET', path)
+          const answer = await backend(this.core, 'GET', turn ? `${path}?turn=${turn.state}` : path)
           if (this.stopped) return
           if (!Array.isArray(answer)) throw new Error('Invalid Super Tab delivery list.')
           deliveries = answer
