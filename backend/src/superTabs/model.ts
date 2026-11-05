@@ -628,6 +628,8 @@ export const NOTICE_READERS = {
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
+  // A computer signed in as another account now, told to its old owner in their Buddy chat (commands.ts machine.moved, #3122).
+  'computer-moved': 'people',
   // "<machine> left the Swarm: ..." in every project chat, no longer written (anh Dee, 11-04, #2742): the rows stored before are
   // read by nobody (they have no recipients), and a project chat ending in one is served as read (read/servedTops.ts).
   'machine-left': 'agent',

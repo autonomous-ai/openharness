@@ -429,9 +429,10 @@ describe('the same rules as a delivery, at digest time', () => {
     const f = await swarm()
     const id = await f.write({ kind: 'idle' }, f.lead, f.group, 'A secret notice.')
     await db.superTabMessage.update({ where: { id }, data: { text: 'A secret notice.' } })
-    // Archived with no command, as an older server could leave it: nothing cancelled it first.
+    // Archived with no command, as an older server could leave it: nothing cancelled it first. Every server's write moves the
+    // part's version (parts/write.ts), which is how a server holding the part sees the change (parts/held.ts).
     const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })
-    await db.swarmGroup.update({ where: { id: part.id }, data: { data: { ...part.data as object, archived: true } } })
+    await db.swarmGroup.update({ where: { id: part.id }, data: { version: part.version + 1, changedAt: new Date(), data: { ...part.data as object, archived: true } } })
     f.clock.now += DUE
     await f.poll()
     expect((await deliveryOf(id, f.lead)).status).toBe('cancelled')

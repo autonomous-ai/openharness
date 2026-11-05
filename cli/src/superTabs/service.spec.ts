@@ -1209,7 +1209,7 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     const make = vi.fn(async () => ({ offer, decline: vi.fn() }))
     const service = superTabService(fakeCore(), { teamSetup: make })
     expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, owner)).toEqual({ ok: true, state: 'started' })
-    expect(offer).toHaveBeenCalledWith('join', expect.any(Function), false)
+    expect(offer).toHaveBeenCalledWith('join', expect.any(Function), false, { signInAgain: false })
     for (const asker of [visitor, { local: false, owner: true, accountOwner: true }]) {
       expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'join' }, asker as never)).toEqual({ error: 'OWNER_REQUIRED' })
     }
@@ -1219,6 +1219,20 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     await service.requests.super_tabs({ action: 'teamSetup', reason: 'contribute' }, owner)
     expect(make).toHaveBeenCalledTimes(1)
     expect(offer).toHaveBeenCalledTimes(2)
+  })
+
+  it("signs the account in again only when the person's own Set up asks, where it serves another account (#3122)", async () => {
+    const offer = vi.fn(async (_reason: string, _shared: () => Promise<boolean>) => ({ state: 'started' as const }))
+    const service = superTabService(fakeCore(), { teamSetup: vi.fn(async () => ({ offer, decline: vi.fn() })) })
+    await service.requests.super_tabs({ action: 'teamSetup', reason: 'manual', signInAgain: true }, owner)
+    expect(offer).toHaveBeenLastCalledWith('manual', expect.any(Function), false, { signInAgain: true })
+    // Only Set up itself: a check, an automatic moment or anything but true signs nothing in again.
+    await service.requests.super_tabs({ action: 'teamSetupCheck', reason: 'manual', signInAgain: true }, owner)
+    expect(offer).toHaveBeenLastCalledWith('manual', expect.any(Function), true, { signInAgain: false })
+    await service.requests.super_tabs({ action: 'teamSetup', reason: 'join', signInAgain: true }, owner)
+    expect(offer).toHaveBeenLastCalledWith('join', expect.any(Function), false, { signInAgain: false })
+    await service.requests.super_tabs({ action: 'teamSetup', reason: 'manual', signInAgain: 'yes' }, owner)
+    expect(offer).toHaveBeenLastCalledWith('manual', expect.any(Function), false, { signInAgain: false })
   })
 
   it('tells only Desktop on this Mac why there is no account, asking nothing and starting nothing', async () => {
@@ -1245,7 +1259,7 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     mkdirSync(dirname(hostJournalFile(dataDir, 'machine-1')), { recursive: true })
     writeFileSync(hostJournalFile(dataDir, 'machine-1'), '{}')
     await service.requests.super_tabs({ action: 'teamSetup', reason: 'startup' }, owner)
-    expect(offer).toHaveBeenCalledWith('startup', expect.any(Function), false)
+    expect(offer).toHaveBeenCalledWith('startup', expect.any(Function), false, { signInAgain: false })
   })
 
   it('says whether it is wanted without asking macOS, runs it when the person asks, and remembers "Not now"', async () => {
@@ -1253,9 +1267,9 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     const decline = vi.fn()
     const service = superTabService(fakeCore(), { teamSetup: async () => ({ offer, decline }) })
     expect(await service.requests.super_tabs({ action: 'teamSetupCheck', reason: 'join' }, owner)).toEqual({ ok: true, state: 'wanted' })
-    expect(offer).toHaveBeenLastCalledWith('join', expect.any(Function), true)
+    expect(offer).toHaveBeenLastCalledWith('join', expect.any(Function), true, { signInAgain: false })
     expect(await service.requests.super_tabs({ action: 'teamSetup', reason: 'manual' }, owner)).toEqual({ ok: true, state: 'started' })
-    expect(offer).toHaveBeenLastCalledWith('manual', expect.any(Function), false)
+    expect(offer).toHaveBeenLastCalledWith('manual', expect.any(Function), false, { signInAgain: false })
     expect(await service.requests.super_tabs({ action: 'teamSetupDecline' }, owner)).toEqual({ ok: true })
     expect(decline).toHaveBeenCalledOnce()
     for (const action of ['teamSetupCheck', 'teamSetupDecline']) {

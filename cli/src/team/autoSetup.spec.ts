@@ -310,6 +310,18 @@ describe('a half-finished setup is repaired, not taken for done (#2765, Darren-M
     expect((await both.auto.status()).detail).toBe('the team daemon is not running, and its privacy check has not passed')
   })
 
+  it("with every part in place, signs the account in again for this Mac's account when Set up asks, where it serves another (#3122)", async () => {
+    const f = fake({ accountExists: vi.fn(async () => true), missing: async () => [] } as Partial<AutoSetupDeps>)
+    expect(await f.auto.offer('manual', async () => true, false, { signInAgain: true })).toEqual({ state: 'started' })
+    await f.auto.settled()
+    expect(f.deps.setup).toHaveBeenCalledWith(expect.any(Function), { signInAgain: true })
+    // Never on its own: an automatic moment, or Desktop's explanation, asks for no password.
+    const quiet = fake({ accountExists: vi.fn(async () => true), missing: async () => [] } as Partial<AutoSetupDeps>)
+    expect(await quiet.auto.offer('join', async () => true, false, { signInAgain: true })).toEqual({ state: 'exists' })
+    expect(await quiet.auto.offer('manual', async () => true, true, { signInAgain: true })).toEqual({ state: 'wanted' })
+    expect(quiet.deps.setup).not.toHaveBeenCalled()
+  })
+
   it('with every part in place it is done: exists, and nothing runs', async () => {
     const f = fake({ accountExists: vi.fn(async () => true), missing: async () => [] } as Partial<AutoSetupDeps>)
     expect(await f.auto.offer('manual')).toEqual({ state: 'exists' })
