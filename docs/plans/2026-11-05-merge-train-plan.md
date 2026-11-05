@@ -10,9 +10,10 @@ merges routine work by hand (task #3402, requested by Dee through Harness).
 **Architecture:** A new module `backend/src/superTabs/mergeTrain/` runs one pass per project in the singleton worker
 (worker.ts), like the pull request watch. The pass is a pure planner (`plan.ts`: who is eligible, which lane, how a red batch
 splits) driven by `train.ts` against two narrow interfaces: `TrainGitHub` (the repository, through the App, `github/train.ts`)
-and `TrainSwarm` (the Swarm store: candidates, recording a merge, telling an owner). The train keeps no state of its own: an
-open batch is an open pull request on a `harness-train/` branch whose body lists its members and their heads, so a restart,
-a second worker or a hand merge never leaves a stale record behind.
+and `TrainSwarm` (the Swarm store: candidates, recording a merge, telling an owner). The train keeps no stored record: an
+open batch is an open pull request on a `harness-train/<project>/` branch whose body lists its members and their heads. The
+worker remembers the tip it built for each batch; a batch whose tip differs (someone pushed to it) or that it does not know (a
+restart) is closed and rebuilt, never merged, so a hand merge, a restart or a push to the branch never leaves a stale record.
 
 **Tech Stack:** TypeScript backend, vitest, GitHub REST (git data, merges, pulls, check runs) through the existing App.
 
@@ -27,8 +28,16 @@ a second worker or a hand merge never leaves a stale record behind.
 - Re-fetch every member's head and main's head immediately before the squash merge; any difference aborts and rebuilds.
 - Train branches never mark tasks Team-written: the batch pull request is never linked to a task (never in a Swarm
   message, result or `pullRequestUrls`), and no ref the train writes ever points at a member's own commit.
-- Kill switch and interval live in the project rules record (task #3393, `rules.mergeTrain.enabled/everyMinutes`). Until
-  it lands, `TRAIN_DEFAULTS = { enabled: true, everyMinutes: 10 }` in `mergeTrain/config.ts` is the one place they live.
+- Kill switch and interval live in the project rules record (task #3393, `rules.mergeTrain.enabled/everyMinutes`). Opt-in
+  (River, 11-05): until a project switches it on it is off. Until the record lands, `TRAIN_DEFAULTS = { enabled: false,
+  everyMinutes: 10 }` in `mergeTrain/config.ts` is the one place they live.
+- Reads (River, 11-05): a PR needs as many distinct passed review reads at its head as the review table asks for its
+  changed paths; until the table lands, the security areas (sign-in, tokens, encryption, access, Buddy guard, device links,
+  deletion) need two (`REVIEW_AREAS`, erring wide). Every other open step (a test) must have passed at the head too.
+- Two PRs that change the same file never share a batch (task #3401's rule: a combination read only where files are
+  shared): the later one waits and runs on top of the first once it merged.
+- The fast lane merges docs/scripts PRs on their own green CI only while no code batch is open, so it never moves main
+  under a batch in CI.
 - People can still merge by hand; the train sees it as main moving or a member closing, and rebuilds.
 - Two security reviews before merge: this is the first server write to main.
 - Swarm code stays out of cli/src/core. Temp files only in mktemp -d folders.
