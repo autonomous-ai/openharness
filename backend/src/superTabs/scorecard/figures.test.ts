@@ -81,6 +81,16 @@ describe('scorecardDay', () => {
     expect(day.oldestUnansweredAskMinutes).toBe((END - at(-30)) / MIN)
   })
 
+  it('counts a person\'s Buddy proposal as an ask, answered once a task is opened from it', () => {
+    const proposal = (createdAt: number) => person('chat', createdAt, { source: { kind: 'buddy-proposal', personId: 'dee', buddyId: 'b', ownerMessageId: 'o' } })
+    const open = proposal(at(2)), built = proposal(at(3))
+    // A task card's line is the person's too, and asks nothing.
+    const line = person('chat', at(4), { source: { kind: 'task-line', taskId: 't9', number: 9, title: 'Scorecard' } })
+    const day = scorecardDay(input({ messages: [open, built, line], tasks: [task('t9', { number: 9, askedAt: at(3, 5), requestMessageIds: [built.id] })] }))
+    expect(day.unansweredAsks).toBe(1)
+    expect(day.oldestUnansweredAskMinutes).toBe((END - at(2)) / MIN)
+  })
+
   it('counts minutes with nobody working while open work waits', () => {
     const tasks = [
       // Waits from 01:00, assigned (working) at 02:00, done at 05:00.
