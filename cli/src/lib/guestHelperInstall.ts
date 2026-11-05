@@ -17,11 +17,7 @@ import { HOOK_SCRIPT } from '../engines/kit/notifyHooks.js'
 import { GUEST_HELPER_PATH, runGuestCommand, type GuestRunner } from './guestAccounts.js'
 import { guestHelperScript, guestSudoersTemplate, helperScriptVersion } from './guestHelperAssets.js'
 import { managedNodePath } from './nodeRuntime.js'
-import { WHOAMI_USER_ARGS, windowsUserSid } from '../team/windowsTeam.js'
-import { WINDOWS_GUEST_SETUP_VERSION, WINDOWS_GUEST_VERSION_FILE, buildWindowsGuestInstallScript, buildWindowsGuestProcessorScript } from './windows/guestScript.js'
-import { WINDOWS_GUEST_TASK } from './windows/guestSetupClient.js'
 import type { RunAdmin } from '../team/admin.js'
-import { ptyHostBinary } from './ptyHost/launch.js'
 
 export const GUEST_SUDOERS_PATH = '/etc/sudoers.d/harness-guests'
 export const GUEST_NODE_DIR = '/usr/local/lib/harness/node'
@@ -136,7 +132,12 @@ export interface GuestHelperInstallOptions {
 
 export async function installGuestHelper(options: GuestHelperInstallOptions = {}): Promise<GuestHelperInstallResult> {
   const platform = options.platform ?? process.platform
-  if (platform === 'win32') return installWindowsGuestHelper(options)
+  // Windows's script builders (and the Team imports they bring) are loaded only there: every other platform, and
+  // every service sharing the edge host's process, must not carry them (src/leanEntry.spec.ts).
+  if (platform === 'win32') {
+    const { installWindowsGuestHelper } = await import('./windows/guestHelperInstallWin.js')
+    return installWindowsGuestHelper(options, GUEST_HELPER_PROMPT)
+  }
   if (platform !== 'darwin' && platform !== 'linux') {
     return { ok: false, code: 'UNSUPPORTED', message: 'Sharing this computer needs macOS or Linux.' }
   }
@@ -190,28 +191,6 @@ export async function installGuestHelper(options: GuestHelperInstallOptions = {}
   }
 }
 
-/** The Windows one-time install: the proven UAC runner, the guest tree/task, one prompt. */
-async function installWindowsGuestHelper(options: GuestHelperInstallOptions): Promise<GuestHelperInstallResult> {
-  if (process.env.HARNESS_WINDOWS_GUESTS === '0') {
-    return { ok: false, code: 'UNSUPPORTED', message: 'Sharing this computer is turned off on this build.' }
-  }
-  const runner = options.runner ?? runGuestCommand
-  const owner = options.owner ?? userInfo().username
-  const ownerHome = options.ownerHome ?? process.env.USERPROFILE ?? ''
-  if (!/^[A-Za-z]:\\Users\\[A-Za-z0-9_.-]+$/.test(ownerHome)) {
-    return { ok: false, code: 'FAILED', message: 'Could not find the owner\'s Windows profile (%USERPROFILE%).' }
-  }
-  const who = await runner('whoami', WHOAMI_USER_ARGS, { timeoutMs: 30_000 })
-  const ownerSid = who.code === 0 ? windowsUserSid(who.stdout) : null
-  if (!ownerSid) return { ok: false, code: 'FAILED', message: 'Could not read this account\'s SID (whoami /user).' }
-  const processor = buildWindowsGuestProcessorScript({ owner, ownerHome, ownerSid })
-  const script = buildWindowsGuestInstallScript({ owner, ownerHome, ownerSid, processor, version: String(WINDOWS_GUEST_SETUP_VERSION), ptySrc: ptyHostBinary() })
-  const admin = options.admin ?? (await import('../team/admin.js')).adminRunner({ platform: 'win32', runner })
-  const result = await admin(() => ({ script }), GUEST_HELPER_PROMPT)
-  if (result.ok) return { ok: true }
-  return { ok: false, code: result.code === 'NO_PROMPT' ? 'FAILED' : result.code, message: result.message }
-}
-
 export type GuestHelperState =
   | 'ready' // installed, current, and this account may run it without a password
   | 'missing'
@@ -239,12 +218,8 @@ export async function guestHelperStatus(deps: GuestHelperStatusDeps = {}): Promi
   })
   const platform = deps.platform ?? process.platform
   if (platform === 'win32') {
-    const installed = read(WINDOWS_GUEST_VERSION_FILE)
-    if (installed === null) return { state: 'missing', version: null }
-    const version = Number(installed.trim())
-    if (!Number.isInteger(version) || version < WINDOWS_GUEST_SETUP_VERSION) return { state: 'outdated', version: Number.isFinite(version) ? version : null }
-    const task = await (deps.runner ?? runGuestCommand)('schtasks.exe', ['/query', '/tn', WINDOWS_GUEST_TASK], { timeoutMs: 10_000 })
-    return { state: task.code === 0 ? 'ready' : 'missing', version }
+    const { windowsGuestHelperStatus } = await import('./windows/guestHelperInstallWin.js')
+    return windowsGuestHelperStatus(deps, read)
   }
   const text = read(helperPath)
   if (text === null) return { state: 'missing', version: null }
