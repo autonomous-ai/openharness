@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
@@ -7,8 +9,9 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'personal_machines.dart';
 
-/// The person's own machines still to join their Personal Swarm, each with one
-/// word, and a failure's reason on hover. The list only: the sync is
+/// The person's own machines still to join their Personal Swarm, each saying
+/// why in a few words ("Couldn't join: machine is off"), with Try again and a
+/// failure's whole reason on hover (task #3042). The list only: the sync is
 /// [PersonalMachines]', so this can move with the machines' section.
 class PersonalMachineRows extends StatelessWidget {
   const PersonalMachineRows({
@@ -36,6 +39,13 @@ class PersonalMachineRows extends StatelessWidget {
 
   Widget _row(PersonalMachineRow row) {
     final failed = row.reason != null;
+    final machines = PersonalMachines.of(app);
+    final status = Text(
+      row.status,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: DesktopChrome.metadata(),
+    );
     final line = Padding(
       padding: const EdgeInsets.symmetric(
         horizontal: grid.AppDesktop.panelPadding,
@@ -49,7 +59,7 @@ class PersonalMachineRows extends StatelessWidget {
             color: DesktopChrome.muted,
           ),
           const SizedBox(width: grid.AppDesktop.controlGap),
-          Expanded(
+          Flexible(
             child: Text(
               row.name,
               maxLines: 1,
@@ -57,14 +67,29 @@ class PersonalMachineRows extends StatelessWidget {
               style: DesktopChrome.text(color: DesktopChrome.muted),
             ),
           ),
-          const SizedBox(width: grid.AppDesktop.controlGap),
-          Text(row.status, style: DesktopChrome.metadata()),
+          Text(' · ', style: DesktopChrome.metadata()),
+          Expanded(
+            child: failed
+                ? Tooltip(message: row.reason, child: status)
+                : status,
+          ),
+          if (row.canRetry) ...[
+            const SizedBox(width: grid.AppDesktop.controlGap),
+            DesktopPill(
+              key: ValueKey('super-personal-machine-retry-${row.machineId}'),
+              label: 'Try again',
+              quiet: true,
+              compact: true,
+              onPressed: () =>
+                  unawaited(machines.retry(controller, row.machineId)),
+            ),
+          ],
         ],
       ),
     );
     return KeyedSubtree(
       key: ValueKey('super-personal-machine-${row.machineId}'),
-      child: failed ? Tooltip(message: row.reason, child: line) : line,
+      child: line,
     );
   }
 }

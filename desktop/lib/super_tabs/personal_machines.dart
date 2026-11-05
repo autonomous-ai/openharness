@@ -5,12 +5,15 @@ import 'package:flutter/foundation.dart';
 
 import '../core/models.dart' show sameMachineId;
 import '../state/app_state.dart';
+import '../ws/ws_conn.dart' show WsRequestTimeout;
 import 'controller.dart';
 import 'machines.dart' show contributeComputer;
 import 'personal_projects.dart' show PersonalProjects;
 
-/// A machine of the person's own not yet in their Personal Swarm: why, in one
-/// word, and the [reason] behind a failure, for its hover.
+/// A machine of the person's own not yet in their Personal Swarm: why, in a
+/// few words ("Couldn't join: machine is off"), the whole [reason] behind a
+/// failure for its hover, and whether Try again can ask it now ([canRetry]:
+/// not while it is being asked).
 typedef PersonalMachineRow = ({
   String machineId,
   String name,
@@ -36,12 +39,10 @@ class PersonalMachines extends ChangeNotifier {
 
   final AppNotifier app;
 
-  /// What Try again on a machine that is off runs first (task #3042).
+  /// What Try again on a machine that is off runs first: the machine list read
+  /// again and their connections retried, so one just woken is seen on.
   @visibleForTesting
   late Future<void> Function() reconnect = app.retryMachines;
-
-  /// Try again on [machineId]'s row (task #3042): not built yet.
-  Future<void> retry(SuperTabController c, String machineId) async {}
 
   /// The longest wait before a failed machine is asked again.
   static const maxRetryWait = Duration(minutes: 5);
@@ -51,6 +52,8 @@ class PersonalMachines extends ChangeNotifier {
   final _failures = <String, int>{};
   final _retryAt = <String, DateTime>{};
   final _reasons = <String, String>{};
+  final _words = <String, String?>{};
+  final _asking = <String>{};
 
   bool _inSwarm(SuperTabController c, String machineId) =>
       (c.snapshot?.machines ?? const <Map<String, dynamic>>[]).any(
@@ -82,18 +85,84 @@ class PersonalMachines extends ChangeNotifier {
     return [
       for (final m in _own)
         if (!_inSwarm(c, m.machine.machineId) && !_left(c, m.machine.machineId))
-          (
-            machineId: m.machine.machineId,
-            name: m.machine.displayName,
-            status: m.isOffline
-                ? 'Offline'
-                : _reasons.containsKey(_key(c, m.machine.machineId))
-                ? "Couldn't add"
-                : 'Adding',
-            reason: m.isOffline ? null : _reasons[_key(c, m.machine.machineId)],
-            canRetry: false,
-          ),
+          _row(c, m),
     ];
+  }
+
+  PersonalMachineRow _row(SuperTabController c, MachineState m) {
+    final key = _key(c, m.machine.machineId);
+    final failure = _reasons[key];
+    final asking = _asking.contains(key);
+    final words = m.isOffline
+        ? 'machine is off'
+        : failure == null
+        ? null
+        : _words[key];
+    return (
+      machineId: m.machine.machineId,
+      name: m.machine.displayName,
+      status: asking || (!m.isOffline && failure == null)
+          ? 'Adding'
+          : words == null
+          ? "Couldn't join"
+          : "Couldn't join: $words",
+      reason: asking || m.isOffline ? null : failure,
+      canRetry: !asking && (m.isOffline || failure != null),
+    );
+  }
+
+  /// Why [failure] kept a machine out, in a few words, as its row says it
+  /// after "Couldn't join:"; null when no few words say it better than its
+  /// whole message.
+  @visibleForTesting
+  static String? fewWords(Object failure) {
+    if (failure is TimeoutException || failure is WsRequestTimeout) {
+      return 'not answering';
+    }
+    if (failure is! SuperTabFailure) return null;
+    final message = failure.message.toLowerCase();
+    return switch (failure.code) {
+      _
+          when failure.code == 'SIGNED_OUT' ||
+              failure.statusCode == 401 ||
+              message.contains('not signed in') =>
+        'not signed in to Harness',
+      _ when failure.code == 'UPDATE_REQUIRED' || failure.statusCode == 426 =>
+        'needs a Harness update',
+      'NO_SWARM_ENGINE' => 'no Claude Code or Codex',
+      'MACHINE_SLOW' => 'not answering',
+      'SETUP_PENDING' => 'still setting up',
+      'MACHINE_UNAVAILABLE' when message.contains('offline') =>
+        'machine is off',
+      _ => null,
+    };
+  }
+
+  /// Try again on [machineId]'s row: asks it again now, whatever its wait,
+  /// once however often it is pressed. One that is off has the machines
+  /// reconnected first. Never one the person took out, or one already in.
+  Future<void> retry(SuperTabController c, String machineId) async {
+    if (!_mayAdd(c) || _inSwarm(c, machineId) || _left(c, machineId)) return;
+    final key = _key(c, machineId);
+    if (_asking.contains(key)) return;
+    final m = _own
+        .where((m) => sameMachineId(m.machine.machineId, machineId))
+        .firstOrNull;
+    if (m == null) return;
+    _retryAt.remove(key);
+    if (m.isOffline) {
+      _asking.add(key);
+      notifyListeners();
+      try {
+        await reconnect();
+      } catch (_) {
+        // Still off: its row says so again.
+      } finally {
+        _asking.remove(key);
+        notifyListeners();
+      }
+    }
+    await sync(c);
   }
 
   String _key(SuperTabController c, String machineId) =>
@@ -151,6 +220,8 @@ class PersonalMachines extends ChangeNotifier {
     bool Function() alive,
   ) async {
     final key = _key(c, machineId);
+    _asking.add(key);
+    notifyListeners();
     try {
       final added = await contributeComputer(
         c,
@@ -171,6 +242,7 @@ class PersonalMachines extends ChangeNotifier {
       _failures.remove(key);
       _retryAt.remove(key);
       _reasons.remove(key);
+      _words.remove(key);
     } catch (failure) {
       if (!alive()) return;
       final count = _failures[key] = (_failures[key] ?? 0) + 1;
@@ -181,6 +253,9 @@ class PersonalMachines extends ChangeNotifier {
       _reasons[key] = failure is SuperTabFailure
           ? failure.message
           : 'Could not add this machine.';
+      _words[key] = fewWords(failure);
+    } finally {
+      _asking.remove(key);
     }
   }
 }

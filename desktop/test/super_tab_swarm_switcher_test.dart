@@ -1581,7 +1581,7 @@ void main() {
           'still setting up',
         ),
       ]) {
-        test('${(failure as SuperTabFailure).code} reads "$words", the '
+        test('${failure.code} reads "$words", the '
             'whole reason on hover', () async {
           final (app, _, c) = await failing(failure);
           final row = PersonalMachines.of(app).waiting(c).single;
@@ -1622,7 +1622,9 @@ void main() {
         backend.failPrepareOn = null;
         final hold = backend.holdPrepare = Completer<void>();
         final before = backend.machineCalls
-            .where((call) => call.$1 == 'rig' && call.$2 == 'prepareContribution')
+            .where(
+              (call) => call.$1 == 'rig' && call.$2 == 'prepareContribution',
+            )
             .length;
         final first = PersonalMachines.of(app).retry(c, 'rig');
         await _settle();
@@ -1638,8 +1640,7 @@ void main() {
         expect(
           backend.machineCalls
               .where(
-                (call) =>
-                    call.$1 == 'rig' && call.$2 == 'prepareContribution',
+                (call) => call.$1 == 'rig' && call.$2 == 'prepareContribution',
               )
               .length,
           before + 1,
@@ -1767,9 +1768,7 @@ void main() {
       );
 
       testWidgets('a failure reads why in a few words, with its whole reason '
-          'on hover', (
-        tester,
-      ) async {
+          'on hover', (tester) async {
         late AppNotifier app;
         late SuperTabController c;
         await tester.runAsync(() async {
