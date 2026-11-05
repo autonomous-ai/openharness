@@ -2007,7 +2007,8 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
   // Task #3159 (Scholes, 11-05): a Buddy launched before #2832 still runs that release's guard until it starts again, and the
   // guard opens a file outside its folder only when the host listed it. Once #2832 stopped listing, every screenshot its owner
   // sent was refused. These run that very guard (__fixtures__/buddy-guard-before-2832.mjs) as Claude Code does.
-  describe('a Buddy still running the guard of a release before #2832', () => {
+  // Each Read starts the guard in a node process of its own, as Claude Code does: slow on a loaded machine (load 120 here).
+  describe('a Buddy still running the guard of a release before #2832', { timeout: 30_000 }, () => {
     const GUARD = readFileSync(new URL('../__fixtures__/buddy-guard-before-2832.mjs', import.meta.url), 'utf8')
     /** Its folder as the older release locked it: the guard, and the local settings that run it, which name it by its path. */
     function lock(t: ReturnType<typeof buddyOn>['t']): string {
