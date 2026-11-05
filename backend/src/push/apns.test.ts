@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { afterAll, describe, expect, it } from 'vitest'
 import { apnsSender, http2Transport, type ApnsAnswer, type ApnsRequest } from './apns.js'
 import type { PushDevice } from './devices.js'
-import type { PhoneNotice } from './sender.js'
+import { swarmNoticeId, type PhoneNotice } from './sender.js'
 
 const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
 const sandboxKey = generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey
@@ -14,7 +14,7 @@ const keys = { teamId: 'TEAM123456', topic: 'ai.autonomous.harness.ios', product
 const productionOnly = { ...keys, sandbox: null }
 const device: PushDevice = { id: 'd1', userId: 'u1', platform: 'ios', token: 'ab'.repeat(32), sandbox: false }
 const notice: PhoneNotice = { personId: 'u1', key: 'reply:tab:row', title: 'Mia replied in a thread', subtitle: 'openharness',
-  body: 'Open Harness to read it.', link: 'swarm:tab/conv/message/m/thread/root' }
+  body: 'Open Harness to read it.', link: 'swarm:tab/conv/message/m/thread/root', slot: 'thread:tab:conv:root' }
 const NOW = Date.UTC(2026, 10, 5, 9)
 
 /** A transport that answers each request in turn and remembers what it was asked. */
@@ -36,10 +36,11 @@ describe('APNs sender (task #2905)', () => {
     expect(await apnsSender(keys, { transport, now: () => NOW }).send(device, notice)).toEqual({ outcome: 'sent' })
     const [request] = asked
     expect(request).toMatchObject({ sandbox: false, path: `/3/device/${device.token}` })
-    expect(request!.headers).toMatchObject({ 'apns-topic': 'ai.autonomous.harness.ios', 'apns-push-type': 'alert', 'apns-priority': '10' })
+    expect(request!.headers).toMatchObject({ 'apns-topic': 'ai.autonomous.harness.ios', 'apns-push-type': 'alert', 'apns-priority': '10',
+      'apns-collapse-id': String(swarmNoticeId('thread:tab:conv:root')) })
     expect(JSON.parse(request!.body)).toEqual({
       aps: { alert: { title: notice.title, subtitle: notice.subtitle, body: notice.body }, sound: 'default', 'thread-id': 'swarm-needs-you', category: 'swarm-needs-you' },
-      key: notice.key, link: notice.link,
+      key: notice.key, link: notice.link, slot: notice.slot,
     })
     const jwt = jwtOf(request!)
     expect(part(jwt, 0)).toEqual({ alg: 'ES256', kid: 'ABC123DEFG' })
@@ -109,6 +110,25 @@ describe('APNs sender (task #2905)', () => {
       .toEqual({ outcome: 'failed', reason: 'ECONNRESET' })
     expect(await apnsSender(keys, { transport: scripted('hang').transport, timeoutMs: 20 }).send(device, notice))
       .toEqual({ outcome: 'failed', reason: 'timeout' })
+  })
+})
+
+describe('APNs: one notification per slot, and quiet repeats (task #3248)', () => {
+  it('collapses on the app\'s own id for the slot, so the app\'s notice and the push are one notification', () => {
+    // mobile/test/notify/local_system_notices_test.dart pins the same ids.
+    expect(swarmNoticeId('mention:m1')).toBe(1161357565)
+    expect(swarmNoticeId('decision:d1')).toBe(15921470)
+    expect(swarmNoticeId('work:s1:c1:a1:needs_human')).toBe(701122187)
+    expect(swarmNoticeId('mention:é✓')).toBe(1555091707)
+  })
+
+  it('sends a quiet push with no sound and passive, so it only replaces what its slot showed', async () => {
+    const { asked, transport } = scripted({ status: 200, reason: null })
+    await apnsSender(keys, { transport, now: () => NOW }).send(device, { ...notice, quiet: true })
+    const body = JSON.parse(asked[0]!.body)
+    expect(body.aps).toEqual({ alert: { title: notice.title, subtitle: notice.subtitle, body: notice.body }, 'interruption-level': 'passive',
+      'thread-id': 'swarm-needs-you', category: 'swarm-needs-you' })
+    expect(asked[0]!.headers['apns-collapse-id']).toBe(String(swarmNoticeId(notice.slot)))
   })
 })
 

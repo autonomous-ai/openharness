@@ -8,7 +8,7 @@ const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const account = { projectId: 'harness-push', clientEmail: 'push@harness-push.iam.gserviceaccount.com', privateKey, tokenUri: 'https://oauth2.googleapis.com/token' }
 const device: PushDevice = { id: 'd1', userId: 'u1', platform: 'android', token: 'fcm:token_1', sandbox: false }
 const notice: PhoneNotice = { personId: 'u1', key: 'mention:m1', title: 'Mia tagged you', subtitle: 'openharness',
-  body: 'Open Harness to read it.', link: 'swarm:tab/conv/message/m' }
+  body: 'Open Harness to read it.', link: 'swarm:tab/conv/message/m', slot: 'mention:m1' }
 const NOW = Date.UTC(2026, 10, 5, 9)
 
 type Call = { url: string; init: RequestInit }
@@ -45,8 +45,20 @@ describe('FCM sender (task #2905)', () => {
       token: device.token,
       notification: { title: 'Mia tagged you', body: 'openharness · Open Harness to read it.' },
       android: { priority: 'high', notification: { channel_id: 'swarm-needs-you', tag: 'mention:m1', visibility: 'PRIVATE' } },
-      data: { key: 'mention:m1', link: notice.link },
+      data: { key: 'mention:m1', link: notice.link, slot: 'mention:m1' },
     } })
+  })
+
+  it('tags the notification with its slot, so a thread\'s replies share one, and sends a quiet one on the app\'s silent channel (task #3248)', async () => {
+    const { fetcher, sends } = google()
+    const reply = { ...notice, key: 'reply:tab:row2', slot: 'thread:tab:conv:root' }
+    const sender = fcmSender(account, { fetcher, now: () => NOW })
+    await sender.send(device, reply)
+    await sender.send(device, { ...reply, quiet: true })
+    const [loud, quiet] = sends().map(c => JSON.parse(String(c.init.body)).message)
+    expect(loud.android.notification).toEqual({ channel_id: 'swarm-needs-you', tag: 'thread:tab:conv:root', visibility: 'PRIVATE' })
+    expect(quiet.android.notification).toEqual({ channel_id: 'swarm-quiet', tag: 'thread:tab:conv:root', visibility: 'PRIVATE' })
+    expect(quiet.data).toEqual({ key: 'reply:tab:row2', link: notice.link, slot: 'thread:tab:conv:root' })
   })
 
   it('keeps its access token until five minutes before it runs out', async () => {
