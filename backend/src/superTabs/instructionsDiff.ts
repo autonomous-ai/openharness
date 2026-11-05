@@ -222,3 +222,43 @@ export function keptIn(after: string): (text: string) => boolean {
     return kept.some(set => covers(words, set))
   }
 }
+
+/** A line [after] adds that repeats one it keeps: the added line's words and the existing line's, as the document has them. */
+export interface RepeatedRule { added: string; existing: string }
+/** Fewest content words of a line that can be a repeat: a short line ("Tests pass.") says too little to be the same rule. */
+const MIN_REPEAT_WORDS = 4
+/** Repeats one refusal lists; more are cut. */
+export const MAX_REPEATS = 20
+
+/**
+ * The lines [after] adds, or rewrites, that say what a line it keeps already says (task #3283, Leo 11-05, from lamp: a PM
+ * saved a rule the document had as if it were new, which hid that it had skipped it). Conservative: a repeat has the same
+ * content words in the same order, so case, punctuation, list marker, wrapping, attribution, filler words and plurals make no
+ * difference, and any changed, added or dropped word, negation or number is a change of substance, not a repeat. A line the
+ * old text has word for word is not new; headings and lines under MIN_REPEAT_WORDS words are never repeats; the existing line
+ * is one the save keeps, in the same section, or an attributed rule against another (a rule is one rule wherever it sits).
+ */
+export function repeatedRules(before: string, after: string): RepeatedRule[] {
+  const old = new Map<string, number>()
+  for (const item of items(before)) old.set(item.key, (old.get(item.key) ?? 0) + 1)
+  const kept = new Map<string, { text: string; path: string; attributed: boolean }[]>()
+  const added: { segment: Segment; path: string }[] = []
+  for (const item of items(after)) {
+    if (item.heading) continue
+    const n = old.get(item.key) ?? 0
+    if (n) old.set(item.key, n - 1)
+    for (const segment of segments(item.text)) {
+      if (segment.seq.length < MIN_REPEAT_WORDS) continue
+      if (n) {
+        const key = segment.seq.join(' ')
+        kept.set(key, [...kept.get(key) ?? [], { text: segment.text, path: item.path, attributed: segment.people.length > 0 }])
+      } else added.push({ segment, path: item.path })
+    }
+  }
+  const repeats: RepeatedRule[] = []
+  for (const { segment, path } of added) {
+    const same = kept.get(segment.seq.join(' '))?.find(k => k.path === path || (k.attributed && segment.people.length > 0))
+    if (same) repeats.push({ added: segment.text, existing: same.text })
+  }
+  return repeats
+}

@@ -57,6 +57,10 @@ export function readState(secret: Buffer, state: string, now: number): ApprovalR
 
 export interface GitHubSignInDeps { clientId: string; clientSecret: string; fetch?: typeof fetch; webUrl?: string; apiUrl?: string }
 
+/** One GitHub API call with the person's user token: its status and its JSON object (empty when it has none). Throws when
+ *  GitHub does not answer. */
+export type UserCall = (method: string, path: string, body?: unknown) => Promise<{ status: number; body: Record<string, unknown> }>
+
 /** The Harness GitHub App's sign-in (GitHub's web application flow for an app's user access token). */
 export class GitHubSignIn {
   private readonly fetch: typeof fetch
@@ -75,6 +79,19 @@ export class GitHubSignIn {
   /** What GitHub says [code]'s person may do on [repository]: their login, and whether they can push. The person's token
    *  is revoked before this answers, whatever it found. */
   async permission(code: string, repository: GitHubRepository): Promise<{ login: string; push: boolean } | null> {
+    return this.withUserToken(code, async call => {
+      const login = (await call('GET', '/user')).body.login
+      if (typeof login !== 'string') return null
+      // A renamed repository answers by redirect, which fetch follows; one the person cannot see answers 404.
+      const repo = await call('GET', `/repos/${repository.owner}/${repository.name}`)
+      const permissions = (repo.body.permissions ?? {}) as Record<string, unknown>
+      return { login, push: repo.status === 200 && (permissions.push === true || permissions.maintain === true || permissions.admin === true) }
+    }).then(seen => seen ?? null)
+  }
+
+  /** Runs [use] with the person's user token from [code], then revokes the token whatever happened (task #1788: creating a
+   *  repository is a few calls with it). Null, with nothing run, when GitHub refuses the code. The token never leaves here. */
+  async withUserToken<T>(code: string, use: (call: UserCall) => Promise<T>): Promise<T | null> {
     const exchanged = await this.fetch(`${this.webUrl}/login/oauth/access_token`, {
       method: 'POST', signal: AbortSignal.timeout(15_000),
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
@@ -82,22 +99,25 @@ export class GitHubSignIn {
     })
     const token = ((await exchanged.json().catch(() => ({}))) as { access_token?: unknown }).access_token
     if (!exchanged.ok || typeof token !== 'string' || !token) return null
+    const headers = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'harness-backend' }
+    const call: UserCall = async (method, path, body) => {
+      const answer = await this.fetch(`${this.apiUrl}${path}`, { method, signal: AbortSignal.timeout(15_000),
+        headers: body === undefined ? headers : { ...headers, 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+      const parsed = await answer.json().catch(() => ({})) as unknown
+      return { status: answer.status, body: parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {} }
+    }
     try {
-      const headers = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'harness-backend' }
-      const user = await this.fetch(`${this.apiUrl}/user`, { headers, signal: AbortSignal.timeout(15_000) })
-      const login = ((await user.json().catch(() => ({}))) as { login?: unknown }).login
-      if (!user.ok || typeof login !== 'string') return null
-      // A renamed repository answers by redirect, which fetch follows; one the person cannot see answers 404.
-      const repo = await this.fetch(`${this.apiUrl}/repos/${repository.owner}/${repository.name}`, { headers, signal: AbortSignal.timeout(15_000) })
-      const permissions = ((await repo.json().catch(() => ({}))) as { permissions?: Record<string, unknown> }).permissions ?? {}
-      return { login, push: repo.ok && (permissions.push === true || permissions.maintain === true || permissions.admin === true) }
+      return await use(call)
     } finally {
       await this.fetch(`${this.apiUrl}/applications/${encodeURIComponent(this.deps.clientId)}/token`, {
         method: 'DELETE', signal: AbortSignal.timeout(15_000),
         headers: { Accept: 'application/vnd.github+json', Authorization: `Basic ${Buffer.from(`${this.deps.clientId}:${this.deps.clientSecret}`).toString('base64')}`,
           'Content-Type': 'application/json' },
         body: JSON.stringify({ access_token: token }),
-      }).catch(() => undefined)
+      }).then(answer => answer.status, () => 'no answer').then(status => {
+        // Said, never with the token, so a token left live shows (security review 1 of #3201); it ends on its own at its expiry.
+        if (status !== 204) console.warn(`[github] a sign-in's user token was not revoked (${status === 'no answer' ? status : `HTTP ${status}`})`)
+      })
     }
   }
 }

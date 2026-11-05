@@ -63,6 +63,35 @@ describe('the app\'s GitHub sign-in', () => {
     expect(await fake(200, {}, false).signIn.permission('c', repo)).toBeNull()
   })
 
+  it('revokes the person\'s token after use, even when the use throws', async () => {
+    const thrown = fake()
+    await expect(thrown.signIn.withUserToken('c', async () => { throw new Error('x') })).rejects.toThrow('x')
+    expect(thrown.calls.at(-1)).toEqual({ url: 'https://api.gh.test/applications/Iv23client/token', method: 'DELETE' })
+    const used = fake()
+    expect(await used.signIn.withUserToken('c', async call => (await call('GET', '/user')).body.login)).toBe('alice')
+    expect(used.calls.map(c => `${c.method} ${c.url}`)).toEqual(['POST https://gh.test/login/oauth/access_token', 'GET https://api.gh.test/user',
+      'DELETE https://api.gh.test/applications/Iv23client/token'])
+    const refused = fake(200, {}, false)
+    let ran = false
+    expect(await refused.signIn.withUserToken('c', async () => { ran = true })).toBeNull()
+    expect(ran).toBe(false)
+    expect(refused.calls).toHaveLength(1)
+  })
+
+  it('says when the person\'s token could not be revoked, never the token itself', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith('/login/oauth/access_token')) return new Response(JSON.stringify({ access_token: 'ghu_secret_fixture' }), { status: 200 })
+      return new Response(null, { status: init?.method === 'DELETE' ? 500 : 200 })
+    }) as unknown as typeof globalThis.fetch
+    const signIn = new GitHubSignIn({ clientId: 'Iv23client', clientSecret: 'secret', fetch, webUrl: 'https://gh.test', apiUrl: 'https://api.gh.test' })
+    await signIn.withUserToken('c', async () => 1)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0])).toContain('not revoked')
+    expect(String(warn.mock.calls[0])).not.toContain('ghu_secret_fixture')
+    warn.mockRestore()
+  })
+
   it('is on with both its client id and secret, off with neither, and refuses one alone', () => {
     expect(githubSignIn({ GITHUB_APP_CLIENT_ID: '', GITHUB_APP_CLIENT_SECRET: '' })).toBeNull()
     expect(githubSignIn({ GITHUB_APP_CLIENT_ID: 'Iv23', GITHUB_APP_CLIENT_SECRET: 's' })).toBeInstanceOf(GitHubSignIn)
