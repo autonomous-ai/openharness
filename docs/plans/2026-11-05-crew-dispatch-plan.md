@@ -38,6 +38,9 @@ its `loseTask`. Desktop adds Group by Member to the board.
 - Crew (#3397, Keeper): `Agent.crew?: { role: string; at: number; by: string; lane?: string }` and `isCrew(agent)`.
   `lane` is the one field this task asks Keeper to add (`crew.add` takes an optional `lane`). Until #3397 merges this
   branch declares the same field in model.ts; whichever lands second keeps one copy.
+- Sleep and move (#3398, Heron): `Agent.asleep?: { since: number }` and `Agent.movedTo` on the agent record. An asleep
+  crew member counts as free, and its assignment wakes it in the same write (asked of Heron: `work.assign` wakes an
+  asleep crew member instead of refusing its closed session); a member with `movedTo` is skipped.
 - Handed (#3399, Handoff): `occupiesAgent(group)` (active work that is not handed) and `handed(group)` from handed.ts.
   Until #3399 merges, dispatch.ts has the same two rules locally (handed = a task's own `review` status); then it imports
   them. Before #3399, `work.assign` still refuses an agent with a handed task (`AGENT_BUSY`): the pass skips it.
@@ -103,7 +106,7 @@ its `loseTask`. Desktop adds Group by Member to the board.
 
 **Interfaces:**
 - Produces: `freeCrew(state, projectId, rules): Agent[]`: crew agents of the project (not the PM, not a Buddy, not
-  stopping, session not closed, no pending start) with no occupying task and fewer than `maxHanded` handed tasks, longest
+  stopping, not moving (`movedTo`), session not closed unless asleep, no pending start) with no occupying task and fewer than `maxHanded` handed tasks, longest
   free first. `dispatchPlan(state, projectId, rules, now): Pick[]` with
   `Pick = { conversationId: string; agentId: string; why: 'pin' | 'lane'; lane: string | null }`: each member takes
   first a task pinned to it (oldest pin first), then its lane's top open task (a member with no lane, whose role is
@@ -112,8 +115,8 @@ its `loseTask`. Desktop adds Group by Member to the board.
   A task lost by this member to the 3 h clock is skipped for it.
 
 - [ ] Failing tests: pins before the lane's top; P0 beats queue order; one task, two free members -> one pick; a member
-  with an occupying task or 3 handed tasks is not free; a member with 2 handed tasks is; the PM, a Buddy, a stopping agent
-  and a non-crew agent get nothing; a pin whose member left the crew goes to the lane; the 3 h loser is skipped; future
+  with an occupying task or 3 handed tasks is not free; a member with 2 handed tasks is; the PM, a Buddy, a stopping agent, a moving one
+  and a non-crew agent get nothing; an asleep member is free; a pin whose member left the crew goes to the lane; the 3 h loser is skipped; future
   `notBefore`, steps, archived and chats are never picked.
 - [ ] Implement; run the file; commit test, then code.
 
