@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/push_channel.dart';
 import 'package:harness_mobile/notify/push_tokens.dart';
+import 'package:harness_mobile/notify/system_notices.dart' show SwarmNotices;
 
 import 'viewer_app_fixture.dart';
 import 'voice_fakes.dart' show MemoryKeyValueStore;
@@ -61,19 +62,14 @@ void main() {
     rig.app.dispose();
   });
 
-  test('a tapped push opens the agent it names', () async {
+  test('a tapped push opens the chat its link names', () async {
     final rig = viewerApp(pushTokens: push);
     await rig.app.bootstrap();
     await settle();
-    channel.onOpened!({
-      'kind': 'agent_question',
-      'machine': 'm1',
-      'agent': 'a1',
-    });
-    expect(rig.app.agentNotices.system.opened.value, (
-      machineId: 'm1',
-      agentId: 'a1',
-    ));
+    channel.onOpened!({'key': 'mention:x1', 'link': 'swarm:s1/c1/message/m1'});
+    final notices = rig.app.agentNotices.system as SwarmNotices;
+    expect(notices.openedSwarm.value?.conversationId, 'c1');
+    expect(notices.openedSwarm.value?.messageId, 'm1');
     rig.app.dispose();
     expect(channel.closed, isTrue);
   });

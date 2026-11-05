@@ -355,15 +355,10 @@ void main() {
       expect(told, 0);
     });
 
-    test('a tapped Swarm push opens the conversation, at its message and thread', () {
-      openPushed({
-        'kind': 'swarm',
-        'swarm': 's1',
-        'conversation': 'c1',
-        'message': 'm1',
-        'thread': 't1',
-        'decision': 'd1',
-      }, notices);
+    // What the server sends (backend push/notices.ts): `key`, and `link`, the app's own `swarm:`
+    // payload.
+    test('a tapped reply push opens the thread at the reply', () {
+      openPushed({'key': 'reply:s1:r1', 'link': 'swarm:s1/c1/message/m1/thread/t1'}, notices);
       expect(notices.openedSwarm.value, (
         swarmId: 's1',
         conversationId: 'c1',
@@ -374,46 +369,42 @@ void main() {
       expect(notices.opened.value, isNull);
     });
 
-    test('a tapped decision push opens that decision', () {
-      openPushed({'kind': 'swarm', 'swarm': 's1', 'conversation': 'c1', 'decision': 'd1', 'thread': 't1'}, notices);
+    test('a tapped tag push opens the chat at the message, its ids decoded', () {
+      openPushed({'key': 'mention:x1', 'link': 'swarm:s%2F1/c1/message/m1'}, notices);
       expect(notices.openedSwarm.value, (
-        swarmId: 's1',
+        swarmId: 's/1',
         conversationId: 'c1',
-        messageId: null,
-        decisionId: 'd1',
+        messageId: 'm1',
+        decisionId: null,
         threadId: null,
       ));
     });
 
-    test('a tapped agent push opens that agent, whether it asks or finished', () {
-      openPushed({'kind': 'agent_question', 'machine': 'machine-1', 'agent': 'agent-7'}, notices);
-      expect(notices.opened.value, ref);
-      notices.opened.value = null;
-      openPushed({'kind': 'agent_done', 'machine': 'machine-1', 'agent': 'agent-7'}, notices);
-      expect(notices.opened.value, ref);
-    });
-
-    test('a push naming nothing it knows only opened the app', () {
+    test('a push opens the chat its link names and nothing else', () {
       for (final data in <Map<String, String>>[
         {},
-        {'kind': 'billing', 'swarm': 's1', 'conversation': 'c1'},
-        {'kind': 'swarm', 'swarm': 's1'},
-        {'kind': 'swarm', 'swarm': '', 'conversation': 'c1'},
-        {'kind': 'swarm', 'swarm': 's1', 'conversation': 'c\n1'},
-        {'kind': 'swarm', 'swarm': 's' * 201, 'conversation': 'c1'},
-        {'kind': 'agent_done', 'machine': 'machine-1'},
+        {'key': 'mention:x1'},
+        {'link': 'machine-1\nagent-7'},
+        {'link': 'device:key-1'},
+        {'link': 'swarm:s1'},
+        {'link': 'swarm:s1/c1/agent/a1'},
+        {'link': 'https://example.com/swarm:s1/c1'},
+        // The first contract's keys: the server never sends them, and they open nothing.
+        {'kind': 'agent_question', 'machine': 'machine-1', 'agent': 'agent-7'},
+        {'kind': 'swarm', 'swarm': 's1', 'conversation': 'c1', 'message': 'm1'},
       ]) {
         openPushed(data, notices);
       }
       expect(notices.openedSwarm.value, isNull);
       expect(notices.opened.value, isNull);
+      expect(notices.openedDevice.value, isNull);
     });
 
-    test('a centre without Swarm notices still opens agents', () {
+    test('a centre without Swarm notices opens nothing', () {
       final silent = _AgentsOnly();
-      openPushed({'kind': 'swarm', 'swarm': 's1', 'conversation': 'c1'}, silent);
-      openPushed({'kind': 'agent_done', 'machine': 'machine-1', 'agent': 'agent-7'}, silent);
-      expect(silent.opened.value, ref);
+      openPushed({'link': 'swarm:s1/c1/message/m1'}, silent);
+      openPushed({'link': 'machine-1\nagent-7'}, silent);
+      expect(silent.opened.value, isNull);
     });
 
     // A push and the notice the running app posts for the same news share an id, so one replaces
