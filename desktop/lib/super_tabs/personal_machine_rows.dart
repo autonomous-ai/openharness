@@ -59,19 +59,26 @@ class PersonalMachineRows extends StatelessWidget {
             color: DesktopChrome.muted,
           ),
           const SizedBox(width: grid.AppDesktop.controlGap),
-          Flexible(
-            child: Text(
-              row.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.text(color: DesktopChrome.muted),
-            ),
-          ),
-          Text(' · ', style: DesktopChrome.metadata()),
+          // Name and reason as one line, Try again at the row's end.
           Expanded(
-            child: failed
-                ? Tooltip(message: row.reason, child: status)
-                : status,
+            child: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    row.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.text(color: DesktopChrome.muted),
+                  ),
+                ),
+                Text(' · ', style: DesktopChrome.metadata()),
+                Flexible(
+                  child: failed
+                      ? Tooltip(message: row.reason, child: status)
+                      : status,
+                ),
+              ],
+            ),
           ),
           if (row.canRetry) ...[
             const SizedBox(width: grid.AppDesktop.controlGap),
