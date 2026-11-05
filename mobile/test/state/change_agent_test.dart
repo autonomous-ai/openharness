@@ -455,11 +455,8 @@ void main() {
       return rig;
     }
 
-    bool stillRunning(ViewerRig rig) => !rig.app
-        .stateOf('m')!
-        .agents
-        .firstWhere((a) => a.id == 'a')
-        .isStopped;
+    bool stillRunning(ViewerRig rig) =>
+        !rig.app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a').isStopped;
 
     test('its close names the switch its handoff was prepared for, so its '
         'machine stops it; then the machine hears which harness took '
@@ -474,8 +471,9 @@ void main() {
       expect(result.error, isNull);
       expect(result.agentId, 'b');
       final conn = rig.conn('m');
-      final changeId =
-          conn.payloadsOf('agent_handoff_prepare').single['changeId'];
+      final changeId = conn
+          .payloadsOf('agent_handoff_prepare')
+          .single['changeId'];
       expect(changeId, matches(RegExp(r'^[0-9a-f]{32}$')));
       expect(conn.payloadsOf('agent_close').single['changeId'], changeId);
       expect(
@@ -541,9 +539,7 @@ void main() {
       expect(result.error, isNot(contains('LEAD_PROTECTED')));
 
       // The same refusal in the reply itself rather than as an error frame.
-      rig.conn('m').answers['agent_close'] = (_) => {
-        'error': 'LEAD_SWITCHING',
-      };
+      rig.conn('m').answers['agent_close'] = (_) => {'error': 'LEAD_SWITCHING'};
       final again = await rig.app.changeAgent('m', 'a', 'cursor');
       expect(again.error, switchingWords);
       expect(rig.conn('m').payloadsOf('agent_create'), isEmpty);
@@ -618,9 +614,11 @@ void main() {
     rig.conn('m').answers['agent_handoff_complete'] = (_) => reported.future;
 
     final first = rig.app.changeAgent('m', 'a', 'codex');
-    for (var i = 0;
-        i < 20 && rig.conn('m').payloadsOf('agent_handoff_complete').isEmpty;
-        i++) {
+    for (
+      var i = 0;
+      i < 20 && rig.conn('m').payloadsOf('agent_handoff_complete').isEmpty;
+      i++
+    ) {
       await finished(rig, Future.value());
     }
 
@@ -660,10 +658,7 @@ void main() {
         'This Product Manager is already switching its agent. '
         'Wait for it to finish.',
       );
-      expect(
-        AppNotifier.closeRefusalMessage('CLOSE_FAILED', detail),
-        generic,
-      );
+      expect(AppNotifier.closeRefusalMessage('CLOSE_FAILED', detail), generic);
       expect(AppNotifier.closeRefusalMessage(null, detail), generic);
     }
   });

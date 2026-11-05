@@ -9022,6 +9022,18 @@ class AppNotifier extends ChangeNotifier {
   static bool canChangeAgent(Agent agent) =>
       agent.engine != null && agent.dsh == null && agent.engine != 'terminal';
 
+  /// Whether the terminal's menu offers Change agent on [agent] of [machineId]: an agent it can
+  /// switch ([canChangeAgent]), on this person's own machine while it is online, as the desktop's
+  /// pane header does. Another account's shared machine answers the handoff for its owner alone
+  /// (cli superTabs/leadSwitch.ts), so the switch could never go through from here.
+  bool offersChangeAgent(String machineId, Agent agent) {
+    final machine = machineStates[machineId];
+    return canChangeAgent(agent) &&
+        machine != null &&
+        !machine.machine.shared &&
+        machine.nodeOnline != false;
+  }
+
   /// The engines a harness can be switched to, in the desktop picker's order: OpenCode first, the
   /// rest by name. The current one is listed too, as the one it is on.
   static List<String> agentChangeEngines() {
@@ -9071,6 +9083,13 @@ class AppNotifier extends ChangeNotifier {
     }
     if (source.engine == engine) {
       return Future.value(AgentChangeResult(agentId: agentId));
+    }
+    if (machine.machine.shared) {
+      return Future.value(
+        const AgentChangeResult(
+          error: 'Only the person whose machine runs this agent can change it.',
+        ),
+      );
     }
     if (!canChangeAgent(source) || !allEngines.any((e) => e.id == engine)) {
       return Future.value(
@@ -9296,7 +9315,10 @@ class AppNotifier extends ChangeNotifier {
             : 'the replacement report was not confirmed',
       );
     } on WsRequestFailure catch (failure) {
-      _logChange(change, 'the replacement report was refused (${failure.code})');
+      _logChange(
+        change,
+        'the replacement report was refused (${failure.code})',
+      );
     } catch (error) {
       _logChange(change, 'the replacement report was not answered ($error)');
     }

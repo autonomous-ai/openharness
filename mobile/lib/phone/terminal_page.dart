@@ -3412,7 +3412,7 @@ class _TerminalPageState extends State<TerminalPage>
       ),
     // Another engine on the same project — what to reach for when a subscription runs out. The
     // desktop's pane agent selector. Named by the agent it is on now, as the Model row is.
-    if (AppNotifier.canChangeAgent(agent))
+    if (widget.notifier.offersChangeAgent(widget.machineId, agent))
       PhoneSheetAction(
         icon: LucideIcons.arrowLeftRight300,
         label: 'Change agent',
