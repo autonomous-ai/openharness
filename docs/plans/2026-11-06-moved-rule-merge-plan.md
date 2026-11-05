@@ -36,7 +36,12 @@ guard (`ruleGuard.ts rulePlaces`) counts a task merged only when one of its link
 - Migration + rollback: none.
 - Audience: GitHub's answer, read by the server; no command writes `briefAt` or a merge time.
 - Identity: the read uses the Harness GitHub App's read-only token, never a person's.
-- Failure: GitHub unreachable → the line stays and the refusal names the task, as for an unmerged one.
+- Failure: GitHub unreachable → the line stays and the refusal names the task, as for an unmerged one; each read it
+  could not make is logged by repository, number and status.
+- A later `work.define` resets `briefAt`: the rule then waits for a merge after the new brief, which fails safe (the line
+  stays) (review 1 of #3273).
+- The tasks read are those the guard's own matcher finds a dropped rule in (`ruleGuard.ts tasksHoldingMoves`), across
+  wrapped lines and as one rule of a line of several (review 1 of #3273).
 - Platforms: backend only.
 
 ## Review Focus

@@ -7,6 +7,7 @@
  */
 import { githubRepository, type GitHubRepository } from '../github/repository.js'
 import { PULL_READ_PERMISSIONS, type GitHubApp } from '../github/app.js'
+import { logger } from '../utils/logger.js'
 
 const PULL = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]*)$/
 
@@ -18,9 +19,14 @@ export async function pullRequestMerges(urls: readonly string[], get: PullGet): 
   const answers = await Promise.all(urls.map(async url => {
     const match = PULL.exec(url), repository = match ? githubRepository(`https://github.com/${match[1]}`) : null
     if (!repository) return null
-    const answer = await get(repository, Number(match![2]))
+    const number = Number(match![2])
+    const answer = await get(repository, number)
     const body = answer.body as { merged_at?: unknown } | null
-    if (answer.status !== 200 || !body) return null
+    if (answer.status !== 200 || !body) {
+      // Its rule's line stays as for a task not merged: said here, so a person told it waits can be told why (ENGINEERING.md 6).
+      logger.warn('[swarm-instructions] merge time not read; the moved rule stays', { repository: repository.fullName, number, status: answer.status })
+      return null
+    }
     const at = typeof body.merged_at === 'string' ? Date.parse(body.merged_at) : null
     return [url, at !== null && Number.isNaN(at) ? null : at] as const
   }))

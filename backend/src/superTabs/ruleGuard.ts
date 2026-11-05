@@ -54,10 +54,37 @@ function rulePlaces(state: SuperTabState, project: SwarmProject, merges: Readonl
     return typeof at === 'number' && (c.briefAt === undefined || at > c.briefAt)
   })
   const records = projectRules(state, project.id).map(r => ({ text: r.text, people: [r.askedBy], where: 'the rules record', open: false }))
-  const tasks = state.conversations.filter(c => (c.projectId ?? 'lead') === project.id && c.id !== project.leadConversationId && !c.kind
-    && !c.reviewOf && !c.step && !c.audience && c.brief && (seenMerged(c) || c.assignment?.status !== 'cancelled'))
+  const tasks = codeTasks(state, project).filter(c => seenMerged(c) || c.assignment?.status !== 'cancelled')
     .map(c => ({ text: c.brief, people: [], where: c.number ? `task #${c.number}` : `task "${c.title}"`, open: !seenMerged(c) }))
   return [...records, ...tasks]
+}
+
+/** The project's code tasks: its tasks with a brief, not a step, a chat or a private chat (rulePlaces, tasksHoldingMoves). */
+const codeTasks = (state: SuperTabState, project: SwarmProject): Conversation[] => state.conversations.filter(c => (c.projectId ?? 'lead') === project.id
+  && c.id !== project.leadConversationId && !c.kind && !c.reviewOf && !c.step && !c.audience && !!c.brief)
+
+/** How the guard tells people apart in this Swarm: a written name as the members it is, so "0xken15" and "Ken" are one. */
+function identifier(state: SuperTabState): (name: string) => string {
+  const membersOf = new Map<string, string[]>()
+  return name => (membersOf.get(name) ?? membersOf.set(name, membersNamed(state, name)).get(name)!).slice().sort().join(',') || `?${personKey(name)}`
+}
+
+/** Words spaced as one line, for a cheap first look across wrapped lines. */
+const spaced = (text: string) => text.replace(/\s+/g, ' ').trim()
+
+/**
+ * The project's code tasks a save from [before] to [after] would move a person's rule into, as the guard itself reads a move
+ * (droppedRules): each task alone, counted open, that holds a rule the save drops, across wrapped lines or as one rule of a
+ * line of several. The store reads their pull requests' merges before the save (store.ts pullRequestMergesFor, #3463). A first
+ * look keeps only tasks whose brief has a dropped rule's opening words, so a big project runs the matcher on few.
+ */
+export function tasksHoldingMoves(state: SuperTabState, project: SwarmProject, before: string, after: string): Conversation[] {
+  const identify = identifier(state)
+  const lost = droppedRules(before, after, identify)
+  if (!lost.length) return []
+  const openings = lost.map(rule => spaced(rule.text).split(' ').slice(0, 4).join(' '))
+  return codeTasks(state, project).filter(task => openings.some(words => spaced(task.brief).includes(words))
+    && droppedRules(before, after, identify, [{ text: task.brief, people: [], where: task.id, open: true }]).some(rule => rule.movedTo === task.id))
 }
 
 /**

@@ -68,7 +68,7 @@ import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
 import { RefusalMemory } from './dispatchRefusals.js'
-import { removedItems } from './instructionsDiff.js'
+import { tasksHoldingMoves } from './ruleGuard.js'
 import { candidatesFor, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type Skip } from './dispatch.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
@@ -1665,11 +1665,10 @@ export class SuperTabStore {
         const repositoryUrl = project?.repository?.repositoryUrl
         if (!project || !repositoryUrl) return []
         const stored = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, project.id) }, select: { text: true } })
-        const removed = stored ? removedItems(stored.text, asked.text) : []
-        if (!removed.length) return []
-        return [...new Set(state.conversations.filter(c => (c.projectId ?? 'lead') === project.id && !c.reviewOf && c.brief
-          && removed.some(line => c.brief.includes(line)))
-          .flatMap(c => (c.pullRequestUrls ?? []).filter(url => projectPullRequestUrl(url, repositoryUrl) !== null)))].slice(0, MAX_MERGE_READS)
+        // The tasks the guard itself would read a dropped rule in (review 1 of #3273): wrapped lines and one rule of several.
+        const holding = stored ? tasksHoldingMoves(state, project, stored.text, asked.text) : []
+        return [...new Set(holding.flatMap(c => (c.pullRequestUrls ?? []).filter(url => projectPullRequestUrl(url, repositoryUrl) !== null)))]
+          .slice(0, MAX_MERGE_READS)
       })
       return urls.length ? await hook(user.autonomousEnv, tabId, asked.projectId, urls) : undefined
     } catch (error) {
@@ -1887,7 +1886,7 @@ export class SuperTabStore {
         const stored = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, projectId) }, select: { revision: true, text: true, updatedAt: true } })
         context.instructions = stored && { revision: stored.revision, text: stored.text, ...stored.updatedAt ? { at: stored.updatedAt.getTime() } : {} }
         if (command.type === 'instructions.save' && command.approvals?.length) context.approvals = await readApprovals(tx, tabId, command.approvals)
-      if (command.type === 'instructions.save' && pullRequestMerges) context.pullRequestMerges = pullRequestMerges
+        if (command.type === 'instructions.save' && pullRequestMerges) context.pullRequestMerges = pullRequestMerges
       }
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
       // A stale rules save is refused with the newest revision, to merge (policy.ts); null is the seed.
