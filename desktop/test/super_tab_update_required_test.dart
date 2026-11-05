@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -14,15 +16,17 @@ void main() {
   late ConversationServer server;
   late List<String> reads;
   var refuse = false;
+  Completer<void>? hold;
 
   SuperTabController open({Duration poll = Duration.zero}) {
     reads = [];
     return SuperTabController(
       tabId: 'tab',
       accountId: 'owner',
-      request: (method, path, {body}) {
+      request: (method, path, {body}) async {
         if (method == 'GET') reads.add(path);
         if (refuse) throw superTabUpdateRequired;
+        if (hold case final pending?) await pending.future;
         return server.request(method, path, body: body);
       },
       save: server.save,
@@ -33,6 +37,7 @@ void main() {
   setUp(() {
     server = ConversationServer();
     refuse = false;
+    hold = null;
   });
 
   test('an update answer shows the update message and stops the poll', () {
@@ -100,11 +105,7 @@ void main() {
     expect(c.accessRevoked, isFalse);
   });
 
-  testWidgets('the update message offers no Retry', (tester) async {
-    final c = open();
-    await c.refresh();
-    refuse = true;
-    await c.refresh();
+  Future<void> show(WidgetTester tester, SuperTabController c) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -119,10 +120,83 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+  }
+
+  for (final firstLoad in [true, false]) {
+    testWidgets('Retry recovers an update refusal, first load: $firstLoad', (
+      tester,
+    ) async {
+      final c = open();
+      addTearDown(c.dispose);
+      if (!firstLoad) await c.refresh();
+      refuse = true;
+      await c.refresh();
+      await show(tester, c);
+      expect(find.text(update), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Retry'), findsOneWidget);
+      refuse = false;
+      await tester.tap(find.widgetWithText(TextButton, 'Retry'));
+      await tester.pumpAndSettle();
+      expect(c.updateRequired, isFalse);
+      expect(c.error, isNull);
+      expect(c.snapshot, isNotNull);
+      expect(find.text(update), findsNothing);
+      expect(find.byKey(const ValueKey('super-message-composer')), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+    });
+  }
+
+  testWidgets('Retry preserves a real refusal and keeps automatic reads stopped', (
+    tester,
+  ) async {
+    final c = open(poll: const Duration(seconds: 3));
+    addTearDown(c.dispose);
+    refuse = true;
+    c.start();
+    await show(tester, c);
+    final before = reads.length;
+    expect(find.widgetWithText(TextButton, 'Retry'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Retry'));
+    await tester.pumpAndSettle();
+    expect(reads.length, greaterThan(before));
+    expect(c.updateRequired, isTrue);
     expect(find.text(update), findsOneWidget);
-    expect(find.text('Retry'), findsNothing);
+    final after = reads.length;
+    await tester.pump(const Duration(seconds: 30));
+    expect(reads, hasLength(after));
     await tester.pumpWidget(const SizedBox());
     await c.flush();
-    c.dispose();
+  });
+
+  testWidgets('successful Retry resumes polling and overlapping retries share a read', (
+    tester,
+  ) async {
+    final c = open(poll: const Duration(seconds: 3));
+    addTearDown(c.dispose);
+    c.start();
+    await tester.pump();
+    refuse = true;
+    await c.refresh();
+    await show(tester, c);
+    refuse = false;
+    hold = Completer<void>();
+    final before = reads.where((p) => p.contains('/changes?')).length;
+    final button = tester.widget<TextButton>(find.widgetWithText(TextButton, 'Retry'));
+    button.onPressed!();
+    button.onPressed!();
+    await tester.pump();
+    expect(reads.where((p) => p.contains('/changes?')), hasLength(before + 1));
+    hold!.complete();
+    hold = null;
+    await tester.pumpAndSettle();
+    expect(c.updateRequired, isFalse);
+    expect(c.error, isNull);
+    final recovered = c.stateReads;
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump();
+    expect(c.stateReads, greaterThan(recovered));
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
   });
 }
