@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import { isCrew } from './crew.js'
+import { projectsOf } from './projects.js'
 
 // Task #3397: a project's crew, the agents the Swarm keeps alive and never closes for being idle.
 
@@ -73,6 +74,27 @@ describe('crew.add and crew.remove', () => {
     expect(f.target().crew).toEqual({ role: 'Engineer', at: 5000, by: f.pm })
     for (const lane of ['backend', 'cli', 'desktop', 'mobile', 'docs']) expect(commandSchema.safeParse({ type: 'crew.add', agentId: 'a1', lane }).success).toBe(true)
     for (const lane of ['', 'web', 'Backend']) expect([lane, commandSchema.safeParse({ type: 'crew.add', agentId: 'a1', lane }).success]).toEqual([lane, false])
+  })
+
+  // River for security review 1 of #3222 (the Swarm goes public): of the people, only the Swarm's or the project's owner,
+  // or the person who runs the agent or whose machine it runs on, as agent.release takes.
+  it('refuses a collaborator who neither owns the Swarm or project nor runs the agent', () => {
+    const f = fixture()
+    f.invite('collaborator')
+    expect(() => f.run({ type: 'crew.add', agentId: f.worker }, peer)).toThrow(/PM or the person who runs/)
+    expect(f.target().crew).toBeUndefined()
+    f.target().contributorId = 'peer'
+    f.run({ type: 'crew.add', agentId: f.worker }, peer)
+    expect(f.target().crew).toMatchObject({ by: 'peer' })
+  })
+
+  it('refuses the person who runs the agent once they cannot read its private project', () => {
+    const f = fixture()
+    f.invite('collaborator')
+    f.target().contributorId = 'peer'
+    f.state.projects = projectsOf(f.state).map(p => ({ ...p, visibility: 'private' as const, members: [] }))
+    expect(() => f.run({ type: 'crew.add', agentId: f.worker }, peer)).toThrow()
+    expect(f.target().crew).toBeUndefined()
   })
 
   it('refuses a role that is empty, too long or holds control characters', () => {
