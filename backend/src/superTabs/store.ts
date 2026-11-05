@@ -1,5 +1,7 @@
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
+import { phoneNotices, type ReplyRow, type TagRow } from '../push/notices.js'
+import type { PhoneNotice } from '../push/sender.js'
 import { accountMachineName, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
 import { authorForAgent, lazyUsernames, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
 import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
@@ -376,6 +378,9 @@ export interface SuperTabStoreHooks {
   /** A delivery now waits for this agent, committed: its machine's daemon socket tells its host to read it at once
    *  (lib/swarmDeliveryPushes.ts). Called after the write commits; it must not throw. */
   deliveriesWaiting?: (waiting: DeliveriesWaiting) => void
+  /** What a write tells people's phones (push/notices.ts, task #2905): its thread replies and tags. Called after the write
+   *  commits; it must not throw. */
+  phoneNotices?: (notices: PhoneNotice[]) => void
   /** A terminal request waits for this machine (spec 2026-11-02 poll cost, Part 4.2), once its write commits. */
   terminalWaiting?: (waiting: DeliveriesWaiting) => void
   /** A commit changed what these machines' hosts read (parts/commit.ts hostsToTell): each machine's daemon socket tells its
@@ -1980,9 +1985,10 @@ export class SuperTabStore {
       const ledId = 'conversationId' in command ? command.conversationId : command.type === 'agent.start' ? command.request.conversationId : undefined
       const leadAt = (state: SuperTabState) => state.conversations.find(c => c.id === ledId)?.leadAction?.at
       if (ledId && leadAt(effects.state) !== undefined && leadAt(effects.state) !== leadAt(original)) await dropHeldTags(tx, tabId, ledId, context.now)
-      await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
+      const tags = await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
       // Everyone in each thread replied in, from the summaries just computed: no read of the threads' rows (task #2745).
-      await writeReplyActivity(tx, tabId, effects.messages, sequences, context.now, { state: effects.state, threads })
+      const replies = await writeReplyActivity(tx, tabId, effects.messages, sequences, context.now, { state: effects.state, threads })
+      this.tellPhones(tx, tabId, effects.state, { replies, tags }, effects.messages)
       // Their own message leaves the chat read for them on every app, in the same commit its read answers from (task #2265). A reply
       // only in a thread is not in the chat, and a Team session has no marks (read/service.ts markRead).
       if (command.type === 'message.send' && actor.kind === 'person' && !isTeamSession(user)) {
@@ -4395,9 +4401,17 @@ export class SuperTabStore {
       // A finished step's too: its task handed on again since the load must not lose the step it will need.
       await this.save(tx, loaded, state, clock.next(), group.reviewOf ? [{ kind: 'group', key: group.reviewOf }] : [])
       await this.writeMessages(tx, tabId, state, rows, sequences)
-      await writeMentions(tx, tabId, state, rows, now)
+      this.tellPhones(tx, tabId, state, { replies: [], tags: await writeMentions(tx, tabId, state, rows, now) }, rows)
       return true
     })
+  }
+
+  /** The phones of whoever `written` tells hear of it once the write commits (push/send.ts). */
+  private tellPhones(tx: Transaction, tabId: string, state: SuperTabState, written: { replies: ReplyRow[]; tags: TagRow[] }, messages: MessageDraft[]): void {
+    const tell = this.hooks.phoneNotices
+    if (!tell || (!written.replies.length && !written.tags.length)) return
+    const notices = phoneNotices(tabId, state, written, messages)
+    if (notices.length) afterCommit(tx, () => tell(notices))
   }
 
   /** Ends, as cancelled, those of this Swarm's open deliveries `rows` (as the delivery pass read them) that can no longer move
