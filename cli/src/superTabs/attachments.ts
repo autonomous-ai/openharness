@@ -80,6 +80,11 @@ function under(base: string, address: string): boolean {
 /** A failure that another try cannot fix. */
 class Refused extends Error {}
 
+/** What a person and their agent read when the disk is full: before a download, or as one is written or copied (task #3159,
+ *  Scholes's Mac). The system's own error names the files' paths, in the person's home, and is no plainer. */
+const NO_ROOM = 'not enough free disk space'
+const isNoRoom = (error: unknown) => !!error && typeof error === 'object' && 'code' in error && (error.code === 'ENOSPC' || error.code === 'EDQUOT')
+
 /** The name on disk: the prompt lists this path for an agent that may paste it into a shell, so it carries nothing a
  * shell reads as syntax ($(...), quotes, spaces, ;). The original name stays in the label beside it. */
 export const diskName = (name: string) => name.replaceAll(/[^A-Za-z0-9._-]+/g, '_').replace(/^[.-]+/, '').slice(-120) || 'file'
@@ -111,7 +116,7 @@ async function download(file: MessageAttachment, base: string, signedBase: strin
   if (!servedFrom(base, address, signedBase) || (file.link && !sameObject(base, file.url, file.link))) throw new Refused('not a Harness file address')
   if (file.size > MAX_ATTACHMENT_BYTES) throw new Refused(`over the ${megabytes(MAX_ATTACHMENT_BYTES)} limit`)
   // Another try would find the same disk: refused, not tried again.
-  if (!await roomFor(file.size, statfs)) throw new Refused('not enough free disk space')
+  if (!await roomFor(file.size, statfs)) throw new Refused(NO_ROOM)
   const limit = file.size
   // No bytes for idleMs ends it, from the request on: waiting for the answer counts too.
   const idle = new AbortController()
@@ -152,6 +157,8 @@ async function download(file: MessageAttachment, base: string, signedBase: strin
     }
     return await writePasteDropStream(diskName(file.name), counted())
   } catch (error) {
+    // The disk filled up as it was written: another try finds the same disk. The part written is gone (lib/pasteDropFiles.ts).
+    if (isNoRoom(error)) throw new Refused(NO_ROOM)
     // Ended for want of bytes: said so, rather than as the abort the fetch or the body threw.
     throw idle.signal.aborted && !(error instanceof Refused) ? idle.signal.reason : error
   } finally { clearTimeout(quiet) }
@@ -235,7 +242,7 @@ export async function attachedFiles(message: Record<string, unknown>,
     try {
       const path = await copyPasteDropFile(result.path, diskName(file.name))
       return { line: `- ${path} (${labelOf(file)})`, path }
-    } catch (error) { return failed(file, error instanceof Error ? error.message : 'could not copy') }
+    } catch (error) { return failed(file, isNoRoom(error) ? NO_ROOM : 'could not copy') }
   }))
   const paths = lines.flatMap(l => l.path === null ? [] : [l.path])
   return { text: `Attached files:\n${lines.map(l => l.line).join('\n')}`, complete: paths.length === lines.length, paths }

@@ -1,4 +1,5 @@
 import { randomInt } from 'node:crypto'
+import { teamCleanupPending } from '../superTabs/computerMoves.js'
 import { pub, publishDown } from './bus.js'
 import type { Prisma } from '@prisma/client'
 import { machineAlive, prisma } from './prisma.js'
@@ -130,6 +131,15 @@ function handoffOf(held: unknown): { userId: string; kind: HandoffKind; convert?
   } catch { return null }
 }
 
+/** A team sign-in for another account while the previous account's Swarm work in that Harness Team account is still being
+ *  deleted (superTabs/computerMoves.ts teamCleanupPending): what its person reads, and does. */
+export class TeamCleanupPending extends Error {
+  readonly code = 'TEAM_CLEANUP_PENDING'
+  constructor() {
+    super("The previous account's Swarm work in Harness Team on this computer is still being cleaned up, so it was not signed in for you yet. Try Repair again in a few minutes.")
+  }
+}
+
 /**
  * Spend [code] and sign [label]'s device in as the account that minted it, as the kind it was minted
  * for. A team code also needs the redeeming daemon's [computerId], which its session is bound to. Null
@@ -151,6 +161,8 @@ export async function redeemHandoff(code: string, label: string, computerId?: st
   // The computer that asked to become a team machine, and no other.
   if (handoff.convert) return handoff.convert === computer ? convertComputer(handoff.userId, label || 'Team', computer) : null
   if (await computerHeldByAnotherSignIn(handoff.userId, computer)) return null
+  // Another account's Team machine here still has Swarm folders to delete, which only its own sign-in can (#3122).
+  if (await teamCleanupPending(prisma, { computerId: computer, userId: handoff.userId })) throw new TeamCleanupPending()
   // A repair run signs the same team account in again: its machine already exists and records its Mac now. A new one
   // records it when it registers (MachineService.resolveForTeamComputer), from the session made here.
   if (handoff.host) {
