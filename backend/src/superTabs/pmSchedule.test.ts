@@ -97,4 +97,20 @@ describe('the built-in PM schedule', () => {
     expect(PM_SCHEDULE_TEXT).toContain('Set no timer of your own')
     expect(PM_SCHEDULE_TEXT).toContain('never save it into the document')
   })
+
+  // Task #3022 (Ken, 11-05): lamp's PM was taught the same rule three times and forgot it again within the hour.
+  it('tells the coordinator to save what a person teaches it in the same turn, naming who said it, without asking', () => {
+    const taught = PM_SCHEDULE_TEXT.slice(PM_SCHEDULE_TEXT.indexOf('What people teach you'))
+    expect(PM_SCHEDULE_TEXT).toContain('What people teach you')
+    for (const words of ['from now on', 'always', 'don\'t', 'I told you', 'again you forgot', 'remember']) expect(taught).toContain(`"${words}"`)
+    expect(taught).toContain('save it into the instructions in that same turn, before you answer')
+    expect(taught).toContain('naming who said it')
+    expect(taught).toContain('Don\'t ask whether to save it')
+  })
+
+  it('keeps the instructions short, and counts what a person had to repeat in the nightly reflection', () => {
+    expect(PM_SCHEDULE_TEXT).toContain('past 150 lines')
+    expect(PM_SCHEDULE_TEXT).toContain('is a repeat')
+    expect(PM_SCHEDULE_TEXT).toContain('nightly reflection')
+  })
 })
