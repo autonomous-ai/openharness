@@ -1,0 +1,7 @@
+{
+  "timeZone": "Asia/Ho_Chi_Minh",
+  "windowStart": "09:00",
+  "windowEnd": "18:00",
+  "kinds": ["backend", "cli", "desktop", "web"],
+  "minMinutesBetween": {"backend": 120}
+}
