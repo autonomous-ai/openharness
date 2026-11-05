@@ -4,7 +4,7 @@ import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import sharp from 'sharp'
@@ -12,6 +12,10 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore, MemoryAvatarStore, type Attachment, type Attachments } from '../src/superTabs/attachments.js'
 import { thumbKeyOf } from '../src/superTabs/thumbnails.js'
+
+// The thumbnailer's queue is full while this says so (thumbnails.ts thumbnailsBusy).
+const queue = vi.hoisted(() => ({ busy: false }))
+vi.mock('../src/superTabs/thumbnails.js', async importOriginal => ({ ...await importOriginal<typeof import('../src/superTabs/thumbnails.js')>(), thumbnailsBusy: () => queue.busy }))
 import { sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
 import { PURGE_MARGIN_MS, purgeDeletedSwarms, purgeFiles } from '../src/superTabs/purge.js'
 import { SWARM_DELETE_GRACE_MS } from '../src/superTabs/deletion.js'
@@ -133,6 +137,34 @@ describe('a picture uploaded through the form', () => {
     expect(read).toMatchObject({ id: file.id, name: 'old.txt' })
     expect(read!.link).toBeTruthy()
     expect(read!.thumb).toBeUndefined()
+  })
+})
+
+describe('when thumbnails are backed up', () => {
+  it('answers a form upload at once with the file and no thumbnail', async () => {
+    const f = await swarm()
+    queue.busy = true
+    try {
+      const original = await jpeg(2000, 1500)
+      const file = await f.upload(original)
+      expect(file).toMatchObject({ mime: 'image/jpeg', size: original.byteLength })
+      expect(file.thumb).toBeUndefined()
+      expect(f.files.objects.get(keyOf(file.url))!.bytes.equals(original)).toBe(true)
+      expect([...f.files.objects.keys()].filter(k => k.endsWith('.thumb.webp'))).toEqual([])
+    } finally { queue.busy = false }
+  })
+
+  it('completes a direct upload at once with the file and no thumbnail', async () => {
+    const f = await swarm()
+    const original = await jpeg(2400, 1600)
+    const { upload } = await f.store.uploadLink(owner, f.tab, 'lead', { name: 'big.jpg', mime: 'image/jpeg', size: original.byteLength })
+    expect(await f.files.receive(upload.url, upload.headers, original)).toBe(200)
+    queue.busy = true
+    try {
+      const { attachment } = await f.store.completeUpload(owner, f.tab, upload.id)
+      expect(attachment).toMatchObject({ name: 'big.jpg', size: original.byteLength })
+      expect(attachment.thumb).toBeUndefined()
+    } finally { queue.busy = false }
   })
 })
 

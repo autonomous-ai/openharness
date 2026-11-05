@@ -2,7 +2,7 @@ import { crc32 } from 'node:zlib'
 import { randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import sharp from 'sharp'
-import { imageFacts, makeThumbnail, THUMB_LONG_SIDE, thumbKeyOf } from './thumbnails.js'
+import { createThumbnailer, imageFacts, makeThumbnail, MAX_THUMB_PIXELS, THUMB_LONG_SIDE, thumbKeyOf, type ImageFacts } from './thumbnails.js'
 
 // Task #3177: the server makes a small copy of a picture when it is uploaded, so a chat draws that and not the whole file.
 
@@ -80,6 +80,90 @@ describe('makeThumbnail', () => {
   it('never throws', async () => {
     await expect(makeThumbnail(randomBytes(5000))).resolves.toBeNull()
     await expect(makeThumbnail(pngClaiming(100, 100))).resolves.toBeNull()
+  })
+})
+
+describe('what a picture may cost', () => {
+  it('stops at 40 megapixels, which covers screenshots and cameras', async () => {
+    expect(MAX_THUMB_PIXELS).toBe(40_000_000)
+    expect(await makeThumbnail(pngClaiming(6_400, 6_400))).toBeNull()
+  })
+
+  it('answers nothing for a PNG with a good header and bad pixels, and for noise inside a JPEG', async () => {
+    const png = pngClaiming(200, 200)
+    const idat = Buffer.alloc(12 + 40); idat.writeUInt32BE(40, 0); idat.write('IDAT', 4, 'ascii'); randomBytes(40).copy(idat, 8)
+    const corrupt = Buffer.concat([png.subarray(0, png.length - 12), idat, png.subarray(png.length - 12)])
+    expect(await makeThumbnail(corrupt)).toBeNull()
+    const jpg = await jpeg(800, 600)
+    randomBytes(2000).copy(jpg, 1000)
+    await expect(makeThumbnail(jpg)).resolves.toSatisfy(facts => facts === null || typeof facts.width === 'number')
+  })
+})
+
+describe('the thumbnailer\'s limits', () => {
+  const facts: ImageFacts = { width: 10, height: 10 }
+  /** A decode the test finishes by hand, and how many started. */
+  function slowDecode() {
+    const pending: Array<() => void> = []
+    const state = { started: 0, release: () => { pending.splice(0).forEach(done => done()) } }
+    const decode = () => { state.started++; return new Promise<ImageFacts | null>(resolve => pending.push(() => resolve(facts))) }
+    return { state, decode }
+  }
+  const bytes = Buffer.from('x')
+  const later = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+  it('keeps a slot until its decode ends, even when the caller gave up waiting', async () => {
+    const { state, decode } = slowDecode()
+    const thumbnailer = createThumbnailer({ atOnce: 1, giveUpMs: 30, maxWaiting: 10, decode })
+    expect(await thumbnailer.make(bytes)).toBeNull()
+    expect(state.started).toBe(1)
+    // The first decode still runs: nothing else starts beside it, and a caller that gave up before its turn is never decoded.
+    expect(await thumbnailer.make(bytes)).toBeNull()
+    expect(state.started).toBe(1)
+    state.release()
+    await later(10)
+    expect(state.started).toBe(1)
+    const third = thumbnailer.make(bytes)
+    await later(5)
+    expect(state.started).toBe(2)
+    state.release()
+    expect(await third).toEqual(facts)
+  })
+
+  it('does at most atOnce decodes together', async () => {
+    const { state, decode } = slowDecode()
+    const thumbnailer = createThumbnailer({ atOnce: 2, giveUpMs: 1_000, maxWaiting: 10, decode })
+    const all = [1, 2, 3, 4].map(() => thumbnailer.make(bytes))
+    await later(10)
+    expect(state.started).toBe(2)
+    state.release()
+    await later(10)
+    expect(state.started).toBe(4)
+    state.release()
+    expect(await Promise.all(all)).toEqual([facts, facts, facts, facts])
+  })
+
+  it('answers at once with nothing when its queue is full, and says it is busy', async () => {
+    const { state, decode } = slowDecode()
+    const thumbnailer = createThumbnailer({ atOnce: 1, giveUpMs: 1_000, maxWaiting: 1, decode })
+    const running = thumbnailer.make(bytes)
+    const waiting = thumbnailer.make(bytes)
+    await later(5)
+    expect(thumbnailer.busy()).toBe(true)
+    const started = Date.now()
+    expect(await thumbnailer.make(bytes)).toBeNull()
+    expect(Date.now() - started).toBeLessThan(200)
+    expect(state.started).toBe(1)
+    state.release(); await later(5); state.release()
+    expect(await Promise.all([running, waiting])).toEqual([facts, facts])
+    expect(thumbnailer.busy()).toBe(false)
+  })
+
+  it('a decode that throws is nothing, and frees its place', async () => {
+    let calls = 0
+    const thumbnailer = createThumbnailer({ atOnce: 1, giveUpMs: 1_000, maxWaiting: 1, decode: async () => { if (calls++ === 0) throw new Error('boom'); return facts } })
+    expect(await thumbnailer.make(bytes)).toBeNull()
+    expect(await thumbnailer.make(bytes)).toEqual(facts)
   })
 })
 
