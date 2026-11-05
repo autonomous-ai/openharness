@@ -25,7 +25,7 @@ describe('the migration of project owners', () => {
     const plan = ownersPlan(legacy())
     expect(plan.projects.find(p => p.id === 'lead')).toEqual({ ...project('lead', 'owner'), visibility: 'public', ownerGeneration: 'swarm' })
     expect(plan.projects.find(p => p.id === 'stayed')).toEqual({ ...project('stayed', 'c'), ownerGeneration: 'c-first' })
-    expect(plan.filled).toBe(2)
+    expect(plan.filled).toEqual([{ projectId: 'lead', ownerId: 'owner' }, { projectId: 'stayed', ownerId: 'c' }])
   })
 
   it('passes on each project whose owner already left: to a member, the Swarm owner for a public one, else nobody', () => {
@@ -42,13 +42,13 @@ describe('the migration of project owners', () => {
   it('finds nothing to do on a second run', () => {
     const state = legacy()
     state.projects = ownersPlan(state).projects
-    expect(ownersPlan(state)).toMatchObject({ filled: 0, handovers: [], changed: false })
+    expect(ownersPlan(state)).toMatchObject({ filled: [], handovers: [], changed: false })
   })
 
   it('leaves a Swarm from before projects alone: its one project is the Swarm owner\'s, who never leaves', () => {
     const state = createSuperTab('swarm', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
     delete state.projects
-    expect(ownersPlan(state)).toMatchObject({ filled: 0, handovers: [], changed: false })
+    expect(ownersPlan(state)).toMatchObject({ filled: [], handovers: [], changed: false })
   })
 
   it('never changes the state it plans from', () => {

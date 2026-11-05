@@ -1,8 +1,11 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { AgentStart } from './model.js'
 import { createSuperTab, visibleState, type Actor, type SuperTabState } from './model.js'
-import { ownerAccount, ownsProject, projectOf, projectsOf, readConversation, settleOwners } from './projects.js'
+import { admitPerson, ownerAccount, ownsProject, projectOf, projectsOf, readConversation, settleOwners } from './projects.js'
+import { teamWorkCheck } from './machines.js'
+import type { ContributedMachine } from './machines.js'
 import { visibilityChanged } from './parts/commit.js'
 
 // Task #3073 (Diego, 11-05): a private project's owner who leaves the Swarm, or is removed, loses it, and the project stays
@@ -229,5 +232,47 @@ describe('the account of a project\'s owner', () => {
     expect(await ownerAccount(users, { ...projectOf(f.state, x.projectId), ownerId: '200000000000000000000001' })).toEqual({ name: 'Olive', email: 'olive@example.com' })
     f.run({ type: 'member.remove', userId: 'p' })
     expect(await ownerAccount(users, projectOf(f.state, x.projectId))).toBeNull()
+  })
+})
+
+// Security reviews 1 and 2 of #3082: every way into and out of the Swarm settles its projects, not only invite.accept and
+// member.remove. A project from before ownerGeneration whose owner left is never matched to them again by a link, domain or
+// Workspace join, and a person a restore drops passes their projects on.
+describe('every way in and out of the Swarm', () => {
+  it('settles a project whose owner left before a person comes back in, by any join', () => {
+    const f = setup(), x = f.create(p)
+    f.run({ type: 'project.sharing', projectId: x.projectId, visibility: 'private', memberIds: ['c'] }, p)
+    // From before ownerGeneration, its owner removed by a backend that did not settle.
+    delete projectOf(f.state, x.projectId).ownerGeneration
+    f.state.people = f.state.people.filter(person => person.id !== 'p')
+    admitPerson(f.state, { id: 'p', email: 'p@example.com', role: 'collaborator', generation: 'p-link' })
+    expect(projectOf(f.state, x.projectId)).toMatchObject({ ownerId: 'c', ownerGeneration: 'c-first' })
+    expect(f.reads(p, x.projectId)).toBe(false)
+    expect(() => f.run({ type: 'project.rename', projectId: x.projectId, name: 'Mine' }, p)).toThrow('unavailable')
+  })
+
+  it('passes on the projects of people a restore leaves out because the Workspace lost them', () => {
+    const f = setup(), x = f.create(p), alone = f.create(p)
+    f.run({ type: 'project.sharing', projectId: x.projectId, visibility: 'private', memberIds: ['c'] }, p)
+    f.state.deletion = { at: new Date(0).toISOString(), by: 'owner', purgeAt: new Date(10_000_000).toISOString() }
+    f.run({ type: 'swarm.restore' }, owner, { workspaceLost: ['p'] })
+    expect(f.state.people.some(person => person.id === 'p')).toBe(false)
+    expect(projectOf(f.state, x.projectId)).toMatchObject({ ownerId: 'c', ownerGeneration: 'c-first' })
+    expect(projectOf(f.state, alone.projectId).ownerId).toBe('')
+  })
+
+  it('has no other place that adds or drops people without settling', () => {
+    for (const file of ['commands.ts', 'store.ts']) {
+      const source = readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')
+      expect(source, file).not.toMatch(/state\.people\.push\(|state\.people = state\.people\.filter/)
+    }
+  })
+
+  it('places work on a machine as its owner\'s own only for its owner now, not the same account at a later membership', () => {
+    const f = setup(), x = f.create(p)
+    f.state.machines = [{ machineId: 'p-mac', contributorId: 'p', buddyOnly: true } as unknown as ContributedMachine]
+    expect(teamWorkCheck(f.state, 'p-mac', 'p', projectOf(f.state, x.projectId), 1000)).toBeNull()
+    f.state.people.find(person => person.id === 'p')!.generation = 'p-second'
+    expect(teamWorkCheck(f.state, 'p-mac', 'p', projectOf(f.state, x.projectId), 1000)).toMatchObject({ code: 'NOT_SWARM_MACHINE' })
   })
 })
