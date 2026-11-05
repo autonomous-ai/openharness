@@ -33,6 +33,36 @@ its task goes back to the head of the queue. Folders and branch copies are clean
 **Spec:** task #3398 brief (anh Dee, Swarm redesign approved 11-05). It builds on #3397 (Keeper: `Agent.crew`,
 `isCrew`, crew keep-alive and retention) and is read by #3400 (Budget: dispatch counts an asleep member as free).
 
+## Decisions made while building (2026-11-05)
+
+These change the plan above where they differ.
+
+- **Fallback order (River):** the route's own order, as the project's Order and quota rule applies it: the same account
+  kind as the machine left, then the account whose weekly quota resets soonest, then the most left, then the fewest
+  agents working, then by name (`crewKeep.ts fallbacks`).
+- **"Out of quota for over an hour"** is read without a stored clock: a used-up window that won't reset within the hour.
+  Unknown quota is never trouble. A withdrawn contribution reads as offline, and the sweep never throws on it.
+- **Retiring the old session uses the existing removal.** A move's take-over calls `removeAgent`, whose close record
+  makes the old host close the session and drop its folder when clean, the same as any removed agent. That replaces the
+  plan's `crewRetired` list and its host command, and is the "member's folder goes on retire" rule.
+- **Branch copies are pruned by the host.** The server records no branch names for tasks. Each hour, in each crew
+  folder, the host deletes local branches that were pushed and then merged into the default branch, or whose remote
+  branch is gone. It never deletes the current branch, one tracking the default branch, or one never pushed. A
+  gone-upstream branch's tip is kept under `refs/harness/dropped/`, so no commit is lost. (`crewFolders.ts
+  pruneBranches`)
+- **Wake after a dropped folder:** before the drop, the host remembers the folder's path and clone. On wake, it brings
+  the folder back at the same path from the clone (`git worktree add --detach`) before the keep-alive resumes the
+  engine's conversation there.
+- **Wake grace:** `work.assign` on an asleep member resets `downSince` to now, so #3397's 5-minute reopen grace counts
+  from the wake and the new task is not lost while the session reopens.
+- **No new host row fields:** host rows already carry the whole agent record, so the host reads `asleep` and `movedTo`
+  there, as Keeper's keep-alive does.
+- **Task 4 contract for the Desktop machine row** (River opens it as its own task), from what clients already get:
+  - crew sessions: `state.agents` on the machine with `crew`;
+  - state: `asleep` (since), `movedTo` (moving), or awake;
+  - idle hours: `now - asleep.since` while asleep;
+  - free disk: `machines[].observation.resources.projectDiskFreeBytes ?? diskFreeBytes`.
+
 ## Global Constraints
 
 - **Owns:** `backend/src/superTabs/`, `backend/src/worker.ts` (unchanged by this plan) and `cli/src/superTabs/`.
