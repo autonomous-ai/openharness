@@ -152,7 +152,7 @@ void main() {
     // Each list marks its own choice, whichever one is on screen.
     expect(
       tester.getSemantics(find.byKey(const ValueKey('palette-night'))),
-      containsSemantics(isSelected: true),
+      isSemantics(isSelected: true),
     );
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 

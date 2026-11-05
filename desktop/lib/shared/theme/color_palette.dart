@@ -211,16 +211,13 @@ enum HarnessPalette {
     this.muted,
     this.faint,
     this.errorInk,
-    Color? sidebar,
+    this._sidebar,
     this.sidebarInk,
     this.sidebarMuted,
-    Color? sidebarHover,
-    Color? sidebarSelected,
-    Color? sidebarOnSelected,
-  }) : _sidebar = sidebar,
-       _sidebarHover = sidebarHover,
-       _sidebarSelected = sidebarSelected,
-       _sidebarOnSelected = sidebarOnSelected;
+    this._sidebarHover,
+    this._sidebarSelected,
+    this._sidebarOnSelected,
+  });
 
   final String label, description;
   final Brightness brightness;
