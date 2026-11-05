@@ -12,7 +12,6 @@ import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/decisions_page.dart';
 import 'package:harness/super_tabs/mentions_page.dart';
 import 'package:harness/super_tabs/places.dart';
-import 'package:harness/super_tabs/buddy_rows.dart' show SuperTabCountBadge;
 import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'super_tab_activity_lists_test.dart' show load, swarm, unreadThread;
@@ -113,15 +112,6 @@ void _tags(ConversationServer server, int n, {String? at}) {
     );
     server.mentions.last['leadName'] = 'Person $i';
   }
-}
-
-/// A followed thread with three new replies, rooted in `offline`.
-void _thread(ConversationServer server) {
-  server.followedThreads = {
-    'unread': [unreadThread('message-1', text: 'Windows credential fix')],
-    'read': [],
-    'more': false,
-  };
 }
 
 /// An agent, Nico, whose task `waiting` asks the reader by name; [result] is
@@ -490,6 +480,7 @@ void main() {
           findsOneWidget,
         );
         await tester.enterText(field, 'The Mac Studio');
+        await tester.pump();
         await _tapSending(
           tester,
           _key('super-decision-send:decision:decision-1'),
@@ -514,22 +505,20 @@ void main() {
         final opened = await show(tester, await loaded(tester, server));
         final field = _key('super-decision-words:decision:decision-1');
         await tester.enterText(field, 'Next week, after the demo');
+        await tester.pump();
         await _tapSending(
           tester,
           _key('super-decision-send:decision:decision-1'),
         );
         expect(find.text('Ship it?'), findsOneWidget);
         expect(
-          tester
-              .widget<TextField>(
-                find.descendant(of: field, matching: find.byType(TextField)),
-              )
-              .controller!
-              .text,
+          tester.widget<TextField>(field).controller!.text,
           'Next week, after the demo',
         );
         expect(
-          find.text("Your words couldn't be sent here. Choose an option, or answer in the chat."),
+          find.text(
+            "Your words couldn't be sent here. Choose an option, or answer in the chat.",
+          ),
           findsOneWidget,
         );
         await tester.tap(_key('super-decision-open-chat:decision:decision-1'));
@@ -563,6 +552,7 @@ void main() {
           _key('super-decision-words:agent:waiting'),
           'Yes, turn it on',
         );
+        await tester.pump();
         await _tapSending(tester, _key('super-decision-send:agent:waiting'));
         final sent = server.posts.single['command'] as Map;
         expect(sent['type'], 'message.send');
@@ -627,7 +617,7 @@ void main() {
             _utc(_now.subtract(Duration(minutes: minutes)));
         // (message, sequence, how the server resolved it, thread).
         final tags = <(String, int, String?, String?)>[
-          ('Read', 6, 'read', null),
+          ('Seen', 6, 'read', null),
           ('Answered', 9, 'answer', null),
           ('Waiting one', 10, null, null),
           ('Waiting two', 11, null, null),
@@ -658,13 +648,13 @@ void main() {
         );
         double y(String text) => tester.getTopLeft(find.text(text)).dy;
         // One row each, though one person wrote them all in one chat.
-        for (final text in ['Answered', 'Waiting one', 'Waiting two', 'Read']) {
+        for (final text in ['Answered', 'Waiting one', 'Waiting two', 'Seen']) {
           expect(find.text(text), findsOneWidget, reason: text);
         }
         expect(y('Answered'), lessThan(y('Waiting one')));
         expect(y('Waiting one'), lessThan(y('Waiting two')));
-        expect(y('Waiting two'), lessThan(y('Read')));
-        expect(y('Read'), lessThan(y('Answered, read past')));
+        expect(y('Waiting two'), lessThan(y('Seen')));
+        expect(y('Seen'), lessThan(y('Answered, read past')));
         expect(dot('mention-2'), findsOneWidget);
         expect(dot('mention-3'), findsOneWidget);
         expect(dot('mention-1'), findsNothing);

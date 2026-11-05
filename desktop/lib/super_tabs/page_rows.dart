@@ -21,9 +21,8 @@ String superTabPageWhen(BuildContext context, DateTime at, DateTime now) {
   if (local.year == now.year &&
       local.month == now.month &&
       local.day == now.day) {
-    return MaterialLocalizations.of(
-      context,
-    ).formatTimeOfDay(TimeOfDay.fromDateTime(local));
+    return MaterialLocalizations.of(context)
+        .formatTimeOfDay(TimeOfDay.fromDateTime(local));
   }
   return superTabAgoShort(now.difference(local));
 }
@@ -66,9 +65,8 @@ Widget superTabPageHeading(String title) => Padding(
   ),
   child: Text(
     title,
-    style: DesktopChrome.metadata(
-      color: grid.AppPalette.textFaint,
-    ).copyWith(fontWeight: grid.AppFont.semibold),
+    style: DesktopChrome.metadata(color: grid.AppPalette.textFaint)
+        .copyWith(fontWeight: grid.AppFont.semibold),
   ),
 );
 
@@ -80,9 +78,8 @@ Widget superTabPageEmpty(String title, [String? more, Widget? action]) =>
         children: [
           Text(
             title,
-            style: DesktopChrome.text(
-              medium: true,
-            ).copyWith(fontWeight: grid.AppFont.semibold),
+            style: DesktopChrome.text(medium: true)
+                .copyWith(fontWeight: grid.AppFont.semibold),
           ),
           if (more != null) ...[
             const SizedBox(height: grid.AppDesktop.listRowGap * 2),
@@ -164,6 +161,7 @@ class SuperTabPageRow extends StatefulWidget {
     this.previewStrong = false,
     this.previewLines = 1,
     this.previewLead,
+    this.marks = const [],
     this.more,
     this.extra,
     this.actions = const [],
@@ -187,6 +185,10 @@ class SuperTabPageRow extends StatefulWidget {
 
   /// How many leading characters of [preview] are a name, shown stronger.
   final int? previewLead;
+
+  /// Words of [preview] drawn in the accent, semibold: the reader's own tag
+  /// in a mention (`@dee`), wherever it is, in any case.
+  final List<String> marks;
 
   final String? more;
   final Widget? extra;
@@ -281,7 +283,7 @@ class _PageRowState extends State<SuperTabPageRow> {
                 ),
                 TextSpan(text: text.substring(lead)),
               ] else
-                TextSpan(text: text),
+                ..._marked(text),
             ],
           ),
           maxLines: widget.previewLines,
@@ -289,6 +291,33 @@ class _PageRowState extends State<SuperTabPageRow> {
         ),
       ],
     );
+  }
+
+  /// [text] with each of [SuperTabPageRow.marks] in it drawn marked.
+  List<InlineSpan> _marked(String text) {
+    final marks = [
+      for (final m in widget.marks)
+        if (m.isNotEmpty) RegExp.escape(m),
+    ];
+    if (marks.isEmpty) return [TextSpan(text: text)];
+    final style = TextStyle(
+      color: DesktopChrome.accent,
+      fontWeight: grid.AppFont.semibold,
+    );
+    final spans = <InlineSpan>[];
+    var from = 0;
+    for (final match in RegExp(
+      marks.join('|'),
+      caseSensitive: false,
+    ).allMatches(text)) {
+      if (match.start > from) {
+        spans.add(TextSpan(text: text.substring(from, match.start)));
+      }
+      spans.add(TextSpan(text: match[0], style: style));
+      from = match.end;
+    }
+    if (from < text.length) spans.add(TextSpan(text: text.substring(from)));
+    return spans;
   }
 
   @override
