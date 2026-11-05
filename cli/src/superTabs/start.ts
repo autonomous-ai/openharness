@@ -1,5 +1,5 @@
 import { encodeRuntimeProfile } from '../engines/kit/runtime.js'
-import { mkdirSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { randomUUID } from 'node:crypto'
@@ -215,6 +215,24 @@ async function watchQueued(queued: Json, scoped: ScopedRequest, pause: (ms: numb
     if (start.dispatched || start.harnessId) break
   }
   return queued
+}
+
+/**
+ * Names a Team-written start's checkout untrusted in its own Codex home (task #3009). The home names no project so that the
+ * branch's own config, hooks and exec policies stay off (audit H2), but codex-cli 0.165 then stops on "Trust this folder?
+ * 1. Trust and continue / 2. Quit" in a pane nobody sees: every such start timed out at 3 minutes (10 of 10, 2026-10-29 to
+ * 11-05). Named untrusted, it asks "Open restricted / Quit" instead, whose first row keeps them off and saves no trust, and
+ * the host answers that screen alone (machines.ts). A worktree takes its repository's answer, so the source folder is named,
+ * as written and as the disk resolves it. Never `trusted`; an entry already there is left as it is.
+ */
+export function untrustCheckout(home: string, checkout: string): void {
+  const file = joinPath(home, 'config.toml')
+  let resolved = checkout
+  try { resolved = realpathSync(checkout) } catch { /* A folder not made yet is named as written. */ }
+  const config = existsSync(file) ? readFileSync(file, 'utf8') : ''
+  // A TOML basic string is a JSON string, except that DEL must be escaped too (engines/kit/folderTrust.ts recordToml).
+  const tables = [...new Set([checkout, resolved])].map(folder => `[projects.${JSON.stringify(folder).replace(/\x7f/g, '\\u007f')}]`).filter(table => !config.includes(table))
+  if (tables.length) appendFileSync(file, `${config && !config.endsWith('\n') ? '\n' : ''}${tables.map(table => `${table}\ntrust_level = "untrusted"\n`).join('')}`, { mode: 0o600 })
 }
 
 /** How a backend from before `heavy` (backend superTabs/commands.ts startRequestSchema) refuses it, word for word. */
@@ -455,6 +473,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         // Codex refuses a CODEX_HOME that is not there; only the Team user reads it.
         mkdirSync(pmHome, { recursive: true, mode: 0o700 })
         payload.codexHome = pmHome
+        if (projectSettingsOff) untrustCheckout(pmHome, String(request.cwd))
       }
       // The routed model goes on the command line of this session alone. Typing /model into the pane afterwards saves
       // it as the person's default in their own Claude settings (manual run 2, 2026-10-19).
