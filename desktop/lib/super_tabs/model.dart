@@ -600,6 +600,43 @@ class SuperTabProjectStatus {
   final String? by;
 }
 
+/// One task agent at a prompt in its terminal, waiting for the reader, as the
+/// backend lists it: no screen text, which the reader's app reads through the
+/// terminal read that checks who may (task #3029).
+class SuperTabPromptWait {
+  const SuperTabPromptWait({
+    required this.agentId,
+    required this.agentName,
+    required this.conversationId,
+    required this.conversationTitle,
+    required this.projectId,
+    required this.projectName,
+  });
+  final String agentId, agentName, conversationId, conversationTitle;
+  final String projectId, projectName;
+
+  /// Null for a row missing what it needs.
+  static SuperTabPromptWait? read(Map<String, dynamic> row) => switch (row) {
+    {
+      'agentId': final String agentId,
+      'agentName': final String agentName,
+      'conversationId': final String conversationId,
+      'conversationTitle': final String conversationTitle,
+      'projectId': final String projectId,
+      'projectName': final String projectName,
+    } =>
+      SuperTabPromptWait(
+        agentId: agentId,
+        agentName: agentName,
+        conversationId: conversationId,
+        conversationTitle: conversationTitle,
+        projectId: projectId,
+        projectName: projectName,
+      ),
+    _ => null,
+  };
+}
+
 class SuperTabSnapshot {
   SuperTabSnapshot.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -657,6 +694,10 @@ class SuperTabSnapshot {
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
+      promptsWaiting = List.unmodifiable([
+        for (final wait in row['promptsWaiting'] as List? ?? const [])
+          if (wait is Map) ?SuperTabPromptWait.read(superTabMap(wait)),
+      ]),
       activityDigest = row['activityDigest'] as String?,
       remindersDigest = row['remindersDigest'] as String?,
       chatSettings = Map.unmodifiable({
@@ -792,6 +833,11 @@ class SuperTabSnapshot {
   /// Which decisions wait, as a digest that moves when they change though the
   /// count may not; null from a backend before it (superTabs/decisions.ts).
   final String? decisionsDigest;
+
+  /// The task agents waiting at a prompt in their terminals for the reader
+  /// (backend superTabs/promptWaits.ts): under Decisions, counted with them.
+  /// Empty from a backend before it (task #3029).
+  final List<SuperTabPromptWait> promptsWaiting;
 
   /// Which of the reader's Activity rows are unread (replies to them, reactions to their messages), as a digest
   /// that moves when one comes or is read; null from a backend before Activity (superTabs/activity.ts).

@@ -194,6 +194,11 @@ class _SuperTabViewState extends State<SuperTabView>
   /// Mentions or Threads (anh Dee, 11-05, task #2996).
   SwarmPage? _page;
 
+  /// The need a notice opened Decisions for, lit there for a moment, and how
+  /// many times one was (task #3029): the same need opened again lights again.
+  String? _highlight;
+  int _highlightTurn = 0;
+
   /// Manage holds the main pane; [_manageTab] is which of its pages, but for
   /// Devices, which is the pane the view holds for it ([_devicesVisible]).
   bool _showManage = false;
@@ -1900,6 +1905,9 @@ class _SuperTabViewState extends State<SuperTabView>
       _page = notice?.kind == SuperTabNoticeKind.mention
           ? SwarmPage.mentions
           : SwarmPage.decisions;
+      // Decisions lights the row it was opened for (task #3029).
+      _highlight = notice?.need?.id;
+      _highlightTurn++;
       _showManage = false;
       _showPullRequests = _showTasks = false;
     });
@@ -5376,6 +5384,8 @@ class _SuperTabViewState extends State<SuperTabView>
                           switch (_pageShown) {
                             SwarmPage.decisions => SuperTabDecisionsPage(
                               activity: SuperTabActivity.of(c),
+                              highlight: _highlight,
+                              highlightTurn: _highlightTurn,
                               onOpenConversation: _openConversation,
                               onOpenReminder: (reminder) =>
                                   unawaited(_openReminder(reminder)),

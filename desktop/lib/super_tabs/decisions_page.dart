@@ -13,21 +13,35 @@ import 'decisions.dart';
 import 'decisions_view.dart' show quietDecisionAction;
 import 'model.dart';
 import 'page_rows.dart';
+import 'prompt_lines.dart';
 import 'reminders.dart';
 
 /// Decisions, the sidebar's first page (anh Dee, 11-05, task #2996): what
 /// waits on the reader's answer, as Needs you listed it. Due reminders lead,
-/// then the agents waiting on them, then the decisions by day. Each can be
-/// answered here: a decision by an option or in words, an agent in words.
+/// then the agents waiting on them (an agent of their task at a prompt in its
+/// terminal too, task #3029), then the decisions by day. Each can be answered
+/// here: a decision by an option or in words, an agent in words or at its
+/// prompt.
 class SuperTabDecisionsPage extends StatefulWidget {
   const SuperTabDecisionsPage({
     super.key,
     required this.activity,
     required this.onOpenConversation,
     this.onOpenReminder,
+    this.highlight,
+    this.highlightTurn = 0,
     this.now = DateTime.now,
   });
   final SuperTabActivity activity;
+
+  /// The need a notice opened the page for (`decision:<id>`, as
+  /// [SuperTabNeed.id]): its row lights for a moment, so the reader sees which
+  /// one (task #3029). [highlightTurn] lights it again for the same need.
+  final String? highlight;
+  final int highlightTurn;
+
+  /// How long a [highlight] stays lit.
+  static const lit = Duration(milliseconds: 1800);
 
   /// Opens the chat of an agent waiting on the reader, or of a decision.
   final ValueChanged<String> onOpenConversation;
@@ -44,10 +58,15 @@ class _DecisionsPageState extends State<SuperTabDecisionsPage> {
   late SuperTabActivity _activity = widget.activity;
   bool _handledShown = false;
 
+  /// The row lit for a moment ([SuperTabDecisionsPage.highlight]).
+  String? _lit;
+  Timer? _unlight;
+
   @override
   void initState() {
     super.initState();
     _activity.opened();
+    _light(widget.highlight);
   }
 
   @override
@@ -57,12 +76,45 @@ class _DecisionsPageState extends State<SuperTabDecisionsPage> {
       _activity.closed();
       _activity = widget.activity..opened();
     }
+    if (widget.highlight != old.highlight ||
+        widget.highlightTurn != old.highlightTurn) {
+      _light(widget.highlight);
+    }
+  }
+
+  void _light(String? id) {
+    _unlight?.cancel();
+    _lit = id;
+    if (id == null) return;
+    _unlight = Timer(SuperTabDecisionsPage.lit, () {
+      if (mounted) setState(() => _lit = null);
+    });
   }
 
   @override
   void dispose() {
+    _unlight?.cancel();
     _activity.closed();
     super.dispose();
+  }
+
+  /// [row], washed in the accent while it is the one lit, and brought into
+  /// view. One shape lit or not, so the row keeps its state (a typed answer).
+  Widget _lighting(String id, Widget row) {
+    final lit = _lit == id;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 240),
+      decoration: BoxDecoration(
+        color: lit ? grid.AppSurface.accentWashHover : Colors.transparent,
+        borderRadius: BorderRadius.circular(grid.AppDesktop.fieldRadius),
+      ),
+      child: Stack(
+        children: [
+          row,
+          if (lit) _BringIntoView(key: ValueKey('super-activity-lit:$id')),
+        ],
+      ),
+    );
   }
 
   String _when(DateTime at) => superTabPageWhen(context, at, widget.now());
@@ -195,8 +247,13 @@ class _DecisionsPageState extends State<SuperTabDecisionsPage> {
       // decisions, and is not left to the PM.
       for (final reminder in due) _reminder(reminder),
       // An agent waiting has no time of its own: it leads, above the days.
-      for (final n in waiting) _need(n),
-      ...superTabByDay<SuperTabNeed>(decided, (n) => n.at, _need, widget.now()),
+      for (final n in waiting) _lighting(n.id, _need(n)),
+      ...superTabByDay<SuperTabNeed>(
+        decided,
+        (n) => n.at,
+        (n) => _lighting(n.id, _need(n)),
+        widget.now(),
+      ),
     ];
   }
 
@@ -227,6 +284,7 @@ class _DecisionsPageState extends State<SuperTabDecisionsPage> {
 
   Widget _need(SuperTabNeed need) {
     final decision = need.decision;
+    if (need.kind == SuperTabNeedKind.prompt) return _prompt(need);
     if (decision == null) {
       final project = _snapshot?.projectFor(need.conversationId);
       return SuperTabPageRow(
@@ -293,6 +351,51 @@ class _DecisionsPageState extends State<SuperTabDecisionsPage> {
         ],
       ),
       onTap: () => widget.onOpenConversation(decision.conversationId),
+    );
+  }
+
+  /// An agent of the reader's task at a prompt in its terminal (task #3029):
+  /// its last lines, and its terminal a click away, beside the task. It
+  /// leaves once the agent moves on (the read drops it).
+  Widget _prompt(SuperTabNeed need) {
+    final agentId = need.agentId!;
+    final project = _snapshot?.projectFor(need.conversationId);
+    void open() {
+      widget.onOpenConversation(need.conversationId);
+      _activity.controller.openAgentTerminal(
+        agentId,
+        conversationId: need.conversationId,
+      );
+    }
+
+    return SuperTabPageRow(
+      key: ValueKey('super-activity-row-${need.id}'),
+      avatarName: _snapshot?.agent(agentId)?.displayName ?? need.title,
+      who: need.title,
+      where: project?.name,
+      privateWhere: project?.isPrivate == true,
+      trailing: 'Open',
+      preview: need.question,
+      extra: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SuperTabPromptLines(
+            key: ValueKey('super-prompt-read:$agentId'),
+            controller: _activity.controller,
+            agentId: agentId,
+          ),
+          Padding(
+            padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
+            child: OutlinedButton(
+              key: ValueKey('super-prompt-open:$agentId'),
+              onPressed: open,
+              child: const Text('Open terminal'),
+            ),
+          ),
+        ],
+      ),
+      onTap: open,
     );
   }
 
@@ -506,4 +609,32 @@ class _AnswerInWordsState extends State<_AnswerInWords> {
       ),
     );
   }
+}
+
+/// Brings the row it sits in into view once, as it lights.
+class _BringIntoView extends StatefulWidget {
+  const _BringIntoView({super.key});
+
+  @override
+  State<_BringIntoView> createState() => _BringIntoViewState();
+}
+
+class _BringIntoViewState extends State<_BringIntoView> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(
+        Scrollable.ensureVisible(
+          context,
+          alignment: 0.3,
+          duration: const Duration(milliseconds: 200),
+        ),
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
 }
