@@ -745,7 +745,7 @@ describe('one machine: a Mac and its Harness Team account', () => {
         maxAgents: 1, ifMissing: true }, person)
       expect(await joins()).toEqual([])
       const listed = (await store.read(owner, tab)).state.machines!.find(m => m.machineId === 'team-mac')!
-      expect(listed).toMatchObject({ hostMachineId: 'personal-mac', name: 'MacBook Pro', maxAgents: 3, cwd: '/team' })
+      expect(listed).toMatchObject({ hostMachineId: 'personal-mac', name: 'MacBook Pro · Team account', maxAgents: 3, cwd: '/team' })
       const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === tab)!.machine.generation
       await store.observeMachine(team, tab, 'team-mac', reading(generation))
       const group = String((await run(tab, { type: 'conversation.create', projectId: 'lead', title: 'Work', brief: 'Do it',
