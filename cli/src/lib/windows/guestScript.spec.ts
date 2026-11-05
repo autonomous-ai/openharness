@@ -91,6 +91,17 @@ describe('the guest processor', () => {
     expect(text).toContain('the guest account $user is not here')
   })
 
+  it('gives the guest\'s host its own instance and the owner SID, and lets only the owner start it', () => {
+    const text = processor()
+    // The host runs the same binary as the owner's: the tag keeps its instance, and every route keyed by it, apart.
+    expect(text).toContain('$instanceTag = "gu" + $user.Substring(3)')
+    expect(text).toContain('set `"HARNESS_PTY_INSTANCE_TAG=$instanceTag`"')
+    expect(text).toContain('set `"HARNESS_PTY_SHARE_SID=$OWNER_SID`"')
+    expect(text).toContain('serve --home `"$hostHome`"')
+    // Owner: start/stop only; the guest's task cannot be changed by the guest.
+    expect(text).toContain('(A;;FRFX;;;" + $OWNER_SID + ")"')
+  })
+
   it('refuses more than one request and removes the request when it answers', () => {
     const text = processor()
     expect(text).toContain("if ($files.Count -ne 1)")

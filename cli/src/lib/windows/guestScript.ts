@@ -359,7 +359,10 @@ export function buildWindowsGuestProcessorScript(input: { owner: string; ownerHo
     '  & $ICACLS $hostHome /inheritance:r /grant:r ("*" + $sid + ":(OI)(CI)F") ("*" + $SYSTEM_SID + ":(OI)(CI)F") ("*" + $ADMINS + ":(OI)(CI)F") ("*" + $OWNER_SID + ":(OI)(CI)(RX)") /L /q | Out-Null',
     '  if ($LASTEXITCODE -ne 0) { throw "could not secure the guest host folder $hostHome" }',
     '  $wrapper = Join-Path $hostHome "host.cmd"',
-    '  $text = "@echo off`r`nset `"HARNESS_PTY_SHARE_SID=$OWNER_SID`"`r`n`"$PTY_BIN`" serve --home `"$hostHome`"`r`n"',
+    // The tag keeps this account\'s host instance (and every pane route keyed by it) apart from the owner\'s, which
+    // runs the same binary: lib/../pty/src/instance.rs `INSTANCE_TAG_VAR`. `hg_<hex>` -> `gu<hex>`.
+    '  $instanceTag = "gu" + $user.Substring(3)',
+    '  $text = "@echo off`r`nset `"HARNESS_PTY_SHARE_SID=$OWNER_SID`"`r`nset `"HARNESS_PTY_INSTANCE_TAG=$instanceTag`"`r`n`"$PTY_BIN`" serve --home `"$hostHome`"`r`n"',
     '  [IO.File]::WriteAllText($wrapper, $text)',
     '  $line = "/d /s /c `"" + $wrapper + "`""',
     '  $arguments = [System.Security.SecurityElement]::Escape($line)',
