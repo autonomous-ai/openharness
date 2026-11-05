@@ -2458,6 +2458,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
       if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
+      // Nor one that needs access: a machine off the list lists nothing it can reach (machineAccess.ts).
+      const unlisted = pool ? null : accessRefusal(state, request.machineId, home, taskAccess(startGroup))
+      if (unlisted) failTeamWork(unlisted)
       state.starts.push({ ...(pool ? { poolGeneration: pool.generation } : {}), ...(command.routeDecisionId ? { routeDecisionId: command.routeDecisionId } : {}), id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
         contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: grant.machineOwnerId,
         hostGrant: grant.hostGrant ?? null, request, harnessId: null, dispatched: false, error: null, requestedAt: context.now })
