@@ -329,7 +329,7 @@ describe('a half-finished setup is repaired, not taken for done (#2765, Darren-M
     expect(f.deps.setup).not.toHaveBeenCalled()
     expect(await f.auto.offer('manual', undefined, false, { restart: true })).toEqual({ state: 'started' })
     await f.auto.settled()
-    expect(f.deps.setup).toHaveBeenCalledWith(expect.any(Function), { signInAgain: false })
+    expect(f.deps.setup).toHaveBeenCalledWith(expect.any(Function))
   })
 
   it('with every part in place it is done: exists, and nothing runs', async () => {
