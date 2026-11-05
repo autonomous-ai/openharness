@@ -32,9 +32,10 @@ import { threadSummaries } from './threads.js'
 import { closeProposal, databaseProposalReads, openProposalRows, openProposals, proposalChat, type OpenProposal } from './proposals.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
+import { makeThumbnail, MAX_READ_BACK_BYTES, pictureFields, THUMBNAILED_TYPES, thumbKeyOf, type StoredImage } from './thumbnails.js'
 import { FileLinks } from './fileLinks.js'
 import { randomBytes, randomUUID } from 'node:crypto'
-import type { Readable } from 'node:stream'
+import { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
 import { noteClaim, recordDeliveryCall } from '../lib/deliveryCalls.js'
 import { retryTransient } from './retry.js'
@@ -2191,8 +2192,9 @@ export class SuperTabStore {
     if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
     const key = await this.uploader(tabId, tx => this.poster(tx, user, tabId, conversationId, asAgentId).then(p => p.actor))
     const row = await this.keep(attachments.store, attachments.prefix, tabId, key, { name: name.data, conversationId },
-      async () => checkedType(mime.data, file.body), file.body, MAX_FORM_ATTACHMENT_BYTES)
-    return { attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }) }
+      async () => checkedType(mime.data, file.body), file.body, MAX_FORM_ATTACHMENT_BYTES, (objectKey, bytes) => this.pictureOf(attachments, objectKey, bytes))
+    return { attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey),
+      ...pictureFields(row.image) }) }
   }
 
   /** A link to put one file of `size` bytes straight into the bucket, for a file too big for this server's form route. The
@@ -2263,9 +2265,9 @@ export class SuperTabStore {
       await this.poster(tx, user, tabId, found!.conversationId, asAgentId)
       return found!
     })
-    const sendable = async (mime: string) => ({ attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime, size: row.size,
-      url: publicUrl(attachments.publicBase, row.objectKey) }) })
-    if (!row.purpose) return sendable(row.mime)
+    const sendable = async (mime: string, image: unknown) => ({ attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime, size: row.size,
+      url: publicUrl(attachments.publicBase, row.objectKey), ...pictureFields(image) }) })
+    if (!row.purpose) return sendable(row.mime, row.image)
     let stored: { size: number } | null, head: Buffer
     try {
       stored = await direct.stored(row.objectKey)
@@ -2281,11 +2283,22 @@ export class SuperTabStore {
       unavailable()
     }
     const mime = typeFromHead(row.mime, head!)
-    const finished = await this.db.superTabAttachment.updateMany({ where: { id: row.id, tabId, purpose: PENDING_UPLOAD_PURPOSE }, data: { purpose: { unset: true }, mime } })
-    if (finished.count === 1) return sendable(mime)
+    // A picture sent straight to the bucket is read back once for its thumbnail, up to a size; any failure only means none.
+    let image: StoredImage | null = null
+    if (THUMBNAILED_TYPES.has(mime) && stored!.size <= MAX_READ_BACK_BYTES) {
+      try { image = await this.pictureOf(attachments, row.objectKey, await direct.read(row.objectKey)) } catch (error) {
+        logger.warn('super-tab upload thumbnail failed', { tabId, code: errorCode(error) })
+      }
+    }
+    const finished = await this.db.superTabAttachment.updateMany({ where: { id: row.id, tabId, purpose: PENDING_UPLOAD_PURPOSE },
+      data: { purpose: { unset: true }, mime, ...image ? { image: image as unknown as Prisma.InputJsonValue } : {} } })
+    if (finished.count === 1) return sendable(mime, image)
     // Another finish of the same upload won: the same answer. The sweep claimed it first: its file is going, so it is refused.
     const now = await this.db.superTabAttachment.findFirst({ where: { id: row.id, tabId } })
-    return now && !now.purpose && !now.usedBy ? sendable(now.mime) : unavailable()
+    if (now && !now.purpose && !now.usedBy) return sendable(now.mime, now.image)
+    // The row will not carry the thumbnail just stored, so nothing would ever remove it: it goes now.
+    if (image?.thumb) await attachments.store.delete(thumbKeyOf(row.objectKey)).catch(() => {})
+    return unavailable()
   }
 
   /**
@@ -2421,13 +2434,20 @@ export class SuperTabStore {
 
   /** Streams one file into the bucket under a random key, as the type `typed` decides from its first bytes, and records it. */
   private async keep(bucket: AttachmentStore, prefix: string, tabId: string, actorKey: string, file: { name: string; conversationId: string; purpose?: string },
-    typed: () => Promise<{ mime: string; body: Readable }>, original: Readable, cap: number) {
+    typed: () => Promise<{ mime: string; body: Readable }>, original: Readable, cap: number,
+    /** Given the stored picture's bytes, its facts and stored thumbnail (pictureOf); a picture is held in memory for it, up to `cap`. */
+    thumbnail?: (objectKey: string, bytes: Buffer) => Promise<StoredImage | null>) {
     const objectKey = objectKeyFor(prefix, tabId, file.name)
     let size: number, mime: string
+    const held: Buffer[] = []
     try {
       const checked = await typed()
       mime = checked.mime
-      size = await bucket.put(objectKey, { name: file.name, mime }, checked.body, cap)
+      const tee = thumbnail && THUMBNAILED_TYPES.has(mime)
+      const body = !tee ? checked.body : Readable.from((async function* () {
+        for await (const chunk of checked.body) { held.push(Buffer.from(chunk)); yield chunk }
+      })())
+      size = await bucket.put(objectKey, { name: file.name, mime }, body, cap)
     } catch (error) {
       if (error instanceof SuperTabError) throw error
       if (error instanceof AttachmentTooLarge) {
@@ -2439,8 +2459,36 @@ export class SuperTabStore {
       logger.error('super-tab attachment storage failed', { tabId, error: error instanceof Error ? error.message : String(error) })
       fail('ATTACHMENTS_UNAVAILABLE', 'Could not store the file just now. Try again.', 503)
     }
-    return this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId: file.conversationId,
-      actorKey, name: file.name, mime, size, objectKey, ...(file.purpose ? { purpose: file.purpose } : {}) } })
+    // After the original is stored, so a picture that will not decode is just a file. Never fails the upload.
+    const image = thumbnail && held.length ? await thumbnail(objectKey, Buffer.concat(held)).catch(() => null) : null
+    held.length = 0
+    try {
+      return await this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId: file.conversationId,
+        actorKey, name: file.name, mime, size, objectKey, ...(file.purpose ? { purpose: file.purpose } : {}),
+        ...image ? { image: image as unknown as Prisma.InputJsonValue } : {} } })
+    } catch (error) {
+      // No row will name the thumbnail, so nothing would remove it.
+      if (image?.thumb) await bucket.delete(thumbKeyOf(objectKey)).catch(() => {})
+      throw error
+    }
+  }
+
+  /** A picture's size and its thumbnail, made and stored beside the original; null when it is not a picture this reads. A thumbnail
+   *  that cannot be stored leaves the size and no thumbnail. Never throws. */
+  private async pictureOf(attachments: Attachments, objectKey: string, bytes: Buffer): Promise<StoredImage | null> {
+    const made = await makeThumbnail(bytes)
+    if (!made) return null
+    const image: StoredImage = { width: made.width, height: made.height }
+    if (made.thumb) {
+      const key = thumbKeyOf(objectKey)
+      try {
+        await attachments.store.put(key, { name: 'thumbnail.webp', mime: 'image/webp' }, Readable.from([made.thumb.bytes]), made.thumb.bytes.byteLength)
+        image.thumb = { url: publicUrl(attachments.publicBase, key), width: made.thumb.width, height: made.thumb.height, size: made.thumb.bytes.byteLength }
+      } catch (error) {
+        logger.warn('super-tab thumbnail could not be stored', { code: errorCode(error) })
+      }
+    }
+    return image
   }
 
   /** The actor, once it may post in this conversation. */
@@ -2468,7 +2516,8 @@ export class SuperTabStore {
       const voice = voiceFacts(row.voice)
       if (!voice && row.voiceSince) fail('VOICE_TRANSCRIBING', 'This voice message is still being transcribed. Try again in a moment.', 409)
       if (voice) voiceWords[row.id] = voiceTranscript(row.voice)
-      return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey), ...voice ? { voice } : {} }
+      return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey), ...voice ? { voice } : {},
+        ...pictureFields(row.image) }
     }) }
   }
 
@@ -2502,7 +2551,8 @@ export class SuperTabStore {
       const heard = new Set((await messagesById(tx, state.id, command.conversationId, handed.map(r => r.usedBy!))).filter(m => !m.buddySession).map(m => m.id))
       handed = handed.filter(r => heard.has(r.usedBy!))
     }
-    return { attachments: [...own, ...handed].map(row => ({ id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) })),
+    return { attachments: [...own, ...handed].map(row => ({ id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey),
+        ...pictureFields(row.image) })),
       claimed: own.map(r => r.id), proposed: handed.map(r => r.id) }
   }
 

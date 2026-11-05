@@ -1,5 +1,6 @@
 import { logger } from '../utils/logger.js'
 import { errorCode, trimPrefix, type Attachment, type AttachmentStore } from './attachments.js'
+import { imageFacts } from './thumbnails.js'
 import { voiceFacts } from './voiceMessages.js'
 
 /**
@@ -50,13 +51,23 @@ export class FileLinks {
     const expiresAt = fileLinkExpiry(now)
     if (expiresAt !== this.window || this.signed.size >= MAX_CACHED_LINKS) { this.signed.clear(); this.window = expiresAt }
     const keys = new Set<string>()
-    for (const row of rows) for (const file of files(row)) { const key = this.keyOf(tabId, file.url); if (key) keys.add(key) }
+    // A thumbnail is linked in the very read that links its original, for the same reader, and only inside the Swarm's folder.
+    const picture = (file: Attachment) => this.keyOf(tabId, file.url) ? imageFacts(file) : null
+    for (const row of rows) for (const file of files(row)) {
+      const key = this.keyOf(tabId, file.url)
+      if (key) keys.add(key)
+      const thumb = key ? this.keyOf(tabId, picture(file)?.thumb?.url) : null
+      if (thumb) keys.add(thumb)
+    }
     const links = await this.signAll([...keys], expiresAt)
     return rows.map(row => !Array.isArray(row.attachments) ? row : { ...row, attachments: files(row).map(file => {
       const key = this.keyOf(tabId, file.url), url = key ? links.get(key) : undefined
       const voice = voiceFacts(file.voice)
+      const facts = picture(file), thumbUrl = facts?.thumb ? links.get(this.keyOf(tabId, facts.thumb.url) ?? '') : undefined
+      const image = !facts ? {} : { width: facts.width, height: facts.height,
+        ...facts.thumb && this.keyOf(tabId, facts.thumb.url) ? { thumb: { ...facts.thumb, ...thumbUrl ? { link: thumbUrl, expiresAt } : { unlinked: true as const } } } : {} }
       return { id: file.id, name: file.name, mime: file.mime, size: file.size, url: typeof file.url === 'string' ? file.url : '',
-        ...url ? { link: url, expiresAt } : { unlinked: true as const }, ...voice ? { voice } : {} } satisfies Attachment
+        ...url ? { link: url, expiresAt } : { unlinked: true as const }, ...voice ? { voice } : {}, ...image } satisfies Attachment
     }) })
   }
 

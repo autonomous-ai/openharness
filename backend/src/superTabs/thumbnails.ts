@@ -89,3 +89,14 @@ export function imageFacts(stored: unknown): StoredImage | null {
   }
   return facts
 }
+
+/** The picture facts a file carries when a stored row's `image` is read for the upload's answer or a message. */
+export function pictureFields(stored: unknown): { width?: number; height?: number; thumb?: { url: string; width: number; height: number; size: number } } {
+  const facts = imageFacts(stored)
+  return facts ? { width: facts.width, height: facts.height, ...facts.thumb ? { thumb: facts.thumb } : {} } : {}
+}
+
+/** Pictures the server reads back from the bucket for a thumbnail when they were sent straight to it. A bigger one gets none. */
+export const MAX_READ_BACK_BYTES = 32 * 1024 * 1024
+/** The types thumbnailed, as an upload's checked type names them. */
+export const THUMBNAILED_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp'])
