@@ -3453,7 +3453,7 @@ class _Pending extends StatelessWidget {
   /// nothing until the post is read back with their links.
   final List<SwarmOutgoingFile> files;
 
-  /// What makes it a voice message, its one file the clip: drawn as its
+  /// What makes it a voice message, its final file the clip: drawn as its
   /// bubble, which plays once the post is read back.
   final SuperTabVoice? voice;
 
@@ -3501,20 +3501,20 @@ class _Pending extends StatelessWidget {
                   ),
                 ),
               ),
-          if (voice case final voice? when files.length == 1)
-            SwarmVoiceBubble(
-              file: SuperTabAttachment.fromJson({
-                'id': '',
-                'name': files.single.name,
-                'mime': swarmMimeForName(files.single.name),
-                'size': files.single.size,
-                'url': '',
-              }),
-              voice: voice,
-              words: '',
-            )
-          else
-            for (final file in files)
+          for (final (index, file) in files.indexed)
+            if (voice case final voice? when index == files.length - 1)
+              SwarmVoiceBubble(
+                file: SuperTabAttachment.fromJson({
+                  'id': '',
+                  'name': file.name,
+                  'mime': swarmMimeForName(file.name),
+                  'size': file.size,
+                  'url': '',
+                }),
+                voice: voice,
+                words: '',
+              )
+            else
               SwarmFileChip(
                 file: SuperTabAttachment.fromJson({
                   'id': '',
