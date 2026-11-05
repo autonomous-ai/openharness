@@ -38,7 +38,7 @@ import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
-import { accountOf, wordsOf, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type SwarmProject } from './projects.js'
+import { accountOf, wordsOf, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, ownsProject, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
@@ -2581,7 +2581,7 @@ export class SuperTabStore {
       } else if (team !== null) {
         // A team session is never the project's owner: it reads a text only for an agent its own machine hosts.
         if (!await this.hostsProject(tx, state, user, project.id, team)) unavailable()
-      } else if (!(user.sub === project.ownerId && state.people.some(p => p.id === user.sub) && await hasWorkspaceAccess(tx, state, user.sub))
+      } else if (!(ownsProject(state, user.sub, project) && await hasWorkspaceAccess(tx, state, user.sub))
         && !await this.hostsProject(tx, state, user, project.id)) {
         unavailable()
       }

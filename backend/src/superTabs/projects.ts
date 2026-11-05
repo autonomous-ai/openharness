@@ -33,7 +33,12 @@ export const roleVersion = (text: string): string => createHash('sha256').update
 export interface SwarmProject {
   id: string
   name: string
+  /** The owner's id; '' for a private project whose owner left with no member left to take it (settleOwners): nobody's. */
   ownerId: string
+  /** The owner's membership generation when they became its owner (task #3073): the same account at a later membership
+   *  owns nothing, as a member's listing works. Absent on projects from before 2026-11-05 until settleOwners fills it; until
+   *  then the owner matches by id, as before. */
+  ownerGeneration?: string
   leadConversationId: string
   /** Public means every member of this swarm, never anonymous internet access. */
   visibility: ProjectVisibility
@@ -170,8 +175,17 @@ export function canReadProject(state: SuperTabState, actor: Actor, project: Swar
     return agentProjectId(state, target) === project.id
   }
   const member = state.people.find(p => p.id === actor.userId)
-  return !!member && (project.visibility === 'public' || project.ownerId === member.id ||
+  return !!member && (project.visibility === 'public' || ownsProject(state, member.id, project) ||
     project.members.some(p => p.id === member.id && p.generation === member.generation))
+}
+
+/** Whether [userId] owns [project] now: its owner, in the Swarm at the membership they owned it in (task #3073). A former
+ *  owner who left or was removed and came back owns nothing, as a former member reads nothing. A project from before the
+ *  generation was stored matches by id until settleOwners fills it. */
+export function ownsProject(state: SuperTabState, userId: string, project: SwarmProject): boolean {
+  if (!userId || project.ownerId !== userId) return false
+  const member = state.people.find(p => p.id === userId)
+  return !!member && (project.ownerGeneration === undefined || project.ownerGeneration === member.generation)
 }
 
 /** Whom a group's work is for, as its pull requests say (`requestedByLine`): the person who asked for it (`requesterId`) while
@@ -419,7 +433,7 @@ export function wordsOf(source: unknown): 'author' | 'none' | 'unknown' | { agen
  */
 export function teamSessionAccess(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): 'watch' | 'none' | 'member' | null {
   if (!onTeamAccount(state, target) || actor.kind !== 'person' || !isConfidential(state, target, elsewhere)) return null
-  if (actor.userId === projectOf(state, agentProjectId(state, target)).ownerId) return 'watch'
+  if (ownsProject(state, actor.userId, projectOf(state, agentProjectId(state, target)))) return 'watch'
   if (actor.userId === target.machineOwnerId) return 'none'
   return watchClosed(state, target, elsewhere) ? 'none' : 'member'
 }
@@ -490,7 +504,7 @@ export function mutableProjects(state: SuperTabState): SwarmProject[] {
 export function manageProject(state: SuperTabState, actor: Actor, projectId: string): SwarmProject {
   const project = readProject(state, actor, projectId)
   author(state, actor, true)
-  if (actor.kind !== 'person' || actor.userId !== project.ownerId) {
+  if (actor.kind !== 'person' || !ownsProject(state, actor.userId, project)) {
     fail('PROJECT_OWNER_REQUIRED', 'Only the project owner can manage this project.', 403)
   }
   mutableProjects(state)

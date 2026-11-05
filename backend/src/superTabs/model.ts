@@ -10,7 +10,7 @@ import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
-import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person {
@@ -942,7 +942,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     const there = state.agents.filter(a => a.machineId === pool.machineId)
     const owners = new Set(there.length ? there.map(a => a.machineOwnerId) : [pool.contributorId])
     const mayMove = actor.kind === 'person' && (owners.has(actor.userId) ||
-      there.some(a => projectsOf(state).some(p => p.ownerId === actor.userId && state.conversations.some(c => c.id === p.leadConversationId && c.leadId === a.id))))
+      there.some(a => projectsOf(state).some(p => ownsProject(state, actor.userId, p) && state.conversations.some(c => c.id === p.leadConversationId && c.leadId === a.id))))
     if (!mayMove) delete pool.observation.profiles
   }
   expireRemovals(visible, now)
