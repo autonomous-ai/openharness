@@ -94,9 +94,13 @@ describe('the shell a Windows engine\'s pane becomes', () => {
       .toEqual({ clearInherited: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CODEX_HOME'], env, afterExit: windowsAfterExit('codex') })
     expect(windowsPaneLaunch('codex', { clearEnv: [], native: { clearEnvironment: [] }, ...where }, 'win32'))
       .toEqual({ env, afterExit: windowsAfterExit('codex') })
-    // A grid already on PATH is moved to the front once, and a Node already there is not added twice.
+    // A grid already on PATH is left to PATH; a Node already there is not added twice.
     expect(windowsPaneLaunch('claude', { environment: { PATH: 'C:\\node;C:\\Tools' }, gridBinary: 'grid', nodeRuntime: 'C:\\node\\node.exe' }, 'win32').env)
       .toEqual({ PATH: 'C:\\node;C:\\Tools', GRID_NO_UPDATE_CHECK: '1' })
+    // Windows often spells it `Path`; the pane must replace that entry, not add a second `PATH`
+    // (measured on DESKTOP-0TFH0OJ: the duplicate was ignored and the agent saw no Harness Node).
+    expect(windowsPaneLaunch('claude', { environment: { Path: 'C:\\Tools' }, gridBinary: 'C:\\grid\\grid.exe', nodeRuntime: 'C:\\node\\node.exe' }, 'win32').env)
+      .toEqual({ Path: 'C:\\grid;C:\\Tools;C:\\node', GRID_NO_UPDATE_CHECK: '1' })
     // The command a person would type names it. On Windows Command Code's is `command-code`: `cmd` is the command
     // processor there (F7, B4.13).
     expect(windowsPaneLaunch('commandcode', { ...where }, 'win32').afterExit?.env).toEqual({ HARNESS_ENGINE_COMMAND: 'command-code' })

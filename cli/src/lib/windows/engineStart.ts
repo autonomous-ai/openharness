@@ -170,13 +170,17 @@ function windowsPaneEnv(launch: WindowsPaneLaunchOptions): Record<string, string
   const environment = launch.environment ?? (real ? process.env : {})
   const grid = launch.gridBinary ?? (real ? gridBinaryPath(environment) : '')
   const node = launch.nodeRuntime ?? (real ? managedNodePath() : '')
-  const parts = (environment.PATH ?? '').split(';').filter((part) => part.length > 0)
+  // Windows names it `Path` as often as `PATH`, and a second spelling would be a duplicate the OS
+  // may resolve to the inherited one: measured on DESKTOP-0TFH0OJ, 2026-11-05, the new `PATH` was
+  // ignored and the agent's shell did not see Harness's Node.
+  const pathName = Object.keys(environment).find((key) => key.toLowerCase() === 'path') ?? 'PATH'
+  const parts = (environment[pathName] ?? '').split(';').filter((part) => part.length > 0)
   // grid's own folder first, so a managed grid a shell's PATH cannot see is the one the agent runs;
   // Harness's Node last, because a `node` the person installed still comes first, as on Unix.
   if (/[\\/]/.test(grid)) prependOnce(parts, win32.dirname(grid))
   if (node) appendOnce(parts, win32.dirname(node))
   return {
-    ...(parts.length ? { PATH: parts.join(';') } : {}),
+    ...(parts.length ? { [pathName]: parts.join(';') } : {}),
     [GRID_NO_UPDATE_CHECK_VAR]: '1',
   }
 }
