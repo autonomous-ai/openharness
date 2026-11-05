@@ -913,6 +913,14 @@ function open(state: SuperTabState, conversationId: string) {
 
 /** Pure policy/state transition. The store commits its state, messages and delivery records in one transaction. */
 /** One command, then each task's line brought up to date (taskLine.ts), whichever way the command returned. */
+/** Whether [assignment]'s builder can no longer close it: its attempt already ended (stopped or lost), or its agent is gone
+ *  from the Swarm or stopping (task #3510). */
+function builderGone(state: SuperTabState, assignment: NonNullable<Conversation['assignment']>): boolean {
+  if (['stopped', 'lost'].includes(assignment.status)) return true
+  const builder = state.agents.find(a => a.id === assignment.agentId)
+  return !builder || builder.workDecision === 'stop'
+}
+
 export function applyCommand(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
   const effects = applyCommandOnce(original, actor, input, context)
   // Who moved the task, for a line its project's coordinator cannot sign and for the Buddy's news; nobody when the actor is
@@ -2640,6 +2648,21 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         else bindPullRequestCards(group, posted, repositoryUrl)
       }
       recordCardMerged(group, pullRequestUrl, mergedAt)
+      // A merged task whose builder is gone closes itself with the merge as its result (task #3510): a released builder can
+      // no longer set its own Done, and the task would stay in review for good. A live builder still closes its own task, and
+      // a step never closes here, nor its parent through it.
+      const assignment = group.assignment
+      if (!isStep(group) && assignment && !['done', 'cancelled'].includes(assignment.status) && builderGone(state, assignment)) {
+        const previous = assignment.status
+        assignment.status = 'done'
+        assignment.result = `Merged ${pullRequestUrl}. Its builder is no longer running, so the recorded merge closes the task.`
+        delete assignment.hold
+        delete assignment.askedOf
+        recordStatus(group, assignment, previous, context.now, operationId)
+        effects.closedAssignment = { assignmentId: assignment.id, outcome: 'done' }
+        message(group.id, `Done\n\n${assignment.result}`, [], null, { ...SYSTEM_ROW, status: 'done' }, undefined, undefined, undefined,
+          stableId(operationId, 'merged-done'))
+      }
       break
     }
     case 'conversation.archive': {
