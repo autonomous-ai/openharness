@@ -3640,6 +3640,11 @@ class AppNotifier extends ChangeNotifier {
     _pushLifecycle = AppLifecycleListener(onResume: _syncPush);
   }
 
+  /// The keys of this app's pushes still in the notification centre (notify/push_channel.dart):
+  /// none where there is no push.
+  Future<Set<String>> pushesShown() async =>
+      await _push?.channel.shown() ?? const {};
+
   /// Tells the backend where to push to this phone while signed in: once the account is known, when
   /// notices are allowed, when the OS hands over a new address, and back in the app.
   void _syncPush() {

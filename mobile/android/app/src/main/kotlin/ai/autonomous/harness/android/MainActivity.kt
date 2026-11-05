@@ -156,7 +156,7 @@ class MainActivity : FlutterActivity() {
     }
     receiveLink(intent)
 
-    // `harness/push` — this phone's push address, and the pushes tapped (Dart:
+    // `harness/push` — this phone's push address, the pushes tapped, and those still shown (Dart:
     // `lib/notify/push_channel.dart`; drawn by Android itself). `address` turns pushes on and answers
     // the FCM token; `forget` turns them off and deletes the token, so a phone signed out is reached
     // by nothing. A tapped push's data waits here until `take`, as a link does; `arrived` says more
@@ -170,6 +170,13 @@ class MainActivity : FlutterActivity() {
             result.success(ArrayList(waitingPushes))
             waitingPushes.clear()
           }
+          // The keys of our pushes still shown: the app does not post them again. The server tags each
+          // push with the key the app gives its own notice for the same reply or tag.
+          "shown" -> result.success(
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) emptyList()
+            else getSystemService(android.app.NotificationManager::class.java).activeNotifications
+              .mapNotNull { shown -> shown.tag?.takeIf { it.startsWith("reply:") || it.startsWith("mention:") } }
+          )
           else -> result.notImplemented()
         }
       }
