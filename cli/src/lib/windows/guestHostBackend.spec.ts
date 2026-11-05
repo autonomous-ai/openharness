@@ -21,7 +21,19 @@ describe('a guest host', () => {
     writeFileSync(join(home, 'run', 'pty-host-p2-0.0.1.json'), discovery('p2-0.0.1', '0.0.1', 2, 11))
     writeFileSync(join(home, 'run', 'pty-host-p2-9.9.9.json'), discovery('p2-9.9.9', '9.9.9', 2, 22))
     writeFileSync(join(home, 'run', 'other.json'), '{}')
-    expect((await waitForGuestHost(home, { user: 'hg_x', waitMs: 0 }))?.instance).toBe('p2-9.9.9')
+    // Both hosts are alive in this test: the newest wins.
+    expect((await waitForGuestHost(home, { user: 'hg_x', waitMs: 0, liveness: { alive: () => true } }))?.instance).toBe('p2-9.9.9')
+  })
+
+  it('never dials a discovery file whose host has gone, as a setup re-run leaves behind', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'guest-host-stale-'))
+    mkdirSync(join(home, 'run'))
+    writeFileSync(join(home, 'run', 'pty-host-p3-0.5.55.json'), discovery('p3-0.5.55', '0.5.55', 3, 11))
+    writeFileSync(join(home, 'run', 'pty-host-p3-0.5.55-gu0123456789ab.json'), discovery('p3-0.5.55-gu0123456789ab', '0.5.55', 3, 22))
+    // The old host's pid is gone; the tagged one runs. The dead file is newer only by name, never picked.
+    const liveness = { alive: (pid: number) => pid === 22 }
+    expect((await waitForGuestHost(home, { user: 'hg_x', waitMs: 0, liveness }))?.instance).toBe('p3-0.5.55-gu0123456789ab')
+    expect(await waitForGuestHost(home, { user: 'hg_x', waitMs: 0, liveness: { alive: () => false } })).toBeNull()
   })
 
   it('returns null when nothing is published in the window', async () => {

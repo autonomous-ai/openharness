@@ -6,7 +6,9 @@
  * its zod) in the process they share (src/leanEntry.spec.ts).
  */
 import { userInfo } from 'node:os'
+import { dirname } from 'node:path'
 import { ptyHostBinary } from '../ptyHost/launch.js'
+import { managedNodePath } from '../nodeRuntime.js'
 import { runGuestCommand, type GuestRunner } from '../guestAccounts.js'
 import { WHOAMI_USER_ARGS, windowsUserSid } from '../../team/windowsTeam.js'
 import { WINDOWS_GUEST_SETUP_VERSION, WINDOWS_GUEST_VERSION_FILE, buildWindowsGuestInstallScript,
@@ -30,8 +32,9 @@ export async function installWindowsGuestHelper(options: GuestHelperInstallOptio
   const who = await runner('whoami', WHOAMI_USER_ARGS, { timeoutMs: 30_000 })
   const ownerSid = who.code === 0 ? windowsUserSid(who.stdout) : null
   if (!ownerSid) return { ok: false, code: 'FAILED', message: 'Could not read this account\'s SID (whoami /user).' }
-  const processor = buildWindowsGuestProcessorScript({ owner, ownerHome, ownerSid })
-  const script = buildWindowsGuestInstallScript({ owner, ownerHome, ownerSid, processor, version: String(WINDOWS_GUEST_SETUP_VERSION), ptySrc: ptyHostBinary() })
+  const processor = buildWindowsGuestProcessorScript({ owner, ownerHome, ownerSid, version: String(WINDOWS_GUEST_SETUP_VERSION) })
+  const script = buildWindowsGuestInstallScript({ owner, ownerHome, ownerSid, processor, version: String(WINDOWS_GUEST_SETUP_VERSION),
+    ptySrc: ptyHostBinary(), nodeSrc: dirname(managedNodePath()) })
   const admin: RunAdmin = options.admin ?? (await import('../../team/admin.js')).adminRunner({ platform: 'win32', runner })
   const result = await admin(() => ({ script }), prompt)
   if (result.ok) return { ok: true }

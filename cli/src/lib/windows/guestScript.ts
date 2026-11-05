@@ -14,14 +14,13 @@
  */
 import { ps } from '../../team/windowsScript.js'
 import { WINDOWS_GUEST_ANSWERS, WINDOWS_GUEST_RECORDS, WINDOWS_GUEST_REQUESTS, WINDOWS_GUEST_ROOT,
-  WINDOWS_GUEST_SCRIPTS } from './guestRequests.js'
+  WINDOWS_GUEST_SCRIPTS, WINDOWS_GUEST_SETUP_VERSION, WINDOWS_GUEST_VERSION_FILE } from './guestRequests.js'
 import { WINDOWS_GUEST_TASK, WINDOWS_GUEST_TASK_NAME, WINDOWS_GUEST_TASK_PATH } from './guestSetupClient.js'
+
+export { WINDOWS_GUEST_SETUP_VERSION, WINDOWS_GUEST_VERSION_FILE }
 
 export const WINDOWS_GUEST_GROUP = 'Harness Guests'
 export const WINDOWS_GUEST_SENTINEL = '.harness-guest-privacy'
-export const WINDOWS_GUEST_VERSION_FILE = `${WINDOWS_GUEST_ROOT}\\version`
-/** Bumped when the installer or processor changes: the form asks the owner to turn sharing on again. */
-export const WINDOWS_GUEST_SETUP_VERSION = 1
 
 /** The guest tree, as SDDL: SYSTEM/Administrators full; guests read/execute only where a harness needs it. */
 export const GUEST_SDDL = {
@@ -79,6 +78,8 @@ export interface WindowsGuestInstallInput {
   version: string
   /** The signed harness-pty.exe to stage for guests; null when this build has none. */
   ptySrc?: string | null
+  /** The Node runtime's folder (node.exe and npm) to stage so a guest can install its engine; null when this build has none. */
+  nodeSrc?: string | null
 }
 
 /**
@@ -105,14 +106,20 @@ export function buildWindowsGuestInstallScript(input: WindowsGuestInstallInput):
     `$REC = ${ps(WINDOWS_GUEST_RECORDS)}`,
     `$SCRIPTS = ${ps(WINDOWS_GUEST_SCRIPTS)}`,
     `$BIN = ${ps(`${WINDOWS_GUEST_ROOT}\\bin`)}`,
+    `$HOSTS = ${ps(`${WINDOWS_GUEST_ROOT}\\hosts`)}`,
     `$PTY_SRC = ${ps(input.ptySrc ?? '')}`,
+    `$NODE_SRC = ${ps(input.nodeSrc ?? '')}`,
     `$VERSION_FILE = ${ps(WINDOWS_GUEST_VERSION_FILE)}`,
     `$TASK_PATH = ${ps(WINDOWS_GUEST_TASK_PATH)}`,
+    `$HOST_TASK_PATH = ${ps('\\Harness\\Guests\\')}`,
     `$TASK_NAME = ${ps(WINDOWS_GUEST_TASK_NAME)}`,
     `$TASK = ${ps(WINDOWS_GUEST_TASK)}`,
     `$SENTINEL = ${ps(`${input.ownerHome}\\${WINDOWS_GUEST_SENTINEL}`)}`,
     `$PROCESSOR = ${ps(`${WINDOWS_GUEST_SCRIPTS}\\process.ps1`)}`,
     `$VERSION = ${ps(input.version)}`,
+    // The staged runtime's folder, named for the setup version the installer wrote: the daemon computes the same one
+    // (lib/windows/guestEngine.ts `guestNodeDir`).
+    `$NODEBIN = ${ps(`${WINDOWS_GUEST_ROOT}\\bin\\node-${input.version}`)}`,
     '',
     '# 1. The group. Guests join it; it is never Administrators.',
     '$existingGroup = Get-LocalGroup -Name $GROUP -ErrorAction SilentlyContinue',
@@ -126,6 +133,10 @@ export function buildWindowsGuestInstallScript(input: WindowsGuestInstallInput):
     'Set-Folder $REQ ("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1301bf;;;" + $OWNER_SID + ")")',
     'Set-Folder $ANS ("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;" + $OWNER_SID + ")")',
     'Set-Folder $REC ("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;" + $OWNER_SID + ")")',
+    // The hosts root is listable by guests, as the macOS guests' home root is: npm stats its way up from a guest's own
+    // engines folder (`hosts\<user>\engines`), and a list of `hg_<hex>` names is all it may see — each home inside keeps
+    // its own guest-only ACL (`Set-GuestHost`).
+    'Set-Folder $HOSTS ("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;" + $OWNER_SID + ")(A;OICI;0x1200a9;;;" + $guestSid + ")")',
     'Set-Folder $SCRIPTS ("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;" + $OWNER_SID + ")(A;OICI;0x1200a9;;;" + $guestSid + ")")',
     '',
     '# 3. The processor. Base64, so no here-string inside the processor can end this script\'s. Written new, then renamed.',
@@ -143,7 +154,28 @@ export function buildWindowsGuestInstallScript(input: WindowsGuestInstallInput):
     '[IO.File]::WriteAllText($VERSION_FILE, "$VERSION`r`n")',
     "if ($PTY_SRC) {",
     "  Set-Folder $BIN (\"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;\" + $OWNER_SID + \")(A;OICI;0x1200a9;;;\" + $guestSid + \")\")",
-    "  Copy-Item -LiteralPath $PTY_SRC -Destination (Join-Path $BIN 'harness-pty.exe') -Force",
+    // A setup re-run after an update stages the new host beside the old one (a running host keeps its file open) and
+    // ends every guest's host first, so the next harness starts the new build. A version already staged and in use is
+    // the same file: it stays (a re-run of one version never replaces a running binary with itself).
+    `  $PTYBIN = Join-Path $BIN ('pty-' + $VERSION)`,
+    '  Set-Folder $PTYBIN ("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;" + $OWNER_SID + ")(A;OICI;0x1200a9;;;" + $guestSid + ")")',
+    '  Get-ScheduledTask -TaskPath $HOST_TASK_PATH -ErrorAction SilentlyContinue | ForEach-Object { try { Stop-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath -ErrorAction Stop } catch {} }',
+    '  Get-LocalUser | Where-Object { $_.Name -like \'hg_*\' } | ForEach-Object {',
+    '    & (Join-Path $env:SystemRoot "System32\\taskkill.exe") /F /IM harness-pty.exe /FI ("USERNAME eq " + $env:COMPUTERNAME + "\\" + $_.Name) 2>$null | Out-Null',
+    '  }',
+    '  try { Copy-Item -LiteralPath $PTY_SRC -Destination (Join-Path $PTYBIN "harness-pty.exe") -Force -ErrorAction Stop }',
+    '  catch { if (-not (Test-Path -LiteralPath (Join-Path $PTYBIN "harness-pty.exe"))) { die "the terminal host could not be staged: $($_.Exception.Message)" 9 } }',
+    '}',
+    // The Node runtime guests' engines are installed with (node.exe beside npm), in a folder named for this setup version
+    // so a host running from an older one is never overwritten under it. The marker says the copy finished; a copy that
+    // stopped part-way is made again. It inherits $BIN's guest read/execute.
+    "if ($NODE_SRC) {",
+    "  $nodeMark = Join-Path $NODEBIN '.complete'",
+    "  if (-not (Test-Path -LiteralPath $nodeMark)) {",
+    "    if (Test-Path -LiteralPath $NODEBIN) { Remove-Item -LiteralPath $NODEBIN -Recurse -Force }",
+    "    try { Copy-Item -LiteralPath $NODE_SRC -Destination $NODEBIN -Recurse -Force } catch { die \"could not stage the Node runtime for guests: $($_.Exception.Message)\" 7 }",
+    "    [IO.File]::WriteAllText($nodeMark, \"ok`r`n\")",
+    '  }',
     '}',
     '',
     '# 4. The privacy sentinel: inherited ACL, owned by the owner, checked as a guest on every ensure.',
@@ -185,10 +217,12 @@ export function buildWindowsGuestInstallScript(input: WindowsGuestInstallInput):
 }
 
 /** The processor's PowerShell. Kept as one function so its text can be tested without a Windows machine. */
-export function buildWindowsGuestProcessorScript(input: { owner: string; ownerHome: string; ownerSid: string }): string {
+export function buildWindowsGuestProcessorScript(input: { owner: string; ownerHome: string; ownerSid: string; version?: string }): string {
   if (!/^[A-Za-z0-9_.-]{1,20}$/.test(input.owner)) throw new Error('not an owner account')
   if (!input.ownerHome.startsWith('C:\\Users\\')) throw new Error('not an owner profile')
   if (!/^S-1-\d+(-\d+)+$/.test(input.ownerSid)) throw new Error('not an owner SID')
+  const version = input.version ?? String(WINDOWS_GUEST_SETUP_VERSION)
+  if (!/^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$/.test(version) || version === '.' || version === '..') throw new Error('not a version')
   return [
     '# Harness guest setup processor (cli/src/lib/windows/guestScript.ts), run by the SYSTEM task. No arguments: it',
     '# accepts exactly one request file, checks it, performs one operation, writes one answer and deletes the request.',
@@ -197,7 +231,8 @@ export function buildWindowsGuestProcessorScript(input: { owner: string; ownerHo
     `$OWNER_HOME = ${ps(input.ownerHome)}`,
     `$OWNER_SID = ${ps(input.ownerSid)}`,
     `$BIN = ${ps(`${WINDOWS_GUEST_ROOT}\\bin`)}`,
-    `$PTY_BIN = ${ps(`${WINDOWS_GUEST_ROOT}\\bin\\harness-pty.exe`)}`,
+    `$PTY_BIN = ${ps(`${WINDOWS_GUEST_ROOT}\\bin\\pty-${version}\\harness-pty.exe`)}`,
+    `$NODEBIN = ${ps(`${WINDOWS_GUEST_ROOT}\\bin\\node-${version}`)}`,
     `$HOSTS = ${ps(`${WINDOWS_GUEST_ROOT}\\hosts`)}`,
     `$HOST_TASK_PATH = ${ps('\\Harness\\Guests\\')}`,
     `$SENTINEL = ${ps(`${input.ownerHome}\\${WINDOWS_GUEST_SENTINEL}`)}`,
@@ -362,7 +397,7 @@ export function buildWindowsGuestProcessorScript(input: { owner: string; ownerHo
     // The tag keeps this account\'s host instance (and every pane route keyed by it) apart from the owner\'s, which
     // runs the same binary: lib/../pty/src/instance.rs `INSTANCE_TAG_VAR`. `hg_<hex>` -> `gu<hex>`.
     '  $instanceTag = "gu" + $user.Substring(3)',
-    '  $text = "@echo off`r`nset `"HARNESS_PTY_SHARE_SID=$OWNER_SID`"`r`nset `"HARNESS_PTY_INSTANCE_TAG=$instanceTag`"`r`n`"$PTY_BIN`" serve --home `"$hostHome`"`r`n"',
+    '  $text = "@echo off`r`nset `"HARNESS_PTY_SHARE_SID=$OWNER_SID`"`r`nset `"HARNESS_PTY_INSTANCE_TAG=$instanceTag`"`r`nset `"PATH=$hostHome\\engines;%USERPROFILE%\\.local;$NODEBIN;%PATH%`"`r`n`"$PTY_BIN`" serve --home `"$hostHome`"`r`n"',
     '  [IO.File]::WriteAllText($wrapper, $text)',
     '  $line = "/d /s /c `"" + $wrapper + "`""',
     '  $arguments = [System.Security.SecurityElement]::Escape($line)',
@@ -380,6 +415,9 @@ export function buildWindowsGuestProcessorScript(input: { owner: string; ownerHo
     '  $scheduler.Connect()',
     "  $folderName = $HOST_TASK_PATH.Trim('\\')",
     "  try { $folder = $scheduler.GetFolder(\"\\$folderName\") } catch { $folder = $scheduler.GetFolder('\\').CreateFolder($folderName) }",
+    // A setup re-run registers a new wrapper with a new instance tag and PATH: an instance still running would keep the
+    // old one and never publish the tag the new daemon waits for, so it is stopped first (state 4 is Running).
+    '  try { $running = $folder.GetTask($user); if ($running.State -eq 4) { $running.Stop() } } catch {}',
     '  [void]$folder.RegisterTask($user, $xml, 6, $user, $pw, 1, $sddl)',
     '}',
     'function Ensure([string]$email, [string]$id) {',
@@ -406,6 +444,15 @@ export function buildWindowsGuestProcessorScript(input: { owner: string; ownerHo
     '  New-Item -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\SpecialAccounts\\UserList" -Force | Out-Null',
     '  New-ItemProperty -LiteralPath "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\SpecialAccounts\\UserList" -Name $user -Value 0 -PropertyType DWord -Force | Out-Null',
     '  Set-BatchLogon $sid $true',
+    // A folder left by an earlier account of the same name makes Windows suffix the new profile (`…DESKTOP-0TFH0OJ.001`),
+    // which is not the path a guest's harness may use. This account is new, so nothing in that folder is anyone's now;
+    // refusing is only right when it cannot be removed (another process holds it).
+    '  if (Test-Path -LiteralPath $guestHome) {',
+    '    try { Remove-Item -LiteralPath $guestHome -Recurse -Force -ErrorAction Stop } catch { Refuse $id ("Windows still holds an earlier guest\'s profile at " + $guestHome + "; restart this PC, then share with them again (" + $_.Exception.Message + ")") }',
+    '  }',
+    '  foreach ($stale in @(Get-CimInstance Win32_UserProfile | Where-Object { $_.SID -eq $sid -and $_.LocalPath -ne $guestHome })) {',
+    '    try { Remove-CimInstance -InputObject $stale -ErrorAction Stop } catch { Refuse $id ("Windows still holds an earlier guest\'s profile for " + $user + "; restart this PC, then share with them again (" + $_.Exception.Message + ")") }',
+    '  }',
     '  $code = Run-As $user $pw "exit 0" 5',
     '  if ($code -ne 0) { Refuse $id ("Windows did not sign the guest in to make its profile (result " + $code + ")") }',
     '  $profiles = @(Get-CimInstance Win32_UserProfile | Where-Object { $_.SID -eq $sid })',

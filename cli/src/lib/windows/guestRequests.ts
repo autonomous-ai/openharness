@@ -21,6 +21,12 @@ export const WINDOWS_GUEST_RUNTIME = `${WINDOWS_GUEST_ROOT}\\runtime`
 export const WINDOWS_GUEST_HOOK = `${WINDOWS_GUEST_ROOT}\\hook`
 /** One home per guest host (`hosts\<user>`): its discovery file, logs and `host.cmd`. */
 export const WINDOWS_GUEST_HOSTS = `${WINDOWS_GUEST_ROOT}\\hosts`
+/** A guest's own host home (lib/windows/guestHostBackend.ts starts its task on it). */
+export const guestHostHome = (user: string): string => `${WINDOWS_GUEST_HOSTS}\\${user}`
+/** The format the installer/processor tree is in: an installed tree older than this is set up again. */
+export const WINDOWS_GUEST_SETUP_VERSION = 3
+/** Where the installer writes the version it put in place. */
+export const WINDOWS_GUEST_VERSION_FILE = `${WINDOWS_GUEST_ROOT}\\version`
 
 /** The macOS form's cap, and the same one the setup record enforces. */
 export const GUEST_REQUEST_MAX_BYTES = 16_384

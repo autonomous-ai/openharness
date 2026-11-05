@@ -9,12 +9,12 @@
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { runGuestCommand, type GuestRunner } from '../guestAccounts.js'
-import { WINDOWS_GUEST_HOSTS } from './guestRequests.js'
+import { guestHostHome } from './guestRequests.js'
 import { PtyHostBackend } from '../ptyHostBackend.js'
-import { reachPtyHost, readInstanceDiscovery } from '../ptyHost/launch.js'
+import { discoveredHostDead, reachPtyHost, readInstanceDiscovery, type HostLiveness } from '../ptyHost/launch.js'
 import type { PtyHostDiscovery } from '../ptyHost/client.js'
 
-export const guestHostHome = (user: string): string => `${WINDOWS_GUEST_HOSTS}\\${user}`
+export { guestHostHome }
 export const guestHostTask = (user: string): string => `\\Harness\\Guests\\${user}`
 
 export interface GuestHostBackendOptions {
@@ -29,6 +29,8 @@ export interface GuestHostBackendOptions {
   /** The files in the host home's `run` folder; a seam for tests. */
   list?: (directory: string) => string[]
   runner?: GuestRunner
+  /** Whether a discovery file's host still runs; its pid alone (`ptyHost/launch.ts`). A seam for tests. */
+  liveness?: HostLiveness
 }
 
 const DISCOVERY = /^pty-host-(.+)\.json$/
@@ -49,7 +51,9 @@ export async function waitForGuestHost(home: string, options: GuestHostBackendOp
       const match = DISCOVERY.exec(name)
       if (!match) continue
       const discovery = readInstanceDiscovery(home, match[1]!)
-      if (discovery) found.push(discovery)
+      // A host that exited leaves its discovery file behind (an update stops one, the next starts another): never
+      // dialled, or the launch would wait on a file whose host is gone.
+      if (discovery && !await discoveredHostDead(home, discovery, options.liveness)) found.push(discovery)
     }
     if (found.length) {
       found.sort((a, b) => a.protocol - b.protocol || a.version.localeCompare(b.version) || a.instance.localeCompare(b.instance))

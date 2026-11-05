@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { guestHelperStatus, installGuestHelper } from './guestHelperInstall.js'
+import { WINDOWS_GUEST_SETUP_VERSION } from './windows/guestRequests.js'
 import type { RunAdmin } from '../team/admin.js'
 
 const SID = 'S-1-5-21-1111111111-2222222222-3333333333-1001'
@@ -16,6 +17,9 @@ describe('installing guest sharing on Windows', () => {
     expect(script).toContain("$ROOT = 'C:\\ProgramData\\HarnessGuests'")
     expect(script).toContain('Harness Guests Setup')
     expect(script).toContain('HighestAvailable')
+    // What a guest installs its engine with is staged with the host: its Node runtime and npm.
+    expect(script).toContain('$NODE_SRC = ')
+    expect(script).toContain('node-')
   })
 
   it('reports a cancelled UAC prompt and refuses a missing profile or SID', async () => {
@@ -31,11 +35,12 @@ describe('installing guest sharing on Windows', () => {
 
 describe('the Windows helper state', () => {
   const read = (text: string | null) => () => text
+  const current = String(WINDOWS_GUEST_SETUP_VERSION)
   it('is ready only with the current version and the setup task', async () => {
-    expect(await guestHelperStatus({ platform: 'win32', read: read('1\n'), runner: async () => ({ code: 0, stdout: '', stderr: '' }) }))
-      .toEqual({ state: 'ready', version: 1 })
-    expect(await guestHelperStatus({ platform: 'win32', read: read('1\n'), runner: async () => ({ code: 1, stdout: '', stderr: '' }) }))
-      .toEqual({ state: 'missing', version: 1 })
+    expect(await guestHelperStatus({ platform: 'win32', read: read(`${current}\n`), runner: async () => ({ code: 0, stdout: '', stderr: '' }) }))
+      .toEqual({ state: 'ready', version: WINDOWS_GUEST_SETUP_VERSION })
+    expect(await guestHelperStatus({ platform: 'win32', read: read(`${current}\n`), runner: async () => ({ code: 1, stdout: '', stderr: '' }) }))
+      .toEqual({ state: 'missing', version: WINDOWS_GUEST_SETUP_VERSION })
     expect(await guestHelperStatus({ platform: 'win32', read: read(null), runner: async () => ({ code: 0, stdout: '', stderr: '' }) }))
       .toEqual({ state: 'missing', version: null })
     expect(await guestHelperStatus({ platform: 'win32', read: read('0\n'), runner: async () => ({ code: 0, stdout: '', stderr: '' }) }))

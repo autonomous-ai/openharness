@@ -39,6 +39,30 @@ describe('the guest install script', () => {
     expect(script).not.toContain('$processorText = @\'')
   })
 
+  it('stages the Node runtime guests install their engine with, and only once per setup version', () => {
+    const script = install({ nodeSrc: 'C:\\Program Files\\nodejs' })
+    expect(script).toContain("$NODE_SRC = 'C:\\Program Files\\nodejs'")
+    expect(script).toContain("$NODEBIN = 'C:\\ProgramData\\HarnessGuests\\bin\\node-1.2.3'")
+    expect(script).toContain('Copy-Item -LiteralPath $NODE_SRC -Destination $NODEBIN -Recurse -Force')
+    // The marker says the copy finished; a partial copy is replaced rather than trusted.
+    expect(script).toContain("$nodeMark = Join-Path $NODEBIN '.complete'")
+    expect(script).toContain('if (Test-Path -LiteralPath $NODEBIN) { Remove-Item -LiteralPath $NODEBIN -Recurse -Force }')
+    // Read/execute for guests is $BIN's, inherited by everything copied under it.
+    expect(script).toContain('0x1200a9;;;" + $guestSid')
+    // A build without one stages none: sharing still works for an already-installed engine.
+    expect(install()).toContain("$NODE_SRC = ''")
+  })
+
+  it('stops every guest host before a re-run, and stages the new host beside the old one it must not overwrite', () => {
+    const script = install()
+    expect(script).toContain(`$PTYBIN = Join-Path $BIN ('pty-' + $VERSION)`)
+    expect(script).toContain('Copy-Item -LiteralPath $PTY_SRC -Destination (Join-Path $PTYBIN "harness-pty.exe") -Force -ErrorAction Stop')
+    expect(script).toContain('if (-not (Test-Path -LiteralPath (Join-Path $PTYBIN "harness-pty.exe")))')
+    expect(script).toContain('Get-ScheduledTask -TaskPath $HOST_TASK_PATH -ErrorAction SilentlyContinue')
+    expect(script).toContain('Stop-ScheduledTask -TaskName $_.TaskName')
+    expect(script).toContain('/F /IM harness-pty.exe /FI ("USERNAME eq " + $env:COMPUTERNAME')
+  })
+
   it('refuses a bad owner, SID or version', () => {
     expect(() => install({ owner: "o'brien" })).toThrow()
     expect(() => install({ ownerSid: 'owner' })).toThrow()
@@ -89,6 +113,9 @@ describe('the guest processor', () => {
     expect(text).toContain('the $op request is not valid')
     expect(text).toContain('the share request is not valid')
     expect(text).toContain('the guest account $user is not here')
+    // A leftover folder from an earlier account of the same name would suffix the new profile; it is cleared first.
+    expect(text).toContain('Windows still holds an earlier guest')
+    expect(text).toContain('restart this PC, then share with them again')
   })
 
   it('gives the guest\'s host its own instance and the owner SID, and lets only the owner start it', () => {
@@ -97,9 +124,15 @@ describe('the guest processor', () => {
     expect(text).toContain('$instanceTag = "gu" + $user.Substring(3)')
     expect(text).toContain('set `"HARNESS_PTY_INSTANCE_TAG=$instanceTag`"')
     expect(text).toContain('set `"HARNESS_PTY_SHARE_SID=$OWNER_SID`"')
+    // The guest's own npm prefix and the staged Node are on every pane's PATH: that is where its engine is installed.
+    expect(text).toContain('set `"PATH=$hostHome\\engines;%USERPROFILE%\\.local;$NODEBIN;%PATH%`"')
     expect(text).toContain('serve --home `"$hostHome`"')
+    // The host is the build staged for this setup version, never a file an older host still runs.
+    expect(text).toContain('$PTY_BIN = \'C:\\ProgramData\\HarnessGuests\\bin\\pty-3\\harness-pty.exe\'')
     // Owner: start/stop only; the guest's task cannot be changed by the guest.
     expect(text).toContain('(A;;FRFX;;;" + $OWNER_SID + ")"')
+    // A re-run stops the instance still running the old wrapper (old tag, old PATH) before registering the new one.
+    expect(text).toContain('if ($running.State -eq 4) { $running.Stop() }')
   })
 
   it('refuses more than one request and removes the request when it answers', () => {
