@@ -627,8 +627,10 @@ describe('watching a pull request', () => {
     const { app, github } = setup()
     const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
     seed(github)
-    github.files.set('acme/app#12', Array.from({ length: 150 }, (_, i) => ({ filename: `f${i}.ts`, status: 'modified', sha: `s${i}`, patch: `@@ -1 +1 @@\n-${i}\n+${i + 1}` })))
-    github.files.get('acme/app#12')!.push({ filename: 'logo.png', status: 'renamed', sha: 'png', previous_filename: 'old.png' })
+    const at = (name: string, head = HEAD) => `https://api.github.com/repos/acme/app/contents/${name}?ref=${head}`
+    github.files.set('acme/app#12', Array.from({ length: 150 }, (_, i) => ({ filename: `f${i}.ts`, status: 'modified', sha: `s${i}`, patch: `@@ -1 +1 @@\n-${i}\n+${i + 1}`,
+      contents_url: at(`f${i}.ts`) })))
+    github.files.get('acme/app#12')!.push({ filename: 'logo.png', status: 'renamed', sha: 'png', previous_filename: 'old.png', contents_url: at('logo.png') })
     const files = await app.pullRequestFiles(repo, 12, token)
     expect(files).toHaveLength(151)
     expect(files![0]).toEqual({ filename: 'f0.ts', status: 'modified', sha: 's0', patch: '@@ -1 +1 @@\n-0\n+1' })
@@ -641,9 +643,24 @@ describe('watching a pull request', () => {
     const { app, github } = setup()
     const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
     seed(github)
-    github.files.set('acme/app#12', [{ filename: 'a.ts', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b' }])
+    github.files.set('acme/app#12', [{ filename: 'a.ts', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b',
+      contents_url: `https://api.github.com/repos/acme/app/contents/a.ts?ref=${HEAD}` }])
     expect(await app.pullRequestFiles(repo, 12, token, HEAD)).toHaveLength(1)
     expect(await app.pullRequestFiles(repo, 12, token, 'fffffff0000000')).toBeNull()
+  })
+
+  // Security review of #3218 (Warden2), Important 4: a push and a push back between pages, or a diff GitHub had not
+  // recomputed yet, listed another head's files under this head.
+  it('answers no files when any file listed is another head\'s', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
+    seed(github)
+    const file = (name: string, ref: string | null) => ({ filename: name, status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b',
+      ...ref === null ? {} : { contents_url: `https://api.github.com/repos/acme/app/contents/${name}?ref=${ref}` } })
+    github.files.set('acme/app#12', [file('a.ts', HEAD), file('b.ts', 'fffffff0000000')])
+    expect(await app.pullRequestFiles(repo, 12, token, HEAD)).toBeNull()
+    github.files.set('acme/app#12', [file('a.ts', HEAD), file('b.ts', null)])
+    expect(await app.pullRequestFiles(repo, 12, token, HEAD)).toBeNull()
   })
 
   it('answers no files when GitHub cannot list them, or lists as many as it ever lists (it may have left some out)', async () => {

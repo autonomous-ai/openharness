@@ -837,33 +837,55 @@ describe('a verdict at a pull request head', () => {
     return { f, reviewer, check }
   }
 
-  it('records the head its task\'s PR watch last read, with its patch', () => {
+  it('records the head the checker read, with its patch, and counts at it', () => {
     const { f, check } = watched()
-    check(f.task, true)
+    check(f.task, true, A.toUpperCase())
     expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: A, patch: 'p1' })
     expect(f.group(f.task).checks[0]!.passedBy).not.toBeNull()
   })
 
-  it('on a step, records its task\'s pull request head', () => {
+  it('on a step, records its task\'s pull request', () => {
     const { f, reviewer, check } = watched()
     const step = f.step('Review', f.as(f.dev), f.task, [{ description: 'Diff reads right', independent: true }])
     f.run({ type: 'conversation.agent', conversationId: step, agentId: reviewer, present: true, lead: false })
     f.run({ type: 'work.assign', conversationId: step, agentId: reviewer }, f.as(f.dev))
-    check(step, true)
+    check(step, true, A)
     expect(f.group(step).checks[0]!.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: A, patch: 'p1' })
   })
 
   it('records the head the checker names; an older one does not count', () => {
     const { f, check } = watched()
-    check(f.task, true, B.slice(0, 7).toUpperCase())
+    check(f.task, true, B)
     const read = f.group(f.task).checks[0]!
-    expect(read.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: 'bbbbbbb', stale: A })
+    expect(read.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: B, stale: A })
     expect(read.verdicts!.at(-1)).not.toHaveProperty('patch')
     expect(read).toMatchObject({ passedBy: null, evidence: null })
   })
 
-  it('takes a head only as a commit id', () => {
+  // Security review of #3218 (Warden2), Important 3: the head the watch read last may be a push nobody reviewed. An agent's
+  // verdict naming no head is recorded and said not to count; nothing is refused.
+  it('an agent\'s verdict naming no head is not given the watched head, does not count, and says what to send', () => {
     const { f, check } = watched()
-    for (const head of ['abc', 'not-a-sha!', 'g'.repeat(40), 'a'.repeat(41)]) expect(() => check(f.task, true, head)).toThrow()
+    const effects = check(f.task, true)
+    const read = f.group(f.task).checks[0]!
+    expect(read.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, stale: A })
+    expect(read.verdicts!.at(-1)).not.toHaveProperty('head')
+    expect(read.passedBy).toBeNull()
+    expect(effects.result).toMatchObject({ counts: false })
+    expect(String(effects.result.next)).toContain('head')
+  })
+
+  it('a person\'s verdict naming no head is given the head the watch read last, as the screen showed it', () => {
+    const { f } = watched()
+    f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, checkId: f.group(f.task).checks[0]!.id,
+      passed: true, evidence: 'Looked at it' } as Command)
+    expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: A, patch: 'p1' })
+    expect(f.group(f.task).checks[0]!.passedBy).toBe('person:owner')
+  })
+
+  // Security review of #3218 (Warden2), Important 2: a short head could match a commit ground to share its characters.
+  it('takes a head only as a whole commit id', () => {
+    const { f, check } = watched()
+    for (const head of ['abc', A.slice(0, 7), A.slice(0, 39), 'not-a-sha!', 'g'.repeat(40), 'a'.repeat(41)]) expect(() => check(f.task, true, head)).toThrow()
   })
 })

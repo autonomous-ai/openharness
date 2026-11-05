@@ -14,9 +14,16 @@ const verdict = (by: string, passed: boolean, head: string | undefined, patch?: 
 const at = (head: string, patch: string | null): PullRequestHeads => ({ [PR]: { head, patch, at: 1 } })
 
 describe('a verdict at a head', () => {
-  it('counts at its head, or a longer spelling of it', () => {
+  it('counts at its head, in either case', () => {
     expect(verdictCounts(verdict('r', true, A), at(A, 'p1'))).toBe(true)
-    expect(verdictCounts(verdict('r', true, A.slice(0, 7)), at(A, 'p1'))).toBe(true)
+    expect(verdictCounts(verdict('r', true, A.toUpperCase()), at(A, 'p1'))).toBe(true)
+  })
+
+  // Security review of #3218 (Warden2), Important 2: a commit ground to share a short head's characters kept the verdict.
+  it('never counts a shortened head at a head that merely starts with it', () => {
+    const ground = `${A.slice(0, 7)}${'f'.repeat(33)}`
+    expect(verdictCounts(verdict('r', true, A.slice(0, 7), 'p1'), at(ground, 'p2'))).toBe(false)
+    expect(verdictCounts(verdict('r', true, A.slice(0, 7)), at(A, 'p1'))).toBe(false)
   })
 
   it('stops counting at a newer head with another patch, or a patch nobody could read', () => {
@@ -29,10 +36,19 @@ describe('a verdict at a head', () => {
     expect(verdictCounts(verdict('r', true, A, 'p1'), at(B, 'p1'))).toBe(true)
   })
 
-  it('counts as before with no head, or no head watched for its pull request', () => {
-    expect(verdictCounts(verdict('r', true, undefined), at(B, 'p2'))).toBe(true)
+  it('counts while no head is watched for its pull request', () => {
     expect(verdictCounts(verdict('r', true, A, 'p1'), undefined)).toBe(true)
     expect(verdictCounts(verdict('r', true, A, 'p1'), { 'https://github.com/acme/app/pull/8': { head: B, patch: 'p2', at: 1 } })).toBe(true)
+    expect(verdictCounts(verdict('r', true, undefined), undefined)).toBe(true)
+    expect(verdictCounts(verdict('r', true, undefined), {})).toBe(true)
+  })
+
+  // Security review of #3218 (Warden2), Important 3: a verdict naming no head was given the head watched last, which a push
+  // during the review made code nobody read; and one from before heads counted at every head.
+  it('naming no head, stops counting once a head is watched', () => {
+    expect(verdictCounts(verdict('r', true, undefined), at(B, 'p2'))).toBe(false)
+    expect(verdictCounts({ by: 'r', passed: true, evidence: '', at: 1, pullRequest: PR }, at(B, 'p2'))).toBe(false)
+    expect(verdictCounts({ by: 'r', passed: true, evidence: '', at: 1, pullRequest: PR }, { 'https://github.com/acme/app/pull/8': { head: B, patch: 'p2', at: 1 } })).toBe(true)
   })
 })
 
@@ -66,11 +82,13 @@ describe('a check of verdicts at heads', () => {
     expect(c).toMatchObject({ passedBy: null, evidence: 'agent:t read it' })
   })
 
-  it('verdicts with no head behave as they did', () => {
+  it('verdicts with no head behave as they did while no head is watched, and are stale at the first', () => {
     const c = check()
     recordCheckVerdict(c, verdict('agent:r', true, undefined))
     expect(c).toMatchObject({ passedBy: 'agent:r', evidence: 'agent:r read it' })
     expect(c.verdicts![0]).not.toHaveProperty('stale')
+    expect(refreshChecks([c], PR, undefined, at(A, 'p1'))).toEqual([c])
+    expect(c.verdicts![0]!.stale).toBe(A)
   })
 })
 

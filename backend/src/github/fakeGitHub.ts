@@ -32,7 +32,7 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   const reviews = new Map<string, Array<{ id: number; user: { login: string }; author_association?: string; state: string; body: string; html_url: string }>>()
   const comments = new Map<string, Array<{ id: number; user: { login: string }; author_association?: string; body: string; html_url: string }>>()
   /** A pull request's files, by `owner/name#number`, lower case: GET /pulls/{number}/files. */
-  const files = new Map<string, Array<{ filename: string; status: string; sha: string; patch?: string; previous_filename?: string }>>()
+  const files = new Map<string, Array<{ filename: string; status: string; sha: string; patch?: string; previous_filename?: string; contents_url?: string }>>()
   /** Workflow runs by `owner/name`, lower case: each run's status and its jobs' statuses and runner labels. */
   const actions = new Map<string, Array<{ id: number; status: string; jobs: Array<{ status: string; labels: string[] }> }>>()
   /** Each installation's accepted permissions, by installation id, as GET /app/installations/{id} answers them. An
