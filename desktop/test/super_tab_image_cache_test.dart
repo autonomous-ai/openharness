@@ -140,9 +140,8 @@ void main() {
 
     test('is kept to this user', () async {
       final folder = Directory('${home.path}/image-cache');
-      await SuperTabImageCache(
-        DirectoryImageShelf(folder),
-      ).keep('a1', _bytes(10), const Size(1, 1));
+      await SuperTabImageCache(DirectoryImageShelf(folder))
+          .keep('a1', _bytes(10), const Size(1, 1));
       if (!PosixFileMode.supported) return;
 
       expect(folder.statSync().mode & 0x1ff, 0x1c0);

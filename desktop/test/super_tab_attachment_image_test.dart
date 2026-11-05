@@ -100,21 +100,24 @@ void main() {
     expect((image as ui.Image).width, 1);
   });
 
-  test("a new signed link for the same file id doesn't download again", () async {
-    answer = (response) => (response..add(_png)).close();
+  test(
+    "a new signed link for the same file id doesn't download again",
+    () async {
+      answer = (response) => (response..add(_png)).close();
 
-    expect(await load(link('/a1.png?sig=1'), side: 360), isA<ui.Image>());
-    expect(await load(link('/a1.png?sig=2'), side: 360), isA<ui.Image>());
-    expect(hits, 1);
+      expect(await load(link('/a1.png?sig=1'), side: 360), isA<ui.Image>());
+      expect(await load(link('/a1.png?sig=2'), side: 360), isA<ui.Image>());
+      expect(hits, 1);
 
-    // Flutter's own copy gone, as after a while or a relaunch: the cache
-    // answers, not the server.
-    imageCache
-      ..clear()
-      ..clearLiveImages();
-    expect(await load(link('/a1.png?sig=3'), side: 360), isA<ui.Image>());
-    expect(hits, 1);
-  });
+      // Flutter's own copy gone, as after a while or a relaunch: the cache
+      // answers, not the server.
+      imageCache
+        ..clear()
+        ..clearLiveImages();
+      expect(await load(link('/a1.png?sig=3'), side: 360), isA<ui.Image>());
+      expect(hits, 1);
+    },
+  );
 
   test('another file is another picture', () async {
     answer = (response) => (response..add(_png)).close();
@@ -167,7 +170,10 @@ void main() {
       return (response..add(_png)).close();
     };
 
-    expect(await load(link('/a1.png?sig=old'), side: 360), isNot(isA<ui.Image>()));
+    expect(
+      await load(link('/a1.png?sig=old'), side: 360),
+      isNot(isA<ui.Image>()),
+    );
     expect(await load(link('/a1.png?sig=new'), side: 360), isA<ui.Image>());
     expect(hits, 2);
   });
