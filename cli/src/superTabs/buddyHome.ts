@@ -215,7 +215,8 @@ function writeCopies(home: string, states: readonly CopyState[]): void {
   rmSync(next, { force: true })
   writeFileSync(next, `Your copy of each project's code, refreshed ${new Date().toISOString()}:\n${states.map(line).join('\n')}\n`, { mode: 0o444 })
   // Windows will not rename over a read-only file (EPERM), and the last pass left this one read-only, so every later pass failed.
-  if (existsSync(path)) chmodSync(path, 0o644)
+  // A plain file alone: chmod follows a link, and the Buddy can write in this folder, so one here could name a private file.
+  if (process.platform === 'win32' && lstatSync(path, { throwIfNoEntry: false })?.isFile()) chmodSync(path, 0o644)
   renameSync(next, path)
 }
 
