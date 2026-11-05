@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/task_card.dart';
 import 'package:harness/super_tabs/tasks_view.dart';
+import 'package:harness/terminal/terminal_theme.dart';
+import 'package:harness/terminal/terminal_theme_store.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 
 import 'super_tab_tasks_view_test.dart' show tasksServer, taskFixture;
@@ -125,6 +128,17 @@ void main() {
         expect(_mark('task'), findsOneWidget);
         expect(tester.widget<ActivityMark>(_mark('task')).activity, activity);
         expect(
+          tester.widget<ActivityMark>(_mark('task')).color,
+          activityColor(
+            activity,
+            terminalThemeFor(
+              grid.AppTheme.surfacePalette,
+              terminalThemeStore.value,
+            ),
+            color: appearancePrefsStore.value.prompt.color,
+          ),
+        );
+        expect(
           find.descendant(
             of: _mark('task'),
             matching: find.text(activity.mark),
@@ -164,6 +178,64 @@ void main() {
       expect(
         find.descendant(of: _card('task'), matching: find.text('Needs you')),
         findsNothing,
+      );
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('$layout mark follows terminal theme and monochrome live', (
+      tester,
+    ) async {
+      final oldTheme = terminalThemeStore.value;
+      final oldAppearance = appearancePrefsStore.value;
+      addTearDown(() {
+        terminalThemeStore.value = oldTheme;
+        appearancePrefsStore.value = oldAppearance;
+      });
+      terminalThemeStore.value = TerminalThemeChoice.light;
+      appearancePrefsStore.value = oldAppearance.copyWith(
+        prompt: oldAppearance.prompt.copyWith(color: true),
+      );
+      await _show(
+        tester,
+        _server(taskFixture('task', 'Failed', 37, status: 'failed')),
+        list: list,
+      );
+      Color color() => tester.widget<ActivityMark>(_mark('task')).color;
+      expect(
+        color(),
+        terminalThemeFor(
+          grid.AppTheme.surfacePalette,
+          TerminalThemeChoice.light,
+        ).red,
+      );
+      terminalThemeStore.value = TerminalThemeChoice.dark;
+      await tester.pump();
+      expect(
+        color(),
+        terminalThemeFor(
+          grid.AppTheme.surfacePalette,
+          TerminalThemeChoice.dark,
+        ).red,
+      );
+      appearancePrefsStore.value = oldAppearance.copyWith(
+        prompt: oldAppearance.prompt.copyWith(color: false),
+      );
+      await tester.pump();
+      expect(
+        color(),
+        terminalThemeFor(
+          grid.AppTheme.surfacePalette,
+          TerminalThemeChoice.dark,
+        ).foreground,
+      );
+      terminalThemeStore.value = TerminalThemeChoice.light;
+      await tester.pump();
+      expect(
+        color(),
+        terminalThemeFor(
+          grid.AppTheme.surfacePalette,
+          TerminalThemeChoice.light,
+        ).foreground,
       );
       await tester.pumpWidget(const SizedBox());
     });
