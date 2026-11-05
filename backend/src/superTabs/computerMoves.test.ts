@@ -152,6 +152,8 @@ describe('a Mac whose own Harness Team account has not joined the Swarm yet', ()
     f.state.machines = f.state.machines!.filter(m => m.machineId === 'kelvin-mac')
     const pool = f.state.machines[0]!
     pool.observation = reading(NOW - 1000)
+    // Teammates' work only through its Team account, as Add machine leaves it.
+    delete pool.ownAccountChoice
     return pool
   }
   const row = (userId: string, hostMachineId: string, machineId = 'kelvin-team') => ({ machineId, userId, hostMachineId })
