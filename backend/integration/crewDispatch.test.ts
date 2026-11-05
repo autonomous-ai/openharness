@@ -4,6 +4,7 @@ import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
+import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { Agent, Conversation } from '../src/superTabs/model.js'
 import { planDatabase } from './plans.test-support.js'
@@ -56,13 +57,22 @@ async function swarm(lanes: Record<string, string | null>, owns: Record<string, 
   return { store, tab, pm, crew, tasks, execute, holders }
 }
 
+/** Writes a part outside the store as every writer does (cacheOn.test-support.ts): a new version, and the Swarm's stamp moved. */
 async function editAgent(tabId: string, agentId: string, edit: (agent: Agent) => Agent) {
-  const row = await db.swarmAgent.findUniqueOrThrow({ where: { tabId_key: { tabId, key: agentId } } })
-  await db.swarmAgent.update({ where: { id: row.id }, data: { data: edit(row.data as unknown as Agent) as unknown as Prisma.InputJsonValue } })
+  await swarmTransaction(db, async tx => {
+    const row = await tx.swarmAgent.findUniqueOrThrow({ where: { tabId_key: { tabId, key: agentId } } })
+    await tx.swarmAgent.update({ where: { id: row.id }, data: { version: row.version + 1, changedAt: new Date(),
+      data: edit(row.data as unknown as Agent) as unknown as Prisma.InputJsonValue } })
+    noteChange(tx, tabId, 'main')
+  })
 }
 async function editGroup(tabId: string, groupId: string, edit: (group: Conversation) => Conversation) {
-  const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId, key: groupId } } })
-  await db.swarmGroup.update({ where: { id: row.id }, data: { data: edit(row.data as unknown as Conversation) as unknown as Prisma.InputJsonValue } })
+  await swarmTransaction(db, async tx => {
+    const row = await tx.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId, key: groupId } } })
+    await tx.swarmGroup.update({ where: { id: row.id }, data: { version: row.version + 1, changedAt: new Date(),
+      data: edit(row.data as unknown as Conversation) as unknown as Prisma.InputJsonValue } })
+    noteChange(tx, tabId, 'main')
+  })
 }
 async function readGroup(tabId: string, groupId: string): Promise<Conversation> {
   return (await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId, key: groupId } } })).data as unknown as Conversation

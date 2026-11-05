@@ -3705,6 +3705,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const owning = isStep(group) ? state.conversations.find(c => c.id === group.reviewOf) : undefined
       if (owning && !owning.agentIds.includes(worker.id) && joinsProject(state, owning, worker.id)) owning.agentIds.push(worker.id)
       rememberAttempt(group)
+      // Whoever it was pinned to (dispatch.ts), it is in someone's hands now.
+      delete group.pin
       group.assignment = { id: operationId, agentId: worker.id, status: 'working', configuration: structuredClone(worker.configuration),
         execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId }, result: null }
       renewLease(group.assignment, context.now)

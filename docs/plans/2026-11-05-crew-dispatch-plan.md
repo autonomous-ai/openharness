@@ -14,8 +14,9 @@ the clocks, the capacity line) from the state alone. `SuperTabStore.dispatchCrew
 `dispatchPlan` for its picks and sends each through the existing `work.assign` command, as the project's PM, in that
 command's own transaction: `WORK_ACTIVE` and `AGENT_BUSY` already refuse a second assignment inside the write, and the
 pick's operation id is stable (`dispatch:<task>:<attempt>`), so two racing passes replay or collide instead of assigning
-twice. The backend worker runs the pass every 30 s over Swarms with crew; API processes run it after a commit that can
-free a member or open a task. The two clocks run in the liveness sweep that already loses tasks (liveness.ts), through
+twice. The 30-second liveness sweep (which machine reports already run, with the Swarm loaded) starts a pass when the
+plan is not empty, and API processes start one after a commit that can free a member or open a task. It runs in the API
+store, whose hooks give `work.assign` the GitHub facts it reads; the backend worker's store has none of them. The two clocks run in the liveness sweep that already loses tasks (liveness.ts), through
 its `loseTask`. Desktop adds Group by Member to the board.
 
 **Tech Stack:** TypeScript backend (vitest unit tests; the Mongo integration suite runs in PR CI), Flutter Desktop
@@ -29,7 +30,8 @@ its `loseTask`. Desktop adds Group by Member to the board.
 - Owns `backend/src/superTabs/`, `backend/src/worker.ts`, `desktop/lib/super_tabs/` (and their tests).
 - Numbers live in one place, `DISPATCH_RULES` in `dispatch.ts`, until the project rules record (#3393) lands; then
   `lanes` is read from its `lanes` section (`{ name, owns[] }`, the same shape) and the rest from the fields it adds.
-- No new refusal code: removedRefusals.test.ts stays green. A dispatch refused by `work.assign` is skipped and logged by
+- None of removedRefusals.test.ts's codes comes back (that test stays green); `work.lane` adds two named ones,
+  `LANE_UNKNOWN` and `LANE_TASK_ONLY`, each naming the next step. A pick `work.assign` refuses is skipped and logged by
   code, never retried in a loop.
 - Swarm code stays out of cli/src/core. Tests never sign the Mac out of the real CLI. Temp files only in mktemp -d.
 
@@ -53,8 +55,8 @@ its `loseTask`. Desktop adds Group by Member to the board.
 - **Concurrency:** every assignment is one `work.assign` transaction (group and agent parts written, so a concurrent
   write retries). Stable operation ids make racing passes (worker and API, two API processes) replay one receipt or
   collide (`OPERATION_REUSED`, `WORK_ACTIVE`, `AGENT_BUSY`), never assign twice.
-- **Read cost:** the 30 s pass lists only Swarms with a crew agent (one query on agent parts, `data.crew` set), then
-  loads each such Swarm's active state once; an event pass loads only the Swarm that changed.
+- **Read cost:** no new query: the 30 s check computes the plan on the state the sweep already loaded, and a pass loads
+  only that one Swarm's active state, then writes one `work.assign` per pick.
 - **Scale:** 10x crew is 10x picks per pass, each a small transaction; the pass's log line (`[swarm-dispatch]` assigned,
   skipped by code, ms) warns first.
 - **Compatibility:** older clients ignore `lane`, `pin`, `nudgedAt` and `derived.lanes`; an older CLI reads the
@@ -106,8 +108,8 @@ its `loseTask`. Desktop adds Group by Member to the board.
 
 **Interfaces:**
 - Produces: `freeCrew(state, projectId, rules): Agent[]`: crew agents of the project (not the PM, not a Buddy, not
-  stopping, not moving (`movedTo`), session not closed unless asleep, no pending start) with no occupying task and fewer than `maxHanded` handed tasks, longest
-  free first. `dispatchPlan(state, projectId, rules, now): Pick[]` with
+  stopping, not moving (`movedTo`), session not closed unless asleep, no pending start) with no occupying task and fewer than `maxHanded` handed tasks, fewest
+  handed first, then roster order. `dispatchPlan(state, projectId, rules, now): Pick[]` with
   `Pick = { conversationId: string; agentId: string; why: 'pin' | 'lane'; lane: string | null }`: each member takes
   first a task pinned to it (oldest pin first), then its lane's top open task (a member with no lane, whose role is
   Engineer, takes the project's top task). Open = a task with a brief, no active work, not a step, not archived, not
@@ -123,13 +125,12 @@ its `loseTask`. Desktop adds Group by Member to the board.
 ### Task 3: The pass, as the PM, through work.assign
 
 **Files:**
-- Modify: `backend/src/superTabs/store.ts` (`dispatchCrew`, the after-commit trigger), `backend/src/worker.ts`
-- Create: `backend/src/superTabs/dispatchPass.ts` (`startCrewDispatch`, the Swarm listing),
-  `backend/integration/crewDispatch.test.ts`
+- Modify: `backend/src/superTabs/store.ts` (`dispatchCrew`, `dispatchSoon`, the sweep's check, hook `dispatch`),
+  `backend/src/routes/superTabs.ts` (one line: `dispatch: true` on the API store), `backend/vitest.super-tabs.config.ts`
+- Create: `backend/integration/crewDispatch.test.ts`
 
 **Interfaces:**
-- Produces: `SuperTabStore.dispatchCrew(tabId): Promise<{ assigned: number; skipped: Record<string, number> }>`;
-  `startCrewDispatch(db, store, everyMs = DISPATCH_RULES.everyMs): () => void`. Each pick is
+- Produces: `SuperTabStore.dispatchCrew(tabId): Promise<{ assigned: number; skipped: Record<string, number> }>`. Each pick is
   `executeOnce(PM's host user, tabId, { operationId: stableId('dispatch', task, String(attempts)), command: work.assign },
   leadId)`. Triggers after commit: `work.status` (done, review, stopped), `work.cancel`, `conversation.create`,
   `work.define`, `work.priority`, `work.queue`, `work.lane`, and losses.

@@ -61,6 +61,8 @@ import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from
 import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
+import { candidatesFor, DISPATCH_RULES, dispatchPlan, freeCrew, openTasks } from './dispatch.js'
+import { barredFromTeamWritten } from './teamWritten.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
 import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
@@ -144,6 +146,13 @@ const hash = (value: unknown): string => createHash('sha256').update(JSON.string
  *  for a busy Swarm) until the maintenance script removes it, and every command and read loads this row. */
 /** The most Swarms a rename reaches at once, as many as a host reads (read/host.ts FULL_TABS); its readings do the rest. */
 const MACHINE_RENAME_SWARMS = 500
+/** The writes after which the crew dispatch runs (store.ts dispatchSoon): those that may free a member or open a task. */
+const DISPATCH_TRIGGERS: ReadonlySet<string> = new Set(['work.status', 'work.cancel', 'conversation.create', 'work.define', 'work.priority',
+  'work.queue', 'work.lane', 'agent.release', 'crew.add'])
+/** How long the dispatch waits after a trigger, so a burst of writes runs one pass. */
+const DISPATCH_DEBOUNCE_MS = 1_000
+/** Picks one member tries in a pass before the next member's turn: each refused one is logged by code. */
+const DISPATCH_TRIES = 3
 const SWARM_ROW = { id: true, ownerId: true, revision: true, format: true, deletedAt: true } satisfies Prisma.SuperTabSelect
 export type SwarmRow = Prisma.SuperTabGetPayload<{ select: typeof SWARM_ROW }>
 /** A Swarm whose state still waits for its split into parts (design section 6.1) is not served until it is split. */
@@ -375,6 +384,9 @@ export interface SuperTabStoreHooks {
   /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
    *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
   teamAccountsIdle?: boolean
+  /** Hand free crew members their next task after the writes that may free one or open a task, and from the 30-second sweep
+   *  (store.ts dispatchCrew, task #3400). Off unless a server turns it on. */
+  dispatch?: boolean
   /** A terminal request was answered or refused, after the commit (lib/bus.ts tells every instance). It must not throw. */
   terminalAnswered?: (requestId: string) => void
   /** Calls `onChange` when that request is answered or refused on any instance; resolves to the call that stops listening. */
@@ -2171,7 +2183,75 @@ export class SuperTabStore {
     })
     this.endWork(tabId, ended)
     this.startWork(tabId, started)
+    // A write that may free a crew member or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
+    if (DISPATCH_TRIGGERS.has(command.type)) this.dispatchSoon(tabId)
     return done
+  }
+
+  private readonly dispatchWaiting = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Runs the crew dispatch for [tabId] a second from now, once however many writes asked: on servers whose hooks turn it on. */
+  private dispatchSoon(tabId: string): void {
+    if (!this.hooks.dispatch || this.dispatchWaiting.has(tabId)) return
+    const timer = setTimeout(() => {
+      this.dispatchWaiting.delete(tabId)
+      this.dispatchCrew(tabId).catch(error => logger.warn('[swarm-dispatch] pass failed', { tabId, error: error instanceof Error ? error.message : String(error) }))
+    }, DISPATCH_DEBOUNCE_MS)
+    timer.unref?.()
+    this.dispatchWaiting.set(tabId, timer)
+  }
+
+  /**
+   * Hands each free crew member of [tabId]'s projects its next task (dispatch.ts, task #3400): its pinned task, then its lane's
+   * top one. Reads the Swarm once, outside any write; each pick is the project's own work.assign, sent as its PM (the actor
+   * the PM itself would be), in that command's own transaction, so WORK_ACTIVE and AGENT_BUSY refuse a second assignment
+   * inside the write. The operation id names the task and its round (its last assignment), so passes racing from two servers
+   * replay one receipt or collide, and never assign twice. A refused pick is counted by code and the member's next task tried,
+   * up to DISPATCH_TRIES. A project with no PM, or no free crew, is left alone.
+   */
+  async dispatchCrew(tabId: string): Promise<{ assigned: number; skipped: Record<string, number> }> {
+    const out = { assigned: 0, skipped: {} as Record<string, number> }
+    const skip = (code: string) => { out.skipped[code] = (out.skipped[code] ?? 0) + 1 }
+    const row = await this.db.superTab.findUnique({ where: { id: tabId }, select: { ...SWARM_ROW, autonomousEnv: true } })
+    if (!row || row.deletedAt || row.format !== 2) return out
+    const { state } = await loadRow(this.db, row)
+    const now = this.now(), rules = DISPATCH_RULES
+    if (state.paused) return out
+    for (const project of projectsOf(state)) {
+      const free = freeCrew(state, project.id, rules, now)
+      if (!free.length) continue
+      const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
+      const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
+      const host = lead && await this.db.user.findUnique({ where: { id: lead.machineOwnerId }, select: { email: true } })
+      if (!lead || !host) { skip('NO_PM'); continue }
+      const user: AuthUser = { sub: lead.machineOwnerId, email: host.email, autonomousEnv: row.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
+      const open = openTasks(state, project.id, now), taken = new Set<string>()
+      for (const member of free) {
+        let tries = 0
+        for (const { group } of candidatesFor(state, member, rules, now, open)) {
+          if (taken.has(group.id)) continue
+          // Team-written code goes to Team accounts only (teamWritten.ts): never offered to a member outside one.
+          if (barredFromTeamWritten(state, group, member)) continue
+          if (++tries > DISPATCH_TRIES) break
+          try {
+            await this.executeOnce(user, tabId, { operationId: stableId('dispatch', group.id, group.assignment?.id ?? 'first'),
+              command: { type: 'work.assign', conversationId: group.id, agentId: member.id } }, lead.id)
+            taken.add(group.id)
+            out.assigned++
+            break
+          } catch (error) {
+            const code = error instanceof SuperTabError ? error.code : 'unknown'
+            skip(code)
+            // Another pass took this task, or this member: the next member, or the next task.
+            if (code === 'WORK_ACTIVE' || code === 'OPERATION_REUSED') { taken.add(group.id); continue }
+            if (code === 'AGENT_BUSY' || code === 'AGENT_CLOSED' || code === 'STOP_REQUESTED' || code === 'START_PENDING') break
+            if (code === 'unknown') throw error
+          }
+        }
+      }
+    }
+    // One line a pass that did something (backend/AGENTS.md rule 4): counts and codes, never names.
+    if (out.assigned || Object.keys(out.skipped).length) logger.info('[swarm-dispatch] pass', { tabId, ...out })
+    return out
   }
 
   private startWork(tabId: string, started: WorkHold[]): void {
@@ -3813,6 +3893,10 @@ export class SuperTabStore {
       // The starts the server refused this machine's own reports for fail now, with the refusal, not 3 minutes on (#2441).
       const checked = [...failRefusedStarts(state, machineId, now), ...loseTasks(state, now, worker => worker.machineId === machineId),
         ...sweep ? sweepLiveness(state, now) : []]
+      // The 30-second sweep also hands out work when the Swarm, as loaded here, has a free crew member and a task for it.
+      if (sweep && this.hooks.dispatch && projectsOf(state).some(p => dispatchPlan(state, p.id, DISPATCH_RULES, now).length)) {
+        afterCommit(tx, () => this.dispatchSoon(tabId))
+      }
       // Then the agents it shows closed leave, those with no active work left: the Lead is told of their tasks above (closedAgents.ts).
       const closedOut = removeClosedAgents(state, state.agents.filter(a => closed.includes(a.id)), now).map(a => a.id)
       removedIds.push(...closedOut)

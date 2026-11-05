@@ -260,6 +260,9 @@ async function productionStore(github: GitHubTokens | null, approvals: Approvals
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     // Older history pages and the costs report read the secondaries (lib/prisma.ts, task #2970).
     { replica: prismaSecondary,
+      // Free crew members get their next task from the 30-second sweep and right after the writes that free one (task #3400).
+      // Here, not in the worker: its work.assign reads the GitHub facts this store's hooks below give.
+      dispatch: true,
       // Thread replies and tags reach the phones of whoever they tell, while the app is closed (push/send.ts, task #2905).
       phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices) },
       // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
