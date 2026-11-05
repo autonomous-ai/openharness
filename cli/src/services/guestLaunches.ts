@@ -8,7 +8,7 @@
  * the owner's subscriptions, even from a harness still running, and keeps none of the owner's folders; every
  * guest still named has exactly the folders the owner shares.
  */
-import { isAbsolute, resolve } from 'node:path'
+import { isAbsolute, resolve, sep } from 'node:path'
 import type { GuestLaunch, GuestLaunchInput } from '../core/api.js'
 import { GuestHelperError, guestUserFor, type GuestAccounts, type SharedFolder } from '../lib/guestAccounts.js'
 import type { GuestHelperState } from '../lib/guestHelperInstall.js'
@@ -47,7 +47,7 @@ const HELPER_REQUIRED: Record<Exclude<GuestHelperState, 'ready'>, string> = {
 /** Whether [path] (resolved) is [folder] or inside it. */
 const within = (path: string, folder: string): boolean => {
   const root = resolve(folder)
-  return path === root || path.startsWith(`${root}/`)
+  return path === root || path.startsWith(`${root}${sep}`)
 }
 
 export function createGuestLaunches(deps: GuestLaunchesDeps): GuestLaunches {
