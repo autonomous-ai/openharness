@@ -45,15 +45,43 @@ const WHY: Record<DroppedRule['why'], string> = {
  * request merged on GitHub. A task that went
  * quiet is in the state only when the save names it (tasks), which loads it.
  */
-function rulePlaces(state: SuperTabState, project: SwarmProject): RulePlace[] {
-  // Merged only as the Swarm itself read it on GitHub (Conversation.mergeSeen), never by the task's own merge record, which
-  // any agent of the project writes with any link (River, review of #3220).
-  const seenMerged = (c: Conversation) => Object.keys(c.mergeSeen ?? {}).length > 0
+function rulePlaces(state: SuperTabState, project: SwarmProject, merges: Readonly<Record<string, number | null>>): RulePlace[] {
+  // Merged only as GitHub itself says, read by the store before this save ([merges]), never by the task's own merge record,
+  // which any agent of the project writes with any link (River, review of #3220); and only after the rule went into its brief
+  // (briefAt): an older merge never carried it (#3463). A task from before briefAt counts any merge, as it did.
+  const seenMerged = (c: Conversation) => (c.pullRequestUrls ?? []).some(url => {
+    const at = merges[url]
+    return typeof at === 'number' && (c.briefAt === undefined || at > c.briefAt)
+  })
   const records = projectRules(state, project.id).map(r => ({ text: r.text, people: [r.askedBy], where: 'the rules record', open: false }))
-  const tasks = state.conversations.filter(c => (c.projectId ?? 'lead') === project.id && c.id !== project.leadConversationId && !c.kind
-    && !c.reviewOf && !c.step && !c.audience && c.brief && (seenMerged(c) || c.assignment?.status !== 'cancelled'))
+  const tasks = codeTasks(state, project).filter(c => seenMerged(c) || c.assignment?.status !== 'cancelled')
     .map(c => ({ text: c.brief, people: [], where: c.number ? `task #${c.number}` : `task "${c.title}"`, open: !seenMerged(c) }))
   return [...records, ...tasks]
+}
+
+/** The project's code tasks: its tasks with a brief, not a step, a chat or a private chat (rulePlaces, tasksHoldingMoves). */
+const codeTasks = (state: SuperTabState, project: SwarmProject): Conversation[] => state.conversations.filter(c => (c.projectId ?? 'lead') === project.id
+  && c.id !== project.leadConversationId && !c.kind && !c.reviewOf && !c.step && !c.audience && !!c.brief)
+
+/** How the guard tells people apart in this Swarm: a written name as the members it is, so "0xken15" and "Ken" are one. */
+function identifier(state: SuperTabState): (name: string) => string {
+  const membersOf = new Map<string, string[]>()
+  return name => (membersOf.get(name) ?? membersOf.set(name, membersNamed(state, name)).get(name)!).slice().sort().join(',') || `?${personKey(name)}`
+}
+
+/**
+ * The project's code tasks a save from [before] to [after] would move a person's rule into, as the guard itself reads a move
+ * (droppedRules): each task alone, counted open, that holds a rule the save drops, across wrapped lines or as one rule of a
+ * line of several, with the guard's own words (filler words, word endings: review 2 of #3273). The store reads their pull
+ * requests' merges before the save (store.ts pullRequestMergesFor, #3463). It runs only for a save that drops a person's rule,
+ * once per code task: a few dozen in a project.
+ */
+export function tasksHoldingMoves(state: SuperTabState, project: SwarmProject, before: string, after: string): Conversation[] {
+  const identify = identifier(state)
+  const lost = droppedRules(before, after, identify)
+  if (!lost.length) return []
+  return codeTasks(state, project).filter(task =>
+    droppedRules(before, after, identify, [{ text: task.brief, people: [], where: task.id, open: true }]).some(rule => rule.movedTo === task.id))
 }
 
 /**
@@ -64,12 +92,11 @@ function rulePlaces(state: SuperTabState, project: SwarmProject): RulePlace[] {
  * several people needs each of them. A name that is no member is the project owner's to allow.
  */
 export function allowedDrops(state: SuperTabState, project: SwarmProject, before: string, after: string, sender: { kind: Author['kind']; id: string },
-  named: readonly string[], approvals: readonly ApprovalRow[], since: number): { told: Map<string, DroppedRule[]>; rules: DroppedRule[] } {
+  named: readonly string[], approvals: readonly ApprovalRow[], since: number, merges: Readonly<Record<string, number | null>> = {}): { told: Map<string, DroppedRule[]>; rules: DroppedRule[] } {
   const told = new Map<string, DroppedRule[]>()
   const membersOf = new Map<string, string[]>()
   const members = (name: string) => membersOf.get(name) ?? membersOf.set(name, membersNamed(state, name)).get(name)!
-  // One written person for comparing revisions: the members they are, so "0xken15" and "Ken" are one.
-  const dropped = droppedRules(before, after, name => members(name).sort().join(',') || `?${personKey(name)}`, rulePlaces(state, project))
+  const dropped = droppedRules(before, after, identifier(state), rulePlaces(state, project, merges))
   if (!dropped.length) return { told, rules: [] }
   const saver = sender.kind === 'person' ? sender.id : undefined
   // Written after the revision this save replaces, in a conversation of this project: an old "thanks" approves nothing (review

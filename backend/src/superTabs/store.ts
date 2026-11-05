@@ -70,11 +70,12 @@ import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
 import { RefusalMemory } from './dispatchRefusals.js'
+import { tasksHoldingMoves } from './ruleGuard.js'
 import { candidatesFor, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type Skip } from './dispatch.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
 import { owedAsk } from './timeChecks.js'
-import { settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
+import { ledgerGroupIds, settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
 import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
@@ -166,6 +167,10 @@ const hash = (value: unknown): string => createHash('sha256').update(JSON.string
  *  for a busy Swarm) until the maintenance script removes it, and every command and read loads this row. */
 /** The most Swarms a rename reaches at once, as many as a host reads (read/host.ts FULL_TABS); its readings do the rest. */
 const MACHINE_RENAME_SWARMS = 500
+/** At most this many pull requests are read on GitHub for one instructions save (pullRequestMergesFor); the rest count as not
+ *  known, and their lines stay. */
+export const MAX_MERGE_READS = 20
+
 /** The writes after which the crew dispatch runs (store.ts dispatchSoon): those that may free a member or open a task. A
  *  status only when it hands the task over or ends it; a progress note, the Swarm's most frequent write, frees nobody. */
 const DISPATCH_TRIGGERS: ReadonlySet<string> = new Set(['work.cancel', 'conversation.create', 'work.define', 'work.priority',
@@ -416,6 +421,10 @@ export interface SuperTabStoreHooks {
   /** The files a handed task's pull requests change and their head (pullRequestFiles.ts), read before its Engineer's Ready so
    *  the server opens its review steps (task #3401). Null with nothing of the project's repository to read. Absent with no GitHub App. */
   pullRequestFiles?: (repositoryUrl: string | null, pullRequestUrls: string[]) => Promise<PullRequestFilesRead | null>
+  /** When GitHub says each of these pull requests merged (ms; null: not merged; absent: not known), read before an
+   *  instructions save that may drop a person's rule kept in a code task (ruleMoves.ts, task #3463). Absent with no GitHub App:
+   *  such a line then stays. */
+  pullRequestMerges?: (autonomousEnv: string, tabId: string, projectId: string, pullRequestUrls: string[]) => Promise<Record<string, number | null>>
   /** The same for a branch a start names: its open pull request's answer, clean for the default branch, unknown with no pull request. */
   branchPushOrigin?: (repositoryUrl: string | null, branch: string) => Promise<PushOrigin>
   /** Whether the Harness GitHub App reaches a project's GitHub repository for this Swarm (github/projectAccess.ts), read before
@@ -1642,13 +1651,44 @@ export class SuperTabStore {
     }
   }
 
+  /**
+   * When GitHub says the pull requests merged that an instructions save's dropped lines may wait on (task #3463): those linked
+   * to the project's code tasks whose brief carries a line the save removes, in the project's own repository (a link
+   * elsewhere is not this task's merge), at most MAX_MERGE_READS. Read before the write, as GitHub may take seconds, whatever
+   * the tidying setting. Undefined when there is nothing to read or no reader; a failure reads as nothing known (the line stays).
+   */
+  private async pullRequestMergesFor(user: AuthUser, tabId: string, command: unknown): Promise<Record<string, number | null> | undefined> {
+    const hook = this.hooks.pullRequestMerges
+    const asked = command as Command | null
+    if (!hook || asked?.type !== 'instructions.save') return undefined
+    try {
+      const urls = await transaction(this.db, async tx => {
+        const { state } = await this.load(tx, user, tabId, namedFor(asked))
+        const project = projectsOf(state).find(p => p.id === asked.projectId)
+        const repositoryUrl = project?.repository?.repositoryUrl
+        // Only a project on GitHub has GitHub merges of its own: any other frees nothing by a GitHub link (review 2 of #3273).
+        if (!project || !repositoryUrl || !githubRepository(repositoryUrl)) return []
+        const stored = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, project.id) }, select: { text: true } })
+        // The tasks the guard itself would read a dropped rule in (review 1 of #3273): wrapped lines and one rule of several.
+        const holding = stored ? tasksHoldingMoves(state, project, stored.text, asked.text) : []
+        return [...new Set(holding.flatMap(c => (c.pullRequestUrls ?? []).filter(url => projectPullRequestUrl(url, repositoryUrl) !== null)))]
+          .slice(0, MAX_MERGE_READS)
+      })
+      return urls.length ? await hook(user.autonomousEnv, tabId, asked.projectId, urls) : undefined
+    } catch (error) {
+      if (error instanceof SuperTabError) return undefined
+      logger.warn('[swarm-instructions] merges not read; moved rules stay', { tabId, error: error instanceof Error ? error.message : String(error) })
+      return undefined
+    }
+  }
+
   /** [only]: what the store alone may give a command: `overdue` for decision.answer (leaveOverdueDecisions), `movedTo` for
    *  machine.moved (computerSignedIn). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
     const { operationId, command } = operationSchema.parse(input)
-    const [pushOrigin, repositoryReach, pullRequestFiles] = await Promise.all([this.pushOriginFor(user, tabId, command), this.repositoryReachFor(user, tabId, command),
-      this.pullRequestFilesFor(user, tabId, command)])
+    const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([this.pushOriginFor(user, tabId, command),
+      this.repositoryReachFor(user, tabId, command), this.pullRequestFilesFor(user, tabId, command), this.pullRequestMergesFor(user, tabId, command)])
     let ended: WorkHold[] = [], started: WorkHold[] = []
     // Whether the Swarm, as this write leaves it, has a crew: only then may the write start a dispatch pass (dispatchSoon).
     let crewed = false
@@ -1850,6 +1890,7 @@ export class SuperTabStore {
         const stored = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, projectId) }, select: { revision: true, text: true, updatedAt: true } })
         context.instructions = stored && { revision: stored.revision, text: stored.text, ...stored.updatedAt ? { at: stored.updatedAt.getTime() } : {} }
         if (command.type === 'instructions.save' && command.approvals?.length) context.approvals = await readApprovals(tx, tabId, command.approvals)
+        if (command.type === 'instructions.save' && pullRequestMerges) context.pullRequestMerges = pullRequestMerges
       }
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
       // A stale rules save is refused with the newest revision, to merge (policy.ts); null is the seed.
@@ -5063,8 +5104,7 @@ export class SuperTabStore {
       const head = (await tx.swarmHead.findUnique({ where: { id: `${tabId}:head` }, select: { data: true } }))?.data as { projects?: SwarmProject[] } | undefined
       const ledger = head?.projects?.find(p => p.id === projectId)?.releases
       if (!ledger) return null
-      const groupIds = [...new Set([...ledger.pending.map(e => e.groupId), ...Object.values(ledger.steps ?? {}).map(s => s!.groupId)])]
-      const loaded = await loadRow(tx, requireParts(row), { groupIds })
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: ledgerGroupIds(ledger) })
       const state = cloneData(loaded.state)
       const before = JSON.stringify(projectsOf(loaded.state).find(p => p.id === projectId)?.releases)
       // The project's rules record as it reads now: its saved window, pace and backend pause, or the seed until one is saved.
@@ -5235,12 +5275,6 @@ export class SuperTabStore {
       // Only the group it reviews as the pass read it: one this write did not load would hide its open pull requests.
       const review = !finished && !!reviewOf && group.reviewOf === reviewOf && reviewClosable(state, group, now) && read(reviewPullRequests(state, group))
       if (!finished && !review) return false
-      // What GitHub said merged in its project's repository, as this read saw it: what a person's rule moved into this task
-      // waits for (ruleGuard.ts rulePlaces, #3392). A link elsewhere, or a step's, is not this task's merge.
-      const repositoryUrl = groupProject(state, group).repository?.repositoryUrl
-      const merged = finished && githubRepository(repositoryUrl) ? Object.keys(checked)
-        .filter(url => checked[url] === 'merged' && projectPullRequestUrl(url, repositoryUrl) !== null) : []
-      if (merged.length) group.mergeSeen = { ...group.mergeSeen, ...Object.fromEntries(merged.map(url => [url, now])) }
       // Its work is over: a decision still waiting there waits no more (Dee, 10-31), as when the work ended by a command.
       await withdrawIn(tx, tabId, [groupId], now)
       group.archived = true

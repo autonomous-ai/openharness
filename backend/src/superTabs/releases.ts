@@ -78,7 +78,14 @@ export function compareTags(a: string, b: string): number {
  *  release (done, cancelled or archived: the release may still be running). */
 export interface ReleaseStep { groupId: string; at: number; endedAt?: number }
 /** A project's release list (SwarmProject.releases). The server alone writes it; readers never get it. */
-export interface ReleaseLedger { pending: PendingRelease[]; last?: Partial<Record<ReleaseComponentId, VerifiedRelease>>; steps?: Partial<Record<ReleaseComponentId, ReleaseStep>> }
+export interface ReleaseLedger { pending: PendingRelease[]; last?: Partial<Record<ReleaseComponentId, VerifiedRelease>>; steps?: Partial<Record<ReleaseComponentId, ReleaseStep>>
+  /** Tasks the cap pushed off the list with no other merge left on it: the merge's write may not hold them, so the next settle
+   *  loads them and clears their `releasing` (review of #3267). */
+  leaving?: string[] }
+
+/** The groups a settle of [ledger] loads: the tasks waiting, the open release steps, the tasks leaving. */
+export const ledgerGroupIds = (ledger: ReleaseLedger): string[] =>
+  [...new Set([...ledger.pending.map(e => e.groupId), ...Object.values(ledger.steps ?? {}).map(s => s!.groupId), ...ledger.leaving ?? []])]
 
 /** At most this many tasks wait on a project's list; the oldest leaves first, with a warning. */
 export const PENDING_MAX = 100
@@ -105,12 +112,18 @@ export const shipped = (entry: PendingRelease): boolean => !!entry.components &&
 
 /** Puts [group]'s merge of [url] at [mergedAt] on [project]'s release list, in the merge record's own write. The same merge
  *  recorded again adds nothing; a later merge of the same task waits on its own. Returns the entries the cap pushed out. */
-export function notePendingRelease(project: SwarmProject, group: Pick<Conversation, 'id'>, url: string, mergedAt: number): PendingRelease[] {
+export function notePendingRelease(project: SwarmProject, group: Pick<Conversation, 'id' | 'releasing'>, url: string, mergedAt: number): PendingRelease[] {
   const ledger = project.releases ??= { pending: [] }
   if (ledger.pending.some(e => e.groupId === group.id && e.url === url)) return []
+  // Releasing from its merge on; its parts are known once the worker reads its pull request's files.
+  group.releasing ??= []
   ledger.pending.push({ groupId: group.id, url, mergedAt })
   ledger.pending.sort((a, b) => a.mergedAt - b.mergedAt)
-  return ledger.pending.length > PENDING_MAX ? ledger.pending.splice(0, ledger.pending.length - PENDING_MAX) : []
+  const dropped = ledger.pending.length > PENDING_MAX ? ledger.pending.splice(0, ledger.pending.length - PENDING_MAX) : []
+  for (const { groupId } of dropped) {
+    if (!ledger.pending.some(e => e.groupId === groupId) && !ledger.leaving?.includes(groupId)) (ledger.leaving ??= []).push(groupId)
+  }
+  return dropped
 }
 
 /** How long a step that ended without a verified release still holds its component: a release workflow that is still
@@ -175,6 +188,8 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
   const fresh = ledger.pending.filter(e => e.mergedAt > now - PENDING_MS)
   outcome.dropped = ledger.pending.filter(e => !fresh.includes(e))
   ledger.pending = fresh
+  const left = new Set<string>([...outcome.dropped.map(e => e.groupId), ...ledger.leaving ?? []])
+  delete ledger.leaving
 
   for (const component of RELEASE_COMPONENTS) {
     const read = facts.releases[component.id]
@@ -206,8 +221,23 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
       group.released = { at, tags }
       outcome.shipped.push(group.id)
     }
+    left.add(entry.groupId)
     return false
   })
+  // What each task still waits for, across its merges still on the list; none left, and it is releasing no more.
+  const waits = new Map<string, Set<ReleaseComponentId>>()
+  for (const entry of ledger.pending) {
+    const parts = waits.get(entry.groupId) ?? new Set<ReleaseComponentId>()
+    for (const c of entry.components ?? []) if (!entry.shippedIn?.[c]) parts.add(c)
+    waits.set(entry.groupId, parts)
+  }
+  for (const groupId of new Set([...left, ...waits.keys()])) {
+    const group = state.conversations.find(c => c.id === groupId)
+    const parts = waits.get(groupId)
+    if (!group) continue
+    if (parts) group.releasing = RELEASE_COMPONENTS.filter(c => parts.has(c.id)).map(c => c.id)
+    else delete group.releasing
+  }
 
   for (const component of RELEASE_COMPONENTS) {
     const step = ledger.steps?.[component.id]

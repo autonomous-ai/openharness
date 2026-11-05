@@ -595,6 +595,9 @@ export interface CommandContext {
     shown?: string[] }
   /** For `instructions.save`: the project's stored document, read by the store, which a stale save hands back to merge. */
   instructions?: { revision: number; text: string; at?: number } | null
+  /** For an instructions.save: when GitHub says each pull request linked to a task the save may move a rule into merged
+   *  (ms), null when it did not; one GitHub could not answer for is absent (store.ts pullRequestMergesFor, #3463). */
+  pullRequestMerges?: Readonly<Record<string, number | null>>
   /** For `instructions.save`: the messages it names as approvals, loaded by id in this tab by the store (ruleGuard.ts). */
   approvals?: ApprovalRow[]
   /** For `rules.set`, and for a task's Ready whose pull request files were read (its review table plans the steps, #3401):
@@ -2066,7 +2069,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       refuseOverBudget(before, command.text)
       // A person's rule, or who gave it, is dropped only by that person or with their own message approving it (#3151).
       const { told, rules } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [],
-        context.instructions?.at ?? 0)
+        context.instructions?.at ?? 0, context.pullRequestMerges ?? {})
       // Every line it dropped, with its kind and who gave it, kept with the revision for the History (River, 11-05).
       saveInstructions(project, current, command.text, command.summary, askedBy, droppedLines(before, command.text, command.dropped ?? [], rules))
       // The coordinator's save that says it is the tidy is that tidy done (pmSchedule.ts tidyRequest); a correction it saves
@@ -2564,7 +2567,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // A task lists its steps from its start (#3394): only a task from before lists none, which its PR watch looks up once.
         ...(!command.reviewOf && !command.audience ? { stepIds: [] } : {}),
         number, title: command.title, leadId, agentIds: [...leadId ? [leadId] : [], ...creator],
-        archived: false, brief, ...(command.task ? { task: command.task } : {}), ...(command.reviewOf ? { reviewOf: command.reviewOf } : {}),
+        archived: false, brief, ...(brief ? { briefAt: context.now } : {}), ...(command.task ? { task: command.task } : {}), ...(command.reviewOf ? { reviewOf: command.reviewOf } : {}),
         // A step keeps its task's mark (teamWritten.ts, audit H2). Opening a task writes none of its code (#3304).
         ...(command.reviewOf ? stepMark(state, conversation(state, command.reviewOf)) : {}),
         ...(command.step ? { step: command.step } : {}),
@@ -4008,6 +4011,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       group.brief = command.task ? renderWorkTask(command.task) : command.brief!
       if (command.task) group.task = command.task
       else delete group.task
+      group.briefAt = context.now
       stampLane(group)
       group.checks = storedChecks(command.checks, operationId)
       message(group.id, group.brief, [], null, SYSTEM_ROW)
