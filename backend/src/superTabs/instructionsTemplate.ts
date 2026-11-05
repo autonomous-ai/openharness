@@ -102,9 +102,10 @@ export const TEMPLATE_ROUTING = `## Routing
   firmware. The machine comes before the model. A mid-strength model is enough for most testing.
 - Every assignment (an Engineer, a Reviewer, a Tester, an idle agent reused) picks in this order:
   1. What the work needs: the machine, a model strong enough, a machine not paused.
-  2. An account any project's PM runs on (this project's or another's; the route notes it) keeps 20% of its weekly
-     quota for that PM: below 20% left it takes no new work and idle agents there are not reused. Above that it is used like any
-     other account.
+  2. An account any project's PM runs on (this project's or another's; the route notes it) keeps the share of its
+     weekly quota the route's note names for that PM: the days to its weekly reset × what that PM spends a day, at least
+     5%, and 20% until 3 days are measured. Below that share left it takes no new work and idle agents there are not
+     reused. Above it, it is used like any other account.
   3. Every other account is used while it has weekly quota left: the one resetting soonest first, then the one with
      the most left.
   4. An idle agent is reused only between candidates equal so far, except the same Reviewer for its next round and
@@ -117,8 +118,8 @@ export const TEMPLATE_ROUTING = `## Routing
   applies this order itself. Every start or assignment from a route gives as its reason the rule above that chose it:
   urgency, context or a machine the work needs where it departs from the order. "Idle" or "first in the list" is not a
   reason.
-- An agent whose account runs out of weekly quota mid-task, or whose account is a PM's and falls below 20%, hands its
-  pushed branch to an agent on another account.
+- An agent whose account runs out of weekly quota mid-task, or whose account is a PM's and falls below the share it keeps
+  for that PM, hands its pushed branch to an agent on another account.
 - Urgent work (production down, security) ignores quota.`
 
 /** The title and the opening words, which say what the document is for. */
