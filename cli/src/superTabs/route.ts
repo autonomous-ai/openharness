@@ -587,6 +587,15 @@ export function quotaBrief(p: Pick<Probe, 'quota' | 'gridModel'> & { fit: Pick<F
   return `${p.fit.status}: weekly ${Math.round(left)}% left${resetsAt === null ? '' : `, resets in ${weeklyResetsIn(resetsAt, now)}`}`
 }
 
+/** [quotaBrief] in a candidate's one line (task #3294): "fits 62% · resets 5d", the weekly window the project's order compares. */
+export function quotaLine(p: Pick<Probe, 'quota' | 'gridModel'> & { fit: Pick<Fit, 'status'> }, now: number): string {
+  if (p.gridModel) return 'free (grid)'
+  if (p.quota.metered) return 'metered'
+  const { left, resetsAt } = weekly(p.quota)
+  if (left === null) return `${p.fit.status === 'unknown' ? '' : `${p.fit.status}, `}weekly unknown${p.quota.why ? ` (${cut(p.quota.why, 60)})` : ''}`
+  return `${p.fit.status} ${Math.round(left)}%${resetsAt === null ? '' : ` · resets ${weeklyResetsIn(resetsAt, now)}`}`
+}
+
 /** One unrated new agent per machine of the named model's engine, on that machine's first row of the engine, which carries
  *  its facts and its quota ([CLAUDE_NAMES]). The person's words are the model's id, in lowercase with no spaces. */
 function unratedProbes(probes: Probe[], named: string): Probe[] {
