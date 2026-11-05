@@ -2327,8 +2327,10 @@ describe('the route answer an agent reads (task #3294)', () => {
     for (const [i, row] of (answer.candidates as Array<{ id: string; kind: string; agentId?: string; machineId: string; engine: string; model: string; effort: string; cwd?: string }>).entries()) {
       const { machine, line } = lines[i]!
       expect(line).toMatch(new RegExp(`^${row.id} ${row.kind === 'new' ? 'new' : `\\S+ \\(agent ${row.agentId}, idle\\)`} · ${row.engine} ${row.model} ${row.effort} · `))
-      expect(machine).toMatch(new RegExp(`· machineId ${row.machineId} · 2 agents · cwd /absolute/repo/on/that/machine`))
+      expect(machine).toMatch(new RegExp(`· machineId ${row.machineId} · 2 agents$`))
     }
+    // The folder a start takes is said once when every machine shares it (a live route: 23 machines, one folder of 85 characters).
+    expect(printed.cwd).toBe('/absolute/repo/on/that/machine')
     expect(lines[0]!.line).toMatch(/· fits 62% · resets 5d$/)
     // A note is its first clause; the record for Details keeps it whole.
     expect(lines[1]!.line).toMatch(/· Machine fit: its 3 agents use 61% of the CPU$/)
@@ -2349,6 +2351,15 @@ describe('the route answer an agent reads (task #3294)', () => {
     const bare = { ...answer, instructions: { revision: 2, text: '# Rules\n\nWork by this.', notes: [] } }
     expect(routeAnswer(bare).instructions).toMatchObject({ revision: 2, text: '# Rules\n\nWork by this.' })
     expect(routeAnswer({ ...answer, instructions: undefined, instructionsUnreadable: true })).toMatchObject({ instructionsUnreadable: true })
+  })
+  it('says a machine\'s own folder only where it differs from the one most share, and no room, which the record keeps', () => {
+    const row = (id: string, machineName: string, cwd: string) => ({ id, kind: 'new', machineId: `id-${machineName}`, machineName, cwd, agents: 1, machine: '6 slots free · 14 GB memory free', line: `${id} new` })
+    const printed = routeAnswer({ ok: true, candidates: [row('c0', 'a', '/Users/t/repo'), row('c1', 'b', '/home/t/repo'), row('c2', 'c', '/Users/t/repo')] })
+    expect(printed).toMatchObject({ cwd: '/Users/t/repo', candidates: [{ machine: 'a · machineId id-a · 1 agents', candidates: ['c0 new'] },
+      { machine: 'b · machineId id-b · 1 agents · cwd /home/t/repo' }, { machine: 'c · machineId id-c · 1 agents' }] })
+    expect(JSON.stringify(printed)).not.toContain('slots')
+    // Members only: no folder to say.
+    expect(routeAnswer({ ok: true, candidates: [{ id: 'c0', kind: 'member', machineId: 'm', machineName: 'a', line: 'c0 M' }] })).not.toHaveProperty('cwd')
   })
   it('says each machine left out in one line, and what is left out of no machine when nothing can run', () => {
     const long = 'z'.repeat(400)
