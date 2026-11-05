@@ -122,6 +122,31 @@ String? swarmRepositoryNameProblem(String name) {
       : swarmRepositoryNameRule;
 }
 
+/// Whether [link] is GitHub's own: https, github.com itself, no login or port
+/// in it. The only links New repository opens or offers, whatever the server
+/// answers (River, from the Desktop security review of #1788).
+bool swarmGitHubLink(String link) {
+  final uri = Uri.tryParse(link);
+  return uri != null &&
+      uri.scheme == 'https' &&
+      uri.host.toLowerCase() == 'github.com' &&
+      uri.userInfo.isEmpty &&
+      !uri.hasPort;
+}
+
+/// Whether [url] is the repository [asked] for on GitHub: owner and name as
+/// asked, as GitHub compares them (without case), and nothing more.
+bool swarmMadeAsAsked(String url, SwarmNewRepository asked) {
+  if (!swarmGitHubLink(url)) return false;
+  final parts = [
+    for (final part in Uri.parse(url).pathSegments)
+      if (part.isNotEmpty) part,
+  ];
+  return parts.length == 2 &&
+      parts[0].toLowerCase() == asked.owner.toLowerCase() &&
+      parts[1].toLowerCase() == asked.name.toLowerCase();
+}
+
 /// Whether [owner] reads as a GitHub organization name.
 bool swarmRepositoryOwnerValid(String owner) => _owner.hasMatch(owner);
 

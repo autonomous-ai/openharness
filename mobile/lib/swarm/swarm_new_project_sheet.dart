@@ -1047,9 +1047,13 @@ class SwarmNewProjectSteps with ChangeNotifier {
       switch (outcome['state']) {
         case 'created':
           final made = outcome['repositoryUrl'];
-          if (made is! String || !swarmRepositoryUrlValid(made)) {
+          // Only the repository asked for starts a Product Manager (River,
+          // from the Desktop security review).
+          if (made is! String ||
+              !swarmRepositoryUrlValid(made) ||
+              !swarmMadeAsAsked(made, sent.repository)) {
             _creation = null;
-            throw const SwarmRepositoryFailure(swarmRepositoryNoAnswer);
+            throw const SwarmRepositoryFailure(swarmRepositoryNotCreated);
           }
           unreachable = outcome['reachable'] == false;
           return made;
@@ -1122,11 +1126,17 @@ class SwarmNewProjectSteps with ChangeNotifier {
         _ => failure,
       };
     }
+    // GitHub's own sign-in, or nothing is opened: the server answered, so
+    // the request is let go, and nothing was created (River, from the
+    // Desktop security review).
     final (authorizeUrl, at) = switch (answer) {
       {'authorizeUrl': final String link, 'at': final num at}
-          when Uri.tryParse(link)?.isScheme('https') ?? false =>
+          when swarmGitHubLink(link) =>
         (link, at.toInt()),
-      _ => throw const SwarmRepositoryFailure(swarmRepositoryNoAnswer),
+      _ => () {
+        _asking = null;
+        throw const SwarmRepositoryFailure(swarmRepositoryNotCreated);
+      }(),
     };
     // Kept before anything else is asked: a sheet gone meanwhile finds it
     // when it opens again, and waits for this sign-in.
@@ -2388,7 +2398,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
             ),
           ),
           if (check?.installUrl case final install?
-              when check?.state == 'not-installed')
+              when check?.state == 'not-installed' && swarmGitHubLink(install))
             Align(
               alignment: AlignmentDirectional.centerStart,
               child: SwarmButton(
@@ -2401,7 +2411,11 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
             ),
           _copyMessage(
             ownerLine,
-            link: check?.state == 'not-installed' ? check?.installUrl : null,
+            link:
+                check?.state == 'not-installed' &&
+                    swarmGitHubLink(check?.installUrl ?? '')
+                ? check?.installUrl
+                : null,
           ),
           Align(
             alignment: AlignmentDirectional.centerStart,
