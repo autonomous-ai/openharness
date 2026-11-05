@@ -84,16 +84,17 @@ Way of working: the project's Engineer workflow (one pull request, test first pe
 
 ### Task 2: Host stamps
 
-**Files:** `backend/src/superTabs/cache.ts`, `cache.test-support.ts`, `cache.test.ts`, `parts/write.ts`,
-`parts/commit.ts` (export `writeHosts`), `machineReports.ts` (ReportRecord gains `hosts`), `store.ts`
-(fastReading, fullReading).
+**Files:** `backend/src/superTabs/cache.ts`, `cache.test-support.ts`, `cache.test.ts`, `cacheRedis.test.ts`,
+`parts/write.ts` (`writeHosts`, and `plainHost` moved here from commit.ts), `machineReports.ts` (ReportRecord gains
+`hosts`), `store.ts` (fastReading, fullReading).
 
-**Interfaces:** `writeHosts(write: PartWrite): string[] | '*' | null`; `noteChange(tx, tabId, scope, hosts?)`;
+**Interfaces:** `writeHosts(write: PartWrite): string[]` (machine ids, or `ALL_HOSTS`); `noteChange(tx, tabId, scope, hosts?)`;
 `SwarmStamps.bump(tabId, scopes, hosts?: string[])`; `SwarmStamps.readHost(tabId, machineId): Promise<HostStamp>`
 with `HostStamp { main, hosted, uncovered, host, all }`; `readHostStamp(tabId, machineId): Promise<HostStamp | null>`.
 
-- [ ] Unit tests in `cache.test.ts` for the Lua script's rules (through a fake Redis evaluating the same rules as
-  MemoryStamps): host fields grow, `hosted` follows `main`, an old bump sets `uncovered`.
+- [ ] Unit tests: `cache.test.ts` (noteChange → host stamps, owed bumps keep them), `machineReports.test.ts`
+  (recordHolds), `parts/write.test.ts` (writeHosts), and the Lua script on a real Redis in `cacheRedis.test.ts`: host
+  fields grow, `hosted` follows `main`, an old bump sets `uncovered`.
 - [ ] Implement; Task 1's fast-path tests pass; commit.
 
 ### Task 3: Changed machines in one read
