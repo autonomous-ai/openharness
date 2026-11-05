@@ -1,4 +1,9 @@
+import 'dart:io';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/manage_page.dart';
@@ -6,7 +11,11 @@ import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/scorecard.dart';
 import 'package:harness/super_tabs/scorecard_view.dart';
 
+import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/super_tab_fixture.dart';
+
+/// Set to a folder to write the PR's screenshots there.
+final shots = Platform.environment['SUPER_TAB_SCORECARD_SHOTS'];
 
 Map<String, dynamic> _day(String on, Map<String, dynamic> figures) => {
   'projectId': 'p0',
@@ -162,5 +171,84 @@ void main() {
         .toList();
     expect(cells.take(4), ['Asks shipped', '9', '–', '7']);
     reader.dispose();
+  });
+
+  group('screenshots', () {
+    setUpAll(() async {
+      if (shots != null) await loadPreviewFonts();
+    });
+    for (final brightness in Brightness.values) {
+      testWidgets('Manage ▸ Scorecard (${brightness.name})', (tester) async {
+        final picture = GlobalKey();
+        grid.AppTheme.brightness.value = brightness;
+        addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
+        await tester.binding.setSurfaceSize(const Size(1100, 560));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final reader = SuperTabScorecardReader(
+          tabId: 'tab',
+          request: (method, path, {body}) async => {
+            'days': [
+              for (final (on, f) in const [
+                ('2026-11-05', [9, 190, 600, 95, 2, 1, 4, 31, 3, 28, 6, 12]),
+                ('2026-11-04', [7, 245, 360, 40, 1, 0, 2, 24, 1, 22, 3, 18]),
+                ('2026-11-02', [4, 300, 120, 0, 0, 0, 1, 12, 0, 10, 1, 9]),
+              ])
+                _day(on, {
+                  'asksShipped': f[0],
+                  'askToShipMedianMinutes': f[1],
+                  'oldestUnansweredAskMinutes': f[2],
+                  'idleMinutes': f[3],
+                  'lostLeftAlone': f[4],
+                  'fixesAfterMerge': f[5],
+                  'corrections': f[6],
+                  'starts': f[7],
+                  'startsFailed': f[8],
+                  'routeDecisions': f[9],
+                  'typedIntoPm': f[10],
+                  'ackPosts': f[11],
+                }),
+            ],
+          },
+        );
+        addTearDown(reader.dispose);
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: grid.buildAppTheme(brightness: brightness),
+            builder: (context, child) =>
+                RepaintBoundary(key: picture, child: child),
+            home: Scaffold(
+              body: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SuperTabManageTabs(
+                    selected: SuperTabManageTab.scorecard,
+                    onChoose: (_) {},
+                  ),
+                  Expanded(
+                    child: SuperTabScorecardView(
+                      projects: _projects,
+                      projectId: 'p0',
+                      reader: reader,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.runAsync(() async {
+          final boundary =
+              picture.currentContext!.findRenderObject()!
+                  as RenderRepaintBoundary;
+          final image = await boundary.toImage(pixelRatio: 2);
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          await Directory(shots!).create(recursive: true);
+          await File('$shots/scorecard-${brightness.name}.png')
+              .writeAsBytes(bytes!.buffer.asUint8List());
+          image.dispose();
+        });
+      }, skip: shots == null);
+    }
   });
 }
