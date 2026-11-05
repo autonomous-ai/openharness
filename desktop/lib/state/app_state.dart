@@ -2905,7 +2905,11 @@ class AppNotifier extends ChangeNotifier {
           _joinAccountRequests.remove(request);
           if (!_disposed) notifyListeners();
         }
-        if (!current() || ownAccount == null) return;
+        if (!current()) return;
+        if (ownAccount == null) {
+          failed('Add it from Machines.');
+          return;
+        }
       }
       final note =
           await SwarmJoinMachine(
