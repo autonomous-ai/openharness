@@ -13,6 +13,8 @@ import { reportedAs } from './projectUpdates.js'
 import { idleNotices } from './tidy.js'
 import { QUIET_RUNNING_MS, sweepForLead, sweepLiveness } from './liveness.js'
 
+const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
+
 describe('opening a step', () => {
   it('opens on a task of its project, numbered, its opener in the task', () => {
     const f = stepsFixture()
@@ -284,7 +286,7 @@ describe('who hears a step', () => {
     const rev = f.add('rev', id)
     f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
     const status = (status: string, result: string | null = 'note', on = id, by = rev) =>
-      f.run({ type: 'work.status', conversationId: on, assignmentId: f.group(on).assignment!.id, status, result } as Command, f.as(by)).messages
+      f.run({ type: 'work.status', conversationId: on, assignmentId: f.group(on).assignment!.id, status, result, ...(status === 'blocked' || status === 'needs_human' ? { hold: HOLD } : {}) } as Command, f.as(by)).messages
     const post = (on: string, by = rev) =>
       f.run({ type: 'message.send', conversationId: on, text: 'Two findings.', replyTo: null, recipientIds: [] } as Command, f.as(by)).messages
     return { f, id, rev, status, post }
