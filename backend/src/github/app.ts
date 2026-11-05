@@ -53,6 +53,11 @@ export class GitHubAppError extends Error {
   }
 }
 
+/** Whether an organization lets Harness create a repository there (task #1788): the app is installed on it and its owner
+ *  accepted Repository creation; [canAdd] when it also accepted installation repository access, so a new repository the
+ *  installation does not cover yet can be added to it. */
+export type OwnerReadiness = { state: 'ready'; installation: number; canAdd: boolean } | { state: 'not-installed'; installUrl: string | null } | { state: 'not-accepted' }
+
 export interface GitHubAppConfig { appId: string; privateKey: KeyObject; slug: string | null }
 
 /** The app's private key as GitHub hands it out (a PEM file), with its line breaks written as `\n`, or base64 of it. The
@@ -154,6 +159,8 @@ export class GitHubApp {
   private readonly pushOrigins = new Map<string, { origin: PushOrigin; until: number }>()
   /** Each repository's CI reads in the last hour, and its last load read, for [CI_READS_PER_HOUR]. */
   private readonly ciReads = new Map<string, { at: number[]; last: { load: CiLoad | null; at: number } | null }>()
+  /** The app's installation on each organization, by its login in lower case, for [ownerReadiness]; null when not installed. */
+  private readonly orgInstallations = new Map<string, { id: number | null; until: number }>()
   /** When each repository's "not installed" was last forgotten on request ([forget]). */
   private readonly forgotten = new Map<string, number>()
   /** The watch's last answer and its ETag, by path ([watchPullRequest]). */
@@ -324,6 +331,28 @@ export class GitHubApp {
       if (answer.status === 200 && typeof id === 'number') return id
     }
     return null
+  }
+
+  /** Whether [owner], an organization, lets Harness create a repository there (task #1788). Its installation is remembered
+   *  ten minutes (a missing one a minute), and what it granted as for agents' tokens ([granted]). A personal account reads
+   *  as not installed: v1 creates in organizations only. */
+  async ownerReadiness(owner: string): Promise<OwnerReadiness> {
+    const key = owner.toLowerCase()
+    let known = this.orgInstallations.get(key)
+    if (!known || known.until <= this.now()) {
+      const answer = await this.call('GET', `/orgs/${encodeURIComponent(owner)}/installation`, `Bearer ${this.jwt()}`)
+      if (answer.status === 401) throw this.misconfigured()
+      const id = (answer.body as Record<string, unknown>).id
+      if (answer.status === 200 && typeof id === 'number') known = { id, until: this.now() + INSTALLATION_TTL_MS }
+      else if (answer.status === 404) known = { id: null, until: this.now() + NOT_INSTALLED_TTL_MS }
+      else throw new GitHubAppError('GITHUB_UNAVAILABLE', `GitHub could not look up the app on ${owner}.`, 502)
+      if (this.orgInstallations.size >= 1000) this.orgInstallations.delete(this.orgInstallations.keys().next().value!)
+      this.orgInstallations.set(key, known)
+    }
+    if (known.id === null) return { state: 'not-installed', installUrl: this.installUrl() }
+    const granted = await this.granted(known.id)
+    if (granted?.repository_creation !== 'write') return { state: 'not-accepted' }
+    return { state: 'ready', installation: known.id, canAdd: granted.installation_repositories === 'write' }
   }
 
   /** Forgets that the app was not on [repository] (and its rename), so the next lookup asks GitHub: a person just
