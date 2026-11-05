@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type Conversation, type MessageDraft } from './model.js'
-import { capacityLine, derivedLanes, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, laneOf, nudgeLine, returnReason } from './dispatch.js'
+import { capacityLine, derivedLanes, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, laneOf, nudgeLine, pinBuilder, pullRequestPin, returnReason } from './dispatch.js'
+import type { PullRequestWatch } from './pullRequestEvents.js'
 import { sweepLiveness } from './liveness.js'
 
 const NOW = Date.parse('2026-11-05T15:00:00Z')
@@ -264,5 +265,57 @@ describe('the capacity line per lane', () => {
     expect(derivedLanes(s.state, s.state)).toEqual({ lead: laneCapacity(s.state, 'lead', DISPATCH_RULES) })
     // A reader who reads no project reads no lanes.
     expect(derivedLanes(s.state, { ...s.state, projects: [] })).toBeUndefined()
+  })
+})
+
+describe('pins: a task without active work waits for its builder after findings, red CI or a conflict', () => {
+  const watch = (patch: Partial<PullRequestWatch> = {}): PullRequestWatch => ({ url: 'https://github.com/o/r/pull/1', number: 1, state: 'open', draft: false,
+    head: 'abc1234', base: 'main', mergeable: true, checkRuns: [{ name: 'ci/required', status: 'completed', conclusion: 'success', completedAt: 1 }],
+    checkSuites: [], ...patch } as PullRequestWatch)
+
+  it('reads red CI and a conflict from the pull request, and nothing from a green one', () => {
+    expect(pullRequestPin(watch())).toBeNull()
+    expect(pullRequestPin(watch({ mergeable: null }))).toBeNull()
+    expect(pullRequestPin(watch({ checkRuns: [{ name: 'ci/required', status: 'completed', conclusion: 'failure', completedAt: 1 }] }))).toBe('ci')
+    expect(pullRequestPin(watch({ mergeable: false }))).toBe('conflict')
+  })
+
+  /** Ash built Api and lost it; Birch reviews it in a step. */
+  function lostBuild() {
+    const s = crewSwarm(['Ash', 'Birch'])
+    const api = s.task('Api', ['backend/src/a.ts'])
+    s.run({ type: 'work.assign', conversationId: api, agentId: s.ids.Ash! }, s.as(s.pm))
+    const step = s.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: api, step: 'Review',
+      checks: [{ description: 'It reads right.', independent: true }] }).result.conversationId as string
+    s.run({ type: 'work.assign', conversationId: step, agentId: s.ids.Birch! }, s.as(s.pm))
+    const build = s.group(api), assignment = build.assignment!
+    assignment.status = 'lost'
+    build.lostAttempt = { id: assignment.id, agentId: s.ids.Ash!, machineId: 'host', engine: 'claude' }
+    return { ...s, api, step }
+  }
+
+  it('pins its builder when a step\'s agent fails the step, and not while the build is in someone\'s hands', () => {
+    const s = lostBuild()
+    const check = s.group(s.step).checks[0]!.id
+    const assignmentId = s.group(s.step).assignment!.id
+    s.run({ type: 'work.check', conversationId: s.step, assignmentId, checkId: check, passed: false, evidence: 'The total is wrong.' }, s.as(s.ids.Birch!), { now: 5000 })
+    expect(s.group(s.api).pin).toEqual({ agentId: s.ids.Ash!, why: 'findings', at: 5000 })
+    // Its next assignment clears it.
+    s.run({ type: 'work.assign', conversationId: s.api, agentId: s.ids.Ash! }, s.as(s.pm))
+    expect(s.group(s.api)).not.toHaveProperty('pin')
+    s.run({ type: 'work.check', conversationId: s.step, assignmentId, checkId: check, passed: false, evidence: 'Still wrong.' }, s.as(s.ids.Birch!), { now: 6000 })
+    expect(s.group(s.api)).not.toHaveProperty('pin')
+  })
+
+  it('pins as pinBuilder says: to the last attempt\'s agent, never over active work', () => {
+    const s = lostBuild()
+    pinBuilder(s.group(s.api), 'ci', 7000)
+    expect(s.group(s.api).pin).toEqual({ agentId: s.ids.Ash!, why: 'ci', at: 7000 })
+    // An older pin keeps its time: it has waited longer.
+    pinBuilder(s.group(s.api), 'conflict', 8000)
+    expect(s.group(s.api).pin).toEqual({ agentId: s.ids.Ash!, why: 'ci', at: 7000 })
+    const fresh = s.group(s.task('Fresh', ['backend/src/f.ts']))
+    pinBuilder(fresh, 'ci', 9000)
+    expect(fresh).not.toHaveProperty('pin')
   })
 })
