@@ -13,7 +13,10 @@ import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 /// This Mac's app, signed in, its Swarm list naming one Swarm the person is
 /// in as [role], joined on the server (a domain auto-join) with no client
 /// asking.
-SuperTabLaunchFixture _computer({String role = 'collaborator', bool chooseTeam = true}) {
+SuperTabLaunchFixture _computer({
+  String role = 'collaborator',
+  bool chooseTeam = true,
+}) {
   final f = SuperTabLaunchFixture();
   f.app.status = AppStatus.authenticated;
   f.app.teamAccountHereForTest = true;
@@ -74,7 +77,9 @@ void main() {
     expect(f.app.teamSetupLocked, isFalse);
     expect(notes.single.ownAccount, isTrue);
     expect(f.connection.server.posts.last['command'], {
-      'type': 'machine.ownAccountWork', 'machineId': 'm', 'allowed': true,
+      'type': 'machine.ownAccountWork',
+      'machineId': 'm',
+      'allowed': true,
     });
     await listening.cancel();
   });
@@ -92,7 +97,10 @@ void main() {
     await _discover(f);
     expect(asked, 1);
     expect(_teamOffers(f), isEmpty);
-    expect(f.connection.server.posts.last['command'], containsPair('allowed', true));
+    expect(
+      f.connection.server.posts.last['command'],
+      containsPair('allowed', true),
+    );
   });
 
   test('cancelled choice contributes nothing and starts no setup', () async {
@@ -103,31 +111,42 @@ void main() {
     expect(_teamOffers(f), isEmpty);
   });
 
-  test('account change while choosing never contributes or sends consent', () async {
-    final f = _computer(chooseTeam: false);
-    f.app.addListener(() {
-      final request = f.app.joinAccountRequest;
-      if (request == null || request.answered) return;
-      f.app.currentUser = null;
-      request.complete(true);
-    });
-    await _discover(f);
-    expect(_contributions(f), isEmpty);
-    expect(_teamOffers(f), isEmpty);
-  });
+  test(
+    'account change while choosing never contributes or sends consent',
+    () async {
+      final f = _computer(chooseTeam: false);
+      f.app.addListener(() {
+        final request = f.app.joinAccountRequest;
+        if (request == null || request.answered) return;
+        f.app.currentUser = null;
+        request.complete(true);
+      });
+      await _discover(f);
+      expect(_contributions(f), isEmpty);
+      expect(_teamOffers(f), isEmpty);
+    },
+  );
 
-  test('refused own-account setting never starts Team setup as an alternative', () async {
-    final f = _computer();
-    f.connection.server.unknownCommand = (c) => c['type'] == 'machine.ownAccountWork';
-    final notes = <SwarmJoinedMachine>[];
-    final listening = f.app.joinedMachines.listen(notes.add);
-    await f.app.addMachineOnJoin(tabId, role: 'collaborator', ownAccount: true);
-    await pumpEventQueue();
-    expect(_teamOffers(f), isEmpty);
-    expect(notes.single.ownAccount, isFalse);
-    expect(notes.single.accountProblem, isNotEmpty);
-    await listening.cancel();
-  });
+  test(
+    'refused own-account setting never starts Team setup as an alternative',
+    () async {
+      final f = _computer();
+      f.connection.server.unknownCommand = (c) =>
+          c['type'] == 'machine.ownAccountWork';
+      final notes = <SwarmJoinedMachine>[];
+      final listening = f.app.joinedMachines.listen(notes.add);
+      await f.app.addMachineOnJoin(
+        tabId,
+        role: 'collaborator',
+        ownAccount: true,
+      );
+      await pumpEventQueue();
+      expect(_teamOffers(f), isEmpty);
+      expect(notes.single.ownAccount, isFalse);
+      expect(notes.single.accountProblem, isNotEmpty);
+      await listening.cancel();
+    },
+  );
 
   test('a Swarm first seen through a domain auto-join adds this Mac and offers the Team account, once', () async {
     final f = _computer();
