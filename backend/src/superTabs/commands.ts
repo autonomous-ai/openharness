@@ -58,7 +58,7 @@ import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, 
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
-import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, refuseRepeats, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
+import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, refuseOverBudget, refuseRepeats, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
@@ -1844,6 +1844,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         : fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
       // A line the save adds that the document already has is refused with the existing line quoted (#3283).
       refuseRepeats(before, command.text)
+      // No part grows past its size budget: core, each role section, people notes, the whole (#3392).
+      refuseOverBudget(before, command.text)
       // A person's rule, or who gave it, is dropped only by that person or with their own message approving it (#3151).
       const { told, rules } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [],
         context.instructions?.at ?? 0)

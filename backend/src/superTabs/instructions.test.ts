@@ -333,9 +333,11 @@ describe('instructions.save', () => {
   it('keeps a document within 64 KB and a summary on one line, and saves nothing new for the same text', () => {
     const f = fixture()
     expect(() => f.run(save(1, 'x'.repeat(65_537)))).toThrow()
-    expect(f.run(save(1, 'é'.repeat(32_768))).result.revision).toBe(2)
+    // Within 64 KB, a document is still held to its size budget (#3392): 'é' is two bytes, so 3,072 of them are 6 KB of core.
+    expect(() => f.run(save(1, 'é'.repeat(32_768)))).toThrow(expect.objectContaining({ code: 'INSTRUCTIONS_OVER_BUDGET' }))
+    expect(f.run(save(1, 'é'.repeat(3_072))).result.revision).toBe(2)
     expect(() => f.run(save(2, 'Other.', { summary: 'two\nlines' }))).toThrow()
-    const same = f.run(save(2, 'é'.repeat(32_768)))
+    const same = f.run(save(2, 'é'.repeat(3_072)))
     expect(same.result).toMatchObject({ revision: 2, unchanged: true })
     expect(same.instructions).toBeUndefined()
     expect(same.messages).toEqual([])
@@ -704,8 +706,8 @@ describe('an instructions save keeps to the size budget', () => {
     const f = fixture()
     expect(refusal(() => f.run(save(1, doc({ pm: 25 })), owner, stored(doc({}))))).toMatchObject({ details: { parts: [{ part: 'role PM', budget: 2048 }] } })
     expect(refusal(() => f.run(save(1, doc({ notes: 35 })), owner, stored(doc({}))))).toMatchObject({ details: { parts: [{ part: 'people notes', budget: 3072 }] } })
-    // Every part within its own budget, the whole past 20 KB: eleven roles of 1.9 KB each.
-    const roles = Array.from({ length: 11 }, (_, r) => ['', `### Role${r}`, '', ...lines(18, `r${r}-`)]).flat()
+    // Every part within its own budget, the whole past 20 KB: twelve roles of 1.8 KB each.
+    const roles = Array.from({ length: 12 }, (_, r) => ['', `### Role${r}`, '', ...lines(18, `r${r}-`)]).flat()
     const wide = ['# Project instructions', '', '## Roles', ...roles].join('\n')
     const message = refusal(() => f.run(save(1, wide), owner, stored(doc({})))).message
     expect(message).toMatch(/Whole document: 2\d\.\d KB of 20 KB/)

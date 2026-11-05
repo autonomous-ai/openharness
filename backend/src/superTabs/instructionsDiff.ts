@@ -223,6 +223,42 @@ export function keptIn(after: string): (text: string) => boolean {
   }
 }
 
+/**
+ * The size budget of a project's instructions, in UTF-8 bytes (task #3392, anh Dee 11-05, decision 5: these instructions stay
+ * as small as possible). Core is everything outside the role sections and people notes. One object, passed in, so a project's
+ * own numbers can replace it.
+ */
+export const INSTRUCTIONS_BUDGET = { core: 6 * 1024, role: 2 * 1024, people: 3 * 1024, total: 20 * 1024 } as const
+export type InstructionsBudget = { readonly [K in keyof typeof INSTRUCTIONS_BUDGET]: number }
+/** One part of a document and its size: `core`, `role <heading>` (a ### under ## Roles), `people notes` (a ## People notes
+ *  section) or `total` (the whole document). */
+export interface BudgetPart { part: string; bytes: number; budget: number }
+
+const ROLES = /^roles$/i
+const PEOPLE_NOTES = /^people notes$/i
+
+/** [text]'s budget parts in document order, `total` last. A line belongs to the section its heading opened; a heading in a
+ *  fenced block is text. */
+export function budgetParts(text: string, budget: InstructionsBudget = INSTRUCTIONS_BUDGET): BudgetPart[] {
+  const bytes = new Map<string, number>([['core', 0]])
+  let h2 = '', h3 = '', fenced = false
+  const lines = text.split('\n')
+  lines.forEach((line, i) => {
+    if (FENCE.test(line)) fenced = !fenced
+    else if (!fenced) {
+      const heading = HEADING.exec(line)
+      if (heading?.[1]!.length === 2) { h2 = heading[2]!.trim(); h3 = '' }
+      else if (heading?.[1]!.length === 1) { h2 = ''; h3 = '' }
+      else if (heading?.[1]!.length === 3) h3 = heading[2]!.trim()
+    }
+    const part = PEOPLE_NOTES.test(h2) ? 'people notes' : ROLES.test(h2) && h3 ? `role ${h3}` : 'core'
+    bytes.set(part, (bytes.get(part) ?? 0) + Buffer.byteLength(line) + (i < lines.length - 1 ? 1 : 0))
+  })
+  const of = (part: string) => part === 'core' ? budget.core : part === 'people notes' ? budget.people : budget.role
+  return [...[...bytes].filter(([part, n]) => n || part === 'core').map(([part, n]) => ({ part, bytes: n, budget: of(part) })),
+    { part: 'total', bytes: Buffer.byteLength(text), budget: budget.total }]
+}
+
 /** A line [after] adds that repeats one it keeps: the added line's words and the existing line's, as the document has them. */
 export interface RepeatedRule { added: string; existing: string }
 /** Fewest content words of a line that can be a repeat: a short line ("Tests pass.") says too little to be the same rule. */

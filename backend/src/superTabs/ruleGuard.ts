@@ -5,7 +5,8 @@
  * dropped rule makes the save or wrote a message approving it that the save names. Who a person is comes from the sender or
  * the stored message's author, never the caller's word (askedBy). The approver is then told in one private line.
  */
-import { attributedRules, droppedRules, ITEM_CHARS, keptIn, MAX_REPEATS, personKey, removedItems, repeatedRules, type DroppedRule } from './instructionsDiff.js'
+import { attributedRules, budgetParts, droppedRules, INSTRUCTIONS_BUDGET, ITEM_CHARS, keptIn, MAX_REPEATS, personKey, removedItems, repeatedRules,
+  type DroppedRule, type InstructionsBudget } from './instructionsDiff.js'
 import { fail, type Author, type SuperTabState } from './model.js'
 import { canReadProject, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
@@ -97,6 +98,29 @@ export function refuseRepeats(before: string, after: string): void {
     ...shown.map(repeat => `- Existing line: "${cut(repeat.existing)}" (added again as "${cut(repeat.added)}")`),
     ...(repeats.length > shown.length ? [`- And ${repeats.length - shown.length} more.`] : []),
   ].join('\n'), 409, { repeated: shown })
+}
+
+const kb = (bytes: number) => `${(bytes / 1024).toFixed(1)} KB`
+const partName = (part: string) => part === 'core' ? 'Core' : part === 'people notes' ? 'People notes' : part === 'total' ? 'Whole document'
+  : `Role section ${part.slice('role '.length)}`
+
+/**
+ * Refuses a save that makes a part of the instructions bigger than its budget (task #3392, anh Dee 11-05, decision 5): core,
+ * each role section, people notes and the whole document (instructionsDiff.ts budgetParts), each named with its size, its budget
+ * and its size before. A part over budget already, as documents were when this came in, may be saved smaller or unchanged:
+ * that is the way down, never blocked.
+ */
+export function refuseOverBudget(before: string, after: string, budget: InstructionsBudget = INSTRUCTIONS_BUDGET): void {
+  const was = new Map(budgetParts(before, budget).map(p => [p.part, p.bytes]))
+  const over = budgetParts(after, budget).filter(p => p.bytes > p.budget && p.bytes > (was.get(p.part) ?? 0))
+    .map(p => ({ ...p, before: was.get(p.part) ?? 0 }))
+  if (!over.length) return
+  fail('INSTRUCTIONS_OVER_BUDGET', [
+    'Not saved: this makes the instructions bigger than their budget. Make it smaller: a rule the Swarm can check becomes a code '
+      + 'task instead of a line; a person\'s rule moves word for word, with who gave it, into people notes or its role section; a '
+      + 'step or date that passed goes. A part already over budget may be saved as long as it does not grow.',
+    ...over.map(p => `- ${partName(p.part)}: ${kb(p.bytes)} of ${kb(p.budget).replace('.0 KB', ' KB')} (was ${kb(p.before)}).`),
+  ].join('\n'), 409, { parts: over })
 }
 
 /** Lines one revision's History keeps (River, 11-05): a rewrite of the whole document lists its first 500. */
