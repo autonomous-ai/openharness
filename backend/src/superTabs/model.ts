@@ -253,6 +253,9 @@ export interface CheckVerdict { by: string; passed: boolean; evidence: string; a
   head?: string
   /** That head's patch id (pullRequestPatch.ts), once the watch has read it. */
   patch?: string
+  /** The branch the pull request merged into when its head was first seen: the diff a reviewer reads is against it, so the
+   *  same head against another branch is another diff (security review of #3218, round 4). Learned like the patch. */
+  base?: string
   /** The pull request's head it stopped counting at, while it does not count: empty while its own pull request's head is not
    *  read yet. */
   stale?: string }

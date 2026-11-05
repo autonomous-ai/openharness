@@ -39,7 +39,9 @@ export function verdictCounts(verdict: CheckVerdict, heads: PullRequestHeads | u
   const current = currentHead(verdict, heads)
   if (current === undefined) return true
   if (!current || !verdict.head) return false
-  return sameHead(current.head, verdict.head) || (!!verdict.patch && current.patch === verdict.patch)
+  // Its head counts only against the base it was read against (security review of #3218, round 4); a patch id names its base.
+  const sameBase = verdict.base === undefined || current.base === undefined || verdict.base === current.base
+  return (sameHead(current.head, verdict.head) && sameBase) || (!!verdict.patch && current.patch === verdict.patch)
 }
 
 /** The links of a task its PR watch reads: its newest HEADS_KEPT (review of #3218: one task links 369 pull requests in
@@ -56,10 +58,14 @@ export function keepHead(heads: PullRequestHeads | undefined, url: string, entry
   return Object.fromEntries(kept)
 }
 
-/** [verdict] at a head whose patch id is known learns it: from [known] when that is the head it read. */
+/** [verdict] learns, from [known] when that is the head it read, the patch id and base branch it was read at: each once,
+ *  so a later base (a retarget) never replaces the one its head was first seen at. */
 function learnPatch(verdict: CheckVerdict, known: PullRequestHead | undefined): void {
-  if (verdict.patch || !verdict.head || !known?.patch || !sameHead(known.head, verdict.head)) return
-  verdict.patch = known.patch
+  if (!verdict.head || !known || !sameHead(known.head, verdict.head)) return
+  if (verdict.base === undefined && known.base !== undefined) verdict.base = known.base
+  // Only a patch read against its own base: the id names the base, so another base's is another diff.
+  if (verdict.base !== undefined && known.base !== undefined && verdict.base !== known.base) return
+  if (!verdict.patch && known.patch) verdict.patch = known.patch
 }
 
 /** Derives [check]'s `passedBy` and `evidence` from the verdicts that count against [heads], and marks the others stale
