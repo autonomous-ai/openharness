@@ -9,6 +9,7 @@ import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
+import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
@@ -519,30 +520,65 @@ describe('the migration job', () => {
 })
 
 // Task #3392 (anh Dee, 11-05, decision 5): a person's rule may move into a code task, its line staying until that task merges.
-// A merged task goes quiet after a day, out of the Swarm a command loads: the save names it, and the store loads it.
-describe('a rule moved into a code task that went quiet', () => {
-  it('counts once the save names the merged task, and not before', async () => {
+// Task #3463 (review of #3220): merged as GitHub itself dates it, after the rule went into the task, read by the store at the
+// save, so it works with tidying off; a merged task gone quiet counts once the save names it.
+describe('a rule moved into a code task', () => {
+  const PR = 'https://github.com/acme/app/pull/7'
+  const leo = 'A bug that reaches stable ships its fix the same day (peer, 2026-11-04).'
+  const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
+  /** A Swarm whose project's repository is acme/app, tidying off, its instructions keeping peer's rule; a store whose GitHub
+   *  says what [merges] holds; and a code task carrying the rule, linking PR. */
+  async function moved() {
+    const merges: Record<string, number | null> = {}, read: string[][] = []
+    const github = new SuperTabStore(db, () => now, null, { pullRequestMerges: async (_env, _tab, _project, urls) => {
+      read.push(urls)
+      return Object.fromEntries(urls.filter(url => url in merges).map(url => [url, merges[url]!]))
+    } })
     const { tab, lead } = await withLead()
-    const quiet = 'No releases between 18:00 and 09:00 Vietnam time (owner, 2026-11-02).'
-    const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
-    await run(tab, save(1, doc(quiet, 'Tests run first.')))
-    const task = (await run(tab, { type: 'conversation.create', title: 'Release guard', brief: `Goal:\nBlock night releases.\n\nChanges:\n- ${quiet}`,
+    await invite(tab)
+    await swarmTransaction(db, async tx => {
+      const head = await tx.swarmHead.findUniqueOrThrow({ where: { id: `${tab}:head` } }), data = head.data as { projects?: Array<{ id: string }> }
+      const repository = { machineId: 'test-host', cwd: '/repo', repositoryUrl: 'https://github.com/acme/app' }
+      await tx.swarmHead.update({ where: { id: head.id }, data: { version: head.version + 1, data: (data.projects
+        ? { ...data, projects: data.projects.map(p => p.id === 'lead' ? { ...p, repository } : p) } : { ...data, project: repository }) as object } })
+      noteChange(tx, tab, 'main')
+    })
+    await run(tab, { type: 'tab.tidy', enabled: false })
+    await run(tab, save(1, doc(leo, 'Tests run first.')))
+    const task = (await run(tab, { type: 'conversation.create', title: 'Stable fixes', brief: `Goal:\nSame-day fixes.\n\nChanges:\n- ${leo}`,
       checks: [] })).result.conversationId as string
-    const drop = (tasks?: string[]) => run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 2, text: doc('Tests run first.'),
-      summary: 'Moved the release rule to its task', askedBy: owner.sub, ...tasks ? { tasks } : {} }, host, lead)
-    // Open: the line stays until the task merges.
-    await expect(drop()).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ why: 'waiting' }] } })
-    // Its own merge record is no merge (River, review of #3220): only what the Swarm read on GitHub is.
-    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: task } })
-    const data = part.data as { ledger?: object }
-    await db.swarmGroup.update({ where: { id: part.id }, data: { version: { increment: 1 },
-      data: { ...data, ledger: { ...data.ledger, mergedAt: now, shippedAt: now } } } })
-    await expect(drop()).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ why: 'waiting' }] } })
-    // Seen merged on GitHub (store.ts archiveFinished), then quiet: out of the command's load unless the save names it.
-    const seen = await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: task } })
-    await db.swarmGroup.update({ where: { id: seen.id }, data: { dormant: true, version: { increment: 1 },
-      data: { ...seen.data as object, dormant: true, mergeSeen: { 'https://github.com/acme/app/pull/7': now } } } })
-    await expect(drop()).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ why: 'removed' }] } })
-    expect((await drop([task])).result).toMatchObject({ revision: 3 })
+    // The PM records the merge with a link: its word alone frees nothing (River, review of #3220).
+    await run(tab, { type: 'conversation.merged', conversationId: task, pullRequestUrl: PR }, host, lead)
+    const briefAt = (await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: task } })).data as { briefAt?: number }
+    const drop = (tasks?: string[]) => github.execute(owner, tab, { operationId: randomUUID(), command: { type: 'instructions.save', projectId: 'lead',
+      baseRevision: 2, text: doc('Tests run first.'), summary: 'Moved the stable rule to its task', ...tasks ? { tasks } : {} } })
+    return { tab, task, merges, read, drop, briefAt: briefAt.briefAt! }
+  }
+
+  it('leaves, with tidying off, once GitHub says the task merged after the move, and not for an older merge', async () => {
+    const m = await moved()
+    expect(m.briefAt).toBe(now)
+    // GitHub: not merged. The line stays, naming the task.
+    m.merges[PR] = null
+    await expect(m.drop()).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ why: 'waiting' }] } })
+    expect(m.read.at(-1)).toEqual([PR])
+    // Merged, but before the rule went into the task: it never carried it.
+    m.merges[PR] = m.briefAt - 60_000
+    await expect(m.drop()).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ why: 'waiting' }] } })
+    // Merged after: the person's save drops the line, though no archive pass ever ran.
+    m.merges[PR] = m.briefAt + 60_000
+    expect((await m.drop()).result).toMatchObject({ revision: 3 })
+  })
+
+  it('counts a merged task that went quiet once the save names it', async () => {
+    const m = await moved()
+    m.merges[PR] = m.briefAt + 60_000
+    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: m.tab, key: m.task } })
+    await swarmTransaction(db, async tx => {
+      await tx.swarmGroup.update({ where: { id: part.id }, data: { dormant: true, version: part.version + 1, data: { ...part.data as object, dormant: true } } })
+      noteChange(tx, m.tab, 'main')
+    })
+    await expect(m.drop()).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ why: 'removed' }] } })
+    expect((await m.drop([m.task])).result).toMatchObject({ revision: 3 })
   })
 })
