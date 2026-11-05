@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Backend and CLI skill text only; no new protocol, dependencies or core code.
+- Backend and CLI skill text, plus Desktop/phone delete-only eligibility authorized by River on November 5; no new protocol, dependencies or core code.
 - Two independent security reviews before merge; Integrator owns review/test routing and shipping.
 - Commit this plan first, then each task's failing tests before implementation. Push the draft and each completed task.
 - Keep the owner's direct-word consent path and existing quote styles and whitespace normalization.
@@ -29,7 +29,7 @@
 - Audience: server verifies readable conversation, person author, source ownership and actor identity. Other people, the Swarm owner and every agent remain unauthorized.
 - Identity: authenticated actor only, never the host computer's login. Proposal attribution and source person must agree.
 - Failure: refuse unquoted/malformed summaries with `PROPOSAL_UNSHOWN` and guidance to show a quoted line again. Preserve existing deleted/not-found errors.
-- Platforms: backend behavior is common to all clients; generated skill is shared by macOS/Linux/Windows. No screen or process-launch changes.
+- Platforms: backend behavior is common to all clients; generated skill is shared by macOS/Linux/Windows. Desktop/phone must offer Delete for the owner's own proposal, while Edit remains limited to plain messages. No process-launch changes.
 
 ## Review Focus
 
@@ -64,3 +64,15 @@ Run focused backend consent/message-edit unit files, the CLI skill spec, and bot
 - [ ] Run `vitest run src/superTabs/messageEdits.test.ts --maxWorkers=2`; record owner deletion failing before the fix.
 - [ ] Derive trusted proposal ownership, permit delete only, and remove source metadata when retaining a deleted root.
 - [ ] Run focused unit files/typechecks, record evidence and push. Mark Ready with red/green evidence, then hand the stable revision to the Integrator for two security reviews and independent testing.
+
+### Task 3: Offer owner-only Delete in Desktop and phone
+
+River expanded the task after inspection found `canChange` hides both actions for every proposal. This Windows session has no Flutter/Dart toolchain; push the backend first and ask River to assign the app work on a Mac, in this task and branch.
+
+**Files:** Desktop `lib/super_tabs/profile_actions.dart`, `lib/super_tabs/view.dart`, their focused tests, and the matching phone eligibility/menu code and tests.
+
+**Interfaces:** Keep the existing edit eligibility unchanged. Add a separate delete eligibility check that retains write/access/archive/deleted checks and admits only a `buddy-proposal` whose person author and source `personId` both equal the signed-in account. The server remains authoritative.
+
+- [ ] Commit failing app tests: the owner sees Delete but no Edit for their proposal; another person, an agent-authored row and a mismatched source owner do not gain Delete; plain messages retain both actions.
+- [ ] Run the affected Flutter tests red on the Mac, implement the separate eligibility, then run them green and analyze changed Dart files.
+- [ ] Record light/dark menu evidence with a memory store and fake sign-in, push, and hand the complete stable revision to the Integrator. No real CLI sign-out.

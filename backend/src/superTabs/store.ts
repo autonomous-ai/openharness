@@ -2636,7 +2636,9 @@ export class SuperTabStore {
     if (group && !sessionReadsRow(reader, group, state)(message)) return undefined
     if ((await deliveredCopies(tx, tabId, [message])).size) return undefined
     const author = message.author as { kind?: string; id?: string } | null
+    const source = message.source as { kind?: unknown; personId?: unknown } | null
     const target: MessageChangeTarget = { messageId: message.id, author: { kind: String(author?.kind ?? ''), id: String(author?.id ?? '') },
+      proposalOwnerId: source?.kind === 'buddy-proposal' && typeof source.personId === 'string' ? source.personId : undefined,
       plain: message.source == null, deleted: !!message.deletedAt, hasFiles: Array.isArray(message.attachments) && message.attachments.length > 0,
       hasReplies: false, text: message.text, sequence: message.sequence }
     // Only an author's delete reads further; anyone else is refused on the row alone.
@@ -2670,9 +2672,10 @@ export class SuperTabStore {
     await tx.$runCommandRaw({ update: 'SuperTabDelivery', updates: [{ q: { tabId, messageId: row.id, status: { $in: [...CANCELLABLE_DELIVERY] } },
       u: { $set: { status: 'cancelled', holdReason: null, holdSince: null, updatedAt: { $date: new Date(now).toISOString() } } }, multi: true }] })
     if (kept) {
-      // Raw: Prisma writes `{ unset: true }` into a Json field as a value instead of removing it.
+      // Raw: Prisma writes `{ unset: true }` into a Json field as a value instead of removing it. A deleted Buddy proposal's
+      // goal and scope must go too (#3322): they can repeat its text, and its source would still make it an open proposal.
       await tx.$runCommandRaw({ update: 'SuperTabMessage', updates: [{ q: { _id: row.id, tabId }, u: { $set: { text: DELETED_TEXT, mentions: [],
-        deletedAt: { $date: new Date(now).toISOString() } }, $unset: { attachments: '', editedAt: '' } } }] })
+        deletedAt: { $date: new Date(now).toISOString() } }, $unset: { attachments: '', editedAt: '', source: '' } } }] })
       // Its own thread's summary drops the people only this root tagged.
       await refreshThreads(tx, tabId, row.conversationId, [row.id])
       return
