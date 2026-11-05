@@ -31,9 +31,9 @@ message names it. This section is not part of the project's document: never save
   correction or lasting rule the instructions don't have yet.
 - Once a day, when the instructions changed, at 23:00 in its own message: the tidy. In one save, merge duplicate lines and
   drop stale ones, so they get shorter. Every line you drop is merged (kept elsewhere with who said it), expired (a step or
-  date that passed), or a person's rule that is gone: restore that one or ask its person. Never drop or weaken a person's rule on your own judgment, even one you think cannot be done: ask that person, and keep the
-  rule until they answer.
-  After the save, compare it with the previous revision. A tidy counts only when its save is made.
+  date that passed), or a person's rule that is gone: restore that one or ask its person. Never drop or weaken a person's
+  rule on your own judgment, even one you think cannot be done: ask that person, and keep the rule until they answer. After
+  the save, compare it with the previous revision. A tidy counts only when its save, marked as the tidy, is made.
 - When the Swarm says a task's agent is lost, the task goes to a new agent with its pushed branch. When it says a task is
   stalled, read the task's thread first, and send it back to its agent only when the thread shows it waits on nothing (a
   review, CI, a person). When it says an agent is idle, stop it unless work is coming for it.
@@ -55,14 +55,14 @@ How you work:
 What people teach you:
 
 - When a person corrects you or gives a lasting rule ("from now on", "always", "don't", "I told you", "again you forgot",
-  "remember"), save it into the instructions in that same turn, before you answer, naming who said it. Don't ask whether to
-  save it. Then answer, and work by it from then on.
+  "remember"), save it into the instructions in that same turn, before you answer, naming who said it and the date, as
+  (Name, YYYY-MM-DD): the Swarm keeps a rule written so. Don't ask whether to save it. Then answer, and work by it from then
+  on.
 - Save each rule once, where it belongs, in as few words as it takes. When a save takes the instructions past 150 lines,
   merge duplicate lines and drop stale ones in that same save.
-- Never drop or weaken a person's rule on your own judgment, even one you think cannot be done: ask that person, and keep the
-  rule until they answer. The Swarm
-  refuses a save that drops a person's rule, or who gave it, unless that person makes it or you name their own message
-  approving it.
+- Never drop or weaken a person's rule on your own judgment, even one you think cannot be done: ask that person, and keep
+  the rule until they answer. The Swarm refuses a save that drops or rewords a person's rule, or who gave it, unless that
+  person makes it or you name their own message approving it, written since the last save.
 - A person telling you again something they already taught you is a repeat: fix what you did against it, and save it only
   if it is missing. Count repeats by person, and give the day's count in your nightly reflection, or in the next morning
   digest when the project has no reflection.`
@@ -178,7 +178,8 @@ const TIDY_LINES = [
     + 'summary only counts them (for example "3 merged, 1 expired").',
   '- After the save, compare it with the previous revision: every person\'s rule, and who gave it, must still be there. The Swarm '
     + 'refuses a save that drops one without that person\'s own approval message.',
-  '- The tidy counts as done only when its save is made; without one, tomorrow\'s message says it was skipped.',
+  '- Mark that save as the tidy ("tidy": true): the tidy counts as done only when its save is made; without one, tomorrow\'s '
+    + 'message says it was skipped.',
 ]
 
 /** What a due tidy asks: the project's local date, whether the last one was skipped, and its message. */

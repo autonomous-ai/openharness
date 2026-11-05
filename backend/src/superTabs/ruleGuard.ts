@@ -8,6 +8,7 @@
 import { attributedRules, droppedRules, ITEM_CHARS, keptIn, personKey, removedItems, type DroppedRule } from './instructionsDiff.js'
 import { fail, type Author, type SuperTabState } from './model.js'
 import { canReadProject, type SwarmProject } from './projects.js'
+import { isSwarmBuddyChat } from './buddies.js'
 import { swarmUsernames } from './usernames.js'
 
 /** Approval messages one save may name: one per person whose rules it drops is plenty. */
@@ -16,7 +17,7 @@ export const MAX_APPROVALS = 20
 const RULE_CHARS = 300
 
 /** A message a save names as a person's approval, as the store loads it by id in this tab. */
-export interface ApprovalRow { id: string; author: Author; source: boolean }
+export interface ApprovalRow { id: string; author: Author; source: boolean; createdAt: number; conversationId: string }
 
 /** The members a written name is: by username, shown name or email, else by one word of a shown name ("Leo" is Leo Tran),
  *  honorifics and a possessive aside (instructionsDiff.ts personKey). */
@@ -37,23 +38,27 @@ const WHY: Record<DroppedRule['why'], string> = {
 }
 
 /**
- * The rules [after] drops from [before] that their people allowed, by the person to tell: refused with the list when any is
- * not allowed. A person allows their rule by making the save themselves (no notice: they know) or by a message of their own
- * among [approvals] (the store's rows) that [named] lists: a person's, not relayed by a Buddy or the Swarm (source). A rule of
- * several people needs each of them. A name that is no member is the project owner's to allow. [before] null is a revision
- * the store could not read: nothing to keep, and the chat line says the change could not be shown (instructionsDiff.ts).
+ * The rules [after] drops from [before] that their people allowed, by the person to tell, and those rules: refused with the
+ * list when any is not allowed. A person allows their rule by making the save themselves (no notice: they know) or by a
+ * message of their own among [approvals] (the store's rows) that [named] lists: a person's, not relayed by a Buddy or the Swarm
+ * (source), written after [since] (when the revision being replaced was saved) in a conversation of this project. A rule of
+ * several people needs each of them. A name that is no member is the project owner's to allow.
  */
-export function allowedDrops(state: SuperTabState, project: SwarmProject, before: string | null, after: string, sender: { kind: Author['kind']; id: string },
-  named: readonly string[], approvals: readonly ApprovalRow[]): { told: Map<string, DroppedRule[]>; rules: DroppedRule[] } {
+export function allowedDrops(state: SuperTabState, project: SwarmProject, before: string, after: string, sender: { kind: Author['kind']; id: string },
+  named: readonly string[], approvals: readonly ApprovalRow[], since: number): { told: Map<string, DroppedRule[]>; rules: DroppedRule[] } {
   const told = new Map<string, DroppedRule[]>()
-  if (before === null) return { told, rules: [] }
   const membersOf = new Map<string, string[]>()
   const members = (name: string) => membersOf.get(name) ?? membersOf.set(name, membersNamed(state, name)).get(name)!
   // One written person for comparing revisions: the members they are, so "0xken15" and "Ken" are one.
   const dropped = droppedRules(before, after, name => members(name).sort().join(',') || `?${personKey(name)}`)
   if (!dropped.length) return { told, rules: [] }
   const saver = sender.kind === 'person' ? sender.id : undefined
-  const approvers = new Set(approvals.filter(a => named.includes(a.id) && a.author.kind === 'person' && !a.source).map(a => a.author.id)
+  // Written after the revision this save replaces, in a conversation of this project: an old "thanks" approves nothing (review
+  // of #3112). A person's one Buddy chat belongs to no project.
+  const here = (conversationId: string) => conversationId === project.leadConversationId || state.conversations.some(c => c.id === conversationId
+    && !isSwarmBuddyChat(c) && (c.projectId ?? 'lead') === project.id)
+  const approvers = new Set(approvals.filter(a => named.includes(a.id) && a.author.kind === 'person' && !a.source && a.createdAt >= since
+    && here(a.conversationId)).map(a => a.author.id)
     .filter(id => state.people.some(p => p.id === id && canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))))
   const refused: DroppedRule[] = []
   for (const rule of dropped) {
@@ -95,8 +100,7 @@ const words = (text: string) => text.normalize('NFKC').toLowerCase().replace(/\s
  * whatever it was called. Otherwise the kind the save gave the line ([sorted]: its words, or a part of them), else `merged`
  * when its words are all in one line of [after], else `unsorted`.
  */
-export function droppedLines(before: string | null, after: string, sorted: readonly SortedLine[], rules: readonly DroppedRule[]): DroppedLine[] {
-  if (before === null) return []
+export function droppedLines(before: string, after: string, sorted: readonly SortedLine[], rules: readonly DroppedRule[]): DroppedLine[] {
   const kept = keptIn(after)
   const named = sorted.map(line => ({ key: words(line.text), kind: line.kind })).filter(line => line.key)
   return removedItems(before, after).slice(0, MAX_DROPPED_LINES).map(text => {

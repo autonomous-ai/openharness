@@ -240,15 +240,16 @@ describe('instructions.save', () => {
     expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 1, instructionsHash: instructionsHash(INSTRUCTIONS_TEMPLATE) })
     const effects = f.run(save(1, 'Reviews run on Opus.'))
     expect(effects.result).toMatchObject({ projectId: 'lead', revision: 2, hash: instructionsHash('Reviews run on Opus.') })
+    // Replacing the template drops its lines, which the revision keeps for the History (#3151).
     expect(effects.instructions).toEqual({ projectId: 'lead', revision: 2, hash: instructionsHash('Reviews run on Opus.'), text: 'Reviews run on Opus.',
-      summary: 'Reviews run on Opus', writtenBy: { kind: 'person', id: 'owner' }, askedBy: 'owner', at: 1000 })
+      summary: 'Reviews run on Opus', writtenBy: { kind: 'person', id: 'owner' }, askedBy: 'owner', at: 1000, dropped: expect.any(Array) })
     expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 2, instructionsHash: instructionsHash('Reviews run on Opus.') })
     // Dee and Ken, 11-05 (#3132): a save is read in the Instructions history, never posted in the project chat or any other.
     expect(effects.messages).toEqual([])
   })
 
   // #3132: the chat line #3021 added is gone with the line; what the save changed stays readable as two kept revisions.
-  it('posts nothing for a save that changes lines, a long change or an unreadable earlier revision, and still records each revision', () => {
+  it('posts nothing for a save that changes lines or a long change, and still records each revision', () => {
     const f = fixture()
     const stored = { instructions: { revision: 1, text: '# Rules\n\n- Opus builds.\n- Haiku reviews.' } }
     const effects = f.run(save(1, '# Rules\n\n- Opus builds.\n- Sonnet reviews.\n- Tests run first.'), owner, stored)
@@ -258,9 +259,7 @@ describe('instructions.save', () => {
     const long = f.run(save(2, ['# Rules', ...rules].join('\n')), owner, { instructions: { revision: 2, text: '# Rules' } })
     expect(long.messages).toEqual([])
     expect(long.instructions).toMatchObject({ revision: 3 })
-    const unreadable = f.run(save(3, 'Other.'), owner, { instructions: null })
-    expect(unreadable.messages).toEqual([])
-    expect(unreadable.instructions).toMatchObject({ revision: 4 })
+    // An unreadable earlier revision is refused (#3151): the rule check needs it.
   })
 
   it('refuses a save on an older revision with the current revision and text, so the caller can merge', () => {
@@ -270,7 +269,7 @@ describe('instructions.save', () => {
     let refused: unknown
     try { f.run(save(1, 'Peer text.'), peer, { instructions: { revision: 2, text: 'Owner text.' } }) } catch (error) { refused = error }
     expect(refused).toMatchObject({ code: 'INSTRUCTIONS_STALE', status: 409, details: { revision: 2, text: 'Owner text.' } })
-    expect(f.run(save(2, 'Peer text.'), peer).result.revision).toBe(3)
+    expect(f.run(save(2, 'Peer text.'), peer, { instructions: { revision: 2, text: 'Owner text.' } }).result.revision).toBe(3)
     // A project without a document yet runs on the template, which is what a stale save there merges with.
     f.state.projects![0]!.instructionsRevision = undefined
     let template: unknown
@@ -302,7 +301,7 @@ describe('instructions.save', () => {
     const effects = f.run(save(1, 'Peer text.', { askedBy: 'peer' }))
     expect(effects.instructions).toMatchObject({ writtenBy: { kind: 'person', id: 'owner' }, askedBy: 'peer' })
     expect(effects.messages).toEqual([])
-    const own = f.run(save(2, 'Owner text.', { askedBy: 'owner' }))
+    const own = f.run(save(2, 'Owner text.', { askedBy: 'owner' }), owner, { instructions: { revision: 2, text: 'Peer text.' } })
     expect(own.instructions).toMatchObject({ askedBy: 'owner' })
     expect(own.messages).toEqual([])
   })

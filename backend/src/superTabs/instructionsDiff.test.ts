@@ -87,7 +87,7 @@ describe('droppedRules', () => {
   })
 
   it('takes a merge only when every word in it comes from the rules it names', () => {
-    const merged = `${quiet.replace(' (Ken, 2026-11-02).', '')}, unless the PM judges it urgent, and ${tony[0]!.toLowerCase()}${tony.slice(1, -21)} (Ken, 2026-11-02; 0xken15, 4 Nov).`
+    const merged = `${quiet.replace(' (Ken, 2026-11-02).', '')}, unless the PM judges it urgent, and ${tony[0]!.toLowerCase()}${tony.slice(1).replace(' (0xken15, 4 Nov).', '')} (Ken, 2026-11-02; 0xken15, 4 Nov).`
     expect(why(doc(tony, quiet), doc(merged)).map(([, w]) => w)).toEqual(['changed', 'changed'])
   })
 

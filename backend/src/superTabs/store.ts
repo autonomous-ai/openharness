@@ -168,8 +168,10 @@ function registeredBy(state: SuperTabState, command: Command): Array<{ machineId
 /** The messages an instructions save names as people's approvals (ruleGuard.ts), each by its id in this tab as askedIn is read:
  *  at most MAX_APPROVALS equality reads on _id. Prisma sends `in` as $expr, which no index bounds (backend/AGENTS.md). */
 async function readApprovals(tx: Transaction, tabId: string, ids: string[]): Promise<ApprovalRow[]> {
-  const rows = await Promise.all([...new Set(ids)].map(id => tx.superTabMessage.findFirst({ where: { id, tabId }, select: { id: true, author: true, source: true } })))
-  return rows.flatMap(row => row ? [{ id: row.id, author: row.author as unknown as Author, source: !!row.source }] : [])
+  const rows = await Promise.all([...new Set(ids)].map(id => tx.superTabMessage.findFirst({ where: { id, tabId },
+    select: { id: true, author: true, source: true, createdAt: true, conversationId: true } })))
+  return rows.flatMap(row => row ? [{ id: row.id, author: row.author as unknown as Author, source: !!row.source, createdAt: row.createdAt.getTime(),
+    conversationId: row.conversationId }] : [])
 }
 
 function namedFor(command: Command): Named {
@@ -931,6 +933,8 @@ export class SuperTabStore {
     // Buddy chat and their older one in the project, quiet or not. Only a person's message tells anyone.
     if (command.type === 'instructions.save' && command.approvals?.length) {
       for (const row of await readApprovals(tx, tabId, command.approvals)) {
+        // Its conversation, quiet or not: an approval counts only in a conversation of this project (ruleGuard.ts).
+        groupIds.push(row.conversationId)
         if (row.author.kind !== 'person') continue
         buddyChat(command.projectId, row.author.id)
         swarmChat(row.author.id)
@@ -1688,7 +1692,9 @@ export class SuperTabStore {
       // (commands.ts ruleProject: the project it names, quotes or acts in).
       if (command.type === 'instructions.save' || command.type === 'rule.set') {
         const projectId = command.type === 'rule.set' ? ruleProject(original, actor, command).id : command.projectId
-        context.instructions = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, projectId) }, select: { revision: true, text: true } })
+        // When it was saved, too: a person's approval of a dropped rule must come after it (ruleGuard.ts).
+        const stored = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, projectId) }, select: { revision: true, text: true, updatedAt: true } })
+        context.instructions = stored && { revision: stored.revision, text: stored.text, ...stored.updatedAt ? { at: stored.updatedAt.getTime() } : {} }
         if (command.type === 'instructions.save' && command.approvals?.length) context.approvals = await readApprovals(tx, tabId, command.approvals)
       }
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)

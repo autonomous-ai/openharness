@@ -309,7 +309,7 @@ describe('the daily tidy on the coordinator\'s poll', () => {
     expect(second?.text).toContain('Yesterday\'s tidy was skipped: no save followed it.')
     // The coordinator's save is the tidy done: nothing to tidy the night after.
     expect((await f.execute({ type: 'instructions.save', projectId: 'lead', baseRevision: 2,
-      text: '# Rules\n\n- Tests run first (owner, 2026-11-02).\n- Reviews run on Opus.', summary: 'Tidied: nothing dropped', askedBy: owner.sub },
+      text: '# Rules\n\n- Tests run first (owner, 2026-11-02).\n- Reviews run on Opus.', summary: 'Tidied: nothing dropped', askedBy: owner.sub, tidy: true },
     host, f.lead)).result.revision).toBe(3)
     f.clock.now = night(4)
     await f.poll()

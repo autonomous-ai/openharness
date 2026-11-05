@@ -112,22 +112,21 @@ interface Segment {
   text: string
   people: string[]
   clauses: number
-  /** Its content words (stemmed), negations and limits ("never", "only"), and numbers, attributions left out. */
+  /** Its content words in order (stemmed; negations, limits and numbers among them), attributions left out. */
+  seq: string[]
   words: Set<string>
-  polarity: Set<string>
-  numbers: Set<string>
 }
 
-const STOP = new Set(['a', 'an', 'the', 'of', 'to', 'and', 'or', 'in', 'on', 'for', 'is', 'are', 'be', 'it', 'its', 'that', 'this', 'by', 'with',
-  'as', 'at', 'from', 'into', 'than', 'then', 'so', 'was', 'were', 'will', 's'])
-const POLARITY = new Set(['never', 'no', 'not', 'nor', 'none', 'nobody', 'nothing', 'neither', 'without', 't', 'cannot', 'only', 'always', 'must',
-  'unless', 'except'])
+/** Words that carry no rule: articles, prepositions and the like. Negations, limits, numbers and "and"/"or" are kept. */
+const STOP = new Set(['a', 'an', 'the', 'of', 'to', 'in', 'on', 'for', 'is', 'are', 'be', 'it', 'its', 'their', 'that', 'this', 'by', 'with',
+  'as', 'at', 'from', 'into', 'so', 'was', 'were', 'will', 's'])
+/** A word a merge may add between the rules it joins. */
+const JOINERS = new Set(['and'])
 const stem = (word: string) => /\d/.test(word) || word.length <= 3 || !word.endsWith('s') || word.endsWith('ss') ? word : word.slice(0, -1)
 
 function segment(text: string, people: string[], clauses: number, body: string): Segment {
-  const tokens = (body.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+(?:[.:,%][\p{N}]+)*%?/gu) ?? []).map(stem)
-  return { text, people, clauses, words: new Set(tokens.filter(t => !STOP.has(t))), polarity: new Set(tokens.filter(t => POLARITY.has(t))),
-    numbers: new Set(tokens.filter(t => /\d/.test(t))) }
+  const seq = (body.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+(?:[.:,%][\p{N}]+)*%?/gu) ?? []).map(stem).filter(t => !STOP.has(t))
+  return { text, people, clauses, seq, words: new Set(seq) }
 }
 
 /** An item's segments: one per attribution as above, or the whole item when it has none. */
@@ -154,22 +153,19 @@ export function attributedRules(text: string): AttributedRule[] {
   return ruleSegments(text).filter(s => s.people.length).map(s => ({ text: s.text, people: s.people }))
 }
 
-/** How many of [a]'s words [b] may lack and still say it: none for a short rule, one in ten for a longer one. */
-const covers = (a: Set<string>, b: Set<string>): boolean => {
-  let missing = 0
-  for (const word of a) if (!b.has(word)) missing++
-  return missing <= (a.size >= 5 ? Math.max(1, Math.floor(a.size / 10)) : 0)
-}
-const within = (a: Set<string>, b: Set<string>) => [...a].every(w => b.has(w))
+/** Whether all of [a]'s words are in [b]: a line merged into another, as far as words show (keptIn, for the History). */
+const covers = (a: Set<string>, b: Set<string>): boolean => [...a].every(word => b.has(word))
 const share = (a: Set<string>, b: Set<string>) => a.size ? [...a].filter(w => b.has(w)).length / a.size : 0
-
-/** Whether [after] still says [rule]: the same words but for a rewording, and the same negations, limits and numbers. A
- *  segment holding more people or attributions is a merge: it may say more, as long as it says all of [rule]. */
-function says(rule: Segment, after: Segment): boolean {
-  if (!covers(rule.words, after.words) || !within(rule.numbers, after.numbers) || !within(rule.polarity, after.polarity)) return false
-  if (after.clauses > rule.clauses || after.people.length > rule.people.length) return true
-  return covers(after.words, rule.words) && within(after.numbers, rule.numbers) && within(after.polarity, rule.polarity)
+/** Every place [part] runs, word for word and in order, inside [whole]. */
+function occurrences(whole: readonly string[], part: readonly string[]): number[] {
+  const found: number[] = []
+  outer: for (let i = 0; i + part.length <= whole.length; i++) {
+    for (let j = 0; j < part.length; j++) if (whole[i + j] !== part[j]) continue outer
+    found.push(i)
+  }
+  return found
 }
+const contains = (whole: readonly string[], part: readonly string[]) => occurrences(whole, part).length > 0
 
 /**
  * The attributed rules of [before] that [after] drops: removed, kept without its people, or changed beyond a rewording by the
@@ -180,13 +176,25 @@ export function droppedRules(before: string, after: string, identify: (name: str
   const next = items(after).map(i => segments(i.text))
   const flat = next.flat()
   const ids = new Map<Segment, Set<string>>(flat.map(s => [s, new Set(s.people.map(identify))]))
+  const rules = ruleSegments(before).filter(s => s.people.length).map(rule => ({ rule, people: rule.people.map(identify) }))
+  // A segment says only what the rules it names said: each of its words lies in one of them, word for word and in order, or
+  // joins two of them (a merge). Anything else (a word changed, moved, added: "unless the PM judges it urgent") is a change
+  // nobody can tell is harmless, so every rule in it counts as changed (review of #3112).
+  const faithful = new Map<Segment, boolean>()
+  const isFaithful = (s: Segment) => faithful.get(s) ?? faithful.set(s, (() => {
+    const covered = s.seq.map(word => JOINERS.has(word))
+    for (const { rule, people } of rules) {
+      if (!rule.seq.length || !people.every(p => ids.get(s)!.has(p))) continue
+      for (const at of occurrences(s.seq, rule.seq)) for (let k = 0; k < rule.seq.length; k++) covered[at + k] = true
+    }
+    return covered.every(Boolean)
+  })()).get(s)!
   const dropped: DroppedRule[] = []
-  for (const rule of ruleSegments(before).filter(s => s.people.length)) {
-    const people = rule.people.map(identify)
+  for (const { rule, people } of rules) {
     const theirs = flat.filter(s => people.every(p => ids.get(s)!.has(p)))
-    if (theirs.some(s => says(rule, s))) continue
-    // Its words still there, whole: with its people that is a change of meaning, without them a lost attribution.
-    const kept = next.find(item => covers(rule.words, item.reduce((all, s) => new Set([...all, ...s.words]), new Set<string>())))
+    if (theirs.some(s => contains(s.seq, rule.seq) && isFaithful(s))) continue
+    // Its words still there, in order: with its people that is a change of meaning, without them a lost attribution.
+    const kept = next.find(item => contains(item.flatMap(s => s.seq), rule.seq))
     const why = kept ? (kept.some(s => theirs.includes(s)) ? 'changed' : 'unattributed')
       : theirs.some(s => share(rule.words, s.words) >= 0.5) ? 'changed' : 'removed'
     dropped.push({ text: rule.text, people: rule.people, why })

@@ -218,7 +218,9 @@ export const commandSchema = z.discriminatedUnion('type', [
     approvals: z.array(id).max(MAX_APPROVALS).optional(),
     // How the writer sorted the lines it dropped, for the History (ruleGuard.ts droppedLines; the daily tidy).
     dropped: z.array(z.object({ text: z.string().trim().min(1).max(2000), kind: z.enum(['merged', 'expired', 'rule']) }).strict())
-      .max(MAX_DROPPED_LINES).optional() }).strict(),
+      .max(MAX_DROPPED_LINES).optional(),
+    // The coordinator's daily tidy, done by this save (pmSchedule.ts tidyRequest).
+    tidy: z.literal(true).optional() }).strict(),
   // A small thing a member told the coordinator, kept beside the instructions until it ends, if it does (instructions.ts).
   z.object({ type: z.literal('note.add'), projectId: id, text: noteTextSchema, askedBy: id, expiresAt: z.iso.datetime().optional() }).strict(),
   z.object({ type: z.literal('note.remove'), projectId: id, noteId: id }).strict(),
@@ -526,7 +528,7 @@ export interface CommandContext {
     text?: string
     shown?: string[] }
   /** For `instructions.save`: the project's stored document, read by the store, which a stale save hands back to merge. */
-  instructions?: { revision: number; text: string } | null
+  instructions?: { revision: number; text: string; at?: number } | null
   /** For `instructions.save`: the messages it names as approvals, loaded by id in this tab by the store (ruleGuard.ts). */
   approvals?: ApprovalRow[]
   /** For `note.add` and `note.remove`: the project's stored notes, expired ones too, read by the store (instructions.ts). */
@@ -1812,14 +1814,19 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         Object.assign(result, { projectId: project.id, revision: current, hash, unchanged: true })
         break
       }
-      // The text this save replaces, which the store read for the stale check above: what the rule check compares with.
-      const before = !current ? INSTRUCTIONS_TEMPLATE : context.instructions?.revision === current ? context.instructions.text : null
+      // The text this save replaces, which the store read for the stale check above: what the rule check compares with. A
+      // project still on the template needs no read. Unread, nothing can be checked, so nothing is saved (review of #3112).
+      const onTemplate = !current || project.instructionsHash === instructionsHash(INSTRUCTIONS_TEMPLATE)
+      const before = context.instructions?.revision === current ? context.instructions.text : onTemplate ? INSTRUCTIONS_TEMPLATE
+        : fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
       // A person's rule, or who gave it, is dropped only by that person or with their own message approving it (#3151).
-      const { told, rules } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [])
+      const { told, rules } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [],
+        context.instructions?.at ?? 0)
       // Every line it dropped, with its kind and who gave it, kept with the revision for the History (River, 11-05).
       saveInstructions(project, current, command.text, command.summary, askedBy, droppedLines(before, command.text, command.dropped ?? [], rules))
-      // The coordinator's save after the daily tidy asked for one is that tidy done (pmSchedule.ts tidyRequest).
-      if (actor.kind === 'agent') tidySaved(projectOf(state, project.id), current + 1)
+      // The coordinator's save that says it is the tidy is that tidy done (pmSchedule.ts tidyRequest); a correction it saves
+      // meanwhile is not (review of #3112).
+      if (actor.kind === 'agent' && command.tidy) tidySaved(projectOf(state, project.id), current + 1)
       // Each approver is told in one line, privately, as person.tell does: in their one Buddy chat and their older one here.
       for (const [personId, rules] of told) {
         const to = person(state, personId)
