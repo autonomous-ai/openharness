@@ -17,7 +17,7 @@ import { prepareSwarmSkill } from './swarmSkills.js'
 import { swarmEngineArgs } from './swarmEngineArgs.js'
 import { swarmGitHubLaunch } from './swarmGitHub.js'
 import { writeMachineMcp } from './machineMcp.js'
-import { NO_CLAUDE_RELAY, teamRelayLaunch, type TeamRelayGrant } from '../team/relay.js'
+import { NO_CLAUDE_RELAY, NO_CODEX_RELAY, teamRelayLaunch, type TeamRelayGrant } from '../team/relay.js'
 import type { TeamConfig } from '../team/config.js'
 
 const GRID: GridLaunchOverride = {
@@ -246,7 +246,7 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
 
   // Task #3301: a CLI release restarts the owner's daemon, which publishes a new grant a little later, and the Team daemon,
   // which restores its agents meanwhile. A Claude restored in that gap started with no credentials and sat signed out.
-  it('in the Harness Team account, holds a Claude relaunch across the owner\'s daemon restart and launches it on the new grant', async () => {
+  it('in the Harness Team account, holds a Claude or Codex relaunch across the owner\'s daemon restart and launches it on the new grant', async () => {
     const config = { user: 'harnessteam', owner: 'owner', ownerHome: '/Users/owner' } as TeamConfig
     const before: TeamRelayGrant = { url: 'http://127.0.0.1:41001', token: 'b'.repeat(43) }
     const after: TeamRelayGrant = { url: 'http://127.0.0.1:41002', token: 'c'.repeat(43) }
@@ -265,6 +265,12 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     const resumed = await relaunch()
     expect(resumed).toMatchObject({ ok: true, overrides: { env: { ANTHROPIC_BASE_URL: `${after.url}/claude`, ANTHROPIC_AUTH_TOKEN: after.token } } })
     expect(JSON.stringify(resumed)).not.toContain(before.token)
+    // A Team Codex in the daemon's own home (a Builder's) is held the same way, and comes back on the relay's provider.
+    published = null
+    const codex = () => buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', {}, 'agent-2')
+    expect(await codex()).toEqual({ ok: false, error: 'OWNER_RELAY_UNAVAILABLE', unavailable: 'native', detail: NO_CODEX_RELAY })
+    published = after
+    expect(await codex()).toMatchObject({ ok: true, overrides: { env: { HARNESS_RELAY_TOKEN: after.token }, extraArgs: expect.arrayContaining(['model_provider="harness_owner"']) } })
   })
 
   it('builds OpenCode overrides without optional code and uses the requested engine facts', async () => {
