@@ -234,15 +234,21 @@ class MainActivity : FlutterActivity() {
   // `swarm:` link names, as a message link (`receiveLink`) already can.
   private fun receivePush(intent: Intent?) {
     if (intent == null) return
-    val extras = intent.extras ?: return
-    if (extras.getString(PushService.MESSAGE_ID).isNullOrEmpty()) return
     // Reopened from Recents, Android hands back the intent that first started the app: that push
     // was opened then.
     if ((intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
+    // Another app may start the launcher with extras of its own making: ones that cannot be read
+    // are no push, not a crash.
     val data = HashMap<String, String>()
-    for (key in PushService.KEYS) extras.getString(key)?.let { data[key] = it }
-    // Taken: the same intent handed back to a recreated activity is not tapped again.
-    intent.removeExtra(PushService.MESSAGE_ID)
+    try {
+      val extras = intent.extras ?: return
+      if (extras.getString(PushService.MESSAGE_ID).isNullOrEmpty()) return
+      for (key in PushService.KEYS) extras.getString(key)?.let { data[key] = it }
+      // Taken: the same intent handed back to a recreated activity is not tapped again.
+      intent.removeExtra(PushService.MESSAGE_ID)
+    } catch (error: RuntimeException) {
+      return
+    }
     waitingPushes.add(data)
     while (waitingPushes.size > 20) waitingPushes.removeAt(0)
     push?.invokeMethod("arrived", null)
