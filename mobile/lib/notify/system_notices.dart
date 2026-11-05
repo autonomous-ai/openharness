@@ -507,49 +507,13 @@ AgentRef? decodeAgentPayload(String? payload) {
   return (machineId: parts[0], agentId: parts[1]);
 }
 
-/// A tapped push (`notify/push_channel.dart`) opens what the same local notice would: the
-/// conversation a Swarm need is in ([SwarmNotices.openedSwarm]), or the agent whose turn it was
-/// ([SystemNotices.opened]). [data] is the push's own keys, as
-/// `docs/design/2026-11-05-phone-push.md` lists them; a push that names nothing it knows only
-/// opened the app.
+/// A tapped push (`notify/push_channel.dart`) opens the chat its `link` names: the app's own
+/// `swarm:` payload, which the server puts beside the notice's `key` (`backend/src/push/notices.ts`).
+/// Anything else (no link, an agent's or a device's payload) only opened the app.
 void openPushed(Map<String, String> data, SystemNotices notices) {
-  switch (data['kind']) {
-    case 'swarm':
-      if (notices case final SwarmNotices swarm) {
-        if (pushSwarmTarget(data) case final target?) {
-          swarm.openedSwarm.value = target;
-        }
-      }
-    case 'agent_question' || 'agent_done':
-      final machine = _pushId(data['machine']), agent = _pushId(data['agent']);
-      if (machine != null && agent != null) {
-        notices.opened.value = (machineId: machine, agentId: agent);
-      }
+  if (notices case final SwarmNotices swarm) {
+    if (decodeSwarmPayload(data['link']) case final target?) {
+      swarm.openedSwarm.value = target;
+    }
   }
 }
-
-/// Where a Swarm push leads, read as [decodeSwarmPayload] reads a local notice's: a message, with
-/// the thread it is in, or else a decision.
-@visibleForTesting
-SwarmNoticeTarget? pushSwarmTarget(Map<String, String> data) {
-  final swarm = _pushId(data['swarm']);
-  final conversation = _pushId(data['conversation']);
-  if (swarm == null || conversation == null) return null;
-  final message = _pushId(data['message']);
-  return (
-    swarmId: swarm,
-    conversationId: conversation,
-    messageId: message,
-    decisionId: message == null ? _pushId(data['decision']) : null,
-    threadId: message == null ? null : _pushId(data['thread']),
-  );
-}
-
-/// An id a push names: one line, of a sane length. Anything else names nothing.
-String? _pushId(String? value) =>
-    value == null ||
-        value.isEmpty ||
-        value.length > 200 ||
-        value.contains('\n')
-    ? null
-    : value;
