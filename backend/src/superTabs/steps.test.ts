@@ -923,3 +923,24 @@ describe('a step on a task from before step lists', () => {
     expect(f.group(f.task)).not.toHaveProperty('stepIds')
   })
 })
+
+// Review of #3218 (Ledger, round 4), Important 1: with #3399, a failure by someone other than the Engineer brings a handed task
+// back to it. A failure for a head the pull request moved past is no verdict on what is in review: it reopens nothing.
+describe('a failure at an old head on a handed task', () => {
+  it('leaves it handed and tells nobody; a failure at its head brings it back', () => {
+    const f = stepsFixture()
+    const PR = 'https://github.com/acme/app/pull/7'
+    const A = 'aaaaaaa1111111111111111111111111111111aa', B = 'bbbbbbb2222222222222222222222222222222bb'
+    const rev = f.add('rev', f.task)
+    Object.assign(f.group(f.task), { pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: B, patch: 'p2', at: 1 } } })
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: `${B} ${PR}` } as Command, f.as(f.dev))
+    const fail = (head: string) => f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
+      checkId: f.group(f.task).checks[0]!.id, passed: false, evidence: 'Drops the session', head } as Command, f.as(rev))
+    const stale = fail(A)
+    expect(f.group(f.task).assignment).toMatchObject({ status: 'review' })
+    expect(f.group(f.task).assignment).not.toHaveProperty('reopened')
+    expect(stale.messages.filter(m => m.recipients.includes(f.dev))).toEqual([])
+    fail(B)
+    expect(f.group(f.task).assignment).toMatchObject({ status: 'working', reopened: expect.objectContaining({ why: expect.any(String) }) })
+  })
+})
