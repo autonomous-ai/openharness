@@ -320,6 +320,18 @@ class PersonalProjects extends ChangeNotifier {
     ]..sort((a, b) => a.$1.compareTo(b.$1));
   }
 
+  /// Each project tab whose name the person did not choose takes its
+  /// project's current name ("api 2" for the second).
+  void _nameProjectTabs(SuperTabController c) {
+    for (final tab in app.swarms.toList()) {
+      if (tab.nameIsCustom || !tab.isProjectTab) continue;
+      final project = projectOfTab(c, tab.id);
+      final number = personalProjectTabParts(tab.id)?.number;
+      if (project == null || number == null) continue;
+      app.renameTabAutomatically(tab.id, projectTabName(project.name, number));
+    }
+  }
+
   /// A desk tab holds 9 harnesses (backend `DESK_MAX_PANES`); it drops a 10th
   /// without an error.
   static bool _hasRoom(Swarm tab) =>
@@ -473,6 +485,7 @@ class PersonalProjects extends ChangeNotifier {
       if (c.accessRevoked) _forget(c.accountId, c.tabId);
       return;
     }
+    _nameProjectTabs(c);
     final account = c.accountId, swarm = c.tabId;
     final scope = '$account/$swarm';
     if (!_syncing.add(scope)) {

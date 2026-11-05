@@ -21310,6 +21310,20 @@ class AppNotifier extends ChangeNotifier {
   /// the tab on screen stays, and the name is not the person's, so it may
   /// follow what it is named after (a Personal project's own tab, task
   /// #3099). It reaches the desk as any new tab does.
+  /// Tab [id] takes [name] without it becoming the person's: a Personal
+  /// project's tab following its project's rename. A name the person chose
+  /// stays.
+  void renameTabAutomatically(String id, String name) {
+    final swarm = swarms.where((s) => s.id == id).firstOrNull;
+    final clean = name.trim();
+    if (swarm == null || swarm.nameIsCustom || clean.isEmpty) return;
+    final next = clean.length > 80 ? clean.substring(0, 80) : clean;
+    if (swarm.name == next) return;
+    swarm.name = next;
+    _persistLayout();
+    notifyListeners();
+  }
+
   Swarm ensureBackgroundTab(String id, String name) {
     final existing = swarms.where((s) => s.id == id).firstOrNull;
     if (existing != null) return existing;
