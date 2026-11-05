@@ -189,13 +189,14 @@ describe('scorecardDay', () => {
     const messages = [typed('pm', at(1)), typed('pm', at(2)), typed('eng', at(3)), typed('pm', at(-1)),
       row({ conversationId: 't1', createdAt: at(1), text: 'On it.' }),
       row({ conversationId: 't1', createdAt: at(1), text: 'Confirmed!' }),
+      // The same rule as the server's guard (acknowledgements.ts): an emoji alone says nothing, but it is no acknowledgement post.
       row({ conversationId: 't1', createdAt: at(1), text: '👀' }),
       row({ conversationId: 't1', createdAt: at(1), text: 'On it: the route needs a machine with a phone, so I picked Tony\'s Mac.' }),
       row({ conversationId: 't1', createdAt: at(1), text: 'Done', source: { kind: 'system', status: 'done' } }),
       person('t1', at(1), { text: 'thanks' })]
     const day = scorecardDay(input({ messages }))
     expect(day.typedIntoPm).toBe(2)
-    expect(day.ackPosts).toBe(3)
+    expect(day.ackPosts).toBe(2)
     expect(day.agentPosts).toBe(4)
   })
 })

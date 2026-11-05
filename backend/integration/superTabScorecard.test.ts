@@ -49,7 +49,8 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-/** A Swarm's day: the owner asks twice and corrects the PM once; one task ships, one waits all evening, the PM posts an ack. */
+/** A Swarm's day: the owner asks twice and corrects the PM once; one task ships, one waits all evening. The server refuses an
+ *  acknowledgement-only post now (acknowledgements.ts), so the PM's post here says something; figures.test.ts counts acks. */
 async function day() {
   const store = new SuperTabStore(db, () => now, null)
   const tab = (await store.create(owner, randomUUID(), 'Scorecard', 'public')).id
@@ -78,7 +79,7 @@ async function day() {
   const assignmentId = String((await execute({ type: 'work.assign', conversationId: task, agentId: worker } as Command)).assignmentId)
   await db.superTabRouteDecision.create({ data: { id: randomUUID(), tabId: tab, conversationId: task, createdAt: new Date(at(3)), record: {} } })
   now = at(4)
-  await execute({ type: 'message.send', conversationId: task, text: 'On it.', replyTo: null, recipientIds: [] } as Command, pm)
+  await execute({ type: 'message.send', conversationId: task, text: 'Plan: figures first, then the nightly job.', replyTo: null, recipientIds: [] } as Command, pm)
   now = at(5)
   await execute({ type: 'work.status', conversationId: task, assignmentId, status: 'done', result: 'Shipped.' } as Command, worker)
   now = at(6)
@@ -110,7 +111,7 @@ describe('the nightly scorecard', () => {
       unansweredAsks: 1, oldestUnansweredAskMinutes: 17 * 60,
       // 02:00-03:00 the task waited for its agent; from 06:00 the second one waits to midnight.
       idleMinutes: 60 + 18 * 60,
-      corrections: 1, routeDecisions: 1, ackPosts: 1, agentPosts: 2, lostLeftAlone: 0,
+      corrections: 1, routeDecisions: 1, ackPosts: 0, agentPosts: 2, lostLeftAlone: 0,
     })
     const empty = await db.superTabScorecard.findUnique({ where: { id: scorecardId(f.tab, 'lead', '2026-11-04') } })
     expect(empty!.figures).toMatchObject({ asksShipped: 0, idleMinutes: 0 })
