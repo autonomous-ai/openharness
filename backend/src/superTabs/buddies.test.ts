@@ -1207,7 +1207,7 @@ describe('the PM\'s private line to a person (Ken, 10-29)', () => {
     expect(f.run(tell('peer', 'Again.'), agentActor(f.pm)).messages.map(m => [m.conversationId, m.recipients])).toEqual([[swarm.id, []], [older.id, []]])
   })
 
-  it('is any agent\'s of the project, never a person\'s, to a person in the Swarm, and needs a line', () => {
+  it('is the PM\'s, never a person\'s, to a person in the Swarm, and needs a line', () => {
     const f = fresh()
     const worker = f.run({ type: 'agent.add', conversationId: f.group, harnessId: 'worker-harness', machineId: 'machine', name: 'Worker',
       configuration, lead: false }).result.agentId as string
@@ -1215,8 +1215,11 @@ describe('the PM\'s private line to a person (Ken, 10-29)', () => {
     expect(() => f.run(tell('stranger'), agentActor(f.pm))).toThrow('person in this Swarm')
     expect(() => f.run(tell('peer', '  '), agentActor(f.pm))).toThrow()
     expect(f.state.conversations.filter(c => c.kind === 'buddy' || c.kind === 'swarm-buddy')).toEqual([])
-    // Who tells a person is workflow (project instructions, phase 4).
-    expect(f.run(tell(), agentActor(worker)).messages).toEqual([expect.objectContaining({ conversationId: peerSwarmChat, text: 'Your fix is merged.', recipients: [] }),
+    // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts, task #3404): another agent's line is the PM's crew need, in the
+    // project chat, and reaches no Buddy chat of the person.
+    expect(f.run(tell(), agentActor(worker)).messages).toEqual([expect.objectContaining({ conversationId: f.app.conversationId, recipients: [f.pm],
+      source: expect.objectContaining({ kind: 'crew-need' }) })])
+    expect(f.run(tell(), agentActor(f.pm)).messages).toEqual([expect.objectContaining({ conversationId: peerSwarmChat, text: 'Your fix is merged.', recipients: [] }),
       expect.objectContaining({ conversationId: buddyChatId(f.app.projectId, { id: 'peer', generation: 'first' }), text: 'Your fix is merged.', recipients: [] })])
   })
 
