@@ -98,6 +98,7 @@ void main() {
                       storage: MemoryKeyValueStore(),
                       needsHuman: (_) => 0,
                       onOpenTask: (_) {},
+                      onOpenMessage: (_, _) {},
                       onOpenProposal: (_) {},
                       now: () => _now,
                     )
