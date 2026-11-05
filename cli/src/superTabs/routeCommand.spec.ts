@@ -2170,17 +2170,34 @@ describe('needs.access', () => {
     expect(excluded.map(e => e.reason)).toContain('Lamp is in Gray\'s own account, not shared with teammates.')
   })
 
-  it('offers the Mac itself, in its owner\'s account and saying so, when its owner shared that entry', async () => {
-    const { answer, candidates } = await route([mac([entry('Lamp', 'own', { teammates: true })]), team()])
+  it('offers the Mac itself, in its owner\'s account and saying so, when its owner shared that entry and the task names it', async () => {
+    const { answer, candidates } = await route([mac([entry('Lamp', 'own', { teammates: true })]), team()], { needs: {}, requires: { access: ['Lamp'] } })
     expect([...new Set(candidates.filter(c => c.kind === 'new').map(c => c.machineId))]).toEqual(['m1'])
     const rows = answer.candidates as Array<{ title: string; notes?: string[] }>
     expect(rows.length).toBeGreaterThan(0)
     for (const row of rows) expect(row.notes ?? [], row.title).toContain('MacBook Pro runs this task in Gray\'s own account: Lamp is shared with teammates.')
   })
 
+  // Security review 2: the start keeps a teammate's task on the Mac only for access its task names (backend teamMachineFor), so
+  // a route asked with needs.access alone never offers the owner's account: it would start in the Team account.
+  it('offers a shared own-account entry only to a task that names it, as the start places it', async () => {
+    const { candidates, excluded } = await route([mac([entry('Lamp', 'own', { teammates: true })]), team()])
+    expect(candidates.some(c => c.kind === 'new' && c.machineId === 'm1')).toBe(false)
+    expect(excluded.map(e => e.reason)).toContain('Lamp is shared from Gray\'s own account only with tasks that name it in their access.')
+  })
+
+  it('notes a production system on every candidate that would use one', async () => {
+    const { answer } = await route([mac([entry('Prod DB read-only', 'team', { production: true })]), team()], { needs: { access: ['Prod DB read-only'] } })
+    const rows = answer.candidates as Array<{ title: string; notes?: string[] }>
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(row.notes ?? [], row.title).toContain('Prod DB read-only is a production system: writes still need a person\'s go.')
+    const plain = await route([mac([entry('Lamp', 'team')]), team()])
+    expect(JSON.stringify(plain.answer)).not.toContain('production system')
+  })
+
   it('names every shared entry the task needs on the Mac', async () => {
     const { answer } = await route([mac([entry('Lamp', 'own', { teammates: true }), entry('Fusion 360', 'own', { teammates: true })]), team()],
-      { needs: { access: ['Lamp', 'Fusion 360'] } })
+      { needs: {}, requires: { access: ['Lamp', 'Fusion 360'] } })
     for (const row of answer.candidates as Array<{ title: string; notes?: string[] }>) {
       expect(row.notes ?? [], row.title).toContain('MacBook Pro runs this task in Gray\'s own account: Lamp, Fusion 360 are shared with teammates.')
     }
