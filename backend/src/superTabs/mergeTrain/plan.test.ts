@@ -99,8 +99,9 @@ describe('eligible', () => {
 })
 
 describe('lanes and components', () => {
-  it('sends docs, Markdown and scripts alone down the fast lane', () => {
-    expect(laneOf(['docs/a.md', 'AGENTS.md', 'scripts/ci-plan.py', 'cli/README.md'])).toBe('fast')
+  it('sends docs and Markdown alone down the fast lane; scripts run CI and release, so they batch', () => {
+    expect(laneOf(['docs/a.md', 'AGENTS.md', 'cli/README.md'])).toBe('fast')
+    expect(laneOf(['docs/a.md', 'scripts/ci-plan.py'])).toBe('code')
     expect(laneOf(['docs/a.md', 'backend/src/a.ts'])).toBe('code')
     expect(laneOf([])).toBe('code')
   })

@@ -112,9 +112,9 @@ describe('the merge train builds batches', () => {
     expect(swarm.told.map(t => t.key)).toEqual([`train-conflict:${a.head}`])
   })
 
-  it('merges a docs or scripts pull request on its own green CI, with no batch', async () => {
+  it('merges a docs pull request on its own green CI, with no batch', async () => {
     const { repo, swarm, pass } = setup()
-    const a = repo.addPull(7, ['docs/a.md', 'scripts/b.py'])
+    const a = repo.addPull(7, ['docs/a.md', 'cli/README.md'])
     swarm.approve(a)
     await pass()
     expect(repo.batches()).toEqual([])
@@ -273,6 +273,80 @@ describe('the merge train finishes batches', () => {
     await pass()
     expect(repo.state.squashes).toEqual([])
     expect(repo.state.pulls.get(second.number)!.state).toBe('closed')
+  })
+
+  it('never touches a fork\'s pull request named like a live batch', async () => {
+    const { repo, swarm, pass } = setup()
+    swarm.approve(repo.addPull(7, ['backend/src/a.ts']))
+    await pass()
+    const batch = repo.batches()[0]!
+    repo.addPull(50, ['README.md'], { headRef: batch.headRef, headRepository: 'outsider/app' })
+    const writes = repo.state.writes.length
+    await pass()
+    expect(repo.state.writes.length).toBe(writes)
+    expect(repo.state.pulls.get(50)!.state).toBe('open')
+    expect(repo.state.branches.has(batch.headRef)).toBe(true)
+  })
+
+  it('forgets a batch someone closed, and still builds the next one', async () => {
+    const { repo, swarm, pass } = setup()
+    swarm.approve(repo.addPull(7, ['backend/src/a.ts']))
+    await pass()
+    const first = repo.batches()[0]!
+    first.state = 'closed'
+    swarm.approve(repo.addPull(8, ['backend/src/b.ts']))
+    await pass()
+    expect(repo.batches()).toHaveLength(1)
+    expect(repo.batches()[0]!.number).not.toBe(first.number)
+  })
+
+  it('closes a batch GitHub refuses to merge, tells each Engineer why, and leaves those heads out', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['backend/src/a.ts'])
+    swarm.approve(a)
+    await pass()
+    const batch = repo.batches()[0]!
+    repo.state.ci.set(batch.head, 'success')
+    repo.state.squashRefusal = 'At least 1 approving review is required by reviewers with write access.'
+    await pass()
+    expect(repo.state.pulls.get(batch.number)!.state).toBe('closed')
+    expect(swarm.told).toEqual([expect.objectContaining({ taskId: 'task-7', key: `train-refused:${a.head}` })])
+    expect(swarm.told[0]!.text).toContain('At least 1 approving review is required')
+    await pass()
+    expect(repo.batches()).toEqual([])
+  })
+
+  it('leaves out a pull request that changes CI workflows, which its token cannot merge, with a line to its task', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['.github/workflows/ci.yml', 'scripts/ci-plan.py'])
+    swarm.approve(a)
+    await pass()
+    expect(repo.batches()).toEqual([])
+    expect(repo.state.squashes).toEqual([])
+    expect(swarm.told.map(t => t.key)).toEqual([`train-workflows:${a.head}`])
+  })
+
+  it('records the other members and closes every original when one record fails after the squash', async () => {
+    const { repo, swarm, pass } = setup()
+    swarm.approve(repo.addPull(7, ['backend/src/a.ts'])); swarm.approve(repo.addPull(8, ['backend/src/b.ts']))
+    await pass()
+    repo.state.ci.set(repo.batches()[0]!.head, 'success')
+    const merged = swarm.swarm.merged
+    swarm.swarm.merged = async (taskId, url, at) => { if (taskId === 'task-7') throw new Error('database down'); return merged(taskId, url, at) }
+    await pass()
+    expect(swarm.merged.map(m => m.taskId)).toEqual(['task-8'])
+    expect(repo.state.pulls.get(7)!.state).toBe('closed')
+    expect(repo.state.pulls.get(8)!.state).toBe('closed')
+  })
+
+  it('drops a member whose head is already in main', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['backend/src/b.ts'])
+    swarm.approve(a); swarm.approve(b)
+    repo.state.inMain.add(a.head)
+    await pass()
+    expect(repo.state.contents.get(repo.batches()[0]!.head)).toEqual([b.head])
+    expect(swarm.told).toEqual([])
   })
 
   it('stops with the kill switch: no read, no write, an open batch left as it is', async () => {

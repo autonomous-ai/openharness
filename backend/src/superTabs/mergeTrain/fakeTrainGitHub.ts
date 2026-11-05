@@ -26,6 +26,10 @@ export function fakeTrainGitHub() {
     reads: [] as string[],
     /** Calls (by name) that answer as GitHub failing. */
     failing: new Set<string>(),
+    /** A squash GitHub refuses, with its reason (branch protection, a workflow change without that permission). */
+    squashRefusal: null as string | null,
+    /** Heads already in main: merging one into a batch merges nothing. */
+    inMain: new Set<string>(),
     nextNumber: 900,
   }
   const read = (name: string) => {
@@ -41,6 +45,7 @@ export function fakeTrainGitHub() {
     return { ...rest, labels: [...pull.labels] }
   }
   const github: TrainGitHub = {
+    repository: 'acme/app',
     async mainHead() { read('mainHead'); return state.main },
     async openPulls() { read('openPulls'); return [...state.pulls.values()].filter(p => p.state === 'open').map(copy) },
     async pull(number) {
@@ -55,6 +60,7 @@ export function fakeTrainGitHub() {
     async mergeInto(branch, head, message) {
       write('mergeInto')
       if (state.conflicts.has(head)) return 'conflict'
+      if (state.inMain.has(head)) return 'already'
       const tip = state.branches.get(branch)!
       const merged = sha(`${tip}+${head}+${message}`)
       state.contents.set(merged, [...state.contents.get(tip) ?? [], head])
@@ -65,12 +71,13 @@ export function fakeTrainGitHub() {
       write('openPull')
       const number = state.nextNumber++
       const pull: FakePull = { number, url: `https://github.com/acme/app/pull/${number}`, state: 'open', merged: false, draft: false, title, body,
-        mergeable: true, head: state.branches.get(branch)!, headRef: branch, base: 'main', labels: [], files: [] }
+        mergeable: true, head: state.branches.get(branch)!, headRef: branch, headRepository: 'acme/app', base: 'main', labels: [], files: [] }
       state.pulls.set(number, pull)
       return copy(pull)
     },
     async squash(number, head, title, message) {
       write('squash')
+      if (state.squashRefusal) throw new TrainReadError('squash', 405, state.squashRefusal)
       const pull = state.pulls.get(number)!
       if (pull.head !== head || pull.state !== 'open') throw new TrainReadError('squash', 409)
       state.main = sha(`${state.main}#${number}`)
@@ -85,7 +92,7 @@ export function fakeTrainGitHub() {
   /** A pull request into main with [files], ready, mergeable and green at its head. */
   const addPull = (number: number, files: string[], over: Partial<FakePull> = {}): FakePull => {
     const pull: FakePull = { number, url: `https://github.com/acme/app/pull/${number}`, state: 'open', merged: false, draft: false, title: `Change ${number}`,
-      body: '', mergeable: true, head: sha(`head-${number}`), headRef: `feature-${number}`, base: 'main', labels: [], files, ...over }
+      body: '', mergeable: true, head: sha(`head-${number}`), headRef: `feature-${number}`, headRepository: 'acme/app', base: 'main', labels: [], files, ...over }
     state.pulls.set(number, pull)
     state.ci.set(pull.head, 'success')
     return pull

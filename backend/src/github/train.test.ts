@@ -5,7 +5,7 @@ import { TRAIN_PERMISSIONS, TrainReadError, repositoryTrain, trainGitHub, type T
 
 const SHA = 'a'.repeat(40), MAIN = 'c'.repeat(40), MERGED = 'd'.repeat(40)
 const pullBody = (n: number, over: Record<string, unknown> = {}) => ({ number: n, html_url: `https://github.com/acme/app/pull/${n}`, state: 'open',
-  merged: false, draft: false, title: `PR ${n}`, body: 'text', mergeable: true, head: { sha: SHA, ref: `feature-${n}` }, base: { ref: 'main' },
+  merged: false, draft: false, title: `PR ${n}`, body: 'text', mergeable: true, head: { sha: SHA, ref: `feature-${n}`, repo: { full_name: 'Acme/App' } }, base: { ref: 'main' },
   labels: [{ name: 'hold' }], ...over })
 
 /** A stub of GitHub's answers by "METHOD path", recording each call. */
@@ -30,7 +30,7 @@ describe('the merge train on GitHub', () => {
     })
     expect(await train.mainHead()).toBe(MAIN)
     expect(await train.pull(7)).toEqual({ number: 7, url: 'https://github.com/acme/app/pull/7', state: 'open', merged: false, draft: false,
-      title: 'PR 7', body: 'text', mergeable: true, head: SHA, headRef: 'feature-7', base: 'main', labels: ['hold'] })
+      title: 'PR 7', body: 'text', mergeable: true, head: SHA, headRef: 'feature-7', headRepository: 'acme/app', base: 'main', labels: ['hold'] })
     expect(await train.files(7)).toEqual(['backend/a.ts', 'docs/b.md'])
     expect(await train.ciRequired(SHA)).toBe('success')
   })
@@ -75,8 +75,8 @@ describe('the merge train on GitHub', () => {
 
   it('reads a conflict as one, and never lets the branch point at a member\'s own commit', async () => {
     expect(await stub({ 'POST /repos/acme/app/merges': { status: 409 } }).train.mergeInto('harness-train/1', SHA, 'm')).toBe('conflict')
-    // Nothing merged: the branch already held the head.
-    await expect(stub({ 'POST /repos/acme/app/merges': { status: 204 } }).train.mergeInto('harness-train/1', SHA, 'm')).rejects.toBeInstanceOf(TrainReadError)
+    // Nothing merged: the head is in the branch already, which starts at main, so it is in main.
+    expect(await stub({ 'POST /repos/acme/app/merges': { status: 204 } }).train.mergeInto('harness-train/1', SHA, 'm')).toBe('already')
     // A fast-forward would leave the branch at the member's commit, which reads as the bot pushing it (pushOrigin.ts).
     await expect(stub({ 'POST /repos/acme/app/merges': { status: 201, body: { sha: SHA, parents: [{ sha: MAIN }] } } }).train
       .mergeInto('harness-train/1', SHA, 'm')).rejects.toBeInstanceOf(TrainReadError)
@@ -97,8 +97,17 @@ describe('the merge train on GitHub', () => {
     expect(calls.map(c => c.method)).toEqual(['PUT', 'POST', 'PATCH', 'DELETE'])
   })
 
-  it('refuses a squash GitHub did not do, and a branch name outside the train', async () => {
-    await expect(stub({ 'PUT /repos/acme/app/pulls/9/merge': { status: 409 } }).train.squash(9, MERGED, 't', 'm')).rejects.toBeInstanceOf(TrainReadError)
+  it('reads a fork\'s pull request as from another repository', async () => {
+    const { train } = stub({ 'GET /repos/acme/app/pulls/7': { status: 200, body: pullBody(7, { head: { sha: SHA, ref: 'harness-train/p1/1', repo: { full_name: 'outsider/app' } } }) } })
+    expect(train.repository).toBe('acme/app')
+    expect((await train.pull(7)).headRepository).toBe('outsider/app')
+  })
+
+  it('refuses a squash GitHub did not do, with its reason, and a branch name outside the train', async () => {
+    const refused = await stub({ 'PUT /repos/acme/app/pulls/9/merge': { status: 405, body: { message: 'Required status check "x" is expected.' } } }).train
+      .squash(9, MERGED, 't', 'm').catch(error => error)
+    expect(refused).toBeInstanceOf(TrainReadError)
+    expect(refused).toMatchObject({ status: 405, reason: 'Required status check "x" is expected.' })
     await expect(stub({ 'PUT /repos/acme/app/pulls/9/merge': { status: 200, body: { merged: false } } }).train.squash(9, MERGED, 't', 'm')).rejects.toBeInstanceOf(TrainReadError)
     const { train, calls } = stub({})
     await expect(train.createBranch('main', MAIN)).rejects.toBeInstanceOf(TrainReadError)
