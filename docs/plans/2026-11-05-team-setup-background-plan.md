@@ -50,7 +50,7 @@ The engine download is ≈ 94 % of the wait. Copying the two installed packages 
 - The copy's shell: values checked and quoted, the two-phase unpack/commit, a failed owner `tar` detected, links
   inside the package that point into the owner's home (discarded, npm instead).
 - The lock stepping aside only after the password, and coming back on failure.
-- The estimate never says "0 min left" and never counts up.
+- The estimate never says "0 min left"; it rises once when an npm download starts (a Mac without the engines).
 
 ## Tasks
 
@@ -71,7 +71,7 @@ The engine download is ≈ 94 % of the wait. Copying the two installed packages 
 **Interfaces:** `TeamSetupWatch.of(AppNotifier)`, `follow()`, `running`, `line` ("Harness Team: setting up · step 2 of 4 ·
 about 4 min left"), `ended` stream of `TeamSetupEnd(ready | failed(reason))`.
 - [ ] Failing tests: four steps from the daemon's eight; time left from the measured step times, at least "less than a
-      minute" while running, never counting up; `exists` ends ready, `failed`/`declined`/`incomplete`/`none` end failed
+      minute" while running; `exists` ends ready, `failed`/`declined`/`incomplete`/`none` end failed
       with a plain reason; polling stops at the end.
 
 ### 3. Desktop: the lock steps aside, the row shows progress, the notice (team_account_setup.dart, machines.dart)

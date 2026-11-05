@@ -132,20 +132,17 @@ void main() {
 
     /// The window as app_shell.dart builds it, the lock above the Navigator, with this Mac's row in Machines when
     /// [server] is given.
+    /// Its Swarm's controller, for [unmount].
+    dynamic shown;
+
     Future<void> window(
       WidgetTester tester, {
       ConversationServer? server,
     }) async {
       taps = 0;
       final c = server?.controller(account: 'owner');
-      if (c != null) {
-        await c.refresh();
-        addTearDown(() async {
-          await tester.pumpWidget(const SizedBox());
-          await c.flush();
-          c.dispose();
-        });
-      }
+      shown = c;
+      if (c != null) await c.refresh();
       await tester.pumpWidget(
         MaterialApp(
           scaffoldMessengerKey: messenger,
@@ -263,6 +260,9 @@ void main() {
           find.byKey(const ValueKey('super-machine-team-setup-m')),
           findsNothing,
         );
+        await tester.pumpWidget(const SizedBox());
+        await shown.flush();
+        shown.dispose();
       },
     );
 

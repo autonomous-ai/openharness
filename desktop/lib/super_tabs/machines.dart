@@ -869,6 +869,27 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   /// or when it cannot say.
   ({String state, String? detail})? _teamSetup;
   bool _teamSetupReading = false;
+
+  /// This Mac's setup while it runs in the background (#3169), for its row's
+  /// step and time left; null without the app's lock in the window.
+  TeamSetupWatch? _setupWatch;
+
+  void _followSetupWatch() {
+    final app = widget.app;
+    final watch = app == null ? null : TeamSetupWatch.of(app);
+    if (identical(watch, _setupWatch)) return;
+    _setupWatch?.removeListener(_setupMoved);
+    _setupWatch = watch?..addListener(_setupMoved);
+  }
+
+  /// The row says the step as it moves, and what the daemon remembers once
+  /// setup ends.
+  void _setupMoved() {
+    if (!mounted) return;
+    _changed();
+    if (_setupWatch?.running == false) unawaited(_readTeamSetup());
+  }
+
   SuperTabController get c => widget.controller;
   // Team agents only: a Buddy is listed nowhere, and its machine may be its
   // person's alone, outside the Swarm (backend buddyOnly).
@@ -887,6 +908,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   void initState() {
     super.initState();
     c.machinesChanged.addListener(_machinesMoved);
+    _followSetupWatch();
     unawaited(_readTeamSetup());
     if ((!kUnderTest || widget.readLocal != null) && widget.app != null) {
       _updateUsage();
@@ -1008,6 +1030,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       final read = await app.teamSetupStatus();
       if (!mounted) return;
       _teamSetup = read;
+      // Running and nobody following it (the app opened while it ran, or it
+      // was started from a terminal): followed from here, so it ends in a
+      // notice too.
+      if (read?.state == 'running') TeamSetupWatch.of(app)?.follow();
       _changed();
     } finally {
       _teamSetupReading = false;
@@ -1088,6 +1114,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     _timer?.cancel();
     _tick?.cancel();
     c.machinesChanged.removeListener(_machinesMoved);
+    _setupWatch?.removeListener(_setupMoved);
     for (final beat in _rowBeats.values) {
       beat.dispose();
     }
@@ -1364,6 +1391,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   /// Everything a machine's row, its tooltip and its details say of it, read once per build.
   _MachineView _view(String id) {
+    _followSetupWatch();
     final app = widget.app, snapshot = c.snapshot!;
     final shared = snapshot.pool(id);
     // The Mac's Harness Team account is part of its row: its agents are listed here, and everyone but the Mac's owner
@@ -1545,8 +1573,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         app != null &&
         app.canSetUpTeamAccount &&
         app.stateOf(id)?.isLocalMachine == true;
-    // Its own person reads why: they cancelled, or setup failed and why.
-    final problem = setUpTeam
+    // While setup runs, its step and the time left, and that the person may
+    // go on working (#3169); otherwise its own person reads why: they
+    // cancelled, or setup failed and why.
+    final progress = setUpTeam ? _setupWatch?.line : null;
+    final problem = progress != null
+        ? '$progress\nKeep working. We\'ll tell you when it\'s ready.'
+        : setUpTeam
         ? superTabTeamSetupLine(_teamSetup) ?? line
         : line;
     return _MachineView(
@@ -1555,7 +1588,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       id: id,
       name: name,
       problem: problem,
-      setUpTeam: setUpTeam,
+      // Set up would ask for the password again while one setup runs.
+      setUpTeam: setUpTeam && progress == null,
       setUpTeamLabel: superTabTeamSetupAction(_teamSetup),
       owner: person,
       contributor: contributor,
