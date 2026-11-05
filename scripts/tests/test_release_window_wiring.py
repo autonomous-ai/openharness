@@ -103,8 +103,9 @@ class ScriptTests(unittest.TestCase):
         self.log = Path(self.tmp.name) / "guard.log"
 
     def run_script(self, kind, *args, code=0):
+        # Relative, as `make release-cli` runs it: the script changes directory before it sources the guard.
         env = {**os.environ, "STUB_LOG": str(self.log), "STUB_CODE": str(code), "BRANCH": "main"}
-        return subprocess.run(["bash", str(self.repo / SCRIPT_OF[kind]), *args], capture_output=True, text=True,
+        return subprocess.run(["bash", SCRIPT_OF[kind], *args], capture_output=True, text=True,
                               env=env, cwd=self.repo, timeout=60)
 
     def guard_calls(self):
