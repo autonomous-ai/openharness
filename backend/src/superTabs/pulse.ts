@@ -120,10 +120,6 @@ export function holdOf(group: Conversation, today: string): { reason: string | n
   return { reason: assignment.result?.trim() || null }
 }
 
-/** [project]'s work: its open tasks and steps, never its chat, a private chat or a Buddy chat. */
-const workOf = (state: SuperTabState, project: SwarmProject): Conversation[] => state.conversations.filter(c => !c.archived && counted(c)
-  && c.id !== project.leadConversationId && (c.projectId ?? 'lead') === project.id)
-
 /** Whether [group] lost its agent: lost, or nobody holds it (liveness.ts `orphaned`), and since when. */
 function lostSince(group: Conversation): number | null {
   const assignment = group.assignment
@@ -137,12 +133,37 @@ interface Counts { working: Set<string>; crew: string[]; nextUp: string[]; lost:
 /** Each agent's project, worked out once for every project counted (agentProjectId may search the conversations). */
 export const agentProjects = (state: SuperTabState): Map<string, string> => new Map(state.agents.map(a => [a.id, agentProjectId(state, a)]))
 
-function countWork(state: SuperTabState, project: SwarmProject, now: number, projectOfAgent = agentProjects(state)): Counts {
+/** The Swarm's open conversations and agents by project, sorted out in one pass, so a pulse for every project costs one walk of
+ *  the Swarm rather than one per project: recordPulse runs after every command (ENGINEERING 4). */
+export interface PulseIndex {
+  /** Each project's open tasks and steps, never its chat, a private chat or a Buddy chat. */
+  work: Map<string, Conversation[]>
+  /** Each project's open conversations that hold owed asks. */
+  owing: Map<string, Conversation[]>
+  /** Each project's agents but Buddies. */
+  agents: Map<string, string[]>
+}
+export function pulseIndex(state: SuperTabState, projectOfAgent = agentProjects(state), only?: string): PulseIndex {
+  const chats = new Set((state.projects ?? []).map(p => p.leadConversationId))
+  const index: PulseIndex = { work: new Map(), owing: new Map(), agents: new Map() }
+  const add = <T>(map: Map<string, T[]>, key: string, value: T) => { const list = map.get(key); if (list) list.push(value); else map.set(key, [value]) }
+  for (const group of state.conversations) {
+    if (group.archived || !counted(group)) continue
+    const projectId = group.projectId ?? 'lead'
+    if (only && projectId !== only) continue
+    if (group.owed?.length) add(index.owing, projectId, group)
+    if (!chats.has(group.id)) add(index.work, projectId, group)
+  }
+  for (const agent of state.agents) if (!isBuddy(agent)) add(index.agents, projectOfAgent.get(agent.id) ?? agentProjectId(state, agent), agent.id)
+  return index
+}
+
+function countWork(state: SuperTabState, project: SwarmProject, now: number, index: PulseIndex): Counts {
   const pm = pmOf(state, project)
-  const crew = state.agents.filter(a => a.id !== pm && !isBuddy(a) && projectOfAgent.get(a.id) === project.id).map(a => a.id)
+  const crew = (index.agents.get(project.id) ?? []).filter(id => id !== pm)
   const inCrew = new Set(crew), today = dayOf(now)
   const counts: Counts = { working: new Set(), crew, nextUp: [], lost: [], held: [] }
-  for (const group of workOf(state, project)) {
+  for (const group of index.work.get(project.id) ?? []) {
     const assignment = group.assignment
     // Lost first: a blocked task whose agent is gone waits for an agent before anything else.
     const since = lostSince(group)
@@ -168,17 +189,28 @@ export const PULSE_LIST_MAX = 50
  * and on the PM's sweep, so the board reddens on time without anyone's poll. Writes only on a change. When Working fell to 0
  * while work waits is kept in it (`idleSince`) from one run to the next.
  */
-export function recordPulse(state: SuperTabState, now: number): void {
+export function recordPulse(state: SuperTabState, now: number, only?: string): void {
   // The asks of a person who left the Swarm are owed to nobody, however they left.
   const people = new Set(state.people.map(p => p.id))
   for (const group of state.conversations) if (group.owed?.some(ask => !people.has(ask.personId))) settle(group, ask => !people.has(ask.personId))
-  const projectOfAgent = agentProjects(state)
-  for (const project of state.projects ?? []) {
-    const chat = state.conversations.find(c => c.id === project.leadConversationId)
+  if (!state.projects?.length) return
+  // [only]: the one project a command's conversation is in, whose pulse alone it can move; every project otherwise.
+  const projects = only ? state.projects.filter(p => p.id === only) : state.projects
+  const index = pulseIndex(state, agentProjects(state), only), chats = new Map(state.conversations.map(c => [c.id, c]))
+  for (const project of projects) {
+    const chat = chats.get(project.leadConversationId)
     if (!chat) continue
-    const pulse = projectPulse(state, project, now, PULSE_LIMITS, projectOfAgent, chat.pulse?.idleSince ?? null)
+    const pulse = projectPulse(state, project, now, PULSE_LIMITS, index, chat.pulse?.idleSince ?? null)
     if (JSON.stringify(pulse) !== JSON.stringify(chat.pulse)) chat.pulse = pulse
   }
+}
+
+/** The project of the conversation [command] names, whose pulse alone it can move; undefined for a command that names none, or
+ *  a conversation outside every project, which may move any. */
+export function pulseProjectOf(state: SuperTabState, command: object): string | undefined {
+  const id = (command as { conversationId?: unknown }).conversationId
+  const group = typeof id === 'string' ? state.conversations.find(c => c.id === id) : undefined
+  return group ? projectOfGroup(state, group)?.id : undefined
 }
 
 /** [project]'s pulse as last recorded on its chat (recordPulse), or none. */
@@ -188,9 +220,9 @@ export const storedPulse = (state: SuperTabState, project: SwarmProject): Pulse 
 /** [project]'s pulse at [now], from what is loaded: every open group, as a command or the PM's sweep loads them. [idleBefore]:
  *  when Working fell to 0 while work waits, as last recorded. */
 export function projectPulse(state: SuperTabState, project: SwarmProject, now: number, limits: PulseLimits = PULSE_LIMITS,
-  projectOfAgent = agentProjects(state), idleBefore: number | null = null): Pulse {
-  const counts = countWork(state, project, now, projectOfAgent)
-  const asks = state.conversations.filter(c => !c.archived && c.owed && (c.projectId ?? 'lead') === project.id)
+  index = pulseIndex(state), idleBefore: number | null = null): Pulse {
+  const counts = countWork(state, project, now, index)
+  const asks = (index.owing.get(project.id) ?? [])
     .flatMap(c => c.owed!.map(ask => ({ conversationId: c.id, messageId: ask.id, personId: ask.personId, at: ask.at })))
     .sort((a, b) => a.at - b.at)
   const oldest = asks[0]

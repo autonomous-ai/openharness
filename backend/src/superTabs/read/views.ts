@@ -134,9 +134,15 @@ export const progressView = (data: NonNullable<SwarmParts['progress'][number]['d
  *  own, so it gets the counts alone, the same on every read. */
 function pulses(state: SuperTabState, visible: SuperTabState, actor: Actor, buddy: boolean): Record<string, Pulse> | undefined {
   if (!visible.projects?.length) return undefined
+  // One lookup by id for every listed conversation: a list names up to 50 per count (pulse.ts PULSE_LIST_MAX).
+  const groups = new Map(state.conversations.map(c => [c.id, c])), checked = new Map<string, boolean>()
   const reads = (id: string) => {
-    const group = state.conversations.find(c => c.id === id)
-    return !group || canReadGroup(state, actor, group)
+    const known = checked.get(id)
+    if (known !== undefined) return known
+    const group = groups.get(id)
+    const readable = !group || canReadGroup(state, actor, group)
+    checked.set(id, readable)
+    return readable
   }
   const out: Record<string, Pulse> = {}
   for (const seen of visible.projects) {
