@@ -58,13 +58,33 @@ describe('a task a Team agent worked on', () => {
     expect(teamWrittenTask(f.state, stored())).toBe(true)
   })
 
-  it('is marked when a Team agent opens it or is added to it', () => {
-    const f = swarm()
+  // #3304: joining a task is not writing its code. Hazel4 joined Magnolia2's task to post a list, and no main-account agent could
+  // take its steps after, though every commit on its branch was a person's. A Team agent's push shows in GitHub's record.
+  it('does not mark a task when a Team agent opens it, is added to it, is named into it or posts there', () => {
+    const f = swarm(), builder = f.member('main-builder', 'mac')
+    const asBuilder: Actor = { kind: 'agent', agentId: builder, machineOwnerId: 'owner' }
     const opened = f.group({}, { kind: 'agent', agentId: f.member('team-a', 'mac-team'), machineOwnerId: 'owner' })
-    expect(f.state.conversations.find(c => c.id === opened)!.teamWritten).toBe(true)
-    const added = f.group()
-    f.run({ type: 'conversation.agent', conversationId: added, agentId: f.member('team-b', 'mac-team'), present: true, lead: false })
-    expect(f.state.conversations.find(c => c.id === added)!.teamWritten).toBe(true)
+    const added = f.group(), named = f.group(), posted = f.group()
+    for (const task of [added, named, posted]) f.run({ type: 'conversation.agent', conversationId: task, agentId: builder, present: true, lead: false })
+    const told = [
+      f.run({ type: 'conversation.agent', conversationId: added, agentId: f.member('team-b', 'mac-team'), present: true, lead: false }),
+      f.run({ type: 'message.send', conversationId: named, text: 'Please look.', replyTo: null, recipientIds: [f.member('team-c', 'mac-team')] }, asBuilder),
+    ]
+    const poster = f.member('team-d', 'mac-team')
+    f.run({ type: 'conversation.agent', conversationId: posted, agentId: poster, present: true, lead: false })
+    f.state.conversations.find(c => c.id === posted)!.agentIds = f.state.conversations.find(c => c.id === posted)!.agentIds.filter(id => id !== poster)
+    told.push(f.run({ type: 'message.send', conversationId: posted, text: 'Here is the list.', replyTo: null, recipientIds: [] }, { kind: 'agent', agentId: poster, machineOwnerId: 'owner' }))
+    expect(told.flatMap(e => e.messages).some(m => m.text === TEAM_WRITTEN_STOP)).toBe(false)
+    for (const task of [opened, added, named, posted]) {
+      expect(f.state.conversations.find(c => c.id === task)!.teamWritten, task).toBeUndefined()
+      const step = f.group({ reviewOf: task, step: 'Review' })
+      expect(refusal(() => f.run({ type: 'work.assign', conversationId: step, agentId: f.member(`main-reviewer-${task}`, 'mac') })), task).toBeNull()
+    }
+  })
+
+  it('is marked when a Team agent is assigned to build it', () => {
+    const f = swarm(), task = f.written()
+    expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBe(true)
   })
 
   it('refuses an agent in the main account: assigned to its step, or to the task itself', () => {
@@ -244,13 +264,6 @@ describe('a task a Team agent worked on', () => {
     const free = f.state.conversations.find(c => c.reviewOf === task)!
     free.assignment!.status = 'done'
     f.run({ type: 'work.assign', conversationId: task, agentId: tester })
-    expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBe(true)
-  })
-
-  it('marks a clean task when another agent names a Team agent into it', () => {
-    const f = swarm(), task = f.group(), builder = f.member('main-builder', 'mac')
-    f.run({ type: 'work.assign', conversationId: task, agentId: builder })
-    f.run({ type: 'message.send', conversationId: task, text: 'Please look.', replyTo: null, recipientIds: [f.member('team-a', 'mac-team')] }, { kind: 'agent', agentId: builder, machineOwnerId: 'owner' })
     expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBe(true)
   })
 
