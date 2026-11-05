@@ -250,7 +250,10 @@ void main() {
             ),
           );
           await tester.pumpAndSettle();
-          expect(find.textContaining('Start your Buddy again'), findsOneWidget);
+          expect(
+            find.byKey(const ValueKey('super-buddy-start-again')),
+            findsOneWidget,
+          );
           if (state == '-refused') {
             await tester.tap(find.widgetWithText(TextButton, 'Start again'));
             await tester.pumpAndSettle();

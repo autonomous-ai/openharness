@@ -699,7 +699,10 @@ class SuperTabBuddyBar extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    'Start your Buddy again to switch its model.',
+                    c.snapshot!.paused
+                        ? 'New work is paused. Start your Buddy again once '
+                              'it resumes.'
+                        : 'Start your Buddy again to switch its model.',
                     style: DesktopChrome.control(),
                   ),
                 ),
