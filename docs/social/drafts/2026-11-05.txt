@@ -1,0 +1,7 @@
+The Tasks board looks like a board now.
+
+Five columns, each its own panel: Proposals, Next up, Working, Waiting, Shipped. Long titles get three lines. Open a task, come back, and it's still highlighted.
+
+Where is the work? Right there.
+
+github.com/autonomous-ai/openharness
