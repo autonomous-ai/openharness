@@ -95,6 +95,7 @@ export function applyPushOrigin(state: SuperTabState, group: Conversation, origi
   group.teamWritten = true
 }
 
-export function failPushUnknown(): never {
-  return fail(TEAM_WRITTEN_WORK, 'GitHub could not show who pushed this task\'s code, so it runs only in a Team account for now. Choose an agent in a Team account, or try again in a minute.', 403)
+/** [reason]: why GitHub cannot show it, when that is known (repositoryReach.ts unknownPushReason). */
+export function failPushUnknown(reason?: string | null): never {
+  return fail(TEAM_WRITTEN_WORK, reason ?? 'GitHub could not show who pushed this task\'s code, so it runs only in a Team account for now. Choose an agent in a Team account, or try again in a minute.', 403)
 }
