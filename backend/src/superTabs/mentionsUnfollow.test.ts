@@ -45,8 +45,8 @@ describe('a tag in a thread brings back an unfollowed thread', () => {
 
   it('leaves an Unfollow alone when the tag is in the chat, not in a thread', async () => {
     const { tx, created, commands } = fakeTx()
-    await writeMentions(tx, 'tab', state, [draft('top', ['peer'])], NOW)
-    expect(created).toHaveLength(1)
+    await writeMentions(tx, 'tab', state, [draft('top', ['peer']), draft('own', ['third'], 'own')], NOW)
+    expect(created).toHaveLength(2)
     expect(commands).toEqual([])
   })
 
