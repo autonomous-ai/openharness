@@ -152,11 +152,25 @@ describe('the app reader\'s patch', () => {
       pullRequestPatchFiles: async () => ({ base, files }) } as unknown as GitHubApp
     const reader = appPullRequestWatch(app)
     const head = 'a'.repeat(40)
-    const onMain = await reader.patch('https://github.com/acme/app/pull/7', head)
+    const onMain = await reader.patch('https://github.com/acme/app/pull/7', head, 'main')
     base = 'evil'
-    const onEvil = await reader.patch('https://github.com/acme/app/pull/7', head)
+    const onEvil = await reader.patch('https://github.com/acme/app/pull/7', head, 'evil')
     expect(onMain).toMatch(/^[0-9a-f]{64}$/)
     expect(onEvil).not.toBe(onMain)
+    await reader.done()
+  })
+})
+
+// Review of #3218 (Ledger, round 5), Important 1: the watch and the patch read are two answers; a retarget between them hashed
+// one base while the head was recorded at the other. The patch read names the base the watch saw, and gives no id for another.
+describe('the app reader\'s patch against the watched base', () => {
+  it('is no id when the comparison was against another base', async () => {
+    const files = [{ filename: 'app.py', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b' }]
+    const app = { installation: async () => 1, createToken: async () => ({ token: 't' }), revoke: async () => {}, botLogin: async () => null,
+      pullRequestPatchFiles: async () => ({ base: 'evil', files }) } as unknown as GitHubApp
+    const reader = appPullRequestWatch(app)
+    expect(await reader.patch('https://github.com/acme/app/pull/7', 'a'.repeat(40), 'main')).toBeNull()
+    expect(await reader.patch('https://github.com/acme/app/pull/7', 'a'.repeat(40), 'evil')).toMatch(/^[0-9a-f]{64}$/)
     await reader.done()
   })
 })
