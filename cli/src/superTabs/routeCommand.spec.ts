@@ -1433,7 +1433,7 @@ describe('routing contributed capacity', () => {
       ] } })
       expect(answer.ok).toBe(true)
       const candidates = answer.candidates as Array<{ notes: string[] }>
-      expect(candidates.some(row => row.notes.some(note => note.includes(category)))).toBe(true)
+      expect(candidates.some(row => (row.notes ?? []).some(note => note.includes(category)))).toBe(true)
       const recordedText = JSON.stringify(recorded(s).command.decision)
       expect(recordedText).not.toContain('/private/project')
       expect(recordedText).not.toContain('private-account')
