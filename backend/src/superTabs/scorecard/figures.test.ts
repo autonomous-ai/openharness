@@ -114,6 +114,24 @@ describe('scorecardDay', () => {
     expect(day.idleMinutes).toBe(18 * 60)
   })
 
+  it('closes a step when its task closes, working or waiting (review of #3212, 1)', () => {
+    const tasks = [
+      // Cancelled at 03:00 with its review step waiting for a Reviewer since 01:00: the step's wait ends at the cancel.
+      task('t1', { number: 1, askedAt: at(-5) }),
+      task('s1', { number: 2, reviewOf: 't1', askedAt: at(1) }),
+      // In review since yesterday; its step is worked from 10:00 and the task is cancelled at 11:00: the step stops Working then.
+      task('t2', { number: 3, askedAt: at(-5), runs: [at(-4)] }),
+      task('s2', { number: 4, reviewOf: 't2', askedAt: at(10), runs: [at(10)] }),
+      // Waits from 12:00 until it is assigned at 13:00, done at 14:00.
+      task('t3', { number: 5, askedAt: at(12), runs: [at(13)] }),
+    ]
+    const messages = [status('t1', at(-4), 'needs_human'), status('t1', at(3), 'cancelled'), status('t2', at(-3), 'review'),
+      status('t2', at(11), 'cancelled'), status('t3', at(14), 'done')]
+    // 01:00-03:00 s1 waits and nobody works; 12:00-13:00 t3 waits and nobody works. Left open, s1 would wait all day and s2's
+    // Working would hide t3's wait: 540.
+    expect(scorecardDay(input({ tasks, messages })).idleMinutes).toBe(2 * 60 + 60)
+  })
+
   it('counts lost tasks left alone longer than the limit', () => {
     const tasks = [task('t1', { number: 1, askedAt: at(-2), runs: [at(-1), at(2, 5)] }), task('t2', { number: 2, askedAt: at(-2), runs: [at(-1)] }),
       task('t3', { number: 3, askedAt: at(-2), runs: [at(-1)] })]
@@ -141,6 +159,19 @@ describe('scorecardDay', () => {
       person('t1', at(3), { replyTo: engineerPost.id }),
       person('chat', at(-1), { replyTo: pmAnswer.id })]
     expect(scorecardDay(input({ messages })).corrections).toBe(1)
+  })
+
+  it('does not count a person answering what the PM asked them, nor replies to rows the Swarm writes as the PM (review of #3212, 2)', () => {
+    const question = row({ conversationId: 'chat', createdAt: at(1), text: '@dee which day should it start?', mentions: ['dee'] })
+    const taskLine = row({ conversationId: 'chat', createdAt: at(1), source: { kind: 'system', ask: 'm1' }, text: 'Opened #9' })
+    const answer = row({ conversationId: 'chat', createdAt: at(1) })
+    const messages = [question, taskLine, answer,
+      person('chat', at(2), { replyTo: question.id, text: 'Monday.' }),
+      person('chat', at(2), { replyTo: taskLine.id, text: 'Thanks' }),
+      // Someone else the question did not tag, correcting it: a correction.
+      person('chat', at(3), { author: { kind: 'person', id: 'ken' }, replyTo: question.id, text: 'No, start today.' }),
+      person('chat', at(3), { replyTo: answer.id, text: 'That is not what I asked.' })]
+    expect(scorecardDay(input({ messages })).corrections).toBe(2)
   })
 
   it('counts starts, failed starts and route decisions in the day', () => {
