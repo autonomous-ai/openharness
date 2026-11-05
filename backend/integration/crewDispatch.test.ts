@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { SuperTabStore } from '../src/superTabs/store.js'
+import { DISPATCH_PM_RETRY_MS, SuperTabStore } from '../src/superTabs/store.js'
 import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { Agent, Conversation } from '../src/superTabs/model.js'
@@ -29,7 +29,10 @@ afterAll(async () => {
 
 /** A Swarm with a PM and the crew [lanes] (name -> lane), and the tasks [owns] (title -> one owned path), in that order. */
 async function swarm(lanes: Record<string, string | null>, owns: Record<string, string>, dispatch = false, pmMachine = 'owner-mac') {
-  const store = new SuperTabStore(db, () => NOW, null, { dispatch })
+  let clock = NOW
+  const store = new SuperTabStore(db, () => clock, null, { dispatch })
+  /** Moves this Swarm's server clock on. */
+  const advance = (ms: number) => { clock += ms }
   const tab = (await store.create(owner, randomUUID(), 'Crew', 'public')).id
   const execute = (command: Command, asAgentId?: string) => store.execute(owner, tab, { operationId: randomUUID(), command }, asAgentId)
   const add = async (name: string, lead = false) => String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: lead ? pmMachine : 'owner-mac',
@@ -55,7 +58,7 @@ async function swarm(lanes: Record<string, string | null>, owns: Record<string, 
       return [title, holder]
     })))
   }
-  return { store, tab, pm, crew, tasks, execute, holders }
+  return { store, tab, pm, crew, tasks, execute, holders, advance }
 }
 
 /** Writes a part outside the store as every writer does (cacheOn.test-support.ts): a new version, and the Swarm's stamp moved. */
@@ -159,7 +162,7 @@ describe('the crew dispatch pass', () => {
     expect(await s.holders()).toEqual({ Api: null })
   })
 
-  it('assigns nothing as a PM whose grant no longer holds, and does not try those picks again', async () => {
+  it('assigns nothing as a PM whose grant no longer holds, waits a little, and assigns once its access is back', async () => {
     const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
     // The PM's machine row is gone (removed, or billing ended): the agent path refuses it (store.ts grantHolds).
     const row = await db.machine.findFirstOrThrow({ where: { machineId: 'owner-mac', userId: owner.sub } })
@@ -169,11 +172,15 @@ describe('the crew dispatch pass', () => {
       expect(first.assigned).toBe(0)
       expect(Object.keys(first.skipped)).toEqual(['HOST_UNAVAILABLE'])
       expect(await s.holders()).toEqual({ Api: null })
-      // The same pick this round is not sent again, by this pass or the sweep's check.
+      // Its PM is not tried again at once, by this pass or the sweep's check.
       expect(await s.store.dispatchCrew(s.tab)).toEqual({ assigned: 0, skipped: {} })
     } finally {
       await db.machine.create({ data: { machineId: 'owner-mac', userId: owner.sub, apiKey: 'fixture-owner-mac', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
     }
+    // Its access is back, in the same round of the same task: the next try after the short wait assigns it.
+    s.advance(DISPATCH_PM_RETRY_MS)
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+    expect(await s.holders()).toEqual({ Api: 'Ash' })
   })
 
   it('never has a Team-account PM assign a member outside a Team account', async () => {
