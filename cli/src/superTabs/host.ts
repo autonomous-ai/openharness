@@ -600,9 +600,9 @@ export class SuperTabHost {
   private missing = new Map<string, number>()
   /** Per Lead harness here: a reopen in progress, its failures, when the next may run, and the reason last logged. */
   private readonly keepAlives = new Map<string, { running: boolean; failures: number; retryAt: number; reason?: string }>()
-  /** Per Product Manager harness here (watchLead): when it was last checked, since when it has been in one turn, whether this
-   *  stuck spell restarted it already, a check or restart in progress, and until when the keep-alive leaves its relaunch be. */
-  private readonly leadWatches = new Map<string, { checkedAt: number; workingSince?: number; restarted: boolean; checking: boolean
+  /** Per Product Manager harness here (watchLead): when it was last checked, since when it has been in one turn, the owed ask
+   *  it was last restarted for, a check or restart in progress, and until when the keep-alive leaves its relaunch be. */
+  private readonly leadWatches = new Map<string, { checkedAt: number; workingSince?: number; restartedFor?: string; checking: boolean
     restarting: boolean; settleUntil: number }>()
   private readonly restartLead: (harnessId: string) => Promise<{ ok: true } | { ok: false; error: string }>
   /** Per session the backend ends: a close or acknowledgement in progress, how far it got, and when the next try may run. */
@@ -1397,38 +1397,42 @@ export class SuperTabHost {
    * keep-alive reopens only one whose session is gone. Every LEAD_WATCH_MS, a running one that owes a person an answer
    * past [owed]'s `restartAfterMs` (the server's number, backend timeChecks.ts), while it has been in one turn that long or its
    * screen has not changed that long, is restarted in its own pane on the same session: never a second one, and the keep-alive
-   * leaves it be until its relaunch is up. Once per stuck spell: a spell ends when it is seen idle, its turn over, so a PM that
-   * hangs again right after its restart is left to people instead of restarted in a loop. Nothing during an engine switch or a
-   * reopen.
+   * leaves it be until its relaunch is up. Once per owed ask: a relaunched PM reads idle at its prompt before that ask is typed
+   * into it, so one the same ask hangs again is left to people, never restarted in a loop until the ask ages out (security
+   * review of #3213); a newer ask owed past its time may restart it again. Nothing during an engine switch or a reopen, checked
+   * again right before the restart, as either may begin while its turn is read.
    */
   private watchLead(harnessId: string, owed: unknown): void {
-    const watch = this.leadWatches.get(harnessId) ?? { checkedAt: -Infinity, restarted: false, checking: false, restarting: false, settleUntil: -Infinity }
+    const watch = this.leadWatches.get(harnessId) ?? { checkedAt: -Infinity, checking: false, restarting: false, settleUntil: -Infinity }
     this.leadWatches.set(harnessId, watch)
     const now = this.now()
     if (watch.checking || watch.restarting || now - watch.checkedAt < LEAD_WATCH_MS) return
-    if (!this.core.agents.byAgent(harnessId) || this.keepAlives.get(harnessId)?.running || leadSwitchOf(this.core.dataDir, harnessId)) return
+    // Not while its session is gone, a reopen runs or its engine is being switched: those are the keep-alive's and the switch's.
+    const heldElsewhere = () => !this.core.agents.byAgent(harnessId) || !!this.keepAlives.get(harnessId)?.running || !!leadSwitchOf(this.core.dataDir, harnessId)
+    if (heldElsewhere()) return
     watch.checkedAt = now
     watch.checking = true
     const ask = object(owed)
     const due = identifier(ask.messageId) && typeof ask.since === 'number' && Number.isFinite(ask.since)
-      && typeof ask.restartAfterMs === 'number' && ask.restartAfterMs > 0 ? { since: ask.since, after: ask.restartAfterMs } : null
+      && typeof ask.restartAfterMs === 'number' && ask.restartAfterMs > 0 ? { messageId: ask.messageId, since: ask.since, after: ask.restartAfterMs } : null
     void (async () => {
       const turn = (await this.core.agents.activity([harnessId]))[harnessId]
       const at = this.now()
-      if (turn === 'idle') { delete watch.workingSince; watch.restarted = false }
+      if (turn === 'idle') delete watch.workingSince
       else if (turn === 'working') watch.workingSince ??= at
-      if (!due || turn === 'idle' || watch.restarted || at - due.since < due.after) return
+      if (!due || turn === 'idle' || watch.restartedFor === due.messageId || at - due.since < due.after) return
       const shown = this.terminal.progressOf([harnessId])[harnessId]
       const inTurn = watch.workingSince !== undefined && at - watch.workingSince >= due.after
       const frozen = typeof shown === 'number' && at - shown >= due.after
       if (!inTurn && !frozen) return
-      watch.restarted = true
+      if (heldElsewhere()) return
+      watch.restartedFor = due.messageId
       watch.restarting = true
       this.log(`Restarting the Product Manager ${harnessId.slice(0, 8)} in place: it owes an answer sent ${Math.round((at - due.since) / 60_000)} min ago and `
         + `${inTurn ? `has been in one turn for ${Math.round((at - watch.workingSince!) / 60_000)} min` : `its screen has not changed for ${Math.round((at - shown!) / 60_000)} min`}.`)
       try {
         const result = await this.restartLead(harnessId)
-        if (!result.ok) this.log(`Could not restart the Product Manager ${harnessId.slice(0, 8)}: ${result.error}. Not tried again until it ends a turn.`)
+        if (!result.ok) this.log(`Could not restart the Product Manager ${harnessId.slice(0, 8)}: ${result.error}. Not tried again for this ask.`)
       } finally {
         delete watch.workingSince
         watch.restarting = false
