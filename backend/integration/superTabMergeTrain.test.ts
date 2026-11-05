@@ -75,6 +75,13 @@ describe('the merge train in the Swarm', () => {
     expect(projects[0]!.pulls.map(p => [p.taskId, p.url, p.task.steps.map(s => s.step)])).toEqual([[f.task, f.PR, ['Review']]])
   })
 
+  it('names the task\'s builders, its assignee and every earlier attempt\'s agent, so none counts as its review', async () => {
+    const f = await swarm()
+    await db.superTabAttempt.create({ data: { id: randomUUID(), tabId: f.tab, conversationId: f.task, snapshot: { assignment: { agentId: 'agent-before' } } } })
+    const [project] = (await f.store.trainProjects(f.clock.now)).filter(p => p.tabId === f.tab)
+    expect([...project!.pulls[0]!.task.builders!].sort()).toEqual([`agent:${f.worker}`, 'agent:agent-before'].sort())
+  })
+
   it('records a merge with the original link, once, and marks nothing Team-written', async () => {
     const f = await swarm()
     const [project] = (await f.store.trainProjects(f.clock.now)).filter(p => p.tabId === f.tab)
