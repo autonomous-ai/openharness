@@ -44,9 +44,11 @@ describe('the built-in template', () => {
   // Ken, 2026-11-02: one pull request showed as three tasks (#1835, its review #1918, its test #1919), and the PM opened
   // groups to hold, batch and triage work. Agents forgot which task they were on (agent context design, section 3).
   it('the template workflow has one task per request, steps, and the context tools', () => {
+    // Its wording is checked as text, wrapping aside (the template was rewrapped to its size budget, #3392).
+    const workflow = TEMPLATE_WORKFLOW.replace(/\s+/g, ' ')
     expect(TEMPLATE_WORKFLOW).toContain('1. One request is one task.')
     // Ken, 2026-11-02: the PM says what the task needs once, then stays out of it until the Engineer reports.
-    expect(TEMPLATE_WORKFLOW).toContain('It says which\n   reviews and tests the task needs')
+    expect(workflow).toContain('says which reviews and tests the task needs')
     expect(TEMPLATE_WORKFLOW).toContain("That is the PM's part until the Engineer reports.")
     expect(TEMPLATE_WORKFLOW).toContain('The PM opens no task to hold, batch, triage or list work')
     expect(TEMPLATE_WORKFLOW).toContain('adds a review step to its task')
@@ -55,11 +57,13 @@ describe('the built-in template', () => {
     expect(TEMPLATE_WORKFLOW).toContain('read `task GROUP`')
     expect(TEMPLATE_WORKFLOW).toContain('read the thread before acting on it')
     // Task #2963: an unnamed post no longer reaches the PM, so the workflow says where verdicts and results go.
-    expect(TEMPLATE_WORKFLOW).toContain('A verdict goes to the Engineer by name\n   (--to, or a reply to its request); a result reaches the PM through status, never by a post to the PM.')
+    expect(workflow).toContain('3. Findings go straight to the Engineer, never through the PM.')
+    expect(workflow).toContain('the Engineer sets its task done with the pull request and the evidence: that status is how the PM hears, once.')
+    expect(workflow).toContain('No agent sends the PM any other message besides a task that needs a person')
     // Ken, 2026-11-02 (from openharness): a two-review task gets two review steps; the Engineer picks its Reviewers
     // itself instead of asking the PM (since 2026-11-03, when the pull request is ready).
-    expect(TEMPLATE_WORKFLOW).toContain('A task that needs two\n   reviews gets two review steps.')
-    expect(TEMPLATE_WORKFLOW).toContain('never one that\n   worked on this task itself')
+    expect(workflow).toContain('A task that needs two reviews gets two review steps.')
+    expect(workflow).toContain('never one that worked on this task,')
     // Ken, 2026-11-02: an Engineer posted "review and test pass" and then set Done, two messages for one event.
     expect(TEMPLATE_WORKFLOW).toContain('that status is how the PM hears, once')
     expect(TEMPLATE_WORKFLOW).toContain('The PM reads `mine` for progress, not `status`.')
@@ -84,7 +88,7 @@ describe('the built-in template', () => {
     expect(role('Reviewer', 'Tester')).toContain('Gives its verdict to the Engineer and records it as its step\'s result')
     expect(flat(INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('### Tester')))).toContain('Gives its verdict to the Engineer and records it as its step\'s result')
     const workflow = flat(TEMPLATE_WORKFLOW)
-    expect(workflow).toContain('The PM neither adds these steps nor asks anyone to review or test a task\'s pull request')
+    expect(workflow).toContain('The PM neither adds these steps nor asks anyone to review or test')
     expect(workflow).toContain('3. Findings go straight to the Engineer, never through the PM.')
     expect(workflow).toContain('No agent sends the PM any other message besides a task that needs a person (Workflow 6) or the answer to a question the PM asked')
     expect(workflow).toContain('no acknowledgement such as "understood", "on it" or "stopped"')
@@ -102,9 +106,9 @@ describe('the built-in template', () => {
   // about quota now; an account any project's PM runs on keeps 20% of its weekly quota for that PM, and every other is used.
   it('keeps 20% of the week on an account any project\'s PM runs on, uses every other account, and asks no one', () => {
     const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\s+/g, ' ')
-    expect(routing).toContain('2. An account any project\'s PM runs on (this project\'s or another\'s; the route notes it) keeps 20% of its weekly quota for that PM: below 20% left it takes no new work and idle agents there are not reused. Above that it is used like any other account.')
+    expect(routing).toContain('2. An account any project\'s PM runs on (the route notes it) keeps 20% of its weekly quota for that PM: below that it takes no new work and its idle agents are not reused; above it, it is used like any other account.')
     expect(routing).toContain('- Nobody is asked about quota or whose account to use. When no account fits, the work waits for the soonest reset, and the task says so.')
-    expect(routing).toContain('or whose account is a PM\'s and falls below 20%, hands its pushed branch')
+    expect(routing).toContain('or is a PM\'s and falls below 20%, hands its pushed branch')
     for (const gone of ['share of its week left', 'owner asks for', 'takes work as any other account does']) expect(routing).not.toContain(gone)
   })
 
@@ -115,7 +119,7 @@ describe('the built-in template', () => {
     expect(INSTRUCTIONS_TEMPLATE).toContain('Review and test run in parallel')
     expect(INSTRUCTIONS_TEMPLATE).toContain('Does not read the code')
     // Ken, 2026-11-02: small work on Sonnet or Sol, big work on Opus or Astra, nothing below high effort.
-    expect(INSTRUCTIONS_TEMPLATE).toContain('Claude Sonnet at high effort or Codex GPT-6.1 Sol at high effort')
+    expect(INSTRUCTIONS_TEMPLATE.replace(/\s+/g, ' ')).toContain('Claude Sonnet at high effort or Codex GPT-6.1 Sol at high effort')
     expect(INSTRUCTIONS_TEMPLATE).toContain('No agent runs below high effort, and none on Claude Haiku.')
     expect(INSTRUCTIONS_TEMPLATE).not.toContain('No Engineer runs on Claude Sonnet')
     expect(INSTRUCTIONS_TEMPLATE).toMatch(/Low-risk docs, tests and fixtures go to a model on the Swarm's grid first/)
@@ -124,8 +128,8 @@ describe('the built-in template', () => {
     const pm = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('### PM'), INSTRUCTIONS_TEMPLATE.indexOf('### Engineer'))
     expect(pm).toContain('nightly routing proposal')
     // Ken, 2026-11-02: a PM copied old workflow lines into a brief; the workflow lives in the instructions only.
-    expect(pm).toContain('It copies no workflow into a brief')
-    expect(pm).toContain('- When the project owner answers Yes to a nightly routing proposal, writes its line into Routing, naming the owner as who asked.')
+    expect(pm).toContain('A brief says what to build and copies no workflow: these instructions win.')
+    expect(pm.replace(/\s+/g, ' ')).toContain('- When the project owner answers Yes to a nightly routing proposal, writes its line into Routing, naming the owner as who asked.')
     expect(Buffer.byteLength(INSTRUCTIONS_TEMPLATE)).toBeLessThan(16_384)
   })
   // Ken, 11-05: openharness's and lamp's PMs own their projects; what made them owners is every new project's PM's now.
@@ -133,7 +137,7 @@ describe('the built-in template', () => {
     const pm = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('### PM'), INSTRUCTIONS_TEMPLATE.indexOf('### Engineer')).replace(/\s+/g, ' ')
     for (const line of [
       'Owns the project: its roadmap, deadlines, progress and quality, and every task and pull request.',
-      'Decides, doesn\'t ask: it decides and reports the result.',
+      'Decides, doesn\'t ask: it asks a person only where a rule names them or for a step only they can do',
       'It never asks "OK to build?", "should I" or "do you want", and never offers a choice it can make itself: it picks, says why in one line, and goes.',
       'Says no by default to new features and growing scope: it answers each request Accept, Reshape, Later (and when) or No, naming why.',
       'Thinks fast and slow:',
@@ -151,6 +155,7 @@ describe('the built-in template', () => {
   it('keeps a Reviewer or Tester working on its step while the Engineer fixes findings: blocked is for a person', () => {
     // Ken, 2026-11-02: 47 of a day's "Stuck" statuses reached the PM from Reviewers waiting on the Engineer's fixes.
     const workflow = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Workflow'), INSTRUCTIONS_TEMPLATE.indexOf('## Routing'))
+      .replace(/\s+/g, ' ')
     expect(workflow).toContain('While the Engineer fixes them, the Reviewer or Tester stays Working on its step')
     expect(workflow).toContain('blocked and needs_human are only for something a person must do.')
   })
@@ -179,20 +184,15 @@ describe('the built-in template', () => {
     expect(routing).toContain('Urgent work (production down, security) ignores quota.')
     for (const gone of ['share per day', '5-hour', 'Engineers move to the next model', 'Max 20x']) expect(routing).not.toContain(gone)
   })
-  it('says the route lists every engine on every machine with its weekly quota, which the PM orders by itself', () => {
-    // Ken, 2026-11-03: the route's rows now carry each account's quota, and no account is cut from them.
-    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
-    expect(routing).toContain('- The route lists the best new agent and the best idle agent of every engine on every machine, each with its quota: '
-      + 'fits or short, weekly quota left and reset time.')
-    expect(routing).not.toContain('The route\'s lines show')
-  })
-  it('says the route ranks nothing and picks nothing, and every start from it gives the rule that chose it', () => {
+  it('says the PM applies the order itself, from a route that ranks nothing, and every start gives the rule that chose it', () => {
     // Task #2901 (Ken, 2026-11-04): PMs took the route's first line, nearly always Opus or Astra, against this order and quota.
-    // The route now lists by machine name and names no pick; the reason goes with the start or assignment.
-    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
-    expect(routing).toContain('It lists them by machine name, with no ranking and no pick: the PM applies this order itself.')
-    expect(routing).toContain('Every start or assignment from a route gives as its reason the rule above that chose it: urgency, context or a '
-      + 'machine the work needs where it departs from the order. "Idle" or "first in the list" is not a reason.')
+    // The route lists by machine name with each account's quota (Ken, 2026-11-03) and names no pick; the reason goes with the
+    // start or assignment. What the route's rows show is the route's own to say: the template keeps the rule (#3392).
+    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\s+/g, ' ')
+    expect(routing).toContain('- The PM applies this order itself; the route ranks nothing.')
+    expect(routing).toContain('Each start or assignment gives as its reason the rule above that chose it, or the urgency, context or machine need '
+      + 'that departs from it. "Idle" or "first in the list" is not a reason.')
+    expect(routing).not.toContain('The route\'s lines show')
     for (const gone of ['Its order does not rank by quota', 'Picking against it needs a reason in the route\'s override']) expect(routing).not.toContain(gone)
   })
 })
