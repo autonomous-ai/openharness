@@ -125,6 +125,9 @@ void main() {
     c.dispose();
   }
 
+  // A widget asks for its picture on each build: what matters is which, in order.
+  List<Uri> urls() => drawn.toSet().toList();
+
   final inline = find.byKey(const ValueKey('super-attachment-inline:p1'));
 
   group('the facts a message carries', () {
@@ -165,7 +168,7 @@ void main() {
       final (_, c) = await show(tester, _picture());
 
       expect(inline, findsOneWidget);
-      expect(drawn, [Uri.parse(_signed(_thumbKey))]);
+      expect(urls(), [Uri.parse(_signed(_thumbKey))]);
       await close(tester, c);
     });
 
@@ -176,7 +179,7 @@ void main() {
 
       await tester.tap(inline);
       await tester.pumpAndSettle();
-      expect(drawn, contains(Uri.parse(_signed(_original))));
+      expect(urls(), contains(Uri.parse(_signed(_original))));
       await tester.tap(find.byKey(const ValueKey('super-image-close')));
       await tester.pumpAndSettle();
       await close(tester, c);
@@ -188,7 +191,7 @@ void main() {
       pictures[_signed(_original)] = await _png(tester);
       final (_, c) = await show(tester, _picture(thumb: false));
 
-      expect(drawn, [Uri.parse(_signed(_original))]);
+      expect(urls(), [Uri.parse(_signed(_original))]);
       await close(tester, c);
     });
 
@@ -198,7 +201,7 @@ void main() {
       pictures[_signed(_original)] = await _png(tester);
       final (_, c) = await show(tester, _picture(thumbUnlinked: true));
 
-      expect(drawn, [Uri.parse(_signed(_original))]);
+      expect(urls(), [Uri.parse(_signed(_original))]);
       await close(tester, c);
     });
 
@@ -211,7 +214,7 @@ void main() {
           _picture(thumbExpiresAt: _ms + 10000),
         );
 
-        expect(drawn, [Uri.parse(_signed(_original))]);
+        expect(urls(), [Uri.parse(_signed(_original))]);
         await close(tester, c);
       },
     );
@@ -222,8 +225,12 @@ void main() {
       // No bytes for the thumbnail: it fails to decode.
       pictures[_signed(_original)] = await _png(tester);
       final (_, c) = await show(tester, _picture());
+      // The original starts loading once the thumbnail has failed: give its
+      // decode the time it has in the app.
+      await tester.runAsync(() => Future<void>.delayed(Durations.short2));
+      await tester.pumpAndSettle();
 
-      expect(drawn, [
+      expect(urls(), [
         Uri.parse(_signed(_thumbKey)),
         Uri.parse(_signed(_original)),
       ]);
