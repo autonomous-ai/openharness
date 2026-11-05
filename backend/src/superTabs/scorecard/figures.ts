@@ -2,6 +2,7 @@
  * A project's scorecard for one local day (task #3386, Dee: judge each change by numbers, daily), from the Swarm's own
  * records: the reader (records.ts) gathers them, this turns them into counts and minutes. Pure: no clock, no database.
  */
+import { crewTimingOf } from '../crewTimes.js'
 import { isAcknowledgement } from '../acknowledgements.js'
 
 /** What the figures measure against, written into each row with them so an old row keeps its meaning. */
@@ -166,7 +167,19 @@ export function scorecardDay(input: ScorecardInput): ScorecardFigures {
     typedIntoPm: dayRows.filter(m => m.source?.kind === 'terminal-input' && pm.has(m.source.agentId as string)).length,
     ackPosts: ownPosts.filter(m => isAcknowledgement(m.text)).length,
     agentPosts: ownPosts.length,
+    ...crewTimesOf(dayRows, input.chatId),
   }
+}
+
+/** The day's crew wakes and moves (crewTimes.ts): the server's timing rows in the project chat, never a person's row or one in
+ *  another conversation. The chat is read back further than the day, so the rows are the day's already (dayRows). */
+function crewTimesOf(dayRows: ScorecardMessage[], chatId: string): { crewWake: CrewTimes; crewMove: CrewTimes } {
+  const timings = dayRows.filter(m => m.conversationId === chatId && m.author.kind === 'agent').flatMap(m => crewTimingOf(m.source) ?? [])
+  const of = (what: 'wake' | 'move'): CrewTimes => {
+    const times = timings.filter(t => t.what === what).map(t => Math.round((t.runningAt - t.startedAt) / 1000))
+    return { count: times.length, medianSeconds: median(times), slowestSeconds: times.length ? Math.max(...times) : null }
+  }
+  return { crewWake: of('wake'), crewMove: of('move') }
 }
 
 /** People's top-level asks in the project chat in the lookback (isAsk) that nothing answered by day end: no agent's row in their

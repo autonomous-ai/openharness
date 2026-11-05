@@ -140,8 +140,9 @@ export interface Agent {
    *  ordinary machine (projects.ts teamSessionAccess, security re-review of #2089). */
   teamAccount?: true
   /** A crew member woken by new work (crewTimes.ts startWake): when, and the task that woke it, until a machine reading shows
-   *  its session running again and the wake's timing row is written (task #3462). Set only by the server. */
-  crewWaking?: { at: number; conversationId: string }
+   *  its session running again (`runningAt`, the first reading that did) and the wake's timing row is written (task #3462). Set
+   *  only by the server. */
+  crewWaking?: { at: number; conversationId: string; runningAt?: number }
 }
 /** A thread session's thread root and the main chat's last sequence it may read (buddySessions.ts). A project session also
  *  names its project (buddies.ts; Dee, 10-31): it reads that project alone, and is the only Buddy that writes into it. */
@@ -658,6 +659,8 @@ export const NOTICE_READERS = {
   'tidy-request': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
+  // A crew member's finished wake or move, timed for the daily scorecard (crewTimes.ts, task #3462): read by nobody.
+  'crew-timing': 'agent',
   // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
   'notice-digest': 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.

@@ -45,6 +45,19 @@ describe('a crew wake is timed from the work that woke it to its session running
     expect(ada.crewWaking).toBeDefined()
   })
 
+  it('keeps the time it ran again until its project chat is loaded, so a dormant chat loses no wake', () => {
+    const ada = member()
+    startWake(ada, 'task7', T)
+    const unloaded = swarm([ada], { receivedAt: T + 9 * SECOND, running: ['h-ada'] })
+    unloaded.conversations = unloaded.conversations.filter(c => c.id !== 'chat')
+    expect(finishedWakes(unloaded, T + 10 * SECOND)).toEqual([])
+    expect(ada.crewWaking).toEqual({ at: T, conversationId: 'task7', runningAt: T + 9 * SECOND })
+    // Later, with the chat loaded and a newer reading: timed to the first reading that showed it running.
+    const rows = finishedWakes(swarm([ada], { receivedAt: T + 300 * SECOND, running: ['h-ada'] }), T + 301 * SECOND)
+    expect(crewTimingOf(rows[0]!.source)).toMatchObject({ startedAt: T, runningAt: T + 9 * SECOND })
+    expect(ada.crewWaking).toBeUndefined()
+  })
+
   it('records one row per wake: a second pass after it finished writes nothing', () => {
     const ada = member()
     startWake(ada, 'task7', T)
