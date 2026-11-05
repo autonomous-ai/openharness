@@ -2006,6 +2006,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // failures and suspensions and the last reading (#3043). A machine not listed yet, or Buddy-only, starts clean.
         ...(previous?.lent ? { lent: previous.lent } : {}), ...(previous?.lentDays ? { lentDays: previous.lentDays } : {}),
         ...(previous?.engineFailures ? { engineFailures: previous.engineFailures } : {}),
+        ...(previous?.engineBackoff ? { engineBackoff: previous.engineBackoff } : {}),
+        ...(previous?.machineFailures ? { machineFailures: previous.machineFailures } : {}),
+        ...(previous?.machineBackoff ? { machineBackoff: previous.machineBackoff } : {}),
+        ...(previous?.machineSuspension ? { machineSuspension: previous.machineSuspension } : {}),
         ...(previous?.engineSuspensions ? { engineSuspensions: previous.engineSuspensions } : {}),
         ...(previous?.observation ? { observation: previous.observation } : {}) })
       // A Mac given other slots or a new name gives its team account the same, and its pause; its own folder, engines and grant stay.

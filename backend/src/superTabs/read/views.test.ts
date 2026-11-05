@@ -146,6 +146,19 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     expect(view.derived.machines.mac!.suspendedEngines).toEqual({ codex: expect.stringContaining('Codex is suspended on this machine for new work') })
   })
 
+  it('exposes a machine cooldown to new and older routing clients, then drops it at expiry', () => {
+    const s = richSwarm()
+    s.contribute('mac', 'swarm')
+    s.edit(state => { Object.assign(state.machines![0]!, { machineSuspension: { at: NOW, durationMs: 30 * MINUTE } }) })
+    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
+    const current = readerView(parts, peer, NOW, { teamMachines: [] }).derived.machines.mac!
+    expect(current).toMatchObject({ machineSuspended: expect.stringContaining('This machine is suspended'),
+      suspendedEngines: { codex: expect.stringContaining('This machine is suspended') } })
+    const expired = readerView(parts, peer, NOW + 30 * MINUTE, { teamMachines: [] }).derived.machines.mac!
+    expect(expired).not.toHaveProperty('machineSuspended')
+    expect(expired).not.toHaveProperty('suspendedEngines')
+  })
+
   it('gives a Lead the other projects\' work and a person the mentions waiting', () => {
     const { s, parts } = scene()
     expect(readerView(parts, agentActor(s.lead), NOW, { teamMachines: [] }).derived).toHaveProperty('otherProjectsWork', [])
