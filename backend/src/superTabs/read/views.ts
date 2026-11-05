@@ -69,7 +69,7 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
 /** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping or the
  *  leaderboard's (the leaderboard read sums it), except when it shipped. */
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
-  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, pulse: _pulse, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
+  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, answered: _answered, pulse: _pulse, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
   // A Buddy chat names its owner instead of an audience: an app from before Buddies takes a private chat of the reader
   // alone for their Chat with PM, and would send what they write for the PM to their Buddy instead (buddies.ts).
   const readers = isBuddyChat(group) ? { buddyOwnerId: audience!.people[0]!.id } : audience ? { audience } : {}
@@ -106,8 +106,8 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
   // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts). The built-in
   // schedule's slot is the coordinator poll's bookkeeping (pmSchedule.ts), like progress, and so is the release list (releases.ts):
-  // no reader shows them.
-  if (head.projects) head.projects = head.projects.map(({ progress: _progress, schedule: _schedule, releases: _releases, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
+  // no reader shows them. What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
+  if (head.projects) head.projects = head.projects.map(({ progress: _progress, schedule: _schedule, releases: _releases, owed: _owed, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
   const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
   const buddy = isBuddyReader(state, actor)

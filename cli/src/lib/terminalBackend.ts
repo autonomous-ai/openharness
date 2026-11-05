@@ -1,3 +1,4 @@
+import type { ProcessRow } from './processTable.js'
 import type { AgentEngine } from '../engines/types.js'
 import type {
   SubmitOptions,
@@ -65,6 +66,11 @@ export interface TerminalBackend<Ref extends TerminalRuntimeRef = TerminalRuntim
   paneInfo(runtime: Ref): Promise<TerminalPaneInfo | null>
   /** The pane's own root process, 'missing' when the backend says the pane does not exist, null when it could not ask. */
   rootProcess(runtime: Ref): Promise<number | 'missing' | null>
+  /**
+   * The process table this backend's panes are in, when it is not the machine's own: a guest's host runs in another
+   * account and the owner's `ps` cannot see its processes (nor may it). Absent means the machine's own table.
+   */
+  processTable?(): (() => Promise<ProcessRow[] | null>) | undefined
 
   /** Byte streaming is optional per backend. */
   openStream?(

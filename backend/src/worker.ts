@@ -26,6 +26,7 @@ import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
 import { startThreadBackfill } from './superTabs/threadBackfill.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
 import { appPullRequestWatch, startPullRequestWatch } from './superTabs/pullRequestEvents.js'
+import { startTimeChecks } from './superTabs/timeChecks.js'
 import { appReleaseReader, startReleaseWatch, unknownReleases } from './superTabs/releaseWatch.js'
 import { recordTrainRules, startMergeTrain } from './superTabs/mergeTrain/run.js'
 import { teamAccountRequired } from './superTabs/machines.js'
@@ -82,6 +83,7 @@ async function start(): Promise<void> {
   let stopLegacyDrop = (): void => {}
   let stopArchive = (): void => {}
   let stopPullRequestWatch = (): void => {}
+  let stopTimeChecks = (): void => {}
   let stopReleaseWatch = (): void => {}
   let stopMergeTrain = (): void => {}
   let stopDeliveries = (): void => {}
@@ -105,6 +107,7 @@ async function start(): Promise<void> {
     stopLegacyDrop()
     stopArchive()
     stopPullRequestWatch()
+    stopTimeChecks()
     stopReleaseWatch()
     stopMergeTrain()
     stopDeliveries()
@@ -165,6 +168,9 @@ async function start(): Promise<void> {
   // GitHub events on an open task's pull request reach its Engineer within a minute (superTabs/pullRequestEvents.ts): only
   // with the app, which reads them.
   if (githubApp) stopPullRequestWatch = startPullRequestWatch(prisma, swarms, () => appPullRequestWatch(githubApp))
+  // Every 30 s, each active Swarm's time checks: lost and stalled work, failed starts and idle agents, told to its PM whether or
+  // not the PM is up (superTabs/timeChecks.ts, task #3385). The PM's poll ran them before, so a hung PM stopped them.
+  stopTimeChecks = startTimeChecks(prisma, swarms)
   // Every 5 minutes, merged tasks a verified release carries are marked released, and inside the release window a due release
   // step opens for the project's Integrator (superTabs/releaseWatch.ts, task #3405). Without the app nothing can be verified:
   // each pass says so for every project still waiting.

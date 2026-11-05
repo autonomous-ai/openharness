@@ -36,6 +36,16 @@ describe('the role tools sheets', () => {
     }
   })
 
+  // #3394 (review of #3218 after the merge with the role sheets): a verdict counts only at the head and base its checker
+  // names, so every sheet that records checks asks for both.
+  it('asks, in each sheet that records checks, for the head and base read', () => {
+    for (const role of ['engineer', 'reviewer', 'tester'] as const) {
+      const line = sheet(role).split('\n').find(l => l.includes('work.check'))!
+      expect(line, role).toContain('head')
+      expect(line, role).toContain('base')
+    }
+  })
+
   it('names, in some sheet, every command the full manual documents', () => {
     const all = TOOLS_ROLES.map(sheet).join('\n')
     const commands = [...SWARM_TOOLS_SKILL.matchAll(/`\{"type":"([a-z.A-Z]+)"/g)].map(m => m[1]!)

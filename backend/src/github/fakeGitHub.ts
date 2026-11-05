@@ -23,7 +23,7 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   const renamed = new Map<string, string>()
   const protection = new Map<string, { rules?: unknown[]; protected?: boolean; branch?: string; fail?: boolean }>()
   /** Pull requests by `owner/name#number`, lower case: GitHub's state and when it was merged, and what a watch reads. */
-  const pulls = new Map<string, { state: 'open' | 'closed'; merged_at: string | null; draft?: boolean; head?: { sha: string }; base?: { ref: string };
+  const pulls = new Map<string, { state: 'open' | 'closed'; merged_at: string | null; draft?: boolean; head?: { sha: string }; base?: { ref: string; sha?: string };
     mergeable?: boolean | null; html_url?: string }>()
   /** A head's latest check runs and its check suites, by `owner/name@sha`, lower case. */
   const checkRuns = new Map<string, Array<{ name: string; status: string; conclusion: string | null; completed_at: string | null }>>()
@@ -31,6 +31,8 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   /** A pull request's reviews and conversation comments, by `owner/name#number`, lower case. */
   const reviews = new Map<string, Array<{ id: number; user: { login: string }; author_association?: string; state: string; body: string; html_url: string }>>()
   const comments = new Map<string, Array<{ id: number; user: { login: string }; author_association?: string; body: string; html_url: string }>>()
+  /** The files of a comparison, by `owner/name@BASE...HEAD`, lower case: GET /compare/{base}...{head}. */
+  const compares = new Map<string, Array<{ filename: string; status: string; sha: string; patch?: string; previous_filename?: string }>>()
   /** A pull request's changed files, by `owner/name#number`, lower case, as GET /pulls/{n}/files lists them (task #3401). */
   const files = new Map<string, Array<{ filename: string; status: string; previous_filename?: string }>>()
   /** Workflow runs by `owner/name`, lower case: each run's status and its jobs' statuses and runner labels. */
@@ -147,6 +149,11 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
         return head[2] === 'check-runs' ? tagged({ total_count: checkRuns.get(key)?.length ?? 0, check_runs: checkRuns.get(key) ?? [] })
           : tagged({ total_count: checkSuites.get(key)?.length ?? 0, check_suites: checkSuites.get(key) ?? [] })
       }
+      const compared = /^\/compare\/([0-9a-f]+)\.\.\.([0-9a-f]+)$/.exec(repoPath[3] ?? '')
+      if (compared) {
+        const listed = compares.get(`${repoKey}@${compared[1]}...${compared[2]}`)
+        return listed ? json(200, { status: 'ahead', files: listed }) : json(404, { message: 'Not Found' })
+      }
       const changed = /^\/pulls\/(\d+)\/files$/.exec(repoPath[3] ?? '')
       if (changed) {
         if (control.pullsStatus !== 200) return json(control.pullsStatus, { message: 'Server Error' })
@@ -157,7 +164,7 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
       const talk = /^\/(pulls|issues)\/(\d+)\/(reviews|comments)$/.exec(repoPath[3] ?? '')
       if (talk) {
         // Oldest first, a page at a time, with a Link to the last page as GitHub sends it.
-        const all = (talk[3] === 'reviews' ? reviews : comments).get(`${repoKey}#${talk[2]}`) ?? []
+        const all: unknown[] = (talk[3] === 'reviews' ? reviews : comments).get(`${repoKey}#${talk[2]}`) ?? []
         const size = Number(url.searchParams.get('per_page') ?? 30), page = Number(url.searchParams.get('page') ?? 1), last = Math.max(1, Math.ceil(all.length / size))
         const answer = tagged(all.slice((page - 1) * size, page * size))
         if (last > 1) answer.headers.set('link', `<${FAKE_API}${url.pathname}?per_page=${size}&page=${last}>; rel="last"`)
@@ -168,7 +175,7 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
     }
     return json(404, { message: 'Not Found' })
   }) as typeof globalThis.fetch
-  return { fetch, calls, grants, installed, owners, renamed, protection, pulls, checkRuns, checkSuites, reviews, comments, files, revoked, issued, control, actions, permissions }
+  return { fetch, calls, grants, installed, owners, renamed, protection, pulls, checkRuns, checkSuites, reviews, comments, files, compares, revoked, issued, control, actions, permissions }
 }
 
 /** A configured app talking to [github]. */

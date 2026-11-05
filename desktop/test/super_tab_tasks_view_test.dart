@@ -1,5 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -24,6 +25,7 @@ Map<String, dynamic> taskFixture(
   bool merged = false,
   bool archived = false,
   DateTime? shippedAt,
+  List<String>? releasing,
 }) => {
   ...conversationFixture(id, title),
   'projectId': 'lead',
@@ -51,6 +53,7 @@ Map<String, dynamic> taskFixture(
     },
   },
   if (shippedAt != null) 'shippedAt': shippedAt.millisecondsSinceEpoch,
+  'releasing': ?releasing,
 };
 
 /// The project of the mockup Dee confirmed: a proposal, two tasks nobody is on
@@ -156,6 +159,7 @@ Future<SuperTabController> _show(
   Set<String> asking = const {},
   Size size = const Size(1400, 900),
   String? selectedId,
+  double textScale = 1,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -165,7 +169,10 @@ Future<SuperTabController> _show(
     MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.light),
       builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(context).copyWith(disableAnimations: true),
+        data: MediaQuery.of(context).copyWith(
+          disableAnimations: true,
+          textScaler: TextScaler.linear(textScale),
+        ),
         child: child!,
       ),
       home: Scaffold(
@@ -795,4 +802,92 @@ void main() {
       await _close(tester, c);
     });
   });
+
+  testWidgets('a merged task waits in Waiting, as merged, releasing, until its '
+      'release; a merge the server has no release list for stays Shipped '
+      '(task #3452)', (tester) async {
+    final server = tasksServer();
+    (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+      taskFixture(
+        'releasing',
+        'Round dial recap',
+        20,
+        requester: 'owner',
+        status: 'done',
+        pullRequest: 3401,
+        merged: true,
+        shippedAt: _now.subtract(const Duration(hours: 1)),
+        releasing: ['desktop', 'cli'],
+      ),
+      taskFixture(
+        'fresh',
+        'Reminder opens no thread',
+        21,
+        requester: 'owner',
+        status: 'done',
+        pullRequest: 3234,
+        merged: true,
+        shippedAt: _now.subtract(const Duration(minutes: 2)),
+        releasing: [],
+      ),
+    ]);
+    final c = await _show(tester, server);
+    expect(_cardsIn(tester, 'waiting'), containsAll(['releasing', 'fresh']));
+    expect(_cardsIn(tester, 'shipped'), ['sender']);
+    expect(
+      find.descendant(
+        of: _card('releasing'),
+        matching: find.textContaining('merged, releasing (Desktop, CLI)'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: _card('fresh'),
+        matching: find.textContaining('merged, releasing'),
+      ),
+      findsOneWidget,
+    );
+    await _close(tester, c);
+  });
+
+  for (final scale in [1.0, 1.5]) {
+    testWidgets('all four release parts show in full on a board card, at text '
+        'scale $scale (task #3452)', (tester) async {
+      final server = tasksServer();
+      (server.state['conversations'] as List).add(
+        taskFixture(
+          'all-four',
+          'Round dial recap',
+          20,
+          requester: 'scholes',
+          status: 'done',
+          pullRequest: 3401,
+          merged: true,
+          shippedAt: _now.subtract(const Duration(hours: 1)),
+          releasing: ['backend', 'cli', 'desktop', 'web'],
+        ),
+      );
+      final c = await _show(
+        tester,
+        server,
+        size: const Size(1500, 900),
+        textScale: scale,
+      );
+      final caption = find.descendant(
+        of: _card('all-four'),
+        matching: find.textContaining(
+          'merged, releasing (backend, CLI, Desktop, Web)',
+        ),
+      );
+      expect(caption, findsOneWidget);
+      expect(
+        tester.renderObject<RenderParagraph>(caption).didExceedMaxLines,
+        isFalse,
+      );
+      // The whole text is laid out: it takes as many lines as it needs.
+      expect(tester.getSize(caption).height, greaterThan(16));
+      await _close(tester, c);
+    });
+  }
 }

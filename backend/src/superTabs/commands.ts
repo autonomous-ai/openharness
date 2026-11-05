@@ -14,7 +14,7 @@ import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
-  activeWork, occupiesAgent, actorKey, agent, appendPullRequestUrls, author, projectPullRequestUrl, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, occupiesAgent, actorKey, agent, appendPullRequestUrls, author, projectPullRequestUrl, pullRequestLinks, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, seenMachineIds, SuperTabError, swarmGridName, visibleState, AGENT_ONLY, STATUS_LABELS, forRecipients,
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
@@ -70,16 +70,25 @@ import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { ACK_ONLY_HINT, isAcknowledgement } from './acknowledgements.js'
-import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, refuseRepeats, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
+import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, refuseOverBudget, refuseRepeats, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
 import { contractRefusal, missingContract } from './taskContract.js'
 import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
+import { inThread, leadsGroup, recordAnswered, requireUnanswered } from './answers.js'
 import { DISPATCH_RULES, laneNamed, pinBuilder, spokenList, stampLane } from './dispatch.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
+/** The most steps a task lists (Conversation.stepIds): production's most was 14 (2026-11-05). */
+const STEPS_LISTED = 200
+/** [task] lists its new step [id], so a new head of its pull request re-derives the step's checks even once it is dormant
+ *  (#3394), however the step opened (conversation.create, or a Ready's review steps). A task from before lists none until its
+ *  PR watch looks its dormant steps up (review of #3218, round 3): listing only this one would hide those. */
+function listStep(task: Conversation, id: string): void {
+  if (task.stepIds) task.stepIds = [...task.stepIds, id].slice(-STEPS_LISTED)
+}
 /** A route override's reason when its agent gave none: following another candidate needs none (project instructions). */
 const NO_REASON = 'No reason given.'
 /** What a pick-less route's only candidate is chosen for, when its start gives no reason (task #2901). */
@@ -238,6 +247,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     summary: summarySchema, askedBy: id.optional(),
     // A person's own messages approving the drop of their rules (ruleGuard.ts), when the save drops any.
     approvals: z.array(id).max(MAX_APPROVALS).optional(),
+    // Code tasks the save's rules moved into (ruleGuard.ts rulePlaces), loaded even when quiet (store.ts namedFor; #3392).
+    tasks: z.array(id).max(MAX_APPROVALS).optional(),
     // How the writer sorted the lines it dropped, for the History (ruleGuard.ts droppedLines; the daily tidy).
     dropped: z.array(z.object({ text: z.string().trim().min(1).max(2000), kind: z.enum(['merged', 'expired', 'rule']) }).strict())
       .max(MAX_DROPPED_LINES).optional(),
@@ -386,6 +397,9 @@ export const commandSchema = z.discriminatedUnion('type', [
     // The message this post answers right below it, in the main flow (anh Dee, 2026-11-04: "every message is a thread"). It
     // settles and routes as a reply to that message does, and opens no thread. Never with replyTo.
     answers: id.optional(),
+    // The answer to the message in `answers` (answers.ts, task #3403): placed in that message's thread when it is a reply in
+    // one, else right below it, and refused when it was answered already. Only with `answers`.
+    answer: z.literal(true).optional(),
     // An agent's own skills notice (instructions changed, skills replaced): the coordinator's goes in its digest
     // (noticeDigest.ts gatheredNotice). Only with `agentOnly`, which keeps it to the agent itself.
     notice: z.literal('skills').optional(),
@@ -436,7 +450,12 @@ export const commandSchema = z.discriminatedUnion('type', [
     text: z.string().refine(value => Buffer.byteLength(value) <= 65_536, 'A screen is at most 64 KB.').optional(),
     error: z.string().trim().min(1).max(500).optional() }).strict().refine(c => c.ok || c.error !== undefined, 'Say why the request failed.')),
   z.object({ type: z.literal('agent.alert'), agentId: id, alert: z.enum(['prompt', 'limit', 'model']), active: z.boolean(), resetAt: z.iso.datetime().optional() }).strict(),
-  z.object({ type: z.literal('work.check'), conversationId: id, assignmentId: id, checkId: id, passed: z.boolean(), evidence: text }).strict(),
+  // `head`: the whole commit id of the pull request head the checker read (#3394; never shortened, security review of #3218).
+  z.object({ type: z.literal('work.check'), conversationId: id, assignmentId: id, checkId: id, passed: z.boolean(), evidence: text,
+    head: z.string().regex(/^[0-9A-Fa-f]{40}$/).transform(head => head.toLowerCase()).optional(),
+    // `base`: the branch the checker read the pull request's diff against (security review of #3218, round 5; review round 7):
+    // any branch name, never a space or a control character, as it is printed in terminals.
+    base: z.string().min(1).max(255).regex(/^[^\s\p{Cc}]+$/u).optional() }).strict(),
 ])
 export type Command = z.infer<typeof commandSchema>
 export const operationSchema = z.object({ operationId: id, command: commandSchema }).strict()
@@ -632,7 +651,7 @@ export interface CommandContext {
   pushOriginPulls?: string[]
   /** The files a Ready for review's task changes in its pull requests, and the head they were read at, read before the command
    *  (store.ts pullRequestFilesFor): `files` null when GitHub could not say. Absent with nothing to read: no step opens then. */
-  pullRequestFiles?: { urls: string[]; head: string | null; files: string[] | null; heads?: Array<{ url: string; head: string | null }> }
+  pullRequestFiles?: { urls: string[]; head: string | null; files: string[] | null; heads?: Array<{ url: string; head: string | null; base?: string | null }> }
   /** Whether the Harness GitHub App reaches the project's repository, read before an agent.start or work.assign (store.ts repositoryReachFor). */
   repositoryReach?: RepositoryReach
   /** The person's role in the Swarm's Workspace, read by the store for invitations (workspaces.ts); absent outside a Workspace. */
@@ -919,6 +938,14 @@ function open(state: SuperTabState, conversationId: string) {
 
 /** Pure policy/state transition. The store commits its state, messages and delivery records in one transaction. */
 /** One command, then each task's line brought up to date (taskLine.ts), whichever way the command returned. */
+/** Whether [assignment]'s builder can no longer close it: its attempt already ended (stopped or lost), or its agent is gone
+ *  from the Swarm or stopping (task #3510). */
+function builderGone(state: SuperTabState, assignment: NonNullable<Conversation['assignment']>): boolean {
+  if (['stopped', 'lost'].includes(assignment.status)) return true
+  const builder = state.agents.find(a => a.id === assignment.agentId)
+  return !builder || builder.workDecision === 'stop'
+}
+
 export function applyCommand(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
   const effects = applyCommandOnce(original, actor, input, context)
   // Who moved the task, for a line its project's coordinator cannot sign and for the Buddy's news; nobody when the actor is
@@ -932,11 +959,20 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   return effects
 }
 
+/** An answer (answers.ts) to a reply inside a thread goes in that thread: a reply to it, never right below it in the main chat.
+ *  Worked out before anything reads where the post goes, so it routes, settles and threads as that reply would. */
+function placeAnswer(command: Command, context: CommandContext): Command {
+  if (command.type !== 'message.send' || !command.answer) return command
+  if (!command.answers || command.replyTo) fail('VALIDATION_ERROR', 'An answer names the message it answers, and nothing else to reply to.', 400)
+  const reply = context.reply
+  return reply && reply.id === command.answers && inThread(reply) ? { ...command, replyTo: command.answers, answers: undefined } : command
+}
+
 function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
   // A credential someone pasted, or an agent echoed from its terminal, is gone before anything is stored or delivered
   // (Oct 2026: a Harness access token in a shared Lead chat). The sender's result says what went.
   const removed: CredentialKind[] = []
-  const command = withoutCredentials(commandSchema.parse(input), removed)
+  const command = placeAnswer(withoutCredentials(commandSchema.parse(input), removed), context)
   const state = cloneData(original)
   numberConversations(state)
   placeRules(state)
@@ -1721,6 +1757,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       ...stepMark(state, task), step: planned.name,
       assignment: null, lastMessageSequence: 0, checks: storedChecks([{ description: stepCheck(planned), independent: true }], id) })
     const step = state.conversations.at(-1)!
+    listStep(task, id)
     message(id, brief, [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(id, 'brief'))
     bindTaskCard(step, effects.messages.at(-1)!)
     return step
@@ -2025,6 +2062,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         : fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
       // A line the save adds that the document already has is refused with the existing line quoted (#3283).
       refuseRepeats(before, command.text)
+      // No part grows past its size budget: core, each role section, people notes, the whole (#3392).
+      refuseOverBudget(before, command.text)
       // A person's rule, or who gave it, is dropped only by that person or with their own message approving it (#3151).
       const { told, rules } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [],
         context.instructions?.at ?? 0)
@@ -2522,6 +2561,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         for (const id of creator) if (!owning.agentIds.includes(id)) owning.agentIds.push(id)
       }
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
+        // A task lists its steps from its start (#3394): only a task from before lists none, which its PR watch looks up once.
+        ...(!command.reviewOf && !command.audience ? { stepIds: [] } : {}),
         number, title: command.title, leadId, agentIds: [...leadId ? [leadId] : [], ...creator],
         archived: false, brief, ...(command.task ? { task: command.task } : {}), ...(command.reviewOf ? { reviewOf: command.reviewOf } : {}),
         // A step keeps its task's mark (teamWritten.ts, audit H2). Opening a task writes none of its code (#3304).
@@ -2533,6 +2574,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       })
       stampLane(state.conversations.at(-1)!)
       recordAsked(state.conversations.at(-1)!, requesterId, context.now)
+      if (command.reviewOf) listStep(conversation(state, command.reviewOf), operationId)
       // The reason stands only where nobody is named, and is shown in the task's first row beside its goal.
       const noRequester = !requesterId && actor.kind === 'agent' ? command.noRequesterReason : undefined
       if (noRequester && state.conversations.at(-1)!.ledger) state.conversations.at(-1)!.ledger!.noRequesterReason = noRequester
@@ -2685,6 +2727,25 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         else bindPullRequestCards(group, posted, repositoryUrl)
       }
       recordCardMerged(group, pullRequestUrl, mergedAt)
+      // A merged task whose builder is gone closes itself with the merge as its result (task #3510): a released builder can
+      // no longer set its own Done, and the task would stay in review for good. A live builder still closes its own task, and
+      // a step never closes here, nor its parent through it. Only the task's own pull request closes it: one its builder named in
+      // its result (the Ready line) or a check's evidence names, which a merge record never writes. A merge of an unrelated one
+      // recorded here, even twice, only links it (Aster, review of #3259).
+      const assignment = group.assignment
+      const ownPullRequest = assignment && [assignment.result, ...group.checks.map(check => check.evidence)]
+        .some(text => !!text && pullRequestLinks(text, repositoryUrl).includes(pullRequestUrl))
+      if (ownPullRequest && !isStep(group) && assignment && !['done', 'cancelled'].includes(assignment.status) && builderGone(state, assignment)) {
+        const previous = assignment.status
+        assignment.status = 'done'
+        assignment.result = `Merged ${pullRequestUrl}. Its builder is no longer running, so the recorded merge closes the task.`
+        delete assignment.hold
+        delete assignment.askedOf
+        recordStatus(group, assignment, previous, context.now, operationId)
+        effects.closedAssignment = { assignmentId: assignment.id, outcome: 'done' }
+        message(group.id, `Done\n\n${assignment.result}`, [], null, { ...SYSTEM_ROW, status: 'done' }, undefined, undefined, undefined,
+          stableId(operationId, 'merged-done'))
+      }
       break
     }
     case 'conversation.archive': {
@@ -3701,6 +3762,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.answers && (command.replyTo || !context.reply || context.reply.id !== command.answers || context.reply.conversationId !== group.id)) {
         fail('INVALID_ANSWER', command.replyTo ? 'Answer a message right below it or reply in its thread, not both.' : 'Answer a message in this conversation.', 400)
       }
+      // A second answer to a message the PM answered is refused with where the first is; a plain post is not (answers.ts).
+      if (command.answer) requireUnanswered(group, (command.answers ?? command.replyTo)!)
       const replyAgent = context.reply?.author.kind === 'agent' ? context.reply.author.id : null
       // An agent's post reaches the agents it names, by --to or by @Name, the agent whose message it answers, and, when it names
       // no one in a task or step, that conversation's current assignee, who owns the room (River's ruling on #2963). Nothing
@@ -3809,11 +3872,18 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const sent = effects.messages.find(m => m.id === operationId)!
         const root = command.replyTo && context.reply && !context.reply.agentOnly ? context.reply.thread ?? context.reply.id : null
         if (actor.kind === 'person') owe(state, group, { id: sent.id, author: sent.author, recipients, thread: root, source: sent.source }, context.now)
-        else settleReply(state, group, actor.agentId, { answers: command.answers ?? null, thread: root })
+        else {
+          const owedBefore = group.owed ?? []
+          settleReply(state, group, actor.agentId, { answers: command.answers ?? null, thread: root })
+          const settled = owedBefore.filter(ask => !group.owed?.some(left => left.id === ask.id))
+          // The PM's answer is recorded for the asks it settled, and for the message `answer` names though nobody owed it.
+          const asked = command.answer && leadsGroup(state, group, actor.agentId) ? [{ id: (command.answers ?? command.replyTo)! }] : []
+          recordAnswered(group, [...settled, ...asked.filter(a => !settled.some(s => s.id === a.id))], sent.id, root, context.now)
+        }
       }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
-      // A verdict is usually a post to the Engineer: its own step then waits for the new revision (liveness.ts waitingForRevision).
-      if (actor.kind === 'agent') toldEngineer(state, group, actor.agentId, recipients, text, context.now)
+      // A post to an Engineer waiting on this review: its own step then waits for the new revision (liveness.ts waitingForRevision).
+      if (actor.kind === 'agent') toldEngineer(state, group, actor.agentId, recipients, context.now)
       if (actor.kind === 'agent') engineerAnswered(state, group, actor.agentId, recipients, context.now)
       leadActed(group.id, 'post')
       break
@@ -4195,8 +4265,31 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const departed = (key: string) => key.startsWith('agent:') ? !state.agents.some(a => `agent:${a.id}` === key)
         : key.startsWith('person:') && !state.people.some(p => `person:${p.id}` === key)
       const name = actor.kind === 'agent' ? agentDisplayName(state.agents, actor.agentId) ?? agent(state, actor.agentId).name : actor.email
-      const { earlier, cleared } = recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now, name },
-        accountable ? departed : undefined)
+      // The pull request head it read (#3394): the task's, for a step its task's; the newest linked one the watch has read. The
+      // checker names it. A person who named none gets the head the watch read last, as the screen they checked showed it; an
+      // agent's verdict naming none is recorded and counts at no watched head (security review of #3218: a push during the
+      // review would get its pass). Nothing is refused: the result says how the verdict counts and what makes it count.
+      const build = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : group
+      const heads = build?.pullRequestHeads, urls = build?.pullRequestUrls ?? []
+      const pullRequest = urls.findLast(url => heads?.[url]) ?? urls.at(-1)
+      const watched = pullRequest ? heads?.[pullRequest]?.head : undefined
+      const head = command.head ?? (actor.kind === 'person' ? watched : undefined)
+      // The base it read against, named as the head is (review of #3218, round 7): no inferred base is known to be the one read.
+      const base = command.base ?? (actor.kind === 'person' && pullRequest ? heads?.[pullRequest]?.base : undefined)
+      const { earlier, cleared } = recordCheckVerdict(check, { by, passed: command.passed, evidence: command.evidence, at: context.now, name,
+        ...pullRequest ? { pullRequest } : {}, ...head ? { head } : {}, ...head && base ? { base } : {} }, accountable ? departed : undefined, heads)
+      const recorded = check.verdicts!.at(-1)!, counts = recorded.stale === undefined
+      result.counts = counts
+      if (!counts) {
+        const now = recorded.stale ? `It is at ${recorded.stale.slice(0, 7)}.` : 'Its head is not read yet.'
+        const current = pullRequest ? heads?.[pullRequest] : undefined
+        result.next = head && current?.head === head && recorded.base === undefined && current.base !== undefined
+          ? `Name the base branch you read the diff against as base: this verdict counts on no base until then. The pull request merges into ${current.base}.`
+          : head && current?.head === head && recorded.base !== current.base
+          ? `This head was read against ${recorded.base}, and the pull request now merges into ${current.base}: it counts on ${recorded.base} only. If you read it against ${current.base}, send base ${current.base}.`
+          : head ? `This verdict is for ${head.slice(0, 7)}, not the pull request's head. ${now} Check its head and send it as head.`
+          : `Name the pull request head you read (its whole commit id) as head: this verdict counts at no head until then. ${now}`
+      }
       const first = !earlier
       // A cleared failure stays on the record, in the task's own chat (security reviews of #2916): whose it was, its evidence's
       // first line, and who cleared it. A checker's name from before verdicts kept one is not known.
@@ -4213,7 +4306,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (reviewed !== false && run?.firstReview === false && run.grid) reviewFailed(group, run.model ?? 'its grid model', command.evidence)
       // An older skill's working hand-off stops waiting once someone else's verdict finds problems in it: its quiet time counts
       // from now (liveness.ts waitingForReview). Its status stays as its agent set it.
-      if (!command.passed && !byAssignee && group.assignment.status === 'working' && waitingForReview(group.assignment)) {
+      // A failure counts only at the head it read (#3394, review of #3218): one for a head the pull request has moved past asks
+      // for no changes, and holds nobody waiting.
+      if (counts && !command.passed && !byAssignee && group.assignment.status === 'working' && waitingForReview(group.assignment)) {
         group.assignment.reviewFoundAt = context.now
         restartQuietTime(group.assignment, context.now)
       }
@@ -4226,13 +4321,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         message(task.id, `${task.assignment!.reopened!.why} ${BACK_WITH_YOU}`, [task.assignment!.agentId], null, SYSTEM_ROW)
         recordTaskState(state, task, context.now)
       }
-      if (!command.passed && !byAssignee) reopen(group)
+      // Only a failure that counts (#3394, review of #3218 round 4): one for a head the pull request moved past reopens nothing.
+      if (counts && !command.passed && !byAssignee) reopen(group)
       // Its Reviewer's verdict asking for changes: its own review task waits for the new revision (liveness.ts waitingForRevision).
-      if (!command.passed && !byAssignee && actor.kind === 'agent') changesRequested(state, group, actor.agentId, context.now)
+      if (counts && !command.passed && !byAssignee && actor.kind === 'agent') changesRequested(state, group, actor.agentId, context.now)
       // A step's own agent failing its step's check asks its Engineer for changes the same way: a Tester's verdict has no set
       // form for a post to carry, and its step waits for the new revision instead of moving after 30 quiet minutes (Ken,
       // 2026-11-04: ~18 of 51 steps moved in two days were waiting on the Engineer's fix).
-      if (!command.passed && byAssignee && actor.kind === 'agent' && group.reviewOf) {
+      if (counts && !command.passed && byAssignee && actor.kind === 'agent' && group.reviewOf) {
         const build = state.conversations.find(c => c.id === group.reviewOf)
         if (build) changesRequested(state, build, actor.agentId, context.now)
         // A handed build goes back to its Engineer (handed.ts, #3399); a build nobody holds waits for its builder to fix what the

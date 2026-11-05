@@ -267,7 +267,27 @@ export interface Check {
 export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number
   /** The checker's name when it gave the verdict: once it leaves the Swarm, the line that clears its failure still names it
    *  (#2656). Absent on verdicts given before. */
-  name?: string }
+  name?: string
+  /** The task's pull request it read and that pull request's head commit then (Dee, #3394): the whole commit id the checker
+   *  named; for a person who named none, the one the PR watch last read. It counts only while that is the head, or the head's
+   *  patch is the same (checkVerdicts.ts verdictCounts); with no head, only while no head of its pull request is watched. */
+  pullRequest?: string
+  head?: string
+  /** That head's patch id (pullRequestPatch.ts), once the watch has read it. */
+  patch?: string
+  /** The branch it read the pull request's diff against, as the checker named it (a person's, the one watched): the same head
+   *  against another branch is another diff (security review of #3218, round 4), and no base the server infers is known to
+   *  be the one read (review round 7). It counts only on this base. */
+  base?: string
+  /** The pull request's head it stopped counting at, while it does not count: empty while its own pull request's head is not
+   *  read yet. */
+  stale?: string }
+/** A linked pull request's head commit as the PR watch last read it, with its patch id (pullRequestPatch.ts): null when the
+ *  patch could not be read, so only that exact head counts (#3394). */
+export interface PullRequestHead { head: string; patch: string | null; at: number
+  /** The branch it merges into as the watch read it: a new one is read again like a new head, as the patch id names it
+   *  (security review of #3218, round 3). Absent on a head recorded before. */
+  base?: string }
 export interface Assignment {
   id: string
   agentId: string
@@ -400,8 +420,19 @@ export interface Conversation {
   heardAt?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
+  /** Its pull requests the Swarm itself read as merged on GitHub in its project's repository, by link: when it read them
+   *  (store.ts archiveFinished). Unlike the merge record (conversation.merged, any agent's word), no command writes it; it
+   *  is what makes a person's rule moved into this task leave the instructions (ruleGuard.ts, #3392). */
+  mergeSeen?: Record<string, number>
   /** What its Engineer was already told of each linked pull request, newest first (pullRequestEvents.ts): absent until read. */
   pullRequestEvents?: Record<string, string[]>
+  /** Each linked pull request's head and patch id as the PR watch last read them (#3394): what check verdicts count against.
+   *  Absent until the watch reads one. */
+  pullRequestHeads?: Record<string, PullRequestHead>
+  /** Its steps and reviews (groups whose reviewOf is this one), newest last, at most 200 (production's most was 14): what a new
+   *  pull request head re-derives the checks of, dormant ones included (#3394). Empty from a task's start; absent on a task
+   *  from before, whose PR watch looks them up once (pullRequestEvents.ts listedSteps). */
+  stepIds?: string[]
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
   cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
@@ -468,6 +499,9 @@ export interface Conversation {
   /** What its project's PM owes here (pulse.ts): people's messages that reached it, not answered, reacted to or made a task
    *  yet, at most MAX_OWED. Bookkeeping: readers get it counted in the pulse, never this list. */
   owed?: import('./pulse.js').OwedAsk[]
+  /** The PM's answers here (answers.ts): each message it answered, where and by which message, at most MAX_ANSWERED, so a
+   *  second `answer` is refused with where the first is. Bookkeeping: never sent to readers. */
+  answered?: import('./answers.js').AnsweredAsk[]
   /** On a project's chat: its project's pulse as last worked out (pulse.ts recordPulse), which every read sends in `derived`. */
   pulse?: import('./pulse.js').Pulse
 }
@@ -828,6 +862,9 @@ export interface CommandEffects {
   /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
   /** `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>
+  /** An attempt the command closed for its gone builder (commands.ts conversation.merged, task #3510): the store closes its
+   *  attempt row as a builder's own done does. */
+  closedAssignment?: { assignmentId: string; outcome: 'done' }
   /** A project's new instructions revision, written outside the tab state by the store (instructions.ts). */
   instructions?: import('./instructions.js').InstructionsWrite
   /** A project's new rules revision, written outside the tab state by the store (policyStore.ts). */
@@ -1100,7 +1137,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     visible.conversations = visible.conversations.filter(c => canReadGroup(state, actor, c))
     // The status card is read exactly by those who read the project chat (projects.ts SwarmProject.status); without the chat
     // loaded, by nobody.
-    visible.projects = visible.projects.map(p => {
+    visible.projects = visible.projects.map(({ owed: _owed, ...p }) => {
+      // What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
       if (p.status === undefined) return p
       const chat = state.conversations.find(c => c.id === p.leadConversationId)
       if (chat && canReadGroup(state, actor, chat)) return p

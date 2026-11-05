@@ -68,6 +68,11 @@ describe('a Ready through the store', () => {
     const steps = await stepsIn(tab, task)
     expect(steps.map(step => step.step).sort()).toEqual(['Security review 1', 'Security review 2'])
     expect(steps.map(step => step.assignment?.agentId).sort()).toEqual([...reviewers].sort())
+    // #3394 (review of #3218 after the merge): its task lists the steps it opened, so a new pull request head re-derives their
+    // checks even once they are dormant.
+    const listed = ((await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: task } })).data as { stepIds?: string[] }).stepIds
+    const opened = (await db.swarmGroup.findMany({ where: { tabId: tab } })).filter(row => (row.data as { reviewOf?: string }).reviewOf === task).map(row => row.key)
+    expect([...listed ?? []].sort()).toEqual(opened.sort())
   })
 
   it('plans by the project\'s saved rules record', async () => {

@@ -45,6 +45,8 @@ describe('a handed task opens its review steps', () => {
     const step = stepsOf(f.state, f.task)[0]!
     expect(step.brief).toContain('Sign-in')
     expect(step.brief).toContain('abc1234')
+    // Task #3540: the verdict it asks for counts only at the head and base it names (#3394).
+    expect(step.brief).toContain('at the pull request head (whole commit id) and base branch you read')
     expect(step.checks).toHaveLength(1)
   })
 

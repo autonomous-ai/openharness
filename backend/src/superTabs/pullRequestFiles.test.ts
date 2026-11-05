@@ -6,7 +6,7 @@ function fakeApp(files: Record<number, string[] | null>, heads: Record<number, s
     resolve: vi.fn(async repository => ({ installation: 1, repository })),
     createToken: vi.fn(async () => ({ token: 'read-token', expiresAt: '' })),
     revoke: vi.fn(async () => {}),
-    watchPullRequest: vi.fn(async (_repository, number) => heads[number] ? { head: heads[number]! } as never : null),
+    watchPullRequest: vi.fn(async (_repository, number) => heads[number] ? { head: heads[number]!, base: 'main' } as never : null),
     pullRequestFiles: vi.fn(async (_repository, number) => files[number] === null ? null
       : (files[number] ?? []).map(filename => ({ filename, status: 'modified', sha: 'x' }))),
   }
@@ -20,7 +20,7 @@ describe('projectPullRequestFiles', () => {
     const app = fakeApp({ 7: ['a.ts', 'b.ts'], 8: ['b.ts', 'c.ts'] }, { 7: 'abc1234', 8: 'def5678' })
     const read = await projectPullRequestFiles(app)(REPO, [`${REPO}/pull/7`, `${REPO}/pull/8`, 'https://github.com/other/repo/pull/9'])
     expect(read).toEqual({ urls: [`${REPO}/pull/7`, `${REPO}/pull/8`], head: 'abc1234', files: ['a.ts', 'b.ts', 'c.ts'],
-      heads: [{ url: `${REPO}/pull/7`, head: 'abc1234' }, { url: `${REPO}/pull/8`, head: 'def5678' }] })
+      heads: [{ url: `${REPO}/pull/7`, head: 'abc1234', base: 'main' }, { url: `${REPO}/pull/8`, head: 'def5678', base: 'main' }] })
     expect(app.pullRequestFiles).toHaveBeenCalledTimes(2)
     expect(app.revoke).toHaveBeenCalledWith('read-token')
   })

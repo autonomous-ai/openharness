@@ -29,7 +29,7 @@ vi.mock('../lib/buddyGuard.js', async original => {
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
-import { backend, writeJournal, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
+import { backend, writeJournal, removeStaleJournalTemps, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { ADDED_MAX } from './deliveryContext.js'
 import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
 import { TerminalHost } from './terminal.js'
@@ -1325,6 +1325,30 @@ describe('Super Tab native delivery handoff', () => {
     expect(readFileSync(`${file}.next`, 'utf8')).toBe('theirs')
     // Its own temporary file does not stay behind.
     expect(readdirSync(dirname(file)).sort()).toEqual(['host-machine-1.json', 'host-machine-1.json.next'])
+  })
+
+  // Task #3514 follow-up (River): a save that crashed between its write and its rename leaves its own temporary file; the
+  // host removes those as it starts, but never one a live process may still be saving through.
+  it('removes its own leftover temporary journal files as it starts, never a live process\'s or another file\'s', () => {
+    const t = setup()
+    const file = hostJournalFile(t.dir, 'machine-1'), folder = dirname(file), base = basename(file)
+    mkdirSync(folder, { recursive: true })
+    const dead = 2 ** 22 + 12_345
+    const left = [`${base}.${dead}.${randomUUID()}.next`, `${base}.${process.pid}.${randomUUID()}.next`]
+    // A live process's, the old fixed name, another machine's (even one a dead process left) and other files: never removed.
+    const kept = [`${base}.${process.ppid}.${randomUUID()}.next`, `${base}.next`, `host-machine-2.json.${dead}.${randomUUID()}.next`,
+      'observers-machine-1.json.next']
+    for (const name of [...left, ...kept]) writeFileSync(join(folder, name), 'x')
+    expect(() => process.kill(dead, 0)).toThrow()
+    t.open()
+    const now = readdirSync(folder)
+    for (const name of left) expect(now).not.toContain(name)
+    for (const name of kept) expect(now).toContain(name)
+    // The live journal stays, as the host read it.
+    expect(now).toContain(base)
+    expect(t.saved()).toMatchObject({ machineId: 'machine-1' })
+    // The same as one call, which the host makes once.
+    expect(removeStaleJournalTemps(file)).toEqual([])
   })
 
   it('does not type again after a crash between submission and its native acknowledgement', async () => {
@@ -5975,6 +5999,186 @@ describe('requests per idle agent and machine per minute while the server pushes
     expect(worker).toEqual({ lists: 0.2, pickups: 0 })
     expect(lead.lists).toBe(2)
   }, 60_000)
+})
+
+// Task #3403 (anh Dee's Swarm redesign, 11-05): nothing is typed into a busy agent. A list row that waits for the turn end
+// (backend turnEnd.ts) is held while its agent works, as a refused write is, and typed once when the agent is idle, with the
+// same claim. A row the server lets go (a status change, 15 minutes) types as before; an older server's row has no field.
+describe('a delivery that waits for the agent\'s turn to end', () => {
+  const waiting = (t: ReturnType<typeof setup>, waits: () => boolean | undefined) => {
+    const original = vi.mocked(t.call).getMockImplementation()!
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+      const answer = await original(method, path, body) as { status: number; body: { data: unknown } }
+      const value = waits()
+      if (method === 'GET' && path.endsWith('/deliveries') && Array.isArray(answer.body.data) && value !== undefined) {
+        answer.body.data = answer.body.data.map(row => ({ ...(row as object), waitsForTurnEnd: value }))
+      }
+      return answer
+    })
+  }
+  const claims = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls.filter(([, , body]) => (body as { type?: string })?.type === 'claim')
+  const working = (t: ReturnType<typeof setup>, state: () => string) =>
+    vi.mocked(t.core.agents.activity).mockImplementation(async ids => Object.fromEntries(ids.map(id => [id, state() as 'working' | 'idle' | 'unknown'])))
+
+  it('is held while the agent works, then typed once when it is idle, with one claim', async () => {
+    const t = setup(), host = t.open()
+    let state = 'working'
+    waiting(t, () => true); working(t, () => state)
+    await host.tick(); t.wait(1_000); await host.tick(); t.wait(1_000); await host.tick()
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+    expect(t.saved().entries.delivery.stage).toBe('prepared')
+    state = 'idle'
+    t.wait(1_000); await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(claims(t)).toHaveLength(1)
+    t.event('delivered'); t.wait(1_000); await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(t.receipts).toEqual([expect.objectContaining({ type: 'ack' })])
+  })
+
+  it('types while the agent works once the server lets it go', async () => {
+    const t = setup(), host = t.open()
+    let waits = true
+    waiting(t, () => waits); working(t, () => 'working')
+    await host.tick()
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
+    // The agent said its status, or 15 minutes passed: the list, read again at least every 30 s while held, says so.
+    waits = false
+    t.wait(31_000); await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+  })
+
+  it('types as before while the agent works when the row does not wait, or comes from an older server', async () => {
+    for (const value of [false, undefined]) {
+      const t = setup(), host = t.open()
+      waiting(t, () => value); working(t, () => 'working')
+      await host.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(t.core.agents.activity).not.toHaveBeenCalled()
+    }
+  })
+})
+
+// Task #3385 (anh Dee, 11-05): a PM that hung in one turn left five people's asks unanswered for 3 to 10 hours, as the keep-alive
+// reopened only a PM whose session was gone. Its host now restarts it in place once it owes a person an answer past the time the
+// server gives and it has been in one turn that long, or its screen has not changed that long. Never a second PM.
+describe('a PM that stops answering', () => {
+  const MIN = 60_000
+  /** A PM row here that owes the message `m1`, sent at [since]. */
+  const owing = (since: number, restartAfterMs = 20 * MIN) => leadRow({ owed: { messageId: 'm1', since, restartAfterMs } })
+  function stuckFixture(rows: Record<string, unknown>[], activity: 'working' | 'idle' | 'unknown' = 'working') {
+    let release: (() => void) | null = null
+    const restartLead = vi.fn(async (_harnessId: string) => {
+      // The restart relaunches it in its own pane: its session reads as gone until the relaunch is up.
+      t.live(false)
+      await new Promise<void>(resolve => { release = resolve })
+      t.live(true)
+      return { ok: true as const }
+    })
+    const t = lifeFixture(rows, { restartLead })
+    t.live(true)
+    const turns = { activity }
+    t.core.agents.activity = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, turns.activity])))
+    return { ...t, restartLead, turns, finish: () => release?.() }
+  }
+
+  it('restarts a PM stuck in one turn while it owes an ask, once, in place, and never opens a second PM meanwhile', async () => {
+    // The host's clock starts at 0: the ask was sent then, and the PM's turn began.
+    const t = stuckFixture([owing(0)])
+    await t.poll()
+    await t.poll(19 * MIN)
+    expect(t.restartLead).not.toHaveBeenCalled()
+    await t.poll(MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(1)
+    expect(t.restartLead).toHaveBeenCalledWith('harness')
+    // Its session reads as gone while it relaunches: the keep-alive must not reopen another one beside it.
+    for (let i = 0; i < 6; i++) await t.poll(10_000)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    t.finish()
+    await t.poll(1_000)
+    // Still in one turn, still owing: once is enough. People see it from here, not a restart loop.
+    for (let i = 0; i < 6; i++) await t.poll(10 * MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(1)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Restarting the Product Manager'))
+  })
+
+  // SecAlder's security review of #3213, Important 1: a relaunched PM reads idle at its prompt before the owed ask is typed
+  // into it, so a guard that reset on idle restarted it every 21 minutes on the same ask until that ask aged out.
+  it('restarts once per owed ask: the same ask hanging it again after its restart is left to people, a new one is not', async () => {
+    const t = stuckFixture([owing(0)])
+    await t.poll()
+    await t.poll(21 * MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(1)
+    t.finish()
+    await t.poll(2 * MIN)
+    // Back at its prompt, then the same ask is typed into it and it hangs again.
+    t.turns.activity = 'idle'
+    await t.poll(MIN)
+    t.turns.activity = 'working'
+    for (let i = 0; i < 8; i++) await t.poll(10 * MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(1)
+    // That ask was answered; a newer one is owed past its time while the PM is still in that turn.
+    t.rows[0] = owing(60 * MIN)
+    t.rows[0]!.owed = { messageId: 'm2', since: 60 * MIN, restartAfterMs: 20 * MIN }
+    await t.poll(MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(2)
+  })
+
+  // Same review, Minor 2: a reopen that started while the turn was being read must hold the restart.
+  it('does not restart a PM whose reopen began while its turn was being read', async () => {
+    const t = stuckFixture([owing(0)])
+    await t.poll()
+    let read: ((value: Record<string, 'working'>) => void) | null = null
+    t.core.agents.activity = vi.fn(() => new Promise<Record<string, 'working'>>(resolve => { read = resolve }))
+    t.keepLeadAlive.mockImplementation(() => new Promise(() => {}))
+    await t.poll(21 * MIN)
+    expect(read).not.toBeNull()
+    // Its session reads as gone meanwhile: the keep-alive starts reopening it.
+    t.live(false)
+    await t.poll(1_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    t.live(true)
+    read!({ harness: 'working' })
+    await t.poll(0)
+    expect(t.restartLead).not.toHaveBeenCalled()
+  })
+
+  it('restarts a PM whose screen has not changed while it owes an ask, whatever its turn reads', async () => {
+    const t = stuckFixture([owing(0)], 'unknown')
+    // Its terminal shows the same screen on every read.
+    ;(t.core as { superTabs?: unknown }).superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn(),
+      screen: vi.fn(async () => ({ ok: true, text: 'Thinking about the batch', hold: null })) }
+    await t.poll()
+    await t.poll(19 * MIN)
+    expect(t.restartLead).not.toHaveBeenCalled()
+    await t.poll(2 * MIN)
+    expect(t.restartLead).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves alone an idle PM, a PM that owes nothing or not for long, and one that keeps ending its turns', async () => {
+    const idle = stuckFixture([owing(0)], 'idle')
+    await idle.poll()
+    await idle.poll(60 * MIN)
+    const none = stuckFixture([leadRow({ owed: null })])
+    await none.poll()
+    await none.poll(60 * MIN)
+    // Asked a minute ago: a PM deep in a long turn has not let anyone wait yet.
+    const fresh = stuckFixture([])
+    await fresh.poll()
+    await fresh.poll(30 * MIN)
+    fresh.rows.push(owing(29 * MIN))
+    await fresh.poll(MIN)
+    const busy = stuckFixture([owing(0)])
+    await busy.poll()
+    for (let i = 0; i < 6; i++) {
+      await busy.poll(10 * MIN)
+      busy.turns.activity = 'idle'
+      await busy.poll(MIN)
+      busy.turns.activity = 'working'
+    }
+    for (const t of [idle, none, fresh, busy]) expect(t.restartLead).not.toHaveBeenCalled()
+  })
 })
 
 // Task #3398: a crew member the server put to sleep, moved, or whose folder it dropped is closed on its host, once, and never

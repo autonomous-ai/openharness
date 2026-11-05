@@ -1,6 +1,6 @@
 import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { ACTIONS_READ_PERMISSIONS, CI_LOAD_TTL_MS, CI_MAX_CALLS, CI_MAX_RUNS, CI_READS_PER_HOUR, CI_STALE_MS, SERVER_PROCESSES_MAX, cacheSecret, githubAppConfig, GitHubAppError, PULL_READ_PERMISSIONS, PULL_WATCH_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
+import { ACTIONS_READ_PERMISSIONS, CI_LOAD_TTL_MS, CI_MAX_CALLS, CI_MAX_RUNS, CI_READS_PER_HOUR, CI_STALE_MS, SERVER_PROCESSES_MAX, cacheSecret, githubAppConfig, GitHubAppError, PULL_PATCH_PERMISSIONS, PULL_READ_PERMISSIONS, PULL_WATCH_PERMISSIONS, readPrivateKey, TOKEN_PERMISSIONS } from './app.js'
 import { FAKE_API, fakeApp, fakeGitHub, throwawayKey } from './fakeGitHub.js'
 import { githubRepository } from './repository.js'
 import { GitHubApp, HARNESS_CO_AUTHOR } from './app.js'
@@ -592,7 +592,7 @@ describe('listing a pull request\'s files', () => {
 describe('watching a pull request', () => {
   const HEAD = 'abc1234def5678'
   const seed = (github: ReturnType<typeof fakeGitHub>) => {
-    github.pulls.set('acme/app#12', { state: 'open', merged_at: null, draft: false, head: { sha: HEAD }, base: { ref: 'main' }, mergeable: false,
+    github.pulls.set('acme/app#12', { state: 'open', merged_at: null, draft: false, head: { sha: HEAD }, base: { ref: 'main', sha: 'base000' }, mergeable: false,
       html_url: 'https://github.com/acme/app/pull/12' })
     github.checkRuns.set(`acme/app@${HEAD}`, [{ name: 'build', status: 'completed', conclusion: 'failure', completed_at: '2026-10-24T11:59:00Z' },
       { name: 'lint', status: 'in_progress', conclusion: null, completed_at: null }])
@@ -644,6 +644,40 @@ describe('watching a pull request', () => {
     // A new comment shows on the next read, even though the first page is unchanged.
     github.comments.get('acme/app#12')!.push({ id: 251, user: { login: 'dee' }, author_association: 'MEMBER', body: 'note 251', html_url: 'x' })
     expect((await app.watchPullRequest(repo, 12, token))!.comments.map(c => c.id)).toContain(251)
+  })
+
+  // Review of #3218 (Ledger, round 3), Important 3: listed files, removed ones above all, cannot be tied to a head (a push and a
+  // push back between reads). A head's patch is read from the comparison of the base and head commits the pull request named
+  // in one answer: two fixed commits, which no push changes.
+  it('reads a head\'s files from the comparison of the base and head it named, with a contents-read token', async () => {
+    const { app, github } = setup()
+    expect(PULL_PATCH_PERMISSIONS).toEqual({ contents: 'read', pull_requests: 'read', metadata: 'read' })
+    const { token } = await app.createToken(77, repo, PULL_PATCH_PERMISSIONS)
+    const head = 'd7b66b0167e16c82bd73fbc61645e691742fa10e', base = 'd908300eaf1e6f81a2ec6c8076acca81857954ae'
+    github.pulls.set('acme/app#12', { state: 'open', merged_at: null, draft: false, head: { sha: head }, base: { ref: 'main', sha: base }, mergeable: true,
+      html_url: 'https://github.com/acme/app/pull/12' })
+    github.compares.set(`acme/app@${base}...${head}`, [
+      { filename: 'a.ts', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b' },
+      { filename: 'backend/src/superTabs/pmFooting.ts', status: 'removed', sha: 'c436dc29cf000d6376014bc78faa3fb77d3555bf', patch: '@@ -1 +0,0 @@\n-x' }])
+    // The base branch the comparison was against comes with the files (security review of #3218, round 3).
+    expect(await app.pullRequestPatchFiles(repo, 12, token, head)).toEqual({ base: 'main', files: [
+      { filename: 'a.ts', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b' },
+      { filename: 'backend/src/superTabs/pmFooting.ts', status: 'removed', sha: 'c436dc29cf000d6376014bc78faa3fb77d3555bf', patch: '@@ -1 +0,0 @@\n-x' }] })
+    expect(github.calls.slice(-2).map(c => c.path)).toEqual(['/repos/acme/app/pulls/12', `/repos/acme/app/compare/${base}...${head}`])
+  })
+
+  it('reads no files for a head the pull request no longer names, a comparison GitHub cannot give, or one at its file cap', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_PATCH_PERMISSIONS)
+    const head = 'a'.repeat(40), base = 'b'.repeat(40)
+    github.pulls.set('acme/app#12', { state: 'open', merged_at: null, draft: false, head: { sha: head }, base: { ref: 'main', sha: base }, mergeable: true,
+      html_url: 'https://github.com/acme/app/pull/12' })
+    expect(await app.pullRequestPatchFiles(repo, 12, token, head)).toBeNull()
+    github.compares.set(`acme/app@${base}...${head}`, [{ filename: 'a.ts', status: 'modified', sha: 's', patch: '@@ -1 +1 @@\n-a\n+b' }])
+    expect(await app.pullRequestPatchFiles(repo, 12, token, 'c'.repeat(40))).toBeNull()
+    expect((await app.pullRequestPatchFiles(repo, 12, token, head))?.files).toHaveLength(1)
+    github.compares.set(`acme/app@${base}...${head}`, Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}.ts`, status: 'added', sha: `s${i}` })))
+    expect(await app.pullRequestPatchFiles(repo, 12, token, head)).toBeNull()
   })
 
   it('answers null when GitHub cannot say', async () => {
