@@ -15,8 +15,9 @@ const ACKNOWLEDGEMENTS: ReadonlySet<string> = new Set([
   'thanks', 'thank you', 'thanks a lot', 'thanks so much', 'many thanks', 'thx', 'ty',
 ])
 
-/** Words that may stand around an acknowledgement but acknowledge nothing alone: "ok, on it" is one; "ok" is an answer. */
-const FILLERS: ReadonlySet<string> = new Set(['ok', 'okay', 'sure', 'yes', 'yep', 'yeah', 'great', 'cool', 'perfect', 'alright', 'all right', 'hi', 'hey'])
+/** Words that may stand around an acknowledgement but acknowledge nothing alone. Only greetings: "yes", "ok", "sure" or "great"
+ *  can answer a question, so "Yes, thanks." is an answer and passes (review of #3391). */
+const FILLERS: ReadonlySet<string> = new Set(['hi', 'hey'])
 
 /** A question, a number, a tag, a link or a file name: something the post says beyond acknowledging. */
 const SAYS_MORE = /[?@#/\\\d]|:\/\/|[a-z]\.[a-z]/
