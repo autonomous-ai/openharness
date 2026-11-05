@@ -243,6 +243,42 @@ class PersonalProjects extends ChangeNotifier {
     ];
   }
 
+  /// Whether project [projectId] of [c] leaves the project list (Huy, 11-05,
+  /// task #3042): one made for the person's panes, with none of them open
+  /// now. Nothing about it changes on the server, so its chat is there when a
+  /// pane of it opens again. Never while a machine holding one of their panes
+  /// has not said what runs there yet: that pane may be this project's.
+  bool hidden(SuperTabController c, String projectId) {
+    if (!eligible(c)) return false;
+    final known = _known[c.accountId]?[c.tabId];
+    if (known == null || !known.containsValue(projectId)) return false;
+    final project = c.snapshot!.projectById(projectId);
+    if (project == null) return false;
+    if (_unresolvedPanes(app)) return false;
+    return panesFor(c, project.leadConversationId).isEmpty;
+  }
+
+  /// A pane of the person's on a machine that has not listed its agents yet.
+  static bool _unresolvedPanes(AppNotifier app) {
+    for (final tab in app.swarms) {
+      if (tab.isSuperTab || tab.isUtility) continue;
+      for (final pane in tab.panes) {
+        if (pane.agentId == null || pane.isViewer) continue;
+        final machine = app.stateOf(pane.machineId);
+        if (machine == null ||
+            machine.belongsToOtherAccount ||
+            machine.machine.isTeamAccount) {
+          continue;
+        }
+        if (!machine.agentsListedOnce &&
+            machine.agentLoadStatus != AgentLoadStatus.loaded) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   /// The tab all of [panes] come from, when they are exactly its panes: its
   /// split sizes are theirs.
   Swarm? soleTab(List<TerminalPane> panes) {

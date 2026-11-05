@@ -1212,19 +1212,22 @@ void main() {
       expect(projects.panesFor(c, api.leadConversationId), [p.api2]);
     });
 
-    test('a tab\'s project hides once its panes with no repo are closed', () async {
-      final f = SuperTabLaunchFixture();
-      final p = _huyDesk(f);
-      final c = await _personal(f);
-      final projects = PersonalProjects.of(f.app);
-      await projects.sync(c);
-      final code = named(c, 'code');
-      f.app.swarms.firstWhere((s) => s.id == 'desk-code').panes
-        ..remove(p.a1)
-        ..remove(p.a2);
-      expect(projects.hidden(c, code.id), isTrue);
-      expect(projects.hidden(c, named(c, 'Harness Monitor').id), isFalse);
-    });
+    test(
+      'a tab\'s project hides once its panes with no repo are closed',
+      () async {
+        final f = SuperTabLaunchFixture();
+        final p = _huyDesk(f);
+        final c = await _personal(f);
+        final projects = PersonalProjects.of(f.app);
+        await projects.sync(c);
+        final code = named(c, 'code');
+        f.app.swarms.firstWhere((s) => s.id == 'desk-code').panes
+          ..remove(p.a1)
+          ..remove(p.a2);
+        expect(projects.hidden(c, code.id), isTrue);
+        expect(projects.hidden(c, named(c, 'Harness Monitor').id), isFalse);
+      },
+    );
 
     test('nothing hides while a machine with one of the panes has not listed '
         'its agents yet', () async {
@@ -1318,13 +1321,19 @@ void main() {
       await tester.pump();
       expect(row(api), findsNothing);
       expect(row(web), findsOneWidget);
-      expect(superTabSidebarOrder(c, app: f.app), isNot(contains(api.leadConversationId)));
+      expect(
+        superTabSidebarOrder(c, app: f.app),
+        isNot(contains(api.leadConversationId)),
+      );
 
       f.app.swarms.firstWhere((s) => s.id == 'two').panes.add(p.api2);
       redraw.value++;
       await tester.pump();
       expect(row(api), findsOneWidget);
-      expect(superTabSidebarOrder(c, app: f.app), contains(api.leadConversationId));
+      expect(
+        superTabSidebarOrder(c, app: f.app),
+        contains(api.leadConversationId),
+      );
 
       await tester.pumpWidget(const SizedBox());
       await c.flush();

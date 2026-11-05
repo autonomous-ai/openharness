@@ -895,7 +895,7 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _jumpUnread(int step) {
     final snapshot = c.snapshot;
     if (snapshot == null || c.accessRevoked) return false;
-    final order = superTabSidebarOrder(c);
+    final order = superTabSidebarOrder(c, app: widget.app);
     var at = order.indexOf(c.selectedId);
     if (at < 0) at = step > 0 ? -1 : order.length;
     for (var i = at + step; i >= 0 && i < order.length; i += step) {

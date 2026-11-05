@@ -17,6 +17,7 @@ import 'attention.dart';
 import 'controller.dart';
 import 'buddies.dart';
 import 'model.dart';
+import 'personal_projects.dart' show PersonalProjects;
 import 'places.dart';
 import 'buddy_rows.dart';
 import 'section_heading.dart';
@@ -637,6 +638,13 @@ class ProjectSidebar extends StatelessWidget {
       controller.unreadShown(group) ||
       (attention?.mentionsIn(group.id) ?? 0) > 0;
 
+  /// A Personal project whose panes are all closed (personal_projects.dart
+  /// `hidden`, task #3042), unless its chat is the one open now, as the
+  /// unread filter keeps it.
+  bool _paneless(SuperTabProject project, SuperTabConversation chat) =>
+      (_paneCovered || controller.selectedId != chat.id) &&
+      superTabProjectHidden(controller, project.id, app: app);
+
   /// Every project with its workgroups, by name from A to Z. The round dial
   /// swipes projects in this order (cli superTabs/cards.ts `leadsOf`): the
   /// two must match.
@@ -647,7 +655,8 @@ class ProjectSidebar extends StatelessWidget {
     for (final project in snapshot?.projects ?? const <SuperTabProject>[])
       if (reading.of(project) case final read
           when read.lead != null &&
-              (!controller.unreadOnly || _hasUnread(read)))
+              (!controller.unreadOnly || _hasUnread(read)) &&
+              !_paneless(project, read.lead!))
         (
           project.name,
           Column(
@@ -930,7 +939,10 @@ class _ProjectReading {
 /// project Buddy chats. Tasks are in each project's Tasks view, not here
 /// (task #2569). The round dial swipes projects in this A to Z order too (cli
 /// superTabs/cards.ts `leadsOf`): the two must match.
-List<String> superTabSidebarOrder(SuperTabController controller) {
+List<String> superTabSidebarOrder(
+  SuperTabController controller, {
+  AppNotifier? app,
+}) {
   final snapshot = controller.snapshot;
   if (snapshot == null) return const [];
   final projects = [...snapshot.projects]
@@ -941,9 +953,20 @@ List<String> superTabSidebarOrder(SuperTabController controller) {
           case final chat?)
         chat.id,
     for (final project in projects)
-      if (snapshot.conversation(project.leadConversationId) != null)
+      if (snapshot.conversation(project.leadConversationId) != null &&
+          (controller.selectedId == project.leadConversationId ||
+              !superTabProjectHidden(controller, project.id, app: app)))
         project.leadConversationId,
     for (final project in projects)
       if (controller.buddyChat(project.id) case final chat?) chat.id,
   ];
 }
+
+/// Whether [projectId] leaves the list: a Personal project of the person's
+/// whose panes are all closed (personal_projects.dart, task #3042). Never
+/// without the app, which holds the panes.
+bool superTabProjectHidden(
+  SuperTabController controller,
+  String projectId, {
+  AppNotifier? app,
+}) => app != null && PersonalProjects.of(app).hidden(controller, projectId);
