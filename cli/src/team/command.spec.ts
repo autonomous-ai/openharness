@@ -658,6 +658,13 @@ describe('internal verbs', () => {
     expect(broken.out.join('\n')).toContain('could not check the engines: no home')
   })
 
+  it('__start replaces a historical sign-in success when no Team session remains', async () => {
+    const f = inTeam()
+    f.status.set(STATUS, { version: 1, signIn: { state: 'signed-in', at: 1 } })
+    await teamCommand(['__start'], f.deps)
+    expect(f.status.get(STATUS)?.signIn).toMatchObject({ state: 'signed-out', at: 1_000_000 })
+  })
+
   it('__start pins the handed sign-in to its redeemed account', async () => {
     const f = inTeam()
     await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], f.deps)
