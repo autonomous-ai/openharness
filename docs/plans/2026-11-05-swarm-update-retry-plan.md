@@ -28,19 +28,19 @@
 **Files:** `cli/src/superTabs/wire.ts`, `wire.spec.ts`, `swarmReads.spec.ts`.
 **Interfaces:** `readable<T>(reply: unknown): T` returns format 2, throws UPDATE_REQUIRED/426 only for an integer format above 2, otherwise throws BACKEND_UNAVAILABLE/503. `backend()` preserves HTTP 426.
 
-- [ ] Add and commit parameterized malformed-format tests and first/changes recovery tests before code.
-- [ ] Run `npx vitest run src/superTabs/wire.spec.ts src/superTabs/swarmReads.spec.ts --maxWorkers=2`; record the expected malformed-format failures.
-- [ ] Implement format classification; run wire, swarmReads, hostFeed and serviceReads specs and typecheck; commit passing code.
+- [x] Add and commit parameterized malformed-format tests and first/changes recovery tests before code.
+- [x] Run `npx vitest run src/superTabs/wire.spec.ts src/superTabs/swarmReads.spec.ts --maxWorkers=2`; record the expected malformed-format failures.
+- [x] Implement format classification; run wire, swarmReads, hostFeed and serviceReads specs and typecheck; commit passing code.
 
 ## Task 2: Recover through explicit Retry
 
 **Files:** `desktop/lib/super_tabs/controller.dart`, `view.dart`, `desktop/test/super_tab_update_required_test.dart`.
-**Interfaces:** Add `Future<void> retry()` for explicit retry; background `refresh()` remains guarded. Both existing Retry buttons invoke it and are available during updateRequired, unless access is revoked.
+**Interfaces:** Add `Future<void> retryRead()` for explicit retry; background `refresh()` remains guarded. Both existing Retry buttons invoke it and are available during updateRequired, unless access is revoked.
 
-- [ ] Add and commit controller tests for no-snapshot recovery, repeated refusal, shared in-flight retry and polling recovery, plus widget tests tapping Retry with and without a snapshot.
-- [ ] Run the update-required test file and record failures before code.
-- [ ] Implement Retry to clear the compatibility latch, coalesce reads and restore scheduling; expose both Retry buttons. Run the new tests; commit passing code.
-- [ ] Run affected controller/view/reading/recovery tests, changed Dart analysis and `python3 scripts/check-ui-style.py --only desktop`.
+- [x] Add and commit controller tests for no-snapshot recovery, repeated refusal, shared in-flight retry and polling recovery, plus widget tests tapping Retry with and without a snapshot.
+- [x] Run the update-required test file and record failures before code.
+- [x] Implement Retry to clear the compatibility latch, coalesce reads and restore scheduling; expose both Retry buttons. Run the new tests; commit passing code.
+- [ ] Run affected controller/view/reading/recovery tests, changed Dart analysis and `python3 scripts/check-ui-style.py --only desktop/lib/super_tabs`.
 - [ ] Record red/green evidence in the PR comment, mark Ready, and hand the stable head to the Integrator for independent review and test.
 
 ## Design
