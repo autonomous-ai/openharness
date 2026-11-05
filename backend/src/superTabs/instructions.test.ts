@@ -90,10 +90,10 @@ describe('the built-in template', () => {
     expect(role('Reviewer', 'Tester')).toContain(line)
   })
   // Ken and Dee, 11-05: lamp-gtm's PM held dee's build behind its weekly line and asked dee three options. Nobody is asked
-  // about quota now; an account any project's PM runs on spends 17% of its weekly quota per day of its week, carried over, and every other is used.
-  it('spends the week of an account any project\'s PM runs on in daily shares of 17%, uses every other account, and asks no one', () => {
+  // about quota now; an account any project's PM runs on spends a seventh (14.3%) of its weekly quota per day of its week, carried over, and every other is used.
+  it('spends the week of an account any project\'s PM runs on in daily shares of a seventh, uses every other account, and asks no one', () => {
     const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\s+/g, ' ')
-    expect(routing).toContain('2. An account any project\'s PM runs on (this project\'s or another\'s; the route notes it) spends its week in daily shares for that PM: 17% of its weekly quota per day since its reset, unused days carried over. Once it has used its share so far it takes no new work and idle agents there are not reused; the route\'s note says where it stands.')
+    expect(routing).toContain('2. An account any project\'s PM runs on (this project\'s or another\'s; the route notes it) spends its week in daily shares for that PM: a seventh (14.3%) of its weekly quota per day since its reset, unused days carried over. Once it has used its share so far it takes no new work and idle agents there are not reused; the route\'s note says where it stands.')
     expect(routing).toContain('- Nobody is asked about quota or whose account to use. When no account fits, the work waits for the soonest reset, and the task says so.')
     // A task already running on a PM's account past its share finishes there: the share is for new work.
     expect(routing).toContain('- An agent whose account runs out of weekly quota mid-task hands its pushed branch to an agent on another account.')

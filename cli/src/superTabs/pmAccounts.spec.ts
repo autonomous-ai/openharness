@@ -47,23 +47,24 @@ describe('withPmAccounts', () => {
     expect(withPmAccounts(hidden, [probe()])[0]!.notes).toEqual([PM_ACCOUNT_NOTE(['another project (its PM)'])])
   })
 
-  // Ken, 11-05: a PM's account spends its week in daily shares of 17% of its weekly quota, unused days carried over; past
+  // Ken, 11-05: a PM's account spends its week in daily shares of a seventh (14.3%) of its weekly quota, unused days carried over; past
   // its share so far it takes no new work.
-  it('says where a PM\'s account stands against its daily share: 17% per day since its weekly reset, carried over', () => {
+  it('says where a PM\'s account stands against its daily share: a seventh (14.3%) per day since its weekly reset, carried over', () => {
     const D = 86_400_000, NOW = 1_800_000_000_000
     const week = (leftPercent: number, resetsIn: number) => probe({ quota: { known: true, leftPercent, resetsAt: NOW + resetsIn,
       windows: [{ name: '5-hour', leftPercent: 90, resetsAt: NOW + 3_600_000 }, { name: 'weekly', leftPercent, resetsAt: NOW + resetsIn }] } })
-    // River at 15:38 on its first day: 10% used of 17%.
-    expect(withPmAccounts(read(), [week(90, 7 * D - 11.6 * 3_600_000)], NOW)[0]!.notes).toEqual([both, PM_DAY_NOTE(1, 17, 10)])
-    expect(PM_DAY_NOTE(1, 17, 10)).toBe('Day 1 of its week allows 17% of its weekly quota and it has used 10%, so it takes new work.')
-    // Dee's account with 43 hours to its reset: day 6 allows 100%, 83% used.
-    expect(withPmAccounts(read(), [week(17, 43 * 3_600_000)], NOW)[0]!.notes).toEqual([both, PM_DAY_NOTE(6, 100, 83)])
-    // Past its share: day 2 allows 34%, 40% used.
+    // River at 15:38 on its first day: 10% used of 14.3%.
+    expect(withPmAccounts(read(), [week(90, 7 * D - 11.6 * 3_600_000)], NOW)[0]!.notes).toEqual([both, PM_DAY_NOTE(1, 14.3, 10)])
+    expect(PM_DAY_NOTE(1, 14.3, 10)).toBe('Day 1 of its week allows 14.3% of its weekly quota and it has used 10%, so it takes new work.')
+    // Dee's account with 43 hours to its reset: day 6 allows 85.7%, 83% used. (17% a day reached 100% by day 6 and left the
+    // PM nothing for its last two days: Ken, 11-05, a seventh instead.)
+    expect(withPmAccounts(read(), [week(17, 43 * 3_600_000)], NOW)[0]!.notes).toEqual([both, PM_DAY_NOTE(6, 85.7, 83)])
+    // Past its share: day 2 allows 28.6%, 40% used.
     const over = withPmAccounts(read(), [week(60, 5.5 * D)], NOW)[0]!.notes
-    expect(over).toEqual([both, PM_DAY_NOTE(2, 34, 40)])
-    expect(PM_DAY_NOTE(2, 34, 40)).toBe('Day 2 of its week allows 34% of its weekly quota and it has used 40%, so it takes no new work.')
+    expect(over).toEqual([both, PM_DAY_NOTE(2, 28.6, 40)])
+    expect(PM_DAY_NOTE(2, 28.6, 40)).toBe('Day 2 of its week allows 28.6% of its weekly quota and it has used 40%, so it takes no new work.')
     // At the reset's own instant it is day 1; a reading whose reset has passed counts as day 7.
-    expect(withPmAccounts(read(), [week(100, 7 * D)], NOW)[0]!.notes).toEqual([both, PM_DAY_NOTE(1, 17, 0)])
+    expect(withPmAccounts(read(), [week(100, 7 * D)], NOW)[0]!.notes).toEqual([both, PM_DAY_NOTE(1, 14.3, 0)])
     expect(withPmAccounts(read(), [week(5, -D)], NOW)[0]!.notes).toEqual([both, PM_DAY_NOTE(7, 100, 95)])
     // No weekly window, or none with a reset: the PM note alone.
     expect(withPmAccounts(read(), [probe({ quota: { known: true, leftPercent: 50, resetsAt: null, windows: [{ name: 'weekly', leftPercent: 50, resetsAt: null }] } })], NOW)[0]!.notes).toEqual([both])
