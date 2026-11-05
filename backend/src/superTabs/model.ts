@@ -242,7 +242,19 @@ export interface Check {
 export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number
   /** The checker's name when it gave the verdict: once it leaves the Swarm, the line that clears its failure still names it
    *  (#2656). Absent on verdicts given before. */
-  name?: string }
+  name?: string
+  /** The task's pull request it read and that pull request's head commit then (Dee, #3394): the head the checker named, else
+   *  the one its PR watch last read. It counts only while that is the head, or the head's patch is the same
+   *  (checkVerdicts.ts verdictCounts). Absent when no head was known: it counts as verdicts always did. */
+  pullRequest?: string
+  head?: string
+  /** That head's patch id (pullRequestPatch.ts), once the watch has read it. */
+  patch?: string
+  /** The pull request's head it stopped counting at, while it does not count. */
+  stale?: string }
+/** A linked pull request's head commit as the PR watch last read it, with its patch id (pullRequestPatch.ts): null when the
+ *  patch could not be read, so only that exact head counts (#3394). */
+export interface PullRequestHead { head: string; patch: string | null; at: number }
 export interface Assignment {
   id: string
   agentId: string
@@ -365,6 +377,9 @@ export interface Conversation {
   pullRequestUrls?: string[]
   /** What its Engineer was already told of each linked pull request, newest first (pullRequestEvents.ts): absent until read. */
   pullRequestEvents?: Record<string, string[]>
+  /** Each linked pull request's head and patch id as the PR watch last read them (#3394): what check verdicts count against.
+   *  Absent until the watch reads one. */
+  pullRequestHeads?: Record<string, PullRequestHead>
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
   cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
