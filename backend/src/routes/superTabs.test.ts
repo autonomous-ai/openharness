@@ -12,6 +12,7 @@ const fakes = vi.hoisted(() => {
     pub: {
       set: vi.fn(async (key: string, value: string) => { redis.set(key, value); return 'OK' }),
       get: vi.fn(async (key: string) => redis.get(key) ?? null),
+      mget: vi.fn(async (...keys: string[]) => keys.map((key) => redis.get(key) ?? null)),
       multi: vi.fn(() => {
         const ops: Array<() => unknown> = []
         const chain = {
