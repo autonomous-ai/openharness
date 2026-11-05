@@ -22,6 +22,7 @@ import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { teamPrivacyObserver } from '../team/observer.js'
 import { teamRelayed } from '../team/relay.js'
+import { RELAY_REASONS, teamRelayHealth, type RelayHealth } from './relayHealth.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 import { repositoryKey } from './route.js'
 import { cleanupClosed } from './cleanupCloses.js'
@@ -152,6 +153,8 @@ export interface MachineDeps {
   /** In the Harness Team account: whether its engines can spend the owner's subscription through the owner's relay
    *  (team/relay.ts), so one it has not signed in itself is ready all the same. */
   relayed?: () => boolean
+  /** Whether that relay answers, and why not (relayHealth.ts); null when there is no grant to ask. */
+  relayHealth?: () => Promise<RelayHealth | null>
   /** The Claude and Codex profile folders this machine offers ([listClaudeProfiles], [listCodexProfiles]). */
   claudeProfiles?: (machineId: string) => Array<{ id: string; path: string; reportLabel: string; offered: boolean; default?: true }>
   codexProfiles?: () => Array<{ path: string; offered?: boolean }>
@@ -279,6 +282,8 @@ export class ContributedMachines {
   /** Whether each engine is installed and signed in, and until when that stands: one probe starts login shells and reads
    *  the engines' accounts, so it runs every [READINESS_MS] (a failed one again after [READINESS_RETRY_MS]). */
   private engineRead: { value: ReadyEngine[] | null; until: number } | null = null
+  /** The owner's relay's last answer, asked again once it is [RELAY_HEALTH_MS] old (task #3106). */
+  private relayRead: { value: RelayHealth | null; until: number } | null = null
   /** The account reader's last answer, when it was read and until when it stands ([USAGE_FRESH_MS] and the rest). */
   private usageRead: { value: Record<string, unknown>; at: number; until: number } | null = null
   /** Per engine, its last readable allowance windows and when they were read, kept [USAGE_KEEP_MS] through failed reads. */
@@ -296,7 +301,33 @@ export class ContributedMachines {
   private readonly checkoutReading = new Set<string>()
   private async engineReadiness(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }): Promise<ReadyEngine[] | null> {
     const now = this.deps.now()
-    if (this.engineRead && now < this.engineRead.until) return this.engineRead.value
+    // Ready on the relay only while it answers (task #3106: Kay's Mac read signed in while the relay refused every request).
+    // Asked on its own minute, apart from the engines' ten.
+    const health = await this.relayHealthNow()
+    const own = this.engineRead && now < this.engineRead.until ? this.engineRead.value : await this.ownEngines(local, now)
+    return own && own.map(e => ({ ...e,
+      signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn || this.relayServes(e.engine, health) : e.signedIn }))
+  }
+  /** Whether this Team account's [engine] may spend its owner's subscription now: the relay's grant is there, and the relay
+   *  answers it, or cannot be asked (no grant to ask with, as before). */
+  private relayServes(engine: string, health: RelayHealth | null): boolean {
+    if (!(this.deps.relayed ?? teamRelayed)()) return false
+    return !health || health.ok || (health.claudeOnly === true && engine !== 'claude')
+  }
+  /** The relay's answer, at most [RELAY_HEALTH_MS] old; null on a machine without a relay grant. */
+  private async relayHealthNow(): Promise<RelayHealth | null> {
+    if (!(this.deps.relayed ?? teamRelayed)()) return null
+    const now = this.deps.now()
+    if (this.relayRead && now < this.relayRead.until) return this.relayRead.value
+    // A probe that failed outright is a relay that does not answer (review 1 of #3098: it read as answering).
+    const value = await (this.deps.relayHealth ?? teamRelayHealth)().catch((): RelayHealth => ({ ok: false, reason: RELAY_REASONS.down }))
+    // An owner sign-in the owner's daemon could not read is asked about less often: each probe has it read the owner's
+    // Keychain item, and while macOS refuses that it may ask on the owner's screen (security reviews of #3098).
+    this.relayRead = { value, until: now + (value && !value.ok && value.claudeOnly ? RELAY_SIGN_IN_RETRY_MS : RELAY_HEALTH_MS) }
+    return value
+  }
+  /** The engines' own installs and sign-ins, probed again once [READINESS_MS] old. */
+  private async ownEngines(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }, now: number): Promise<ReadyEngine[] | null> {
     const answer = await local.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000).catch(() => null)
     const engines = object(answer).engines
     // An engine that says nothing of its sign-in (an older daemon, an engine not installed) is unknown, never signed out.
@@ -304,10 +335,9 @@ export class ContributedMachines {
     // such a machine fails its first start loudly instead (review of #1743).
     // A Harness Team account that has not signed an engine in spends its owner's subscription through the owner's relay
     // (team/relay.ts): the Lead routed nothing to it while it read as signed out (routeCommand.ts `unreadyPool`).
-    const relayed = (this.deps.relayed ?? teamRelayed)()
     const value = Array.isArray(engines) ? list(engines).filter(e => e.engine === 'claude' || e.engine === 'codex')
       .map((e): ReadyEngine => ({ engine: String(e.engine), installed: e.installed === true ? true : null,
-        signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn || relayed : null })) : null
+        signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn : null })) : null
     this.engineRead = { value, until: now + (value ? READINESS_MS : READINESS_RETRY_MS) }
     return value
   }
@@ -372,6 +402,9 @@ export class ContributedMachines {
     if (list(read.value.providers).find(p => p.provider === engine)?.outcome === 'signedOut') this.goodQuota.delete(engine)
     const kept = this.goodQuota.get(engine)
     if (kept && this.deps.now() - kept.at <= USAGE_KEEP_MS) return { engine, known: true, windows: kept.windows }
+    // A relay that does not answer says why, in place of where the allowance is read (task #3106).
+    const relay = this.relayRead?.value ?? null
+    if (relay && !relay.ok && !this.relayServes(engine, relay) && (this.deps.relayed ?? teamRelayed)()) return { engine, known: false, windows: [], reason: relay.reason }
     return { engine, known: false, windows: [], reason: quotaUnknownReason(read.value, engine, (this.deps.relayed ?? teamRelayed)()) ?? undefined }
   }
   /** The last readiness of [root]'s checkouts, reading them again beside the pass once it is [READINESS_MS] old. Null
@@ -1265,6 +1298,10 @@ export class ContributedMachines {
  *  probe that failed is tried again. */
 const READINESS_MS = 10 * 60_000
 const READINESS_RETRY_MS = 60_000
+/** How long the owner's relay's answer stands: a relay back after its owner's restart reads ready again within this. */
+const RELAY_HEALTH_MS = 60_000
+/** How long an owner Claude sign-in the relay could not read stands before it is asked about again. */
+const RELAY_SIGN_IN_RETRY_MS = 5 * 60_000
 /** How long an allowance reading stands. 2026-10-29: Anthropic answered 5 reads in a row, then refused them for 5 minutes
  *  (HTTP 429, retry-after 300); read on every 15-second report, Claude's allowance showed as unknown. */
 const USAGE_FRESH_MS = 3 * 60_000

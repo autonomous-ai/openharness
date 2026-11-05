@@ -374,6 +374,30 @@ void main() {
     expect(inRow('answered', find.text('Terminal answer')), findsOneWidget);
   });
 
+  // Dee, 11-05 (task #3127): a terminal's recording gap gives a person
+  // nothing to do, so it is no chat row; the server keeps it for diagnosis.
+  testWidgets('a recording gap is no chat row', (tester) async {
+    await show(
+      tester,
+      backend([
+        row('said', 2, 'A real update', {}),
+        for (final sequence in [3, 4])
+          row(
+            'gap-$sequence',
+            sequence,
+            'Some terminal activity could not be recorded.',
+            {'kind': 'native', 'phase': 'gap'},
+          ),
+      ]),
+    );
+    expect(inRow('said', find.text('A real update')), findsOneWidget);
+    expect(
+      find.text('Some terminal activity could not be recorded.'),
+      findsNothing,
+    );
+    expect(find.text('Terminal recording interrupted'), findsNothing);
+  });
+
   group('an ordinary message says', () {
     testWidgets('Terminal answer above a terminal\'s answer', (tester) async {
       await show(
