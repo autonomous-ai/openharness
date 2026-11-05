@@ -232,8 +232,8 @@ describe('pull request events', () => {
       const group = async (key: string) => (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key } })).data as unknown as
         { checks: Array<{ id: string; passedBy: string | null; verdicts?: Array<{ head?: string; patch?: string; stale?: string }> }> }
       const taskCheck = (await group(f.task)).checks[0]!.id, stepCheck = (await group(step)).checks[0]!.id
-      await f.execute({ type: 'work.check', conversationId: f.task, assignmentId: f.assignment, checkId: taskCheck, passed: true, evidence: 'Reads right', head: HEAD } as Command, host, reviewer)
-      await f.execute({ type: 'work.check', conversationId: step, assignmentId: stepWork, checkId: stepCheck, passed: true, evidence: 'Signs in', head: HEAD } as Command, host, tester)
+      await f.execute({ type: 'work.check', conversationId: f.task, assignmentId: f.assignment, checkId: taskCheck, passed: true, evidence: 'Reads right', head: HEAD, base: 'main' } as Command, host, reviewer)
+      await f.execute({ type: 'work.check', conversationId: step, assignmentId: stepWork, checkId: stepCheck, passed: true, evidence: 'Signs in', head: HEAD, base: 'main' } as Command, host, tester)
       const read = async () => [(await group(f.task)).checks[0]!, (await group(step)).checks[0]!]
       return { f, HEAD2, HEAD3, step, read }
     }
@@ -342,24 +342,25 @@ describe('pull request events', () => {
       for (const check of await read()) expect(check.passedBy).not.toBeNull()
     })
 
-    // Security review of #3218 (Warden2, round 5): retargeted while the review ran, the verdict recorded after still counts only
-    // on the base its head was first seen at.
-    it('a verdict recorded after a retarget counts only on the base its head was first seen at', async () => {
+    // Review of #3218 round 7 (Ledger): seen on main, retargeted to another branch while the review ran and back before the
+    // verdict came. No inferred base is the one read: a verdict naming none does not count; one naming its base counts on it.
+    it('after a round trip of retargets, a verdict counts only with the base it names', async () => {
       const f = await swarm()
       const X = '9999999999999999999999999999999999999999'
       f.patches.set(`${X}@evil`, 'p-evil').set(`${X}@main`, 'p-main')
-      f.pulls.set(f.PR, f.pull({ head: X, base: 'evil' }))
-      await f.pass()
-      f.pulls.set(f.PR, f.pull({ head: X, base: 'main' }))
-      await f.pass()
+      for (const base of ['main', 'evil', 'main']) {
+        f.pulls.set(f.PR, f.pull({ head: X, base }))
+        await f.pass()
+      }
       const reviewer = await f.add(f.task, 'test-host', 'Reviewer')
       const checkId = ((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })).data as { checks: Array<{ id: string }> }).checks[0]!.id
-      const recorded = await f.execute({ type: 'work.check', conversationId: f.task, assignmentId: f.assignment, checkId, passed: true, evidence: 'Read it', head: X } as Command, host, reviewer)
-      expect(recorded.result).toMatchObject({ counts: false })
-      expect(String(recorded.result.next)).toContain('evil')
-      const data = (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })).data as { checks: Array<{ passedBy: string | null; verdicts: Array<{ base?: string }> }> }
-      expect(data.checks[0]).toMatchObject({ passedBy: null })
-      expect(data.checks[0]!.verdicts.at(-1)).toMatchObject({ base: 'evil' })
+      const check = (fields: Record<string, string>) => f.execute({ type: 'work.check', conversationId: f.task, assignmentId: f.assignment, checkId,
+        passed: true, evidence: 'Read it', ...fields } as Command, host, reviewer)
+      const unnamed = await check({ head: X })
+      expect(unnamed.result).toMatchObject({ counts: false })
+      expect(String(unnamed.result.next)).toContain('base')
+      expect(await check({ head: X, base: 'evil' })).toMatchObject({ result: { counts: false } })
+      expect(await check({ head: X, base: 'main' })).toMatchObject({ result: { counts: true } })
     })
 
     // Review of #3218 (Ledger, round 3), Important 2: links added later can move a reviewed pull request out of the watch;

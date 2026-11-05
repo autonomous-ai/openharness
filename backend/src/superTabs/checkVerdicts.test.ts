@@ -164,14 +164,16 @@ describe('the links a task is watched for', () => {
   })
 })
 
-// Security review of #3218 (Warden2, round 4), Important 1: a reviewer reads the pull request's diff against its base branch.
-// Read at X against a branch holding other code, then retargeted to main at the same X, X's diff is that code too.
-describe('a verdict and the base branch it was read against', () => {
+// Security reviews of #3218 (Warden2, rounds 4 and 5) and review round 7 (Ledger): a reviewer reads the pull request's diff
+// against a base branch, and no base the server infers (the one watched when the verdict came, or the one its head was first
+// seen at) is known to be the one this reviewer read: a round trip of retargets defeats each. The checker names it, as it names
+// the head; once a head with its base is watched, a verdict naming none counts at none.
+describe('a verdict and the base branch it read against', () => {
   const on = (head: string, patch: string | null, base: string): PullRequestHeads => ({ [PR]: { head, patch, at: 1, base } })
 
-  it('counts at its head only against the base it was read against', () => {
+  it('counts at its head only on the base it names', () => {
     const c = check()
-    recordCheckVerdict(c, verdict('agent:r', true, A), undefined, on(A, 'p-evil', 'evil'))
+    recordCheckVerdict(c, { ...verdict('agent:r', true, A), base: 'evil' }, undefined, on(A, 'p-evil', 'evil'))
     expect(c.verdicts![0]).toMatchObject({ head: A, patch: 'p-evil', base: 'evil' })
     expect(c.passedBy).toBe('agent:r')
     refreshChecks([c], PR, { head: A, patch: 'p-evil', at: 1, base: 'evil' }, on(A, 'p-main', 'main'))
@@ -181,31 +183,25 @@ describe('a verdict and the base branch it was read against', () => {
     expect(c.passedBy).toBe('agent:r')
   })
 
-  it('learns the base its head was first seen at, never a later one', () => {
+  it('naming no base, counts at no watched base, and learns none', () => {
     const c = check()
-    recordCheckVerdict(c, verdict('agent:r', true, A), undefined, at(A, null))
+    recordCheckVerdict(c, verdict('agent:r', true, A), undefined, on(A, 'p-main', 'main'))
     expect(c.verdicts![0]).not.toHaveProperty('base')
-    refreshChecks([c], PR, { head: A, patch: null, at: 1, base: 'evil' }, on(A, 'p-main', 'main'))
-    expect(c.verdicts![0]!.base).toBe('evil')
-    expect(c.passedBy).toBeNull()
-  })
-})
-
-// Security review of #3218 (Warden2, round 5), Important 1: retargeted while the review ran, a verdict recorded after learned the
-// new base. A head keeps the base it was first seen at while it stays the same, and a verdict learns that one.
-describe('a verdict recorded after its head was retargeted', () => {
-  it('learns the base its head was first seen at, so it does not count on the new one', () => {
-    const c = check()
-    recordCheckVerdict(c, verdict('agent:r', true, A), undefined, { [PR]: { head: A, patch: 'p-main', at: 2, base: 'main', firstBase: 'evil' } })
-    expect(c.verdicts![0]).toMatchObject({ base: 'evil' })
     expect(c.verdicts![0]).not.toHaveProperty('patch')
     expect(c.passedBy).toBeNull()
   })
 
-  it('counts on the new base when the checker names it as the base it read against', () => {
+  it('learns no patch read against another base', () => {
     const c = check()
-    recordCheckVerdict(c, { ...verdict('agent:r', true, A), base: 'main' }, undefined, { [PR]: { head: A, patch: 'p-main', at: 2, base: 'main', firstBase: 'evil' } })
-    expect(c.verdicts![0]).toMatchObject({ base: 'main', patch: 'p-main' })
+    recordCheckVerdict(c, { ...verdict('agent:r', true, A), base: 'evil' }, undefined, on(A, 'p-main', 'main'))
+    expect(c.verdicts![0]).not.toHaveProperty('patch')
+    expect(c.passedBy).toBeNull()
+  })
+
+  it('carries to a new head on its own base with the same patch', () => {
+    const c = check()
+    recordCheckVerdict(c, { ...verdict('agent:r', true, A), base: 'main' }, undefined, on(A, 'p1', 'main'))
+    refreshChecks([c], PR, { head: A, patch: 'p1', at: 1, base: 'main' }, on(B, 'p1', 'main'))
     expect(c.passedBy).toBe('agent:r')
   })
 })

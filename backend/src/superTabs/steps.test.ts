@@ -945,18 +945,46 @@ describe('a failure at an old head on a handed task', () => {
   })
 })
 
-// Security review of #3218 (Warden2, round 5): a checker names the base branch it read against, as it names the head.
+// Security review of #3218 (Warden2, round 5) and review round 7 (Ledger): a checker names the base branch it read against, as it
+// names the head: any branch name GitHub takes, never one with a space or a control character.
 describe('a verdict naming its base', () => {
-  it('is recorded with it, and a base must be a branch name', () => {
+  const PR = 'https://github.com/acme/app/pull/7', A = 'aaaaaaa1111111111111111111111111111111aa'
+  const watched = (base: string) => {
     const f = stepsFixture()
-    const PR = 'https://github.com/acme/app/pull/7', A = 'aaaaaaa1111111111111111111111111111111aa'
     const rev = f.add('rev', f.task)
-    Object.assign(f.group(f.task), { pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: A, patch: 'p', at: 1, base: 'release/1.2', firstBase: 'main' } } })
-    const check = (base: string) => f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
-      checkId: f.group(f.task).checks[0]!.id, passed: true, evidence: 'Read it', head: A, base } as Command, f.as(rev))
-    check('release/1.2')
-    expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ head: A, base: 'release/1.2', patch: 'p' })
-    expect(f.group(f.task).checks[0]!.passedBy).not.toBeNull()
-    for (const base of ['', 'a b', 'x\ny', 'z'.repeat(256)]) expect(() => check(base)).toThrow()
+    Object.assign(f.group(f.task), { pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: A, patch: 'p', at: 1, base } } })
+    const check = (fields: Record<string, string>) => f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
+      checkId: f.group(f.task).checks[0]!.id, passed: true, evidence: 'Read it', ...fields } as Command, f.as(rev))
+    return { f, check }
+  }
+
+  it('is recorded with it, for any branch name', () => {
+    for (const base of ['release/1.2', 'release+hotfix', 'feature/修正', 'user@{x}']) {
+      const { f, check } = watched(base)
+      check({ head: A, base })
+      expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ head: A, base, patch: 'p' })
+      expect(f.group(f.task).checks[0]!.passedBy).not.toBeNull()
+    }
+  })
+
+  it('is refused only as no branch name at all', () => {
+    const { check } = watched('main')
+    for (const base of ['', 'a b', 'x\ny', 'tab\there', 'z'.repeat(256)]) expect(() => check({ head: A, base })).toThrow()
+  })
+
+  it('naming none, does not count, and the result asks for the base', () => {
+    const { f, check } = watched('main')
+    const effects = check({ head: A })
+    expect(f.group(f.task).checks[0]!.passedBy).toBeNull()
+    expect(effects.result).toMatchObject({ counts: false })
+    expect(String(effects.result.next)).toContain('base')
+  })
+
+  it('from a person naming neither, gets the head and base the watch read last', () => {
+    const { f } = watched('main')
+    f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, checkId: f.group(f.task).checks[0]!.id,
+      passed: true, evidence: 'Looked at it' } as Command)
+    expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ head: A, base: 'main', patch: 'p' })
+    expect(f.group(f.task).checks[0]!.passedBy).toBe('person:owner')
   })
 })

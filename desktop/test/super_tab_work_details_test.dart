@@ -404,6 +404,28 @@ void main() {
       );
     });
 
+    testWidgets('Stale when its verdict named no base', (tester) async {
+      await open(tester, {
+        'id': 'check',
+        'description': 'Signs in offline',
+        'independent': true,
+        'evidence': null,
+        'passedBy': null,
+        'verdicts': [
+          {
+            'by': 'agent:reviewer',
+            'passed': true,
+            'evidence': 'Diff reads right',
+            'at': 2,
+            'pullRequest': 'https://github.com/acme/app/pull/7',
+            'head': a,
+            'stale': a,
+          },
+        ],
+      });
+      expect(find.text('Stale: read aaaaaaa, no base named'), findsOneWidget);
+    });
+
     testWidgets('Verified as before for a verdict with no head', (
       tester,
     ) async {
