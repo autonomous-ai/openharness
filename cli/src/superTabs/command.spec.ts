@@ -187,7 +187,7 @@ it('prints the compact route answer: the Routing section, not the whole instruct
   const deps = { where: () => where, pane: '%42', open: async () => ({ request, close, machineId: 'machine' }), print }
   await superTabCommand(['--tab', 'tab', 'route', 'g1', '{"difficulty":"low","risk":"low","why":"x"}'], deps)
   const printed = JSON.parse(print.mock.calls.at(-1)![0] as string)
-  expect(printed).toMatchObject({ ok: true, instructions: { revision: 7, routing: '## Routing\nBy quota.' }, candidates: { 'mac · machineId machine · 1 agents': [expect.stringMatching(/^c0 /)] } })
+  expect(printed).toMatchObject({ ok: true, instructions: { revision: 7, routing: '## Routing\nBy quota.' }, candidates: { 'mac · machineId machine · 1 agents': [expect.stringMatching(/^c0 Multiply/), expect.stringMatching(/^c1 new/)] } })
   expect(JSON.stringify(printed)).not.toContain('WHOLE')
   await superTabCommand(['--tab', 'tab', 'route', 'g1', '{"difficulty":"low","risk":"low","why":"x"}', '--full-instructions'], deps)
   expect(JSON.parse(print.mock.calls.at(-1)![0] as string)).toMatchObject({ instructions: { revision: 7, text } })

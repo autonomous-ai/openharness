@@ -579,7 +579,7 @@ function nextOf(rows: Shown[], conversationId: string, routeDecisionId: string |
   const start = `Start a new agent: start OPERATION_ID ${JSON.stringify({ conversationId, name: 'NAME', ...(instructions ? { roleName: 'ROLE' } : {}),
     cwd: 'CWD', worktree: true, requirements: startRequirements(needs), ...(needs.heavy ? { heavy: needs.heavy } : {}),
     machineId: 'MACHINE', engine: 'ENGINE', model: 'MODEL', effort: 'EFFORT', ...decided })}, then assign it${routeDecisionId ? ' with the same routeDecisionId' : ''}. `
-    + 'MACHINE and CWD are its machine\'s machineId and cwd; ENGINE, MODEL and EFFORT its line\'s; a grid line takes its gridModel and gridName in place of model and effort. '
+    + 'MACHINE is its machine\'s machineId, CWD the cwd its machine names or else the answer\'s; ENGINE, MODEL and EFFORT its line\'s; a grid line takes its gridModel and gridName in place of model and effort. '
     + `NAME is the agent's name${instructions ? ', ROLE its role in the instructions' : ''}. It starts from the default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" for another.`
   const rule = routeDecisionId ? ' RULE: the Routing rule that chose it.' : ''
   return [choose, ...(rows.some(r => r.kind === 'member') ? [assign] : []), ...(rows.some(r => r.kind === 'new') ? [start] : [])].join(' ') + rule
@@ -833,7 +833,7 @@ function clause(note: string): string {
   const first = /^(.*?[^.])(?:\.\s|;\s|\.$|$)/.exec(note.trim())?.[1] ?? note
   return first.length <= NOTE_MAX ? first : `${first.slice(0, NOTE_MAX - 1)}…`
 }
-const NOTE_MAX = 60, LEFT_OUT_REASON_MAX = 120, WARNING_MAX = 240
+const NOTE_MAX = 48, LEFT_OUT_REASON_MAX = 120, WARNING_MAX = 240
 
 /** The section of the instructions headed "Routing" (any level), up to the next heading of its level or higher, with its
  *  own subsections (Models, Machines, Order and quota); null when the instructions have none. */
@@ -864,28 +864,42 @@ export function routeAnswer(answer: Json, options: { fullInstructions?: boolean;
           + `Route with --instructions-read ${written.revision} once you have read this revision.` }
   }
   if (Array.isArray(candidates)) {
-    // By machine, in the list's order: the machine's id, agents, start folder and room once, then its candidates' lines.
+    // By machine, in the list's order: the machine's id and agents once, then its candidates' lines. The folder a start takes
+    // is said once, the one most machines share (a live route: 23 machines, one folder of 85 characters), and on a machine
+    // only where it differs. Free slots, memory and disk stay in the record: the route already leaves out what cannot run.
+    const rows = candidates.map(object)
+    const folders = new Map<string, number>()
+    for (const row of rows) if (row.kind === 'new' && typeof row.cwd === 'string') folders.set(row.cwd, (folders.get(row.cwd) ?? 0) + 1)
+    const cwd = [...folders].sort((x, y) => y[1] - x[1])[0]?.[0]
+    if (cwd) printed.cwd = cwd
     const machines = new Map<string, { machine: string; candidates: string[] }>()
-    for (const row of candidates.map(object)) {
+    for (const row of rows) {
       const name = String(row.machineName ?? row.machineId)
       const at = machines.get(name) ?? machines.set(name, { machine: '', candidates: [] }).get(name)!
-      if (!at.machine || row.kind === 'new' && !at.machine.includes(' · cwd ')) {
+      if (!at.machine || row.kind === 'new' && row.cwd !== cwd && !at.machine.includes(' · cwd ')) {
         at.machine = [name, `machineId ${row.machineId}`, ...(typeof row.agents === 'number' ? [`${row.agents} agents`] : []),
-          ...(row.cwd ? [`cwd ${row.cwd}`] : []), ...(row.machine ? [row.machine] : [])].join(' · ')
+          ...(row.kind === 'new' && row.cwd && row.cwd !== cwd ? [`cwd ${row.cwd}`] : [])].join(' · ')
       }
       at.candidates.push(String(row.line))
     }
-    printed.candidates = [...machines.values()]
+    // Keyed by the machine's line: an object per machine cost 30 characters each (a live route: 21 machines).
+    printed.candidates = Object.fromEntries([...machines.values()].map(m => [m.machine, m.candidates]))
   }
   if (Array.isArray(excluded)) {
     // Without a candidate: what is left out of no machine (a named model, the catalog) is said; each machine's is in leftOut.
     const general = excluded.map(object).filter(e => !e.machine).map(e => `${e.title}: ${cut(String(e.reason), LEFT_OUT_REASON_MAX)}`)
     if (general.length) printed.excluded = general
   }
-  if (Array.isArray(out)) printed.leftOut = out.map(object).map(m => {
-    const reasons = Array.isArray(m.reasons) ? m.reasons.map(String) : []
-    return `${m.machine}: ${cut(reasons[0] ?? 'left out', LEFT_OUT_REASON_MAX)}${reasons.length > 1 ? ` (+${reasons.length - 1} more)` : ''}`
-  })
+  if (Array.isArray(out)) {
+    // Machines left out for the same first reason share its line (a live route: five machines offline, five lines).
+    const byReason = new Map<string, string[]>()
+    for (const m of out.map(object)) {
+      const reasons = Array.isArray(m.reasons) ? m.reasons.map(String) : []
+      const reason = cut(reasons[0] ?? 'left out', LEFT_OUT_REASON_MAX)
+      byReason.set(reason, [...byReason.get(reason) ?? [], `${m.machine}${reasons.length > 1 ? ` (+${reasons.length - 1} more reasons)` : ''}`])
+    }
+    printed.leftOut = [...byReason].map(([reason, machines]) => `${machines.join(', ')}: ${reason}`)
+  }
   if (Array.isArray(warnings) && warnings.length) printed.warnings = warnings.map(w => cut(String(w), WARNING_MAX))
   return printed
 }

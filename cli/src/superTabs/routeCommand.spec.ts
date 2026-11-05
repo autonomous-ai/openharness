@@ -2329,6 +2329,10 @@ describe('the route answer an agent reads (task #3294)', () => {
       expect(line).toMatch(new RegExp(`^${row.id} ${row.kind === 'new' ? 'new' : `\\S+ \\(agent ${row.agentId}, idle\\)`} · ${row.engine} ${row.model} ${row.effort} · `))
       expect(machine).toMatch(new RegExp(`· machineId ${row.machineId} · 2 agents$`))
     }
+    // The why of an unranked route is the next's first sentence; the record keeps it whole.
+    expect(printed).not.toHaveProperty('why')
+    expect(printed.next).toMatch(/^Not ranked: listed by machine name\. Choose one by the project's Routing instructions \(Order and quota\)/)
+    expect(routeAnswer({ ok: true, via: 'only', why: 'Only candidate that can run this task.' })).toMatchObject({ why: 'Only candidate that can run this task.' })
     // The folder a start takes is said once when every machine shares it (a live route: 23 machines, one folder of 85 characters).
     expect(printed.cwd).toBe('/absolute/repo/on/that/machine')
     expect(lines[0]!.line).toMatch(/· fits 62% · resets 5d$/)

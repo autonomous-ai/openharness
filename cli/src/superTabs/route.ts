@@ -592,7 +592,7 @@ export function quotaLine(p: Pick<Probe, 'quota' | 'gridModel'> & { fit: Pick<Fi
   if (p.gridModel) return 'free (grid)'
   if (p.quota.metered) return 'metered'
   const { left, resetsAt } = weekly(p.quota)
-  if (left === null) return `${p.fit.status === 'unknown' ? '' : `${p.fit.status}, `}weekly unknown${p.quota.why ? ` (${cut(p.quota.why, 60)})` : ''}`
+  if (left === null) return `${p.fit.status === 'unknown' ? '' : `${p.fit.status}, `}weekly unknown${p.quota.why ? ` (${cut(p.quota.why, 40)})` : ''}`
   return `${p.fit.status} ${Math.round(left)}%${resetsAt === null ? '' : ` · resets ${weeklyResetsIn(resetsAt, now)}`}`
 }
 
