@@ -2960,44 +2960,54 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets(
-    'an owner’s own At most 16, kept by the server, opens and saves as At most 16',
-    (tester) async {
-      final f = SuperTabLaunchFixture();
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-      f.connection.maxAvailableAgents = 96;
-      f.connection.server.state['machines'] = [
-        {
-          'machineId': 'm',
-          'contributorId': 'owner',
-          'maxAgents': 16,
-          'agents': 'atMost',
-        },
-      ];
-      final c = await f.app.superTabs.open(tabId);
-      await c.refresh();
-      await _openConfigureDialog(
-        tester,
-        f,
-        c,
-        readLocal: (_) async => _reading(totalGiB: 192, freeGiB: 100),
-      );
+  for (final setting in [
+    (totalGiB: 192.0, stored: 16, expected: 16),
+    (totalGiB: 32.0, stored: 16, expected: 16),
+    (totalGiB: 192.0, stored: 96, expected: 96),
+    (totalGiB: 32.0, stored: 24, expected: 16),
+  ]) {
+    testWidgets(
+      'an owner’s own At most ${setting.stored} on ${setting.totalGiB} GiB opens and saves as At most ${setting.expected}',
+      (tester) async {
+        final f = SuperTabLaunchFixture();
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+        f.connection.maxAvailableAgents = setting.totalGiB ~/ 2;
+        f.connection.server.state['machines'] = [
+          {
+            'machineId': 'm',
+            'contributorId': 'owner',
+            'maxAgents': setting.stored,
+            'agents': 'atMost',
+          },
+        ];
+        final c = await f.app.superTabs.open(tabId);
+        await c.refresh();
+        await _openConfigureDialog(
+          tester,
+          f,
+          c,
+          readLocal: (_) async => _reading(
+            totalGiB: setting.totalGiB,
+            freeGiB: setting.totalGiB / 2,
+          ),
+        );
 
-      expect(_agentsChoice(tester), 'atMost');
-      expect(_limit(tester), '16');
-      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
-      await _settleSave(tester);
-      final sent = f.connection.server.posts.single['command']!;
-      expect(sent['maxAgents'], 16);
-      expect(sent['agents'], 'atMost');
-      expect(tester.takeException(), isNull);
+        expect(_agentsChoice(tester), 'atMost');
+        expect(_limit(tester), '${setting.expected}');
+        await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+        await _settleSave(tester);
+        final sent = f.connection.server.posts.single['command']!;
+        expect(sent['maxAgents'], setting.expected);
+        expect(sent['agents'], 'atMost');
+        expect(tester.takeException(), isNull);
 
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      f.app.superTabs.dispose();
-      await tester.pump();
-    },
-  );
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        f.app.superTabs.dispose();
+        await tester.pump();
+      },
+    );
+  }
 
   testWidgets('changing the At most number chooses At most', (tester) async {
     final f = SuperTabLaunchFixture();
