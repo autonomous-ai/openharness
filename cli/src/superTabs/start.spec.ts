@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { dirname, join } from 'node:path'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { env } from '../config/env.js'
@@ -159,6 +159,40 @@ describe('Swarm permission mode', () => {
       expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: true })
       expect(String(payload.codexHome)).toContain(`/${PM_HOMES}/`)
       rmSync(dirname(String(payload.codexHome)), { recursive: true, force: true })
+    } finally { teamDaemon.value = false }
+  })
+
+  // Task #3009: in a home that names no project, codex-cli 0.165 stops on "Trust this folder? 1. Trust and continue" in a pane
+  // nobody sees, and every Team-written Codex start timed out at 3 minutes (10 of 10, 2026-10-29..11-05). Named untrusted, the
+  // checkout opens restricted instead (its config, hooks and exec policies off), and a worktree takes its repository's answer.
+  it('names the checkout of Team-written Codex work untrusted in its engine home, never trusted', async () => {
+    teamDaemon.value = true
+    try {
+      const f = fixture()
+      Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off', cwd: '/Users/harnessteam/swarms/tab/"quoted" project' })
+      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+      const home = String(f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!.codexHome)
+      try {
+        const config = readFileSync(join(home, 'config.toml'), 'utf8')
+        expect(config).toContain('[projects."/Users/harnessteam/swarms/tab/\\"quoted\\" project"]\ntrust_level = "untrusted"\n')
+        expect(config).not.toMatch(/trust_level = "trusted"/)
+      } finally { rmSync(dirname(home), { recursive: true, force: true }) }
+    } finally { teamDaemon.value = false }
+  })
+
+  // Security review 1 of #3063: JSON leaves DEL as it is, which TOML refuses, and Codex will not start on a config it cannot read.
+  it('escapes DEL in the checkout it names untrusted, as folder trust does', async () => {
+    teamDaemon.value = true
+    try {
+      const f = fixture()
+      Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off', cwd: '/Users/harnessteam/swarms/tab/odd\x7fname' })
+      expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+      const home = String(f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!.codexHome)
+      try {
+        const config = readFileSync(join(home, 'config.toml'), 'utf8')
+        expect(config).toContain('[projects."/Users/harnessteam/swarms/tab/odd\\u007fname"]')
+        expect(config).not.toContain('\x7f')
+      } finally { rmSync(dirname(home), { recursive: true, force: true }) }
     } finally { teamDaemon.value = false }
   })
 
