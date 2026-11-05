@@ -161,31 +161,18 @@ void main() {
     },
   );
 
-  testWidgets(
-    "idle hours line up in tabular figures, and a member's full name shows on hover",
-    (tester) async {
-      final c = await _mount(tester, _pool(), _crew());
-      await _expand(tester);
-      final state = tester.widget<Text>(
-        find.byKey(const ValueKey('super-machine-crew-state-m-3')),
-      );
-      expect(
-        state.style?.fontFeatures,
-        contains(const FontFeature.tabularFigures()),
-      );
-      final name = find.byKey(const ValueKey('super-machine-crew-member-m-3'));
-      expect(
-        find.ancestor(
-          of: name,
-          matching: find.byWidgetPredicate(
-            (w) => w is Tooltip && w.message == 'TestKeep',
-          ),
-        ),
-        findsOneWidget,
-      );
-      await _unmount(tester, c);
-    },
-  );
+  testWidgets('idle hours line up in tabular figures', (tester) async {
+    final c = await _mount(tester, _pool(), _crew());
+    await _expand(tester);
+    final state = tester.widget<Text>(
+      find.byKey(const ValueKey('super-machine-crew-state-m-3')),
+    );
+    expect(
+      state.style?.fontFeatures,
+      contains(const FontFeature.tabularFigures()),
+    );
+    await _unmount(tester, c);
+  });
 
   testWidgets('a machine with no crew keeps its row as today', (tester) async {
     final c = await _mount(tester, _pool(), [

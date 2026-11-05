@@ -23,6 +23,38 @@ view carries it; `_MachineLine` draws the line under the name, `_MachineReadings
 
 **Spec:** task #3412's brief; docs/plans/2026-11-05-crew-sleep-wake-move-plan.md, Task 4 and Decisions (#3229).
 
+## Design
+
+Read-only view of data the Swarm state already carries (docs/feature-design-rules.md Rule 1). It stores, syncs and
+writes nothing; the rows it reads belong to #3397 (`crew`) and #3398 (`asleep`, `movedTo`), whose own Design sections
+answer for them.
+
+1. **Growth:** N/A: no new record. What it shows leaves with the agent (removal) or its crew mark (`crew.remove`), as
+   #3397/#3398 define. Per machine the view holds one list of that machine's crew, rebuilt each draw.
+2. **Concurrency:** N/A: no write. It reads one snapshot per draw, so the line and the details always agree.
+3. **Read cost:** no new read, request, field or poll. It uses the agents and machine readings Desktop already has
+   (the change reads; nothing polls whole state).
+4. **Scale (10x):** O(agents on the machine) to pick the crew, plus a sort of the crew (a handful), once per machine per
+   draw. Measured with `MACHINE_CREW_BENCH` (below): at 10 machines and 100 (10x) with every row expanded. The first
+   warning at 10x is the expanded details' draw time, which grows with the crew rows shown (one text row each).
+5. **Compatibility:** an older server sends no `crew`/`asleep`/`movedTo`: no line, no section, the row as today. An
+   older Desktop ignores the fields. A `asleep` without a number `since` reads asleep with no hours.
+6. **Migration and rollback:** none; reverting the PR removes the line and the section only.
+7. **Audience:** who already sees the machine row sees its agents' names today (Manage → Machines, the agents
+   count); the line adds counts and states of those same agents, nothing from other projects the reader cannot read.
+8. **Identity:** N/A: no action, no account; display names as the Swarm state gives them.
+9. **Failure:** a stale machine (offline, unreachable, refreshing) drops its free disk figure instead of showing an old
+   one; crew counts stay, since they come from the Swarm, not the machine. Malformed records are read defensively.
+10. **Platforms:** Desktop on macOS, Windows and Linux, and the web build: one Flutter widget, no platform code.
+
+## Measurements
+
+`MACHINE_CREW_BENCH=1 flutter test test/super_tab_machine_crew_bench_test.dart`: Manage → Machines, every row expanded,
+4 crew (2 asleep) and 2 other agents per machine, 200 redraws, median and p95 in a debug widget test (relative only).
+The same file on the code before (#3222 base d2694b5c) and after; two rounds each, numbers in the pull request.
+Desktop at rest (PRODUCT.md: ≤ 1% of one core): no timer, listener or animation is added; idle hours advance on the
+next redraw the Swarm causes, not by a clock.
+
 ## Global Constraints
 
 - Owns `desktop/lib/` (and its tests). No backend change; Swarm code stays out of `cli/src/core`.

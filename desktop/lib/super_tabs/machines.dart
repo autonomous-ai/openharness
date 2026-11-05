@@ -3755,8 +3755,9 @@ class _MachineReadings extends StatelessWidget {
     );
   }
 
-  /// One line per crew member: its name (in full on hover), then awake, moving, or asleep with its idle hours in
-  /// tabular figures; an asleep one muted. Named roles only: the row's control text, its metadata, its list gaps.
+  /// One line per crew member: its name, then awake, moving, or asleep with its idle hours in tabular figures; an
+  /// asleep one muted. Named roles only: the row's control text, its metadata, its list gaps. No tooltip per name: at
+  /// 100 machines it cost 10-15 ms a redraw (MACHINE_CREW_BENCH, review of #3232).
   static Widget _crew(_MachineView view) {
     final now = DateTime.now();
     return Column(
@@ -3771,21 +3772,17 @@ class _MachineReadings extends StatelessWidget {
             child: Row(
               children: [
                 Expanded(
-                  child: Tooltip(
-                    message: _crewName(member),
-                    excludeFromSemantics: true,
-                    child: Text(
-                      _crewName(member),
-                      key: ValueKey(
-                        'super-machine-crew-member-${view.id}-$index',
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.control(
-                        color: member.crewAsleep
-                            ? DesktopChrome.muted
-                            : DesktopChrome.foreground,
-                      ),
+                  child: Text(
+                    _crewName(member),
+                    key: ValueKey(
+                      'super-machine-crew-member-${view.id}-$index',
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.control(
+                      color: member.crewAsleep
+                          ? DesktopChrome.muted
+                          : DesktopChrome.foreground,
                     ),
                   ),
                 ),
