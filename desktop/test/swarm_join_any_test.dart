@@ -1,3 +1,4 @@
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/join_machine.dart';
@@ -105,11 +106,42 @@ void main() {
 
   test('cancelled choice contributes nothing and starts no setup', () async {
     final f = _computer(chooseTeam: false);
+    final notes = <SwarmJoinedMachine>[];
+    final listening = f.app.joinedMachines.listen(notes.add);
     f.app.addListener(() => f.app.joinAccountRequest?.complete(null));
     await _discover(f);
     expect(_contributions(f), isEmpty);
     expect(_teamOffers(f), isEmpty);
+    expect(notes.single.added, isFalse);
+    expect(notes.single.problem, 'Add it from Machines.');
+    await listening.cancel();
   });
+
+  test(
+    'expired account choice says the computer was not added and how to add it',
+    () {
+      fakeAsync((time) {
+        final f = _computer(chooseTeam: false);
+        final notes = <SwarmJoinedMachine>[];
+        f.app.joinedMachines.listen(notes.add);
+        var finished = false;
+        f.app
+            .addMachineOnJoin(tabId, role: 'collaborator')
+            .then((_) => finished = true);
+        time.elapse(const Duration(seconds: 5));
+        expect(f.app.joinAccountRequest, isNotNull);
+        expect(finished, isFalse);
+        expect(notes, isEmpty);
+        time.elapse(const Duration(minutes: 15));
+        expect(finished, isTrue);
+        expect(_contributions(f), isEmpty);
+        expect(_teamOffers(f), isEmpty);
+        expect(notes.single.added, isFalse);
+        expect(notes.single.problem, 'Add it from Machines.');
+        f.dispose();
+      });
+    },
+  );
 
   test(
     'account change while choosing never contributes or sends consent',
