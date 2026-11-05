@@ -1335,13 +1335,18 @@ describe('Super Tab native delivery handoff', () => {
     mkdirSync(folder, { recursive: true })
     const dead = 2 ** 22 + 12_345
     const left = [`${base}.${dead}.${randomUUID()}.next`, `${base}.${process.pid}.${randomUUID()}.next`]
-    const kept = [`${base}.${process.ppid}.${randomUUID()}.next`, `${base}.next`, 'host-machine-2.json.1.x.next', 'observers-machine-1.json.next']
+    // A live process's, the old fixed name, another machine's (even one a dead process left) and other files: never removed.
+    const kept = [`${base}.${process.ppid}.${randomUUID()}.next`, `${base}.next`, `host-machine-2.json.${dead}.${randomUUID()}.next`,
+      'observers-machine-1.json.next']
     for (const name of [...left, ...kept]) writeFileSync(join(folder, name), 'x')
     expect(() => process.kill(dead, 0)).toThrow()
     t.open()
     const now = readdirSync(folder)
     for (const name of left) expect(now).not.toContain(name)
     for (const name of kept) expect(now).toContain(name)
+    // The live journal stays, as the host read it.
+    expect(now).toContain(base)
+    expect(t.saved()).toMatchObject({ machineId: 'machine-1' })
     // The same as one call, which the host makes once.
     expect(removeStaleJournalTemps(file)).toEqual([])
   })
