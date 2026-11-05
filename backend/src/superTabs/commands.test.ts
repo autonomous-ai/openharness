@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { groupProject } from './projects.js'
 import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
@@ -4998,6 +4999,17 @@ describe('linked tasks', () => {
     f.run({ type: 'conversation.merged', conversationId: R, pullRequestUrl: 'https://github.com/example/app/pull/9' }, E)
     expect(task(R).pullRequestUrls).toEqual(['https://github.com/example/app/pull/9'])
     expect(task(R).ledger?.shippedAt).toEqual(expect.any(Number))
+  })
+
+  // Task #3405: the merge record puts the task on its project's release list, once, for the next verified release.
+  it('puts a recorded merge on the project\'s release list once', () => {
+    const { f, T, E, create } = linked()
+    const R = create('Fix the flaky test', T), url = 'https://github.com/example/app/pull/9'
+    const list = () => groupProject(f.state, f.state.conversations.find(c => c.id === R)!).releases?.pending
+    f.run({ type: 'conversation.merged', conversationId: R, pullRequestUrl: url, mergedAt: new Date(900).toISOString() }, E)
+    expect(list()).toEqual([{ groupId: R, url, mergedAt: 900 }])
+    f.run({ type: 'conversation.merged', conversationId: R, pullRequestUrl: url, mergedAt: new Date(900).toISOString() }, E)
+    expect(list()).toHaveLength(1)
   })
 
   it('archives a linked task without a verdict', () => {

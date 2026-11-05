@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { backendPaused, carries, componentsOf, inReleaseWindow, isReleaseTag, RELEASE_COMPONENTS, RELEASE_RULES, releaseDue, shipped,
-  waitingFor, type PendingRelease, type ReleaseLedger } from './releases.js'
+import type { SwarmProject } from './projects.js'
+import { backendPaused, carries, componentsOf, inReleaseWindow, isReleaseTag, notePendingRelease, PENDING_MAX, RELEASE_COMPONENTS, RELEASE_RULES,
+  releaseDue, shipped, waitingFor, type PendingRelease, type ReleaseLedger } from './releases.js'
 
 /** A time in Vietnam (UTC+7, no daylight saving) on 6 November 2026. */
 const vn = (hour: number, minute = 0) => Date.UTC(2026, 10, 6, hour - 7, minute)
@@ -102,5 +103,25 @@ describe('shipping', () => {
   it('lists what waits for a component', () => {
     const waiting = ledger({ pending: [entry({ groupId: 'a' }), entry({ groupId: 'b', components: ['cli'] }), entry({ groupId: 'c', shippedIn: { desktop: 't' } })] })
     expect(waitingFor(waiting, 'desktop').map(e => e.groupId)).toEqual(['a'])
+  })
+})
+
+describe('notePendingRelease', () => {
+  const project = () => ({ id: 'p1' }) as SwarmProject
+
+  it('adds a merge once, oldest first', () => {
+    const p = project()
+    notePendingRelease(p, { id: 'b' }, 'https://github.com/o/r/pull/2', vn(11))
+    notePendingRelease(p, { id: 'a' }, 'https://github.com/o/r/pull/1', vn(10))
+    notePendingRelease(p, { id: 'a' }, 'https://github.com/o/r/pull/1', vn(10))
+    expect(p.releases!.pending.map(e => e.groupId)).toEqual(['a', 'b'])
+  })
+
+  it('keeps at most PENDING_MAX, pushing out the oldest', () => {
+    const p = project()
+    for (let i = 0; i < PENDING_MAX; i++) notePendingRelease(p, { id: `g${i}` }, `https://github.com/o/r/pull/${i + 1}`, vn(10) + i)
+    const dropped = notePendingRelease(p, { id: 'late' }, 'https://github.com/o/r/pull/999', vn(12))
+    expect(dropped.map(e => e.groupId)).toEqual(['g0'])
+    expect(p.releases!.pending).toHaveLength(PENDING_MAX)
   })
 })

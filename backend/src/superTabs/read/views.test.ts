@@ -208,4 +208,11 @@ describe('instructions in the reader\'s view (project instructions, phase 2)', (
     expect(readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, { teamMachines: [] }).parts.head.data.projects![0]!.coordinatorName)
       .toBe('Lead engineer')
   })
+  // Task #3405: the release list is the server's bookkeeping, like the schedule; no reader gets it.
+  it('sends projects without their release list', () => {
+    const { s } = scene()
+    s.edit(state => { state.projects![0]!.releases = { pending: [{ groupId: 'g', url: 'https://github.com/o/r/pull/1', mergedAt: NOW }] } })
+    const head = readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, { teamMachines: [] }).parts.head
+    expect(head.data.projects!.every(p => !('releases' in p))).toBe(true)
+  })
 })
