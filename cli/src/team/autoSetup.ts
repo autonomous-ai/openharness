@@ -90,7 +90,7 @@ export interface AutoSetupDeps {
   writeDecision(decision: TeamSetupDecision): void
   /** `harness team setup --json`, as this account: its exit code and the JSON it answered (null when it said none).
    *  [progress] hears each step as it goes. */
-  setup(progress?: (step: string) => void): Promise<{ code: number; result: Record<string, unknown> | null }>
+  setup(progress?: (step: string) => void, options?: { signInAgain?: boolean }): Promise<{ code: number; result: Record<string, unknown> | null }>
   now(): number
   log(line: string): void
   /** Linux: whether the administrator prompt can be shown from here (pkexec and a desktop session, ./admin.ts
@@ -114,16 +114,19 @@ export class TeamAutoSetup {
    * Starts the setup when it is wanted, and answers at once with why it did or did not; the prompt is macOS's. At `startup`
    * it is wanted only while [sharedSwarm] says this Mac is in a Swarm with other people in it (false when it cannot say).
    * With [check] it starts nothing and answers `wanted` instead, for Desktop to explain the account first.
+   * With [signInAgain] the person's own Set up signs an existing account in again for the account signed in here: the Swarm
+   * found it serving another account of this computer (#3122), which no part of it shows.
    */
-  async offer(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean> = async () => false, check = false): Promise<{ state: AutoSetupState }> {
-    const state = await this.decide(reason, sharedSwarm, check)
+  async offer(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean> = async () => false, check = false,
+    { signInAgain = false }: { signInAgain?: boolean } = {}): Promise<{ state: AutoSetupState }> {
+    const state = await this.decide(reason, sharedSwarm, check, signInAgain)
     // Every answer is said, not only a setup that starts: Macs in a Swarm went without the prompt and nothing on them said
     // why (2026-10-27). A check that finds it wanted starts nothing: that is Desktop's question, not an answer.
     if (state !== 'started' && state !== 'wanted') this.deps.log(`the Harness Team account was not offered (${reason}): ${state}`)
     return { state }
   }
 
-  private async decide(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean>, check: boolean): Promise<AutoSetupState> {
+  private async decide(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean>, check: boolean, signInAgain: boolean): Promise<AutoSetupState> {
     const { deps } = this
     // A Mac, a Linux and a Windows computer (docs/superpowers/plans/2026-10-28-harness-team-account-windows.md).
     if (!teamLayout(deps.platform)) return 'unsupported'
@@ -134,7 +137,8 @@ export class TeamAutoSetup {
     if (deps.readConfig() || await deps.accountExists(TEAM_USER)) {
       // Done only when every part is there (#2765: an account with no daemon answered "already set up", and nothing
       // repaired it). A part missing is repaired only when the person asks (Set up): no password is asked for on its own.
-      if (!(await this.missing()).length) return 'exists'
+      const again = reason === 'manual' && signInAgain
+      if (!(await this.missing()).length && !again) return 'exists'
       if (reason !== 'manual') return 'incomplete'
     } else if (reason !== 'manual') {
       const decision = deps.readDecision()
@@ -148,7 +152,7 @@ export class TeamAutoSetup {
     if (deps.platform === 'linux' && deps.canPrompt && !deps.canPrompt()) return 'no-prompt'
     if (check) return 'wanted'
     if (this.running) return 'running'
-    this.running = this.run().finally(() => { this.running = null })
+    this.running = this.run(reason === 'manual' && signInAgain).finally(() => { this.running = null })
     return 'started'
   }
 
@@ -184,7 +188,7 @@ export class TeamAutoSetup {
   /** Waits for a setup this started, for a spec. */
   settled(): Promise<void> { return this.running ?? Promise.resolve() }
 
-  private async run(): Promise<void> {
+  private async run(signInAgain: boolean): Promise<void> {
     const { deps } = this
     deps.log(deps.platform === 'win32' ? 'setting up the Harness Team account: Windows asks for permission (User Account Control)'
       : `setting up the Harness Team account: ${deps.platform === 'darwin' ? 'macOS' : 'the system'} asks for an administrator password`)
@@ -192,7 +196,7 @@ export class TeamAutoSetup {
     this.step = null
     let outcome: { code: number; result: Record<string, unknown> | null }
     try {
-      outcome = await deps.setup((step) => { this.step = step })
+      outcome = await deps.setup((step) => { this.step = step }, ...signInAgain ? [{ signInAgain: true }] : [])
     } catch (error) {
       outcome = { code: 1, result: { ok: false, code: 'SETUP_FAILED', message: error instanceof Error ? error.message : String(error) } }
     }
@@ -266,11 +270,11 @@ export async function realTeamAutoSetup(dataDir: string, log: (line: string) => 
     },
     readDecision: () => readTeamSetupDecision(file),
     writeDecision: (decision) => writeTeamSetupDecision(file, decision),
-    setup: async (progress) => {
+    setup: async (progress, options) => {
       const [{ teamCommand }, { teamCommandDeps }] = await Promise.all([import('./command.js'), import('./deps.js')])
       const lines: string[] = []
       const refuse = async (): Promise<never> => { throw new Error('setup does not restart the daemon') }
-      const code = await teamCommand(['setup', '--json'], { ...teamCommandDeps({ stopDaemon: refuse, startDaemon: refuse }),
+      const code = await teamCommand(['setup', '--json', ...options?.signInAgain ? ['--sign-in-again'] : []], { ...teamCommandDeps({ stopDaemon: refuse, startDaemon: refuse }),
         out: (line) => lines.push(line), err: (line) => lines.push(line), interactive: false, ...(progress ? { progress } : {}) })
       const last = [...lines].reverse().find((line) => line.startsWith('{'))
       let result: Record<string, unknown> | null = null
