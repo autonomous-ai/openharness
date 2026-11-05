@@ -607,6 +607,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       onMachineLinked: _followLinkedMachine,
       onOpenAgent: _openAgentAtHome,
       onShowSwarm: _showSwarm,
+      home: _home,
       canOpenMachine: (machineId) =>
           phoneMachineOpensTerminals(widget.notifier.machineStates[machineId]),
       agentStopped: (machineId, agentId) =>

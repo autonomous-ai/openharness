@@ -1725,6 +1725,15 @@ class ConversationServer {
               : (key(siblings[i]) + key(next)) / 2;
         }
         revision++;
+      } else if (command['type'] == 'work.priority') {
+        // As backend taskPriority.ts sets it: the task's one field.
+        (state['conversations'] as List)
+                .cast<Map<String, dynamic>>()
+                .firstWhere(
+                  (g) => g['id'] == command['conversationId'],
+                )['priority'] =
+            command['priority'];
+        revision++;
       } else if (command['type'] == 'conversation.archive') {
         (state['conversations'] as List)
                 .cast<Map<String, dynamic>>()

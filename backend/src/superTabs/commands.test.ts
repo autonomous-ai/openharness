@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
+import { readsRawReason } from './startFailure.js'
 import { sweepLiveness } from './liveness.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
 import { defaultProfileId, hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
@@ -3391,6 +3392,39 @@ describe('a failed start\'s reason', () => {
     f.state.starts![0]!.error = 'Its machine was removed from the Swarm.'
     expect(read(owner)).toBe('Its machine was removed from the Swarm.')
   })
+
+  // The reported dead end: a Buddy's owner read only "its machine could not prepare or launch it", while the chat told them
+  // the starter and the PM could read why. A Buddy chat is private to its owner, so the reason belongs there whole.
+  it('writes a Buddy start\'s reason whole in its owner\'s chat, never the group line', () => {
+    const f = fixture(); f.invite()
+    const generation = f.state.people[0]!.generation
+    const chat = { id: 'buddy-chat', kind: 'buddy', number: 1, title: "owner's Buddy", leadId: null, agentIds: [],
+      archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
+      audience: { people: [{ id: 'owner', generation }] } }
+    f.state.conversations.push(chat as never)
+    f.state.starts = [{ id: 's1', actorKey: 'person:owner', contributorId: 'owner', membershipGeneration: generation,
+      machineOwnerId: 'owner', request: { conversationId: chat.id, machineId: 'mac', name: "nsonha777's Buddy",
+        buddyOf: { personId: 'owner', generation } }, harnessId: null, dispatched: true, error: null }] as never
+    const [notice] = f.run({ type: 'agent.startFailed', startId: 's1', error: RAW }, owner).messages
+    expect(notice!.conversationId).toBe(chat.id)
+    expect(notice!.text).toBe(`Could not start nsonha777's Buddy: ${RAW}`)
+    expect(notice!.text).not.toContain('Whoever started it')
+  })
+
+  it('lets a Buddy chat\'s owner read the raw reason even when an agent made the start on another machine', () => {
+    const f = fixture(); f.invite()
+    const generation = f.state.people[0]!.generation
+    const chat = { id: 'buddy-chat', kind: 'buddy', number: 1, title: "owner's Buddy", leadId: null, agentIds: [],
+      archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
+      audience: { people: [{ id: 'owner', generation }] } }
+    f.state.conversations.push(chat as never)
+    f.state.starts = [{ id: 's1', actorKey: 'agent:someone', contributorId: 'owner', membershipGeneration: generation,
+      machineOwnerId: 'someone-else', request: { conversationId: chat.id, machineId: 'host-mac', name: "nsonha777's Buddy",
+        buddyOf: { personId: 'owner', generation } }, harnessId: null, dispatched: true, error: RAW }] as never
+    expect(visibleState(f.state, owner).starts![0]!.error).toBe(RAW)
+    // A Swarm member who is not that chat's owner still reads only what the reason means.
+    expect(readsRawReason(peer, f.state.starts![0]!, chat as never)).toBe(false)
+  })
 })
 
 describe('the owner\'s rules, after review', () => {
@@ -5812,6 +5846,106 @@ describe('the Next-up queue (work.queue)', () => {
     expect(task(c)).toMatchObject({ queueRank: expect.any(Number), notBefore: '2026-12-04' })
     f.run(queue(c, { after: a, notBefore: '2026-12-04' }), owner, { operationId: 'move' })
     expect(f.state).toEqual(once)
+  })
+})
+
+// A task's priority, P0-P3 (task #3117): a hotfix for a broken release must not wait behind ordinary work.
+describe('a task\'s priority (conversation.create and work.priority)', () => {
+  function prioritized() {
+    const f = routed()
+    const task = (id: string) => f.state.conversations.find(g => g.id === id)!
+    const create = (fields: Record<string, unknown> = {}, actor: Actor = f.leadActor) =>
+      f.run(commandSchema.parse({ type: 'conversation.create', title: 'Sign-in broken', brief: 'Fix it.', checks: [], ...fields }), actor)
+    const set = (conversationId: string, priority: string) => commandSchema.parse({ type: 'work.priority', conversationId, priority })
+    return { f, task, create, set }
+  }
+
+  it('takes the PM\'s priority when it creates a task', () => {
+    const { task, create } = prioritized()
+    const created = create({ priority: 'P0' })
+    expect(created.result).toMatchObject({ priority: 'P0' })
+    expect(created.result.warnings ?? []).not.toContainEqual(expect.stringContaining('No priority given'))
+    expect(task(created.result.conversationId as string).priority).toBe('P0')
+    expect(groupView(task(created.result.conversationId as string), new Set())).toMatchObject({ priority: 'P0' })
+  })
+
+  it('gives a task created without one P2, and the reply says so', () => {
+    const { task, create } = prioritized()
+    const created = create()
+    expect(task(created.result.conversationId as string).priority).toBe('P2')
+    expect(created.result).toMatchObject({ priority: 'P2',
+      warnings: expect.arrayContaining(['No priority given: this task is P2. Set P0-P3 with work.priority.']) })
+  })
+
+  it('gives no priority to a step, and refuses one there', () => {
+    const { f, task, create } = prioritized()
+    const parent = create().result.conversationId as string
+    const step = create({ title: 'Review', reviewOf: parent, step: 'Review' }).result.conversationId as string
+    expect(task(step)).not.toHaveProperty('priority')
+    expect(() => create({ title: 'Test', reviewOf: parent, step: 'Test', priority: 'P1' }))
+      .toThrow(expect.objectContaining({ code: 'PRIORITY_TASK_ONLY', status: 400 }))
+    expect(f.state.conversations.filter(c => c.step === 'Test')).toEqual([])
+  })
+
+  it('lets only the PM or a person create a P0, while any agent may open a P1-P3 task', () => {
+    const { f, task, create } = prioritized()
+    expect(() => create({ priority: 'P0' }, f.workerActor)).toThrow(expect.objectContaining({ code: 'PRIORITY_P0', status: 403 }))
+    expect(task(create({ priority: 'P1' }, f.workerActor).result.conversationId as string).priority).toBe('P1')
+    expect(task(create({ priority: 'P0' }, owner).result.conversationId as string).priority).toBe('P0')
+  })
+
+  it('changes it for a person or the PM, and records each change in the task as a line', () => {
+    const { f, task, create, set } = prioritized()
+    const id = create().result.conversationId as string
+    const changed = f.run(set(id, 'P0'), owner)
+    expect(task(id).priority).toBe('P0')
+    expect(changed.messages).toEqual([expect.objectContaining({ conversationId: id, recipients: [], source: { kind: 'system' },
+      text: 'owner changed the priority to P0, hotfix: something shipped is broken (was P2).' })])
+    const byPm = f.run(set(id, 'P1'), f.leadActor)
+    expect(task(id).priority).toBe('P1')
+    // The PM by the name the Swarm shows for it.
+    const pm = f.state.agents.find(a => a.id === f.lead)!
+    expect(byPm.messages[0]!.text).toBe(`${pm.displayName ?? pm.name} changed the priority to P1, needed by users soon (was P0).`)
+  })
+
+  it('reads a task from before priorities as P2 when it changes', () => {
+    const { f, task, create, set } = prioritized()
+    const id = create().result.conversationId as string
+    delete task(id).priority
+    expect(f.run(set(id, 'P3'), owner).messages[0]!.text).toBe('owner changed the priority to P3, tools, docs or process (was P2).')
+  })
+
+  it('reads a task from before priorities by its title\'s urgent or high marker, as every client shows it', () => {
+    const { f, task, create, set } = prioritized()
+    const urgent = create({ title: 'Sign-in broken (urgent)' }).result.conversationId as string
+    const high = create({ title: 'Faster sync (Ken, high)' }).result.conversationId as string
+    for (const id of [urgent, high]) delete task(id).priority
+    expect(f.run(set(urgent, 'P2'), owner).messages[0]!.text).toBe('owner changed the priority to P2, planned goal (was P0).')
+    expect(f.run(set(high, 'P2'), owner).messages[0]!.text).toBe('owner changed the priority to P2, planned goal (was P1).')
+  })
+
+  it('posts nothing when the priority is already that one', () => {
+    const { f, task, create, set } = prioritized()
+    const id = create({ priority: 'P1' }).result.conversationId as string
+    expect(f.run(set(id, 'P1'), owner).messages).toEqual([])
+    expect(task(id).priority).toBe('P1')
+  })
+
+  it('is refused to any other agent of the project, and on what is not an open task', () => {
+    const { f, create, set } = prioritized()
+    const id = create().result.conversationId as string
+    const step = create({ title: 'Review', reviewOf: id, step: 'Review' }).result.conversationId as string
+    const before = structuredClone(f.state)
+    expect(() => f.run(set(id, 'P0'), f.workerActor)).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
+    for (const other of ['lead', step]) expect(() => f.run(set(other, 'P0'), owner), other).toThrow(expect.objectContaining({ code: 'PRIORITY_TASK_ONLY', status: 400 }))
+    expect(f.state).toEqual(before)
+  })
+
+  it('takes only P0 to P3', () => {
+    const parse = (priority: unknown) => commandSchema.safeParse({ type: 'work.priority', conversationId: 'task', priority }).success
+    for (const priority of ['P0', 'P1', 'P2', 'P3']) expect(parse(priority)).toBe(true)
+    for (const priority of ['P4', 'p0', 'high', 0, null, undefined]) expect(parse(priority), String(priority)).toBe(false)
+    expect(commandSchema.safeParse({ type: 'conversation.create', title: 'T', brief: 'B', checks: [], priority: 'urgent' }).success).toBe(false)
   })
 })
 

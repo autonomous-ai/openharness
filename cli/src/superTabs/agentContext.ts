@@ -6,6 +6,7 @@
  */
 
 import { personName } from './personName.js'
+import { effectivePriority, priorityRank, type TaskPriority } from './taskPriority.js'
 
 type Json = Record<string, unknown>
 const object = (value: unknown): Json => value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {}
@@ -29,6 +30,8 @@ export interface TaskLine {
   pullRequestUrls: string[]
   step: string | null
   taskId: string | null
+  /** A task's priority; for a step, its task's, by which it is ordered but not labelled (a step carries none, #3117). */
+  priority: TaskPriority
   /** For a step: its task's number and title, by which it is shown (task steps design). */
   taskNumber: number | null
   taskTitle: string | null
@@ -68,7 +71,7 @@ function lineOf(state: Json, group: Json): TaskLine {
     status: text(assignment.status) ?? 'unassigned', agentName: agentName(state, assignment.agentId),
     updatedAt: null, result: text(assignment.result),
     pullRequestUrls: Array.isArray(group.pullRequestUrls) ? group.pullRequestUrls.filter((u): u is string => typeof u === 'string') : [],
-    step: isStep(group) ? stepName(group) : null, taskId: text(group.reviewOf),
+    step: isStep(group) ? stepName(group) : null, taskId: text(group.reviewOf), priority: effectivePriority(task ?? group),
   }
 }
 
@@ -111,7 +114,9 @@ const utc = (at: number): string => `${new Date(at).toISOString().slice(0, 16).r
 
 const label = (line: TaskLine): string => line.step && line.taskTitle !== null
   ? `${line.taskNumber !== null ? `#${line.taskNumber} ` : ''}${line.taskTitle} · ${line.step} (conversation ${line.id})`
-  : `${line.number !== null ? `#${line.number} ` : ''}${line.title} (conversation ${line.id})`
+  : `${line.number !== null ? `#${line.number} ` : ''}${line.priority} ${line.title} (conversation ${line.id})`
+/** [lines] P0 first, each priority in the order given (#3117). */
+const byPriority = (lines: TaskLine[]): TaskLine[] => [...lines].sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority))
 
 function ownLine(line: TaskLine, changedAt: number | undefined, now: number): string {
   return `${label(line)} — ${line.status}`
@@ -146,11 +151,11 @@ function stepsLine(state: Json, taskId: string): string[] {
 
 export function mineText(state: Json, groupChangedAt: ReadonlyMap<string, number>, agentId: string, now: number): string {
   if (isCoordinator(state, agentId)) {
-    const open = projectOpenWork(state, agentId)
+    const open = byPriority(projectOpenWork(state, agentId))
     if (!open.length) return 'Your project has no open task.'
     return [...open.flatMap(line => [otherLine(line), ...stepsLine(state, line.id)]), `${open.length} open task${open.length === 1 ? '' : 's'}.`].join('\n')
   }
-  const own = openWorkOf(state, agentId)
+  const own = byPriority(openWorkOf(state, agentId))
   if (!own.length) return 'No task is assigned to you.'
   const groups = new Map(list(state.conversations).map(g => [String(g.id), g]))
   return own.map(line => [ownLine(line, groupChangedAt.get(line.id), now),

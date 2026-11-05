@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import { placeholderBranch, plausibleBranchName, worktreeFolderName } from './agentNames.js'
 import { redactSecretsInText } from './logBundle.js'
 import { withinRoots } from './pathContainment.js'
+import { ownProcessGroup } from './windows/noWindow.js'
 
 const exec = promisify(execFile)
 
@@ -484,7 +485,7 @@ function worktreeAdd(source: string, args: string[], timeout: number, extraEnv: 
     const failed = (reason: string, running = false): WorktreeAddFailure => ({ ok: false, reason, stderr, timedOut, diskFull: diskFull({ stderr }), running })
     const late = () => `timed out after ${Math.round(timeout / 1000)} s`
     const child = spawn('git', gitArgs(source, args), {
-      env: { ...gitEnv(process.env), ...extraEnv }, stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32', windowsHide: true,
+      env: { ...gitEnv(process.env), ...extraEnv }, stdio: ['ignore', 'ignore', 'pipe'], ...ownProcessGroup(),
     })
     child.stderr.on('data', (chunk: Buffer) => { if (stderr.length < 64 * 1024) stderr += chunk.toString() })
     const timer = setTimeout(() => {

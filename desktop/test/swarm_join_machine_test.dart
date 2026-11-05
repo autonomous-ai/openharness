@@ -480,6 +480,32 @@ void noteTests() {
     c.dispose();
   });
 
+  // Task #3160: a failed Team account offer was only a log line.
+  testWidgets(
+    'a Team account that could not be offered says where to set it up',
+    (tester) async {
+      final c = await mount(
+        tester,
+        const SwarmJoinedMachine(
+          tabId: 'tab',
+          swarmName: 'Pilot',
+          machineId: 'mate-mac',
+          machineName: 'MacBook Air',
+          teamProblem: 'Set it up from Machines.',
+        ),
+      );
+      expect(
+        find.text(
+          'This Mac was added to Pilot, but Harness could not offer its Harness '
+          'Team account. Set it up from Machines.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('swarm-joined-machine-pause')), findsNothing);
+      c.dispose();
+    },
+  );
+
   testWidgets('a Swarm at its limit says so after joining', (tester) async {
     final c = await mount(
       tester,

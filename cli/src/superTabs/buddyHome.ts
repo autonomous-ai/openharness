@@ -8,7 +8,7 @@
  * longer reads leaves the folder before the Buddy's next turn (pruneBuddyHome).
  */
 import { execFile } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { launchEnvironment } from '../engines/kit/launchExecutable.js'
@@ -214,6 +214,9 @@ function writeCopies(home: string, states: readonly CopyState[]): void {
   const path = join(home, BUDDY_COPIES_FILE), next = `${path}.next`
   rmSync(next, { force: true })
   writeFileSync(next, `Your copy of each project's code, refreshed ${new Date().toISOString()}:\n${states.map(line).join('\n')}\n`, { mode: 0o444 })
+  // Windows will not rename over a read-only file (EPERM), and the last pass left this one read-only, so every later pass failed.
+  // A plain file alone: chmod follows a link, and the Buddy can write in this folder, so one here could name a private file.
+  if (process.platform === 'win32' && lstatSync(path, { throwIfNoEntry: false })?.isFile()) chmodSync(path, 0o644)
   renameSync(next, path)
 }
 

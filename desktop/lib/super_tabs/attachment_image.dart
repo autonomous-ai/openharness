@@ -44,6 +44,15 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
   /// more than once) say nothing about the original drawn in its place.
   Uri? _thumbFailed;
 
+  /// How long after each failed ask for a link the next one is made.
+  static const _askAgainAfter = [
+    Duration(seconds: 2),
+    Duration(seconds: 5),
+    Duration(seconds: 15),
+  ];
+  int _waited = 0;
+  Timer? _askAgain;
+
   @override
   void initState() {
     super.initState();
@@ -62,6 +71,8 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
     _ref = widget.file;
     _retried = _failed = false;
     _thumbFailed = null;
+    _askAgain?.cancel();
+    _waited = 0;
     _start();
   }
 
@@ -79,13 +90,28 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
     if (!mounted || _asking) return;
     final ref = _ref;
     setState(() => _asking = true);
-    final url = await superTabOpenableLink(context, ref, stale: stale);
+    var worthAnother = false;
+    final url = await superTabOpenableLink(
+      context,
+      ref,
+      stale: stale,
+      onUnavailable: (problem) => worthAnother = !problem.gone,
+    );
     if (!mounted) return;
     // Another file, Swarm or account now: this answer is not for what is
     // shown. The ask is over all the same, and the one shown now is asked for.
     if (!identical(ref, _ref)) {
       _asking = false;
       if (_url == null && !_failed) _ask(stale: false);
+      return;
+    }
+    // Still connecting, say, as the app starts: a failure of the ask says
+    // nothing of the file, so the picture waits for another before it says it
+    // can't be shown. It said so until the chat was opened again.
+    if (url == null && worthAnother && _waited < _askAgainAfter.length) {
+      final wait = _askAgainAfter[_waited++];
+      setState(() => _asking = false);
+      _askAgain = Timer(wait, () => _ask(stale: stale));
       return;
     }
     // A fresh answer brings the thumbnail's new link too.
@@ -96,6 +122,12 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
       _url = thumb ?? url;
       _failed = url == null;
     });
+  }
+
+  @override
+  void dispose() {
+    _askAgain?.cancel();
+    super.dispose();
   }
 
   /// The picture did not load. A short-lived link may have ended under it:

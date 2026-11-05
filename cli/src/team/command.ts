@@ -30,7 +30,7 @@ import {
 import type { PrivacyResult, TeamStatus } from './privacy.js'
 import {
   LINUX_NO_SYSTEMD, LINUX_NO_TMUX, REMOVE_REFUSED, buildLinuxRemoveScript, buildLinuxSetupScript, buildRemoveScript,
-  buildSetupScript, teamLaunchdPlist, teamSystemdUnit, type RemoveScriptInput, type SetupScriptInput, type TeamPlistInput,
+  buildSetupScript, teamLaunchdPlist, teamSystemdUnit, type EngineCopy, type RemoveScriptInput, type SetupScriptInput, type TeamPlistInput,
 } from './script.js'
 import { windowsTeamPaths } from './windowsLayout.js'
 import { WINDOWS_STAGED, buildWindowsRemoveScript, buildWindowsSetupScript, teamTaskXml } from './windowsScript.js'
@@ -115,6 +115,9 @@ export interface Installed {
   /** Windows: the owner's terminal host payload in use (`runtime\pty\<version>`), copied for the team account, which has no
    *  installer of its own to lay one down; null without one. */
   ptyDir?: string | null
+  /** A Mac: the owner's own installed Claude Code and Codex (./engines.ts `ownerEngineCopies`), copied for the team account
+   *  instead of downloaded again (#3169). */
+  engineCopies?: EngineCopy[]
 }
 
 export interface JobState { loaded: boolean; pid: number | null; state: string | null }
@@ -410,6 +413,7 @@ async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean)
       user: TEAM_USER, realName: TEAM_REAL_NAME, home: layout.home, owner, ownerHome, stageDir,
       nodeRuntimeDir: installed.nodeRuntimeDir!, tmuxRuntimeDir: installed.tmuxRuntimeDir, cliDir: installed.cliDir,
       ownerNode: installed.node, ownerCli: installed.cliJs, mintEnv, signIn: signInAgain ? 'always' : 'missing',
+      ...mac && installed.engineCopies?.length ? { engineCopies: installed.engineCopies } : {},
       ...windows ? { ownerSid, ptyDir: installed.ptyDir ?? null } : {},
     }),
     files: { 'team.json': teamConfigJson(config), [scripts.serviceFile]: service },

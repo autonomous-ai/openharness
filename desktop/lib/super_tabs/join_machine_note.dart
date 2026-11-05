@@ -24,10 +24,18 @@ void showJoinedMachineNote(
   final here = (operatingSystem ?? RuntimePlatform.operatingSystem) == 'macos'
       ? 'This Mac'
       : 'This computer';
-  final text = note.added
-      ? '$here was added to ${note.swarmName}. Teammates\' agents run here '
-            'only in Harness Team, never as you.'
-      : '$here was not added to ${note.swarmName}. ${note.problem}';
+  final text = switch (note) {
+    SwarmJoinedMachine(added: false) =>
+      '$here was not added to ${note.swarmName}. ${note.problem}',
+    SwarmJoinedMachine(teamProblem: final String problem) =>
+      '$here was added to ${note.swarmName}, but Harness could not offer its '
+          'Harness Team account. $problem',
+    _ =>
+      '$here was added to ${note.swarmName}. Teammates\' agents run here '
+          'only in Harness Team, never as you.',
+  };
+  // Pause and Remove came with the note that it was added.
+  final undo = note.added && note.teamProblem == null;
   messenger.showSnackBar(
     SnackBar(
       key: const Key('swarm-joined-machine-note'),
@@ -36,7 +44,7 @@ void showJoinedMachineNote(
       content: Row(
         children: [
           Expanded(child: Text(text)),
-          if (note.added) ...[
+          if (undo) ...[
             const SizedBox(width: 12),
             _NoteAction(
               key: const Key('swarm-joined-machine-pause'),

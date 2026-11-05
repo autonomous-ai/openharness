@@ -64,8 +64,9 @@ class _Words {
       account: _computerAccount,
       prompt: 'Your system asks for your password once.',
       started:
-          'Your system is asking for your password. '
-          'Setup then takes a minute or two. This computer\'s row updates when it is ready.',
+          'Your system is asking for your password. After that, setup goes on '
+          'in the background: this computer\'s row in Machines shows how far it is, '
+          'and Harness tells you when it is ready.',
       exists: _computerExists,
       update: _computerUpdate,
       cannot: _computerCannot,
@@ -73,8 +74,8 @@ class _Words {
       noPrompt: 'Run harness team setup in a terminal on this computer.',
       lead: _computerLead,
       waiting:
-          'Your system is asking for your password. '
-          'Setup then takes a minute or two, and Harness opens when it is done.',
+          'Your system is asking for your password. After that, setup goes on '
+          'in the background and you can keep working.',
       rejected: 'Your system did not accept that password. Try again.',
       cancelled: 'The password window was closed before setup finished.',
       removeWhy:
@@ -89,16 +90,17 @@ class _Words {
       account: _computerAccount,
       prompt: 'Windows asks for permission once (User Account Control).',
       started:
-          'Windows is asking for permission. '
-          'Setup then takes a minute or two. This computer\'s row updates when it is ready.',
+          'Windows is asking for permission. After that, setup goes on '
+          'in the background: this computer\'s row in Machines shows how far it is, '
+          'and Harness tells you when it is ready.',
       exists: _computerExists,
       update: _computerUpdate,
       cannot: _computerCannot,
       unreachable: _computerUnreachable,
       lead: _computerLead,
       waiting:
-          'Windows is asking for permission. '
-          'Setup then takes a minute or two, and Harness opens when it is done.',
+          'Windows is asking for permission. After that, setup goes on '
+          'in the background and you can keep working.',
       rejected: 'Windows did not give permission. Try again.',
       cancelled: 'The permission window was closed before setup finished.',
       removeWhy:
@@ -119,7 +121,8 @@ class _Words {
           'That is the macOS tool Harness uses to ask.',
       started:
           'macOS is asking for your password in a window titled “osascript”. '
-          'Setup then takes a minute or two. This Mac\'s row updates when it is ready.',
+          'After that, setup goes on in the background: this Mac\'s row in '
+          'Machines shows how far it is, and Harness tells you when it is ready.',
       exists: 'Harness Team is already set up on this Mac.',
       update:
           'This Mac\'s Harness is too old to set it up from here. Update Harness, '
@@ -130,7 +133,7 @@ class _Words {
           'This Mac joined a Swarm, so it needs Harness Team before you go on.',
       waiting:
           'macOS is asking for your password in a window titled “osascript”. '
-          'Setup then takes a minute or two, and Harness opens when it is done.',
+          'After that, setup goes on in the background and you can keep working.',
       rejected: 'macOS did not accept that password. Try again.',
       cancelled: 'The password window was closed before setup finished.',
       removeWhy:
@@ -199,48 +202,18 @@ class _Words {
   /// "this Mac", or "this computer": what Remove takes out of the Swarms.
   final String here;
 
-  /// The steps setup says after the password, in order (cli/src/team/script.ts
-  /// `step`, then cli/src/team/command.ts `report`).
-  static const steps = [
-    'account',
-    'home',
-    'privacy',
-    'runtime',
-    'engines',
-    'sign-in',
-    'daemon',
-    'report',
-  ];
-
-  /// What setup is doing at [step], or null for the password (or a step this
-  /// app does not know), which [waiting] says.
-  String? doing(String? step) => switch (step) {
-    'account' => 'Making the Harness Team account.',
-    'home' => 'Making the Harness Team account\'s home folder.',
-    'privacy' => 'Making your home folder private.',
-    'runtime' => 'Copying Harness into the Harness Team account.',
-    'engines' =>
-      'Installing Claude Code and Codex for Harness Team. '
-          'On a new ${here.replaceFirst('this ', '')} this can take several minutes.',
-    'sign-in' => 'Signing Harness Team in.',
-    'daemon' => 'Starting Harness Team.',
-    'report' => 'Checking that Harness Team cannot read your files.',
-    _ => null,
-  };
-
-  /// The line under it: the step's number once one is said, and the time so
-  /// far.
-  static String sofar(String? step, Duration elapsed) {
+  /// The line under the password wait: how long it has waited.
+  static String sofar(Duration elapsed) {
     final seconds = elapsed.inSeconds;
     final time = seconds < 60
         ? '$seconds s'
         : '${seconds ~/ 60} min ${seconds % 60} s';
-    final at = steps.indexOf(step ?? '');
-    return at < 0
-        ? '$time so far.'
-        : 'Step ${at + 1} of ${steps.length} · $time so far. '
-              'Harness opens when it is done.';
+    return '$time so far.';
   }
+
+  /// [cancelled] for a notice, which says first that setup did not finish:
+  /// "The password window was closed."
+  String get closed => cancelled.replaceFirst(' before setup finished', '');
 
   /// What Remove asks before it removes anything (security review of #2779):
   /// it deletes this computer from each Swarm in [swarms], which it names.
@@ -295,9 +268,15 @@ class _TeamAccountSetupState extends State<_TeamAccountSetup> {
     final words = widget.words;
     String outcome;
     try {
-      outcome = switch (await widget.app.setUpTeamAccount(
+      final state = await widget.app.setUpTeamAccount(
         signInAgain: widget.signInAgain,
-      )) {
+      );
+      // The row and the notice follow it from here (#3169): the dialog's OK
+      // leaves the person free while it runs.
+      if (state == 'started' || state == 'running') {
+        TeamSetupWatch.of(widget.app)?.follow(restart: state == 'started');
+      }
+      outcome = switch (state) {
         'started' || 'running' => words.started,
         'exists' => words.exists,
         'update' => words.update,
@@ -434,6 +413,261 @@ final _refusedPassword = RegExp(
   caseSensitive: false,
 );
 
+String _sentence(String text) =>
+    RegExp(r'[.!?]$').hasMatch(text) ? text : '$text.';
+
+/// The four steps a person reads (#3169 mockup: "step 2 of 4"), from the
+/// steps setup says (cli/src/team/script.ts `step`, ./command.ts `progress`):
+/// the account, Harness and its engines, starting it, its privacy check. Null
+/// for the password, and for a step this app does not know.
+int? teamSetupPhase(String? step) => switch (step) {
+  'account' || 'home' || 'privacy' => 1,
+  'runtime' || 'copy-engines' || 'engines' => 2,
+  'sign-in' || 'daemon' => 3,
+  'report' => 4,
+  _ => null,
+};
+
+/// What each step usually takes, from this Mac's real setup of 2026-11-04
+/// (#3169): the account, homes and privacy about 8 s, Harness 3 s, the npm
+/// download of Claude Code and Codex 4 min 18 s (`engines`), the start and
+/// its check about 5 s. `copy-engines`, which took over from the download
+/// where the Mac has both, took 1.4 to 9.9 s.
+const _stepTimes = <String, Duration>{
+  'account': Duration(seconds: 4),
+  'home': Duration(seconds: 2),
+  'privacy': Duration(seconds: 2),
+  'runtime': Duration(seconds: 5),
+  'copy-engines': Duration(seconds: 10),
+  'engines': Duration(seconds: 240),
+  'sign-in': Duration(seconds: 2),
+  'daemon': Duration(seconds: 3),
+  'report': Duration(seconds: 5),
+};
+
+/// How long setup has left, at [step] after [inStep] on it; null for a step
+/// this app does not know. A step past its usual time keeps a quarter of it
+/// (at least 10 s), so a slow download never reads as done. The download is
+/// counted only once it runs: a Mac that copies its engines never has one.
+Duration? teamSetupLeft(String? step, Duration inStep) {
+  final usual = _stepTimes[step];
+  if (usual == null) return null;
+  final floor = usual ~/ 4 > const Duration(seconds: 10)
+      ? usual ~/ 4
+      : const Duration(seconds: 10);
+  var left = usual - inStep < floor ? floor : usual - inStep;
+  final steps = _stepTimes.keys.toList();
+  for (final later in steps.skip(steps.indexOf(step!) + 1)) {
+    if (later != 'engines') left += _stepTimes[later]!;
+  }
+  return left;
+}
+
+/// This Mac's row while setup runs (#3169): "Harness Team: setting up · step
+/// 2 of 4 · about 4 min left".
+String teamSetupLine(String? step, Duration inStep) {
+  final phase = teamSetupPhase(step);
+  final left = teamSetupLeft(step, inStep);
+  if (phase == null || left == null) return 'Harness Team: setting up';
+  final time = left < const Duration(minutes: 1)
+      ? 'less than a minute left'
+      : 'about ${(left.inSeconds / 60).round()} min left';
+  return 'Harness Team: setting up · step $phase of 4 · $time';
+}
+
+/// How a setup [TeamSetupWatch] followed ended.
+enum TeamSetupEndKind { ready, failed, cancelled }
+
+class TeamSetupEnd {
+  const TeamSetupEnd(this.kind, {this.lock = '', this.notice = ''});
+
+  final TeamSetupEndKind kind;
+
+  /// What the lock says when it holds the app ([TeamAccountSetupLock]).
+  final String lock;
+
+  /// What the notice says otherwise.
+  final String notice;
+}
+
+/// This computer's Harness Team setup, followed while it runs (#3169): one
+/// per app, made and ended by [TeamAccountSetupLock], which sits above every
+/// route for the app's whole life. It reads the daemon's status every 2 s,
+/// only while setup runs, and ends with [ended]: ready (the lock is let go),
+/// failed or cancelled, with words for the lock and for a notice. The machine
+/// row draws [line].
+class TeamSetupWatch extends ChangeNotifier {
+  TeamSetupWatch._(this.app, this._words, this._now);
+
+  static final _watches = Expando<TeamSetupWatch>('team setup watch');
+
+  /// [app]'s watch, while its lock is in the window; null otherwise.
+  static TeamSetupWatch? of(AppNotifier app) => _watches[app];
+
+  final AppNotifier app;
+  final _Words _words;
+  final DateTime Function() _now;
+  final _ended = StreamController<TeamSetupEnd>.broadcast();
+  Timer? _read;
+  int _generation = 0;
+  bool _disposed = false;
+  DateTime? _since, _stepSince;
+
+  /// Each end of a setup it followed.
+  Stream<TeamSetupEnd> get ended => _ended.stream;
+
+  bool running = false;
+
+  /// The step setup said last, and how long it has run.
+  String? step;
+  Duration? elapsed;
+
+  /// Setup is past the password: the person may go on working.
+  bool get afterPassword => running && step != null && step != 'password';
+
+  /// The row's line while it runs after the password; null otherwise.
+  String? get line {
+    final since = _stepSince;
+    if (!afterPassword || since == null) return null;
+    return teamSetupLine(step, _now().difference(since));
+  }
+
+  /// Follows a setup started here or found running. One already followed is
+  /// left as it is, unless [restart]: a setup just started again.
+  void follow({bool restart = false}) {
+    if (_disposed || (running && !restart)) return;
+    _generation++;
+    running = true;
+    step = null;
+    elapsed = Duration.zero;
+    _since = _stepSince = _now();
+    notifyListeners();
+    _schedule();
+  }
+
+  void _schedule() {
+    _read?.cancel();
+    final generation = _generation;
+    _read = Timer(_setupRead, () => unawaited(_readNow(generation)));
+  }
+
+  Future<void> _readNow(int generation) async {
+    _read = null;
+    final setup = await app.teamSetupProgress();
+    if (_disposed || !running || generation != _generation) return;
+    final words = _words;
+    final detail = setup?.detail?.trim();
+    switch (setup?.state) {
+      case 'exists':
+        return _end(const TeamSetupEnd(TeamSetupEndKind.ready));
+      case 'failed' when detail != null && _refusedPassword.hasMatch(detail):
+        return _end(
+          TeamSetupEnd(
+            TeamSetupEndKind.failed,
+            lock: words.rejected,
+            notice: _failed(words.rejected.replaceFirst(' Try again.', '')),
+          ),
+        );
+      case 'failed':
+        final said = detail == null || detail.isEmpty
+            ? null
+            : _sentence(detail);
+        return _end(
+          TeamSetupEnd(
+            TeamSetupEndKind.failed,
+            lock: said == null
+                ? 'Setup did not finish. Try again.'
+                : 'Setup did not finish: $said',
+            notice: _failed(said),
+          ),
+        );
+      case 'declined':
+        return _end(
+          TeamSetupEnd(
+            TeamSetupEndKind.cancelled,
+            lock: words.cancelled,
+            notice: _failed(words.closed),
+          ),
+        );
+      // It ended with the account there and a part not (#2765): said, and Try again repairs it.
+      case 'incomplete':
+        final missing = detail == null || detail.isEmpty
+            ? null
+            : _sentence(detail);
+        return _end(
+          TeamSetupEnd(
+            TeamSetupEndKind.failed,
+            lock: missing == null
+                ? 'Setup ended, but Harness Team is not finished. Try again.'
+                : 'Setup ended, but Harness Team is not finished: $missing Try again.',
+            notice: missing == null
+                ? 'Harness Team setup ended, but it is not finished.'
+                : 'Harness Team setup ended, but it is not finished: $missing',
+          ),
+        );
+      case 'running':
+        final next = setup?.step;
+        if (next != step) _stepSince = _now();
+        step = next;
+        final since = _since;
+        elapsed =
+            setup?.elapsed ?? (since == null ? null : _now().difference(since));
+        notifyListeners();
+      case null:
+        // No answer (the daemon restarting): read again, until the limit.
+        break;
+      default:
+        // Anything else once it stopped running ('none': it ended with no
+        // account and nothing remembered, or the daemon restarted): the
+        // wait is over, and it says so (Scholes, 2026-11-04).
+        return _end(
+          TeamSetupEnd(
+            TeamSetupEndKind.failed,
+            lock: 'Setup stopped before the Harness Team account was made. Try again.',
+            notice: _failed('It stopped before the account was made.'),
+          ),
+        );
+    }
+    final since = _since;
+    if (since != null && _now().difference(since) > _setupLimit) {
+      return _end(
+        TeamSetupEnd(
+          TeamSetupEndKind.failed,
+          lock: 'Setup did not finish. Try again.',
+          notice: _failed('It ran out of time.'),
+        ),
+      );
+    }
+    _schedule();
+  }
+
+  static String _failed(String? why) => why == null
+      ? 'Harness Team setup did not finish.'
+      : 'Harness Team setup did not finish. $why';
+
+  Future<void> _end(TeamSetupEnd end) async {
+    _read?.cancel();
+    _read = null;
+    running = false;
+    step = null;
+    elapsed = null;
+    notifyListeners();
+    // Ready lets the lock go before anyone hears of it, so a notice never
+    // sits under a lock that is about to end.
+    if (end.kind == TeamSetupEndKind.ready) await app.teamAccountMade();
+    if (!_disposed) _ended.add(end);
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _read?.cancel();
+    unawaited(_ended.close());
+    if (identical(_watches[app], this)) _watches[app] = null;
+    super.dispose();
+  }
+}
+
 class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
   late final _Words _words = _Words.of(
     widget.operatingSystem ?? RuntimePlatform.operatingSystem,
@@ -446,17 +680,29 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
   /// these Swarms.
   bool _confirming = false;
   List<String> _confirmSwarms = const [];
-  Timer? _read;
-  DateTime? _since;
 
-  /// While it waits: the step setup said, and how long it has run.
-  String? _setupStep;
-  Duration? _elapsed;
+  late TeamSetupWatch _watch;
+  StreamSubscription<TeamSetupEnd>? _ends;
 
   @override
   void initState() {
     super.initState();
     widget.app.addListener(_changed);
+    _makeWatch();
+  }
+
+  void _makeWatch() {
+    _watch = TeamSetupWatch._(widget.app, _words, DateTime.now)
+      ..addListener(_changed);
+    TeamSetupWatch._watches[widget.app] = _watch;
+    _ends = _watch.ended.listen(_setupEnded);
+  }
+
+  void _dropWatch() {
+    unawaited(_ends?.cancel());
+    _watch
+      ..removeListener(_changed)
+      ..dispose();
   }
 
   @override
@@ -465,13 +711,15 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
     if (!identical(old.app, widget.app)) {
       old.app.removeListener(_changed);
       widget.app.addListener(_changed);
+      _dropWatch();
+      _makeWatch();
     }
   }
 
   @override
   void dispose() {
     widget.app.removeListener(_changed);
-    _read?.cancel();
+    _dropWatch();
     super.dispose();
   }
 
@@ -483,14 +731,10 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
   }
 
   void _reset() {
-    _read?.cancel();
-    _read = null;
     _step = _LockStep.intro;
     _outcome = _removeError = null;
     _busy = false;
     _confirming = false;
-    _setupStep = null;
-    _elapsed = null;
   }
 
   void _show(_LockStep step, String outcome) {
@@ -502,6 +746,59 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
     });
   }
 
+  /// A setup the watch followed ended. Where the lock holds the app, it says
+  /// why on the lock again, with Try again; otherwise a notice says it, with
+  /// Retry on a failure (#3169).
+  void _setupEnded(TeamSetupEnd end) {
+    if (!mounted) return;
+    if (end.kind != TeamSetupEndKind.ready && widget.app.teamSetupLocked) {
+      _show(
+        end.kind == TeamSetupEndKind.cancelled
+            ? _LockStep.cancelled
+            : _LockStep.retry,
+        end.lock,
+      );
+      return;
+    }
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    final here = _words.here.replaceFirst('this ', '');
+    final ready = end.kind == TeamSetupEndKind.ready;
+    messenger.showSnackBar(
+      SnackBar(
+        key: const Key('team-setup-notice'),
+        duration: Duration(seconds: ready ? 8 : 20),
+        showCloseIcon: true,
+        content: Text(
+          ready
+              ? 'Harness Team is ready on this $here. Teammates\' agents can run here now.'
+              : end.notice,
+        ),
+        action: ready
+            ? null
+            : SnackBarAction(
+                key: const Key('team-setup-notice-retry'),
+                label: 'Retry',
+                onPressed: () => unawaited(_retry()),
+              ),
+      ),
+    );
+  }
+
+  /// The notice's Retry: the system's prompt again, followed as before.
+  Future<void> _retry() async {
+    try {
+      final state = await widget.app.setUpTeamAccount();
+      if (state == 'started' || state == 'running') {
+        _watch.follow(restart: state == 'started');
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(SnackBar(content: Text(_words.unreachable)));
+    }
+  }
+
   Future<void> _start() async {
     setState(() {
       _busy = true;
@@ -511,11 +808,8 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
     try {
       switch (await widget.app.setUpTeamAccount()) {
         case 'started' || 'running':
-          _since = DateTime.now();
-          _setupStep = null;
-          _elapsed = Duration.zero;
           _show(_LockStep.waiting, words.waiting);
-          _scheduleRead();
+          _watch.follow(restart: true);
         case 'exists':
           await widget.app.teamAccountMade();
         case 'update':
@@ -534,78 +828,6 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
     } catch (_) {
       _show(_LockStep.retry, words.unreachable);
     }
-  }
-
-  /// The setup runs in this computer's daemon after the system's prompt;
-  /// nothing tells the app when it ends, so its status is read while the
-  /// prompt can still be open, and never after.
-  void _scheduleRead() {
-    _read?.cancel();
-    _read = Timer(_setupRead, () => unawaited(_readSetup()));
-  }
-
-  Future<void> _readSetup() async {
-    _read = null;
-    final setup = await widget.app.teamSetupProgress();
-    if (!mounted || _step != _LockStep.waiting) return;
-    switch (setup?.state) {
-      case 'exists':
-        await widget.app.teamAccountMade();
-        return;
-      case 'failed':
-        final detail = setup?.detail?.trim();
-        if (detail != null && _refusedPassword.hasMatch(detail)) {
-          _show(_LockStep.retry, _words.rejected);
-        } else {
-          _show(
-            _LockStep.retry,
-            detail == null || detail.isEmpty
-                ? 'Setup did not finish. Try again.'
-                : 'Setup did not finish: ${_sentence(detail)}',
-          );
-        }
-        return;
-      case 'declined':
-        _show(_LockStep.cancelled, _words.cancelled);
-        return;
-      // It ended with the account there and a part not (#2765): said, and Try again repairs it.
-      case 'incomplete':
-        final missing = setup?.detail?.trim();
-        _show(
-          _LockStep.retry,
-          missing == null || missing.isEmpty
-              ? 'Setup ended, but Harness Team is not finished. Try again.'
-              : 'Setup ended, but Harness Team is not finished: ${_sentence(missing)} Try again.',
-        );
-        return;
-      case 'running':
-        final since = _since;
-        setState(() {
-          _setupStep = setup?.step;
-          _elapsed =
-              setup?.elapsed ??
-              (since == null ? null : DateTime.now().difference(since));
-          _outcome = _words.doing(_setupStep) ?? _words.waiting;
-        });
-      case null:
-        // No answer (the daemon restarting): read again, until the limit.
-        break;
-      default:
-        // Anything else once it stopped running ('none': it ended with no
-        // account and nothing remembered, or the daemon restarted): the
-        // wait is over, and it says so (Scholes, 2026-11-04).
-        _show(
-          _LockStep.retry,
-          'Setup stopped before the Harness Team account was made. Try again.',
-        );
-        return;
-    }
-    final since = _since;
-    if (since != null && DateTime.now().difference(since) > _setupLimit) {
-      _show(_LockStep.retry, 'Setup did not finish. Try again.');
-      return;
-    }
-    _scheduleRead();
   }
 
   /// Try again while it waits: reads the status first, and starts setup
@@ -627,9 +849,6 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
         await _start();
     }
   }
-
-  static String _sentence(String text) =>
-      RegExp(r'[.!?]$').hasMatch(text) ? text : '$text.';
 
   Future<void> _askRemove() async {
     setState(() {
@@ -667,7 +886,9 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
 
   @override
   Widget build(BuildContext context) {
-    final locked = widget.app.teamSetupLocked;
+    // Past the password, setup goes on behind the person's work (#3169): the
+    // lock still holds, and comes back if setup fails.
+    final locked = widget.app.teamSetupLocked && !_watch.afterPassword;
     // One tree shape locked or not, so the app below is never remounted.
     return Stack(
       fit: StackFit.expand,
@@ -769,10 +990,10 @@ class _TeamAccountSetupLockState extends State<TeamAccountSetupLock> {
                       ),
                     ],
                   ),
-                  if (_step == _LockStep.waiting && _elapsed != null) ...[
+                  if (_step == _LockStep.waiting && _watch.elapsed != null) ...[
                     const SizedBox(height: 8),
                     Text(
-                      _Words.sofar(_setupStep, _elapsed!),
+                      _Words.sofar(_watch.elapsed!),
                       key: const Key('team-account-lock-elapsed'),
                       style: muted,
                     ),

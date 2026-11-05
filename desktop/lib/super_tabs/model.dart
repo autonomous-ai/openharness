@@ -394,6 +394,7 @@ class SuperTabConversation {
             )
           : null,
       queueRank = (row['queueRank'] as num?)?.toDouble(),
+      priority = row['priority'] as String?,
       notBefore = DateTime.tryParse(row['notBefore'] as String? ?? ''),
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
@@ -496,6 +497,11 @@ class SuperTabConversation {
   /// (backend taskQueue.ts); null until someone moves it, when its number
   /// places it (task_groups.dart).
   final double? queueRank;
+
+  /// A task's priority as the server keeps it, `P0` to `P3` (backend
+  /// taskPriority.ts); null on a step, a chat, and a task from before it,
+  /// whose title may still mark one (`superTabTaskPriority`, backlog.dart).
+  final String? priority;
 
   /// The day before which its work may not start, a promise the PM keeps
   /// ("remove the preview route after Dec 4"); null when there is none.

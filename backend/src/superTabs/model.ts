@@ -408,6 +408,9 @@ export interface Conversation {
   queueRank?: number
   /** The day (YYYY-MM-DD) its work should not start before, a promise the PM marks with work.queue. */
   notBefore?: string
+  /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
+   *  from before priorities, which reads as P2. */
+  priority?: import('./taskPriority.js').TaskPriority
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */
@@ -481,6 +484,8 @@ export interface SuperTabState {
   overlapAlerts?: string[]
   /** Read-only, for a Lead's own reads (visibleState): the active work of the other projects it may know about. */
   otherProjectsWork?: OtherProjectWork[]
+  /** Read-only, for a project agent's reads (visibleState): the account every project's PM runs on, for the route's notes. */
+  pmAccounts?: PmAccount[]
   /** Read-only, for the Swarm owner's reads (visibleState): the projects nobody owns, by name and size (projects.ts). */
   ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
   ownerId: string
@@ -554,6 +559,26 @@ export interface SwarmLocalModels {
   ready?: boolean
   error?: string
 }
+/** An account a project's PM runs on (Ken, 11-05): its machine (a Mac's Harness Team account names that Mac too, whose
+ *  subscription it spends) and engine. A project the reader may not read is "another project", its PM unnamed. */
+export interface PmAccount { machineId: string; hostMachineId?: string; engine: string; project: string; pm: string }
+
+/** Every project's PM account (PmAccount): a PM could drain the account another project's PM ran on, and the route, reading
+ *  as an agent of one project, saw no other project's PM (review of #3134). */
+export function pmAccounts(state: SuperTabState, actor: Actor): PmAccount[] {
+  return projectsOf(state).flatMap(project => {
+    const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
+    const pm = leadId ? state.agents.find(a => a.id === leadId) : undefined
+    const engine = pm?.configuration?.engine
+    if (!pm || !engine) return []
+    const host = state.machines?.find(m => m.machineId === pm.machineId)?.hostMachineId
+    // A public project is named to every project agent, as otherProjectsWork names it (sharedWithLeads).
+    const readable = canReadProject(state, actor, project) || sharedWithLeads(project)
+    return [{ machineId: pm.machineId, ...(host ? { hostMachineId: host } : {}), engine,
+      project: readable ? project.name : 'another project', pm: readable ? pm.displayName ?? pm.name : 'its PM' }]
+  })
+}
+
 export interface OtherProjectWork {
   conversationId: string
   projectName: string
@@ -1052,5 +1077,10 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   const seen = seenMachineIds(visible)
   visible.conversations = visible.conversations.map(c => withSeenRequirement(c, seen))
+  // A project agent's route notes the accounts PMs run on, on machines it may see: after the Buddy's machines are gone.
+  if (actor.kind === 'agent' && visible.machines?.length) {
+    const machines = new Set(visible.machines.map(m => m.machineId))
+    visible.pmAccounts = pmAccounts(state, actor).filter(a => machines.has(a.machineId) || (a.hostMachineId !== undefined && machines.has(a.hostMachineId)))
+  }
   return visible
 }

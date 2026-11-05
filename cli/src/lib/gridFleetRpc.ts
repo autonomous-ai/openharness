@@ -64,16 +64,24 @@ export class GridFleetRpc {
         const output = { stdout: new GridOutputCapture(), stderr: new GridOutputCapture() }
         let stopped: string | null = null, done = false
         let timeout: ReturnType<typeof setTimeout>, kill: ReturnType<typeof setTimeout> | undefined
-        const command = gridCommand(gridBinaryPath(this.processEnv), request.args)
-        const child = spawn(command.file, command.args, {
-          env: { ...gridChildEnv(this.processEnv), ...(request.thinking === undefined ? {} : {
-            LLAMA_ARG_CHAT_TEMPLATE_KWARGS: JSON.stringify({ enable_thinking: request.thinking }),
-          }) }, stdio: ['ignore', 'pipe', 'pipe'],
-        })
         const finish = (code: number, error: string | null) => {
           if (done) return
           done = true; clearTimeout(timeout); clearTimeout(kill); ended()
           resolve({ ok: code === 0 && !error, code, stdout: output.stdout.text, stderr: output.stderr.text, error })
+        }
+        const command = gridCommand(gridBinaryPath(this.processEnv), request.args)
+        let child: ReturnType<typeof spawn>
+        try {
+          child = spawn(command.file, command.args, {
+            env: { ...gridChildEnv(this.processEnv), ...(request.thinking === undefined ? {} : {
+              LLAMA_ARG_CHAT_TEMPLATE_KWARGS: JSON.stringify({ enable_thinking: request.thinking }),
+            }) }, stdio: ['ignore', 'pipe', 'pipe'],
+          })
+        } catch (error) {
+          // A synchronous start failure (Windows' application control answers UNKNOWN) is reported as
+          // a result, and releases the counter an install waits on. It used to reject instead.
+          finish(127, `Grid could not start on this machine: ${error instanceof Error ? error.message : String(error)}. Check its Grid installation.`)
+          return
         }
         const stop = (reason: string) => {
           if (stopped || done) return
@@ -88,8 +96,9 @@ export class GridFleetRpc {
             stop(`Grid output exceeded ${maxOutput / 1024} KiB; use a narrower query.`); return
           }
         }
-        child.stdout.setEncoding('utf8').on('data', (data: string) => capture('stdout', data))
-        child.stderr.setEncoding('utf8').on('data', (data: string) => capture('stderr', data))
+        // stdio is a pipe pair by construction above, so neither is null.
+        child.stdout!.setEncoding('utf8').on('data', (data: string) => capture('stdout', data))
+        child.stderr!.setEncoding('utf8').on('data', (data: string) => capture('stderr', data))
         child.once('error', () => finish(127, 'Grid could not start on this machine. Check its Grid installation.'))
         child.once('close', code => finish(stopped ? 124 : code ?? 1, stopped || (code === 0 ? null : 'Grid command failed.')))
         timeout = setTimeout(() => stop('Grid command timed out. Verify the target state before retrying a deployment.'), request.timeoutMs)

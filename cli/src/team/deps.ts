@@ -26,7 +26,7 @@ import { readTeamConfig } from './config.js'
 import { agentTmpState } from '../lib/agentTmp.js'
 import { realPrivacyDeps, readTeamStatus, runPrivacyCheck, writeTeamStatus } from './privacy.js'
 import { takeHandoffFile } from './handoff.js'
-import { checkTeamEngines, realEngineCheckDeps } from './engines.js'
+import { checkTeamEngines, ownerEngineCopies, realEngineCheckDeps } from './engines.js'
 import { teamSetupDecisionFile, writeTeamSetupDecision } from './autoSetup.js'
 
 /** What `launchctl print system/<label>` says of a job; not loaded when launchd does not know it. Readable without root. */
@@ -130,6 +130,7 @@ export function teamCommandDeps(options: {
         node: managedNodePath(),
         nodeRuntimeDir: managedNodeRuntimeDir(),
         tmuxRuntimeDir: tmux ? dirname(dirname(tmux)) : null,
+        ...process.platform === 'darwin' ? { engineCopies: ownerEngineCopies({ home: homedir(), nodeRuntimeDir: managedNodeRuntimeDir() }) } : {},
       }
     },
     exists: existsSync,

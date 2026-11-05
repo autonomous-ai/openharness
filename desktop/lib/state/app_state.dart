@@ -1,6 +1,7 @@
 import '../core/home_dir.dart';
 import '../usage/usage_account_key.dart';
 import '../measurement/product_measurement.dart';
+import '../measurement/speed_marks.dart';
 import '../measurement/product_runtime_health.dart';
 import '../measurement/product_connections.dart';
 import '../core/crash_log.dart';
@@ -106,6 +107,7 @@ import '../super_tabs/backend_transport.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
 import '../super_tabs/join_machine.dart';
+import '../super_tabs/join_seen.dart';
 import '../super_tabs/identity.dart' show superTabMachineName;
 import '../super_tabs/view_store.dart';
 import '../super_tabs/notifications.dart'
@@ -1951,6 +1953,12 @@ class AppNotifier extends ChangeNotifier {
           currentUser?.id == null) {
         return;
       }
+      // However the person joined, this computer is added once to each Swarm
+      // new here (task #3160).
+      _addMachineWhereNew(
+        [for (final tab in tabs) tab.id],
+        {for (final swarm in swarms) ?swarm.superTabId, ...hidden},
+      );
       var changed = false;
       // Membership and names for the closed list: a tab hidden before a
       // restart has no open view to take its name from.
@@ -2704,6 +2712,29 @@ class AppNotifier extends ChangeNotifier {
   Stream<SwarmJoinedMachine> get joinedMachines => _joinedMachines.stream;
   final _joinAdding = <String>{};
 
+  /// The Swarms the join's add already ran or was decided for, per account on
+  /// this computer (super_tabs/join_seen.dart). Null without a local store:
+  /// nothing is added that could not be remembered.
+  SwarmJoinSeen? get _joinRecord {
+    final store = localStore;
+    if (store == null) return null;
+    if (!identical(store, _joinSeen?.store)) _joinSeen = SwarmJoinSeen(store);
+    return _joinSeen;
+  }
+
+  SwarmJoinSeen? _joinSeen;
+  Future<void>? _joinPass;
+
+  /// Swarms tried in this run where the person is not known to be a
+  /// collaborator or owner (a viewer, not listed yet, or a Swarm that could
+  /// not be read): tried again at the next launch, never on every discovery
+  /// (review of #3115).
+  final _joinPassed = <String>{};
+
+  /// The pass discovery started last, for tests to wait on.
+  @visibleForTesting
+  Future<void> get joinAddPassForTest => _joinPass ?? Future.value();
+
   /// A Swarm [tabId] just joined at this computer, as [role]: adds this
   /// computer to it with Add machine's defaults (super_tabs/join_machine.dart),
   /// then offers the Harness Team account, the one step macOS asks a password
@@ -2715,6 +2746,49 @@ class AppNotifier extends ChangeNotifier {
     bool alreadyMember = false,
   }) async {
     if (alreadyMember || role != 'collaborator') return;
+    await _addMachineToSwarm(tabId, joined: true);
+  }
+
+  /// Swarm discovery's list ([listed]), however each was joined: a domain
+  /// auto-join, a Workspace-open join, a join on the phone or the web
+  /// (Scholes, 2026-11-05, task #3160). The join's add runs once for each
+  /// Swarm new here; [knownHere], the Swarms open or hidden on this computer,
+  /// are taken as seen the first time, even by a pass that cannot add yet
+  /// (this computer's own row not known). One pass at a time: a discovery
+  /// while one runs leaves its list to the next.
+  void _addMachineWhereNew(List<String> listed, Set<String> knownHere) {
+    final record = _joinRecord;
+    final account = currentUser?.id;
+    if (_joinPass != null || record == null || account == null) return;
+    _joinPass = () async {
+      try {
+        final fresh = await record.fresh(account, listed, knownHere: knownHere);
+        for (final tabId in fresh) {
+          if (_disposed ||
+              currentUser?.id != account ||
+              _teamAccountHere() == null) {
+            return;
+          }
+          if (_joinPassed.contains('$account/$tabId')) continue;
+          await _addMachineToSwarm(tabId, joined: false);
+        }
+      } catch (error) {
+        appLog.info('super-tabs', 'joined Swarms not checked: $error');
+      } finally {
+        _joinPass = null;
+      }
+    }();
+  }
+
+  /// The join's add for one Swarm this account is in. The person's role is
+  /// read from the Swarm itself: a viewer's Swarm is neither added nor
+  /// recorded, so it is asked about again; an owner's is recorded and left.
+  /// A step that fails for a collaborator shows them a note saying what to do
+  /// (task #3160). [joined]: they joined it at this computer just now, so
+  /// they are known to be one before the Swarm is read; a Swarm only listed
+  /// that cannot be read says nothing yet, since they may be a viewer, and is
+  /// asked about again on the next discovery.
+  Future<void> _addMachineToSwarm(String tabId, {required bool joined}) async {
     final here = _teamAccountHere();
     final accountId = currentUser?.id;
     if (here == null || accountId == null || !_joinAdding.add(tabId)) return;
@@ -2722,30 +2796,72 @@ class AppNotifier extends ChangeNotifier {
         !_disposed &&
         status == AppStatus.authenticated &&
         currentUser?.id == accountId;
+    final machineName = stateOf(here)?.machine.displayName ?? 'This computer';
+    // Opened only for this add: let go after it, unless the person went to it
+    // meanwhile, so it does not keep polling unseen (review of #3115).
+    final openedHere = superTabs.peek(tabId) == null;
+    var collaborator = joined;
+    void failed(String problem) {
+      if (!collaborator || !current()) return;
+      _joinedMachines.add(
+        SwarmJoinedMachine(
+          tabId: tabId,
+          swarmName: superTabName(tabId) ?? 'the Swarm',
+          machineId: here,
+          machineName: machineName,
+          problem: problem,
+        ),
+      );
+    }
+
     try {
       final c = await superTabs.open(tabId);
       if (!current()) return;
       await c.refresh();
-      final note =
-          await SwarmJoinMachine(
-            machineRequest: superTabMachineRequest,
-            readResources: readMachineResources,
-            wake: wakeSuperTabHost,
-          ).add(
-            c,
-            machineId: here,
-            machineName: stateOf(here)?.machine.displayName ?? 'This computer',
-            current: current,
-          );
+      if (!current()) return;
+      final snapshot = c.snapshot;
+      if (snapshot == null) {
+        appLog.info('super-tabs', 'machine not added on join: unread Swarm');
+        if (!collaborator) _joinPassed.add('$accountId/$tabId');
+        failed('Could not reach the Swarm. Add this computer from Machines.');
+        return;
+      }
+      final role = snapshot.people
+          .where((p) => p.id == accountId)
+          .firstOrNull
+          ?.role;
+      if (role == null || role == 'viewer') {
+        _joinPassed.add('$accountId/$tabId');
+        return;
+      }
+      collaborator = role == 'collaborator';
+      await _joinRecord?.mark(accountId, tabId);
+      if (!collaborator) return;
+      final note = await SwarmJoinMachine(
+        machineRequest: superTabMachineRequest,
+        readResources: readMachineResources,
+        wake: wakeSuperTabHost,
+      ).add(c, machineId: here, machineName: machineName, current: current);
       if (note == null || !current()) return;
       _joinedMachines.add(note);
       // Joined by the person at this computer: the system asks once for the
       // Harness Team account (cli/src/team/autoSetup.ts).
-      if (note.added) await offerTeamAccount('join', tabId: tabId);
+      if (!note.added) return;
+      if (!await offerTeamAccount('join', tabId: tabId) && current()) {
+        _joinedMachines.add(note.withoutTeamOffer());
+      }
     } catch (error) {
       appLog.info('super-tabs', 'machine not added on join: $error');
+      if (!collaborator) _joinPassed.add('$accountId/$tabId');
+      failed('Could not add this computer. Add it from Machines.');
     } finally {
       _joinAdding.remove(tabId);
+      if (openedHere &&
+          !_disposed &&
+          activeSwarm.superTabId != tabId &&
+          superTabs.peek(tabId) != null) {
+        superTabs.release(tabId);
+      }
     }
   }
 
@@ -7025,6 +7141,7 @@ class AppNotifier extends ChangeNotifier {
   final _startupTimings = <String, int>{};
   final _startupClock = Stopwatch();
   void _markStartup(String step) {
+    speedMarks.launch(step);
     if (_startupClock.isRunning)
       _startupTimings[step] = _startupClock.elapsedMilliseconds;
   }
@@ -7664,6 +7781,7 @@ class AppNotifier extends ChangeNotifier {
     }
     try {
       await refreshMachines();
+      speedMarks.launch('machines listed');
     } catch (error) {
       if (!_authWorkCurrent(revision)) return;
       _reportMachineLoadError(error);
