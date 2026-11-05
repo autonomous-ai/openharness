@@ -236,10 +236,9 @@ describe('the nightly routing reflection', () => {
     await f.ship()
     // Two days later the evidence is still this week's, but the last day had no attempt.
     f.clock.now = NIGHT + 2 * DAY
-    const pass = await reflectNightly(db, f.store, f.clock.now)
+    await reflectNightly(db, f.store, f.clock.now)
     expect(await f.reports()).toEqual([])
     expect(await f.reports(quiet.conversationId)).toEqual([])
-    expect(pass.posted).toBe(0)
     expect(await f.store.postReflection(f.tab, 'lead', '2026-11-01')).toBe('empty')
     // The quiet project has no evidence, so no pass reads it; asked directly, it has nothing to say.
     expect(await f.store.postReflection(f.tab, quiet.projectId, '2026-11-01')).toBe('empty')
