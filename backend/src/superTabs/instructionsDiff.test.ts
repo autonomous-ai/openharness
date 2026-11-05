@@ -67,7 +67,28 @@ describe('droppedRules', () => {
     const moved = ['# Project instructions', '', '## Releases', '', `1. ${leo}`, '', '## Rules', '', `- ${tony}`].join('\n')
     expect(droppedRules(doc(leo, tony), moved)).toEqual([])
     expect(droppedRules(doc(leo), doc(leo.replace('the fix ships', 'the fix\n  ships')))).toEqual([])
-    expect(droppedRules(doc(tony), doc('Every phone app task runs first on Tony\'s Mac, both its Engineer and its Tester (0xken15, 2026-11-04).'))).toEqual([])
+    // Case, punctuation, plurals, stop words and the attribution's format are no change.
+    expect(droppedRules(doc(tony), doc('every phone-app task runs on Tony\'s Mac first; its Engineers and the Testers both (0xken15, 2026-11-04)'))).toEqual([])
+  })
+
+  // Review of #3112 (Heron21): words compared as a set let a rule lose one word in ten, and negations and numbers be moved.
+  it('refuses any change of a rule\'s words, negations, numbers or their order', () => {
+    const changed = (rule: string, to: string) => why(doc(rule), doc(to))
+    expect(changed(leo, leo.replace('within the hour', 'within the week'))).toEqual([[['Leo'], 'changed']])
+    const two = 'Every change gets two reviewers before merge (Ken, 2026-11-03).'
+    expect(changed(two, two.replace('two', 'one'))).toEqual([[['Ken'], 'changed']])
+    expect(changed(two, two.replace('before', 'after'))).toEqual([[['Ken'], 'changed']])
+    expect(changed(quiet, quiet.replace('18:00 and 09:00', '09:00 and 18:00'))).toEqual([[['Ken'], 'changed']])
+    const merges = 'The PM merges on review. It does not release without a test (Ken, 2026-11-03).'
+    expect(changed(merges, 'The PM does not merge on review. It releases without a test (Ken, 2026-11-03).')).toEqual([[['Ken'], 'changed']])
+    // A rewording that keeps the meaning is still a change of words: refused, so its person is asked.
+    const read = 'It gives its verdict once it has read the code (Ken, 2026-11-04).'
+    expect(changed(read, 'It gives its verdict after reading the code (Ken, 2026-11-04).')).toEqual([[['Ken'], 'changed']])
+  })
+
+  it('takes a merge only when every word in it comes from the rules it names', () => {
+    const merged = `${quiet.replace(' (Ken, 2026-11-02).', '')}, unless the PM judges it urgent, and ${tony[0]!.toLowerCase()}${tony.slice(1, -21)} (Ken, 2026-11-02; 0xken15, 4 Nov).`
+    expect(why(doc(tony, quiet), doc(merged)).map(([, w]) => w)).toEqual(['changed', 'changed'])
   })
 
   it('lists a rule whose meaning may have changed: a negation, a number or a new condition', () => {

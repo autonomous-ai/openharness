@@ -105,6 +105,8 @@ describe('the built-in PM schedule', () => {
     for (const words of ['from now on', 'always', 'don\'t', 'I told you', 'again you forgot', 'remember']) expect(taught).toContain(`"${words}"`)
     expect(taught).toContain('save it into the instructions in that same turn, before you answer')
     expect(taught).toContain('naming who said it')
+    // Review of #3112: an undated "(Ken)" is no rule the Swarm can keep.
+    expect(taught).toContain('naming who said it and the date, as (Name, YYYY-MM-DD)')
     expect(taught).toContain('Don\'t ask whether to save it')
   })
 
@@ -297,6 +299,7 @@ describe('the daily tidy', () => {
     expect(text).toContain('After the save, compare it with the previous revision: every person\'s rule, and who gave it, must still be there')
     expect(text).toContain('The Swarm refuses a save that drops one without that person\'s own approval message')
     expect(text).toContain('counts as done only when its save is made')
+    expect(text).toContain('Mark that save as the tidy ("tidy": true)')
   })
 
   it('tells the coordinator, in the built-in section, never to drop or weaken a person\'s rule on its own judgment', () => {

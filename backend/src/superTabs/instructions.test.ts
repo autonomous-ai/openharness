@@ -338,7 +338,8 @@ describe('an instructions save keeps the rules people gave', () => {
   const quiet = 'No releases between 18:00 and 09:00 Vietnam time (owner, 2026-11-02).'
   const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
   const base = doc(leo, tony, quiet)
-  const stored = (text = base, revision = 1) => ({ instructions: { revision, text } })
+  /** The revision a save replaces, saved at 500: an approval must come after it. */
+  const stored = (text = base, revision = 1) => ({ instructions: { revision, text, at: 500 } })
   /** A tab with the peer invited and the project's coordinator, whose saves carry askedBy. */
   function pm() {
     const f = fixture()
@@ -350,8 +351,8 @@ describe('an instructions save keeps the rules people gave', () => {
     try { run() } catch (error) { return error as { code: string; status: number; message: string; details: { dropped: unknown[] } } }
     throw new Error('the save went through')
   }
-  const approval = (id: string, author: { kind: 'person' | 'agent'; id: string }, source = false) =>
-    ({ id, author: { ...author, name: author.id, membershipGeneration: 'tab' }, source })
+  const approval = (id: string, author: { kind: 'person' | 'agent'; id: string }, source = false, createdAt = 900, conversationId = 'lead') =>
+    ({ id, author: { ...author, name: author.id, membershipGeneration: 'tab' }, source, createdAt, conversationId })
 
   it('refuses a save that drops an attributed rule, listing it and its person', () => {
     const { f, lead } = pm()
@@ -414,6 +415,10 @@ describe('an instructions save keeps the rules people gave', () => {
     expect(drop([approval('owner-said', { kind: 'person', id: 'owner' })])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
     expect(drop([approval('pm-said', { kind: 'agent', id: lead })])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
     expect(drop([approval('buddy-said', { kind: 'person', id: 'peer' }, true)])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    // Review of #3112 (Heron21): an old "thanks", from before the revision this save replaces, approves nothing; nor does a
+    // message in a conversation of another project.
+    expect(drop([approval('old-thanks', { kind: 'person', id: 'peer' }, false, 400)])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    expect(drop([approval('elsewhere', { kind: 'person', id: 'peer' }, false, 900, 'another-project-chat')])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
     // A message the save names but the store did not find approves nothing.
     expect(refusal(() => f.run(save(1, doc(tony, quiet), { askedBy: 'owner', approvals: ['missing'] }), as(lead), stored())))
       .toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
@@ -464,13 +469,24 @@ describe('an instructions save keeps the rules people gave', () => {
   })
 
   // A tidy counts as done only when a save follows it (pmSchedule.ts tidyRequest): the coordinator's save, not a person's.
-  it('marks a pending daily tidy done on the coordinator\'s save', () => {
+  it('marks a pending daily tidy done on the coordinator\'s save that says it is the tidy', () => {
     const { f, lead } = pm()
     f.state.projects![0]!.schedule = { lastSlot: 1, tidiedOn: '2026-11-04', tidyPending: true }
-    f.run(save(1, `${base}\n- Tests run first.`), peer, stored())
+    f.run(save(1, `${base}\n- Tests run first.`, { tidy: true }), peer, stored())
     expect(f.state.projects![0]!.schedule).toMatchObject({ tidyPending: true })
-    f.run(save(2, base, { askedBy: 'owner' }), as(lead), stored(`${base}\n- Tests run first.`, 2))
-    expect(f.state.projects![0]!.schedule).toEqual({ lastSlot: 1, tidiedOn: '2026-11-04', tidiedRevision: 3 })
+    // Review of #3112 (Heron21): a correction the coordinator saves after the request is not the tidy.
+    f.run(save(2, `${base}\n- Tests run first.\n- Lint first.`, { askedBy: 'owner' }), as(lead), stored(`${base}\n- Tests run first.`, 2))
+    expect(f.state.projects![0]!.schedule).toMatchObject({ tidyPending: true })
+    f.run(save(3, base, { askedBy: 'owner', tidy: true }), as(lead), stored(`${base}\n- Tests run first.\n- Lint first.`, 3))
+    expect(f.state.projects![0]!.schedule).toEqual({ lastSlot: 1, tidiedOn: '2026-11-04', tidiedRevision: 4 })
+  })
+
+  // Review of #3112 (Heron21): with the revision it replaces unread, nothing can be checked, so nothing is saved.
+  it('refuses a save when the revision it replaces cannot be read', () => {
+    const { f, lead } = pm()
+    f.run(save(1, base), owner, stored())
+    expect(refusal(() => f.run(save(2, doc(tony), { askedBy: 'owner' }), as(lead), { instructions: null })))
+      .toMatchObject({ code: 'INSTRUCTIONS_UNAVAILABLE', status: 503 })
   })
 
   it('leaves a rule whose person is no member to the project\'s owner', () => {
