@@ -2755,6 +2755,8 @@ void main() {
           findsOneWidget,
         );
         await name(tester, 'notes-app');
+        // Named above its field, as the mockup has it, once typed in too.
+        expect(key('swarm-new-repo-name-label'), findsOneWidget);
         expect(find.text('github.com/$owner/notes-app'), findsOneWidget);
         expect(
           tester.widget<Switch>(key('swarm-new-repo-private')).value,
