@@ -746,6 +746,7 @@ class SwarmThread extends ChangeNotifier
       ),
       files: outgoing,
       voice: voice,
+      held: (voiceFiles: attached),
     );
     for (final file in attached) {
       files.remove(file);
@@ -913,6 +914,13 @@ class SwarmThread extends ChangeNotifier
   /// A refused reply's text and files back in the box, before anything
   /// typed or added since.
   void _restore(SwarmPost post) {
+    if (post.held case (voiceFiles: final List<SwarmOutgoingFile> attached)) {
+      final since = files.files;
+      files
+        ..clear()
+        ..add([...attached, ...since]);
+      return;
+    }
     final sent = post.held;
     if (sent
         is! ({

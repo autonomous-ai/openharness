@@ -1044,6 +1044,7 @@ class SwarmConversation extends ChangeNotifier
       ),
       files: outgoing,
       voice: voice,
+      held: (voiceFiles: attached),
     );
     _replyingTo = null;
     error = null;
@@ -1638,6 +1639,13 @@ class SwarmConversation extends ChangeNotifier
 
   /// A refused post's text back in the draft, before anything typed since.
   void _restore(SwarmPost post) {
+    if (post.held case (voiceFiles: final List<SwarmOutgoingFile> attached)) {
+      final since = files.files;
+      files
+        ..clear()
+        ..add([...attached, ...since]);
+      return;
+    }
     final sent = post.held;
     if (sent
         is! ({
