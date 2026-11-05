@@ -275,5 +275,22 @@ class DesktopProcessTests(unittest.TestCase):
         self.assertLess(receipt["duration_seconds"], 5)
 
 
+    def test_a_shard_out_of_time_names_the_files_it_did_not_reach(self):
+        """Task #3458: shard 3 hit its limit with a few files never reached, and nothing said which."""
+        result, receipt, calls = self.run_driver("partial", ["--timeout", "2"])
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(receipt["checks"][0]["status"], "timeout")
+        self.assertEqual(receipt["unreached_files"], ["test/two_test.dart"])
+        self.assertIn("Not reached before the time limit (1 file): test/two_test.dart", result.stdout)
+        self.assertIn("::error title=Desktop shard out of time::", result.stdout)
+        self.assertNotIn("one_test.dart", result.stdout.split("Not reached", 1)[1].splitlines()[0])
+
+    def test_a_run_that_finishes_names_no_unreached_files(self):
+        result, receipt, calls = self.run_driver()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(receipt.get("unreached_files"), [])
+        self.assertNotIn("Not reached", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
