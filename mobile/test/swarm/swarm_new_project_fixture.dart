@@ -163,8 +163,10 @@ class NewProjectSwarm {
   /// Each New repository request's body, in order.
   final repositoryRequests = <Map<String, dynamic>>[];
 
-  /// The time the last New repository request answered with.
+  /// The time the last New repository request answered with, and how long
+  /// before [newProjectNow] its requests say they were asked.
   int? creationAt;
+  Duration creationAgo = Duration.zero;
 
   /// GitHub's callback came back for the project [projectId]'s last request:
   /// its `repositoryCreation` reads [state] in every read from now on.
@@ -268,7 +270,9 @@ class NewProjectSwarm {
     fake.routes['/api/super-tabs/$id/projects/'] = (body) async {
       if (refuseRepository case final refuse?) return refuse(body!);
       repositoryRequests.add(body!);
-      final at = creationAt = 1000 + repositoryRequests.length;
+      final at = creationAt =
+          newProjectNow.subtract(creationAgo).millisecondsSinceEpoch +
+          repositoryRequests.length;
       final made = projects.lastWhere((p) => p['name'] == 'New project');
       made['repositoryCreation'] = {
         'owner': body['owner'],

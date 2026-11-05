@@ -2912,6 +2912,31 @@ void main() {
         expect(swarm.commands('lead.start'), hasLength(1));
       });
 
+      // Heron, #3201's security review: a server that died mid-create leaves
+      // it creating; past five minutes from its request, Try again asks
+      // afresh, and a repository made meanwhile reads as made then.
+      testWidgets('creating for more than five minutes offers Try again, '
+          'which asks again', (tester) async {
+        final swarm = NewProjectSwarm()
+          ..ownerState = 'ready'
+          ..creationAgo = const Duration(minutes: 6);
+        final host = await pump(tester, [swarm]);
+        final made = await createNew(tester, host, swarm);
+        swarm.finishCreation(made, 'creating');
+        await host.session!.inbox.reader(tab)!.refresh();
+        await tester.pumpAndSettle();
+        expect(
+          find.text(swarmRepositoryStuck(owner, 'notes-app')),
+          findsOneWidget,
+        );
+        expect(find.text('Try again'), findsOneWidget);
+        swarm.creationAgo = Duration.zero;
+        await tester.tap(key('swarm-new-project-create'));
+        await pumpFor(tester);
+        expect(swarm.repositoryRequests, hasLength(2));
+        expect(find.text('Creating $owner/notes-app…'), findsOneWidget);
+      });
+
       testWidgets('too many organization checks: the choice stays, and it '
           'says to try again in a minute', (tester) async {
         final swarm = NewProjectSwarm()
