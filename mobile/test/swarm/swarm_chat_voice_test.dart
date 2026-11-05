@@ -194,7 +194,7 @@ void main() {
     expect(fake.commands, isEmpty);
   });
 
-  testWidgets('a voice message draws its bubble, its words behind →A', (
+  testWidgets('a voice message draws its bubble, which plays only', (
     tester,
   ) async {
     fake.routes[messages] = (_) => {
@@ -230,9 +230,8 @@ void main() {
     expect(find.text('1:21'), findsOneWidget);
     expect(find.text('Ship the parser today.'), findsNothing);
     expect(find.text('Voice message.wav'), findsNothing, reason: 'no chip');
-    await tester.tap(key('swarm-voice-words-toggle'));
-    await tester.pump();
-    expect(find.text('Ship the parser today.'), findsOneWidget);
+    expect(find.text('→A'), findsNothing);
+    expect(key('swarm-voice-words-toggle'), findsNothing);
   });
 
   testWidgets('no mic where none can be heard', (tester) async {

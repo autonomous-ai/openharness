@@ -301,7 +301,9 @@ void main() {
       await tester.pump();
     }
 
-    testWidgets('shows play, the waveform, its length and →A, and no text', (
+    // Voice messages play only, as Telegram draws them: no →A, no words, no
+    // option to show them (anh Dee, 11-04, and 11-05 "I already told you NO").
+    testWidgets('plays only: play, the waveform and its length; no →A', (
       tester,
     ) async {
       await show(tester, withVoice());
@@ -316,10 +318,9 @@ void main() {
         find.descendant(of: bubble, matching: find.text('1:21')),
         findsOneWidget,
       );
-      expect(
-        find.descendant(of: bubble, matching: find.text('→A')),
-        findsOneWidget,
-      );
+      expect(find.text('→A'), findsNothing);
+      expect(toggle, findsNothing);
+      expect(find.byTooltip('Show words'), findsNothing);
       expect(find.text(_words), findsNothing);
       expect(
         find.descendant(of: row, matching: find.byType(SuperTabMessageText)),
@@ -331,26 +332,9 @@ void main() {
       await close(tester);
     });
 
-    testWidgets('→A shows the words under the bubble, and again hides them', (
+    testWidgets('a clip without words says nothing about words', (
       tester,
     ) async {
-      await show(tester, withVoice());
-      expect(find.byTooltip('Show words'), findsOneWidget);
-      await tester.tap(toggle);
-      await tester.pumpAndSettle();
-      expect(find.text(_words), findsOneWidget);
-      expect(find.byTooltip('Hide words'), findsOneWidget);
-      expect(
-        tester.getTopLeft(find.text(_words)).dy,
-        greaterThan(tester.getBottomLeft(toggle).dy),
-      );
-      await tester.tap(toggle);
-      await tester.pumpAndSettle();
-      expect(find.text(_words), findsNothing);
-      await close(tester);
-    });
-
-    testWidgets('a clip with no words says so, and why', (tester) async {
       await show(
         tester,
         ConversationServer()
@@ -362,16 +346,8 @@ void main() {
             ],
           ),
       );
-      await tester.tap(toggle);
-      await tester.tap(
-        find.byKey(const ValueKey('super-voice-words-toggle:v2')),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('Not transcribed'), findsOneWidget);
-      expect(
-        find.text('Not transcribed: today’s voice limit was used'),
-        findsOneWidget,
-      );
+      expect(find.text('→A'), findsNothing);
+      expect(find.textContaining('transcribed'), findsNothing);
       await close(tester);
     });
 
@@ -446,33 +422,27 @@ void main() {
       await close(tester);
     });
 
-    testWidgets(
-      'on Linux Play opens the file as a chip does',
-      (tester) async {
-        await show(tester, withVoice());
-        await tester.tap(find.byTooltip('Play'));
-        await tester.pumpAndSettle();
-        expect(opened, [url]);
-        expect(fetched, isEmpty);
-        expect(sources, isEmpty);
-        await close(tester);
-      },
-      variant: TargetPlatformVariant.only(TargetPlatform.linux),
-    );
+    testWidgets('on Linux Play opens the file as a chip does', (tester) async {
+      await show(tester, withVoice());
+      await tester.tap(find.byTooltip('Play'));
+      await tester.pumpAndSettle();
+      expect(opened, [url]);
+      expect(fetched, isEmpty);
+      expect(sources, isEmpty);
+      await close(tester);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
-    testWidgets(
-      'on Windows Play plays in the chat, from a local copy',
-      (tester) async {
-        await show(tester, withVoice());
-        await tester.tap(find.byTooltip('Play'));
-        await settleFiles(tester);
-        expect(opened, isEmpty);
-        expect(sources, hasLength(1));
-        expect(sources.single.isScheme('file'), isTrue);
-        await close(tester);
-      },
-      variant: TargetPlatformVariant.only(TargetPlatform.windows),
-    );
+    testWidgets('on Windows Play plays in the chat, from a local copy', (
+      tester,
+    ) async {
+      await show(tester, withVoice());
+      await tester.tap(find.byTooltip('Play'));
+      await settleFiles(tester);
+      expect(opened, isEmpty);
+      expect(sources, hasLength(1));
+      expect(sources.single.isScheme('file'), isTrue);
+      await close(tester);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.windows));
   });
 }
 

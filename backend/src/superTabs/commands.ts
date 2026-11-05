@@ -2638,9 +2638,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // What goes out is the owner's own message (anh Dee, task #2926): their words, or the one line they saw and okayed, and
       // nothing else of their private chat.
-      const words = command.text ?? fail('PROPOSAL_TEXT', 'Send the words to post as your owner in "text": show them the line first ("I\'ll post this as you: …"), and send it once they say ok.', 400)
+      const words = command.text ?? fail('PROPOSAL_TEXT', 'Send the words to post as your owner in "text": show them the line first with quotes (I\'ll post this as you: "…"), and send it once they say ok.', 400)
       if (!okayedWords(words, ask)) {
-        fail('PROPOSAL_UNSHOWN', 'Post only your owner\'s own words, or the exact line you showed them just before they said ok. Show it to them ("I\'ll post this as you: …") and send it once they agree.', 403)
+        fail('PROPOSAL_UNSHOWN', 'Post only your owner\'s own words, or the exact quoted line you showed them just before they said ok. Show it again with quotes (I\'ll post this as you: "…") and send only that line once they agree.', 403)
       }
       if (chat.proposals?.includes(command.ownerMessageId)) fail('PROPOSAL_SENT', 'A proposal was already sent for that message. Ask your owner before sending another.')
       const attachments = [...new Set(command.attachmentIds ?? [])]
