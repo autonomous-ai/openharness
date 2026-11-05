@@ -11,6 +11,8 @@ import { availableSlots, slotCounter, machineTeamWork, type ContributedMachine }
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
+import { projectPulse, type Pulse } from '../pulse.js'
+import { logger } from '../../utils/logger.js'
 import { coordinatorNameOf, roleNameOf } from '../instructions.js'
 import { withAvatarView } from '../profile.js'
 import { swarmUsernames } from '../usernames.js'
@@ -65,7 +67,7 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
 /** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping or the
  *  leaderboard's (the leaderboard read sums it), except when it shipped. */
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
-  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
+  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
   // A Buddy chat names its owner instead of an audience: an app from before Buddies takes a private chat of the reader
   // alone for their Chat with PM, and would send what they write for the PM to their Buddy instead (buddies.ts).
   const readers = isBuddyChat(group) ? { buddyOwnerId: audience!.people[0]!.id } : audience ? { audience } : {}
@@ -97,7 +99,7 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
   // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts). The built-in
   // schedule's slot is the coordinator poll's bookkeeping (pmSchedule.ts), like progress: no reader shows it.
-  if (head.projects) head.projects = head.projects.map(({ progress: _progress, schedule: _schedule, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
+  if (head.projects) head.projects = head.projects.map(({ progress: _progress, schedule: _schedule, idleSince: _idle, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
   const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
   const buddy = isBuddyReader(state, actor)
@@ -126,6 +128,21 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
 export const progressView = (data: NonNullable<SwarmParts['progress'][number]['data']>): ProgressView =>
   ({ ...data, requestedAt: data.requestedAt ?? null })
 
+/** The board's pulse of each project the reader sees (pulse.ts, task #3384), from the stored state. One that cannot be worked
+ *  out is left out and logged: the board then draws no strip rather than a wrong one. */
+function pulses(state: SuperTabState, visible: SuperTabState, now: number): Record<string, Pulse> | undefined {
+  if (!visible.projects?.length) return undefined
+  const out: Record<string, Pulse> = {}
+  for (const seen of visible.projects) {
+    const project = state.projects?.find(p => p.id === seen.id)
+    if (!project) continue
+    try { out[project.id] = projectPulse(state, project, now) } catch (error) {
+      logger.error('[swarm-pulse] could not work out a project\'s pulse', { tabId: state.id, projectId: project.id, error: String(error) })
+    }
+  }
+  return out
+}
+
 function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now: number, extras: ReadExtras): Derived {
   // Where New Project's Product Manager would run on each teammate's machine, decided as its start decides (leadStart.ts).
   const leads = actor.kind === 'person' && state.people.find(p => p.id === actor.userId)?.role !== 'viewer'
@@ -144,7 +161,9 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
       teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const }, ...(version ? { clientVersion: version } : {}),
       ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(machineSuspended ? { machineSuspended } : {}), ...(leads[pool.machineId] ? { lead: leads[pool.machineId] } : {}) }] as const
   }
+  const pulse = pulses(state, visible, now)
   return {
+    ...(pulse ? { pulse } : {}),
     agents: Object.fromEntries(visible.agents.map(seen => [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,
       workDecision: seen.workDecision === 'awaiting' && state.agents.find(a => a.id === seen.id)!.workDecision !== 'awaiting' ? 'awaiting' as const : null,
       roleId: seen.roleId ?? null,
