@@ -572,6 +572,41 @@ class SuperTabBuddyBar extends StatelessWidget {
     );
   }
 
+  /// The words the Buddy's machine reports for a switch the Buddy guard held
+  /// (cli superTabs/buddyModel.ts refusal(), task #3256), as the backend's
+  /// line in the Buddy chat begins (backend superTabs/buddyModel.ts).
+  static const _heldSwitch =
+      "Couldn't switch your Buddy: Start your Buddy again to switch its model";
+
+  /// Whether [agent]'s last switch failed because it must be started again:
+  /// its newest system line in this chat says so, and no switch is under way.
+  /// Its machine writes that line as the Buddy itself, so a later line (a
+  /// switch that landed, another failure) settles it, and a Buddy started
+  /// again, a new agent, never inherits it. Scholes, 11-05: the line alone
+  /// told him to start his Buddy again, with no way to do it while it ran.
+  bool _mustStartAgain(SuperTabController c, SuperTabAgent agent) {
+    if (!chat.isSwarmBuddyChat || agent.modelRequest != null) return false;
+    final last = c
+        .messages(chat.id)
+        .where(
+          (m) => m.source['kind'] == 'system' && m.author['id'] == agent.id,
+        )
+        .lastOrNull;
+    return last != null && last.text.startsWith(_heldSwitch);
+  }
+
+  /// A running Buddy refuses a second start (backend BUDDY_EXISTS): it is
+  /// removed and started again on the same machine and engine, as a down
+  /// one's Start again replaces it. Its chat and its name stay.
+  Future<void> _startAgain(SuperTabController c, SuperTabAgent agent) async {
+    if (!await c.removeBuddy(chat.projectId)) return;
+    await c.addBuddy(
+      projectId: chat.projectId,
+      machineId: agent.machineId,
+      engine: agent.engine,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -633,6 +668,24 @@ class SuperTabBuddyBar extends StatelessWidget {
             )
           else
             Text(where, style: DesktopChrome.metadata()),
+          if (agent.downSince == null && _mustStartAgain(c, agent))
+            Row(
+              key: const ValueKey('super-buddy-start-again'),
+              children: [
+                Expanded(
+                  child: Text(
+                    'Start your Buddy again to switch its model.',
+                    style: DesktopChrome.control(),
+                  ),
+                ),
+                TextButton(
+                  onPressed: busy
+                      ? null
+                      : () => unawaited(_startAgain(c, agent)),
+                  child: const Text('Start again'),
+                ),
+              ],
+            ),
           if (agent.downSince != null)
             Row(
               children: [

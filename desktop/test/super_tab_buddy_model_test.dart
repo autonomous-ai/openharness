@@ -555,7 +555,10 @@ void main() {
       await none(other);
       final later = swarm();
       line(later, held);
-      line(later, "Peer's Buddy now runs on Kimi K3, which your machine serves.");
+      line(
+        later,
+        "Peer's Buddy now runs on Kimi K3, which your machine serves.",
+      );
       await none(later);
       final moving = swarm(
         modelRequest: {'id': 'req2', 'gridModel': 'kimi-k3', 'name': 'Kimi K3'},
