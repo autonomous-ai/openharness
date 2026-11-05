@@ -14,7 +14,7 @@ import { CommandRetries, permanentRefusal } from './retries.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
 import { attachedFiles, attachmentsOf, formatSize, type FilesInFlight, type Relink } from './attachments.js'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import { BUDDY_HOME_MANIFEST, BUDDY_HOMES, buddyHomeDue, buddyHomeHoldsLost, buddyHomeRefreshing, pruneBuddyHome, refreshBuddyHome, removeBuddyHome, stopBuddyHomeRefresh } from './buddyHome.js'
@@ -445,11 +445,19 @@ export const BUDDY_SESSION_GONE_MS = 60_000
  *  idle time counts from the wake, so a Mac that slept through 30 minutes never ends a working session as it wakes (security
  *  review 1 of #2345). */
 export const BUDDY_SESSION_SLEEP_GAP_MS = 2 * 60_000
-const writeJournal = (file: string, journal: Journal) => {
+/** Saves [journal] whole, through a temporary file of its own: a fixed `.next` name let another writer's save move it away
+ *  first, and every save then failed (task #3514: Mac 3's Team host, 11-06, ENOENT on the rename). A save that fails leaves
+ *  no temporary file behind. */
+export const writeJournal = (file: string, journal: Journal) => {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
-  const temporary = `${file}.next`
-  writeFileSync(temporary, JSON.stringify(journal), { mode: 0o600, flush: true })
-  renameSync(temporary, file)
+  const temporary = `${file}.${process.pid}.${randomUUID()}.next`
+  try {
+    writeFileSync(temporary, JSON.stringify(journal), { mode: 0o600, flush: true })
+    renameSync(temporary, file)
+  } catch (error) {
+    rmSync(temporary, { force: true })
+    throw error
+  }
 }
 
 /** Whether a message asks its reader something: then the answer goes to the one who asked. */
@@ -2083,9 +2091,15 @@ export class SuperTabHost {
         grantBuddyWide(buddyReadsOf(sent.key), wide ? { session: sent.session, wide: true, account: signedIn!, launch: launch! } : { session: sent.session, wide: false })
       } catch (error) { this.authorized.delete(id); throw error }
     }
-    // The durable intent must exist before the core can write. A thrown disk write must not deliver.
+    // The durable intent must exist before the core can write. A thrown disk write must not deliver, and leaves the delivery
+    // untyped, so the next pass types it: left 'submitting', it was reported interrupted and never typed (task #3514).
+    const before = entry.stage
     entry.stage = 'submitting'
-    this.persist()
+    try { this.persist() } catch (error) {
+      entry.stage = before
+      this.authorized.delete(id)
+      throw error
+    }
     this.active.add(id)
     const attached = [files.text, sent?.links.length ? ARTIFACT_LINKS(sent.links) : '', elsewhere.length ? LINKS_ELSEWHERE(elsewhere) : '']
       .filter(Boolean).join('\n\n')

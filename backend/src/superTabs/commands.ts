@@ -1,6 +1,7 @@
 import { pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
 import { applyPushOrigin, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import { crewMoveFailed, takeOverCrewMember, wakeCrewMember } from './crewKeep.js'
+import { moveTimingRow, startWake } from './crewTimes.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from './repositoryReach.js'
 import { admitByRoom, admitMachineStart, noRepositoryStart, failOwnAccountTeamEntry, ownAccountTeamEntry, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
@@ -1666,8 +1667,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** [worker] takes [group]'s work as assignment [assignmentId], after assignRefusal let it: what work.assign writes, and its
    *  brief to the worker. */
   const assignTo = (group: Conversation, worker: Agent, assignmentId: string) => {
-    // An asleep crew member wakes for it: its host reopens the session in place (crewKeep.ts).
-    wakeCrewMember(worker, context.now)
+    // An asleep crew member wakes for it: its host reopens the session in place (crewKeep.ts). The wake is timed from here to
+    // the first reading that shows it running (crewTimes.ts, task #3462).
+    if (wakeCrewMember(worker, context.now)) startWake(worker, group.id, context.now)
     // A Team agent's work marks the task (teamWritten.ts, audit H2).
     marking(group, () => markTeamWritten(state, group, worker))
     delete worker.workDecision
@@ -3248,7 +3250,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       noteStartSucceeded(state, start)
       result.agentId = agentId
       // A crew member's move: its new session becomes the same member, and the old one is retired (crewKeep.ts).
-      if (start.request.crewMoveOf) takeOverCrewMember(state, start, agentId, context.now, target => removeAgent(target))
+      if (start.request.crewMoveOf) {
+        const move = state.agents.find(a => a.id === start.request.crewMoveOf)?.movedTo
+        takeOverCrewMember(state, start, agentId, context.now, target => removeAgent(target))
+        // The move is timed from the keeper's pick to this takeover (crewTimes.ts, task #3462), once it took the member over.
+        const timed = move && state.agents.find(a => a.id === agentId)?.movedFrom?.agentId === start.request.crewMoveOf
+          ? moveTimingRow(state, agentId, move.at, move.reason, context.now) : null
+        if (timed) effects.messages.push(timed)
+      }
       // A thread session joins its chat's record, and hears the person's messages sent while it started, by delivery as any
       // other: its host's person check, run: judging and read grant apply to them too (spec: Security).
       if (start.request.buddySession) {

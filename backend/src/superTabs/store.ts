@@ -1,5 +1,7 @@
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
-import { applyCrewKeep, crewMoveRequest, crewNeedsMachine, isCrewMember, type CrewDeps } from './crewKeep.js'
+import { applyCrewKeep, crewMoveRequest, crewNeedsMachine, type CrewDeps } from './crewKeep.js'
+import { finishedWakes } from './crewTimes.js'
+import { isCrew } from './crew.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
@@ -4106,10 +4108,12 @@ export class SuperTabStore {
       // The crew keeper with the Swarm's time checks (crewKeep.ts): sleep, move off a failing machine, drop folders. A move is
       // placed only where a start would be admitted now, Team rules included.
       // The Team facts are read only when a member needs another machine (review of #3229); sleeps and folders need none.
-      const crew = sweep && state.agents.some(isCrewMember)
+      const crew = sweep && state.agents.some(isCrew)
         ? crewNeedsMachine(state, now) ? await this.crewDeps(tx, state, now) : { admits: () => false } : null
       const checked = [...failRefusedStarts(state, machineId, now), ...loseTasks(state, now, worker => worker.machineId === machineId),
-        ...sweep ? sweepLiveness(state, now) : [], ...crew ? applyCrewKeep(state, now, crew) : []]
+        ...sweep ? sweepLiveness(state, now) : [], ...crew ? applyCrewKeep(state, now, crew) : [],
+        // A woken crew member this reading shows running again: its wake's timing row (crewTimes.ts, task #3462).
+        ...finishedWakes(state, now)]
       // The 30-second sweep also hands out work when the Swarm, as loaded here, has a free crew member and a task for it.
       if (sweep && this.hooks.dispatch && projectsOf(state).some(p => !this.pmWaiting(tabId, state, p, now)
         && dispatchPlan(state, p.id, DISPATCH_RULES, now, this.refusedSkip(tabId, state, now)).length)) {
