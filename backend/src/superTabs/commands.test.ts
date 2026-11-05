@@ -1764,8 +1764,8 @@ describe('saving a machine again', () => {
       engineSuspensions: { claude: { at: NOW, fine: false } },
       observation: { receivedAt: NOW, runningHarnessIds: ['h1'], stoppedHarnessIds: [] } as never,
     }
-    Object.assign(f.state.machines[0]!, structuredClone(kept))
-    const lentThisWeek = () => lentIn(f.state.machines[0]!, weekSpan(week), NOW, { projects: new Set(['lead']), unsplit: true })
+    Object.assign(f.state.machines![0]!, structuredClone(kept))
+    const lentThisWeek = () => lentIn(f.state.machines![0]!, weekSpan(week), NOW, { projects: new Set(['lead']), unsplit: true })
     expect(lentThisWeek()).toBe(18_000_000)
     f.run(save(3), owner, owners)
     expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host', maxAgents: 3, ...kept })])
@@ -1774,7 +1774,7 @@ describe('saving a machine again', () => {
   it('gives a first-time contribution a clean record', () => {
     const f = fixture()
     f.run(save(2), owner, owners)
-    const record = f.state.machines[0]!
+    const record = f.state.machines![0]!
     for (const key of ['lent', 'lentDays', 'engineFailures', 'engineSuspensions', 'observation']) expect(record).not.toHaveProperty(key)
   })
 })
