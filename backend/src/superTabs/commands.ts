@@ -2285,7 +2285,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('INVALID_REQUEST', 'A request message opens a task of its own: leave out proposalMessageId, reviewOf and audience.', 400)
       }
       const request = command.requestMessageId ? requestOf(state, project, context.request) : undefined
-      if (request) settleRequest(state, project, request.messageId)
+      if (request) settleRequest(state, project, actor.kind === 'agent' ? actor.agentId : null, request.messageId)
       const requesterId = command.requesterId ? requester(state, project, command.requesterId)
         : proposalRequester(state, project, proposal?.personId) ?? request?.personId ?? (actor.kind === 'person' ? actor.userId : undefined)
       const number = nextConversationNumber(state)

@@ -72,10 +72,11 @@ export function settleReaction(state: SuperTabState, group: Conversation, agentI
   settle(group, ask => ask.id === messageId)
 }
 
-/** A task opened from the person's request [messageId] in [project]'s chat settles it (commands.ts requestOf). */
-export function settleRequest(state: SuperTabState, project: SwarmProject, messageId: string): void {
+/** A task the PM opens from the person's request [messageId] in [project]'s chat settles it (commands.ts requestOf); one anyone
+ *  else opens leaves the PM's answer owed (River's ruling on the review of #3209). */
+export function settleRequest(state: SuperTabState, project: SwarmProject, agentId: string | null, messageId: string): void {
   const chat = state.conversations.find(c => c.id === project.leadConversationId)
-  if (chat) settle(chat, ask => ask.id === messageId)
+  if (chat && agentId && pmOf(state, project) === agentId) settle(chat, ask => ask.id === messageId)
 }
 
 
