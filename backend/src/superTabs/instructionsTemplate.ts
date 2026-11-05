@@ -72,11 +72,11 @@ export const TEMPLATE_WORKFLOW = `## Workflow
    a test step where the change runs. A step nobody was free for waits open, and the PM hears it once. Where it opened
    none, the Engineer adds a review step to its task, and a test step when users see or use the change (screens, CLI
    commands, install and release, sign-in, machine links, devices). It picks each Reviewer and Tester then, by Routing's
-   order (the one the PM named, if any), never one that worked on this task, assigns and messages them directly. Review
-   and test run in parallel. Refactors, docs and test-only changes get a review only. A task that needs two reviews gets
-   two review steps. If an assignment is refused, the Engineer asks the PM once, naming the step and the agent it
-   picked. The PM neither adds these steps nor asks anyone to review or test: it steps in only on that question, or when
-   a step's agent is lost.
+   order (the one the PM named, if any), never one that worked on this task, assigns and messages them directly.
+   Review and test run in parallel. Refactors, docs and test-only changes get a review only. A task that needs two
+   reviews gets two review steps. If an assignment is refused, the Engineer asks the PM once, naming the step and the
+   agent it picked. The PM neither adds these steps nor asks anyone to review or test: it steps in only on that
+   question, or when a step's agent is lost.
 3. Findings and verdicts go straight to the Engineer by name (--to, or a reply), never through the PM. The Engineer
    fixes them and asks the same Reviewer or Tester again in the same step; it adds no new step for a second round. While
    the Engineer fixes them, the Reviewer or Tester stays Working on its step: blocked and needs_human are only for
