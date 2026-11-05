@@ -309,7 +309,8 @@ async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Extr
   const missing = [...new Set(rows.map(r => r.conversationId))].filter(id => !groups.has(id))
   if (missing.length) {
     // By id through its index (parts/indexed.ts): every person's read counts these on each poll.
-    for (const row of await groupsBy(tx, 'key', [{ $match: { tabId, deleted: false, key: { $in: missing } } }, { $project: { _id: 0, key: 1, data: 1 } }])) {
+    for (const row of await groupsBy(tx, 'key', [{ $match: { tabId, deleted: false, key: { $in: missing } } }, { $project: { _id: 0, key: 1,
+      data: { kind: 1, projectId: 1, audience: 1, archived: 1, assignment: { status: 1 } } } }])) {
       groups.set(row.key as string, row.data as unknown as Conversation)
     }
   }
