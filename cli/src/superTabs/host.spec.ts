@@ -6275,3 +6275,42 @@ describe('a crew member at rest', () => {
     expect(t.closeMember).toHaveBeenCalledTimes(2)
   })
 })
+
+// Task #3545: the PM's inbox goes when its turn ends. Its host says whether its turn is open with the PM's list read, and reads
+// that list again as soon as the turn ends, not on the PM's 30-second cadence. Another agent's read says nothing.
+describe('the PM\'s turn on its list read', () => {
+  const reads = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'GET' && String(path).includes('/deliveries'))
+    .map(([, path]) => String(path).replace(/^.*\/deliveries/, ''))
+  const turn = (t: ReturnType<typeof setup>, state: () => string) =>
+    vi.mocked(t.core.agents.activity).mockImplementation(async ids => Object.fromEntries(ids.map(id => [id, state() as 'working' | 'idle' | 'unknown'])))
+
+  it('says busy while the PM works and idle once it does not, and nothing for another agent', async () => {
+    const t = setup(); t.row.lead = true; t.idle()
+    let state = 'working'
+    turn(t, () => state)
+    const host = t.open()
+    await host.tick()
+    state = 'idle'
+    t.wait(31_000); await host.tick()
+    expect(reads(t)).toEqual(['?turn=busy', '?turn=idle'])
+    const other = setup(); other.idle()
+    turn(other, () => 'working')
+    await other.open().tick()
+    expect(reads(other)).toEqual([''])
+  })
+
+  it('reads the PM\'s list on the tick its turn ends, within its 30 seconds', async () => {
+    const t = setup(); t.row.lead = true; t.idle()
+    let state = 'working'
+    turn(t, () => state)
+    const host = t.open()
+    // The server pushes deliveries, so a list is read when due, not every second.
+    t.push({ type: '__deliveries_lease' })
+    await host.tick()
+    t.wait(1_000); await host.tick()
+    expect(reads(t)).toEqual(['?turn=busy'])
+    state = 'idle'
+    t.wait(1_000); await host.tick()
+    expect(reads(t)).toEqual(['?turn=busy', '?turn=idle'])
+  })
+})
