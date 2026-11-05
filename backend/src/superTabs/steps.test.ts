@@ -90,13 +90,18 @@ describe('assigning a step', () => {
       f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
       return { f, id, rev }
     }
+    /** The Engineer waits on its review: a post to it then holds the step (#3394: whatever the post says). */
+    const waitsOnReview = (f: ReturnType<typeof stepsFixture>) =>
+      f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: 'PR 7' } as Command, f.as(f.dev))
 
     it('from the step\'s own agent is kept, in the step\'s chat or the task\'s', () => {
       const a = reviewing()
+      waitsOnReview(a.f)
       post(a.f, a.id, [a.f.dev], a.rev)
       expect(a.f.group(a.id).assignment!.toldEngineerAt).toBe(a.f.now)
       // A reply to the Engineer's message reaches it, so it counts too; a plain post reaches no one since #2963.
       const b = reviewing()
+      waitsOnReview(b.f)
       post(b.f, b.id, [], b.rev)
       expect(b.f.group(b.id).assignment!.toldEngineerAt).toBeUndefined()
       const asked = b.f.run({ type: 'message.send', conversationId: b.id, text: 'Ready for review.', replyTo: null, recipientIds: [b.rev] } as Command, b.f.as(b.f.dev)).messages[0]!
@@ -105,6 +110,7 @@ describe('assigning a step', () => {
       expect(b.f.group(b.id).assignment!.toldEngineerAt).toBe(b.f.now)
       // Named from the task's own chat, once the Reviewer is in it.
       const c = reviewing()
+      waitsOnReview(c.f)
       c.f.run({ type: 'conversation.agent', conversationId: c.f.task, agentId: c.rev, present: true, lead: false })
       post(c.f, c.f.task, [c.f.dev], c.rev)
       expect(c.f.group(c.id).assignment!.toldEngineerAt).toBe(c.f.now)
@@ -146,12 +152,14 @@ describe('assigning a step', () => {
     // Review of #2659: Engineers often ask by post, "fixed at abc, please re-check", so a hung Reviewer must not stay held.
     it('ends with the Engineer\'s post to it, in the step\'s chat or the task\'s, and its 30 minutes restart', () => {
       const a = reviewing()
+      waitsOnReview(a.f)
       post(a.f, a.id, [a.f.dev], a.rev)
       a.f.tick(60_000)
       post(a.f, a.id, [a.rev], a.f.dev)
       expect(a.f.group(a.id).assignment!.toldEngineerAt).toBeUndefined()
       expect(a.f.group(a.id).assignment).toMatchObject({ status: 'working', progressAt: a.f.now })
       const b = reviewing()
+      waitsOnReview(b.f)
       post(b.f, b.id, [b.f.dev], b.rev)
       b.f.run({ type: 'conversation.agent', conversationId: b.f.task, agentId: b.rev, present: true, lead: false })
       b.f.tick(60_000)
@@ -769,24 +777,19 @@ describe('an Engineer waiting on its own steps', () => {
 
   // Review of #2744 (Wren2): a Reviewer stays working through the fix round its verdict asked for, waiting on the Engineer's
   // new revision; counting that step held the two on each other, so a hung Engineer was never found.
-  for (const via of ['a post', 'a failed check'] as const) {
-    it(`gets its 30 minutes from a verdict asking for changes by ${via}, while its Reviewer waits on it`, () => {
-      const { f, id, rev, reviewFor, task } = reviewing()
-      reviewFor(8)
-      if (via === 'a post') {
-        f.run({ type: 'message.send', conversationId: id, text: 'Ready to merge: With fixes. One Important.', replyTo: null, recipientIds: [f.dev] } as Command, f.as(rev))
-      } else {
-        f.run({ type: 'work.check', conversationId: f.task, assignmentId: task().id, checkId: f.group(f.task).checks[0]!.id, passed: false,
-          evidence: 'One Important at x.ts:1' } as Command, f.as(rev))
-      }
-      f.tick(QUIET_RUNNING_MS - MIN)
-      sweepLiveness(f.state, f.now)
-      expect(task()).toMatchObject({ status: 'working' })
-      f.tick(2 * MIN)
-      sweepLiveness(f.state, f.now)
-      expect(task()).toMatchObject({ status: 'lost' })
-    })
-  }
+  // A verdict asking for changes is a failed check (#3394: a post's words are not read).
+  it('gets its 30 minutes from a verdict asking for changes, while its Reviewer waits on it', () => {
+    const { f, rev, reviewFor, task } = reviewing()
+    reviewFor(8)
+    f.run({ type: 'work.check', conversationId: f.task, assignmentId: task().id, checkId: f.group(f.task).checks[0]!.id, passed: false,
+      evidence: 'One Important at x.ts:1' } as Command, f.as(rev))
+    f.tick(QUIET_RUNNING_MS - MIN)
+    sweepLiveness(f.state, f.now)
+    expect(task()).toMatchObject({ status: 'working' })
+    f.tick(2 * MIN)
+    sweepLiveness(f.state, f.now)
+    expect(task()).toMatchObject({ status: 'lost' })
+  })
 
   // Diego, 2026-11-04 (#2578): a step lost inside the PM's poll left its task recorded as waiting on it, so the same poll woke
   // the PM with a false stall and the Engineer lost its task 30 seconds later instead of after its 30 minutes.

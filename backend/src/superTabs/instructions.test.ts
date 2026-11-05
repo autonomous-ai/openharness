@@ -65,7 +65,9 @@ describe('the built-in template', () => {
     const flat = (text: string) => text.replace(/\s+/g, ' ')
     const reviewer = flat(INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('### Reviewer'), INSTRUCTIONS_TEMPLATE.indexOf('### Tester')))
     expect(reviewer).toContain('It gives its verdict once it has read the code and never waits for CI to finish: the PM checks CI before it merges (Workflow 5).')
-    expect(flat(TEMPLATE_WORKFLOW)).toContain('A verdict asking for changes, a Tester\'s too, is a message to the Engineer with the line "Ready to merge: No" or "Ready to merge: With fixes"')
+    // Dee, #3394: the Swarm reads a failed check recorded at the head it read, not a post's words.
+    expect(flat(TEMPLATE_WORKFLOW)).toContain('A verdict asking for changes, a Tester\'s too, is a failed check, recorded at the pull request head it read, with its findings sent to the Engineer')
+    expect(flat(TEMPLATE_WORKFLOW)).not.toContain('that line, sent to the Engineer')
   })
   it('keeps messages to and from the PM to work, answers and people, with verdicts on the step', () => {
     const flat = (text: string) => text.replace(/\s+/g, ' ')
