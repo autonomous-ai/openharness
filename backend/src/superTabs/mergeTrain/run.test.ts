@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { TrainProject } from '../store.js'
 import { runMergeTrain, type MergeTrainDeps, type TrainMemories } from './run.js'
+import { SEED_RULES } from '../policy.js'
+
+const OFF = async () => ({ enabled: false, everyMinutes: 10, rules: SEED_RULES })
+const ON = async () => ({ enabled: true, everyMinutes: 10, rules: SEED_RULES })
 
 const project: TrainProject = { tabId: 't1', projectId: 'p1', ownerId: 'o1', autonomousEnv: 'prod', repositoryUrl: 'https://github.com/acme/app', pulls: [] }
 
@@ -20,6 +24,7 @@ function deps(over: Partial<MergeTrainDeps> = {}) {
       revoke: async () => { calls.push('revoke') },
     },
     approved: async () => true,
+    rules: OFF,
     ...over,
   }
   return { value, calls }
@@ -33,7 +38,7 @@ describe('running the merge train', () => {
   })
 
   it('runs a switched-on project once per interval, with one token revoked after', async () => {
-    const { value, calls } = deps({ rules: async () => ({ enabled: true, everyMinutes: 10 }) })
+    const { value, calls } = deps({ rules: ON })
     const memories: TrainMemories = new Map()
     expect(await runMergeTrain(value, memories, 1_000_000)).toBe(1)
     expect(calls.filter(c => c === 'token' || c === 'revoke')).toEqual(['token', 'revoke'])
@@ -42,7 +47,7 @@ describe('running the merge train', () => {
   })
 
   it('skips a repository not approved for the project', async () => {
-    const { value, calls } = deps({ rules: async () => ({ enabled: true, everyMinutes: 10 }), approved: async () => false })
+    const { value, calls } = deps({ rules: ON, approved: async () => false })
     expect(await runMergeTrain(value, new Map(), 1_000_000)).toBe(0)
     expect(calls).toEqual([])
   })

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Check, Conversation } from '../model.js'
-import { componentOf, eligible, headReads, laneOf, requiredReads, splitRed, type TrainCandidate, type TrainTask } from './plan.js'
-import { TRAIN_DEFAULTS } from './config.js'
+import { componentOf, eligible, headReads, laneOf, splitRed, type TrainCandidate, type TrainTask } from './plan.js'
+import { requiredReads, SEED_RULES } from '../policy.js'
 
 const URL = 'https://github.com/acme/app/pull/7'
 const HEAD = 'a'.repeat(40), OLD = 'b'.repeat(40)
@@ -134,23 +134,20 @@ describe('lanes and components', () => {
   })
 })
 
-describe('requiredReads', () => {
+// The train's reads come from the project rules record (policy.ts, task #3475); its seed asks what the train's own table did.
+describe('requiredReads, from the rules record\'s seed', () => {
   it('asks the default for ordinary paths and two for the security areas, failing closed', () => {
-    expect(requiredReads(['backend/src/superTabs/cards.ts'])).toBe(1)
-    expect(requiredReads(['backend/src/github/tokens.ts'])).toBe(2)
-    expect(requiredReads(['backend/src/routes/auth.ts', 'docs/a.md'])).toBe(2)
-    expect(requiredReads(['backend/src/superTabs/purge.ts'])).toBe(2)
-    expect(requiredReads(['desktop/lib/super_tabs/buddy_guard.dart'])).toBe(2)
-  })
-  it('takes the reads from the rules record when it names the area, never fewer than the default', () => {
-    const reviews = { defaultReads: 1, rows: [{ area: 'Tokens', reads: 3 }] }
-    expect(requiredReads(['backend/src/github/tokens.ts'], reviews)).toBe(3)
-    expect(requiredReads(['backend/src/superTabs/cards.ts'], { defaultReads: 2, rows: [] })).toBe(2)
+    expect(requiredReads(SEED_RULES, ['backend/src/superTabs/cards.ts'])).toBe(1)
+    expect(requiredReads(SEED_RULES, ['backend/src/github/tokens.ts'])).toBe(2)
+    expect(requiredReads(SEED_RULES, ['backend/src/routes/auth.ts', 'docs/a.md'])).toBe(2)
+    expect(requiredReads(SEED_RULES, ['backend/src/superTabs/purge.ts'])).toBe(2)
+    expect(requiredReads(SEED_RULES, ['desktop/lib/super_tabs/buddy_guard.dart'])).toBe(2)
+    expect(requiredReads(SEED_RULES, null)).toBe(2)
   })
 })
 
-describe('config', () => {
+describe('the rules record\'s seed for the train', () => {
   it('is off until a project switches it on, every 10 minutes', () => {
-    expect(TRAIN_DEFAULTS).toEqual({ enabled: false, everyMinutes: 10 })
+    expect(SEED_RULES.mergeTrain).toEqual({ enabled: false, everyMinutes: 10 })
   })
 })

@@ -277,6 +277,8 @@ export interface Assignment {
   leaseUntil?: number
   /** Its agent's last progress the lease saw, for the Lead's wake-up when it is lost. */
   progressAt?: number
+  /** When its crew member was told it had been 2 hours without progress (dispatch.ts crewClock): once per quiet spell. */
+  nudgedAt?: number
   /** While it needs a human: the person its agent asked (work.status with ask), whom its wait names (liveness.ts). */
   askedOf?: string
   /** While it is blocked or needs a human: why it waits (heldReason.ts). Absent on a hold from before reasons. */
@@ -448,6 +450,15 @@ export interface Conversation {
   /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
    *  from before priorities, which reads as P2. */
   priority?: import('./taskPriority.js').TaskPriority
+  /** The lane its PM or a person put it in (dispatch.ts laneOf), set by work.lane, as the lane table writes it. Absent: its
+   *  owned paths choose. */
+  lane?: string
+  /** Its lane as the dispatch hands it out (dispatch.ts laneOf), stored when its paths or lane change (stampLane), so reads
+   *  only copy it. Absent on a chat, a step, and a task from before; null when no lane owns its paths. */
+  handOutLane?: string | null
+  /** The member it waits for, without active work (dispatch.ts): its builder, after another agent's failed check, red CI or a
+   *  merge conflict. The next assignment clears it. */
+  pin?: { agentId: string; why: 'findings' | 'ci' | 'conflict'; at: number }
   /** What its project's PM owes here (pulse.ts): people's messages that reached it, not answered, reacted to or made a task
    *  yet, at most MAX_OWED. Bookkeeping: readers get it counted in the pulse, never this list. */
   owed?: import('./pulse.js').OwedAsk[]
@@ -680,6 +691,8 @@ export const NOTICE_READERS = {
   // The Lead's wakes and requests, and the worker's "moved" line (liveness.ts, tidy.ts, projectUpdates.ts, digest.ts); two
   // projects changing the same code, to both their Leads in the Leads chat (commands.ts).
   'work-stalled': 'recipients', 'work-lost': 'recipients', 'work-resumed': 'recipients', 'idle-stop': 'recipients',
+  // A crew member's 2 hours without progress on its task, to that member (dispatch.ts crewClock, liveness.ts).
+  'crew-nudge': 'recipients',
   // An agent with no open task for 15 minutes, and a grid attempt's failed first review, told to the coordinator (tidy.ts
   // idleNotices, commands.ts work.check; project instructions, phase 4). `idle-stop` rows are from before.
   idle: 'recipients', 'review-failed': 'recipients',
