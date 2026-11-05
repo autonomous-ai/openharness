@@ -79,6 +79,13 @@ export async function addMember(tx: Transaction, workspaceId: string, person: { 
     : tx.swarmWorkspaceMember.create({ data: { id, workspaceId, userId: person.id, ...data } })
 }
 
+/** When this Workspace last removed `userId`, or null. An invitation sent before then is refused (task #3173). Removal records
+ *  outlive any invitation (30 days after they finish), so none sent before a removal is missed. */
+export async function latestRemovalAt(tx: Transaction, workspaceId: string, userId: string): Promise<number | null> {
+  const removal = await tx.swarmWorkspaceRemoval.findFirst({ where: { workspaceId, userId }, orderBy: { removedAt: 'desc' }, select: { removedAt: true } })
+  return removal ? removal.removedAt.getTime() : null
+}
+
 /** Whether this Workspace removed `userId`: auto-join never adds them to its Swarms. Unlike the member row, never purged. */
 export async function autoJoinDeclinedBy(tx: Transaction, workspaceId: string, userId: string): Promise<boolean> {
   const workspace = await tx.swarmWorkspace.findUnique({ where: { id: workspaceId }, select: { autoJoinDeclined: true } })
@@ -266,8 +273,8 @@ export class SwarmWorkspaces {
       if (!invitation || invitation.expiresAt.getTime() <= this.deps.now()) fail('NOT_FOUND', 'This invitation is unavailable.', 404)
       // A removal is final against an invitation sent before it (task #3173): `remove` deletes the pending one, and this
       // refuses one a removal from before that fix left behind. One sent after the removal is a new decision and stands.
-      const removal = await tx.swarmWorkspaceRemoval.findFirst({ where: { workspaceId, userId: user.sub }, orderBy: { removedAt: 'desc' }, select: { removedAt: true } })
-      if (removal && sentAt(invitation) < removal.removedAt.getTime()) fail('NOT_FOUND', 'This invitation is unavailable.', 404)
+      const removedAt = await latestRemovalAt(tx, workspaceId, user.sub)
+      if (removedAt !== null && sentAt(invitation) < removedAt) fail('NOT_FOUND', 'This invitation is unavailable.', 404)
       await tx.swarmWorkspaceInvitation.delete({ where: { id: invitation.id } })
       const role = invitation.role as WorkspaceRole
       const current = await activeMember(tx, workspaceId, user.sub)
