@@ -259,6 +259,8 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
       clock = Date.now()
       await hosts.changes(owner, s.machineId, { cursor: first.cursor })
       await store.deliveries(owner, s.tabId, s.lead)
+      // The worker's time checks (timeChecks.ts), which read the Swarm's open deliveries for its idle agents.
+      await store.runTimeChecks(s.tabId)
       // Last: ending the running work releases its run record and open deliveries.
       const work = ((await db.swarmGroup.findFirst({ where: { tabId: s.tabId, key: s.web } }))!.data as { assignment: { id: string } }).assignment.id
       await store.execute(owner, s.tabId, { operationId: randomUUID(),
@@ -284,7 +286,7 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(rows[0]!.nreturned!)
   })
 
-  it('the Lead\'s poll reads only the Swarm\'s open deliveries, not each agent\'s closed ones', () => {
+  it('the time checks read only the Swarm\'s open deliveries, not each agent\'s closed ones', () => {
     // Prisma sends the open statuses as an $or; the claimed-only read ending deliveries makes is the next test's.
     const rows = reads(entries, 'SuperTabDelivery', ['tabId', 'status', 'or'], ['agentId', 'messageId', 'assignmentId', 'conversationId'])
     expect(rows).toHaveLength(1)

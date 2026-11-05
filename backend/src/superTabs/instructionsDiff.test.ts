@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attributedRules, droppedRules, personKey, repeatedRules } from './instructionsDiff.js'
+import { attributedRules, budgetParts, droppedRules, INSTRUCTIONS_BUDGET, personKey, repeatedRules } from './instructionsDiff.js'
 
 // Task #3151 (Ken, 11-05, from lamp): a PM's tidy from revision 70 to 71 dropped Leo's rule and the "(0xken15, 4 Nov)" of a
 // rule it kept, and nothing checked the save.
@@ -158,5 +158,83 @@ describe('repeatedRules', () => {
     const base = '# Project\n\n## PM\n\n- Decides, never asks the owner to choose (Ken, 2026-11-04).\n'
     const added = '- Decides, never asks the owner to choose (Faye, 11-05).'
     expect(repeatedRules(base, `${base}\n## Reviewer\n\n${added}\n`)).toEqual([{ added: added.slice(2), existing: 'Decides, never asks the owner to choose (Ken, 2026-11-04).' }])
+  })
+})
+
+// Task #3392 (anh Dee, 11-05, decision 5): the instructions have a size budget by section, so they stay small.
+describe('budgetParts', () => {
+  const size = (text: string) => Buffer.byteLength(text)
+  const parts = (text: string) => Object.fromEntries(budgetParts(text).map(p => [p.part, p.bytes]))
+
+  it('splits core, each role section under Roles, and people notes, counting UTF-8 bytes', () => {
+    const intro = '# Project instructions\n\nHow this project works.\n\n## Roles\n\nEvery agent reads its role.\n\n'
+    const pm = '### PM\n\n- Opens one task per request.\n\n'
+    const engineer = '### Engineer\n\n- Builds it test first, chị Hà\u2019s way.\n\n'
+    const workflow = '## Workflow\n\n1. One request is one task.\n\n'
+    const notes = '## People notes\n\n- Ken likes short replies (Ken, 11-05).\n'
+    const doc = intro + pm + engineer + workflow + notes
+    expect(parts(doc)).toEqual({ core: size(intro + workflow), 'role PM': size(pm), 'role Engineer': size(engineer), 'people notes': size(notes), total: size(doc) })
+    expect(budgetParts(doc).find(p => p.part === 'role PM')!.budget).toBe(INSTRUCTIONS_BUDGET.role)
+    expect(INSTRUCTIONS_BUDGET).toEqual({ core: 6 * 1024, role: 2 * 1024, people: 3 * 1024, total: 20 * 1024 })
+  })
+
+  it('reads a heading inside a fenced block as text, and a ### outside Roles as core', () => {
+    const doc = '# P\n\n## Roles\n\n### PM\n\n```\n## Workflow\n```\n\n## Routing\n\n### Models\n\n- Opus builds.\n'
+    const pm = '### PM\n\n```\n## Workflow\n```\n\n'
+    expect(parts(doc)).toEqual({ core: size(doc) - size(pm), 'role PM': size(pm), total: size(doc) })
+  })
+})
+
+// Task #3392 (anh Dee, 11-05, decision 5): a person's rule may move instead of being kept in place, word for word with who
+// gave it: into people notes or a role section, into the project's rules record, or into a code task once it merges.
+describe('droppedRules with moved rules', () => {
+  const leo = 'A bug that reaches stable: the previous build is promoted back within the hour and the fix ships the same day (Leo, 2026-11-04).'
+  const quiet = 'No releases between 18:00 and 09:00 Vietnam time (Ken, 2026-11-02).'
+  const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
+  const brief = (line: string) => `Goal:\nShip the release guard.\n\nChanges:\n- ${line}\n\nConstraints:\nNone.\n\nOwns:\n- backend/`
+  const task = (line: string, open = false) => ({ text: brief(line), people: [], where: 'task #12', open })
+
+  it('keeps a rule moved word for word into people notes or a role section', () => {
+    const moved = ['# Project instructions', '', '## Roles', '', '### PM', '', `- ${quiet}`, '', '## People notes', '', `- ${leo}`].join('\n')
+    expect(droppedRules(doc(leo, quiet), moved)).toEqual([])
+  })
+
+  it('keeps a rule moved into the rules record, by who asked for it or by its attribution', () => {
+    const record = (text: string, people: string[]) => ({ text, people, where: 'the rules record', open: false })
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [record('No releases between 18:00 and 09:00 Vietnam time.', ['ken'])])).toEqual([])
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [record(quiet, [])])).toEqual([])
+    // Asked for by someone else, its person is lost: still dropped.
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [record('No releases between 18:00 and 09:00 Vietnam time.', ['dee'])]))
+      .toEqual([expect.objectContaining({ people: ['Ken'], why: 'removed' })])
+  })
+
+  it('keeps a rule moved into a code task once that task merged; an open one keeps the line, naming the task', () => {
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [task(quiet)])).toEqual([])
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [task(quiet, true)]))
+      .toEqual([{ text: quiet, people: ['Ken'], why: 'waiting', movedTo: 'task #12' }])
+  })
+
+  it('still drops a rule that moved without who gave it, or changed on the way', () => {
+    const unattributed = 'No releases between 18:00 and 09:00 Vietnam time.'
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [task(unattributed)])).toEqual([expect.objectContaining({ why: 'removed' })])
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [task(quiet.replace('18:00', '20:00'))])).toEqual([expect.objectContaining({ why: 'removed' })])
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [task(quiet.replace('time', 'time, unless the PM judges it urgent'))]))
+      .toEqual([expect.objectContaining({ why: 'removed' })])
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [task(quiet.replace('No releases', 'Releases'))])).toEqual([expect.objectContaining({ why: 'removed' })])
+    // A real drop, with nowhere it moved to.
+    expect(droppedRules(doc(leo, quiet), doc(leo), personKey, [])).toEqual([expect.objectContaining({ people: ['Ken'], why: 'removed' })])
+  })
+})
+
+describe('droppedRules with a rule in several places', () => {
+  const quiet = 'No releases between 18:00 and 09:00 Vietnam time (Ken, 2026-11-02).'
+  const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
+  // Review of #3220: an open task listed first hid the rules record that keeps the same rule.
+  it('counts a rule kept when any place keeps it, an open task listed first or not', () => {
+    const open = { text: `Changes:\n- ${quiet}`, people: [], where: 'task #12', open: true }
+    const record = { text: quiet, people: [], where: 'the rules record', open: false }
+    expect(droppedRules(doc(quiet), doc(), personKey, [open, record])).toEqual([])
+    expect(droppedRules(doc(quiet), doc(), personKey, [open, { ...open, where: 'task #13' }]))
+      .toEqual([expect.objectContaining({ why: 'waiting', movedTo: 'task #12' })])
   })
 })

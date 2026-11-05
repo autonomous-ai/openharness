@@ -4,6 +4,7 @@ import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { appendRouting, instructionsHash, legacyRoleName, MAX_INSTRUCTIONS_BYTES, roleNameOf, routingSummary, summarySchema } from './instructions.js'
 import type { SwarmProject } from './projects.js'
 import { INSTRUCTIONS_TEMPLATE, TEMPLATE_WORKFLOW } from './instructionsTemplate.js'
+import { budgetParts, INSTRUCTIONS_BUDGET } from './instructionsDiff.js'
 import { hostTab } from './read/hostRows.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
 
@@ -32,33 +33,48 @@ function fixture() {
 }
 
 describe('the built-in template', () => {
+  // Task #3392 (River, 11-05): a new project's PM must be able to add its routing lines, and a member a line to the PM's
+  // section, so the template keeps room in its core and 200 B in its PM section, every role within its budget. The core's
+  // room went from 800 B to 300 B when #3227's rule that the server opens review steps came in word for word (River, 11-06):
+  // rules leaving for code free room again.
+  it('keeps to the size budget, with room in its core and its PM section', () => {
+    const parts = budgetParts(INSTRUCTIONS_TEMPLATE)
+    expect(parts.find(p => p.part === 'core')!.bytes).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET.core - 300)
+    expect(parts.find(p => p.part === 'role PM')!.bytes).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET.role - 200)
+    for (const role of parts.filter(p => p.part.startsWith('role '))) expect(role.bytes, role.part).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET.role)
+    expect(parts.filter(p => p.part.startsWith('role ')).map(p => p.part)).toEqual(['role PM', 'role Engineer', 'role Reviewer', 'role Tester'])
+  })
   // Ken, 2026-11-02: one pull request showed as three tasks (#1835, its review #1918, its test #1919), and the PM opened
   // groups to hold, batch and triage work. Agents forgot which task they were on (agent context design, section 3).
   it('the template workflow has one task per request, steps, and the context tools', () => {
+    // Its wording is checked as text, wrapping aside (the template was rewrapped to its size budget, #3392).
+    const workflow = TEMPLATE_WORKFLOW.replace(/\s+/g, ' ')
     expect(TEMPLATE_WORKFLOW).toContain('1. One request is one task.')
     // Ken, 2026-11-02: the PM says what the task needs once, then stays out of it until the Engineer reports.
-    expect(TEMPLATE_WORKFLOW).toContain('It says which\n   reviews and tests the task needs')
-    expect(TEMPLATE_WORKFLOW).toContain("That is the PM's part until the Engineer reports.")
-    expect(TEMPLATE_WORKFLOW).toContain('The PM opens no task to hold, batch, triage or list work')
-    expect(TEMPLATE_WORKFLOW).toContain('adds a review step to its task')
+    expect(workflow).toContain('says which reviews and tests the task needs')
+    expect(workflow).toContain("That is the PM's part until the Engineer reports.")
+    expect(workflow).toContain('The PM opens no task to hold, batch, triage or list work')
+    expect(workflow).toContain('adds a review step to its task')
     // Task #3401: the server opens a ready pull request's steps from the files it changes; the Engineer opens them only
     // where it opened none.
-    expect(TEMPLATE_WORKFLOW).toContain('2. When the pull request is ready, the server opens its review steps from the files it changes')
-    expect(TEMPLATE_WORKFLOW).toContain('Where it opened none, the Engineer adds a review step to its task')
-    expect(TEMPLATE_WORKFLOW).toContain('it adds no new step for a second round')
+    expect(workflow).toContain('2. When the pull request is ready, the server opens its review steps from the files it changes')
+    expect(workflow).toContain('Where it opened none, the Engineer adds a review step to its task')
+    expect(workflow).toContain('it adds no new step for a second round')
     expect(TEMPLATE_WORKFLOW).toContain('run `mine`')
     expect(TEMPLATE_WORKFLOW).toContain('read `task GROUP`')
-    expect(TEMPLATE_WORKFLOW).toContain('read the thread before acting on it')
+    expect(workflow).toContain('In a thread others wrote in, read it before acting')
     // Task #2963: an unnamed post no longer reaches the PM, so the workflow says where verdicts and results go.
-    expect(TEMPLATE_WORKFLOW).toContain('A verdict goes to the Engineer by name\n   (--to, or a reply to its request); a result reaches the PM through status, never by a post to the PM.')
+    expect(workflow).toContain('3. Findings and verdicts go straight to the Engineer by name (--to, or a reply), never through the PM.')
+    expect(workflow).toContain('the Engineer sets its task done with the pull request and the evidence: that status is how the PM hears, once.')
+    expect(workflow).toContain('No agent sends the PM any other message besides a task that needs a person')
     // Ken, 2026-11-02 (from openharness): a two-review task gets two review steps; the Engineer picks its Reviewers
     // itself instead of asking the PM (since 2026-11-03, when the pull request is ready).
-    expect(TEMPLATE_WORKFLOW).toContain('A task that needs two\n   reviews gets two review steps.')
-    expect(TEMPLATE_WORKFLOW).toContain('never one that\n   worked on this task itself')
+    expect(workflow).toContain('A task that needs two reviews gets two review steps.')
+    expect(workflow).toContain('never one that worked on this task,')
     // Ken, 2026-11-02: an Engineer posted "review and test pass" and then set Done, two messages for one event.
-    expect(TEMPLATE_WORKFLOW).toContain('that status is how the PM hears, once')
-    expect(TEMPLATE_WORKFLOW).toContain('The PM reads `mine` for progress, not `status`.')
-    expect(TEMPLATE_WORKFLOW.split('\n').filter(l => /^\d+\. /.test(l))).toHaveLength(11)
+    expect(workflow).toContain('that status is how the PM hears, once')
+    expect(workflow).toContain('run `mine`; the PM reads it for progress, not `status`.')
+    expect(TEMPLATE_WORKFLOW.split('\n').filter(l => /^\d+\. /.test(l))).toHaveLength(10)
   })
   // Ken, 2026-11-03: in two days agents sent openharness's PM 850 direct messages, 73% of them answers to the PM's own
   // 1,437 (review asks, status asks, thanks), and Reviewers sent their verdicts to the PM instead of the Engineer.
@@ -69,7 +85,8 @@ describe('the built-in template', () => {
     const flat = (text: string) => text.replace(/\s+/g, ' ')
     const reviewer = flat(INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('### Reviewer'), INSTRUCTIONS_TEMPLATE.indexOf('### Tester')))
     expect(reviewer).toContain('It gives its verdict once it has read the code and never waits for CI to finish: the PM checks CI before it merges (Workflow 5).')
-    expect(flat(TEMPLATE_WORKFLOW)).toContain('A verdict asking for changes, a Tester\'s too, is a message to the Engineer with the line "Ready to merge: No" or "Ready to merge: With fixes"')
+    expect(flat(TEMPLATE_WORKFLOW)).toContain('Findings and verdicts go straight to the Engineer by name')
+    expect(flat(TEMPLATE_WORKFLOW)).toContain('A verdict asking for changes, a Tester\'s too, carries the line "Ready to merge: No" or "Ready to merge: With fixes"')
   })
   it('keeps messages to and from the PM to work, answers and people, with verdicts on the step', () => {
     const flat = (text: string) => text.replace(/\s+/g, ' ')
@@ -79,10 +96,10 @@ describe('the built-in template', () => {
     expect(role('Reviewer', 'Tester')).toContain('Gives its verdict to the Engineer and records it as its step\'s result')
     expect(flat(INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('### Tester')))).toContain('Gives its verdict to the Engineer and records it as its step\'s result')
     const workflow = flat(TEMPLATE_WORKFLOW)
-    expect(workflow).toContain('The PM neither adds these steps nor asks anyone to review or test a task\'s pull request')
-    expect(workflow).toContain('3. Findings go straight to the Engineer, never through the PM.')
+    expect(workflow).toContain('The PM neither adds these steps nor asks anyone to review or test')
+    expect(workflow).toContain('3. Findings and verdicts go straight to the Engineer by name')
     expect(workflow).toContain('No agent sends the PM any other message besides a task that needs a person (Workflow 6) or the answer to a question the PM asked')
-    expect(workflow).toContain('no acknowledgement such as "understood", "on it" or "stopped"')
+    expect(workflow).toContain('no progress notes and no acknowledgements')
   })
   // Audit M3 (task #2021): the host marks a message an agent of another account wrote; the Engineer and the Reviewer are told
   // what that means, in the words the CLI's built-in texts use (cli/src/lib/swarmTools.ts).
@@ -97,9 +114,9 @@ describe('the built-in template', () => {
   // about quota now; an account any project's PM runs on keeps 20% of its weekly quota for that PM, and every other is used.
   it('keeps 20% of the week on an account any project\'s PM runs on, uses every other account, and asks no one', () => {
     const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\s+/g, ' ')
-    expect(routing).toContain('2. An account any project\'s PM runs on (this project\'s or another\'s; the route notes it) keeps 20% of its weekly quota for that PM: below 20% left it takes no new work and idle agents there are not reused. Above that it is used like any other account.')
+    expect(routing).toContain('2. An account any project\'s PM runs on keeps 20% of its weekly quota for that PM: below that it takes no new work and its idle agents are not reused; above it, like any other account.')
     expect(routing).toContain('- Nobody is asked about quota or whose account to use. When no account fits, the work waits for the soonest reset, and the task says so.')
-    expect(routing).toContain('or whose account is a PM\'s and falls below 20%, hands its pushed branch')
+    expect(routing).toContain('or is a PM\'s and falls below 20%, hands its pushed branch')
     for (const gone of ['share of its week left', 'owner asks for', 'takes work as any other account does']) expect(routing).not.toContain(gone)
   })
 
@@ -110,7 +127,7 @@ describe('the built-in template', () => {
     expect(INSTRUCTIONS_TEMPLATE).toContain('Review and test run in parallel')
     expect(INSTRUCTIONS_TEMPLATE).toContain('Does not read the code')
     // Ken, 2026-11-02: small work on Sonnet or Sol, big work on Opus or Astra, nothing below high effort.
-    expect(INSTRUCTIONS_TEMPLATE).toContain('Claude Sonnet at high effort or Codex GPT-6.1 Sol at high effort')
+    expect(INSTRUCTIONS_TEMPLATE.replace(/\s+/g, ' ')).toContain('Claude Sonnet or Codex GPT-6.1 Sol, both at high effort; big, hard or risky work on Claude Opus at high effort or Codex GPT-6 Astra at xhigh')
     expect(INSTRUCTIONS_TEMPLATE).toContain('No agent runs below high effort, and none on Claude Haiku.')
     expect(INSTRUCTIONS_TEMPLATE).not.toContain('No Engineer runs on Claude Sonnet')
     expect(INSTRUCTIONS_TEMPLATE).toMatch(/Low-risk docs, tests and fixtures go to a model on the Swarm's grid first/)
@@ -119,8 +136,8 @@ describe('the built-in template', () => {
     const pm = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('### PM'), INSTRUCTIONS_TEMPLATE.indexOf('### Engineer'))
     expect(pm).toContain('nightly routing proposal')
     // Ken, 2026-11-02: a PM copied old workflow lines into a brief; the workflow lives in the instructions only.
-    expect(pm).toContain('It copies no workflow into a brief')
-    expect(pm).toContain('- When the project owner answers Yes to a nightly routing proposal, writes its line into Routing, naming the owner as who asked.')
+    expect(INSTRUCTIONS_TEMPLATE.replace(/\s+/g, ' ')).toContain('The PM opens it with a brief: goal, "Done when", changes, constraints, checks, never workflow (these instructions win).')
+    expect(pm.replace(/\s+/g, ' ')).toContain('- When the project owner answers Yes to a nightly routing proposal, writes its line into Routing, naming the owner as who asked.')
     expect(Buffer.byteLength(INSTRUCTIONS_TEMPLATE)).toBeLessThan(16_384)
   })
   // Ken, 11-05: openharness's and lamp's PMs own their projects; what made them owners is every new project's PM's now.
@@ -128,7 +145,7 @@ describe('the built-in template', () => {
     const pm = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('### PM'), INSTRUCTIONS_TEMPLATE.indexOf('### Engineer')).replace(/\s+/g, ' ')
     for (const line of [
       'Owns the project: its roadmap, deadlines, progress and quality, and every task and pull request.',
-      'Decides, doesn\'t ask: it decides and reports the result.',
+      'Decides, doesn\'t ask: it decides and reports the result, asking a person only where a rule names them or for a step only they can do',
       'It never asks "OK to build?", "should I" or "do you want", and never offers a choice it can make itself: it picks, says why in one line, and goes.',
       'Says no by default to new features and growing scope: it answers each request Accept, Reshape, Later (and when) or No, naming why.',
       'Thinks fast and slow:',
@@ -136,16 +153,33 @@ describe('the built-in template', () => {
       'Sets deadlines for today, in hours.',
       'Each hour it finds where work waits and fixes the slowest step itself, without waiting to be told.',
       'A status gives the goal, what must exist today, and what is stuck (owner and time); never what is already done.',
-      'Before answering a message in a task, reads that task\'s state and its latest messages.',
-      'Links every issue and pull request number it names.',
     ]) expect(pm).toContain(line)
+    // Its mechanics live in the Workflow, where they leave the PM's section room (River, review of #3220).
+    const workflow = TEMPLATE_WORKFLOW.replace(/\s+/g, ' ')
+    expect(workflow).toContain('Before answering a message in a task, the PM reads that task\'s state and its latest messages.')
+    expect(workflow).toContain('It tags a person only to answer them or when they must act (an agent\'s owner, to have it act), and links every issue and pull request number it names.')
     // Shared lines name no person (instructions attribution).
     expect(pm).not.toMatch(/\((Ken|Dee|Leo)[,)]/)
+  })
+  // Review of #3220 (#3392): trimming the template to its budget cut wording, never a rule's meaning.
+  it('keeps every rule\'s meaning through the trim to its size budget', () => {
+    const flat = INSTRUCTIONS_TEMPLATE.replace(/\s+/g, ' ')
+    const pm = flat.slice(flat.indexOf('### PM'), flat.indexOf('### Engineer'))
+    for (const line of [
+      'works without pause toward the goal with every machine and agent the Swarm has',
+      'it decides and reports the result',
+      'A fix to what ships, a security fix, or crew speed or reliability is a yes at once.',
+      'what is cheap to undo it decides in the same turn; what is hard to undo (a feature, deleting data, production writes, spending money) after reading the evidence',
+    ]) expect(pm).toContain(line)
+    expect(flat).toContain('a mid-strength model is enough for most testing.')
+    expect(flat).toContain('Any member may change it, directly or through the PM, who says what it changed.')
+    expect(flat).toContain('go straight to the Engineer by name (--to, or a reply), never through the PM.')
   })
 
   it('keeps a Reviewer or Tester working on its step while the Engineer fixes findings: blocked is for a person', () => {
     // Ken, 2026-11-02: 47 of a day's "Stuck" statuses reached the PM from Reviewers waiting on the Engineer's fixes.
     const workflow = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Workflow'), INSTRUCTIONS_TEMPLATE.indexOf('## Routing'))
+      .replace(/\s+/g, ' ')
     expect(workflow).toContain('While the Engineer fixes them, the Reviewer or Tester stays Working on its step')
     expect(workflow).toContain('blocked and needs_human are only for something a person must do.')
   })
@@ -169,25 +203,20 @@ describe('the built-in template', () => {
     expect(routing).toContain('keeps 20% of its weekly quota for that PM')
     expect(routing).toContain('Every other account is used while it has weekly quota left: the one resetting soonest first')
     expect(routing).toContain('An idle agent is reused only between candidates equal so far')
-    expect(routing).toContain('"Idle" or "first in the list" is not a reason.')
+    expect(routing).toContain('never "idle" or "first in the list".')
     expect(routing).toContain('hands its pushed branch to an agent on another account.')
     expect(routing).toContain('Urgent work (production down, security) ignores quota.')
     for (const gone of ['share per day', '5-hour', 'Engineers move to the next model', 'Max 20x']) expect(routing).not.toContain(gone)
   })
-  it('says the route lists every engine on every machine with its weekly quota, which the PM orders by itself', () => {
-    // Ken, 2026-11-03: the route's rows now carry each account's quota, and no account is cut from them.
-    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
-    expect(routing).toContain('- The route lists the best new agent and the best idle agent of every engine on every machine, each with its quota: '
-      + 'fits or short, weekly quota left and reset time.')
-    expect(routing).not.toContain('The route\'s lines show')
-  })
-  it('says the route ranks nothing and picks nothing, and every start from it gives the rule that chose it', () => {
+  it('says the PM applies the order itself, from a route that ranks nothing, and every start gives the rule that chose it', () => {
     // Task #2901 (Ken, 2026-11-04): PMs took the route's first line, nearly always Opus or Astra, against this order and quota.
-    // The route now lists by machine name and names no pick; the reason goes with the start or assignment.
-    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\n +/g, ' ')
-    expect(routing).toContain('It lists them by machine name, with no ranking and no pick: the PM applies this order itself.')
-    expect(routing).toContain('Every start or assignment from a route gives as its reason the rule above that chose it: urgency, context or a '
-      + 'machine the work needs where it departs from the order. "Idle" or "first in the list" is not a reason.')
+    // The route lists by machine name with each account's quota (Ken, 2026-11-03) and names no pick; the reason goes with the
+    // start or assignment. What the route's rows show is the route's own to say: the template keeps the rule (#3392).
+    const routing = INSTRUCTIONS_TEMPLATE.slice(INSTRUCTIONS_TEMPLATE.indexOf('## Routing')).replace(/\s+/g, ' ')
+    // Any start or assignment, the Engineer's of its Reviewer and Tester too (review of #3220).
+    expect(routing).toContain('- The PM applies this order itself (the route ranks nothing). Each start or assignment gives as its reason the rule '
+      + 'that chose it, or the urgency, context or machine need that departs from it; never "idle" or "first in the list".')
+    expect(routing).not.toContain('The route\'s lines show')
     for (const gone of ['Its order does not rank by quota', 'Picking against it needs a reason in the route\'s override']) expect(routing).not.toContain(gone)
   })
 })
@@ -337,9 +366,11 @@ describe('instructions.save', () => {
   it('keeps a document within 64 KB and a summary on one line, and saves nothing new for the same text', () => {
     const f = fixture()
     expect(() => f.run(save(1, 'x'.repeat(65_537)))).toThrow()
-    expect(f.run(save(1, 'é'.repeat(32_768))).result.revision).toBe(2)
+    // Within 64 KB, a document is still held to its size budget (#3392): 'é' is two bytes, so 3,072 of them are 6 KB of core.
+    expect(() => f.run(save(1, 'é'.repeat(32_768)))).toThrow(expect.objectContaining({ code: 'INSTRUCTIONS_OVER_BUDGET' }))
+    expect(f.run(save(1, 'é'.repeat(3_072))).result.revision).toBe(2)
     expect(() => f.run(save(2, 'Other.', { summary: 'two\nlines' }))).toThrow()
-    const same = f.run(save(2, 'é'.repeat(32_768)))
+    const same = f.run(save(2, 'é'.repeat(3_072)))
     expect(same.result).toMatchObject({ revision: 2, unchanged: true })
     expect(same.instructions).toBeUndefined()
     expect(same.messages).toEqual([])
@@ -677,5 +708,134 @@ describe('a project on the template', () => {
     const rows = await hostTab('tab', f.state, 'host', user, null, lookups as never)
     const row = rows.roster.find(r => (r as { agent?: { id: string } }).agent?.id === agentId) as { instructions?: { revision: number; hash: string | null } }
     expect(row.instructions).toMatchObject({ revision: 0, hash: FIRST_INSTRUCTIONS.instructionsHash })
+  })
+})
+
+// Task #3392 (anh Dee, 11-05, decision 5): the instructions have a size budget by section: core 6 KB, each role section 2 KB,
+// people notes 3 KB, 20 KB in all. A save that makes a part bigger than its budget is refused with the sizes.
+describe('an instructions save keeps to the size budget', () => {
+  const save = (baseRevision: number, text: string): Command =>
+    ({ type: 'instructions.save', projectId: 'lead', baseRevision, text, summary: 'Changed the instructions' })
+  const stored = (text: string, revision = 1) => ({ instructions: { revision, text, at: 500 } })
+  /** [n] distinct lines of about 100 bytes, each too short to read as a repeat of another. */
+  const lines = (n: number, tag: string) => Array.from({ length: n }, (_, i) => `- ${tag}${i} ${'x'.repeat(90)}`)
+  const doc = ({ core = 10, pm = 5, notes = 0 }: { core?: number; pm?: number; notes?: number }) => [
+    '# Project instructions', '', '## Roles', '', '### PM', '', ...lines(pm, 'pm'), '', '## Workflow', '', ...lines(core, 'core'),
+    ...notes ? ['', '## People notes', '', ...lines(notes, 'note')] : []].join('\n')
+  const refusal = (run: () => unknown) => {
+    try { run() } catch (error) { return error as { code: string; status: number; message: string; details: { parts: unknown[] } } }
+    throw new Error('the save went through')
+  }
+
+  it('refuses a save whose core grows past 6 KB, naming its size and budget', () => {
+    const f = fixture()
+    const refused = refusal(() => f.run(save(1, doc({ core: 70 })), owner, stored(doc({}))))
+    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_OVER_BUDGET', status: 409, details: { parts: [{ part: 'core', budget: 6144 }] } })
+    expect(refused.message).toMatch(/Core: 6\.\d KB of 6 KB/)
+    expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 1 })
+  })
+
+  it('refuses a role section past 2 KB, people notes past 3 KB, and a document past 20 KB', () => {
+    const f = fixture()
+    expect(refusal(() => f.run(save(1, doc({ pm: 25 })), owner, stored(doc({}))))).toMatchObject({ details: { parts: [{ part: 'role PM', budget: 2048 }] } })
+    expect(refusal(() => f.run(save(1, doc({ notes: 35 })), owner, stored(doc({}))))).toMatchObject({ details: { parts: [{ part: 'people notes', budget: 3072 }] } })
+    // Every part within its own budget, the whole past 20 KB: twelve roles of 1.8 KB each.
+    const roles = Array.from({ length: 12 }, (_, r) => ['', `### Role${r}`, '', ...lines(18, `r${r}-`)]).flat()
+    const wide = ['# Project instructions', '', '## Roles', ...roles].join('\n')
+    const message = refusal(() => f.run(save(1, wide), owner, stored(doc({})))).message
+    expect(message).toMatch(/Whole document: 2\d\.\d KB of 20 KB/)
+    expect(message).not.toContain('Role0')
+  })
+
+  it('lets a part already over budget be saved when it does not grow, and saves within budget', () => {
+    const f = fixture()
+    // Today's documents are over budget: shrinking a part, or leaving it as it was, is the way down.
+    expect(f.run(save(1, doc({ core: 75 })), owner, stored(doc({ core: 80 }))).result.revision).toBe(2)
+    expect(f.run(save(2, doc({ core: 75, pm: 6 })), owner, stored(doc({ core: 75 }), 2)).result.revision).toBe(3)
+    expect(refusal(() => f.run(save(3, doc({ core: 76, pm: 6 })), owner, stored(doc({ core: 75, pm: 6 }), 3))))
+      .toMatchObject({ code: 'INSTRUCTIONS_OVER_BUDGET', message: expect.stringMatching(/was 7\.\d KB/) })
+    expect(f.run(save(3, doc({ core: 20, pm: 6, notes: 10 })), owner, stored(doc({ core: 75, pm: 6 }), 3)).result.revision).toBe(4)
+  })
+})
+
+// Task #3392 (anh Dee, 11-05, decision 5): one restructure save may move every person's rule, word for word with who gave
+// it, into people notes or a role section, the project's rules record, or a code task (its line stays until that merges).
+describe('an instructions save may move a person\'s rule', () => {
+  const save = (baseRevision: number, text: string, extra: Partial<Extract<Command, { type: 'instructions.save' }>> = {}): Command =>
+    ({ type: 'instructions.save', projectId: 'lead', baseRevision, text, summary: 'Restructured', askedBy: 'owner', ...extra })
+  const leo = 'A bug that reaches stable: the previous build is promoted back within the hour and the fix ships the same day (peer, 2026-11-04).'
+  const quiet = 'No releases between 18:00 and 09:00 Vietnam time (owner, 2026-11-02).'
+  const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
+  const stored = (text = doc(leo, quiet)) => ({ instructions: { revision: 1, text, at: 500 } })
+  const refusal = (run: () => unknown) => {
+    try { run() } catch (error) { return error as { code: string; message: string; details: { dropped: unknown[] } } }
+    throw new Error('the save went through')
+  }
+  function pm() {
+    const f = fixture()
+    f.invite()
+    const lead = f.add('lead', 'lead', true)
+    return { f, lead }
+  }
+  const PR = 'https://github.com/acme/app/pull/7'
+  /** A code task of the project whose brief carries [line]; [merged]: GitHub, read by the Swarm itself, saw its pull request
+   *  merge (store.ts archiveFinished), as no command can say. */
+  function codeTask(f: ReturnType<typeof fixture>, line: string, merged: boolean) {
+    const id = f.run({ type: 'conversation.create', title: 'Release guard', brief: `Goal:\nBlock releases at night.\n\nChanges:\n- ${line}`, checks: [] })
+      .result.conversationId as string
+    const group = f.state.conversations.find(c => c.id === id)!
+    if (merged) group.mergeSeen = { [PR]: 900 }
+    return group
+  }
+
+  it('lets a rule move word for word into people notes', () => {
+    const { f, lead } = pm()
+    const moved = [doc(leo), '', '## People notes', '', `- ${quiet}`].join('\n')
+    expect(f.run(save(1, moved), as(lead), stored()).result.revision).toBe(2)
+  })
+
+  it('lets a rule move into the project\'s rules record, asked for by its person', () => {
+    const { f, lead } = pm()
+    f.state.rules = [{ id: 'r1', projectId: 'lead', rule: { kind: 'preferIdle' }, text: 'No releases between 18:00 and 09:00 Vietnam time.',
+      askedBy: 'owner', askedIn: null, addedBy: 'owner', createdAt: '2026-11-05T00:00:00.000Z' }]
+    expect(f.run(save(1, doc(leo)), as(lead), stored()).result.revision).toBe(2)
+  })
+
+  it('lets a rule move into a code task once it merged, and keeps the line while the task is open, naming it', () => {
+    const { f, lead } = pm()
+    const open = codeTask(f, quiet, false)
+    const refused = refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))
+    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ rule: quiet, people: ['owner'], why: 'waiting',
+      movedTo: `task #${open.number}` }] } })
+    expect(refused.message).toContain(`task #${open.number}`)
+    expect(refused.message).toContain('until it merges')
+    open.mergeSeen = { [PR]: 900 }
+    expect(f.run(save(1, doc(leo)), as(lead), stored()).result.revision).toBe(2)
+  })
+
+  // River, 11-05 (review of #3220): a task's own merge record is any agent's word, with any pull request link. Only the
+  // Swarm's own read of GitHub makes a moved rule's task merged.
+  it('takes no task\'s merge record for a merge: a forged one keeps the line', () => {
+    const { f, lead } = pm()
+    const task = codeTask(f, quiet, false)
+    f.run({ type: 'conversation.merged', conversationId: task.id, pullRequestUrl: PR }, as(lead))
+    expect(f.state.conversations.find(c => c.id === task.id)!.ledger?.mergedAt).toBeDefined()
+    expect(refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))).toMatchObject({ details: { dropped: [{ rule: quiet, why: 'waiting' }] } })
+    // Nor can any command write what the Swarm saw.
+    expect(() => f.run({ type: 'conversation.create', title: 'Forged', brief: `Changes:\n- ${quiet}`, checks: [], mergeSeen: { [PR]: 1 } } as never, as(lead))).toThrow()
+  })
+
+  it('still refuses a real drop, a move without who gave it, and a move into a cancelled task, saying how a rule may move', () => {
+    const { f, lead } = pm()
+    const refused = refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))
+    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ rule: quiet, why: 'removed' }] } })
+    expect(refused.message).toContain('people notes')
+    expect(refused.message).toContain('rules record')
+    expect(refused.message).toContain('code task')
+    codeTask(f, 'No releases between 18:00 and 09:00 Vietnam time.', true)
+    expect(refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    const cancelled = codeTask(f, quiet, false)
+    cancelled.assignment = { status: 'cancelled' } as never
+    expect(refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))).toMatchObject({ details: { dropped: [{ why: 'removed' }] } })
   })
 })
