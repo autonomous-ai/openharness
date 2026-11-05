@@ -23,7 +23,7 @@ void main() {
       'https://$kSuperTabFilesHost/bucket/super-tabs/tab/a1/shot.png'
       '?X-Goog-Signature=$sig';
 
-  late ImageProvider Function(Uri) original;
+  late ImageProvider Function(AttachmentImage) original;
   setUp(() {
     original = attachmentImage;
     attachmentImage = (_) => MemoryImage(_png);
