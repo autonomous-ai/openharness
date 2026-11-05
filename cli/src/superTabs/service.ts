@@ -450,6 +450,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // `teamSetupCheck` only says whether it is wanted, so Desktop explains it before macOS asks; `teamSetupDecline` is
         // that explanation's "Not now". Both are new names, so an older daemon refuses them rather than asking unexplained.
         // `teamSetupStatus`: why there is no account yet, for this Mac's own machine row (cancelled, failed and why, running).
+        // Why this Mac's Harness Team account has not joined a Swarm, while adding it fails (host.ts joinTeams), and Retry on the
+        // row (Amon, #3215: "joining" for good, the reason only in the log). This Mac's own Desktop alone; never starts the host.
+        if (payload.action === 'teamJoinStatus' || payload.action === 'teamJoinRetry') {
+          if (!asker.local) return { error: 'OWNER_REQUIRED' }
+          if (payload.action === 'teamJoinRetry') { host?.retryTeamJoins(); return { ok: true } }
+          return { ok: true, failure: host?.teamJoinFailure() ?? null }
+        }
         if (payload.action === 'teamSetup' || payload.action === 'teamSetupCheck' || payload.action === 'teamSetupDecline'
           || payload.action === 'teamSetupStatus') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
