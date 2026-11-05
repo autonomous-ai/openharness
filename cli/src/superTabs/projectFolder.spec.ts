@@ -291,7 +291,9 @@ describe('preparing another person\'s start with the Harness GitHub App', () => 
     await expect(f.ready()).rejects.toThrow("could not clone the project repository with the Harness GitHub App's token")
     expect(f.prepare).toHaveBeenCalledTimes(1)
     f.prepare.mockRejectedValueOnce(new ProjectFolderError('PROJECT_EXISTS', 'taken'))
-    await expect(f.ready()).rejects.toThrow('taken')
+    // A folder already in the clone's place is named, with what to do (#3211), and not tried again either.
+    await expect(f.ready()).rejects.toMatchObject({ code: 'PROJECT_EXISTS', message: expect.stringContaining('Move it aside') })
+    expect(f.prepare).toHaveBeenCalledTimes(2)
   })
 
   // Local Team account run, 2026-10-28: the read-only token for the clone was never revoked and stayed good for its hour.
