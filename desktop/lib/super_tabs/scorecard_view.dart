@@ -10,7 +10,9 @@ import 'scorecard.dart';
 /// The widest the table grows.
 const _maxWidth = 960.0;
 const _labelWidth = 240.0;
-const _cellWidth = 72.0;
+
+/// Wide enough for a crew time's "9m59 · 9m59" on one line (task #3462).
+const _cellWidth = 96.0;
 const _rowHeight = 32.0;
 
 /// Manage ▸ Scorecard (task #3386): one project's figures for its last 7

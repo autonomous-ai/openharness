@@ -7,6 +7,7 @@
 import type { MachineRule } from './crewRules.js'
 import { activeWork, actorKey, stableId, type Agent, type AgentStart, type AgentStartRequest, type CrewTrouble, type MessageDraft, type SuperTabState } from './model.js'
 import { isBuddy } from './buddies.js'
+import { isCrew } from './crew.js'
 import { AGENT_MEMORY_BYTES, projectFolder, type ContributedMachine } from './machines.js'
 import { agentProjectId, groupProject, onTeamAccount, projectsOf, teamAccountPool } from './projects.js'
 import { barredFromTeamWritten, teamWrittenTask } from './teamWritten.js'
@@ -30,7 +31,6 @@ export interface CrewDeps {
 }
 
 /** Whether [agent] is crew (#3397's `crew` record), read without its type until that change lands. */
-export const isCrewMember = (agent: Agent): boolean => !!(agent as Agent & { crew?: { role?: unknown } }).crew
 
 /** [machineId]'s contribution while it stands: a withdrawn one (its person left or became a viewer) reads as none, never a
  *  refusal, so a sweep never stops on it. */
@@ -136,7 +136,7 @@ export function crewNeedsMachine(state: SuperTabState, now: number): boolean {
 /** What the keeper does now for the Swarm's crew: one action per member at most, and one low-disk drop per machine. */
 export function crewKeep(state: SuperTabState, now: number, deps: CrewDeps): CrewAction[] {
   const actions: CrewAction[] = []
-  const members = state.agents.filter(a => isCrewMember(a) && !isBuddy(a) && !isLead(state, a) && !a.movedTo)
+  const members = state.agents.filter(a => isCrew(a) && !isBuddy(a) && !isLead(state, a) && !a.movedTo)
   for (const agent of members) {
     const trouble = crewTrouble(state, standingPool(state, agent.machineId), agent.configuration.engine, now)
     // An asleep member, or an awake one with no work on a machine gone offline (a laptop closed for the night), stays where it
