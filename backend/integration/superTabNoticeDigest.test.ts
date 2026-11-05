@@ -827,3 +827,50 @@ describe('a step\'s Stuck, skills notices and quiet alerts', () => {
     expect((await digests(f.tab)).some(d => d.text.includes(id!))).toBe(true)
   })
 })
+
+// Task #3403 (anh Dee's Swarm redesign, 11-05): an agent's post to a crew member waits for that member's turn to end, its own
+// status change, or 15 minutes, never typed into a busy agent; a person's message, a stop or a cancel goes at once (River,
+// 11-05). The list row says so (`waitsForTurnEnd`); the host holds it while the agent works (cli host.ts).
+describe('a crew member\'s messages wait for its turn to end', () => {
+  const listed = async (f: Awaited<ReturnType<typeof swarm>>, messageId: string, agentId = f.worker) =>
+    (await f.timed.deliveries(host, f.tab, agentId) as Array<Record<string, unknown>>).find(d => d.messageId === messageId)
+
+  it('an agent\'s post to a crew member waits, until 15 minutes pass', async () => {
+    const f = await swarm()
+    const verdict = await f.write(undefined, f.worker, f.group, 'Ready to merge: With fixes.', f.lead)
+    expect(await listed(f, verdict)).toMatchObject({ waitsForTurnEnd: true })
+    f.clock.now += 15 * MINUTE - 1_000
+    expect(await listed(f, verdict)).toMatchObject({ waitsForTurnEnd: true })
+    f.clock.now += 2_000
+    expect(await listed(f, verdict)).toMatchObject({ waitsForTurnEnd: false })
+  })
+
+  it('goes once the crew member changes its own status', async () => {
+    const f = await swarm()
+    const verdict = await f.write(undefined, f.worker, f.group, 'Ready to merge: No.', f.lead)
+    expect(await listed(f, verdict)).toMatchObject({ waitsForTurnEnd: true })
+    await f.status('working', 'Fixing the review findings')
+    expect(await listed(f, verdict)).toMatchObject({ waitsForTurnEnd: false })
+  })
+
+  it('a stop or a cancel, a system row, goes at once', async () => {
+    const f = await swarm()
+    const stop = await f.write({ kind: 'system' }, f.worker, f.group, 'Stop: do not run it here.', f.lead)
+    expect(await listed(f, stop)).toMatchObject({ waitsForTurnEnd: false })
+    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
+    const cancel = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.group }, orderBy: { sequence: 'desc' } })).find(m => m.text.includes('cancelled this task'))!
+    expect((await deliveryOf(cancel.id, f.worker)).waitsUntil).toBeNull()
+  })
+
+  it('a person\'s own message to a crew member goes at once', async () => {
+    const f = await swarm()
+    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Use the second parser.', replyTo: null, recipientIds: [f.worker] })
+    expect(await listed(f, String(sent.result.messageId))).toMatchObject({ waitsForTurnEnd: false })
+  })
+
+  it('the coordinator\'s own deliveries never wait for a turn end', async () => {
+    const f = await swarm()
+    const question = await f.write(undefined, f.lead, 'lead', 'A question for the PM.', f.worker)
+    expect((await deliveryOf(question, f.lead)).waitsUntil).toBeNull()
+  })
+})
