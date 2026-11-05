@@ -18,6 +18,12 @@ const owner = user('500000000000000000000009', 'owner@example.com'), kelvinUser 
 let replica: MongoMemoryReplSet
 let db: PrismaClient
 let store: SuperTabStore
+/** Each machine's key in its account's device key log (lib/deviceKeyLog.ts): one key per computer, whatever account it signs
+ *  in to, so a computer's machines of two accounts hold the same one (e2ee/store.ts identity.json). */
+const keys: Array<{ userId: string; machineId: string; pub: string }> = [
+  { userId: kelvin, machineId: 'kelvin-mac', pub: 'pub-computer' }, { userId: tt, machineId: 'tt-mac', pub: 'pub-computer' },
+  { userId: kelvin, machineId: 'kelvin-old', pub: 'pub-duplicated' }, { userId: tt, machineId: 'tt-new', pub: 'pub-duplicated' },
+]
 
 beforeAll(async () => {
   ({ replica, db } = await planDatabase('computer_moves'))
@@ -36,7 +42,8 @@ beforeAll(async () => {
     await db.user.create({ data: { id: person.sub, externalId: `fixture-${person.sub}`, email: person.email, autonomousEnv: 'prod' } })
   }
   const memory = localReportMemory(Date.now)
-  store = new SuperTabStore(db, Date.now, null, { reports: { get: (t, m) => memory.get(t, m), set: (t, m, r) => memory.set(t, m, r), sweepDue: async () => false } })
+  store = new SuperTabStore(db, Date.now, null, { reports: { get: (t, m) => memory.get(t, m), set: (t, m, r) => memory.set(t, m, r), sweepDue: async () => false },
+    machineKeys: async userIds => new Map(userIds.map(id => [id, keys.filter(k => k.userId === id).map(k => ({ ...k, kind: 'machine' as const }))])) })
 }, 300_000)
 afterAll(async () => {
   await db?.$disconnect()
@@ -90,6 +97,30 @@ describe('a computer signed in as another account', () => {
     expect(await store.computerSignedIn({ machineId: 'tt-mac', ownerId: tt, computerId: OTHER, autonomousEnv: 'prod' })).toBe(0)
     expect(await store.computerSignedIn({ machineId: 'other-elsewhere', ownerId: other, computerId: COMPUTER, autonomousEnv: 'prod' })).toBe(0)
     expect(await machinesIn(tab)).toEqual([{ machineId: 'kelvin-mac', contributorId: kelvin, previousOwner: undefined }])
+  })
+
+  // Security review 1 of #3100: the computer id is self-declared. Someone who learned it, signed in to their own account
+  // anywhere, must not take that computer's entry while it sleeps: only the computer's own key, which its sign-in to the new
+  // account registered in that account's log, proves it is the same computer.
+  it("moves nothing for an account that claims a computer's id without that computer's key", async () => {
+    const VICTIM = 'b'.repeat(32)
+    await db.machine.create({ data: { machineId: 'kelvin-victim', userId: kelvin, computerId: VICTIM, sessionKind: 'computer', apiKey: 'fixture-kelvin-victim',
+      managerId: '', autonomousEnv: 'prod', authMode: 'remote' } })
+    await db.machine.create({ data: { machineId: 'forged-mac', userId: tt, computerId: VICTIM, sessionKind: 'computer', apiKey: 'fixture-forged-mac',
+      managerId: '', autonomousEnv: 'prod', authMode: 'remote' } })
+    keys.push({ userId: kelvin, machineId: 'kelvin-victim', pub: 'pub-victim' }, { userId: tt, machineId: 'forged-mac', pub: 'pub-forger' })
+    const tab = (await store.create(owner, randomUUID(), 'Forged')).id
+    for (const person of [kelvinUser, ttUser]) {
+      const invitation = await run(tab, { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' })
+      await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, person)
+    }
+    await run(tab, { type: 'machine.contribute', machineId: 'kelvin-victim', name: 'Victim Mac', cwd: '/work', scope: 'swarm', engines: ['claude'],
+      maxAgents: 2, teamAccountOnly: true }, kelvinUser)
+    expect(await store.computerSignedIn({ machineId: 'forged-mac', ownerId: tt, computerId: VICTIM, autonomousEnv: 'prod' })).toBe(0)
+    // Nor with no key at all: a machine that never registered one proves nothing.
+    keys.splice(keys.findIndex(k => k.machineId === 'forged-mac'), 1)
+    expect(await store.computerSignedIn({ machineId: 'forged-mac', ownerId: tt, computerId: VICTIM, autonomousEnv: 'prod' })).toBe(0)
+    expect(await machinesIn(tab)).toEqual([{ machineId: 'kelvin-victim', contributorId: kelvin, previousOwner: undefined }])
   })
 
   it('cannot be asked for by a person', async () => {
