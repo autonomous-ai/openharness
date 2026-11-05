@@ -1,0 +1,10 @@
+  Folder access
+  /Users/harnessteam/harnesses/worktrees/project/super-tab-start
+
+  Config, hooks, and exec policies from untrusted folders stay disabled. Trusted project folders can still contribute
+  settings. Skills still load, and tools follow your permission settings. Opening will not change saved trust.
+
+› 1. Open restricted
+  2. Quit
+
+  enter continue · esc quit
