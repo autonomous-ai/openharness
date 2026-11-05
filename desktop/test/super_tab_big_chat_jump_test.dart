@@ -203,4 +203,19 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await c.flush();
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('opening a big chat at its end reads no older page', (
+    tester,
+  ) async {
+    final server = chat(400);
+    final reads = <String>[];
+    server.onRead = (path) {
+      if (path.contains('before=')) reads.add(path);
+    };
+    final c = await show(tester, server);
+    expect(chatScroll(tester).position.extentAfter, lessThan(40));
+    expect(reads, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 }

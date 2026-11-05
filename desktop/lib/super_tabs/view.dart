@@ -1590,18 +1590,25 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The list's rows as last built, by row key: their place in it.
   Map<String, int> _rowPlaces = const {};
 
-  /// Whether the reader is near the top of what is read of [id].
-  bool _nearTop(ScrollMetrics metrics) {
-    if (metrics.extentBefore <= 400) return true;
+  /// Whether the reader is near the top of what is read: once a scroll
+  /// ends, within 400 px; reading [ahead] (moving up, or pages read on),
+  /// fewer than [_readAheadRows] rows above the view, never by pixels.
+  bool _nearTop(ScrollMetrics metrics, {required bool ahead}) {
+    if (!ahead) return metrics.extentBefore <= 400;
     final top = _rowAtTop();
     final at = top == null ? null : _rowPlaces[_rowKey(c.messageIdentity(top))];
     return at != null && at < _readAheadRows;
   }
 
-  /// A scroll near the top reads the earlier page with no click: while it
-  /// moves up, and once it ends.
-  void _readEarlierNearTop(String id, ScrollMetrics metrics) {
-    if (!_nearTop(metrics) ||
+  /// A scroll near the top reads the earlier page with no click: [ahead]
+  /// while it moves up or pages read on, and once it ends. A scroll that
+  /// ends at the bottom, as opening a chat does, reads nothing ahead.
+  void _readEarlierNearTop(
+    String id,
+    ScrollMetrics metrics, {
+    bool ahead = false,
+  }) {
+    if (!_nearTop(metrics, ahead: ahead) ||
         _finding != null ||
         _find?.reading != null ||
         _loadingOlder.contains(id) ||
@@ -1664,7 +1671,7 @@ class _SuperTabViewState extends State<SuperTabView>
     WidgetsBinding.instance
       ..addPostFrameCallback((_) {
         if (mounted && c.selectedId == id && scroll.hasClients) {
-          _readEarlierNearTop(id, scroll.position);
+          _readEarlierNearTop(id, scroll.position, ahead: true);
         }
       })
       ..scheduleFrame();
@@ -4809,10 +4816,15 @@ class _SuperTabViewState extends State<SuperTabView>
                                 final atEnd = event.metrics.extentAfter < 40;
                                 _follow(id, atEnd);
                                 // Moving up, or once the scroll ends.
-                                if (event is ScrollEndNotification ||
-                                    (event is ScrollUpdateNotification &&
-                                        (event.scrollDelta ?? 0) < 0)) {
+                                if (event is ScrollEndNotification) {
                                   _readEarlierNearTop(id, event.metrics);
+                                } else if (event is ScrollUpdateNotification &&
+                                    (event.scrollDelta ?? 0) < 0) {
+                                  _readEarlierNearTop(
+                                    id,
+                                    event.metrics,
+                                    ahead: true,
+                                  );
                                 }
                                 if (atEnd) {
                                   // A row still sending has no place in the transcript.
