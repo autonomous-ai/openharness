@@ -83,7 +83,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       break
     case 'project.report': case 'project.repository':
     // The coordinator's own writes check it leads the project, which a concurrent Lead change ends (review of phase 2).
-    case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName':
+    case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName': case 'rules.set':
       leadCheck(command.projectId)
       break
     // An older CLI's rule is a save to its project's instructions, the coordinator's like instructions.save (commands.ts).

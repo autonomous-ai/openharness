@@ -20,6 +20,7 @@ import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
+import { projectRulesSchema, rulesDiff, rulesEqual, SEED_RULES, type ProjectRules } from './policy.js'
 import { accessRefusal, changeAccess, expireAccess, taskAccess } from './machineAccess.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
@@ -229,6 +230,10 @@ export const commandSchema = z.discriminatedUnion('type', [
       .max(MAX_DROPPED_LINES).optional(),
     // The coordinator's daily tidy, done by this save (pmSchedule.ts tidyRequest).
     tidy: z.literal(true).optional() }).strict(),
+  // The project's rules record, saved on the revision the writer read (policy.ts). A person writes in their own name; the
+  // project's PM only with `askedIn`, the person's own chat message it passes on.
+  z.object({ type: z.literal('rules.set'), projectId: id, baseRevision: z.number().int().nonnegative().safe(), rules: projectRulesSchema,
+    summary: summarySchema, askedIn: askedInSchema.optional() }).strict(),
   // A small thing a member told the coordinator, kept beside the instructions until it ends, if it does (instructions.ts).
   z.object({ type: z.literal('note.add'), projectId: id, text: noteTextSchema, askedBy: id, expiresAt: z.iso.datetime().optional() }).strict(),
   z.object({ type: z.literal('note.remove'), projectId: id, noteId: id }).strict(),
@@ -444,6 +449,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'note.add': ['text'],
   'project.coordinatorName': ['name'],
   'rule.set': ['text'],
+  'rules.set': ['summary'],
   'route.record': ['decision.assessment.why', 'decision.why', 'decision.excluded[].title', 'decision.excluded[].reason',
     'decision.candidates[].title', 'decision.candidates[].label'],
   'route.override': ['reason'],
@@ -546,6 +552,9 @@ export interface CommandContext {
   instructions?: { revision: number; text: string; at?: number } | null
   /** For `instructions.save`: the messages it names as approvals, loaded by id in this tab by the store (ruleGuard.ts). */
   approvals?: ApprovalRow[]
+  /** For `rules.set`: the project's newest stored rules revision, read by the store; null when none is saved yet, which is
+   *  the seed at revision 0 (policyStore.ts). Unread (undefined), nothing is saved. */
+  projectRules?: { revision: number; rules: ProjectRules } | null
   /** For `note.add` and `note.remove`: the project's stored notes, expired ones too, read by the store (instructions.ts). */
   notes?: PmNote[]
   /** The message a Lead quotes as the owner's request for a rule or skill mode change, loaded from this tab by the store. */
@@ -745,7 +754,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
   if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
     || command.type === 'machine.engineResume' || command.type === 'machine.projects' || command.type === 'machine.ownAccountWork'
-    || command.type === 'machine.access') && command.askedIn) {
+    || command.type === 'machine.access' || command.type === 'rules.set') && command.askedIn) {
     readConversation(state, actor, command.askedIn.conversationId)
   }
   if ('startId' in command && command.type !== 'route.modelResult') {
@@ -1861,6 +1870,41 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         Object.assign(effects.messages.at(-1)!, { buddyProject: project.id })
         effects.messages.push({ id: stableId(id, 'project-chat'), conversationId: openBuddyChat(state, project.id, to).id, author: sender, text, replyTo: null, recipients: [] })
       }
+      break
+    }
+    case 'rules.set': {
+      // People change a project's rules, or its PM passing on a person's own chat message of this project from the last day
+      // (task #3393): the record keeps who wrote it, for whom and where they asked. Nothing is posted: the history shows it.
+      const project = readProject(state, actor, command.projectId)
+      let askedBy: string, askedIn: { conversationId: string; messageId: string } | null = null
+      if (actor.kind === 'agent') {
+        if (ledProject(state, actor.agentId)?.id !== project.id) {
+          fail('RULES_EDITOR_REQUIRED', 'A member changes this project\'s rules, or its PM passing on their chat message. Ask the PM in the project chat.', 403)
+        }
+        const asked = command.askedIn && context.askedIn
+        const where = command.askedIn && state.conversations.find(c => c.id === command.askedIn!.conversationId)
+        if (!asked || !where || asked.author.kind !== 'person' || asked.source || context.now - asked.createdAt > RULE_MESSAGE_MS
+          || groupProject(state, where).id !== project.id) {
+          fail('RULES_ASKED_IN_REQUIRED', 'Quote the chat message, from the last day in this project, of the person who asked for this change (askedIn).', 400)
+        }
+        askedBy = askedByOf(state, project, asked.author.id)
+        askedIn = { conversationId: command.askedIn!.conversationId, messageId: command.askedIn!.messageId }
+      } else askedBy = (actor as Extract<Actor, { kind: 'person' }>).userId
+      if (context.projectRules === undefined) fail('RULES_UNAVAILABLE', 'This project\'s rules cannot be read now. Try again in a moment.', 503)
+      const current = context.projectRules ?? { revision: 0, rules: SEED_RULES }
+      if (command.baseRevision !== current.revision) {
+        // Refused with the record it missed, to merge and save again: never two writers' records kept silently.
+        fail('RULES_STALE', `The project rules changed since revision ${command.baseRevision}. Merge your change into revision ${current.revision} and save again.`,
+          409, { revision: current.revision, rules: current.rules })
+      }
+      if (rulesEqual(current.rules, command.rules)) {
+        Object.assign(result, { projectId: project.id, revision: current.revision, unchanged: true })
+        break
+      }
+      const revision = current.revision + 1
+      effects.projectRules = { projectId: project.id, revision, rules: command.rules, diff: rulesDiff(current.rules, command.rules),
+        summary: command.summary, writtenBy: { kind: sender.kind, id: sender.id }, askedBy, askedIn, at: context.now }
+      Object.assign(result, { projectId: project.id, revision })
       break
     }
     case 'note.add': {

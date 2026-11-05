@@ -758,6 +758,8 @@ export interface CommandEffects {
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>
   /** A project's new instructions revision, written outside the tab state by the store (instructions.ts). */
   instructions?: import('./instructions.js').InstructionsWrite
+  /** A project's new rules revision, written outside the tab state by the store (policyStore.ts). */
+  projectRules?: import('./policy.js').RulesWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
   /** Reactions the Swarm adds as a task's agent on the message that asked for it (taskLine.ts), written by the store as that

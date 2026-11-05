@@ -138,7 +138,8 @@ describe('rules.set', () => {
 
 describe('who changes the rules', () => {
   const asked = (conversationId: string, messageId = 'ask-1') => ({ askedIn: { conversationId, messageId } })
-  const personAsked = (id = 'peer', createdAt = NOW - 60_000) => ({ author: { kind: 'person' as const, id }, source: false, createdAt })
+  const author = (kind: 'person' | 'agent', id: string) => ({ kind, id, name: id, membershipGeneration: 'tab' })
+  const personAsked = (id = 'peer', createdAt = NOW - 60_000) => ({ author: author('person', id), source: false, createdAt })
 
   it('lets a person who may write the project change them, never a viewer', () => {
     const f = fixture()
@@ -159,14 +160,14 @@ describe('who changes the rules', () => {
     // Quoted but not found in this tab.
     expect(code(pm(asked('lead'), {}))).toBe('RULES_ASKED_IN_REQUIRED')
     // An agent's message, a Swarm notice, and a person's message older than a day.
-    expect(code(pm(asked('lead'), { askedIn: { author: { kind: 'agent', id: lead }, source: false, createdAt: NOW } }))).toBe('RULES_ASKED_IN_REQUIRED')
+    expect(code(pm(asked('lead'), { askedIn: { author: author('agent', lead), source: false, createdAt: NOW } }))).toBe('RULES_ASKED_IN_REQUIRED')
     expect(code(pm(asked('lead'), { askedIn: { ...personAsked(), source: true } }))).toBe('RULES_ASKED_IN_REQUIRED')
     expect(code(pm(asked('lead'), { askedIn: personAsked('peer', NOW - RULE_MESSAGE_MS - 1) }))).toBe('RULES_ASKED_IN_REQUIRED')
     // A person who is no member any more.
     expect(code(pm(asked('lead'), { askedIn: personAsked('stranger') }))).toBe('ASKED_BY_UNAVAILABLE')
-    // A message of another project's chat.
+    // A message of another project's chat: the PM reads none of it, so the quote is refused as one it cannot see.
     const other = f.run({ type: 'project.create', name: 'App', visibility: 'public', brief: '' }).result as { conversationId: string }
-    expect(code(pm(asked(other.conversationId), { askedIn: personAsked() }))).toBe('RULES_ASKED_IN_REQUIRED')
+    expect(code(pm(asked(other.conversationId), { askedIn: personAsked() }))).toBe('NOT_FOUND')
     // In a task of this project: recorded with who asked and where.
     const effects = pm(asked(task, 'ask-2'), { askedIn: personAsked() })() as ReturnType<typeof f.run>
     expect(effects.projectRules).toMatchObject({ writtenBy: { kind: 'agent', id: lead }, askedBy: 'peer', askedIn: { conversationId: task, messageId: 'ask-2' } })
@@ -182,7 +183,8 @@ describe('who changes the rules', () => {
     expect(code(() => f.run(set(0, later(), asked(task)), as(engineer), context))).toBe('RULES_EDITOR_REQUIRED')
     const other = f.run({ type: 'project.create', name: 'App', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
     const otherLead = f.add('other-lead', other.conversationId, true)
-    expect(code(() => f.run(set(0, later(), asked('lead')), as(otherLead), context))).toBe('RULES_EDITOR_REQUIRED')
+    // Another project's PM reads nothing of this one.
+    expect(code(() => f.run(set(0, later(), asked('lead')), as(otherLead), context))).toBe('NOT_FOUND')
     const buddy = f.add('buddy', task)
     f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
     expect(code(() => f.run(set(0, later(), asked(task)), as(buddy), context))).toBe('BUDDY_FORBIDDEN')

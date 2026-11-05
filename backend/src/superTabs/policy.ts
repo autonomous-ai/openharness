@@ -97,3 +97,18 @@ export function rulesDiff(before: ProjectRules, after: ProjectRules): RulesChang
   walk('', before, after)
   return changes
 }
+
+/** What a save hands the store: the new revision, its diff from the one before, and who wrote it for whom. `writtenBy` is a
+ *  person or the project's PM; `askedBy` the person whose words it carries; `askedIn` the chat message the PM passed on (null
+ *  when a person wrote it). Never the machine owner's login. */
+export interface RulesWrite {
+  projectId: string
+  revision: number
+  rules: ProjectRules
+  diff: RulesChange[]
+  summary: string
+  writtenBy: { kind: 'person' | 'agent'; id: string }
+  askedBy: string
+  askedIn: { conversationId: string; messageId: string } | null
+  at: number
+}
