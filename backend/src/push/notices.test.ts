@@ -3,6 +3,7 @@ import { phoneNotices } from './notices.js'
 import { swarm, owner, peer } from '../superTabs/read/fixture.test-support.js'
 import { shownNameOf } from '../superTabs/personNames.js'
 import type { MessageDraft } from '../superTabs/model.js'
+import { openSwarmBuddyChat } from '../superTabs/buddies.js'
 
 function scene() {
   const s = swarm()
@@ -40,6 +41,16 @@ describe('phoneNotices: what a write tells phones (task #2905)', () => {
       ['mention:t3', `${shownNameOf(state, peer.userId)} tagged you`, 'Web launch', `swarm:tab/${web}/message/m3`],
     ])
     expect(notices.every(n => n.body === 'Open Harness to read it.')).toBe(true)
+  })
+
+  it('tells of a reply in a person\'s Swarm Buddy chat, which belongs to no project, without failing (security review 2)', () => {
+    const { state } = scene()
+    const buddy = openSwarmBuddyChat(state, state.people.find(p => p.id === peer.userId)!).id
+    const agent = { kind: 'agent' as const, id: 'buddy-session', name: 'Buddy', membershipGeneration: 'g' }
+    const reply = draft({ id: 'r1', conversationId: buddy, author: agent, thread: 'root1' })
+    const notices = phoneNotices('tab', state, { replies: [{ id: 'row1', personId: peer.userId, conversationId: buddy, messageId: 'r1', threadId: 'root1',
+      actorKind: 'agent', actorId: 'buddy-session' }], tags: [] }, [reply])
+    expect(notices).toEqual([expect.objectContaining({ personId: peer.userId, subtitle: '', link: `swarm:tab/${buddy}/message/r1/thread/root1` })])
   })
 
   it('pushes no tag held back for a quiet chat', () => {
