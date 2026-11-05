@@ -186,6 +186,29 @@ describe('the one Buddy sends a proposal to a project its person reads (Scholes,
     expect(await f.store.delivery(owner, f.tab, f.pms.web, delivery.id, { type: 'claim', claimId: randomUUID() })).toMatchObject({ otherAccount: true })
   })
 
+  it('refuses private text after an unquoted offer, then posts only the quoted line after a fresh ok', async () => {
+    const f = await swarm()
+    const { chat, main } = await buddy(f)
+    const line = 'Keep drafts offline'
+    const privateText = 'This sentence is only for you. My plans must stay private.'
+    await send(f, chat, `I'll post this as you: ${line}\n\n${privateText}`, {}, peer, main)
+    const firstOk = await ask(f, chat, 'ok')
+    for (const text of [line, `${line}\n\n${privateText}`]) {
+      await expect(propose(f, chat, firstOk, f.web.projectId, main, { text })).rejects.toMatchObject({ code: 'PROPOSAL_UNSHOWN' })
+    }
+    expect(await texts(f, f.web.conversationId, owner)).not.toContain(privateText)
+    // A missing closing quote must not turn later private lines into the approved offer when a quote appears there.
+    await send(f, chat, `I'll post this as you: "${line}\n\n${privateText}"`, {}, peer, main)
+    const multilineOk = await ask(f, chat, 'ok')
+    await expect(propose(f, chat, multilineOk, f.web.projectId, main, { text: `${line}\n\n${privateText}` })).rejects.toMatchObject({ code: 'PROPOSAL_UNSHOWN' })
+    await send(f, chat, `I'll post this as you: "${line}"\n\n${privateText}`, {}, peer, main)
+    const ok = await ask(f, chat, 'ok')
+    await expect(propose(f, chat, ok, f.web.projectId, main, { text: `${line}\n\n${privateText}` })).rejects.toMatchObject({ code: 'PROPOSAL_UNSHOWN' })
+    const sent = String((await propose(f, chat, ok, f.web.projectId, main, { text: line })).result.messageId)
+    expect(await db.superTabMessage.findUniqueOrThrow({ where: { id: sent } })).toMatchObject({ text: line, author: { kind: 'person', id: peer.sub } })
+    expect(JSON.stringify(await texts(f, f.web.conversationId, owner))).not.toContain(privateText)
+  })
+
   it('tells its person in their chat, in the Swarm\'s own words, waking nobody; a refused send says nothing', async () => {
     const f = await swarm()
     const { chat, main } = await buddy(f)
