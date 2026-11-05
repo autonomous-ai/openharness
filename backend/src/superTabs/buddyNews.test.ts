@@ -105,7 +105,7 @@ describe('which Buddy a project-chat message reaches (Diego, 10-29)', () => {
   it('is nobody once its person no longer reads the project, has left, or rejoined at a new membership', () => {
     const lost = setup(), sent = lost.propose()
     lost.state.projects!.find(p => p.id === lost.app.projectId)!.visibility = 'private'
-    expect(lost.pmPost('Taking it.', { replyTo: sent }).buddyRecipients).toBeUndefined()
+    expect(lost.pmPost('Taking this as its own task.', { replyTo: sent }).buddyRecipients).toBeUndefined()
     const rejoined = setup(), asked = rejoined.propose()
     rejoined.state.people.find(p => p.id === 'peer')!.generation = 'second'
     expect(buddiesTold(rejoined.state, { ...asked, id: 'answer', replyTo: asked.id, thread: asked.id, author: { kind: 'agent', id: rejoined.pm, name: 'pm',
