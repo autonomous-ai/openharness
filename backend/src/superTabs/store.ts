@@ -5,7 +5,7 @@ import type { PhoneNotice } from '../push/sender.js'
 import { joiningTeamMacs, type TeamMachineRow, accountMachineName, availableSlots, expireRemovals, followAccountName, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, slotCounter, machineTeamWork, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, teamWorkRefusal, ownAccountWork, ownAccountNote, type MachineObservation } from './machines.js'
 import { expireAccess } from './machineAccess.js'
 import { authorForAgent, lazyUsernames, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
-import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
+import { machineSuspensionReason, readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
@@ -1344,13 +1344,14 @@ export class SuperTabStore {
       // out for, and what Desktop can show on the machine.
       const refusal = machineTeamWork(state, stored, now, teamMachines, otherWorkspace, joining)
       const suspended = suspendedEngines(stored, now)
+      const machineSuspended = machineSuspensionReason(stored, now)
       return { ...pool, availableSlots: availableSlots(state, stored, slots(stored)),
         teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const,
           // Its owner lets teammates' work run in their own account (machines.ts ownAccountWork): the route says so.
           ...(ownAccountWork(stored) ? { ownAccount: ownAccountNote(stored, shownNameOf(state, stored.contributorId)) } : {}) },
         ...(facts.versions[pool.machineId] ? { clientVersion: facts.versions[pool.machineId] } : {}),
         // What the route leaves out (cli superTabs/routeCommand.ts unreadyPool).
-        ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}) }
+        ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(machineSuspended ? { machineSuspended } : {}) }
     }) } }
   }
 
@@ -3561,9 +3562,9 @@ export class SuperTabStore {
     if (!readingOnly(mine.observation, reading)) return null
     addLent(mine, now, record.lentCount, record.lentProjects)
     mine.observation = reading
-    const suspended = JSON.stringify(mine.engineSuspensions)
+    const suspended = JSON.stringify([mine.engineSuspensions, mine.machineSuspension])
     readingClearsSuspensions(mine, now)
-    if (JSON.stringify(mine.engineSuspensions) !== suspended) return null
+    if (JSON.stringify([mine.engineSuspensions, mine.machineSuspension]) !== suspended) return null
     // Its sweep due: the full report runs it, with the slot this reading, which passed the checks, just took.
     if (await this.reports.sweepDue(tabId, now)) return { sweep: true }
     const stamp = clock.next()

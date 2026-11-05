@@ -4,11 +4,13 @@
  *  machine from before these readings keeps today's behaviour. */
 import type { ContributedMachine } from './machines.js'
 import type { AgentStart, SuperTabState } from './model.js'
+import { TIMED_OUT, TIMED_OUT_SUFFIX } from './startFailure.js'
 
 /** Failed starts in a row that suspend an engine on a machine. */
 export const SUSPEND_AFTER = 2
 const LEGACY_SUSPENSION_MS = 6 * 3_600_000
 const duration = (level: number) => Math.min(30 * 60_000 * 2 ** (level - 1), 12 * 3_600_000)
+const durationText = (ms: number) => ms < 3_600_000 ? `${ms / 60_000} minutes` : `${ms / 3_600_000} ${ms === 3_600_000 ? 'hour' : 'hours'}`
 type EngineSuspension = NonNullable<ContributedMachine['engineSuspensions']>[string]
 const NAME: Record<string, string> = { claude: 'Claude Code', codex: 'Codex' }
 const named = (engine: string) => NAME[engine] ?? engine
@@ -27,7 +29,7 @@ function engineFailure(error: string): 'sign-in' | 'engine' | null {
 
 function pool(state: SuperTabState, machineId: string) { return state.machines?.find(m => m.machineId === machineId) }
 /** Only a routed worker's start: a Product Manager's start has its own retries (leadStart.ts), and a Buddy is its owner's own. */
-const counts = (start: AgentStart) => !!start.error && !start.request.gridModel && !start.request.leadFor && !start.request.buddyOf && !!engineFailure(start.error)
+const worker = (start: AgentStart) => !!start.error && !start.request.leadFor && !start.request.buddyOf
 
 /** Signed in, with every usage window below its limit (or metered, with none), in the machine's latest reading. */
 function readsFine(machine: ContributedMachine, engine: string): boolean {
@@ -41,19 +43,35 @@ function active(machine: ContributedMachine, engine: string, now: number) {
   return suspension && now - suspension.at < (suspension.durationMs ?? LEGACY_SUSPENSION_MS) ? suspension : null
 }
 function suspensionReason(engine: string, suspension: EngineSuspension): string {
-  const minutes = (suspension.durationMs ?? LEGACY_SUSPENSION_MS) / 60_000
-  const after = minutes < 60 ? `${minutes} minutes` : `${minutes / 60} ${minutes === 60 ? 'hour' : 'hours'}`
+  const after = durationText(suspension.durationMs ?? LEGACY_SUSPENSION_MS)
   const reading = suspension.cause === 'sign-in' ? 'once a reading shows it signed in, '
     : !suspension.cause && !suspension.fine ? 'once a reading shows it signed in with quota left, ' : ''
   return `${named(engine)} is suspended on this machine for new work: its last ${SUSPEND_AFTER} starts there failed. `
     + `It is offered again ${reading}after ${after}, or once its owner resumes it.`
 }
 
-/** Counts a failed start against its engine on its machine. Returns the suspension's sentence when this failure suspends
- *  the engine, and null otherwise, so its notice is posted once per suspension, never on a later failure. */
+/** A pickup timeout says nothing about any one engine. Keep its cooldown apart, and expose it to old clients through
+ *  suspendedEngines too; admission still enforces it for clients that do not yet know machineSuspended. */
+export function machineSuspensionReason(machine: ContributedMachine, now: number): string | null {
+  const s = machine.machineSuspension
+  return s && now - s.at < s.durationMs
+    ? `This machine is suspended for new work: its last ${SUSPEND_AFTER} starts timed out. It is offered again after ${durationText(s.durationMs)}.` : null
+}
+
+/** Count the first failure receipt only (the caller owns deduplication). Return a notice once per cooldown. */
 export function noteStartFailed(state: SuperTabState, start: AgentStart, now: number): string | null {
   const machine = pool(state, start.request.machineId), engine = start.request.engine
-  if (!machine || !counts(start) || active(machine, engine, now)) return null
+  if (!machine || !worker(start)) return null
+  if (start.error === TIMED_OUT || start.error!.endsWith(TIMED_OUT_SUFFIX)) {
+    if (machineSuspensionReason(machine, now)) return null
+    machine.machineFailures = (machine.machineFailures ?? 0) + 1
+    if (machine.machineFailures < SUSPEND_AFTER) return null
+    delete machine.machineFailures
+    machine.machineBackoff = Math.min((machine.machineBackoff ?? 0) + 1, 6)
+    machine.machineSuspension = { at: now, durationMs: duration(machine.machineBackoff) }
+    return machineSuspensionReason(machine, now)
+  }
+  if (start.request.gridModel || !engineFailure(start.error!) || active(machine, engine, now)) return null
   const failures = (machine.engineFailures?.[engine] ?? 0) + 1
   const previous = machine.engineBackoff?.[engine]
   const cause = engineFailure(start.error!) === 'engine' || (failures > 1 && previous?.cause !== 'sign-in') ? 'engine' : 'sign-in'
@@ -74,12 +92,17 @@ export function noteStartFailed(state: SuperTabState, start: AgentStart, now: nu
 /** A start that ran: its engine's failures there are no longer in a row. */
 export function noteStartSucceeded(state: SuperTabState, start: AgentStart): void {
   const machine = pool(state, start.request.machineId)
-  if (machine && !start.request.gridModel) resumeEngine(machine, start.request.engine)
+  if (!machine) return
+  delete machine.machineFailures
+  delete machine.machineBackoff
+  delete machine.machineSuspension
+  if (!start.request.gridModel) resumeEngine(machine, start.request.engine)
 }
 
-/** After a reading is stored: a suspension ends once the engine reads fine, unless it already read fine as it was suspended
- *  (its starts failed for another reason, and every report would end it at once). Ended and expired ones are dropped. */
+/** Readings clear sign-in failures only; a quota reading cannot prove a launch works. Legacy causes remain unknown.
+ *  Expiry drops active cooldowns, keeping the bounded repeat level until a start succeeds. */
 export function readingClearsSuspensions(machine: ContributedMachine, now: number): void {
+  if (machine.machineSuspension && !machineSuspensionReason(machine, now)) delete machine.machineSuspension
   if (!machine.engineSuspensions) return
   const kept = Object.entries(machine.engineSuspensions).filter(([engine, s]) => {
     if (!active(machine, engine, now)) return false
@@ -100,6 +123,8 @@ export function resumeEngine(machine: ContributedMachine, engine: string): boole
 
 /** Each engine suspended on the machine now, with why: what the route leaves out and Desktop strikes through. */
 export function suspendedEngines(machine: ContributedMachine, now: number): Record<string, string> {
+  const machineReason = machineSuspensionReason(machine, now)
+  if (machineReason) return Object.fromEntries(machine.engines.map(engine => [engine, machineReason]))
   return Object.fromEntries(Object.entries(machine.engineSuspensions ?? {}).filter(([engine]) => active(machine, engine, now))
     .map(([engine, s]) => [engine, suspensionReason(engine, s)]))
 }
@@ -108,6 +133,8 @@ export function suspendedEngines(machine: ContributedMachine, now: number): Reco
  *  information, not a gate (project instructions, phase 4): a used-up window refuses nothing. What the reading does not say
  *  stays usable. */
 export function engineUnusable(machine: ContributedMachine, engine: string, now: number): string | null {
+  const machineReason = machineSuspensionReason(machine, now)
+  if (machineReason) return machineReason
   const reading = machine.observation
   if (reading?.readiness?.engines?.find(e => e.engine === engine)?.signedIn === false) return `${named(engine)} is not signed in to a subscription on this machine.`
   const suspension = active(machine, engine, now)

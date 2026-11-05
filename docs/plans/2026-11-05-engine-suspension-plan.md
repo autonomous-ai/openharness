@@ -47,9 +47,9 @@
 
 **Interfaces:** Keep `noteStartFailed(state, start, now): string | null`; add a private classification of known engine launch/exit/question/sign-in failures, leaving unknown/setup errors uncounted.
 
-- [ ] Add table-driven negative cases for clone, GitHub token, missing folder/commit/tool, unavailable model, permission flags, removed/moved machines and unknown request/account failures; positive cases use real native exit and hidden-screen summaries.
-- [ ] Commit tests; run `npm test -- src/superTabs/engineHealth.test.ts --maxWorkers=2` and retain failing evidence.
-- [ ] Implement conservative classification; run the same test plus direct command/liveness callers; commit and push.
+- [x] Add table-driven negative cases for clone, GitHub token, missing folder/commit/tool, unavailable model, permission flags, removed/moved machines and unknown request/account failures; positive cases use real native exit and hidden-screen summaries.
+- [x] Commit tests; run `npm test -- src/superTabs/engineHealth.test.ts --maxWorkers=2` and retain failing evidence.
+- [x] Implement conservative classification; run the same test plus direct command/liveness callers; commit and push.
 
 ### Task 2: Back off engine failures and recover by cause
 
@@ -57,9 +57,9 @@
 
 **Interfaces:** Extend `engineSuspensions` with optional `durationMs` and `cause`; retain bounded `engineBackoff` per engine. Existing `readingClearsSuspensions`, `noteStartSucceeded`, `resumeEngine`, `engineUnusable`, `suspendedEngines` remain entry points.
 
-- [ ] Test literal durations 30m/1h/2h/4h/8h/12h/12h across expiry and readings; test success reset, owner resume, settings preservation and legacy records.
-- [ ] Test signed-in plus unknown quota clears sign-in cause only; mixed failures must not clear a launch failure.
-- [ ] Commit failing tests and capture red; implement duration/cause/reset semantics and settings preservation, run focused tests, commit and push green.
+- [x] Test literal durations 30m/1h/2h/4h/8h/12h/12h across expiry and readings; test success reset, owner resume, settings preservation and legacy records.
+- [x] Test signed-in plus unknown quota clears sign-in cause only; mixed failures must not clear a launch failure.
+- [x] Commit failing tests and capture red; implement duration/cause/reset semantics and settings preservation, run focused tests, commit and push green.
 
 ### Task 3: Machine timeouts and route explanations
 
@@ -67,8 +67,8 @@
 
 **Interfaces:** Add bounded machine timeout counters/backoff/suspension and `machineSuspensionReason(machine, now): string | null`. Server exposes optional `machineSuspended` plus per-engine reasons for older clients. CLI `unreadyPool` treats the machine reason as an all-engine refusal; route notes use fixed descriptions of recent setup failures.
 
-- [ ] Test alternating-engine timeouts, one notice, double-report suppression, successful start reset, expiry/backoff, grid admission and preservation across re-contribution.
-- [ ] Test both read projections and persisted host readings; test route all-engine refusal and safe setup notes while candidates stay available.
-- [ ] Commit failing tests and capture red; implement through existing command/read paths, run affected tests and commit/push green.
-- [ ] Run backend unit suite, focused Super Tab engine-health integrations, CLI routing specs and both typechecks with bounded workers/timeouts. Full integration and CLI suites remain automatic PR CI.
+- [x] Test alternating-engine timeouts, one notice, double-report suppression, successful start reset, expiry/backoff, grid admission and preservation across re-contribution.
+- [x] Test both read projections and persisted host readings; test route all-engine refusal and safe setup notes while candidates stay available.
+- [x] Commit failing tests and capture red; implement through existing command/read paths, run affected tests and commit/push green.
+- [x] Run backend unit suite, focused Super Tab engine-health integrations, CLI routing specs and both typechecks with bounded workers/timeouts. Full integration and CLI suites remain automatic PR CI.
 - [ ] Record red/green evidence and timings in a PR comment, mark Ready, request the Integrator's independent review, and resolve findings.
