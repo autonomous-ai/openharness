@@ -65,6 +65,37 @@ void main() {
     expect(listed['n']!.folders, isEmpty);
   });
 
+  test('a repo behind an SSH alias is found by its real repository, as '
+      'Desktop reads it, and each computer says when the person last opened '
+      'one of its agents (task #3042)', () async {
+    final rig = await signedInWith({'m': [], 'n': []});
+    addTearDown(rig.app.dispose);
+    rig.conn('m').answers['agents_list'] = (_) => {
+      'agents': [
+        agentJson(
+          'a1',
+          extra: {
+            'lastOpenedAt': '2026-11-05T08:00:00.000Z',
+            'project': {
+              'name': 'games',
+              'cwd': '/Users/me/games',
+              'remote': 'gh-work/acme/games',
+              'repository': 'github.com/acme/games',
+            },
+          },
+        ),
+        agentJson('a2', extra: {'lastOpenedAt': '2026-11-05T09:30:00.000Z'}),
+      ],
+    };
+    await rig.app.syncAgentsForTest('m');
+    final computers = AppSwarmComputers(rig.app);
+    addTearDown(computers.dispose);
+    final listed = {for (final c in computers.leadComputers) c.id: c};
+    expect(listed['m']!.folders, {'github.com/acme/games': '/Users/me/games'});
+    expect(listed['m']!.lastUsed, DateTime.utc(2026, 11, 5, 9, 30));
+    expect(listed['n']!.lastUsed, isNull);
+  });
+
   test(
     'a computer not connected, shared, or a Team account is left out',
     () async {
