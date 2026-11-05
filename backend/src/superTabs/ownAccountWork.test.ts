@@ -243,3 +243,54 @@ describe('teammates\' work in a Mac owner\'s own account', () => {
     expect(moved.result.moved).toContain('in this Swarm\'s Manage > Machines')
   })
 })
+
+// Task #3060 (Scholes, 11-05): on 11-04 a lamp start named Gray's Team account entry itself, not the Mac, after Gray had
+// turned own-account work on. Both entries were named 'Gray.local', and the server placed it as named, with no note. A
+// start that names the Team entry for a teammate's work no Team agent wrote is refused, with a pointer to the Mac's own
+// entry: moving it would put the work in a person's own account when the start named the isolated one.
+describe('a start that names a Mac\'s Team account entry while its owner runs teammates\' work in their own account', () => {
+  const startOnTeam = (f: ReturnType<typeof swarm>, group: string, actor: Actor = f.leadActor, projectId = 'lead') =>
+    f.run({ type: 'agent.start', request: { ...f.request(group, 'gray-team', projectId), cwd: `/team-swarm/${projectId}` } }, actor, f.joined)
+
+  it('is refused for a teammate\'s task, pointing at the Mac\'s own entry, and nothing starts', () => {
+    const f = swarm()
+    f.choose(true)
+    const result = refusal(() => startOnTeam(f, f.group()))
+    expect(result?.code).toBe('OWN_ACCOUNT_WORK')
+    expect(result?.message).toContain('Gray\'s Mac')
+    expect(result?.message).toContain('gray-mac')
+    expect(f.state.starts ?? []).toHaveLength(0)
+  })
+
+  it('is refused for a person\'s start too', () => {
+    const f = swarm()
+    f.choose(true)
+    expect(refusal(() => startOnTeam(f, f.group(), owner))?.code).toBe('OWN_ACCOUNT_WORK')
+  })
+
+  it('still starts work a Team agent wrote in the Team account', () => {
+    const f = swarm()
+    f.choose(true)
+    const group = f.group()
+    Object.assign(f.state.conversations.find(c => c.id === group)!, { teamWritten: true })
+    startOnTeam(f, group)
+    expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team', cwd: '/team-swarm/lead' })
+  })
+
+  it('starts there as before when its owner has not turned own-account work on, or turned it off', () => {
+    const f = swarm()
+    startOnTeam(f, f.group())
+    expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team' })
+    f.choose(true)
+    f.choose(false)
+    startOnTeam(f, f.group())
+    expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team' })
+  })
+
+  it('leaves a choice recorded by someone other than the owner unread, as ownAccountWork does', () => {
+    const f = swarm()
+    f.machine('gray-mac').ownAccountChoice = { allowed: true, by: 'mate', at: new Date(NOW).toISOString() }
+    startOnTeam(f, f.group())
+    expect(f.state.starts!.at(-1)!.request).toMatchObject({ machineId: 'gray-team' })
+  })
+})
