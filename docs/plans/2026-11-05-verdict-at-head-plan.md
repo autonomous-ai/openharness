@@ -23,23 +23,27 @@ and re-derives the checks of the task and its steps. liveness.ts drops its text 
 ## Global Constraints
 
 - No new refusal: `removedRefusals.test.ts` stays green. A bad `head` is a schema error like any malformed field.
-- Old clients: `head` is optional; a verdict without a head, or on a task with no watched pull request, counts as before.
-- Fail safe: a head whose patch cannot be read (GitHub error, over 3,000 files) has patch `null`, so only an exact head
-  match counts there.
-- Reads: per-file patches are read only when the watch sees a new head; steps are found with one read on that change.
+- Old clients: `head` (the whole commit id) is optional in the command. A verdict counts as before only while its task has
+  no watched head; after that, one naming no head, or on a pull request whose head is not watched, counts at none.
+- Fail safe: a head whose patch cannot be read (GitHub error, over 3,000 files, the head moved, a file listed for another
+  head) has patch `null`, so only an exact head match counts there; it is read again after 15 minutes.
+- Reads: per-file patches are read when the watch sees a new head, or again for a null patch every 15 minutes. Steps load
+  by key from the task's `stepIds`; a task from before them looks its dormant steps up once.
 - Swarm code stays out of cli/src/core.
 
 ## Design
 
-- growth: `pullRequestHeads` keeps the heads of pull requests the task still links, at most 50, the most recently read
-  (`keepHead`); a verdict on one dropped is unverified, never valid. `stepIds` is capped at 50 (production: at most 14
-  steps on a task, 1.6 on average, 2026-11-05). Verdicts as before.
+- growth: the watch reads a task's newest 50 links (`watchedLinks`) and `pullRequestHeads` keeps exactly those heads
+  (`keepHead`), so the map never drops a head the next pass reads; a verdict on a link no longer read is unverified.
+  `stepIds` is capped at 200 (production: at most 14 steps on a task, 1.6 on average, 2026-11-05). Verdicts as before.
 - concurrency: written in the same group transaction as the watch's keys (store.ts pullRequestSeen) and `work.check`.
 - read cost: the files are read once per new head (1 to 30 GitHub calls, plus one PR read to pin the head), and again
   only for a head whose patch could not be read, every 15 minutes. Steps are loaded by key from `stepIds` on a head
-  change only. A second watch read takes done, unarchived tasks (cap 50) by the same index, `workFinished: true`.
-- scale: production on 2026-11-05 had 51 open tasks with 552 links (one task with 369) and 15 done, unarchived tasks
-  with 18 links. 10x pushes means 10x files reads; the pass's warn line (`unreadable`, `unpatched`) shows it first.
+  change only. A second watch read takes done, unarchived tasks of any age (cap 100) by the same index, `workFinished:
+  true` (production: 51 finished, unarchived groups in all). A task from before `stepIds` looks its dormant steps up once,
+  by tabId, dormant and deleted (a Swarm's dormant groups, at most 3,060 in production), then lists them.
+- scale: production on 2026-11-05 had 51 open tasks with 552 links (one task with 369; 45 watched this week) and 31 done,
+  unarchived tasks with links (11 quiet over a week). 10x pushes means 10x files reads; the pass's warn line (`unreadable`, `unpatched`) shows it first.
 - compatibility: old clients ignore the new fields. An agent's `work.check` without `head` is recorded and counts at no
   watched head; its result says `counts: false` and what to send. A person's still gets the head watched last.
 - migration + rollback: none. A verdict from before heads counts until its task's pull request is first watched, then
