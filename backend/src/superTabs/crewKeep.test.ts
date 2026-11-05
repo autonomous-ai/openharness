@@ -34,9 +34,18 @@ describe('crewKeep: sleep', () => {
 
 describe('crewKeep: move when its machine fails', () => {
   const moveOf = (state: SuperTabState, deps = everywhere) => crewKeep(state, NOW, deps).find(a => a.kind === 'move')
-  it('moves after the machine is offline over 5 minutes, not before', () => {
-    expect(moveOf(fixture([machine('mac', { receivedAt: NOW - MOVE_OFFLINE_MS + 30_000 }), machine('mini')]).state)).toBeUndefined()
-    expect(moveOf(fixture([machine('mac', { receivedAt: NOW - MOVE_OFFLINE_MS - 1 }), machine('mini')]).state))
+  it('moves a member holding work after the machine is offline over 5 minutes, not before', () => {
+    // Holding work: the task its machine took from it, as liveness does at 2 minutes offline.
+    const holding = (pools: ReturnType<typeof machine>[]) => {
+      const f = fixture(pools)
+      f.state = applyCommand(f.state, person, { type: 'conversation.create', title: 'Fix it', brief: 'b', checks: [] } as never, { now: NOW - 7_200_000, operationId: 'held' }).state
+      const group = f.state.conversations.find(c => c.title === 'Fix it')!
+      group.assignment = { id: 'a1', agentId: f.ada.id, status: 'lost', lost: { reason: 'machine offline', at: NOW - 180_000 } } as never
+      f.state.agents.find(a => a.id === f.ada.id)!.lostTask = { conversationId: group.id, assignmentId: 'a1', reason: 'machine offline', at: NOW - 180_000 }
+      return f.state
+    }
+    expect(moveOf(holding([machine('mac', { receivedAt: NOW - MOVE_OFFLINE_MS + 30_000 }), machine('mini')]))).toBeUndefined()
+    expect(moveOf(holding([machine('mac', { receivedAt: NOW - MOVE_OFFLINE_MS - 1 }), machine('mini')])))
       .toEqual({ kind: 'move', agentId: expect.any(String), toMachineId: 'mini', reason: 'offline' })
   })
   it('moves at once when its engine is signed out', () => {

@@ -2,6 +2,8 @@ import { OBSERVER_VALID_MS, publishObservers } from './observers.js'
 import { CrewFolders, crewRest, pruneBranches } from './crewFolders.js'
 /** How often a crew member's finished branch copies are pruned (crewFolders.ts). */
 const CREW_PRUNE_EVERY_MS = 60 * 60_000
+/** How long a folder drop the Swarm's removal refused waits before it is tried again. */
+const CREW_DROP_RETRY_MS = 60 * 60_000
 import { ContributedMachines, uncommittedIn, type MachineDeps } from './machines.js'
 import { SwarmGrids } from './swarmGrids.js'
 import { retainContributions } from './retention.js'
@@ -1169,6 +1171,11 @@ export class SuperTabHost {
       const rest = crewRest(target.agent as Parameters<typeof crewRest>[0])
       const restKey = `${target.tabId}:${target.agent.harnessId}`
       if (rest) {
+        // A drop the Swarm's removal refused (work not committed or pushed) is tried again an hour on (review of #3229).
+        if (rest === 'drop' && this.rested.get(restKey) === 'drop' && (this.dropRetry.get(restKey) ?? Infinity) <= this.now()) {
+          this.rested.delete(restKey)
+          this.dropRetry.delete(restKey)
+        }
         void this.crewRest(target, rest)
         continue
       }
@@ -1339,6 +1346,8 @@ export class SuperTabHost {
   /** Crew members closed for rest, by tab and harness, with what closed them: closed once per rest, and when one wakes, its
    *  dropped folder comes back before its keep-alive reopens it (crewFolders.ts). */
   private readonly rested = new Map<string, 'sleep' | 'drop' | 'moving'>()
+  /** When a refused folder drop is tried again, by the same key. */
+  private readonly dropRetry = new Map<string, number>()
   private crewFoldersInstance?: CrewFolders
   private crewFolders(): CrewFolders {
     return this.crewFoldersInstance ??= new CrewFolders({ dataDir: this.core.dataDir, machineId: this.machineId,
@@ -1364,7 +1373,7 @@ export class SuperTabHost {
         const closed = await this.core.agents.closeMember?.(row.agent.harnessId)
         if (closed && 'error' in closed && closed.error) throw new Error(closed.error)
       }
-      if (rest === 'drop') await this.crewFolders().drop(row.tabId, row.agent.harnessId)
+      if (rest === 'drop' && await this.crewFolders().drop(row.tabId, row.agent.harnessId) === 'kept') this.dropRetry.set(key, this.now() + CREW_DROP_RETRY_MS)
     } catch (error) {
       // Tried again on the next roster: the server still says it rests.
       this.rested.delete(key)

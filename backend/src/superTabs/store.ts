@@ -1,5 +1,5 @@
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
-import { applyCrewKeep, crewMoveRequest, isCrewMember, type CrewDeps } from './crewKeep.js'
+import { applyCrewKeep, crewMoveRequest, crewNeedsMachine, isCrewMember, type CrewDeps } from './crewKeep.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
@@ -3830,7 +3830,9 @@ export class SuperTabStore {
       // The starts the server refused this machine's own reports for fail now, with the refusal, not 3 minutes on (#2441).
       // The crew keeper with the Swarm's time checks (crewKeep.ts): sleep, move off a failing machine, drop folders. A move is
       // placed only where a start would be admitted now, Team rules included.
-      const crew = sweep && state.agents.some(isCrewMember) ? await this.crewDeps(tx, state, now) : null
+      // The Team facts are read only when a member needs another machine (review of #3229); sleeps and folders need none.
+      const crew = sweep && state.agents.some(isCrewMember)
+        ? crewNeedsMachine(state, now) ? await this.crewDeps(tx, state, now) : { admits: () => false } : null
       const checked = [...failRefusedStarts(state, machineId, now), ...loseTasks(state, now, worker => worker.machineId === machineId),
         ...sweep ? sweepLiveness(state, now) : [], ...crew ? applyCrewKeep(state, now, crew) : []]
       // Then the agents it shows closed leave, those with no active work left: the Lead is told of their tasks above (closedAgents.ts).
