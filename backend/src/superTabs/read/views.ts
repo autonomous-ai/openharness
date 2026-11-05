@@ -11,7 +11,7 @@ import { availableSlots, slotCounter, machineTeamWork, type ContributedMachine }
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
-import { projectPulse, type Pulse } from '../pulse.js'
+import { agentProjects, projectPulse, PULSE_LIMITS, type Pulse } from '../pulse.js'
 import { logger } from '../../utils/logger.js'
 import { coordinatorNameOf, roleNameOf } from '../instructions.js'
 import { withAvatarView } from '../profile.js'
@@ -132,11 +132,11 @@ export const progressView = (data: NonNullable<SwarmParts['progress'][number]['d
  *  out is left out and logged: the board then draws no strip rather than a wrong one. */
 function pulses(state: SuperTabState, visible: SuperTabState, now: number): Record<string, Pulse> | undefined {
   if (!visible.projects?.length) return undefined
-  const out: Record<string, Pulse> = {}
+  const out: Record<string, Pulse> = {}, projectOfAgent = agentProjects(state)
   for (const seen of visible.projects) {
     const project = state.projects?.find(p => p.id === seen.id)
     if (!project) continue
-    try { out[project.id] = projectPulse(state, project, now) } catch (error) {
+    try { out[project.id] = projectPulse(state, project, now, PULSE_LIMITS, projectOfAgent) } catch (error) {
       logger.error('[swarm-pulse] could not work out a project\'s pulse', { tabId: state.id, projectId: project.id, error: String(error) })
     }
   }

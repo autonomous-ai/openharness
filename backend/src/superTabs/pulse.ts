@@ -128,18 +128,22 @@ function lostSince(group: Conversation): number | null {
 
 interface Counts { working: Set<string>; crew: string[]; nextUp: string[]; lost: Array<{ id: string; since: number }>; held: Array<{ conversationId: string; reason: string | null }> }
 
-function countWork(state: SuperTabState, project: SwarmProject, now: number): Counts {
+/** Each agent's project, worked out once for every project counted (agentProjectId may search the conversations). */
+export const agentProjects = (state: SuperTabState): Map<string, string> => new Map(state.agents.map(a => [a.id, agentProjectId(state, a)]))
+
+function countWork(state: SuperTabState, project: SwarmProject, now: number, projectOfAgent = agentProjects(state)): Counts {
   const pm = pmOf(state, project)
-  const crew = state.agents.filter(a => a.id !== pm && !isBuddy(a) && agentProjectId(state, a) === project.id).map(a => a.id)
+  const crew = state.agents.filter(a => a.id !== pm && !isBuddy(a) && projectOfAgent.get(a.id) === project.id).map(a => a.id)
   const inCrew = new Set(crew), today = dayOf(now)
   const counts: Counts = { working: new Set(), crew, nextUp: [], lost: [], held: [] }
   for (const group of workOf(state, project)) {
     const assignment = group.assignment
+    // Lost first: a blocked task whose agent is gone waits for an agent before anything else.
+    const since = lostSince(group)
+    if (since !== null) { counts.lost.push({ id: group.id, since }); continue }
     const hold = holdOf(group, today)
     if (hold) { counts.held.push({ conversationId: group.id, reason: hold.reason }); continue }
     if (!assignment) { if (!group.reviewOf) counts.nextUp.push(group.id); continue }
-    const since = lostSince(group)
-    if (since !== null) { counts.lost.push({ id: group.id, since }); continue }
     if (assignment.status === 'working' && inCrew.has(assignment.agentId)) counts.working.add(assignment.agentId)
   }
   return counts
@@ -152,16 +156,18 @@ const idle = (counts: Counts): boolean => !counts.working.size && (counts.nextUp
  *  loaded, after each command and on the PM's sweep, so the board reddens on time without anyone's poll. Writes only on a
  *  change. */
 export function markIdle(state: SuperTabState, now: number): void {
+  const projectOfAgent = agentProjects(state)
   for (const project of state.projects ?? []) {
-    const waiting = idle(countWork(state, project, now))
+    const waiting = idle(countWork(state, project, now, projectOfAgent))
     if (waiting && project.idleSince === undefined) project.idleSince = now
     else if (!waiting && project.idleSince !== undefined) delete project.idleSince
   }
 }
 
 /** [project]'s pulse at [now], from what is loaded. */
-export function projectPulse(state: SuperTabState, project: SwarmProject, now: number, limits: PulseLimits = PULSE_LIMITS): Pulse {
-  const counts = countWork(state, project, now)
+export function projectPulse(state: SuperTabState, project: SwarmProject, now: number, limits: PulseLimits = PULSE_LIMITS,
+  projectOfAgent = agentProjects(state)): Pulse {
+  const counts = countWork(state, project, now, projectOfAgent)
   const asks = state.conversations.filter(c => !c.archived && c.owed && (c.projectId ?? 'lead') === project.id)
     .flatMap(c => c.owed!.map(ask => ({ conversationId: c.id, messageId: ask.id, personId: ask.personId, at: ask.at })))
     .sort((a, b) => a.at - b.at)
