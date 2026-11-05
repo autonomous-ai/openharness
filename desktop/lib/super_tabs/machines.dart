@@ -3202,17 +3202,19 @@ class _MachineLine extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: DesktopChrome.metadata(),
                         ),
+                      // The design system's secondary action, as themed (desktop-design-system.md): no local style.
                       if (problem != null && onSetUpTeam != null)
-                        TextButton(
-                          key: ValueKey('super-machine-team-setup-${view.id}'),
-                          onPressed: onSetUpTeam,
-                          style: TextButton.styleFrom(
-                            padding: EdgeInsets.zero,
-                            minimumSize: const Size(0, 22),
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            alignment: Alignment.centerLeft,
+                        Padding(
+                          padding: const EdgeInsets.only(
+                            top: grid.AppDesktop.controlGap,
                           ),
-                          child: Text(view.setUpTeamLabel),
+                          child: OutlinedButton(
+                            key: ValueKey(
+                              'super-machine-team-setup-${view.id}',
+                            ),
+                            onPressed: onSetUpTeam,
+                            child: Text(view.setUpTeamLabel),
+                          ),
                         ),
                     ],
                   );
