@@ -58,6 +58,10 @@ Future<SuperTabController> _show(
   );
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 50));
+  if (list) {
+    await tester.tap(find.byKey(const ValueKey('super-tasks-heading-shipped')));
+    await tester.pump();
+  }
   return controller;
 }
 
@@ -112,7 +116,7 @@ void main() {
               status: status,
               liveness: liveness,
               merged: merged,
-              pullRequest: merged ? 3007 : null,
+              pullRequest: merged || status == 'done' ? 3007 : null,
               shippedAt: merged ? _now : null,
             ),
           ),
@@ -257,10 +261,32 @@ void main() {
           matching: find.byType(Text),
         );
         expect(text, findsOneWidget);
-        final before = tester.widget<Text>(text).data;
+        final mark = tester.widget<ActivityMark>(_mark('task'));
+        var now = DateTime(2026, 11, 5);
+        final clock = ActivityClock(now: () => now);
+        addTearDown(clock.dispose);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: MediaQuery(
+              data: MediaQueryData(disableAnimations: reduceMotion),
+              child: ActivityMark(
+                activity: mark.activity,
+                color: mark.color,
+                clock: clock,
+              ),
+            ),
+          ),
+        );
+        final animatedText = find.descendant(
+          of: find.byType(ActivityMark),
+          matching: find.byType(Text),
+        );
+        final before = tester.widget<Text>(animatedText).data;
+        now = now.add(activityFrameInterval);
         await tester.pump(activityFrameInterval);
-        final after = tester.widget<Text>(text).data;
+        final after = tester.widget<Text>(animatedText).data;
         expect(after, reduceMotion ? before : isNot(before));
+        expect(clock.running, !reduceMotion);
         await tester.pumpWidget(const SizedBox());
       },
     );
