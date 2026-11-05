@@ -289,11 +289,35 @@ void main() {
     ]);
     expect(find.textContaining('Grid limits'), findsOneWidget);
     expect(
-      find.text('Unavailable on 3 machines — $gridSecurity'),
+      find.text(
+        'Unavailable on Mac 3, MacBook-Pro-8 and Tony\'s Mac — $gridSecurity',
+      ),
       findsOneWidget,
     );
     // Those machines offered their other candidates: no line of their own.
     expect(find.textContaining('Unavailable: '), findsNothing);
+  });
+
+  // Review of #3167: "Required tool missing: git." reads like a rule but is a
+  // machine fact; a line said once must still say where.
+  testWidgets('a reason said once names its machines', (tester) async {
+    const git = 'Required tool missing: git.';
+    await openDetails(tester, [
+      ...rowsOn('Mac 3', git, count: 2),
+      ...rowsOn('Gray.local', git),
+    ]);
+    expect(
+      find.text('Unavailable on Mac 3 and Gray.local — $git'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Unavailable'), findsOneWidget);
+    await openDetails(tester, [
+      for (final machine in ['A', 'B', 'C', 'D', 'E']) ...rowsOn(machine, git),
+    ]);
+    expect(
+      find.text('Unavailable on A, B, C and 2 more machines — $git'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('each machine keeps its own line and up to four reasons', (
