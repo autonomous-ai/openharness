@@ -10,6 +10,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 
 import 'phone_edge/edge_fixture.dart';
+import 'swarm/picture_loads.dart';
 
 /// A picture or video an agent printed, downloaded and shown in the app — the page a tap on a
 /// terminal's media link opens. Real files in a temporary folder, a share sheet and a player that
@@ -267,6 +268,8 @@ void main() {
       final shot = file('shot.png', _png);
       await tester.pumpWidget(host(shot.path));
       await open(tester);
+      // The folder goes with the test: after the picture is read.
+      await picturesLoaded(tester);
       expect(find.byType(MediaPreviewPage), findsOneWidget);
       expect(find.text('terminal'), findsNothing);
 
@@ -282,6 +285,7 @@ void main() {
       final shot = file('shot.png', _png);
       await tester.pumpWidget(host(shot.path));
       await open(tester);
+      await picturesLoaded(tester);
 
       await tester.binding.handlePopRoute();
       await tester.pump();
@@ -297,6 +301,7 @@ void main() {
       final shot = file('shot.png', _png);
       await tester.pumpWidget(host(shot.path));
       await open(tester);
+      await picturesLoaded(tester);
       final pictureRoute =
           ModalRoute.of(tester.element(find.byType(MediaPreviewPage)))!
               as CupertinoPageRoute<void>;

@@ -10,7 +10,7 @@ import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
-import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person {
@@ -355,6 +355,10 @@ export interface Conversation {
   /** The sequence of its newest main-stream message from a person, not a system row (parts/commit.ts): what makes a task's
    *  sidebar row bold (Huy, 11-03, #2427). Absent until a person's first message after this was added; readers read 0. */
   lastPersonSequence?: number
+  /** When a person last wrote to its project's coordinator here: any message in the project chat (threads included), or one
+   *  reaching the coordinator in another chat of the project (parts/commit.ts). The built-in wake asks the coordinator to save
+   *  what it was taught only after one (pmSchedule.ts; task #3022). Absent until then. */
+  heardAt?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
   /** What its Engineer was already told of each linked pull request, newest first (pullRequestEvents.ts): absent until read. */
@@ -475,6 +479,8 @@ export interface SuperTabState {
   overlapAlerts?: string[]
   /** Read-only, for a Lead's own reads (visibleState): the active work of the other projects it may know about. */
   otherProjectsWork?: OtherProjectWork[]
+  /** Read-only, for the Swarm owner's reads (visibleState): the projects nobody owns, by name and size (projects.ts). */
+  ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
   ownerId: string
   /** The Workspace it belongs to (workspaceStore.ts); absent on a Swarm from before Workspaces until the migration gives it one. */
   workspaceId?: string
@@ -922,6 +928,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   assignAgentDisplayNames(visible.agents)
   const led = actor.kind === 'agent' ? ledProject(visible, actor.agentId) : undefined
   if (led) visible.otherProjectsWork = otherProjectsWork(visible, led)
+  const ownerless = ownerlessProjects(state, actor)
+  if (ownerless) visible.ownerlessProjects = ownerless
   for (const target of visible.agents) {
     const since = downSince(state, target, now)
     if (since) target.downSince = since
@@ -942,7 +950,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     const there = state.agents.filter(a => a.machineId === pool.machineId)
     const owners = new Set(there.length ? there.map(a => a.machineOwnerId) : [pool.contributorId])
     const mayMove = actor.kind === 'person' && (owners.has(actor.userId) ||
-      there.some(a => projectsOf(state).some(p => p.ownerId === actor.userId && state.conversations.some(c => c.id === p.leadConversationId && c.leadId === a.id))))
+      there.some(a => projectsOf(state).some(p => ownsProject(state, actor.userId, p) && state.conversations.some(c => c.id === p.leadConversationId && c.leadId === a.id))))
     if (!mayMove) delete pool.observation.profiles
   }
   expireRemovals(visible, now)

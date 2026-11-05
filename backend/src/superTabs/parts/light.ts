@@ -27,7 +27,7 @@ export const GROUP_FIELDS = {
   always: ['id', 'kind', 'projectId', 'leadId', 'agentIds', 'archived', 'audience', 'dormant', 'assignment.id', 'assignment.agentId', 'assignment.status',
     'assignment.lost'],
   whenRunning: ['title', 'task.owns', 'assignment.execution', 'assignment.result'],
-  unread: ['number', 'brief', 'reviewOf', 'teamWritten', 'step', 'reviewStamp', 'checks', 'lastMessageSequence', 'lastMainSequence', 'lastPersonSequence', 'pullRequestUrls', 'pullRequestEvents', 'cards', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger', 'reactionSeq', 'proposals', 'buddyName', 'buddySessions', 'buddyDownTold', 'liveness', 'leadAction', 'stepUp', 'queueRank', 'notBefore',
+  unread: ['number', 'brief', 'reviewOf', 'teamWritten', 'step', 'reviewStamp', 'checks', 'lastMessageSequence', 'lastMainSequence', 'lastPersonSequence', 'heardAt', 'pullRequestUrls', 'pullRequestEvents', 'cards', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger', 'reactionSeq', 'proposals', 'buddyName', 'buddySessions', 'buddyDownTold', 'liveness', 'leadAction', 'stepUp', 'queueRank', 'notBefore',
     'assignment.configuration', 'assignment.recordingProgress', 'assignment.leaseUntil', 'assignment.progressAt', 'assignment.askedOf', 'assignment.reviewFoundAt', 'assignment.changesRequestedAt', 'assignment.toldEngineerAt',
     'assignment.handoffs', 'assignment.verdicts'],
 } as const
@@ -44,6 +44,13 @@ export function ms(value: unknown): number {
   if (typeof date === 'number') return date
   return Number((date as { $numberLong?: string }).$numberLong)
 }
+
+/** A group part as `aggregateRaw` returns it, as the PartRow Prisma would. */
+export const rawGroupRow = (row: Record<string, unknown>): PartRow => ({ ...row, changedAt: new Date(ms(row.changedAt)) }) as unknown as PartRow
+/** Any part as `aggregateRaw` returns it: a Float ordinal can come wrapped, and a part stored before `deleted` lacks it. */
+export const rawPartRow = (row: Record<string, unknown>): PartRow => ({ ...rawGroupRow(row), version: Number(row.version), deleted: !!row.deleted,
+  ordinal: typeof row.ordinal === 'number' ? row.ordinal : Number((row.ordinal as { $numberDouble?: string; $numberInt?: string }).$numberDouble
+    ?? (row.ordinal as { $numberInt?: string }).$numberInt) }) as PartRow
 
 export function lightGroup(row: Record<string, unknown>): Part<GroupData> {
   const raw = (row.data ?? {}) as Partial<GroupData> & { task?: { owns?: string[] } }

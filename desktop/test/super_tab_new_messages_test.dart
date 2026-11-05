@@ -857,6 +857,9 @@ void main() {
     position.jumpTo(position.maxScrollExtent);
     await tester.pumpAndSettle();
     expect(find.byKey(_jump), findsNothing);
+    // At the end the chat is read, and its mark saved.
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
   });
 
   testWidgets('opened at a linked message above the line, the pill points '

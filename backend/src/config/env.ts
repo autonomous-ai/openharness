@@ -308,6 +308,18 @@ const envSchema = z.object({
   GITHUB_APP_CLIENT_ID: z.string().default(''),
   GITHUB_APP_CLIENT_SECRET: z.string().default(''),
 
+  // Phone push (push/keys.ts, task #2905): a thread reply or a tag reaches a phone whose app is closed. APNs for iPhones: the
+  // key Apple generated in the developer account (the .p8 file, with its line breaks as \n, or base64 of it), its Key ID and
+  // the Team ID; all three or none. FCM for Android: base64 of the Firebase service account's JSON key. Unset: that platform
+  // gets no push, and each one skipped is counted and logged. A value that cannot be right stops the backend at startup, with
+  // a message that never shows it.
+  APNS_KEY_ID: z.string().default(''),
+  APNS_TEAM_ID: z.string().default(''),
+  APNS_PRIVATE_KEY: z.string().default(''),
+  // The iPhone app's bundle id, which Apple sends to.
+  APNS_TOPIC: z.string().default('ai.autonomous.harness.ios'),
+  FCM_SERVICE_ACCOUNT: z.string().default(''),
+
   // TTL for the in-memory subdomain→machineId cache on the public app-proxy hot path
   // (avoids a Mongo lookup per request). Bounds staleness after a cross-instance app teardown.
   // 60 min default (mapping is stable; a same-instance delete evicts immediately).

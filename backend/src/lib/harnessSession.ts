@@ -7,6 +7,7 @@ import { TEAM_CONVERTED_FRAME } from './teamSession.js'
 import { userService } from '../services/UserService.js'
 import { storedAutonomousEnvironment, type AutonomousEnvironment } from './autonomousEnvironment.js'
 import { SsoAuthError, type AuthUser } from './ssoAuth.js'
+import { authEpochKey, harnessAuthCache, signInsChanged } from './harnessAuthCache.js'
 import type { SsoClientId } from './sso.js'
 import {
   endedSessionData,
@@ -182,6 +183,7 @@ async function convertComputer(userId: string, label: string, computerId: string
     } })
     return { session: created, machineIds: machines.map((m) => m.machineId) }
   })
+  await signInsChanged(userId)
   for (const machineId of machineIds) {
     await publishDown(machineId, { connId: '', frame: { type: TEAM_CONVERTED_FRAME } }).catch(() => { /* best effort: the next connect decides */ })
   }
@@ -289,10 +291,12 @@ export async function refreshHarnessSession(refreshToken: string): Promise<Harne
  *  tokens it held are deleted. */
 export async function revokeHarnessSession(refreshToken: string): Promise<void> {
   if (!isHarnessRefreshToken(refreshToken)) return
-  await prisma.harnessSession.updateMany({
-    where: { refreshHash: harnessTokenHash(refreshToken), ...notRevoked },
-    data: endedSessionData(),
-  })
+  const refreshHash = harnessTokenHash(refreshToken)
+  const session = await prisma.harnessSession.findUnique({ where: { refreshHash }, select: { userId: true } })
+  if (!session) return
+  await prisma.harnessSession.updateMany({ where: { refreshHash, ...notRevoked }, data: endedSessionData() })
+  // Even when it was already revoked: a retry after a failed epoch write must still reach every pod.
+  await signInsChanged(session.userId)
 }
 
 async function issueAccess(sessionId: string, userId: string, kind: HarnessSessionKind): Promise<string> {
@@ -306,36 +310,71 @@ async function issueAccess(sessionId: string, userId: string, kind: HarnessSessi
   return token
 }
 
+const invalid = (): SsoAuthError => new SsoAuthError('Invalid or expired access token', 'INVALID_TOKEN')
+
 /**
  * The account a Harness access token speaks for. The session is read on every call, so a revoked
- * one stops at once rather than when its access token runs out.
+ * one stops at once rather than when its access token runs out — or, within [AUTH_CACHE_TTL_MS] of the
+ * last read, remembered by this pod and checked against the person's sign-in epoch instead
+ * (lib/harnessAuthCache.ts), which every sign-out moves. The access token is read from Redis either way.
  *
  * Only a token that is not good is `INVALID_TOKEN`. Redis or Mongo failing is
  * `AUTH_SERVICE_UNAVAILABLE` — the caller's 503, not its 401 — because a 401 sends the phone to
  * refresh and, failing that, to sign in again, over what is only an outage.
  */
 export async function authenticateHarnessAccessToken(token: string): Promise<AuthUser> {
-  const invalid = (): SsoAuthError => new SsoAuthError('Invalid or expired access token', 'INVALID_TOKEN')
+  const hash = harnessTokenHash(token)
+  const remembered = harnessAuthCache.get(hash)
   let user: Awaited<ReturnType<typeof userService.get>>
   let sessionId: string
+  let userId: string
+  let epoch: string | null
   let kind: string | null | undefined
   let computerId: string | null | undefined
   try {
-    const raw = await pub.get(accessKey(harnessTokenHash(token)))
-    if (!raw) throw invalid()
+    let raw: string | null
+    if (remembered) {
+      [raw, epoch] = await pub.mget(accessKey(hash), authEpochKey(remembered.userId))
+    } else {
+      raw = await pub.get(accessKey(hash))
+      epoch = null
+    }
+    if (!raw) {
+      harnessAuthCache.delete(hash)
+      throw invalid()
+    }
     const held = JSON.parse(raw) as { sessionId?: unknown; userId?: unknown }
     if (typeof held.sessionId !== 'string' || typeof held.userId !== 'string') throw invalid()
     sessionId = held.sessionId
+    userId = held.userId
+    if (remembered && remembered.sessionId === sessionId && remembered.userId === userId && remembered.epoch === epoch) {
+      return { ...remembered.user }
+    }
+    // The epoch before the session and the user: a sign-out landing between these reads leaves it stale.
+    if (!remembered || remembered.userId !== userId) epoch = await pub.get(authEpochKey(userId))
     const session = await prisma.harnessSession.findUnique({ where: { id: sessionId } })
-    if (!session || session.revokedAt || session.userId !== held.userId) throw invalid()
+    if (!session || session.revokedAt || session.userId !== userId) throw invalid()
     kind = session.kind
     computerId = session.computerId
-    user = await userService.get(held.userId)
+    user = await userService.get(userId)
   } catch (err) {
     if (err instanceof SsoAuthError) throw err
     throw new SsoAuthError('Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE')
   }
   if (!user) throw invalid()
+  const answer = identityOf(token, user, sessionId, kind, computerId)
+  harnessAuthCache.set(hash, { sessionId, userId, epoch, user: answer })
+  return { ...answer }
+}
+
+/** What a live session answers for [token]; throws INVALID_TOKEN for a session of the wrong kind or bound to nothing. */
+function identityOf(
+  token: string,
+  user: NonNullable<Awaited<ReturnType<typeof userService.get>>>,
+  sessionId: string,
+  kind: string | null | undefined,
+  computerId: string | null | undefined,
+): AuthUser {
   const identity = {
     sub: user.id,
     email: user.email,
@@ -357,6 +396,7 @@ export async function authenticateHarnessAccessToken(token: string): Promise<Aut
 /** Revoke the session with this id (a device removed from the account's device key log). */
 export async function revokeHarnessSessionById(sessionId: string, userId: string): Promise<void> {
   await prisma.harnessSession.updateMany({ where: { id: sessionId, userId, ...notRevoked }, data: endedSessionData() })
+  await signInsChanged(userId)
 }
 
 // ── Sign in a computer by scanning its QR with a signed-in phone ──────────────────────────────────

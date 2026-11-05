@@ -89,6 +89,16 @@ Future<SuperTabController> showView(
 }
 
 Finder notificationsEntry() => find.byKey(const ValueKey('super-decisions'));
+
+FontWeight? entryWeight(WidgetTester tester) => tester
+    .widget<Text>(
+      find.descendant(
+        of: notificationsEntry(),
+        matching: find.text('Decisions'),
+      ),
+    )
+    .style
+    ?.fontWeight;
 Finder option(String id, int index) =>
     find.byKey(ValueKey('super-decision-$id-$index'));
 Finder activityOption(String id, int index) =>
@@ -313,10 +323,12 @@ void main() {
       (tester) async {
         final server = swarm()..ask(['Ship how?', 'Name it?']);
         await showView(tester, server);
+        // Two waiting: the row is bold, with no number (task #3128).
         expect(
           find.descendant(of: notificationsEntry(), matching: find.text('2')),
-          findsOneWidget,
+          findsNothing,
         );
+        expect(entryWeight(tester), grid.AppFont.semibold);
         await tester.tap(notificationsEntry());
         await tester.pumpAndSettle();
         expect(find.text('Decisions'), findsWidgets);
@@ -330,16 +342,14 @@ void main() {
           'decisionId': 'decision-2',
           'choice': 1,
         });
-        // Answered, it leaves Needs you and the number.
+        // Answered, it leaves Needs you; one still waits, so the row stays
+        // bold.
         expect(
           find.byKey(const ValueKey('super-activity-row-decision:decision-2')),
           findsNothing,
         );
         expect(find.text('Ship how?'), findsOneWidget);
-        expect(
-          find.descendant(of: notificationsEntry(), matching: find.text('1')),
-          findsOneWidget,
-        );
+        expect(entryWeight(tester), grid.AppFont.semibold);
       },
     );
 
