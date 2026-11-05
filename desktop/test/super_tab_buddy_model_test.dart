@@ -597,7 +597,13 @@ void main() {
       server.state['paused'] = true;
       line(server, held);
       final c = await show(tester, server);
-      expect(find.text(offer), findsOneWidget);
+      // Words say why, not the disabled button alone (UI checklist).
+      expect(
+        find.text(
+          'New work is paused. Start your Buddy again once it resumes.',
+        ),
+        findsOneWidget,
+      );
       expect(tester.widget<TextButton>(startAgain).onPressed, isNull);
       expect(commands(server, 'buddy.remove'), isEmpty);
       await close(tester, c);
