@@ -295,3 +295,93 @@ describe('who reads what (design section 4)', () => {
     expect(f.entry('ArgoCD')).toMatchObject({ note: 'connection info in ~/.argocd/config', check: 'argocd' })
   })
 })
+
+describe('requires.access and the start check (design section 3)', () => {
+  const candidate = (id: string, machineId: string) => ({ id, kind: 'new', machineId, engine: 'codex', model: 'default', effort: 'default',
+    quality: 3, cost: 2, title: `${id} on ${machineId}`, label: `Label ${id}` })
+  const record = (candidates: unknown[]) => ({ assessment: { difficulty: 'medium', risk: 'low', why: 'A lamp test.' }, candidates, excluded: [],
+    floor: 2, notes: false, via: 'instructions', p: null, belowFloor: false, why: 'Instructions.' })
+  const lastStart = (f: ReturnType<typeof swarm>) => f.state.starts!.at(-1)!.request
+
+  it('keeps a task\'s access, trimmed', () => {
+    const f = swarm()
+    const work = f.group('lead', owner, { access: ['Lamp', '  Fusion 360 '] })
+    expect(f.state.conversations.find(c => c.id === work)!.task!.requires).toEqual({ access: ['Lamp', 'Fusion 360'] })
+    expect(refusal(() => f.group('lead', owner, { access: ['x'.repeat(61)] }))?.code).toBe('INVALID_REQUEST')
+  })
+
+  it('refuses a start that names no access (an older CLI) where the task\'s access is missing', () => {
+    const f = swarm()
+    const work = f.group('lead', owner, { access: ['Lamp'] })
+    expect(refusal(() => f.start(work))).toMatchObject({ code: 'ACCESS_MISSING', message: 'No Lamp here.' })
+    expect(f.state.starts ?? []).toEqual([])
+  })
+
+  it('never counts the owner\'s unshared own-account entry for a teammate\'s task, nor the Team account for it', () => {
+    const f = swarm()
+    f.add('Lamp')
+    // The Swarm owner's project is a teammate's on Gray's Mac: it runs in the Team account, which has no Lamp.
+    const work = f.group('lead', owner, { access: ['Lamp'] })
+    expect(refusal(() => f.start(work))).toMatchObject({ code: 'ACCESS_MISSING', message: 'Lamp is in gray\'s own account, not shared with teammates.' })
+  })
+
+  it('keeps a teammate\'s start on the Mac, in the owner\'s account, when the owner shared that entry', () => {
+    const f = swarm()
+    const id = f.add('Lamp')
+    f.access({ action: 'change', entryId: id, teammates: true })
+    const work = f.group('lead', owner, { access: ['Lamp'] })
+    const started = f.start(work)
+    expect(lastStart(f).machineId).toBe('gray-mac')
+    expect(started.result.moved).toBeUndefined()
+    // A task that needs nothing shared still goes to the Team account, as before.
+    f.start(f.group('lead', owner))
+    expect(lastStart(f).machineId).toBe('gray-team')
+  })
+
+  it('sends Team-written code to the Team account even for a shared entry, and refuses it there', () => {
+    const f = swarm()
+    const id = f.add('Lamp')
+    f.access({ action: 'change', entryId: id, teammates: true })
+    const work = f.group('lead', owner, { access: ['Lamp'] })
+    f.state.conversations.find(c => c.id === work)!.teamWritten = true
+    expect(refusal(() => f.start(work))?.code).toBe('ACCESS_MISSING')
+    expect(f.state.starts ?? []).toEqual([])
+  })
+
+  it('refuses an entry waiting for its owner to confirm', () => {
+    const f = swarm()
+    f.add('Lamp', { account: 'team', askedIn: { conversationId: 'lead', messageId: 'm-1' } }, f.leadActor, said('owner'))
+    const work = f.group('lead', owner, { access: ['Lamp'] })
+    expect(refusal(() => f.start(work))).toMatchObject({ code: 'ACCESS_MISSING', message: 'Lamp on Gray\'s Mac is waiting for gray to confirm.' })
+  })
+
+  it('refuses the owner\'s own task needing a Team-account entry: that account runs only teammates\' work', () => {
+    const f = swarm()
+    f.add('Lamp', { account: 'team' })
+    const work = f.group(f.grays, gray, { access: ['Lamp'] })
+    expect(refusal(() => f.start(work, gray, f.grays))).toMatchObject({ code: 'ACCESS_MISSING',
+      message: 'Lamp is in the Harness Team account on Gray\'s Mac, which runs only teammates\' work.' })
+    // Its own-account entry is the owner's to use.
+    f.add('Lamp')
+    f.start(work, gray, f.grays)
+    expect(lastStart(f).machineId).toBe('gray-mac')
+  })
+
+  it('matches names without case or spacing, and leaves a start with no requirement as it was', () => {
+    const f = swarm()
+    f.add('Lamp', { account: 'team' })
+    f.start(f.group('lead', owner, { access: ['  lamp '] }))
+    expect(lastStart(f).machineId).toBe('gray-team')
+    const g = swarm()
+    g.start(g.group('lead', owner))
+    expect(g.state.starts!.at(-1)!.request.machineId).toBe('gray-team')
+  })
+
+  it('leaves a machine without the access out of a recorded route, and refuses it as the only choice', () => {
+    const f = swarm()
+    const work = f.group('lead', owner, { access: ['Lamp'] })
+    f.add('Lamp', { account: 'team' }, owner, {}, )
+    expect(refusal(() => f.run({ type: 'route.record', conversationId: work, decision: record([candidate('c0', 'owner-mac')]) } as Command, owner)))
+      .toMatchObject({ code: 'ACCESS_MISSING', message: 'No Lamp here. Route again.' })
+  })
+})
