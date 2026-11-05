@@ -1936,7 +1936,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused,
         ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}), ...(projects && !host ? { projects } : {}),
         ...(ownAccountChoice && !host ? { ownAccountChoice } : {}),
-        ...(othersToldWeek != null ? { othersToldWeek } : {}) })
+        ...(othersToldWeek != null ? { othersToldWeek } : {}),
+        // What its readings and starts recorded is not a setting: saving the settings keeps the Lent ledger, the engines'
+        // failures and suspensions and the last reading (#3043). A machine not listed yet, or Buddy-only, starts clean.
+        ...(previous?.lent ? { lent: previous.lent } : {}), ...(previous?.lentDays ? { lentDays: previous.lentDays } : {}),
+        ...(previous?.engineFailures ? { engineFailures: previous.engineFailures } : {}),
+        ...(previous?.engineSuspensions ? { engineSuspensions: previous.engineSuspensions } : {}),
+        ...(previous?.observation ? { observation: previous.observation } : {}) })
       // A Mac given other slots or a new name gives its team account the same, and its pause; its own folder, engines and grant stay.
       const added = state.machines.at(-1)!
       for (const team of teamPoolsOf(state, added)) if (!team.removal) {
