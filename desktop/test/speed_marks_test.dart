@@ -38,10 +38,9 @@ void main() {
       now = const Duration(milliseconds: 1700);
       marks.firstChat();
 
-      expect(
-        written.where((l) => l.contains('first_chat_painted')),
-        ['launch step=first_chat_painted ms=1500'],
-      );
+      expect(written.where((l) => l.contains('first_chat_painted')), [
+        'launch step=first_chat_painted ms=1500',
+      ]);
     });
 
     test('a messages read keeps its kind, rows and both times', () {
@@ -83,7 +82,8 @@ void main() {
       expect(() => broken.start(), returnsNormally);
       expect(() => broken.launch('x'), returnsNormally);
       expect(
-        () => broken.messages(kind: 'latest', rows: 1, requestMs: 1, totalMs: 1),
+        () =>
+            broken.messages(kind: 'latest', rows: 1, requestMs: 1, totalMs: 1),
         returnsNormally,
       );
       expect(() => broken.image(ms: 1, bytes: 1), returnsNormally);
