@@ -411,7 +411,7 @@ class SuperTabController extends ChangeNotifier {
       openedThread = root == null ? null : (conversationId: to, root: root);
       threadTarget = null;
       _threadUnshown = root != null;
-      _reopenThread = root != null;
+      _reopenThread = false;
     }
   }
 
