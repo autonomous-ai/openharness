@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
+import 'dart:ui';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
@@ -13,6 +15,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/state/profile_cache.dart';
+import 'package:harness/super_tabs/image_cache.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 
 // Task #2169: the last profile of the same signed-in account shows at once, and another account's never does. A machine
@@ -282,6 +285,41 @@ void main() {
     again.api.profiles.single.complete(_me('ada'));
     await _ticks();
     expect(storage.values, isNot(contains(ProfileCache.key)));
+  });
+
+  group("the chat's pictures (#3178)", () {
+    late SuperTabImageCache original;
+    late MemoryImageShelf shelf;
+
+    setUp(() async {
+      original = superTabImageCache;
+      shelf = MemoryImageShelf();
+      superTabImageCache = SuperTabImageCache(shelf);
+      await superTabImageCache.keep('a1', Uint8List(8), const Size(4, 3));
+    });
+    tearDown(() => superTabImageCache = original);
+
+    test('signing out clears them, and their shapes', () async {
+      await signedInBefore('machine-a', 'ada');
+      final again = await open('machine-a');
+      expect(await superTabImageCache.read('a1'), isNotNull);
+
+      await again.app.logout();
+      await _ticks();
+
+      expect(await shelf.list(), isEmpty);
+      expect(superTabImageCache.shapeOf('a1'), isNull);
+    });
+
+    test('a session that ends clears them too', () async {
+      await signedInBefore('machine-a', 'ada');
+      final again = await open('machine-a');
+
+      again.app.expireSessionForTest('Your sign-in expired. Sign in again.');
+      await _ticks();
+
+      expect(await shelf.list(), isEmpty);
+    });
   });
 
   test(
