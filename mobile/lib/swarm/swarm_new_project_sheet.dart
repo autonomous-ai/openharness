@@ -20,6 +20,7 @@ import 'swarm_conversation_page.dart' show SwarmAttachButton, attachSwarmFiles;
 import 'swarm_home_list.dart' show swarmProjectActivity;
 import 'swarm_home_top.dart' show swarmHomeOffers;
 import 'swarm_inbox.dart';
+import 'swarm_new_repository.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
@@ -654,6 +655,26 @@ class SwarmNewProjectSteps with ChangeNotifier {
 
   Map<String, dynamic>? _create, _brief, _start;
   String? _projectId, _conversationId;
+
+  /// New repository's request once sent (task #3373): what was asked, the
+  /// time that names it and GitHub's sign-in, until its outcome comes back.
+  /// A refusal or a failed outcome drops it, so Try again asks afresh.
+  ({SwarmNewRepository repository, int at, String authorizeUrl})? _creation;
+
+  /// The repository New repository made is not yet in reach of Harness (F7):
+  /// its Product Manager was started all the same.
+  bool unreachable = false;
+
+  /// New repository's request while it is out, before its answer is kept: a
+  /// run after an answer that never came asks it again as it was.
+  SwarmNewRepository? _asking;
+
+  /// The request held while its answer is unknown.
+  SwarmNewRepository? get asking => _asking;
+
+  /// GitHub's sign-in did not open in the browser: the sheet says so, and
+  /// [openSignIn] opens it again.
+  bool openFailed = false;
   bool _briefPosted = false, _started = false, _named = false;
 
   /// The files its brief goes with, as they were when its creation was
@@ -673,6 +694,16 @@ class SwarmNewProjectSteps with ChangeNotifier {
   /// on these steps. [chosenEngine] is null while the person left the
   /// machine's own.
   String? chosenMachine, chosenRepository, chosenEngine, failure;
+
+  /// New repository, when the sheet chose it in place of [chosenRepository].
+  SwarmNewRepository? chosenNewRepository;
+
+  /// The repository New repository waits for: asked, sign-in opened, its
+  /// outcome not read yet. Null otherwise.
+  SwarmNewRepository? get creating => _started ? null : _creation?.repository;
+
+  /// The time naming the request [creating] waits for.
+  int? get creationAt => _started ? null : _creation?.at;
 
   /// The project exists: its Swarm, brief and visibility are what it was
   /// made with.
@@ -746,13 +777,16 @@ class SwarmNewProjectSteps with ChangeNotifier {
     required String brief,
     required String visibility,
     required String machineId,
-    required String repositoryUrl,
+    String? repositoryUrl,
+    SwarmNewRepository? newRepository,
     String? engine,
     List<SwarmOutgoingFile> files = const [],
     required bool Function() live,
     required List<SwarmLeadMachine> Function(SuperTabSnapshot snapshot)
     machinesOf,
+    DateTime Function() now = DateTime.now,
   }) async {
+    assert(repositoryUrl != null || newRepository != null);
     for (var running = _running; running != null; running = _running) {
       await running;
     }
@@ -764,10 +798,12 @@ class SwarmNewProjectSteps with ChangeNotifier {
         visibility: visibility,
         machineId: machineId,
         repositoryUrl: repositoryUrl,
+        newRepository: newRepository,
         engine: engine,
         files: files,
         live: live,
         machinesOf: machinesOf,
+        now: now,
       );
     } finally {
       _running = null;
@@ -779,12 +815,14 @@ class SwarmNewProjectSteps with ChangeNotifier {
     required String brief,
     required String visibility,
     required String machineId,
-    required String repositoryUrl,
+    required String? repositoryUrl,
+    required SwarmNewRepository? newRepository,
     required String? engine,
     required List<SwarmOutgoingFile> files,
     required bool Function() live,
     required List<SwarmLeadMachine> Function(SuperTabSnapshot snapshot)
     machinesOf,
+    required DateTime Function() now,
   }) async {
     void check() {
       if (!live()) throw const SwarmNewProjectGone();
@@ -869,6 +907,14 @@ class SwarmNewProjectSteps with ChangeNotifier {
       _briefPosted = true;
       check();
     }
+    // New repository: made on GitHub through the person's own sign-in before
+    // its Product Manager can start in it (task #3373). A start already sent
+    // keeps the repository it was sent with.
+    var url = repositoryUrl;
+    if (!_started && _start == null && newRepository != null) {
+      url = await _newRepository(projectId, newRepository, check, now);
+      read = true;
+    }
     if (!_started) {
       if (_start == null) {
         // The list from when the sheet drew it may be stale: read the Swarm
@@ -899,7 +945,7 @@ class SwarmNewProjectSteps with ChangeNotifier {
             // No model: the Swarm fills its role's default where the owner's
             // model list and rules allow it (backend commands.ts lead.start).
             'engine': engine ?? machine.engine,
-            'repositoryUrl': repositoryUrl,
+            'repositoryUrl': url,
           },
         };
       }
@@ -907,7 +953,7 @@ class SwarmNewProjectSteps with ChangeNotifier {
       _started = true;
       check();
     }
-    final name = swarmRepositoryName(startRepository ?? repositoryUrl);
+    final name = swarmRepositoryName(startRepository ?? url!);
     if (!_named) {
       try {
         await _send(
@@ -964,10 +1010,170 @@ class SwarmNewProjectSteps with ChangeNotifier {
     return true;
   }
 
+  /// New repository [asked] for project [projectId]: its outcome when the
+  /// Swarm state has it (the repository's address, once made), else the
+  /// request sent and GitHub's sign-in opened, and the steps wait
+  /// ([SwarmRepositoryWaiting]). A refusal or an outcome other than made says
+  /// why in the design's words ([SwarmRepositoryFailure]) and drops the
+  /// request, so the next run asks afresh. The state is read first, so a
+  /// sheet back from GitHub sees the outcome.
+  Future<String> _newRepository(
+    String projectId,
+    SwarmNewRepository asked,
+    void Function() check,
+    DateTime Function() now,
+  ) async {
+    if (_creation case final sent?) {
+      // Judged only from a read that came back: a failed one leaves the last
+      // read in place, and a deadline passed on it would give up a request
+      // GitHub may have answered meanwhile (Guide's second review).
+      final reads = reader.reads.value;
+      await reader.refresh();
+      check();
+      if (reader.reads.value == reads) {
+        throw const SwarmRepositoryFailure(swarmRepositoryUnchecked);
+      }
+      final project = reader.snapshot?.projectById(projectId);
+      if (project == null) {
+        if (await _deleted(projectId, check) ?? false) _gone();
+        throw const SwarmRepositoryWaiting();
+      }
+      final outcome = project.repositoryCreation;
+      // Not this request's yet (a read from before it, say): still waiting.
+      if (outcome == null || outcome['at'] != sent.at) {
+        throw const SwarmRepositoryWaiting();
+      }
+      final (owner, name) = (sent.repository.owner, sent.repository.name);
+      switch (outcome['state']) {
+        case 'created':
+          final made = outcome['repositoryUrl'];
+          // Only the repository asked for starts a Product Manager (River,
+          // from the Desktop security review).
+          if (made is! String ||
+              !swarmRepositoryUrlValid(made) ||
+              !swarmMadeAsAsked(made, sent.repository)) {
+            _creation = null;
+            throw const SwarmRepositoryFailure(swarmRepositoryNotCreated);
+          }
+          unreachable = outcome['reachable'] == false;
+          return made;
+        // Making it now, in the callback (Heron, #3201): as waiting, until
+        // it has been so too long for a live server.
+        case 'creating' when swarmRepositoryStuckAt(sent.at, now()):
+          _creation = null;
+          throw SwarmRepositoryFailure(swarmRepositoryStuck(owner, name));
+        // Its sign-in link has expired: nothing was made, and the next run
+        // asks again for this same project (Guide's review of #3204).
+        case 'waiting' when swarmSignInExpiredAt(sent.at, now()):
+          _creation = null;
+          throw const SwarmRepositoryFailure(swarmRepositoryNotCreated);
+        case 'waiting' || 'creating':
+          throw const SwarmRepositoryWaiting();
+        case 'taken':
+          _creation = null;
+          throw SwarmRepositoryFailure(swarmRepositoryTaken(owner, name));
+        case 'refused':
+          _creation = null;
+          final reason = outcome['reason'];
+          throw SwarmRepositoryFailure(
+            swarmRepositoryRefused(
+              owner,
+              reason is String && reason.trim().isNotEmpty
+                  ? reason.trim().replaceFirst(RegExp(r'[.\s]+$'), '')
+                  : 'GitHub gave no reason',
+            ),
+          );
+        case 'cancelled':
+          _creation = null;
+          throw const SwarmRepositoryFailure(swarmRepositoryNotCreated);
+        default:
+          _creation = null;
+          throw const SwarmRepositoryFailure(swarmRepositoryNoAnswer);
+      }
+    }
+    // Held before it is sent, as the other steps are: an answer that never
+    // came is asked again as first written, whatever is chosen since. Only a
+    // definite refusal lets it go (Guide's review of #3204).
+    final asking = _asking ??= asked;
+    final Map<String, dynamic> answer;
+    try {
+      answer = superTabMap(
+        await reader.request(
+          'POST',
+          '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/projects/'
+              '${Uri.encodeComponent(projectId)}/github/repository',
+          body: {
+            'owner': asking.owner,
+            'name': asking.name,
+            'private': asking.private,
+          },
+        ),
+      );
+    } on SuperTabFailure catch (failure) {
+      final limited = swarmRateLimited(failure);
+      if (limited || _refusedOutright(failure)) _asking = null;
+      if (limited) {
+        throw const SwarmRepositoryFailure(swarmRepositoryRateLimited);
+      }
+      throw switch (failure.code) {
+        'GITHUB_APP_NOT_INSTALLED' => SwarmRepositoryFailure(
+          swarmRepositoryNotInstalled(asking.owner),
+        ),
+        'GITHUB_APP_PERMISSIONS' => SwarmRepositoryFailure(
+          swarmRepositoryNotAccepted(asking.owner),
+        ),
+        'REPOSITORY_NAME' => SwarmRepositoryFailure(failure.message),
+        _ => failure,
+      };
+    }
+    // GitHub's own sign-in, or nothing is opened: the server answered, so
+    // the request is let go, and nothing was created (River, from the
+    // Desktop security review).
+    final (authorizeUrl, at) = switch (answer) {
+      {'authorizeUrl': final String link, 'at': final num at}
+          when swarmGitHubLink(link) =>
+        (link, at.toInt()),
+      _ => () {
+        _asking = null;
+        throw const SwarmRepositoryFailure(swarmRepositoryNotCreated);
+      }(),
+    };
+    // Kept before anything else is asked: a sheet gone meanwhile finds it
+    // when it opens again, and waits for this sign-in.
+    _creation = (repository: asking, at: at, authorizeUrl: authorizeUrl);
+    _asking = null;
+    notifyListeners();
+    check();
+    await openSignIn();
+    throw const SwarmRepositoryWaiting();
+  }
+
+  /// Opens GitHub's sign-in for the request [creating] waits for, again if
+  /// asked; [openFailed] says whether it did not open.
+  Future<void> openSignIn() async {
+    final url = authorizeUrl;
+    if (url == null) return;
+    bool opened;
+    try {
+      opened = await swarmOpenGitHub(Uri.parse(url));
+    } catch (_) {
+      opened = false;
+    }
+    openFailed = !opened;
+    notifyListeners();
+  }
+
+  /// GitHub's sign-in for the request [creating] waits for, to open again.
+  String? get authorizeUrl => _started ? null : _creation?.authorizeUrl;
+
   /// Its project deleted meanwhile: these steps are done with, and the next
-  /// Create makes a new project.
+  /// Create makes a new project. Deleted while New repository was out in
+  /// GitHub, the repository may still have been made (F11).
   Never _gone() {
     forget();
+    if (_creation != null) {
+      throw const SwarmRepositoryFailure(swarmRepositoryProjectGone);
+    }
     throw const SuperTabFailure(
       'PROJECT_GONE',
       'The project was deleted meanwhile. Create it again.',
@@ -1101,12 +1307,50 @@ class SwarmNewProjectSheet extends StatefulWidget {
 }
 
 /// What the sheet shows in place of its form: one of its choices' lists.
-enum _Pick { swarm, visibility, repository, link, machine, engine }
+enum _Pick {
+  swarm,
+  visibility,
+  repository,
+  link,
+  newRepository,
+  owner,
+  machine,
+  engine,
+}
 
 class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
     implements SwarmFilesBox {
   final _brief = TextEditingController();
   final _link = TextEditingController();
+
+  /// New repository (task #3373): its name and another organization, as
+  /// typed, and whether it is private (on by default).
+  final _newName = TextEditingController();
+  final _otherOwner = TextEditingController();
+  bool _newPrivate = true;
+
+  /// The organization New repository's subpage has, until it is used.
+  String? _newOwner;
+
+  /// New repository, once its name is used: the repository the project is
+  /// made in, in place of [_repository].
+  SwarmNewRepository? _newRepository;
+
+  /// Each organization's check, by Swarm and owner; a check under way is
+  /// there as null, asked once.
+  final _ownerChecks = <String, SwarmOwnerCheck?>{};
+  final _ownerAsked = <String>{};
+
+  /// When each rate-limited check answered: asked again a minute after.
+  final _ownerLimitedAt = <String, DateTime>{};
+
+  /// The outcome New repository last went on from, so one outcome runs once.
+  String? _outcomeRun;
+
+  /// Made, but its repository not yet in reach of Harness (F7): the sheet
+  /// stays to say so, then opens the project.
+  SwarmNewProject? _madeUnreachable;
+  String? _unreachableLine;
 
   /// The files going with the brief: in memory, or a large one on disk in
   /// the app's temporary folder while it is held (here, or by the steps once
@@ -1216,6 +1460,11 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
       _repository = repository;
       _repositoryPicked = true;
     }
+    if (steps.chosenNewRepository case final repository?) {
+      _newRepository = repository;
+      _repository = null;
+      _repositoryPicked = true;
+    }
     _machineId = steps.chosenMachine;
     _engine = steps.chosenEngine;
     // The files its brief went with, held as sent.
@@ -1266,6 +1515,8 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
       ..dispose();
     _brief.dispose();
     _link.dispose();
+    _newName.dispose();
+    _otherOwner.dispose();
     super.dispose();
   }
 
@@ -1515,6 +1766,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
       ),
       Flexible(
         child: SingleChildScrollView(
+          key: const ValueKey('swarm-new-project-scroll'),
           padding: EdgeInsets.fromLTRB(
             AppSpace.l,
             0,
@@ -1527,13 +1779,21 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
           ),
         ),
       ),
+      // In sight at its own height; past four tenths of the screen (a short
+      // phone at large text) it scrolls, so its last way out is never off the
+      // sheet (Guide's second review of #3204: 320 points, 200%).
       if (footer.isNotEmpty)
-        Padding(
-          padding: const EdgeInsets.all(AppSpace.l).copyWith(top: 0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: footer,
+        ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * .4,
+          ),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(AppSpace.l).copyWith(top: 0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: footer,
+            ),
           ),
         ),
     ],
@@ -1573,12 +1833,24 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
     final repository =
         steps?.startRepository ??
         (_repositoryPicked ? _repository : repositories.firstOrNull);
+    // New repository, while no start went with another one.
+    final newRepository = steps?.startRepository == null
+        ? _newRepository
+        : null;
+    final creating = steps?.creating;
     final machineId = steps?.startMachine ?? _machineId;
     final machine = machines.where((m) => m.id == machineId).firstOrNull;
     final sent = steps?.sent ?? false;
     final startSent = steps?.startSent ?? false;
     final engine = _engineOf(swarmId, machine);
-    final blocked = _blocked(snapshot, machines, machine, repository);
+    final blocked = _blocked(
+      snapshot,
+      machines,
+      machine,
+      repository ??
+          (newRepository == null ? null : swarmNewRepositoryUrl(newRepository)),
+    );
+    _goOnFromOutcome(swarmId, reader, snapshot, steps, machineId);
     final swarmName =
         _inbox.swarms.where((s) => s.id == swarmId).firstOrNull?.name ??
         snapshot.name;
@@ -1664,16 +1936,28 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
             _Field(
               key: const ValueKey('swarm-new-project-repository'),
               label: 'Repository',
-              value: repository == null
+              value: newRepository != null
+                  ? 'New · ${newRepository.name}'
+                  : repository == null
                   ? 'Choose'
                   : swarmRepositoryName(repository),
-              detail: repository == null
+              detail: newRepository != null
+                  ? '${newRepository.owner}/${newRepository.name}'
+                  : repository == null
                   ? null
                   : swarmRepositoryKey(repository),
               // A link is a choice in its list: said here while none is
               // chosen, so it is found (Dee, 11-01; Lead: no line otherwise).
-              hint: repository == null ? 'Or enter a link' : null,
-              onTap: startSent || _busy
+              hint: repository == null && newRepository == null
+                  ? 'Or enter a link'
+                  : null,
+              // Fixed while GitHub's sign-in is out for it, or its request's
+              // answer is unknown.
+              onTap:
+                  startSent ||
+                      _busy ||
+                      creating != null ||
+                      steps?.asking != null
                   ? null
                   : () => setState(() => _picking = _Pick.repository),
             ),
@@ -1714,9 +1998,55 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
               lines: 3,
             ),
           ),
+        // Out in GitHub: what it waits for, and whether GitHub opened.
+        if (creating != null && _error == null && !_busy) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.xs,
+              AppSpace.m,
+              AppSpace.xs,
+              0,
+            ),
+            child: SwarmRow.line(
+              'Creating ${creating.owner}/${creating.name}…',
+              key: const ValueKey('swarm-new-project-creating'),
+              lines: 6,
+            ),
+          ),
+          if (steps!.openFailed)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.xs,
+                AppSpace.s,
+                AppSpace.xs,
+                0,
+              ),
+              child: SwarmRow.line(
+                swarmRepositoryOpenFailed,
+                key: const ValueKey('swarm-new-project-open-failed'),
+                lines: 4,
+              ),
+            ),
+        ],
+        if (_unreachableLine case final line?) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.xs,
+              AppSpace.m,
+              AppSpace.xs,
+              0,
+            ),
+            child: SwarmRow.line(
+              line,
+              key: const ValueKey('swarm-new-project-unreachable'),
+              lines: 4,
+            ),
+          ),
+          _copyMessage(line),
+        ]
         // Why it stopped, under what it is about; scrolled into sight when
         // it appears (_showError).
-        if (_error case final error?)
+        else if (_error case final error?)
           Padding(
             key: _errorKey,
             padding: const EdgeInsets.fromLTRB(
@@ -1750,21 +2080,71 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
       // Create in sight however short the phone, the keyboard up too.
       footer: [
         const SizedBox(height: AppSpace.l),
-        SwarmButton(
-          key: const ValueKey('swarm-new-project-create'),
-          label: _error == null ? 'Create' : 'Try again',
-          style: SwarmButtonStyle.fill,
-          wide: true,
-          busy: _busy,
-          busyLabel: 'Creating…',
-          onPressed:
-              blocked == null &&
-                  repository != null &&
-                  machineId != null &&
-                  (machine != null || startSent)
-              ? () => unawaited(_create(swarmId, reader, repository, machineId))
-              : null,
-        ),
+        if (_madeUnreachable case final made?)
+          SwarmButton(
+            key: const ValueKey('swarm-new-project-open-made'),
+            label: 'Open the project',
+            style: SwarmButtonStyle.fill,
+            wide: true,
+            onPressed: () {
+              _closing = true;
+              Navigator.of(context).pop(made);
+            },
+          )
+        // Out in GitHub: what it waits for, a way to look again, and to open
+        // GitHub again (it may not have opened, or been closed).
+        else if (creating != null && _error == null && !_busy) ...[
+          // Its words are above, where they scroll: a long name at large text
+          // never pushes the ways out off the sheet (Guide's second review).
+          SwarmButton(
+            key: const ValueKey('swarm-new-project-create'),
+            label: 'Creating…',
+            style: SwarmButtonStyle.fill,
+            wide: true,
+            onPressed: null,
+          ),
+          const SizedBox(height: AppSpace.s),
+          SwarmButton(
+            key: const ValueKey('swarm-new-project-open-github'),
+            label: 'Open GitHub',
+            icon: LucideIcons.externalLink300,
+            style: SwarmButtonStyle.link,
+            wide: true,
+            onPressed: () => unawaited(steps!.openSignIn()),
+          ),
+          const SizedBox(height: AppSpace.s),
+          SwarmButton(
+            key: const ValueKey('swarm-new-project-check-again'),
+            label: 'Check again',
+            style: SwarmButtonStyle.link,
+            wide: true,
+            onPressed: machineId == null
+                ? null
+                : () => unawaited(
+                    _create(swarmId, reader, repository, machineId),
+                  ),
+          ),
+        ] else
+          SwarmButton(
+            key: const ValueKey('swarm-new-project-create'),
+            label: _error != null
+                ? 'Try again'
+                : newRepository != null
+                ? 'Create and continue in GitHub'
+                : 'Create',
+            style: SwarmButtonStyle.fill,
+            wide: true,
+            busy: _busy,
+            busyLabel: 'Creating…',
+            onPressed:
+                blocked == null &&
+                    (repository != null || newRepository != null) &&
+                    machineId != null &&
+                    (machine != null || startSent)
+                ? () =>
+                      unawaited(_create(swarmId, reader, repository, machineId))
+                : null,
+          ),
         // Steps left that nothing runs: the way out of them, whatever stops
         // them (Lead's re-review).
         if (steps != null && steps.sent && steps.running == null && !_busy) ...[
@@ -1813,6 +2193,381 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
     });
   }
 
+  /// What the server says of [owner]'s GitHub, asked once per Swarm and
+  /// owner; null until it answers, and when it could not say.
+  SwarmOwnerCheck? _ownerCheck(
+    String swarmId,
+    SwarmReader reader,
+    String owner,
+  ) {
+    final key = '$swarmId/${owner.toLowerCase()}';
+    // Too many checks: kept a minute, then asked again on the next look.
+    if (_ownerLimitedAt[key] case final at?
+        when widget.now().difference(at) >= const Duration(minutes: 1)) {
+      _ownerLimitedAt.remove(key);
+      _ownerAsked.remove(key);
+    }
+    if (_ownerAsked.add(key)) {
+      unawaited(
+        swarmCheckGitHubOwner(reader, owner).then((check) {
+          if (!mounted) return;
+          setState(() {
+            _ownerChecks[key] = check;
+            if (check?.state == 'rate-limited') {
+              _ownerLimitedAt[key] = widget.now();
+            }
+          });
+        }),
+      );
+    }
+    return _ownerChecks[key];
+  }
+
+  /// Asks [owner]'s check again: after installing Harness or accepting its
+  /// permission on GitHub, or a check that got no answer (Guide's review of
+  /// #3204). The name and visibility typed stay.
+  void _recheckOwner(String swarmId, String owner) {
+    final key = '$swarmId/${owner.toLowerCase()}';
+    setState(() {
+      _ownerAsked.remove(key);
+      _ownerChecks.remove(key);
+      _ownerLimitedAt.remove(key);
+    });
+  }
+
+  /// Whether Repository offers New repository: the Swarm uses a GitHub
+  /// organization, and the server can make repositories (not an older one,
+  /// nor one without GitHub sign-in).
+  bool _newRepositoryOffered(
+    String swarmId,
+    SwarmReader reader,
+    List<String> repositories,
+  ) {
+    final owner = swarmGitHubOwners(repositories).firstOrNull;
+    if (owner == null) return false;
+    final check = _ownerCheck(swarmId, reader, owner);
+    return check != null && check.state != 'not-configured';
+  }
+
+  /// Copy message, for an owner of the organization to act on [line].
+  Widget _copyMessage(String line, {String? link}) => Align(
+    alignment: AlignmentDirectional.centerStart,
+    child: SwarmButton(
+      key: const ValueKey('swarm-new-repo-copy'),
+      label: 'Copy message',
+      icon: LucideIcons.copy300,
+      style: SwarmButtonStyle.link,
+      onPressed: () => unawaited(
+        Clipboard.setData(
+          ClipboardData(text: link == null ? line : '$line $link'),
+        ),
+      ),
+    ),
+  );
+
+  /// New repository (the design's phone mockup): Owner, Name with the
+  /// address it will have under it, Private on by default, then Use this
+  /// name. The name's rule shows as it is typed (F1), and the organization's
+  /// check before anything is made (F4, F5).
+  Widget _newRepositoryPage(Widget header, String swarmId, SwarmReader reader) {
+    final owners = swarmGitHubOwners(swarmProjectRepositories(reader));
+    final owner = _newOwner ?? owners.firstOrNull ?? '';
+    final name = _newName.text.trim();
+    final problem = swarmRepositoryNameProblem(name);
+    final check = owner.isEmpty ? null : _ownerCheck(swarmId, reader, owner);
+    final ownerLine = check == null ? null : swarmOwnerProblem(owner, check);
+    final usable =
+        name.isNotEmpty && problem == null && check?.state == 'ready';
+    void use() {
+      if (!usable) return;
+      setState(() {
+        _newRepository = (owner: owner, name: name, private: _newPrivate);
+        _repository = null;
+        _repositoryPicked = true;
+        _error = null;
+        _picking = null;
+      });
+    }
+
+    return _frame(
+      header: header,
+      children: [
+        SwarmGroup(
+          children: [
+            _Field(
+              key: const ValueKey('swarm-new-repo-owner'),
+              label: 'Owner',
+              value: owner.isEmpty ? 'Choose' : owner,
+              onTap: () => setState(() => _picking = _Pick.owner),
+            ),
+          ],
+        ),
+        const SizedBox(height: AppSpace.m),
+        // Named above its field, as the mockup has it: the hint goes once
+        // something is typed.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.xs,
+            0,
+            AppSpace.xs,
+            AppSpace.s,
+          ),
+          child: Text(
+            'Name',
+            key: const ValueKey('swarm-new-repo-name-label'),
+            style: AppType.label(color: AppPalette.textSecondary),
+          ),
+        ),
+        TextField(
+          key: const ValueKey('swarm-new-repo-name'),
+          controller: _newName,
+          autofocus: true,
+          autocorrect: false,
+          enableSuggestions: false,
+          textInputAction: TextInputAction.done,
+          onChanged: (_) => setState(() {}),
+          onSubmitted: (_) => use(),
+          style: AppType.body(color: AppPalette.textPrimary),
+          decoration: InputDecoration(
+            hintText: 'Name',
+            hintStyle: TextStyle(color: AppPalette.textFaint),
+            filled: true,
+            fillColor: AppPalette.swarmField,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppControl.radius),
+              borderSide: BorderSide.none,
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.xs,
+            AppSpace.s,
+            AppSpace.xs,
+            0,
+          ),
+          child: problem != null
+              ? SwarmRow.line(
+                  problem,
+                  key: const ValueKey('swarm-new-repo-name-error'),
+                  lines: 2,
+                  color: AppColors.danger,
+                )
+              : SwarmRow.line(
+                  'github.com/${owner.isEmpty ? 'owner' : owner}/'
+                  '${name.isEmpty ? 'name' : name}',
+                  key: const ValueKey('swarm-new-repo-address'),
+                  // A long name, or 200% text, wraps rather than cuts off.
+                  lines: 3,
+                ),
+        ),
+        const SizedBox(height: AppSpace.m),
+        SwarmGroup(
+          children: [
+            _Option(
+              key: const ValueKey('swarm-new-repo-private-row'),
+              leading: Icon(
+                LucideIcons.lock300,
+                size: 20,
+                color: AppPalette.textSecondary,
+              ),
+              title: 'Private',
+              detail: 'Only people with access on GitHub see it',
+              trailing: Switch.adaptive(
+                key: const ValueKey('swarm-new-repo-private'),
+                value: _newPrivate,
+                activeTrackColor: AppPalette.swarmAccent,
+                onChanged: (on) => setState(() => _newPrivate = on),
+              ),
+              onTap: () => setState(() => _newPrivate = !_newPrivate),
+            ),
+          ],
+        ),
+        if (ownerLine != null) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.xs,
+              AppSpace.m,
+              AppSpace.xs,
+              0,
+            ),
+            child: SwarmRow.line(
+              ownerLine,
+              key: const ValueKey('swarm-new-repo-owner-note'),
+              lines: 3,
+            ),
+          ),
+          if (check?.installUrl case final install?
+              when check?.state == 'not-installed' && swarmGitHubLink(install))
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: SwarmButton(
+                key: const ValueKey('swarm-new-repo-install'),
+                label: 'Install on GitHub',
+                icon: LucideIcons.externalLink300,
+                style: SwarmButtonStyle.link,
+                onPressed: () => unawaited(swarmOpenGitHub(Uri.parse(install))),
+              ),
+            ),
+          _copyMessage(
+            ownerLine,
+            link:
+                check?.state == 'not-installed' &&
+                    swarmGitHubLink(check?.installUrl ?? '')
+                ? check?.installUrl
+                : null,
+          ),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: SwarmButton(
+              key: const ValueKey('swarm-new-repo-recheck'),
+              label: 'Check again',
+              icon: LucideIcons.refreshCw300,
+              style: SwarmButtonStyle.link,
+              onPressed: () => _recheckOwner(swarmId, owner),
+            ),
+          ),
+        ],
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.xs,
+            AppSpace.m,
+            AppSpace.xs,
+            0,
+          ),
+          child: SwarmRow.line(
+            'GitHub asks you to confirm, then Harness creates it with you as '
+            'its admin.',
+            lines: 4,
+          ),
+        ),
+      ],
+      footer: [
+        const SizedBox(height: AppSpace.l),
+        SwarmButton(
+          key: const ValueKey('swarm-new-repo-use'),
+          label: 'Use this name',
+          style: SwarmButtonStyle.fill,
+          wide: true,
+          onPressed: usable ? use : null,
+        ),
+      ],
+    );
+  }
+
+  /// New repository's Owner: the organizations the Swarm's projects use,
+  /// most recent first, and another one by its name.
+  Widget _ownerPage(Widget header, SwarmReader reader) {
+    final owners = swarmGitHubOwners(swarmProjectRepositories(reader));
+    final chosen = _newOwner ?? owners.firstOrNull;
+    void other() {
+      final owner = _otherOwner.text.trim();
+      if (!swarmRepositoryOwnerValid(owner)) return;
+      setState(() {
+        _newOwner = owner;
+        _picking = _Pick.newRepository;
+      });
+    }
+
+    return _frame(
+      header: header,
+      children: [
+        if (owners.isNotEmpty) ...[
+          SwarmGroup(
+            children: [
+              for (final owner in owners)
+                _Option(
+                  key: ValueKey('swarm-new-repo-pick-owner-$owner'),
+                  leading: Icon(
+                    LucideIcons.building2300,
+                    size: 20,
+                    color: AppPalette.textSecondary,
+                  ),
+                  title: owner,
+                  trailing: owner == chosen
+                      ? Icon(
+                          LucideIcons.check300,
+                          size: 20,
+                          color: AppPalette.swarmAccent,
+                        )
+                      : null,
+                  onTap: () => setState(() {
+                    _newOwner = owner;
+                    _picking = _Pick.newRepository;
+                  }),
+                ),
+            ],
+          ),
+          const SizedBox(height: AppSpace.m),
+        ],
+        TextField(
+          key: const ValueKey('swarm-new-repo-other-owner'),
+          controller: _otherOwner,
+          autocorrect: false,
+          enableSuggestions: false,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => other(),
+          style: AppType.body(color: AppPalette.textPrimary),
+          decoration: InputDecoration(
+            hintText: 'Another organization',
+            hintStyle: TextStyle(color: AppPalette.textFaint),
+            filled: true,
+            fillColor: AppPalette.swarmField,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppControl.radius),
+              borderSide: BorderSide.none,
+            ),
+          ),
+        ),
+      ],
+      footer: [
+        const SizedBox(height: AppSpace.l),
+        SwarmButton(
+          key: const ValueKey('swarm-new-repo-other-use'),
+          label: 'Use this organization',
+          style: SwarmButtonStyle.fill,
+          wide: true,
+          onPressed: other,
+        ),
+      ],
+    );
+  }
+
+  /// New repository's outcome came back in the Swarm state while the steps
+  /// wait for it: they go on, once for each outcome (made: its Product
+  /// Manager starts; otherwise it says why).
+  void _goOnFromOutcome(
+    String swarmId,
+    SwarmReader reader,
+    SuperTabSnapshot snapshot,
+    SwarmNewProjectSteps? steps,
+    String? machineId,
+  ) {
+    final at = steps?.creationAt;
+    final projectId = steps?.projectId;
+    if (at == null || projectId == null || machineId == null) return;
+    if (_busy || _error != null || steps!.running != null) return;
+    final outcome = snapshot.projectById(projectId)?.repositoryCreation;
+    final state = outcome?['state'];
+    // Waiting and creating go on by themselves only once too old: their
+    // sign-in link expired, or the server stopped mid-create. Try again then.
+    final now = widget.now();
+    final old =
+        (state == 'creating' && swarmRepositoryStuckAt(at, now)) ||
+        (state == 'waiting' && swarmSignInExpiredAt(at, now));
+    if (outcome?['at'] != at ||
+        state is! String ||
+        ((state == 'waiting' || state == 'creating') && !old)) {
+      return;
+    }
+    final key = '$at/$state';
+    if (_outcomeRun == key) return;
+    _outcomeRun = key;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_create(swarmId, reader, null, machineId));
+    });
+  }
+
   /// Why Create cannot be pressed now, or null (Desktop's `leadBlocked`).
   String? _blocked(
     SuperTabSnapshot snapshot,
@@ -1847,14 +2602,17 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
   Future<void> _create(
     String swarmId,
     SwarmReader reader,
-    String repository,
+    String? repository,
     String machineId,
   ) async {
     if (_busy) return;
+    final newRepository = repository == null ? _newRepository : null;
+    if (repository == null && newRepository == null) return;
     // Held by the Swarm's reader: a sheet opened again resumes them.
     final steps = SwarmNewProjectSteps.of(reader)
       ..chosenMachine = machineId
       ..chosenRepository = repository
+      ..chosenNewRepository = newRepository
       ..chosenEngine = _engine
       ..failure = null;
     setState(() {
@@ -1868,14 +2626,36 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
         visibility: _visibility,
         machineId: machineId,
         repositoryUrl: repository,
+        newRepository: newRepository,
         engine: _engine,
         files: _files.files,
         live: () => _live(swarmId, reader),
         machinesOf: (snapshot) => _machinesOf(swarmId, snapshot),
+        now: widget.now,
       );
       if (!mounted || !_live(swarmId, reader)) return;
+      // Made, but Harness can't reach it yet (F7): the Product Manager was
+      // started all the same, and the sheet says what its owner does.
+      if (steps.unreachable && newRepository != null) {
+        setState(() {
+          _madeUnreachable = (swarmId: swarmId, projectId: projectId);
+          _unreachableLine = swarmRepositoryUnreachable(
+            newRepository.owner,
+            newRepository.name,
+          );
+        });
+        return;
+      }
       _closing = true;
       Navigator.of(context).pop((swarmId: swarmId, projectId: projectId));
+    } on SwarmRepositoryWaiting {
+      // Out in GitHub: its outcome comes back in the Swarm state.
+    } on SwarmRepositoryFailure catch (failure) {
+      // Said in the design's words, as they are (F2 to F11).
+      steps.failure = failure.line;
+      if (!_live(swarmId, reader)) return;
+      setState(() => _error = failure.line);
+      _showError();
     } on SwarmNewProjectGone {
       // The sheet goes by itself: its Swarm, access or account went.
     } on SuperTabFailure catch (failure) {
@@ -1921,7 +2701,11 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
     SuperTabSnapshot snapshot,
   ) {
     void back() => setState(() {
-      _picking = pick == _Pick.link ? _Pick.repository : null;
+      _picking = switch (pick) {
+        _Pick.link || _Pick.newRepository => _Pick.repository,
+        _Pick.owner => _Pick.newRepository,
+        _ => null,
+      };
       _linkError = null;
     });
     final header = _header(
@@ -1930,6 +2714,8 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
         _Pick.visibility => 'Visibility',
         _Pick.repository => 'Repository',
         _Pick.link => 'Enter a link',
+        _Pick.newRepository => 'New repository',
+        _Pick.owner => 'Owner',
         _Pick.machine => 'PM runs on',
         _Pick.engine => 'Agent',
       },
@@ -2042,9 +2828,47 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
                     trailing: url == chosen ? tick() : null,
                     onTap: () => setState(() {
                       _repository = url;
+                      _newRepository = null;
                       _repositoryPicked = true;
                       _picking = null;
                     }),
+                  ),
+                // Only where the server can make one (Task 6's organization
+                // check: an older server answers 404, and one with no GitHub
+                // sign-in says not-configured, F6).
+                if (_newRepositoryOffered(swarmId, reader, repositories))
+                  _Option(
+                    key: const ValueKey('swarm-new-project-pick-new-repo'),
+                    leading: Icon(
+                      LucideIcons.plus300,
+                      size: 20,
+                      color: AppPalette.textSecondary,
+                    ),
+                    title: 'New repository',
+                    trailing: _newRepository == null
+                        ? null
+                        : Icon(
+                            LucideIcons.check300,
+                            size: 20,
+                            color: AppPalette.swarmAccent,
+                          ),
+                    onTap: () {
+                      final owner =
+                          _newOwner ??
+                          swarmGitHubOwners(repositories).firstOrNull;
+                      // Back from GitHub, say: an organization that could not
+                      // be used is asked again.
+                      if (owner != null &&
+                          _ownerChecks['$swarmId/${owner.toLowerCase()}']
+                                  ?.state !=
+                              'ready') {
+                        _recheckOwner(swarmId, owner);
+                      }
+                      setState(() {
+                        _picking = _Pick.newRepository;
+                        _newOwner = owner;
+                      });
+                    },
                   ),
                 _Option(
                   key: const ValueKey('swarm-new-project-pick-link'),
@@ -2063,6 +2887,10 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
             ),
           ],
         );
+      case _Pick.newRepository:
+        return _newRepositoryPage(header, swarmId, reader);
+      case _Pick.owner:
+        return _ownerPage(header, reader);
       case _Pick.link:
         void use() {
           final link = swarmRepositoryLink(_link.text);
@@ -2074,6 +2902,7 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
               return;
             }
             _repository = link;
+            _newRepository = null;
             _repositoryPicked = true;
             _linkError = null;
             _picking = null;
@@ -2277,68 +3106,76 @@ class _Field extends StatelessWidget {
                 horizontal: AppSpace.l,
                 vertical: AppSpace.m,
               ),
-              child: Row(
-                children: [
-                  Text(
-                    label,
-                    style: AppType.label(color: AppPalette.textSecondary),
-                  ),
-                  const SizedBox(width: AppSpace.m),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          value,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.end,
-                          style: AppType.label(
-                            color: enabled
-                                ? AppPalette.textPrimary
-                                : AppPalette.textSecondary,
-                            height: 1.3,
-                          ),
-                        ),
-                        if (detail case final detail?) ...[
-                          const SizedBox(height: 3),
+              child: LayoutBuilder(
+                builder: (context, box) => Row(
+                  children: [
+                    // Its own width, at most under half the row: it wraps,
+                    // rather than overflows, on a narrow phone at large text
+                    // (Guide's second review of #3204: 320 points, 200%).
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: box.maxWidth * .45),
+                      child: Text(
+                        label,
+                        style: AppType.label(color: AppPalette.textSecondary),
+                      ),
+                    ),
+                    const SizedBox(width: AppSpace.m),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
                           Text(
-                            detail,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.end,
-                            style: AppType.caption(
-                              color: AppPalette.textSecondary,
-                              height: 1.35,
-                            ),
-                          ),
-                        ],
-                        if (hint case final hint?) ...[
-                          const SizedBox(height: 3),
-                          Text(
-                            hint,
+                            value,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             textAlign: TextAlign.end,
-                            style: AppType.caption(
-                              color: AppPalette.textFaint,
-                              height: 1.35,
+                            style: AppType.label(
+                              color: enabled
+                                  ? AppPalette.textPrimary
+                                  : AppPalette.textSecondary,
+                              height: 1.3,
                             ),
                           ),
+                          if (detail case final detail?) ...[
+                            const SizedBox(height: 3),
+                            Text(
+                              detail,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.end,
+                              style: AppType.caption(
+                                color: AppPalette.textSecondary,
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
+                          if (hint case final hint?) ...[
+                            const SizedBox(height: 3),
+                            Text(
+                              hint,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.end,
+                              style: AppType.caption(
+                                color: AppPalette.textFaint,
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
-                  ),
-                  if (enabled) ...[
-                    const SizedBox(width: AppSpace.s),
-                    Icon(
-                      LucideIcons.chevronDown300,
-                      size: 18,
-                      color: AppPalette.textFaint,
-                    ),
+                    if (enabled) ...[
+                      const SizedBox(width: AppSpace.s),
+                      Icon(
+                        LucideIcons.chevronDown300,
+                        size: 18,
+                        color: AppPalette.textFaint,
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
           ),
