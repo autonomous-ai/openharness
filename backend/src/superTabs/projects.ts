@@ -56,6 +56,9 @@ export interface SwarmProject {
    *  the daily tidy was last asked, and the instructions revision its last save made; `tidyPending`: asked, and no save has
    *  followed yet (pmSchedule.ts tidyRequest; tasks #3022, #3151). */
   schedule?: { lastSlot: number; wakeId?: string; heardAt?: number; tidiedOn?: string; tidiedRevision?: number; tidyPending?: boolean }
+  /** Its release list (releases.ts, task #3405): merged tasks waiting for a release, each component's last verified release
+   *  and its open release step. Written by the server alone; readers never get it. */
+  releases?: import('./releases.js').ReleaseLedger
   /** The status card at the top of the project chat (Dee, 2026-10-31): the coordinator's last project.report text, which
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null
