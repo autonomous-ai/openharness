@@ -69,7 +69,7 @@ describe('a task\'s one message in its project chat', () => {
     const s = await swarm()
     const P = await s.add('Coordinator', 'lead', true)
     const before = (await store.messages(owner, s.tab, 'lead', {})).messages.length
-    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', requesterId: owner.sub, brief: 'Keep drafts.', checks: [] })).result.conversationId)
+    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', requesterId: owner.sub, brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2' })).result.conversationId)
     const E = await s.add('Engineer', T)
     const assignmentId = String((await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })).result.assignmentId)
     const pr = 'https://github.com/example/app/pull/7'
@@ -89,14 +89,14 @@ describe('a task\'s one message in its project chat', () => {
     const P = await s.add('Coordinator', 'lead', true)
     const asked = String((await run(s.tab, { type: 'message.send', conversationId: 'lead', text: 'Can the phone show who answered?', replyTo: null,
       recipientIds: [] }, peer)).result.messageId)
-    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Phone shows who answered', brief: 'Show who answered.', checks: [],
+    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Phone shows who answered', brief: 'Show who answered.', checks: [{ description: 'Done', independent: false }], priority: 'P2',
       requestMessageId: asked })).result.conversationId)
     expect((await s.page('lead')).lines).toEqual([])
     expect((await store.read(owner, s.tab)).state.conversations.find(c => c.id === T)?.requesterId).toBe(peer.sub)
     const E = await s.add('Engineer', T)
     await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })
     // A second task may hang under the same message; its thread names both.
-    await s.as(P)({ type: 'conversation.create', title: 'Desktop shows who answered', brief: 'Same on Desktop.', checks: [], requestMessageId: asked })
+    await s.as(P)({ type: 'conversation.create', title: 'Desktop shows who answered', brief: 'Same on Desktop.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: asked })
     expect((await s.page('lead')).lines).toEqual([])
     expect((await store.messages(owner, s.tab, 'lead', { thread: asked })).messages.map(m => m.text))
       .toEqual(['Can the phone show who answered?', 'Phone shows who answered', 'Desktop shows who answered'])
@@ -111,7 +111,7 @@ describe('a task\'s one message in its project chat', () => {
     const P = await s.add('Coordinator', 'lead', true)
     const asked = String((await run(s.tab, { type: 'message.send', conversationId: 'lead', text: 'Can drafts survive a restart?', replyTo: null,
       recipientIds: [] }, peer)).result.messageId)
-    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [], requestMessageId: asked }))
+    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: asked }))
       .result.conversationId)
     const E = await s.add('Engineer', T)
     const reactions = async () => {
@@ -139,7 +139,7 @@ describe('a task\'s one message in its project chat', () => {
     const s = await swarm()
     const P = await s.add('Coordinator', 'lead', true)
     const root = await s.ask('Can drafts survive a restart?')
-    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [], requestMessageId: root }))
+    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: root }))
       .result.conversationId)
     const E = await s.add('Engineer', T)
     const assignmentId = String((await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })).result.assignmentId)
@@ -154,7 +154,7 @@ describe('a task\'s one message in its project chat', () => {
     const s = await swarm()
     const P = await s.add('Coordinator', 'lead', true)
     const root = await s.ask('Can drafts survive a restart?')
-    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [], requestMessageId: root }))
+    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: root }))
       .result.conversationId)
     const E = await s.add('Engineer', T)
     const assignmentId = String((await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })).result.assignmentId)
@@ -175,7 +175,7 @@ describe('a task\'s one message in its project chat', () => {
     const created = (await run(s.tab, { type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })).result as { projectId: string; conversationId: string }
     const P = await s.add('Coordinator', created.conversationId, true)
     const root = await s.ask('Can we do the hidden work?', created.conversationId)
-    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Hidden work', brief: 'Quietly.', checks: [], requestMessageId: root })).result.conversationId)
+    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Hidden work', brief: 'Quietly.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: root })).result.conversationId)
     const E = await s.add('Engineer', T)
     const assignmentId = String((await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })).result.assignmentId)
     await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'working', result: 'Started.' })

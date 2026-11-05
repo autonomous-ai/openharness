@@ -251,7 +251,7 @@ describe('a Buddy through the store', () => {
       checks: [] })).result.conversationId), [owner.sub])
     const { agentId } = await buddy(f)
     const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
-      checks: [{ description: 'Edits survive a restart', independent: false }] })).result.conversationId)
+      checks: [{ description: 'Edits survive a restart', independent: false }], priority: 'P2', requesterId: owner.sub })).result.conversationId)
     const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
       configuration: config, lead: false })).result.agentId)
     const assignmentId = String((await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })).result.assignmentId)
@@ -927,7 +927,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
   it('hears no assignment of a task its person cannot read', async () => {
     const { f, agentId } = await proposed()
     const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
-      checks: [{ description: 'Edits survive a restart', independent: false }], requesterId: peer.sub }, owner, f.lead)).result.conversationId)
+      checks: [{ description: 'Edits survive a restart', independent: false }], priority: 'P2', requesterId: peer.sub }, owner, f.lead)).result.conversationId)
     const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
       configuration: config, lead: false })).result.agentId)
     await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })

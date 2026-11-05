@@ -602,7 +602,7 @@ describe('a teammate\'s work and the machines that take it', () => {
     const refused = { code: 'TEAM_ACCOUNT_REQUIRED', message: NO_TEAM_ACCOUNT }
     await expect(run(f.tab, post([volunteer]), owner, f.lead)).rejects.toMatchObject(refused)
     await expect(run(f.tab, post([]), person, volunteer)).rejects.toMatchObject(refused)
-    await expect(run(f.tab, { type: 'conversation.create', title: 'Its own task', brief: 'Do it', checks: [] }, person, volunteer)).rejects.toMatchObject(refused)
+    await expect(run(f.tab, { type: 'conversation.create', title: 'Its own task', brief: 'Do it', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: person.sub }, person, volunteer)).rejects.toMatchObject(refused)
     const task = (await store.read(owner, f.tab)).state.conversations.find(c => c.id === f.teamGroup)!
     expect(task.agentIds).not.toContain(volunteer)
     // The agent on the person's Team machine is named into another task of the owner's project.

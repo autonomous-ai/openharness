@@ -158,7 +158,7 @@ describe('the one Buddy sends a proposal to a project its person reads (Scholes,
     expect(await db.superTabMessage.count({ where: { tabId: f.tab, replyTo: sent } })).toBe(0)
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: sent, agentId: f.pms.web } })).toBe(1)
     for (const elsewhere of ['lead', f.secret.conversationId]) expect(await texts(f, elsewhere, owner)).not.toContain(row.text)
-    const group = String((await f.execute({ type: 'conversation.create', title: 'Offline sync', brief: '', checks: [], proposalMessageId: sent }, owner, f.pms.web)).result.conversationId)
+    const group = String((await f.execute({ type: 'conversation.create', title: 'Offline sync', brief: '', checks: [{ description: 'Done', independent: false }], proposalMessageId: sent }, owner, f.pms.web)).result.conversationId)
     expect((await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === group)).toMatchObject({ requesterId: peer.sub,
       brief: 'Goal: Offline sync\nScope: Web only\nPriority: normal' })
     expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: group } })).data).toMatchObject({ ledger: { proposal: { buddyId: main } } })
@@ -458,7 +458,7 @@ describe('a project session', () => {
     // Sessions end by themselves after 30 idle minutes, so the PM often opens the group after the session is gone.
     if (endBeforeOpen) await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'ended' }, peer)
     const group = String((await f.execute({ type: 'conversation.create', projectId: f.web.projectId, title: 'Offline sync', brief: 'Web keeps edits offline.',
-      checks: [], proposalMessageId: proposal }, owner, f.pms.web)).result.conversationId)
+      checks: [{ description: 'Done', independent: false }], proposalMessageId: proposal }, owner, f.pms.web)).result.conversationId)
     await f.execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
     if (!endBeforeOpen) await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'ended' }, peer)
     return { chat, main, agentId, group }
@@ -500,7 +500,7 @@ describe('a project session', () => {
       peer, agentId)).result.messageId)
     await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'ended' }, peer)
     await f.execute({ type: 'project.sharing', projectId: f.web.projectId, visibility: 'private', memberIds: [owner.sub] })
-    const group = String((await f.execute({ type: 'conversation.create', projectId: f.web.projectId, title: 'T', brief: '', checks: [], proposalMessageId: proposal },
+    const group = String((await f.execute({ type: 'conversation.create', projectId: f.web.projectId, title: 'T', brief: '', checks: [{ description: 'Done', independent: false }], proposalMessageId: proposal, requesterId: owner.sub },
       owner, f.pms.web)).result.conversationId)
     await f.execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/8' })
     const board = await new SwarmReads(f.store).leaderboard(owner, f.tab, f.web.projectId)
@@ -529,7 +529,7 @@ describe('a project session', () => {
     const ask = String((await send(f, chat, 'Send it', { replyTo: thread })).result.messageId)
     const proposal = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it', goal: 'G', scope: 'S', priority: 'normal' },
       peer, agentId)).result.messageId)
-    await f.execute({ type: 'conversation.create', projectId: f.web.projectId, title: 'T', brief: '', checks: [], proposalMessageId: proposal }, owner, f.pms.web)
+    await f.execute({ type: 'conversation.create', projectId: f.web.projectId, title: 'T', brief: '', checks: [{ description: 'Done', independent: false }], proposalMessageId: proposal }, owner, f.pms.web)
     expect((await buddyRows(f, peer, f.web.projectId)).map(r => r.agentId)).toEqual([main])
   })
 
@@ -547,7 +547,7 @@ describe('a project session', () => {
     const sent = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it', projectId: f.web.projectId, goal: 'G', scope: 'S', priority: 'normal' }, peer, agentId)).result.messageId)
     expect(await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: sent } })).toMatchObject({ conversationId: f.web.conversationId, recipientIds: [f.pms.web] })
     // Credited to the person's one Buddy, as a project session's is: a session ends.
-    const group = String((await f.execute({ type: 'conversation.create', title: 'From the session', brief: '', checks: [], proposalMessageId: sent }, owner, f.pms.web)).result.conversationId)
+    const group = String((await f.execute({ type: 'conversation.create', title: 'From the session', brief: '', checks: [{ description: 'Done', independent: false }], proposalMessageId: sent }, owner, f.pms.web)).result.conversationId)
     const row = (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === group)
     expect(row?.requesterId).toBe(peer.sub)
     expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: group } })).data).toMatchObject({ ledger: { proposal: { buddyId: main } } })

@@ -575,7 +575,7 @@ describe('five-part task persistence', () => {
     const checks = [{ description: 'Draft survives reconnect', independent: false }]
     const created = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`,
       headers: { authorization: `Bearer ${host.sub}` }, payload: { operationId: randomUUID(), asAgentId: lead,
-        command: { type: 'conversation.create', title: 'Drafts', task, checks } } })
+        command: { type: 'conversation.create', title: 'Drafts', task, checks, priority: 'P2', requesterId: owner.sub } } })
     expect(created.statusCode, created.body).toBe(200)
     const group = created.json().data.result.conversationId as string
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId as string
@@ -4082,7 +4082,7 @@ describe('Product Managers chat, removed (Dee, 2026-10-31)', () => {
       title: 'Roster', owns: ['desktop/lib/super_tabs'], status: 'working' })])
     expect((await store.read(host, tab, worker)).state).not.toHaveProperty('otherProjectsWork')
 
-    const filter = String((await run(tab, { type: 'conversation.create', title: 'Agents filter', task: task(['desktop/lib/super_tabs/roster.dart']), checks },
+    const filter = String((await run(tab, { type: 'conversation.create', title: 'Agents filter', task: task(['desktop/lib/super_tabs/roster.dart']), checks, priority: 'P2', requesterId: owner.sub },
       host, lead)).result.conversationId)
     await run(tab, { type: 'work.define', conversationId: filter, task: task(['desktop/lib/super_tabs']), checks }, host, lead)
     const alerts = await db.superTabMessage.findMany({ where: { tabId: tab, source: { equals: { kind: 'overlap', conversationIds: [filter, roster] } } } })
