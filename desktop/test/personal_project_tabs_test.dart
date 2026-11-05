@@ -489,4 +489,40 @@ void main() {
       );
     });
   });
+
+  test('Personal remembers the order its projects first appear in the tabs, '
+      'and keeps it when the tabs move', () async {
+    final f = SuperTabLaunchFixture();
+    f.app.machineStates['m']!.agents = [
+      _agent('w', remote: 'https://github.com/acme/web', cwd: '/w/web'),
+      _agent('a', remote: 'https://github.com/acme/api', cwd: '/w/api'),
+      _agent('n', cwd: '/Users/me/notes'),
+      _agent('d', remote: 'https://github.com/acme/docs', cwd: '/w/docs'),
+    ];
+    final web = _tab(f.app, 'desk-web', [_pane('m', 'w')], name: 'web');
+    _tab(f.app, 'desk-api', [_pane('m', 'a')], name: 'api');
+    _tab(f.app, 'desk-notes', [_pane('m', 'n')], name: 'notes');
+    final c = await _personal(f);
+    final personal = PersonalProjects.of(f.app);
+    await personal.sync(c);
+    String id(String name) =>
+        c.snapshot!.projects.firstWhere((p) => p.name == name).id;
+    expect(personal.projectOrder(c), [id('web'), id('api'), id('notes')]);
+
+    // The person moves the web tab last and opens docs: the order seen
+    // first stays, and docs comes after.
+    f.app.swarms
+      ..remove(web)
+      ..add(web);
+    _tab(f.app, 'desk-docs', [_pane('m', 'd')], name: 'docs');
+    await personal.sync(c);
+    final order = [id('web'), id('api'), id('notes'), id('docs')];
+    expect(personal.projectOrder(c), order);
+    final saved = jsonDecode(
+      (await f.app.superTabs.storage.read(
+        PersonalProjects.storageKey('owner'),
+      ))!,
+    ) as Map;
+    expect((saved[tabId] as Map)['order'], order);
+  });
 }
