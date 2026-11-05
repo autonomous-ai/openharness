@@ -1763,6 +1763,7 @@ describe('saving a machine again', () => {
       lent: [{ week, busyMs: 18_000_000 }],
       lentDays: [{ day: week, projectId: 'lead', busyMs: 18_000_000 }],
       engineFailures: { codex: 1 },
+      engineBackoff: { codex: { level: 3, cause: 'engine' } },
       engineSuspensions: { claude: { at: NOW, fine: false } },
       observation: { receivedAt: NOW, runningHarnessIds: ['h1'], stoppedHarnessIds: [] } as never,
     }
