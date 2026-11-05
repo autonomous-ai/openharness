@@ -74,6 +74,7 @@ import { commitParts, indexesOf, machineContentChanged, numberMessages, type Tou
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
 import { pullRequestEvents, type PullRequestWatch } from './pullRequestEvents.js'
+import { refreshChecks } from './checkVerdicts.js'
 import { guardedWrite, partId } from './parts/write.js'
 import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
@@ -4637,7 +4638,8 @@ export class SuperTabStore {
    * second pass posts none twice. A task with no Engineer in the Swarm records them and posts nothing. A step, an archived or
    * a finished task, or a pull request it no longer links, is left alone. The messages posted.
    */
-  async pullRequestSeen(tabId: string, groupId: string, watch: PullRequestWatch, botLogin: string | null): Promise<number> {
+  /** [patch]: the patch id the pass read for [watch]'s head when it was new to the task (undefined: not read, null: unreadable). */
+  async pullRequestSeen(tabId: string, groupId: string, watch: PullRequestWatch, botLogin: string | null, patch?: string | null): Promise<number> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       if (!row || row.deletedAt) return 0
@@ -4648,7 +4650,15 @@ export class SuperTabStore {
         || ['done', 'cancelled'].includes(group.assignment?.status ?? '')) return 0
       const now = this.now(), seen = group.pullRequestEvents?.[watch.url] ?? []
       const { events, keys } = pullRequestEvents(watch, seen, botLogin, now)
-      if (keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
+      // A new head is recorded with its patch id, and the verdicts of the task and its awake steps count against it (#3394).
+      const known = group.pullRequestHeads?.[watch.url], newHead = known?.head !== watch.head
+      if (newHead) {
+        group.pullRequestHeads = { ...group.pullRequestHeads, [watch.url]: { head: watch.head, patch: patch ?? null, at: now } }
+        for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
+          refreshChecks(checked.checks, watch.url, known, group.pullRequestHeads)
+        }
+      }
+      if (!newHead && keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
       group.pullRequestEvents = { ...group.pullRequestEvents, [watch.url]: keys }
       const ownerId = ownerOf(state, group), owner = ownerId ? state.agents.find(a => a.id === ownerId) : undefined
       // Written as its project's Lead, as the Swarm's own lines are (tidy.ts archiveLine); as the Engineer itself without one.

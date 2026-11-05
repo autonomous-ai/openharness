@@ -6,6 +6,8 @@ import type { PrismaClient } from '@prisma/client'
 import { PULL_WATCH_PERMISSIONS, type GitHubApp } from '../github/app.js'
 import { githubRepository, type GitHubRepository } from '../github/repository.js'
 import type { SuperTabStore } from './store.js'
+import type { PullRequestHead } from './model.js'
+import { patchId } from './pullRequestPatch.js'
 import { logger } from '../utils/logger.js'
 
 /** What GitHub says of one pull request, as the watch reads it (github/app.ts watchPullRequest). */
@@ -107,8 +109,14 @@ export function pullRequestEvents(watch: PullRequestWatch, seen: readonly string
   return { events, keys: [...marks, ...kept] }
 }
 
-/** What a pass asks GitHub: a pull request's watch (null: it cannot say), the app's own login, and `done` once it is over. */
-export interface PullRequestReader { watch(url: string): Promise<PullRequestWatch | null>; botLogin(): Promise<string | null>; done(): Promise<void> }
+/** What a pass asks GitHub: a pull request's watch (null: it cannot say), the patch id of its files at a new head (null: it
+ *  cannot say, pullRequestPatch.ts), the app's own login, and `done` once it is over. */
+export interface PullRequestReader {
+  watch(url: string): Promise<PullRequestWatch | null>
+  patch(url: string, head: string): Promise<string | null>
+  botLogin(): Promise<string | null>
+  done(): Promise<void>
+}
 
 const PULL = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]*)$/
 /** A task quiet this long is not watched: its Engineer is not waiting on its pull request. */
@@ -128,12 +136,18 @@ export function appPullRequestWatch(app: GitHubApp): PullRequestReader {
     })().catch(() => null))
     return tokens.get(key)!
   }
+  const read = async <T>(url: string, body: (repository: GitHubRepository, number: number, granted: string) => Promise<T | null>) => {
+    const match = PULL.exec(url), repository = match ? githubRepository(`https://github.com/${match[1]}`) : null
+    const granted = repository ? await token(repository) : null
+    return granted ? body(repository!, Number(match![2]), granted) : null
+  }
   return {
-    async watch(url) {
-      const match = PULL.exec(url), repository = match ? githubRepository(`https://github.com/${match[1]}`) : null
-      const granted = repository ? await token(repository) : null
-      return granted ? app.watchPullRequest(repository!, Number(match![2]), granted) : null
-    },
+    watch: url => read(url, (repository, number, granted) => app.watchPullRequest(repository, number, granted)),
+    // The files as they are now: the pass asks right after reading [head], and a head pushed in between reads stale at worst.
+    patch: url => read(url, async (repository, number, granted) => {
+      const files = await app.pullRequestFiles(repository, number, granted)
+      return files && patchId(files)
+    }),
     botLogin: () => app.botLogin(),
     async done() {
       for (const granted of tokens.values()) {
@@ -161,19 +175,28 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
         deleted: false, kind: null, 'data.reviewOf': null, 'data.pullRequestUrls.0': { $exists: true } } },
       { $sort: { lastActivityAt: -1 } },
       { $limit: limit },
-      { $project: { _id: 0, tabId: 1, key: 1, urls: '$data.pullRequestUrls' } },
-    ] }) as unknown as Array<{ tabId: string; key: string; urls: string[] }>
+      { $project: { _id: 0, tabId: 1, key: 1, urls: '$data.pullRequestUrls', heads: '$data.pullRequestHeads' } },
+    ] }) as unknown as Array<{ tabId: string; key: string; urls: string[]; heads?: Record<string, PullRequestHead> | null }>
     if (!rows.length) return 0
     const bot = await reader.botLogin()
     // One read per pull request a pass, however many tasks link it.
     const reads = new Map<string, Promise<PullRequestWatch | null>>()
     const watchOf = (url: string) => { if (!reads.has(url)) reads.set(url, reader.watch(url).catch(() => null)); return reads.get(url)! }
+    // A patch id is read only for a head the task has not recorded yet (#3394), once a pass whatever links it.
+    const patches = new Map<string, Promise<string | null>>()
+    const patchOf = (url: string, head: string) => {
+      const key = `${url}@${head}`
+      if (!patches.has(key)) patches.set(key, reader.patch(url, head).catch(() => null))
+      return patches.get(key)!
+    }
     let posted = 0
     for (const row of rows) {
       for (const url of row.urls) {
         try {
           const watch = await watchOf(url)
-          if (watch?.state === 'open') posted += await store.pullRequestSeen(row.tabId, row.key, watch, bot)
+          if (watch?.state !== 'open') continue
+          const patch = row.heads?.[url]?.head === watch.head ? undefined : await patchOf(url, watch.head)
+          posted += await store.pullRequestSeen(row.tabId, row.key, watch, bot, patch)
         } catch (error) {
           logger.warn('[swarm-pr-events] group skipped', { tabId: row.tabId, group: row.key, error: error instanceof Error ? error.message : String(error) })
         }

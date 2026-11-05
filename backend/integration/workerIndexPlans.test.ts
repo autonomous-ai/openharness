@@ -279,7 +279,7 @@ describe('the pull request watch', () => {
       group(NOW - 3 * 3_600_000), group(NOW - 2 * 3_600_000), group(NOW - 3_600_000, { data: { reviewOf: 'g1' } }), group(NOW - 60_000),
     ] })
     const asked: string[] = []
-    const reader = { watch: async (url: string) => { asked.push(url); return null }, botLogin: async () => null, done: async () => {} }
+    const reader = { watch: async (url: string) => { asked.push(url); return null }, patch: async () => null, botLogin: async () => null, done: async () => {} }
     const entries = await profiled(db, () => watchPullRequests(db, { pullRequestSeen: async () => 0 }, reader, NOW, 2))
     expect(asked).toEqual(['https://github.com/acme/app/pull/44', 'https://github.com/acme/app/pull/42'])
     const rows = reads(entries, 'SwarmGroup', ['workFinished', 'lastActivityAt'])
