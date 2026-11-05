@@ -1172,7 +1172,9 @@ export class SuperTabHost {
         void this.crewRest(target, rest)
         continue
       }
-      if (this.rested.delete(restKey)) void this.crewFolders().restore(target.tabId, target.agent.harnessId)
+      // Rested here, or dropped before this host restarted (its record is on disk): the folder comes back first.
+      if ((this.rested.delete(restKey) || ((target.agent as { crew?: unknown }).crew && this.crewFolders().remembers(target.tabId, target.agent.harnessId))))
+        void this.crewFolders().restore(target.tabId, target.agent.harnessId)
       if ((target.agent as { crew?: unknown }).crew) this.pruneCrewBranches(target.tabId, target.agent.harnessId)
       if (row.lead === true || target.agent.switchLanded) {
         if (row.lead === true) leads.add(target.agent.harnessId)

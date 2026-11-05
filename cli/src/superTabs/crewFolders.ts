@@ -6,7 +6,8 @@
  *   conversation is filed (claude --resume and codex resume find it by folder);
  * - finished branch copies go: a local branch whose work merged into the default branch, or whose remote branch was
  *   deleted (a merged or closed pull request). Never the current branch or one never pushed; a deleted branch's tip is
- *   kept under refs/harness/dropped/ so no commit becomes unreachable.
+ *   kept under refs/harness/dropped/ so no commit becomes unreachable. Branches are the clone's, shared by its worktrees, so
+ *   another agent's finished branch that no worktree has checked out goes too, recoverably (security review of #3229).
  */
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -36,9 +37,18 @@ export interface CrewFoldersDeps {
 }
 
 export class CrewFolders {
+  /** This host's record, read once and kept in step with its writes: only this host writes the file. */
+  private cache?: Remembered[]
   constructor(private readonly deps: CrewFoldersDeps) {}
+  /** Whether [harnessId]'s folder was dropped and waits to come back: read from disk, so a host restart forgets nothing. */
+  remembers(tabId: string, harnessId: string): boolean {
+    return this.read().some(r => r.tabId === tabId && r.harnessId === harnessId)
+  }
   private get file() { return join(this.deps.dataDir, 'super-tabs', `crew-folders-${this.deps.machineId}.json`) }
   private read(): Remembered[] {
+    return this.cache ??= this.readFile()
+  }
+  private readFile(): Remembered[] {
     try {
       const rows = (JSON.parse(readFileSync(this.file, 'utf8')) as { folders?: unknown }).folders
       return Array.isArray(rows) ? rows.filter((r): r is Remembered => !!r && typeof r === 'object' && ['tabId', 'harnessId', 'path', 'source']
@@ -46,6 +56,7 @@ export class CrewFolders {
     } catch { return [] }
   }
   private write(rows: Remembered[]) {
+    this.cache = rows
     mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 })
     writeFileSync(`${this.file}.next`, JSON.stringify({ version: 1, folders: rows }), { mode: 0o600 })
     renameSync(`${this.file}.next`, this.file)

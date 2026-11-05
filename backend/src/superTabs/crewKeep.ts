@@ -7,7 +7,8 @@
 import { activeWork, actorKey, stableId, type Agent, type AgentStart, type AgentStartRequest, type CrewTrouble, type MessageDraft, type SuperTabState } from './model.js'
 import { isBuddy } from './buddies.js'
 import { AGENT_MEMORY_BYTES, projectFolder, type ContributedMachine } from './machines.js'
-import { agentProjectId, groupProject, projectsOf, teamAccountPool } from './projects.js'
+import { agentProjectId, groupProject, onTeamAccount, projectsOf, teamAccountPool } from './projects.js'
+import { barredFromTeamWritten, teamWrittenTask } from './teamWritten.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 import { quotaOf, resetMs } from './reviewSeats.js'
 import { groupsOf, idleSince } from './tidy.js'
@@ -60,8 +61,16 @@ export function crewTrouble(state: SuperTabState, pool: ContributedMachine | nul
 /** The fallback machines for [agent], best first, in the route's order: the same account kind as the machine it leaves, then
  *  the account whose weekly quota resets soonest, then the most left, then the fewest agents working, then by name. Only
  *  machines with no trouble that admit its start. */
+/** Whether [agent]'s work must stay in Harness Team accounts, as an agent.start's must (audit H2; security review of #3229):
+ *  it runs in one, or it is in a Team-written task or step. Its project's chat is its coordinator's and does not count. */
+export function teamOnly(state: SuperTabState, agent: Agent): boolean {
+  const chats = new Set(projectsOf(state).map(p => p.leadConversationId))
+  return onTeamAccount(state, agent) || groupsOf(state, agent).some(g => !chats.has(g.id) && teamWrittenTask(state, g))
+}
+
 export function fallbacks(state: SuperTabState, agent: Agent, now: number, deps: CrewDeps): ContributedMachine[] {
   const from = standingPool(state, agent.machineId)
+  const team = teamOnly(state, agent)
   const engine = agent.configuration.engine
   const weekly = (pool: ContributedMachine) => quotaOf(state, pool, engine, now)?.windows.find(w => w.name === 'weekly')
   const working = (pool: ContributedMachine) => state.agents.filter(a => a.machineId === pool.machineId && hasWork(state, a)).length
@@ -71,7 +80,7 @@ export function fallbacks(state: SuperTabState, agent: Agent, now: number, deps:
       w ? w.usedPercent : 100, working(pool), pool.name]
   }
   return (state.machines ?? [])
-    .filter(pool => pool.machineId !== agent.machineId && !pool.buddyOnly && standingPool(state, pool.machineId) && !crewTrouble(state, pool, engine, now) && deps.admits(pool.machineId, agent))
+    .filter(pool => pool.machineId !== agent.machineId && !pool.buddyOnly && standingPool(state, pool.machineId) && (!team || teamAccountPool(pool)) && !crewTrouble(state, pool, engine, now) && deps.admits(pool.machineId, agent))
     .map(pool => ({ pool, key: key(pool) }))
     .sort((a, b) => { for (let i = 0; i < a.key.length; i++) if (a.key[i] !== b.key[i]) return a.key[i]! < b.key[i]! ? -1 : 1; return 0 })
     .map(entry => entry.pool)
@@ -224,7 +233,9 @@ export function takeOverCrewMember(state: SuperTabState, start: AgentStart, agen
   moved.displayName = nameOf(from)
   moved.movedFrom = { agentId: from.id, machineId: from.machineId, reason: from.movedTo.reason, at: now }
   for (const group of state.conversations) {
-    if (group.agentIds.includes(from.id) && !group.agentIds.includes(moved.id)) group.agentIds.push(moved.id)
+    // Never into Team-written work from the main account (audit H2): the placement keeps such a member in Team accounts,
+    // and this holds even for a start placed otherwise.
+    if (group.agentIds.includes(from.id) && !group.agentIds.includes(moved.id) && !barredFromTeamWritten(state, group, moved)) group.agentIds.push(moved.id)
     if (group.assignment?.agentId === from.id && activeWork(group)) {
       group.assignment.status = 'lost'
       group.assignment.lost = { reason: 'crew-moved', at: now }
