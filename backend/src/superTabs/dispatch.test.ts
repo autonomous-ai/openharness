@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type Conversation } from './model.js'
-import { DISPATCH_RULES, laneOf } from './dispatch.js'
+import { DISPATCH_RULES, dispatchPlan, freeCrew, laneOf, returnReason } from './dispatch.js'
+
+const NOW = Date.parse('2026-11-05T15:00:00Z')
 
 // Task #3400 (anh Dee's Swarm redesign, 2026-11-05): the server hands a free crew member its next task.
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -66,5 +68,112 @@ describe('a task\'s lane', () => {
     expect(() => s.run({ type: 'work.lane', conversationId: 'lead', lane: 'CLI' }))
       .toThrow(expect.objectContaining({ code: 'LANE_TASK_ONLY', status: 400 }))
     expect(s.state).toEqual(before)
+  })
+})
+
+describe('what a free crew member gets', () => {
+  /** A crew of [names] (Engineers with no lane unless [lanes] gives one), and four tasks: two backend, one Desktop, one CLI. */
+  function crew(names: string[], lanes: Record<string, string> = {}) {
+    const s = crewSwarm(names)
+    for (const name of names) {
+      const member = s.state.agents.find(a => a.id === s.ids[name])!
+      member.crew = { role: 'Engineer', ...lanes[name] ? { lane: lanes[name] } : {}, at: 1000, by: 'owner' }
+    }
+    const tasks = { api: s.task('Api', ['backend/src/a.ts']), store: s.task('Store', ['backend/src/b.ts']),
+      board: s.task('Board', ['desktop/lib/c.dart']), hosts: s.task('Hosts', ['cli/src/d.ts']) }
+    const picks = (now = NOW) => dispatchPlan(s.state, 'lead', DISPATCH_RULES, now).map(p => [nameOf(s, p.agentId), titleOf(s, p.conversationId), p.why])
+    return { ...s, tasks, picks }
+  }
+  const nameOf = (s: ReturnType<typeof crewSwarm>, id: string) => s.state.agents.find(a => a.id === id)!.name
+  const titleOf = (s: ReturnType<typeof crewSwarm>, id: string) => s.group(id).title
+  /** Gives [agentId] [conversationId] in [status], as work.assign and then work.status leave it (written directly: before
+   *  #3399 work.assign still counts a handed task as busy). */
+  const holding = (s: ReturnType<typeof crewSwarm>, agentId: string, conversationId: string, status: 'working' | 'review' | 'done' = 'working') => {
+    s.group(conversationId).assignment = { id: `held-${conversationId}`, agentId, status, configuration: config,
+      execution: { machineId: 'host', harnessId: agentId, machineOwnerId: 'host-owner' }, result: null }
+  }
+
+  it('is its lane\'s top task, the queue\'s order, each task to one member', () => {
+    const s = crew(['Ash', 'Birch', 'Cedar'], { Ash: 'backend', Birch: 'backend', Cedar: 'desktop' })
+    expect(s.picks()).toEqual([['Ash', 'Api', 'lane'], ['Birch', 'Store', 'lane'], ['Cedar', 'Board', 'lane']])
+  })
+
+  it('puts a P0 first, wherever the queue has it', () => {
+    const s = crew(['Ash'], { Ash: 'backend' })
+    s.run({ type: 'work.priority', conversationId: s.tasks.store, priority: 'P0' })
+    expect(s.picks()).toEqual([['Ash', 'Store', 'lane']])
+  })
+
+  it('gives a crew Engineer with no lane the project\'s top task, and any other role nothing', () => {
+    const s = crew(['Ash', 'Birch'])
+    s.state.agents.find(a => a.id === s.ids.Birch)!.crew!.role = 'Reviewer'
+    s.run({ type: 'work.queue', conversationId: s.tasks.hosts, after: null })
+    expect(s.picks()).toEqual([['Ash', 'Hosts', 'lane']])
+  })
+
+  it('gives a member its pinned task first, and a pin whose member left the crew goes to the lane', () => {
+    const s = crew(['Ash', 'Birch'], { Ash: 'backend', Birch: 'backend' })
+    s.group(s.tasks.store).pin = { agentId: s.ids.Birch!, why: 'ci', at: 2000 }
+    expect(s.picks()).toEqual([['Ash', 'Api', 'lane'], ['Birch', 'Store', 'pin']])
+    delete s.state.agents.find(a => a.id === s.ids.Birch)!.crew
+    expect(s.picks()).toEqual([['Ash', 'Api', 'lane']])
+  })
+
+  it('counts a member free with fewer than 3 handed tasks and nothing in its hands', () => {
+    const s = crew(['Ash'], { Ash: 'backend' })
+    holding(s, s.ids.Ash!, s.tasks.api, 'review')
+    expect(s.picks()).toEqual([['Ash', 'Store', 'lane']])
+    holding(s, s.ids.Ash!, s.tasks.board, 'review')
+    expect(freeCrew(s.state, 'lead', DISPATCH_RULES, NOW).map(a => a.name)).toEqual(['Ash'])
+    holding(s, s.ids.Ash!, s.tasks.hosts, 'review')
+    expect(s.picks()).toEqual([])
+    // A finished one counts no more; one in its hands keeps it busy.
+    holding(s, s.ids.Ash!, s.tasks.hosts, 'done')
+    expect(s.picks()).toEqual([['Ash', 'Store', 'lane']])
+    holding(s, s.ids.Ash!, s.task('Cache', ['backend/src/e.ts']))
+    expect(s.picks()).toEqual([])
+  })
+
+  it('leaves out the PM, a Buddy, a stopping member, a moving one and an agent not in the crew; an asleep one is free', () => {
+    const s = crew(['Ash', 'Birch', 'Cedar', 'Dune'], { Ash: 'backend', Birch: 'backend', Cedar: 'backend', Dune: 'backend' })
+    const pm = s.state.agents.find(a => a.id === s.pm)!
+    pm.crew = { role: 'PM', at: 1000, by: 'owner' }
+    const agent = (name: string) => s.state.agents.find(a => a.id === s.ids[name])!
+    agent('Ash').workDecision = 'stop'
+    Object.assign(agent('Birch'), { movedTo: { machineId: 'other', at: 2000 } })
+    Object.assign(agent('Cedar'), { asleep: { since: 2000 } })
+    s.add('Elm')
+    expect(freeCrew(s.state, 'lead', DISPATCH_RULES, NOW).map(a => a.name)).toEqual(['Cedar', 'Dune'])
+  })
+
+  it('never picks a step, an archived task, a chat, a finished task or one not to start before a later day', () => {
+    const s = crew(['Ash'], { Ash: 'backend' })
+    s.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: s.tasks.board, step: 'Review', checks: [] })
+    s.run({ type: 'conversation.archive', conversationId: s.tasks.api, archived: true })
+    s.run({ type: 'work.queue', conversationId: s.tasks.store, notBefore: '2026-11-06' })
+    expect(s.picks()).toEqual([])
+    s.run({ type: 'work.queue', conversationId: s.tasks.store, notBefore: '2026-11-05' })
+    expect(s.picks()).toEqual([['Ash', 'Store', 'lane']])
+    holding(s, s.ids.Ash!, s.tasks.store, 'done')
+    expect(s.picks()).toEqual([])
+  })
+
+  it('does not hand a member the task it lost for no progress at once; another member takes it', () => {
+    const s = crew(['Ash', 'Birch'], { Ash: 'backend', Birch: 'desktop' })
+    holding(s, s.ids.Ash!, s.tasks.api)
+    const assignment = s.group(s.tasks.api).assignment!
+    assignment.status = 'lost'
+    assignment.lost = { reason: returnReason('backend'), at: NOW }
+    s.group(s.tasks.api).lostAttempt = { id: assignment.id, agentId: s.ids.Ash!, machineId: 'host', engine: 'claude' }
+    expect(s.picks()).toEqual([['Ash', 'Store', 'lane'], ['Birch', 'Board', 'lane']])
+    s.group(s.tasks.store).lane = 'Desktop'
+    s.group(s.tasks.board).lane = 'backend'
+    expect(s.picks()).toEqual([['Ash', 'Board', 'lane'], ['Birch', 'Store', 'lane']])
+  })
+
+  it('hands out nothing while the Swarm is paused', () => {
+    const s = crew(['Ash'], { Ash: 'backend' })
+    s.state.paused = true
+    expect(s.picks()).toEqual([])
   })
 })
