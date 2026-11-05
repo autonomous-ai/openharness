@@ -32,11 +32,20 @@ type Owns = (harnessId: string) => Promise<boolean>
 
 /** What the keeper knows of one crew session here: since when its engine has been seen working without a break. */
 interface Watch { workingSince: number; said?: string }
-/** A continue still owed to a reopened session: when it may be tried next, and how many tries it has left. */
-interface Owed { at: number; tries: number }
+/** A continue still owed to a reopened session: when it may be tried next, how many tries it has left, and whether this
+ *  reopen typed its text already (only then is Enter owed; review 2 of #3222: after a second crash the restored history
+ *  shows the first continue, over an empty composer). */
+interface Owed { at: number; tries: number; typed: boolean }
+
+/** How many of a screen's last lines hold its composer, wrapped text and the footer under it. */
+const COMPOSER_LINES = 8
 
 /** Its text, its whitespace left out: a narrow pane wraps the typed line. */
 const squeezed = (text: string) => text.replace(/\s+/g, '')
+
+/** Whether [screen]'s composer, its last lines, holds the continue. */
+const inComposer = (screen: string) =>
+  squeezed(screen.split('\n').filter(line => line.trim()).slice(-COMPOSER_LINES).join('\n')).includes(squeezed(CREW_CONTINUE))
 
 /**
  * Restarts a frozen crew session and continues a reopened one. The keep-alive itself is the host's (host.ts keepAlive),
@@ -72,7 +81,7 @@ export class CrewKeeper {
 
   /** The keep-alive reopened crew session [harnessId]: it is told to continue once its screen takes input. */
   reopened(harnessId: string): void {
-    this.owed.set(harnessId, { at: 0, tries: CREW_CONTINUE_TRIES })
+    this.owed.set(harnessId, { at: 0, tries: CREW_CONTINUE_TRIES, typed: false })
     this.watches.delete(harnessId)
   }
 
@@ -83,15 +92,19 @@ export class CrewKeeper {
   }
 
   private async pass(rows: unknown[]): Promise<void> {
+    /** The crew the roster names here; what is owed them is kept while it does, their terminal away for a moment or not
+     *  (review 2 of #3222). */
+    const named = new Set<string>()
     const here = new Map<string, Record<string, unknown>>()
     for (const row of rows.map(object)) {
       const agent = object(row.agent)
       if (!identifier(agent.harnessId) || agent.machineId !== this.machineId || row.closeSession === true || row.stopRequested === true || !isCrewRow(row)) continue
+      named.add(agent.harnessId)
       if (!this.core.agents.byAgent(agent.harnessId) || !this.core.agents.terminalAvailable(agent.harnessId)) continue
       here.set(agent.harnessId, row)
     }
     for (const id of this.watches.keys()) if (!here.has(id)) this.watches.delete(id)
-    for (const id of this.owed.keys()) if (!here.has(id)) this.owed.delete(id)
+    for (const id of this.owed.keys()) if (!named.has(id)) this.owed.delete(id)
     for (const harnessId of here.keys()) if (this.owed.has(harnessId)) await this.continueTask(harnessId)
     const now = this.now()
     if (now - this.lookedAt < CREW_LOOK_MS) return
@@ -121,11 +134,17 @@ export class CrewKeeper {
     // A prompt or an unreadable screen waits, a look later, and costs no try.
     let screen = await ready()
     if (screen === null) return void (owed.at = now + CREW_LOOK_MS)
-    if (!squeezed(screen).includes(squeezed(CREW_CONTINUE))) {
+    if (!owed.typed) {
       const typed = await this.core.superTabs!.input(harnessId, CREW_CONTINUE, [])
       if (!typed.ok) return again(typed.error)
+      owed.typed = true
       screen = await ready()
       if (screen === null) return void (owed.at = now + CREW_LOOK_MS)
+    }
+    // Its composer no longer holds it (cleared meanwhile): typed again on the next try, never an Enter on an empty prompt.
+    if (!inComposer(screen)) {
+      owed.typed = false
+      return again('its composer did not keep the text')
     }
     const entered = await this.core.superTabs!.inputIfScreen(harnessId, ['Enter'], screen)
     if (!entered.ok) return again(entered.error)
