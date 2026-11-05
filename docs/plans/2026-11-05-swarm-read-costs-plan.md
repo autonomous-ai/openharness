@@ -4,7 +4,7 @@
 
 **Goal:** Reduce Super Tab read traffic while preserving mention counts and promptly observing Swarm deletion.
 
-**Architecture:** Project only conversation fields needed for person mention visibility and held-tag eligibility. A changes poll carries its already-read waiting tags into the derived mention count. Each `SwarmReads` instance caches only the Super Tab format and deletion fields for a short bounded window, with failures and expired entries refreshed from MongoDB.
+**Architecture:** Project only conversation fields needed for person mention visibility, held-tag eligibility, and tag-list titles. A changes poll carries its already-read waiting tags into the derived mention count. Each `SwarmReads` instance caches only the Super Tab format and deletion fields for a short bounded window, with failures and expired entries refreshed from MongoDB.
 
 **Tech Stack:** TypeScript, Prisma, MongoDB, Vitest, MongoDB Memory Replica Set.
 
@@ -15,13 +15,15 @@
 - Backend only; do not change `cli/src/core`.
 - Changed backend reads use indexed MongoDB query shapes and are checked with `explain()` against a test database.
 - Waiting-tag counts and digests remain unchanged; each changes poll reads `SuperTabMention` once.
+- Waiting and earlier tag lists retain quiet conversation titles.
 - A cached deleted Swarm becomes unavailable after at most the metadata hold window.
+- A cached format transition is checked at expiry and retains migration/refusal behavior.
 - Before Ready, run affected integration files and the backend unit suite (`npm test`); Super Tab integration coverage runs in PR CI.
 - PR evidence includes before/after examined documents and returned bytes per request; start its body with `Requested by 0xKen15 through Harness.`
 
 ## Review Focus
 
-- Quiet conversations may contain large task or status payloads; the projected row must retain exactly the fields used by visibility and held-tag checks, tested against counts and digests.
+- Quiet conversations may contain large task or status payloads; the projected row must retain only fields used by visibility, held-tag checks, and tag-list titles, tested against counts and list output.
 - A tag or group update racing a changes poll must use one coherent tag query and still load each tagged conversation.
 - Missing, deleted, and newly migrated Swarms must retain their existing refusal and migration behavior across cache expiration.
 - Cache entries must be isolated by environment and tab, bounded, and refreshed after expiry or a failed read.
@@ -37,9 +39,9 @@
 
 **Interfaces:**
 - Consume: `waitingMentions(tx, tabId, state, actor, now)` and existing group-by-key index helper.
-- Produce: an aggregate projection containing the conversation `key` plus `data.kind`, `data.projectId`, `data.audience`, `data.archived`, and `data.assignment.status`, sufficient for `canReadGroup`, `isLeads`, and held-tag listing.
+- Produce: an aggregate projection containing the conversation `key` plus `data.title`, `data.kind`, `data.projectId`, `data.audience`, `data.archived`, and `data.assignment.status`, sufficient for `canReadGroup`, `isLeads`, held-tag listing, and mention titles.
 
-- [ ] **Step 1: Write failing coverage** proving waiting-tag counts remain unchanged when 21 quiet groups contain large unrelated conversation fields, and that the fetched BSON excludes those fields.
+- [ ] **Step 1: Write failing coverage** proving waiting-tag counts remain unchanged when 21 quiet groups contain large unrelated conversation fields, fetched BSON excludes those fields, and quiet titles remain in waiting and earlier tag lists.
 - [ ] **Step 2: Run the targeted test** and record its expected failure against full conversation payloads.
 - [ ] **Step 3: Project only the fields required by the mention check** in the missing-conversations aggregate.
 - [ ] **Step 4: Run the targeted test** and capture before/after `explain("executionStats")`, examined documents, and returned BSON bytes on the same test fixture.
@@ -72,7 +74,7 @@
 - Consume: the scoped `SuperTab.findFirst` selection of `format` and `deletedAt` in `SwarmReads.read()`.
 - Produce: a per-instance cache keyed by environment and tab id, with a short exported/testable hold duration, bounded size, and cached metadata only.
 
-- [ ] **Step 1: Write failing coverage** proving repeated reads share one metadata lookup, soft deletion is observed at hold expiry, and another environment cannot reuse a cached row.
+- [ ] **Step 1: Write failing coverage** proving repeated reads share one metadata lookup, soft deletion and format transitions are observed at hold expiry with existing migration/refusal behavior, and another environment cannot reuse a cached row.
 - [ ] **Step 2: Run the targeted test** and record its expected failure against one metadata lookup per request.
 - [ ] **Step 3: Add the bounded per-instance metadata cache**, expiring entries by the injected clock and discarding failed lookups.
 - [ ] **Step 4: Run the targeted test** and report before/after row reads and deletion visibility latency.
