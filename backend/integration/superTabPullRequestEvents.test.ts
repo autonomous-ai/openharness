@@ -48,14 +48,17 @@ function fakeReader() {
   /** Each pull request's patch id, by head: what its files read at that head (pullRequestPatch.ts). */
   const patches = new Map<string, string>()
   const patchReads: string[] = []
+  /** Each head that is git's own merge of another head and main (task #3553), by head: the head it carries. */
+  const merges = new Map<string, string>()
   const reader: PullRequestReader = {
     watch: async url => { asked.push(url); return pulls.get(url) ?? null },
     // A patch id names the base branch too (pullRequestPatch.ts): `HEAD@BASE` when a test sets one, else by head alone.
     patch: async (url, head, base) => { patchReads.push(`${url}@${head}`); return patches.get(`${head}@${base}`) ?? patches.get(head) ?? null },
+    merge: async (_url, head) => merges.get(head) ?? null,
     botLogin: async () => 'harness[bot]',
     done: async () => {},
   }
-  return { pulls, asked, patches, patchReads, reader }
+  return { pulls, asked, patches, patchReads, merges, reader }
 }
 /** Each Swarm's own pull request: a pass reads every Swarm in this database, and the others' are not this fake's. */
 let pullNumbers = 100
@@ -82,12 +85,12 @@ async function swarm() {
   const worker = await add(task, 'test-host', 'Worker')
   const assignment = String((await execute({ type: 'work.assign', conversationId: task, agentId: worker })).result.assignmentId)
   await execute({ type: 'work.status', conversationId: task, assignmentId: assignment, status: 'working', result: `Draft ${PR}` }, host, worker)
-  const { pulls, asked, patches, patchReads, reader } = fakeReader()
+  const { pulls, asked, patches, patchReads, merges, reader } = fakeReader()
   const pass = async () => { now += MINUTE; return watchPullRequests(db, store, reader, now) }
   /** The rows this feature wrote in [conversationId], oldest first. */
   const told = async (conversationId = task) => (await db.superTabMessage.findMany({ where: { tabId: tab, conversationId }, orderBy: { sequence: 'asc' } }))
     .filter(m => m.recipientIds.length > 0 && m.text.includes(PR))
-  return { PR, number, pull, store, tab, execute, add, lead, task, worker, assignment, pulls, asked, patches, patchReads, reader, pass, told, clock: { get now() { return now }, advance(ms: number) { now += ms } } }
+  return { PR, number, pull, store, tab, execute, add, lead, task, worker, assignment, pulls, asked, patches, patchReads, merges, reader, pass, told, clock: { get now() { return now }, advance(ms: number) { now += ms } } }
 }
 
 describe('pull request events', () => {
@@ -256,6 +259,33 @@ describe('pull request events', () => {
         expect(check.passedBy).not.toBeNull()
         expect(check.verdicts!.at(-1)!.stale).toBeUndefined()
       }
+    })
+
+    // Task #3553: a head git merged from the reviewed head and main by itself carries the verdict (mergeCarry.ts), though its
+    // patch is new; any other head does not, and a chain of such merges carries it on.
+    it('a clean, automatic main merge keeps it, through a chain of them', async () => {
+      const { f, HEAD3, read } = await reviewed()
+      const MERGE2 = 'eeeeeee5555555eeeeeee5555555eeeeeee55555'
+      f.merges.set(HEAD3, HEAD)
+      f.pulls.set(f.PR, f.pull({ head: HEAD3 }))
+      await f.pass()
+      for (const check of await read()) {
+        expect(check.passedBy).not.toBeNull()
+        expect(check.verdicts!.at(-1)!.stale).toBeUndefined()
+      }
+      f.merges.set(MERGE2, HEAD3)
+      f.pulls.set(f.PR, f.pull({ head: MERGE2 }))
+      await f.pass()
+      for (const check of await read()) expect(check.passedBy).not.toBeNull()
+    })
+
+    it('a main merge of another head, or with a line resolved by hand, makes it stale', async () => {
+      const { f, HEAD3, read } = await reviewed()
+      // Git's merge of some other head carries that head's verdicts, not these.
+      f.merges.set(HEAD3, 'fffffff6666666fffffff6666666fffffff66666')
+      f.pulls.set(f.PR, f.pull({ head: HEAD3 }))
+      await f.pass()
+      for (const check of await read()) expect(check.verdicts!.at(-1)).toMatchObject({ head: HEAD, stale: HEAD3 })
     })
 
     it('a new commit makes it stale on the task and its step', async () => {

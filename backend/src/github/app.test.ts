@@ -680,6 +680,48 @@ describe('watching a pull request', () => {
     expect(await app.pullRequestPatchFiles(repo, 12, token, head)).toBeNull()
   })
 
+  // Task #3553: what a new head is of the pull request, to judge whether it is git's own merge of its reviewed head and main
+  // (superTabs/mergeCarry.ts): its parents, whether the second is on the branch it merges into, and the three comparisons.
+  it('reads a merge head\'s parents and the three sides of the merge, at the head the pull request names', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_PATCH_PERMISSIONS)
+    const M = 'd'.repeat(40), H = 'a'.repeat(40), B = 'b'.repeat(40)
+    github.pulls.set('acme/app#12', { state: 'open', merged_at: null, draft: false, head: { sha: M }, base: { ref: 'main', sha: B }, mergeable: true,
+      html_url: 'https://github.com/acme/app/pull/12' })
+    github.commits.set(`acme/app@${M}`, [H, B])
+    github.compares.set(`acme/app@${B}...main`, [])
+    github.compareStatus.set(`acme/app@${B}...main`, 'identical')
+    github.compares.set(`acme/app@${H}...${B}`, [{ filename: 'lib.ts', status: 'modified', sha: 'm2' }])
+    github.compares.set(`acme/app@${B}...${H}`, [{ filename: 'app.ts', status: 'modified', sha: 'p1' }])
+    github.compares.set(`acme/app@${H}...${M}`, [{ filename: 'lib.ts', status: 'modified', sha: 'm2' }])
+    expect(await app.mainMergeSides(repo, 12, token, M)).toEqual({ base: 'main', sides: { parents: [H, B], onBase: true,
+      prSide: [{ filename: 'app.ts', status: 'modified', sha: 'p1' }], mainSide: [{ filename: 'lib.ts', status: 'modified', sha: 'm2' }],
+      mergeSide: [{ filename: 'lib.ts', status: 'modified', sha: 'm2' }] } })
+    // Its second parent behind main's tip is on it; one main never had is not.
+    github.compareStatus.set(`acme/app@${B}...main`, 'ahead')
+    expect((await app.mainMergeSides(repo, 12, token, M))?.sides.onBase).toBe(true)
+    github.compareStatus.set(`acme/app@${B}...main`, 'diverged')
+    expect((await app.mainMergeSides(repo, 12, token, M))?.sides.onBase).toBe(false)
+  })
+
+  it('reads no merge for a head the pull request no longer names, a commit that is no merge, or a side at its file cap', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo, PULL_PATCH_PERMISSIONS)
+    const M = 'd'.repeat(40), H = 'a'.repeat(40), B = 'b'.repeat(40)
+    github.pulls.set('acme/app#12', { state: 'open', merged_at: null, draft: false, head: { sha: M }, base: { ref: 'main', sha: B }, mergeable: true,
+      html_url: 'https://github.com/acme/app/pull/12' })
+    expect(await app.mainMergeSides(repo, 12, token, 'c'.repeat(40))).toBeNull()
+    // One parent: no comparison is read, and the sides say it is no merge.
+    github.commits.set(`acme/app@${M}`, [H])
+    expect(await app.mainMergeSides(repo, 12, token, M)).toEqual({ base: 'main', sides: { parents: [H], onBase: false, prSide: [], mainSide: [], mergeSide: [] } })
+    github.commits.set(`acme/app@${M}`, [H, B])
+    github.compares.set(`acme/app@${B}...main`, [])
+    github.compares.set(`acme/app@${H}...${B}`, Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}.ts`, status: 'added', sha: `s${i}` })))
+    github.compares.set(`acme/app@${B}...${H}`, [])
+    github.compares.set(`acme/app@${H}...${M}`, [])
+    expect(await app.mainMergeSides(repo, 12, token, M)).toBeNull()
+  })
+
   it('answers null when GitHub cannot say', async () => {
     const { app, github } = setup()
     const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
