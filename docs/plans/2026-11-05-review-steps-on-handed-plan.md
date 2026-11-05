@@ -11,7 +11,7 @@ nobody is free for stays open and the PM is told once. A batch asks for a combin
 requests touch the same file (task #3401, requested by Dee through Harness).
 
 **Architecture:** The table is the project rules record's review section (`policy.ts`, #3393: rows with path globs, test
-rows, untested paths, read through its matcher, which never backtracks; at most `MAX_GLOB_STARS` stars per pattern; Task 6).
+rows, untested paths, read through its linear-time matcher, at most `MAX_WILDCARDS` wildcards per pattern, both from #3216).
 A new `reviewTable.ts` turns a pull request's changed files into the steps it needs (`reviewPlan`), and
 says which files two pull requests of a batch share (`sharedFiles`). A new `reviewerPick.ts` ranks the free agents for a step
 (`reviewerCandidates`). In `commands.ts`, `work.assign`'s checks and its writes split into two closures (`assignRefusal`,
@@ -121,10 +121,9 @@ the server before that task lands.
 
 ### Task 6: one table, the project rules record (River, after review)
 
-**Files:** `backend/src/superTabs/policy.ts` (matcher without backtracking, star cap), `reviewTable.ts` (reads the record),
+**Files:** `reviewTable.ts` (reads the record; the matcher and its wildcard cap are #3216's, merged in),
 `commands.ts` / `store.ts` (the Ready reads the project's newest rules revision), `reviewerPick.ts` (whole heads only, #3394).
 
-- [x] Test: a many-star pattern fails a long path at once (red: the regex matcher hung); more than 8 stars is refused at save.
 - [x] Test: the plan follows the project's saved rules, in the command and through the store.
 - [x] Test: a verdict naming no head, or a prefix of the head, is not at this head.
-- [x] Code; the local `REVIEW_TABLE` and `globMatch` copy are gone.
+- [x] Code; the local `REVIEW_TABLE` and `globMatch` copy are gone, and `policy.ts` is #3216's as reviewed.

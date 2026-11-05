@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { RULE_MESSAGE_MS } from './rules.js'
-import { globMatch, MAX_GLOB_STARS, MAX_RULES_BYTES, projectRulesSchema, requiredReads, rulesDiff, rulesEqual, SEED_RULES, testsFor, type ProjectRules } from './policy.js'
+import { globMatch, MAX_RULES_BYTES, projectRulesSchema, requiredReads, rulesDiff, rulesEqual, SEED_RULES, testsFor, type ProjectRules } from './policy.js'
 
 const copy = (): ProjectRules => structuredClone(SEED_RULES)
 const refused = (value: unknown) => projectRulesSchema.safeParse(value).success === false
@@ -50,6 +50,16 @@ describe('the project rules record', () => {
       expect(refused({ ...copy(), reviews: { ...SEED_RULES.reviews, rows: [{ area: 'Tokens', reads: 2, paths: [glob] }] } })).toBe(true)
     }
     expect(refused({ ...copy(), reviews: { ...SEED_RULES.reviews, rows: [{ area: 'Tokens', reads: 2, paths: Array.from({ length: 51 }, (_, i) => `a${i}/**`) }] } })).toBe(true)
+    // Security review of #3216: at most 4 wildcards a pattern, a double star counting as one, and no run of three stars.
+    const pattern = (glob: string) => refused({ ...copy(), reviews: { ...SEED_RULES.reviews, rows: [{ area: 'Tokens', reads: 2, paths: [glob] }] } })
+    for (const glob of ['*a*a*a*a*a', '**/'.repeat(5) + 'z', '**/**/**/**/*.ts', 'a???b??', '***.ts', '*'.repeat(200)]) {
+      expect(pattern(glob), glob).toBe(true)
+    }
+    for (const glob of ['**/*buddy_guard*', '**/*.test.*', 'a/**/b/*.ts', '**/?x*']) expect(pattern(glob), glob).toBe(false)
+    // The backend pause is a part of the release window (review of #3216).
+    expect(refused({ ...copy(), releasePace: { ...SEED_RULES.releasePace, backendPause: { start: '08:00', end: '10:00' } } })).toBe(true)
+    expect(refused({ ...copy(), releasePace: { ...SEED_RULES.releasePace, backendPause: { start: '17:00', end: '19:00' } } })).toBe(true)
+    expect(refused({ ...copy(), releasePace: { ...SEED_RULES.releasePace, backendPause: { start: '09:00', end: '18:00' } } })).toBe(false)
     expect(refused({ ...copy(), reviews: { ...SEED_RULES.reviews, test: [{ where: 'Mac', paths: ['desktop/**'] }, { where: 'mac', paths: [] }] } })).toBe(true)
     expect(refused({ ...copy(), mergeTrain: { enabled: 'yes', everyMinutes: 30 } })).toBe(true)
     expect(refused({ ...copy(), caps: Array.from({ length: 51 }, (_, i) => ({ name: `Cap ${i}`, value: i })) })).toBe(true)
@@ -104,7 +114,8 @@ function fixture() {
   return { run, invite, add, group, get state() { return state } }
 }
 
-const later = (): ProjectRules => ({ ...copy(), releaseWindow: { ...SEED_RULES.releaseWindow, start: '10:00' } })
+// An earlier start keeps the seed's 09:00-10:00 backend pause inside the window.
+const later = (): ProjectRules => ({ ...copy(), releaseWindow: { ...SEED_RULES.releaseWindow, start: '08:00' } })
 const set = (baseRevision: number, rules: ProjectRules, extra: Partial<Extract<Command, { type: 'rules.set' }>> = {}): Command =>
   ({ type: 'rules.set', projectId: 'lead', baseRevision, rules, summary: 'Releases start at 10', ...extra })
 const code = (run: () => unknown): unknown => { try { run() } catch (error) { return (error as { code?: string }).code ?? 'INVALID' } return undefined }
@@ -121,24 +132,21 @@ describe('reads and tests a change needs', () => {
     expect(globMatch('docs/a.md', 'docs/aXmd')).toBe(false)
   })
 
-  // Task #3401, River: a saved pattern runs on every Ready, in the command's own write, so none may stall it.
-  it('matches without backtracking: a pattern of many stars fails a long path at once', () => {
+  // Review of #3216 (minor 2): a saved pattern became a backtracking regex, and many `*` against a long name could stall a
+  // server worker. The matcher's time grows with the name times the pattern, whatever the pattern.
+  it('matches a pattern of many wildcards against a long name quickly', () => {
+    const pattern = '*a'.repeat(40) + '*'
+    const name = 'a'.repeat(5_000) + '/b'
     const started = performance.now()
-    expect(globMatch('*a*a*a*a*a*a*a*a*b', 'a'.repeat(200))).toBe(false)
-    expect(globMatch('**a**a**a**a**a**a**a**a**b', `${'a/'.repeat(100)}c`)).toBe(false)
-    expect(performance.now() - started).toBeLessThan(200)
-    expect(globMatch('**/a*b*c', 'x/y/aXbYc')).toBe(true)
-    expect(globMatch('**/', 'x/')).toBe(true)
-    expect(globMatch('a/**/b', 'a/b')).toBe(true)
-    expect(globMatch('a/**/b', 'a/x/y/b')).toBe(true)
-    expect(globMatch('a/**/b', 'a/xb')).toBe(false)
-  })
-
-  it('refuses a pattern of more than MAX_GLOB_STARS stars when rules are saved', () => {
-    const many = { ...copy(), reviews: { ...copy().reviews, rows: [{ area: 'Billing', reads: 2, paths: [`${'*a'.repeat(MAX_GLOB_STARS + 1)}`] }] } }
-    expect(projectRulesSchema.safeParse(many).success).toBe(false)
-    const enough = { ...copy(), reviews: { ...copy().reviews, rows: [{ area: 'Billing', reads: 2, paths: [`${'*a'.repeat(MAX_GLOB_STARS)}`] }] } }
-    expect(projectRulesSchema.safeParse(enough).success).toBe(true)
+    expect(globMatch(pattern, name)).toBe(false)
+    expect(globMatch('**/' + '*a'.repeat(25) + 'z', 'x/'.repeat(500) + 'a'.repeat(3_000))).toBe(false)
+    expect(performance.now() - started).toBeLessThan(500)
+    expect(globMatch('**/' + '*a'.repeat(3), 'x/yaaa')).toBe(true)
+    expect(globMatch('**', 'any/thing/at.all')).toBe(true)
+    expect(globMatch('**/', 'a/b/')).toBe(true)
+    expect(globMatch('a/**/b.ts', 'a/b.ts')).toBe(true)
+    expect(globMatch('a/**/b.ts', 'a/x/y/b.ts')).toBe(true)
+    expect(globMatch('a/**/b.ts', 'a/x/y/c.ts')).toBe(false)
   })
 
   it('asks the most reads any touched row asks, at least the default, and fails closed on files it cannot read', () => {
@@ -165,7 +173,7 @@ describe('rules.set', () => {
     const effects = f.run(set(0, later()), owner, { projectRules: null })
     expect(effects.result).toMatchObject({ projectId: 'lead', revision: 1 })
     expect(effects.projectRules).toEqual({ projectId: 'lead', revision: 1, rules: later(), summary: 'Releases start at 10',
-      diff: [{ path: 'releaseWindow.start', before: '09:00', after: '10:00' }],
+      diff: [{ path: 'releaseWindow.start', before: '09:00', after: '08:00' }],
       writtenBy: { kind: 'person', id: 'owner' }, askedBy: 'owner', askedIn: null, at: NOW })
     expect(effects.messages).toEqual([])
     expect(f.state.projects).toEqual(before)
@@ -228,6 +236,10 @@ describe('who changes the rules', () => {
     expect(code(pm(asked('lead'), { askedIn: personAsked('peer', NOW - RULE_MESSAGE_MS - 1) }))).toBe('RULES_ASKED_IN_REQUIRED')
     // A person who is no member any more.
     expect(code(pm(asked('lead'), { askedIn: personAsked('stranger') }))).toBe('ASKED_BY_UNAVAILABLE')
+    // A person who may only read the project now (security review of #3216).
+    f.state.people.find(p => p.id === 'peer')!.role = 'viewer'
+    expect(code(pm(asked('lead'), { askedIn: personAsked() }))).toBe('RULES_ASKED_IN_REQUIRED')
+    f.state.people.find(p => p.id === 'peer')!.role = 'collaborator'
     // A message of another project's chat: the PM reads none of it, so the quote is refused as one it cannot see.
     const other = f.run({ type: 'project.create', name: 'App', visibility: 'public', brief: '' }).result as { conversationId: string }
     expect(code(pm(asked(other.conversationId), { askedIn: personAsked() }))).toBe('NOT_FOUND')

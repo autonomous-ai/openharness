@@ -2010,6 +2010,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           fail('RULES_ASKED_IN_REQUIRED', 'Quote the chat message, from the last day in this project, of the person who asked for this change (askedIn).', 400)
         }
         askedBy = askedByOf(state, project, asked.author.id)
+        // The person must still be one who may change the rules themselves: not one made a viewer since (security review).
+        if (person(state, askedBy).role === 'viewer') {
+          fail('RULES_ASKED_IN_REQUIRED', 'Quote the chat message of a member who may change this project, not a viewer.', 400)
+        }
         askedIn = { conversationId: command.askedIn!.conversationId, messageId: command.askedIn!.messageId }
       } else askedBy = (actor as Extract<Actor, { kind: 'person' }>).userId
       if (context.projectRules === undefined) fail('RULES_UNAVAILABLE', 'This project\'s rules cannot be read now. Try again in a moment.', 503)
