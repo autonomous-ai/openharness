@@ -640,7 +640,7 @@ describe('a teammate\'s work and the machines that take it', () => {
     const refused = { code: 'TEAM_ACCOUNT_REQUIRED', message: NO_TEAM_ACCOUNT }
     await expect(run(f.tab, post([volunteer]), owner, f.lead)).rejects.toMatchObject(refused)
     await expect(run(f.tab, post([]), person, volunteer)).rejects.toMatchObject(refused)
-    await expect(run(f.tab, { type: 'conversation.create', title: 'Its own task', brief: 'Do it', checks: [] }, person, volunteer)).rejects.toMatchObject(refused)
+    await expect(run(f.tab, { type: 'conversation.create', title: 'Its own task', brief: 'Do it', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: person.sub }, person, volunteer)).rejects.toMatchObject(refused)
     const task = (await store.read(owner, f.tab)).state.conversations.find(c => c.id === f.teamGroup)!
     expect(task.agentIds).not.toContain(volunteer)
     // The agent on the person's Team machine is named into another task of the owner's project.
@@ -1161,8 +1161,12 @@ describe('a message from an agent of another account (audit M3)', () => {
     const tester = await startTeam(f, 'Tester')
     const helper = String((await run(f.tab, { type: 'agent.add', conversationId: f.teamGroup, machineId: 'owner-host', harnessId: randomUUID(),
       name: 'Helper', configuration: config, lead: false })).result.agentId)
-    await run(f.tab, { type: 'conversation.agent', conversationId: f.teamGroup, agentId: f.lead, present: true, lead: true })
-    return { ...f, tester, helper }
+    // The owner's agent leading the task, not the project's coordinator: agents' posts to the coordinator wait for its digest,
+    // which marks them there (#3387), while these tests read the mark a host's claim carries.
+    const lead = String((await run(f.tab, { type: 'agent.add', conversationId: f.teamGroup, machineId: 'owner-host', harnessId: randomUUID(),
+      name: 'Owner Lead', configuration: config, lead: false })).result.agentId)
+    await run(f.tab, { type: 'conversation.agent', conversationId: f.teamGroup, agentId: lead, present: true, lead: true })
+    return { ...f, lead, tester, helper }
   }
   /** What an ordinary sign-in connecting as the Team computer does to its account row (lib/adapterWs.ts), after the send,
    *  which the team session could no longer make. */
@@ -1257,7 +1261,7 @@ describe('a message from an agent of another account (audit M3)', () => {
     expect(answer).not.toHaveProperty('otherAccount')
     expect(answer.quotedOtherAccount).toEqual([asked.id])
     // A reply to the Lead's reply quotes the Lead's, and its thread is the Team agent's.
-    const again = await said(f, 'On it.', f.lead, { agent: f.helper, user: owner }, relayed.id)
+    const again = await said(f, 'On it, rebasing now.', f.lead, { agent: f.helper, user: owner }, relayed.id)
     expect((await claimed(f, owner, f.lead, again.id)).quotedOtherAccount).toEqual([asked.id])
   })
   it('names no quoted message from the same account, nor a person\'s', async () => {
@@ -1266,7 +1270,7 @@ describe('a message from an agent of another account (audit M3)', () => {
     const reply = await said(f, 'Agreed.', f.lead, { agent: f.helper, user: owner }, own.id)
     expect(await claimed(f, owner, f.lead, reply.id)).not.toHaveProperty('quotedOtherAccount')
     const person = await said(f, 'From the owner, quoted.', f.lead)
-    const answer = await said(f, 'Will do.', f.helper, { agent: f.lead, user: owner }, person.id)
+    const answer = await said(f, 'Will do, after the rebase.', f.helper, { agent: f.lead, user: owner }, person.id)
     expect(await claimed(f, owner, f.helper, answer.id)).not.toHaveProperty('quotedOtherAccount')
   })
 
