@@ -855,6 +855,17 @@ describe('an instructions save may move a person\'s rule', () => {
     expect(tasksHoldingMoves(f.state, project, doc(leo, quiet), doc(leo)).map(t => t.id).sort()).toEqual([shouted.id, emphasised.id].sort())
   })
 
+  // Review 2 of #3273, round 3: whatever the guard accepts as the moved rule (filler words, word endings), the save reads.
+  it('names a task the guard reads the rule in through filler words and word endings', () => {
+    const { f } = pm()
+    const project = projectsOf(f.state)[0]!
+    const windowRule = 'The release window closes at 18:00 Vietnam time (owner, 2026-11-02).'
+    const noFiller = codeTask(f, 'Release window closes at 18:00 Vietnam time (owner, 2026-11-02).')
+    expect(tasksHoldingMoves(f.state, project, doc(leo, windowRule), doc(leo)).map(t => t.id)).toEqual([noFiller.id])
+    const singular = codeTask(f, 'No release between 18:00 and 09:00 Vietnam time (owner, 2026-11-02).')
+    expect(tasksHoldingMoves(f.state, project, doc(leo, quiet), doc(leo)).map(t => t.id)).toContain(singular.id)
+  })
+
   // River, 11-05 (review of #3220): a task's own merge record is any agent's word, with any pull request link. Only the
   // Swarm's own read of GitHub makes a moved rule's task merged.
   it('takes no task\'s merge record for a merge: a forged one keeps the line', () => {
