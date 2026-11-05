@@ -92,6 +92,22 @@ describe('a handed task opens its review steps', () => {
     expect(f.group(second!.id).assignment!.agentId).toBe([a, b].find(id => id !== firstAgent))
   })
 
+  // Review of #3227 (Digest): a second Ready at the same head re-assigned a review that had passed there, and cleared its verdict.
+  it('a repeated Ready at the same head keeps a review that passed at that head', () => {
+    const f = fixture()
+    f.add('rev-a', f.task, 'Reviewer'); f.add('rev-b', f.task, 'Reviewer')
+    const head = 'abc1234'.padEnd(40, '0')
+    f.ready(['docs/a.md'], head)
+    const step = stepsOf(f.state, f.task)[0]!, reviewer = step.assignment!.agentId
+    f.group(step.id).checks[0]!.passedBy = `agent:${reviewer}`
+    f.group(step.id).checks[0]!.verdicts = [{ by: `agent:${reviewer}`, passed: true, evidence: 'Yes', at: 1, head } as never]
+    f.run({ type: 'work.status', conversationId: step.id, assignmentId: step.assignment!.id, status: 'done', result: 'Ready to merge: Yes' } as Command, f.as(reviewer))
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'CI rerun' } as Command, f.as(f.dev))
+    f.ready(['docs/a.md'], head)
+    expect(f.group(step.id).assignment).toMatchObject({ agentId: reviewer, status: 'done' })
+    expect(f.group(step.id).checks[0]!.passedBy).toBe(`agent:${reviewer}`)
+  })
+
   it('reuses a step the Engineer opened itself, and adds only what is missing', () => {
     const f = fixture()
     f.add('rev-a', f.task, 'Reviewer'); f.add('rev-b', f.task, 'Reviewer')

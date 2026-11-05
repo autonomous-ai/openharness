@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
+import type { ContributedMachine } from './machines.js'
 import { builtBy, reviewerCandidates, strengthOf } from './reviewerPick.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -28,8 +29,8 @@ function fixture(engineer: AgentConfiguration = opus) {
   run({ type: 'work.assign', conversationId: task, agentId: dev }, as(lead))
   const group = (id: string) => state.conversations.find(c => c.id === id)!
   const pick = (kind: 'review' | 'security' | 'test' = 'review', head: string | null = 'abc1234') =>
-    reviewerCandidates(state, group(task), kind, head).map(a => a.name)
-  return { run, as, add, lead, task, dev, group, pick, get state() { return state } }
+    reviewerCandidates(state, group(task), kind, head, now).map(a => a.name)
+  return { run, as, add, lead, task, dev, group, pick, now, get state() { return state } }
 }
 
 describe('strengthOf', () => {
@@ -128,6 +129,38 @@ describe('reviewerCandidates', () => {
     expect(review.slice(1).sort()).toEqual(['eng', 'tst'])
     expect(test[0]).toBe('tst')
     expect(test.slice(1).sort()).toEqual(['eng', 'rev'])
+  })
+
+  // Review of #3227 (Digest): on the live Swarm the Guides carry the role Reviewer and the Integrator none (an Engineer).
+  it('is never the Guide or the Integrator, whatever role name they carry', () => {
+    const f = fixture()
+    f.add('Guide', f.task, opus, { roleName: 'Reviewer' })
+    f.add('Guide2', f.task, opus, { roleName: 'Reviewer' })
+    f.add('Integrator', f.task, opus)
+    f.add('rev', f.task, opus, { roleName: 'Reviewer' })
+    expect(f.pick()).toEqual(['rev'])
+  })
+
+  it('is never an agent whose machine cannot start work now: out of quota, signed out, paused or offline', () => {
+    const f = fixture()
+    const machine = (machineId: string, usedPercent: number, extra: Partial<ContributedMachine> = {}): ContributedMachine => ({ machineId, name: machineId,
+      contributorId: 'owner', membershipGeneration: 'g', generation: 'g1', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
+      observation: { generation: 'g1', receivedAt: f.now - 1000, sessionKind: 'computer', resources: {}, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+        readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
+        quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent, resetsAt: null }] }] }, ...extra } as unknown as ContributedMachine)
+    f.add('tired-rev', f.task, opus, { roleName: 'Reviewer', machineId: 'tired' })
+    f.add('paused-rev', f.task, opus, { roleName: 'Reviewer', machineId: 'resting' })
+    f.add('rested-rev', f.task, opus, { roleName: 'Reviewer', machineId: 'rested' })
+    f.state.machines = [machine('tired', 100), machine('rested', 15), machine('resting', 15, { paused: true })]
+    expect(f.pick()).toEqual(['rested-rev'])
+  })
+
+  it('ranks by the model an agent runs, its engine\'s default included', () => {
+    const f = fixture(sol)
+    f.add('opus-rev', f.task, opus, { roleName: 'Reviewer' })
+    const own = f.add('default-rev', f.task, { ...sol, model: null, effort: null }, { roleName: 'Reviewer' })
+    f.state.agents.find(a => a.id === own)!.launchedDefault = true
+    expect(f.pick()).toEqual(['default-rev', 'opus-rev'])
   })
 
   it('is never an agent of another project', () => {
