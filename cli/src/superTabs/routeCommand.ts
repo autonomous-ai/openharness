@@ -314,10 +314,16 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is that Mac, under its name. A
   // teammate's project starts only in the team account and the Mac's owner's own projects only with the owner, so only one
   // of the two offers new agents here, and the other is not listed as unfit; agents already on either stay members.
+  // Not when the Mac's owner runs teammates' work in their own account (backend machines.ts ownAccountWork, task #3060): a
+  // teammate's work no Team agent wrote starts on the Mac, and the server refuses a start naming the Team account there.
+  // Work a Team agent wrote stays in the Team account (backend teamWritten.ts); a step reads its task's mark.
+  const task = group.reviewOf ? conversations.find(c => c.id === group.reviewOf) : group
+  const teamWritten = group.teamWritten === true || !task || task.teamWritten === true
   for (const [team, mac] of macOf) {
     const pool = machines.get(team)?.pool
     if (!pool || !machines.has(mac)) continue
-    machines.get(projectOwner === pool.contributorId ? team : mac)!.folded = true
+    const ownAccount = typeof machines.get(mac)!.pool?.ownAccount === 'string' && !teamWritten
+    machines.get(projectOwner === pool.contributorId || ownAccount ? team : mac)!.folded = true
   }
   // Every row of the catalog is probed: one not offered by default is offered when a person names it (route.ts choose).
   const rows = catalog.models
