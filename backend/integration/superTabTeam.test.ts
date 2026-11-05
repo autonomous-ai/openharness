@@ -188,7 +188,7 @@ describe('a task a Team agent worked on', () => {
     const read = vi.fn(async () => 'team' as const)
     const asked = new SuperTabStore(db, Date.now, undefined, { pushOrigin: read })
     const state = await storedState(tab)
-    state.conversations.find(c => c.id === clean)!.pullRequestUrls = ['https://github.com/acme/app/pull/7']
+    state.conversations.find(c => c.id === clean)!.codePullRequestUrls = ['https://github.com/acme/app/pull/7']
     await saveState(tab, state)
     await expect(asked.execute(owner, tab, { operationId: randomUUID(), command: { type: 'work.assign', conversationId: review, agentId: main } }))
       .rejects.toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
@@ -203,7 +203,7 @@ describe('a task a Team agent worked on', () => {
     const { tab, builder } = await fixture()
     const clean = await task(tab, 'Owner work'), main = await owners(tab, clean), review = await step(tab, clean)
     const state = await storedState(tab)
-    state.conversations.find(c => c.id === clean)!.pullRequestUrls = ['https://github.com/acme/app/pull/9']
+    state.conversations.find(c => c.id === clean)!.codePullRequestUrls = ['https://github.com/acme/app/pull/9']
     await saveState(tab, state)
     const asked = new SuperTabStore(db, Date.now, undefined, { pushOrigin: async () => 'team' })
     await asked.execute(owner, tab, { operationId: randomUUID(), command: { type: 'work.assign', conversationId: review, agentId: builder } })
@@ -233,7 +233,7 @@ describe('a task a Team agent worked on', () => {
     const { tab } = await fixture()
     const clean = await task(tab, 'Owner work'), main = await owners(tab, clean), review = await step(tab, clean)
     const state = await storedState(tab)
-    state.conversations.find(c => c.id === clean)!.pullRequestUrls = ['https://github.com/acme/app/pull/8']
+    state.conversations.find(c => c.id === clean)!.codePullRequestUrls = ['https://github.com/acme/app/pull/8']
     await saveState(tab, state)
     const answer = vi.fn<() => Promise<'unknown' | 'clean'>>().mockResolvedValueOnce('unknown').mockResolvedValueOnce('clean')
     const asked = new SuperTabStore(db, Date.now, undefined, { pushOrigin: answer })
@@ -249,7 +249,8 @@ describe('a task a Team agent worked on', () => {
     const joined = await task(tab, 'Owner work'), main = await owners(tab, joined)
     const state = await storedState(tab)
     state.projects!.find(p => p.id === 'lead')!.repository = { machineId: 'owner-host', cwd: '/repo', repositoryUrl: 'https://github.com/acme/app' }
-    Object.assign(state.conversations.find(c => c.id === joined)!, { teamWritten: true, pullRequestUrls: ['https://github.com/acme/app/pull/3154'] })
+    // A task from before #3554 as well: no code list, so it reads every pull request it recorded.
+    Object.assign(state.conversations.find(c => c.id === joined)!, { teamWritten: true, pullRequestUrls: ['https://github.com/acme/app/pull/3154'], codePullRequestUrls: undefined })
     await saveState(tab, state)
     const review = await step(tab, joined)
     expect((await storedState(tab)).conversations.find(c => c.id === review)?.teamWritten).toBe(true)
@@ -320,14 +321,16 @@ describe('a task\'s Team-written mark rests on its own code', () => {
     expect(await f.marked(f.task)).toBe(false)
   })
 
-  it('marks a step for a Team pull request its reviewer linked, never the task, which a main-account agent still takes', async () => {
+  it('marks a step for a Team pull request its reviewer names in its Ready, never the task; a link posted there marks nothing', async () => {
     const f = await setup()
     const review = String((await run(f.tab, { type: 'conversation.create', projectId: 'lead', title: 'Review', brief: 'Read it', reviewOf: f.task, step: 'Review', checks: [] })).result.conversationId)
     // A Team-account reviewer, as #3462's were.
     await f.exec({ type: 'work.assign', conversationId: review, agentId: f.builder })
     const step = (await storedState(f.tab)).conversations.find(c => c.id === review)!
     await run(f.tab, { type: 'message.send', conversationId: review, text: `Same bug as ${TEAM_PR}.`, replyTo: null, recipientIds: [] })
-    await f.execTeam({ type: 'work.status', conversationId: review, assignmentId: step.assignment!.id, status: 'review', result: 'Ready to merge: Yes' }, f.builder)
+    await f.execTeam({ type: 'work.status', conversationId: review, assignmentId: step.assignment!.id, status: 'working', result: 'Reading it' }, f.builder)
+    expect(await f.marked(review)).toBe(false)
+    await f.execTeam({ type: 'work.status', conversationId: review, assignmentId: step.assignment!.id, status: 'review', result: `Ready to merge: Yes. Same bug as ${TEAM_PR}.` }, f.builder)
     expect(await f.marked(review)).toBe(true)
     expect(await f.marked(f.task)).toBe(false)
     await expect(f.join('Owner Builder 2')).resolves.toBeTruthy()

@@ -378,6 +378,8 @@ describe('a task a Team agent worked on', () => {
     const joinMarked = (f: ReturnType<typeof swarm>, recorded: string[]) => {
       const task = f.group(), stored = f.state.conversations.find(c => c.id === task)!
       stored.teamWritten = true
+      // From before #3554 too: no code list, so it reads every pull request it recorded.
+      delete stored.codePullRequestUrls
       stored.pullRequestUrls = recorded
       return { task, step: f.group({ reviewOf: task, step: 'Review' }) }
     }
@@ -402,7 +404,7 @@ describe('a task a Team agent worked on', () => {
 
     it('keeps the mark of a Team agent assigned to build the task', () => {
       const f = swarm(), task = f.written(), stored = f.state.conversations.find(c => c.id === task)!
-      stored.pullRequestUrls = [P]
+      stored.codePullRequestUrls = [P]
       stored.assignment = null
       expect(assignMain(f, f.group({ reviewOf: task, step: 'Review' }), [P])).toBe(TEAM_WRITTEN_WORK)
       expect(marked(f, task)).toBe(true)
@@ -410,7 +412,7 @@ describe('a task a Team agent worked on', () => {
 
     it('keeps a bot push\'s mark until it covers the pull requests that push was read on', () => {
       const f = swarm(), task = f.group()
-      f.state.conversations.find(c => c.id === task)!.pullRequestUrls = [P]
+      f.state.conversations.find(c => c.id === task)!.codePullRequestUrls = [P]
       f.run({ type: 'work.teamWritten', conversationId: task }, owner, { pushOrigin: 'team', pushOriginPulls: [P, Q] })
       const step = f.group({ reviewOf: task, step: 'Review' })
       expect(assignMain(f, step, [P])).toBe(TEAM_WRITTEN_WORK)
@@ -420,7 +422,7 @@ describe('a task a Team agent worked on', () => {
 
     it('keeps the mark of a bot\'s push on a branch a start named', () => {
       const f = swarm(), task = f.group()
-      f.state.conversations.find(c => c.id === task)!.pullRequestUrls = [P]
+      f.state.conversations.find(c => c.id === task)!.codePullRequestUrls = [P]
       f.run({ type: 'agent.start', request: { conversationId: task, machineId: 'mac', engine: 'claude', name: 'Tester', cwd: '/swarm/lead', worktree: true, branchRef: 'refs/remotes/origin/fix', requirements } }, owner, { pushOrigin: 'team' })
       expect(assignMain(f, f.group({ reviewOf: task, step: 'Review' }), [P])).toBe(TEAM_WRITTEN_WORK)
       expect(marked(f, task)).toBe(true)
@@ -429,7 +431,7 @@ describe('a task a Team agent worked on', () => {
     it('keeps a step\'s own mark from a bot\'s push on the pull request it records', () => {
       const f = swarm(), { task, step } = joinMarked(f, [P])
       const other = f.group({ reviewOf: task, step: 'Test' }), stored = f.state.conversations.find(c => c.id === other)!
-      stored.pullRequestUrls = [Q]
+      stored.codePullRequestUrls = [Q]
       expect(assignMain(f, step, [P])).toBeNull()
       expect(marked(f, task)).toBeUndefined()
       expect(marked(f, other)).toBe(true)

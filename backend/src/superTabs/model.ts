@@ -420,6 +420,10 @@ export interface Conversation {
   heardAt?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
+  /** The pull requests its own code is in, which GitHub's push read covers for its Team-written mark (teamWritten.ts, task
+   *  #3554): those its brief, title, assignment's result, checks' evidence and merge record name, never links in posts. [] from
+   *  its creation; absent on a conversation from before, which reads what it recorded instead (codePullRequests). */
+  codePullRequestUrls?: string[]
   /** When its brief was last set (conversation.create, work.define): a person's rule moved into this task leaves the
    *  instructions only for a pull request GitHub says merged after it (ruleGuard.ts rulePlaces, #3463). No command writes
    *  it otherwise. Absent on a task from before. */
@@ -538,6 +542,20 @@ export function projectPullRequestUrl(url: string, repositoryUrl: string | null 
  *  (in the project's spelling) and a link into any other repository is left out, so one pull request is one link. */
 export const pullRequestLinks = (text: string, repositoryUrl?: string | null): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
   .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).flatMap(match => projectPullRequestUrl(match[0], repositoryUrl) ?? []))]
+
+/** The pull requests [group]'s own code is in (codePullRequestUrls). A conversation from before the list reads every link it
+ *  recorded, posts' included: an access rule loses no protection it had (task #3554). */
+export const codePullRequests = (group: Pick<Conversation, 'codePullRequestUrls' | 'pullRequestUrls'>): string[] =>
+  group.codePullRequestUrls ?? group.pullRequestUrls ?? []
+
+/** Adds the pull request links of [texts], its own code's sources, to [group]'s code list, and corrects the ones it holds. A
+ *  conversation from before the list gets none: it keeps reading what it recorded (codePullRequests). */
+export function appendCodePullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
+  if (group.codePullRequestUrls === undefined) return
+  const urls = new Set(group.codePullRequestUrls.flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) urls.add(url)
+  group.codePullRequestUrls = [...urls]
+}
 
 /** Adds the pull request links of [texts] to [group] and corrects the ones it holds, by the project's [repositoryUrl]. */
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {

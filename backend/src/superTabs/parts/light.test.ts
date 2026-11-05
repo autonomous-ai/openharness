@@ -41,6 +41,7 @@ const conversation: Required<Conversation> = {
   buddySessions: [],
   cards: {},
   checks: [],
+  codePullRequestUrls: [],
   dormant: false,
   handOutLane: 'Desktop',
   heardAt: 0,

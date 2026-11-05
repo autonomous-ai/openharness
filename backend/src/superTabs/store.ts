@@ -103,7 +103,7 @@ import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import { activeMember, addMember, hasWorkspaceAccess, latestRemovalAt, listWorkspaces, memberId, removedFromWorkspace, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
 import { WORKSPACE_LABEL, workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { STATUS_LABELS,
-  activeWork, handed, occupiesAgent, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
+  activeWork, handed, occupiesAgent, actorKey, agent, agentOnly, appendCodePullRequestUrls, appendPullRequestUrls, codePullRequests, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState,
   projectPullRequestUrl, pullRequestLinks,
 } from './model.js'
@@ -1553,7 +1553,7 @@ export class SuperTabStore {
    * nothing to read, or this reader cannot read that task: the command then refuses as it would. `pulls` are the pull requests
    * it read (none for a branch): a clean read clears only a mark it covered (teamWritten.ts applyPushOrigin, #3304).
    */
-  private async pushOriginFor(user: AuthUser, tabId: string, command: unknown): Promise<{ origin: PushOrigin; pulls: string[] } | undefined> {
+  private async pushOriginFor(user: AuthUser, tabId: string, command: unknown): Promise<{ origin: PushOrigin; pulls: string[]; task?: { origin: PushOrigin; pulls: string[] } } | undefined> {
     const hook = this.hooks.pushOrigin
     const asked = command as { type?: unknown; conversationId?: unknown; status?: unknown; result?: unknown; present?: unknown; projectId?: unknown; branchRef?: unknown;
       request?: { branchRef?: unknown; conversationId?: unknown } } | null
@@ -1579,15 +1579,28 @@ export class SuperTabStore {
         if (!group) return null
         const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
         const repositoryUrl = groupProject(state, group).repository?.repositoryUrl ?? null
-        const urls = [...group.pullRequestUrls ?? [], ...task?.pullRequestUrls ?? [],
-          ...[group.brief, group.title, task?.brief, task?.title, typeof asked.result === 'string' ? asked.result : ''].flatMap(text => text ? pullRequestsIn(text, repositoryUrl) : [])]
-        return { repositoryUrl, urls: [...new Set(urls)], step: !!group.reviewOf }
+        // Only the code each is in: links posted in a task or a step mark nothing (task #3554, model.ts codePullRequests).
+        const codeOf = (c: Conversation) => [...codePullRequests(c), ...[c.brief, c.title].flatMap(text => text ? pullRequestsIn(text, repositoryUrl) : [])]
+        const named = typeof asked.result === 'string' ? pullRequestsIn(asked.result, repositoryUrl) : []
+        const own = [...new Set(task ? codeOf(task) : [...codeOf(group), ...named])]
+        // A step's own pull requests (its brief, its agent's results) are read apart: they mark the step, not its task.
+        const stepOnly = task ? [...new Set([...codeOf(group), ...named])].filter(url => !own.includes(url)) : []
+        return { repositoryUrl, own, stepOnly, step: !!group.reviewOf }
       })
       if (!facts) return undefined
       // Only what the reader reads covers a mark: the project's own repository's pull requests (pushOrigin.ts projectPushOrigin),
       // which answers clean for none of them (security review 2 of #3304).
-      const read = githubRepository(facts.repositoryUrl) ? facts.urls.flatMap(url => projectPullRequestUrl(url, facts.repositoryUrl) ?? []) : []
-      if (facts.urls.length) return { origin: await hook(facts.repositoryUrl, facts.urls), pulls: read }
+      const covered = (urls: string[]) => githubRepository(facts.repositoryUrl) ? urls.flatMap(url => projectPullRequestUrl(url, facts.repositoryUrl) ?? []) : []
+      const urls = [...facts.own, ...facts.stepOnly]
+      if (!facts.step && urls.length) return { origin: await hook(facts.repositoryUrl, urls), pulls: covered(urls) }
+      if (urls.length) {
+        const [task, step] = await Promise.all([facts.own.length ? hook(facts.repositoryUrl, facts.own) : undefined,
+          facts.stepOnly.length ? hook(facts.repositoryUrl, facts.stepOnly) : undefined])
+        const answers = [task, step].filter((a): a is PushOrigin => !!a)
+        const origin: PushOrigin = answers.includes('team') ? 'team' : answers.includes('unknown') ? 'unknown' : 'clean'
+        // With no code of the task's own named, nothing shows whose it is: the task is read as the step's answer, as before.
+        return { origin, pulls: covered(urls), ...task ? { task: { origin: task, pulls: covered(facts.own) } } : {} }
+      }
       // A step reads or runs a branch, and with no pull request named nothing shows whose. It may name one in a sentence no read
       // can parse, and then its agent runs `gh pr checkout` itself (security review 2 of #2559).
       return facts.step && facts.repositoryUrl && githubRepository(facts.repositoryUrl) ? { origin: 'unknown', pulls: [] } : undefined
@@ -1983,7 +1996,7 @@ export class SuperTabStore {
         context.otherWorkspaceMachines = await this.otherWorkspaceMachines(tx, original)
         if (this.hooks.teamAccountsIdle) context.teamAccountsIdle = true
       }
-      if (pushOrigin) Object.assign(context, { pushOrigin: pushOrigin.origin, pushOriginPulls: pushOrigin.pulls })
+      if (pushOrigin) Object.assign(context, { pushOrigin: pushOrigin.origin, pushOriginPulls: pushOrigin.pulls, ...pushOrigin.task ? { pushOriginTask: pushOrigin.task } : {} })
       if (repositoryReach) context.repositoryReach = repositoryReach
       if (pullRequestFiles && command.type === 'work.status') {
         context.pullRequestFiles = pullRequestFiles
@@ -2016,6 +2029,8 @@ export class SuperTabStore {
           ...shown.filter(message => message.conversationId === group.id).map(message => message.text),
           ...group.checks.map(check => check.evidence), group.assignment?.result,
         ], repositoryUrl)
+        // Its own code's sources alone, never a post: what GitHub's push read covers for its Team-written mark (task #3554).
+        appendCodePullRequestUrls(group, [group.brief, group.title, ...group.checks.map(check => check.evidence), group.assignment?.result], repositoryUrl)
         cleanPullRequestLinks(group, repositoryUrl)
       }
       if (command.type === 'agent.rebind') {
