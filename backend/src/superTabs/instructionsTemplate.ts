@@ -104,7 +104,8 @@ export const TEMPLATE_ROUTING = `## Routing
   1. What the work needs: the machine, a model strong enough, a machine not paused.
   2. The PM's own account (the engine it runs on, on its machine) keeps the PM running for the whole week. It takes
      other work only while ahead of its week: weekly quota left above the share of its week left (with 5 of 7 days
-     to go, above 71%). At or below that line it takes no new work and idle agents there are not reused.
+     to go, above 71%). At or below that line it takes no new work and idle agents there are not reused, except work the
+     account's owner asks for, which runs on it at once.
   3. Every other account is used while it has weekly quota left: the one resetting soonest first, then the one with
      the most left.
   4. An idle agent is reused only between candidates equal so far, except the same Reviewer for its next round and
