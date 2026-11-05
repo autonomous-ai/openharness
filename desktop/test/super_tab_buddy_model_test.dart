@@ -667,5 +667,134 @@ void main() {
       });
       await close(tester, c);
     });
+
+    // Second review of #3171 (Guide): the reader's two machines, with Ken's
+    // other Mac listed first, so a Start bar that lost the Buddy's machine
+    // would pick it.
+    ConversationServer twoMachines({String engine = 'codex'}) {
+      final server = swarm();
+      final machines = server.state['machines'] as List;
+      machines.insert(
+        0,
+        machine('peer-mini', 'Kens-Mac-mini.local', 'peer', []),
+      );
+      (server.state['agents'] as List).cast<Map>().firstWhere(
+        (a) => a['id'] == 'wren',
+      )['configuration'] = {
+        'engine': engine,
+        'model': 'default',
+      };
+      line(server, held);
+      return server;
+    }
+
+    void pause(ConversationServer server, String machineId) =>
+        (server.state['machines'] as List).cast<Map>().firstWhere(
+          (m) => m['machineId'] == machineId,
+        )['paused'] = true;
+
+    final startMachine = find.byKey(
+      const ValueKey('super-buddy-start-machine'),
+    );
+    Finder inStart(Finder f) => find.descendant(
+      of: find.byKey(const ValueKey('super-buddy-start')),
+      matching: f,
+    );
+
+    testWidgets('on a paused machine, Start again removes nothing and says '
+        'why', (tester) async {
+      final server = twoMachines();
+      pause(server, 'ken-mac');
+      final c = await show(tester, server);
+      expect(
+        find.text(
+          "Kens-MacBook is paused. Start your Buddy again once it's "
+          'back.',
+        ),
+        findsOneWidget,
+      );
+      expect(tester.widget<TextButton>(startAgain).onPressed, isNull);
+      expect(commands(server, 'buddy.remove'), isEmpty);
+      await close(tester, c);
+    });
+
+    testWidgets('a Start bar left by a refused start keeps its machine while '
+        'it cannot be used, until another is chosen', (tester) async {
+      final server = twoMachines();
+      server.unknownCommand = (command) => command['type'] == 'buddy.create';
+      final c = await show(tester, server);
+      await tester.tap(startAgain);
+      await tester.pumpAndSettle();
+      expect(c.buddy(SuperTabController.kSwarmBuddyKey), isNull);
+      // Its machine is paused since: it stays chosen, and says so.
+      server.unknownCommand = null;
+      pause(server, 'ken-mac');
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(of: startMachine, matching: find.text('Kens-MacBook')),
+        findsOneWidget,
+      );
+      expect(
+        inStart(
+          find.text(
+            "Kens-MacBook is paused. Your Buddy starts there "
+            'once it\'s back, or choose another machine.',
+          ),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              inStart(find.widgetWithText(FilledButton, 'Start')),
+            )
+            .onPressed,
+        isNull,
+      );
+      // Another machine, chosen by hand, starts it there.
+      await tester.tap(startMachine);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('super-buddy-machine-option-peer-mini')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(inStart(find.widgetWithText(FilledButton, 'Start')));
+      await tester.pumpAndSettle();
+      expect(commands(server, 'buddy.create').last, {
+        'type': 'buddy.create',
+        'machineId': 'peer-mini',
+        'engine': 'codex',
+      });
+      await close(tester, c);
+    });
+
+    testWidgets('a removal whose answer was lost leaves the Start bar on its '
+        'machine and engine', (tester) async {
+      final server = twoMachines();
+      server.loseReply = true;
+      final c = await show(tester, server);
+      await tester.tap(startAgain);
+      await tester.pumpAndSettle();
+      // The removal went through; its answer did not come back, so no start
+      // was sent after it.
+      expect(commands(server, 'buddy.remove'), hasLength(1));
+      expect(commands(server, 'buddy.create'), isEmpty);
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(c.buddy(SuperTabController.kSwarmBuddyKey), isNull);
+      expect(
+        find.descendant(of: startMachine, matching: find.text('Kens-MacBook')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('super-buddy-start-engine')),
+          matching: find.text('Codex'),
+        ),
+        findsOneWidget,
+      );
+      await close(tester, c);
+    });
   });
 }
