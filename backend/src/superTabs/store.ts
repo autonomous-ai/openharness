@@ -4708,7 +4708,8 @@ export class SuperTabStore {
       const now = this.now()
       // A new head is recorded with its patch id, or a patch read again for it, and the verdicts of the task and its steps
       // count against it (#3394).
-      const known = group.pullRequestHeads?.[watch.url], newHead = known?.head !== watch.head
+      // A new base branch counts as a new head (security review of #3218, round 3): the patch id names the branch.
+      const known = group.pullRequestHeads?.[watch.url], newHead = known?.head !== watch.head || known.base !== watch.base
       const repatched = !newHead && patch !== undefined && known!.patch === null
       if (newHead || repatched) {
         // A task from before steps were listed lists the ones its watch looked up, with its awake ones (#3394).
@@ -4716,8 +4717,8 @@ export class SuperTabStore {
           group.stepIds = [...new Set([...state.conversations.filter(c => c.reviewOf === group.id).map(c => c.id), ...stepIds])]
         }
         // A head the pass gave no patch for (its read already ended) is read again at the next pass, never kept unread.
-        group.pullRequestHeads = keepHead(group.pullRequestHeads, watch.url, { head: watch.head, patch: patch ?? null, at: patch === undefined ? 0 : now },
-          group.pullRequestUrls)
+        group.pullRequestHeads = keepHead(group.pullRequestHeads, watch.url, { head: watch.head, base: watch.base, patch: patch ?? null,
+          at: patch === undefined ? 0 : now }, group.pullRequestUrls)
         for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
           refreshChecks(checked.checks, watch.url, newHead ? known : undefined, group.pullRequestHeads)
         }

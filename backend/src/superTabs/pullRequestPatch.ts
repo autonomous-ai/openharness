@@ -23,10 +23,13 @@ export interface PullRequestFile {
  *  the file never starts one (security review of #3218). Its section heading after them is kept. */
 const HUNK = /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/
 
-/** The patch id of a pull request's [files] (any order), or null for none. */
-export function patchId(files: readonly PullRequestFile[]): string | null {
+/** The patch id of a pull request's [files] (any order) against the branch it merges into, [base], or null for none. The
+ *  branch is in the id (security review of #3218, round 3): the same diff against another branch is other code once merged,
+ *  so retargeting, pushing the same diff and retargeting back never keeps a verdict. */
+export function patchId(files: readonly PullRequestFile[], base: string | null = null): string | null {
   if (!files.length) return null
   const hash = createHash('sha256')
+  hash.update(`base\0${base ?? ''}\0\0`)
   for (const file of [...files].sort((a, b) => a.filename < b.filename ? -1 : a.filename > b.filename ? 1 : 0)) {
     hash.update(`${file.status}\0${file.previousFilename ?? ''}\0${file.filename}\0`)
     hash.update(file.patch === undefined ? `blob ${file.sha}` : file.patch.split('\n').map(line => line.replace(HUNK, '@@')).join('\n'))

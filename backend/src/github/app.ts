@@ -694,20 +694,22 @@ export class GitHubApp {
    *  [PULL_PATCH_PERMISSIONS]: the comparison of the base and head commits the pull request names in one answer
    *  (GET /pulls/{number}, then GET /compare/{base}...{head}), two fixed commits no push changes (review of #3218, round 3:
    *  a listing's removed files tie it to no head). Null unless the pull request still names [head], and when GitHub cannot
-   *  say or gives as many files as it ever gives ([COMPARE_FILES_MAX]), as it may then have left some out. */
-  async pullRequestPatchFiles(repository: GitHubRepository, number: number, token: string, head: string): Promise<PullRequestFile[] | null> {
+   *  say or gives as many files as it ever gives ([COMPARE_FILES_MAX]), as it may then have left some out. With the branch it
+   *  merges into from the same answer, which the patch id names (security review of #3218, round 3). */
+  async pullRequestPatchFiles(repository: GitHubRepository, number: number, token: string, head: string): Promise<{ base: string; files: PullRequestFile[] } | null> {
     const base = `/repos/${repository.owner}/${repository.name}`
     const sha = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : undefined
     try {
       const pull = await this.call('GET', `${base}/pulls/${number}`, `Bearer ${token}`)
       if (pull.status !== 200) return null
-      const named = pull.body as { head?: { sha?: unknown }; base?: { sha?: unknown } }
-      const at = sha(named.head?.sha), from = sha(named.base?.sha)
-      if (!at || !from || at !== head.toLowerCase()) return null
+      const named = pull.body as { head?: { sha?: unknown }; base?: { sha?: unknown; ref?: unknown } }
+      const at = sha(named.head?.sha), from = sha(named.base?.sha), branch = typeof named.base?.ref === 'string' ? named.base.ref : ''
+      if (!at || !from || !branch || at !== head.toLowerCase()) return null
       const compared = await this.call('GET', `${base}/compare/${from}...${at}?per_page=1`, `Bearer ${token}`)
       const listed = compared.status === 200 ? (compared.body as { files?: unknown }).files : undefined
       if (!Array.isArray(listed) || listed.length >= COMPARE_FILES_MAX) return null
-      return filesOf(listed)
+      const files = filesOf(listed)
+      return files && { base: branch, files }
     } catch (error) {
       if (error instanceof GitHubAppError) return null
       throw error

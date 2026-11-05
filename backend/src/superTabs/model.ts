@@ -258,7 +258,10 @@ export interface CheckVerdict { by: string; passed: boolean; evidence: string; a
   stale?: string }
 /** A linked pull request's head commit as the PR watch last read it, with its patch id (pullRequestPatch.ts): null when the
  *  patch could not be read, so only that exact head counts (#3394). */
-export interface PullRequestHead { head: string; patch: string | null; at: number }
+export interface PullRequestHead { head: string; patch: string | null; at: number
+  /** The branch it merges into as the watch read it: a new one is read again like a new head, as the patch id names it
+   *  (security review of #3218, round 3). Absent on a head recorded before. */
+  base?: string }
 export interface Assignment {
   id: string
   agentId: string

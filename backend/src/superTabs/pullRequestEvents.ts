@@ -154,8 +154,8 @@ export function appPullRequestWatch(app: GitHubApp): PullRequestReader {
     watch: url => read(url, PULL_WATCH_PERMISSIONS, (repository, number, granted) => app.watchPullRequest(repository, number, granted)),
     // The files at [head], from the comparison of the commits the pull request names: none once it names another head.
     patch: (url, head) => read(url, PULL_PATCH_PERMISSIONS, async (repository, number, granted) => {
-      const files = await app.pullRequestPatchFiles(repository, number, granted, head)
-      return files && patchId(files)
+      const read = await app.pullRequestPatchFiles(repository, number, granted, head)
+      return read && patchId(read.files, read.base)
     }),
     botLogin: () => app.botLogin(),
     async done() {
@@ -197,20 +197,21 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
     // A patch id is read only for a head the task has not recorded yet, or whose patch GitHub could not give PATCH_RETRY_MS ago
     // (#3394), once a pass whatever links it.
     const patches = new Map<string, Promise<string | null>>()
-    const patchOf = (url: string, head: string) => {
-      const key = `${url}@${head}`
+    const patchOf = (url: string, head: string, base: string) => {
+      const key = `${url}@${head}@${base}`
       if (!patches.has(key)) patches.set(key, reader.patch(url, head).catch(() => null))
       return patches.get(key)!
     }
-    const patchNeeded = (known: PullRequestHead | undefined, head: string) =>
-      known?.head !== head || (known.patch === null && now - known.at >= PATCH_RETRY_MS)
+    // A new base branch is read again like a new head (security review of #3218, round 3): the id names the branch.
+    const patchNeeded = (known: PullRequestHead | undefined, watch: PullRequestWatch) =>
+      known?.head !== watch.head || known.base !== watch.base || (known.patch === null && now - known.at >= PATCH_RETRY_MS)
     // Each task's newest links (watchedLinks), with their pull request as GitHub has it now and a patch where one is needed.
     const seen: Array<{ row: typeof rows[number]; watch: PullRequestWatch; patch: string | null | undefined }> = []
     for (const row of rows) {
       for (const url of watchedLinks(row.urls)) {
         const watch = await watchOf(url)
         if (watch?.state !== 'open') continue
-        seen.push({ row, watch, patch: patchNeeded(row.heads?.[url] ?? undefined, watch.head) ? await patchOf(url, watch.head) : undefined })
+        seen.push({ row, watch, patch: patchNeeded(row.heads?.[url] ?? undefined, watch) ? await patchOf(url, watch.head, watch.base) : undefined })
       }
     }
     // A task whose links moved past a head it keeps (review of #3218, round 3): that head is no longer read, so it is dropped
