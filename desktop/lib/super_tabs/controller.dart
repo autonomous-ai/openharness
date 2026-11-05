@@ -398,7 +398,7 @@ class SuperTabController extends ChangeNotifier {
   int lastChangedAt = -1;
 
   /// The backend no longer serves this build's reads (HTTP 426): the tab says
-  /// to update Harness and asks nothing more (section 5.1).
+  /// to update Harness and waits for an explicit Retry (section 5.1).
   bool updateRequired = false;
 
   /// What the tab says once [updateRequired] (docs/naming-system.md).
@@ -3791,6 +3791,16 @@ class SuperTabController extends ChangeNotifier {
     );
   }
 
+  /// Rechecks a compatibility refusal only when the person presses Retry.
+  /// Leo's reconnect once returned an update refusal that survived until quit.
+  Future<void> retryRead() async {
+    if (_disposed || accessRevoked) return;
+    final stopped = updateRequired;
+    updateRequired = false;
+    await refresh();
+    if (stopped) _schedule();
+  }
+
   Future<void> refresh() {
     if (_disposed || accessRevoked || updateRequired) return Future.value();
     return _refreshing ??= _read().whenComplete(() {
@@ -4638,7 +4648,7 @@ class SuperTabController extends ChangeNotifier {
       (failure.statusCode == 426 ||
           (failure.code == 'UPDATE_REQUIRED' && failure.statusCode != 400));
 
-  /// Says to update Harness and stops the poll: no read can succeed now.
+  /// Says to update Harness and stops background reads until an explicit Retry.
   void _requireUpdate() {
     updateRequired = true;
     error = updateMessage;
