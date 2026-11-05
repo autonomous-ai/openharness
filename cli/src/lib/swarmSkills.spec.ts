@@ -148,6 +148,9 @@ describe('built-in Swarm skills', () => {
     + '- When the project\'s instructions name an agent or a person for a job (an order, a queue, a device, a release), you do not do that job yourself, even when it is urgent. Message that owner with the priority or the change you want, and wait for them.\n'
     + '- An urgent case means telling the owner first, at once and with the reason; it never means taking over.\n'
     + '- Setting priorities is not doing the owner\'s job: ask for the order you want, and never reorder, stop or restart their work yourself.\n\n'
+  // The quota section (Dee, 2026-11-05; task #3180): the Lead's alone, in both modes, right after the named-owner section.
+  const quota = '## Spending a person\'s quota\n'
+    + '- You may spend a requester\'s own account quota on that person\'s own task without asking, as long as that account has more than 10% of its week left. Below 10%, ask the person, with your recommendation.\n\n'
   // Last in the Default Lead text, which has no red flags: after a blank line, ending the text.
   const requestsLast = `\n${requests.trimEnd()}\n`
   // The shared-machine rules (Ken, 2026-10-28): the Builder's and the Reviewer's alone, in both modes, in a section of their
@@ -252,7 +255,7 @@ describe('built-in Swarm skills', () => {
   it('has every role acknowledge with reactions and post only substance, the Lead adding 🚀 at a merge', () => {
     for (const mode of ['orchestration', 'default'] as const) for (const role of ['lead', 'dev', 'review'] as const) {
       const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
-      expect(text, `${mode} ${role}`).toContain(`\n\n${reactions(role)}${role === 'lead' ? impact + owner : ''}## ${role === 'lead' ? 'Requests and Done' : 'Shared machines and secrets'}\n`)
+      expect(text, `${mode} ${role}`).toContain(`\n\n${reactions(role)}${role === 'lead' ? impact + owner + quota : ''}## ${role === 'lead' ? 'Requests and Done' : 'Shared machines and secrets'}\n`)
       expect(text.split('## Reactions\n'), `${mode} ${role}`).toHaveLength(2)
       expect(text.split(rocket), `${mode} ${role}`).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(took), `${mode} ${role}`).toHaveLength(role === 'dev' ? 2 : 1)
@@ -329,6 +332,7 @@ describe('built-in Swarm skills', () => {
       expect(text.split(requests)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(impact)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(owner)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(quota)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(failedStart)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(shared)).toHaveLength(role === 'lead' ? 1 : 2)
       expect(text.split(report)).toHaveLength(role === 'lead' ? 2 : 1)
@@ -339,7 +343,7 @@ describe('built-in Swarm skills', () => {
       expect(text.split(thread)).toHaveLength(role === 'lead' ? 2 : 1)
       expect([cardLead, cardDev, cardReview].map(line => text.split(line).length)).toEqual([role === 'lead' ? 2 : 1, role === 'dev' ? 2 : 1, role === 'review' ? 2 : 1])
       expect(sha(approved(text, 'orchestration', role).replace(whoReaches(role), '').replace(reactions(role), '').replace(twoHours, '').replace(terminal, '').replace(update, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(impact, '').replace(owner, '').replace(requests, '').replace(shared, '').replace(report, '').replace(quiet, '')
+        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(impact, '').replace(owner, '').replace(quota, '').replace(requests, '').replace(shared, '').replace(report, '').replace(quiet, '')
         .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, '').replace(thread, '').replace(queue, '')
         .replace(cardLead, '').replace(cardDev, '').replace(cardReview, ''))).toBe(sha256)
     }
@@ -420,12 +424,12 @@ describe('built-in Swarm skills', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
     expect(orchestration).toContain(`\n\n${requests}## Red flags`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
-    expect(plain.endsWith(`Call the roles Product Manager, Engineer and Reviewer.\n${thread}\n${whoReaches('lead')}${reactionsBefore('lead').slice(1)}\n${impact}${owner.trimEnd()}\n${requestsLast}`)).toBe(true)
+    expect(plain.endsWith(`Call the roles Product Manager, Engineer and Reviewer.\n${thread}\n${whoReaches('lead')}${reactionsBefore('lead').slice(1)}\n${impact}${owner}${quota.trimEnd()}\n${requestsLast}`)).toBe(true)
   })
   it('gives each Lead skill an impact section right before its requests section, and no other role', () => {
     for (const mode of ['orchestration', 'default'] as const) {
       const lead = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8')
-      expect(lead).toContain(`${impact}${owner}${mode === 'default' ? requestsLast.slice(1) : requests}`)
+      expect(lead).toContain(`${impact}${owner}${quota}${mode === 'default' ? requestsLast.slice(1) : requests}`)
       // The impact levels and every hotfix step the section promises.
       for (const part of ['decide its impact before anything else', 'say it, with the reason, in your reply', 'Impact 0: something that already shipped is broken, loses data, or stops people\'s or agents\' work (a stuck workflow)',
         'Impact 1: needed by users soon', 'Impact 2: planned goals', 'Impact 3: tools, docs, process', 'Impact 0 is a hotfix', 'an agent at once', 'ahead of everything else',
@@ -444,6 +448,15 @@ describe('built-in Swarm skills', () => {
         'An urgent case means telling the owner first', 'it never means taking over', 'never reorder, stop or restart their work yourself']) expect(lead).toContain(part)
       for (const role of ['dev', 'review', 'buddy'] as const) {
         expect(readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')).not.toContain('## Work that has an owner')
+      }
+    }
+  })
+  it('lets each Lead, and no other role, spend a requester\'s own quota on their task above 10% of the week, and ask below it', () => {
+    for (const mode of ['orchestration', 'default'] as const) {
+      const lead = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8')
+      for (const part of ['## Spending a person\'s quota', 'a requester\'s own account quota on that person\'s own task without asking', 'more than 10% of its week left', 'Below 10%, ask the person, with your recommendation']) expect(lead).toContain(part)
+      for (const role of ['dev', 'review', 'buddy'] as const) {
+        expect(readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')).not.toContain('## Spending a person')
       }
     }
   })
@@ -542,6 +555,7 @@ describe('built-in Swarm skills', () => {
     expect(text.split(requestsLast)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(impact)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(owner)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(quota)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(failedStart)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(sharedLast)).toHaveLength(role === 'lead' ? 1 : 2)
     expect(text.split(report)).toHaveLength(role === 'lead' ? 2 : 1)
@@ -552,7 +566,7 @@ describe('built-in Swarm skills', () => {
     expect(text.split(thread)).toHaveLength(role === 'lead' ? 2 : 1)
     expect([cardLead, cardDev, cardReview].map(line => text.split(line).length)).toEqual([role === 'lead' ? 2 : 1, role === 'dev' ? 2 : 1, role === 'review' ? 2 : 1])
     expect(sha(approved(text, 'default', role).replace(whoReaches(role), '').replace(reactions(role), '').replace(terminal, '').replace(update, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(impact, '').replace(owner, '').replace(requestsLast, '').replace(sharedLast, '').replace(report, '').replace(quiet, '')
+      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(impact, '').replace(owner, '').replace(quota, '').replace(requestsLast, '').replace(sharedLast, '').replace(report, '').replace(quiet, '')
       .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, '').replace(thread, '').replace(queue, '')
         .replace(cardLead, '').replace(cardDev, '').replace(cardReview, ''))).toBe(sha256)
     expect(prepared.instructions).toMatch(/^Use the built-in swarm-tools skill /)
