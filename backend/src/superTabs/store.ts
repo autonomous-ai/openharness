@@ -85,7 +85,7 @@ import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import { activeMember, addMember, hasWorkspaceAccess, latestRemovalAt, listWorkspaces, memberId, removedFromWorkspace, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
 import { WORKSPACE_LABEL, workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { STATUS_LABELS,
-  activeWork, handed, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
+  activeWork, handed, occupiesAgent, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
   SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState,
   pullRequestLinks,
 } from './model.js'
@@ -2965,6 +2965,25 @@ export class SuperTabStore {
       if (!changed || !activeWork(changed) || changed.assignment!.id !== group.assignment!.id) ended.add(group.assignment!.id)
     }
     await this.releaseRuns(tx, tabId, [...ended])
+    // An agent whose work in hand ended, or whose handed task came back to it, may still have a task open here: a task it
+    // handed over (model.ts handed, #3399) gave its record to the next one. The record goes back to it, so no other Swarm
+    // assigns the session while a No or red CI may bring that task back (security review of #3221).
+    const agentOf = new Map([...before.conversations, ...after.conversations].flatMap(c => c.assignment ? [[c.assignment.id, c.assignment.agentId] as const] : []))
+    const reopened = after.conversations.filter(c => c.assignment?.status === 'working' && earlier.get(c.id)?.assignment?.id === c.assignment.id
+      && earlier.get(c.id)?.assignment?.status === 'review').map(c => c.assignment!.agentId)
+    await this.restoreRuns(tx, tabId, after, [...new Set([...[...ended].flatMap(id => agentOf.get(id) ?? []), ...reopened])])
+  }
+
+  /** Each of [agentIds] with no run record and a task still open in this Swarm gets one for that task, the one in its hands
+   *  first (endRuns). A record already there, this Swarm's or another's, is left as it is. */
+  private async restoreRuns(tx: Transaction, tabId: string, state: SuperTabState, agentIds: string[]) {
+    for (const agentId of agentIds) {
+      const open = state.conversations.filter(c => activeWork(c) && c.assignment!.agentId === agentId && c.assignment!.status !== 'reconciling')
+      const task = open.find(occupiesAgent) ?? open[0]
+      if (!task || await tx.superTabRun.findUnique({ where: { id: agentId } })) continue
+      const work = task.assignment!
+      await tx.superTabRun.create({ data: { id: agentId, tabId, assignmentId: work.id, machineId: work.execution.machineId, harnessId: work.execution.harnessId } })
+    }
   }
 
   /** For these ended assignments of this Swarm, by their exact ids: their run records go, and their deliveries still queued,
@@ -4657,7 +4676,11 @@ export class SuperTabStore {
       group.pullRequestEvents = { ...group.pullRequestEvents, [watch.url]: keys }
       // CI failing or a conflict brings a handed task back to its Engineer, in the message that tells it (handed.ts, #3399).
       const events = reopenOnEvents(group, seenEvents, now)
-      if (events !== seenEvents) recordTaskState(state, group, now)
+      if (events !== seenEvents) {
+        recordTaskState(state, group, now)
+        // Back in its hands: the session's cross-Swarm fence covers it again if nothing does (endRuns).
+        await this.restoreRuns(tx, tabId, state, [group.assignment!.agentId])
+      }
       const ownerId = ownerOf(state, group), owner = ownerId ? state.agents.find(a => a.id === ownerId) : undefined
       // Written as its project's Lead, as the Swarm's own lines are (tidy.ts archiveLine); as the Engineer itself without one.
       const leadId = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId

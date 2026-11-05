@@ -3896,7 +3896,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const check = group.checks.find(c => c.id === command.checkId) ?? fail('NOT_FOUND', 'This acceptance check is unavailable.', 404)
       if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)) fail('FORBIDDEN', 'This agent does not participate in the review.', 403)
       // Checks are information (project instructions, phase 4): who passes one is the project's workflow, so anyone in the task
-      // records a verdict, its assignee too, and a failed one leaves the work's status as its agent set it. A verdict counts as a
+      // records a verdict, its assignee too, and a failed one leaves the work's status as its agent set it, except that a failed one
+      // from anyone else brings a handed task back to its Engineer (below, #3399). A verdict counts as a
       // review only from someone other than the assignee (leaderboard/record.ts).
       const by = actorKey(actor)
       // A checker who left the Swarm can never pass its failure again: the task's PM or an owner passing the check clears
