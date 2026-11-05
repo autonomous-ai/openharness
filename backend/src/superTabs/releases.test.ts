@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import type { Agent, Conversation, SuperTabState } from './model.js'
 import type { SwarmProject } from './projects.js'
 import { backendPaused, carries, componentsOf, inReleaseWindow, isReleaseTag, notePendingRelease, PENDING_MAX, RELEASE_COMPONENTS, RELEASE_RULES,
-  releaseDue, shipped, waitingFor, type PendingRelease, type ReleaseLedger } from './releases.js'
+  releaseDue, settleReleases, PENDING_MS, shipped, waitingFor, type PendingRelease, type ReleaseLedger } from './releases.js'
 
 /** A time in Vietnam (UTC+7, no daylight saving) on 6 November 2026. */
 const vn = (hour: number, minute = 0) => Date.UTC(2026, 10, 6, hour - 7, minute)
@@ -123,5 +124,106 @@ describe('notePendingRelease', () => {
     const dropped = notePendingRelease(p, { id: 'late' }, 'https://github.com/o/r/pull/999', vn(12))
     expect(dropped.map(e => e.groupId)).toEqual(['g0'])
     expect(p.releases!.pending).toHaveLength(PENDING_MAX)
+  })
+})
+
+describe('settleReleases', () => {
+  const T = vn(11)
+  const agent = (id: string, roleName?: string): Agent => ({ id, name: id, contributorId: 'owner', membershipGeneration: 'g', machineId: 'mac',
+    harnessId: `h-${id}`, machineOwnerId: 'owner', projectId: 'p1', ...roleName ? { roleName } : {},
+    configuration: { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null } } as unknown as Agent)
+  const task = (number: number, over: Partial<Conversation> = {}): Conversation => ({ id: `g${number}`, projectId: 'p1', number,
+    title: `Task ${number}`, leadId: 'lead', agentIds: ['lead'], archived: false, brief: 'Do it.', checks: [], assignment: null,
+    lastMessageSequence: 1, ...over }) as Conversation
+  function swarm(pending: PendingRelease[], { integrator = true, ...over }: Partial<ReleaseLedger> & { integrator?: boolean } = {}): SuperTabState {
+    return {
+      version: 1, id: 'tab', name: 'Swarm', ownerId: 'owner', environment: 'prod', paused: false, invitations: [], groupCounter: 20,
+      people: [{ id: 'owner', email: 'owner@example.com', role: 'owner', generation: 'g' }] as SuperTabState['people'],
+      agents: [agent('lead'), ...integrator ? [agent('ship', 'Integrator')] : [], agent('eng', 'Engineer')],
+      projects: [{ id: 'p1', name: 'openharness', ownerId: 'owner', leadConversationId: 'lead-p1', visibility: 'public', members: [], updateMinutes: 5,
+        releases: { pending, ...over } }],
+      conversations: [{ ...task(0), id: 'lead-p1', number: undefined, title: 'Lead' } as Conversation, task(12), task(13)],
+    } as SuperTabState
+  }
+  const ledgerOf = (state: SuperTabState) => state.projects![0]!.releases!
+  const desktopRelease = (committedAt = T - 10 * MINUTE, at = T - 5 * MINUTE) => ({ tag: 'v1.3.78_desktop', sha: 'd1', at, committedAt })
+  const webRelease = { tag: 'v1.3.98_web', sha: 'w1', at: T - 5 * MINUTE, committedAt: T - 10 * MINUTE }
+  const noFacts = { components: [], releases: {} }
+
+  it('marks a task released once every release it needs carries it, and takes it off the list', () => {
+    const state = swarm([entry({ groupId: 'g12', mergedAt: T - 20 * MINUTE, components: ['desktop', 'web'] })])
+    const first = settleReleases(state, 'p1', { components: [], releases: { desktop: desktopRelease() } }, T)
+    expect(first.shipped).toEqual([])
+    expect(ledgerOf(state).pending[0]!.shippedIn).toEqual({ desktop: 'v1.3.78_desktop' })
+    const second = settleReleases(state, 'p1', { components: [], releases: { desktop: desktopRelease(), web: webRelease } }, T)
+    expect(second.shipped).toEqual(['g12'])
+    expect(state.conversations.find(c => c.id === 'g12')!.released).toEqual({ at: T - 5 * MINUTE, tags: ['v1.3.78_desktop', 'v1.3.98_web'] })
+    expect(ledgerOf(state).pending).toEqual([])
+  })
+
+  it('leaves a merge that landed after the tag\'s commit waiting, and marks nothing without a verified release', () => {
+    const state = swarm([entry({ groupId: 'g12', mergedAt: T - 5 * MINUTE, components: ['desktop'] })])
+    settleReleases(state, 'p1', { components: [], releases: { desktop: desktopRelease(T - 10 * MINUTE) } }, vn(18, 30))
+    settleReleases(state, 'p1', noFacts, vn(18, 30))
+    expect(ledgerOf(state).pending[0]!.shippedIn).toBeUndefined()
+    expect(state.conversations.find(c => c.id === 'g12')!.released).toBeUndefined()
+  })
+
+  it('ships work that changed no released part at its merge', () => {
+    const state = swarm([entry({ groupId: 'g13', url: 'https://github.com/o/r/pull/13', mergedAt: T - MINUTE, components: undefined })])
+    const outcome = settleReleases(state, 'p1', { components: [{ groupId: 'g13', url: 'https://github.com/o/r/pull/13', components: [] }], releases: {} }, vn(20))
+    expect(outcome.shipped).toEqual(['g13'])
+    expect(state.conversations.find(c => c.id === 'g13')!.released).toEqual({ at: T - MINUTE, tags: [] })
+  })
+
+  it('opens one release step for the Integrator inside the window, and no second one while it is open', () => {
+    const state = swarm([entry({ groupId: 'g12', mergedAt: T - MINUTE, components: ['desktop', 'web'] })])
+    const outcome = settleReleases(state, 'p1', noFacts, T)
+    const step = state.conversations.find(c => c.id === outcome.opened)!
+    expect(step).toMatchObject({ projectId: 'p1', number: 21, title: 'Release Desktop and Web', priority: 'P1', assignment: null, archived: false })
+    expect(step.agentIds).toEqual(['lead', 'ship'])
+    expect(step.brief).toContain('#12 Task 12')
+    expect(ledgerOf(state).steps).toEqual({ desktop: { groupId: step.id, at: T }, web: { groupId: step.id, at: T } })
+    expect(outcome.messages).toEqual([expect.objectContaining({ conversationId: step.id, recipients: ['ship'], source: { kind: 'release' } })])
+    expect(settleReleases(state, 'p1', noFacts, T + 5 * MINUTE).opened).toBeNull()
+  })
+
+  it('opens no step outside the window, and the backend only at its pace', () => {
+    const late = swarm([entry({ components: ['desktop'] })])
+    expect(settleReleases(late, 'p1', noFacts, vn(18)).opened).toBeNull()
+    const backend = swarm([entry({ components: ['backend'], mergedAt: T - MINUTE })],
+      { last: { backend: { tag: 'v1.4.16_backend', sha: 'b', at: T - 60 * MINUTE, committedAt: T - 70 * MINUTE } } })
+    expect(settleReleases(backend, 'p1', noFacts, T).opened).toBeNull()
+    expect(settleReleases(backend, 'p1', noFacts, T + 60 * MINUTE).opened).not.toBeNull()
+  })
+
+  it('says the PM assigns it when the project has no Integrator', () => {
+    const state = swarm([entry({ components: ['cli'] })], { integrator: false })
+    const outcome = settleReleases(state, 'p1', noFacts, T)
+    expect(outcome.messages[0]).toMatchObject({ recipients: [] })
+    expect(outcome.messages[0]!.text).toContain('No Integrator')
+  })
+
+  it('says in the step which verified release carried which tasks, and frees the component for the next step', () => {
+    const state = swarm([entry({ groupId: 'g12', mergedAt: T - 20 * MINUTE, components: ['desktop'] })],
+      { steps: { desktop: { groupId: 'g13', at: T - 15 * MINUTE } } })
+    const outcome = settleReleases(state, 'p1', { components: [], releases: { desktop: desktopRelease() } }, T)
+    expect(outcome.messages).toEqual([expect.objectContaining({ conversationId: 'g13', text: 'Verified v1.3.78_desktop: it carries #12 Task 12.' })])
+    expect(ledgerOf(state).steps).toEqual({})
+  })
+
+  it('frees a step that ended without a verified release an hour after it ended, so a failed release gets a new step', () => {
+    const state = swarm([entry({ groupId: 'g12', components: ['desktop'] })], { steps: { desktop: { groupId: 'g13', at: T - 30 * MINUTE } } })
+    state.conversations.find(c => c.id === 'g13')!.assignment = { id: 'a', agentId: 'ship', status: 'done' } as Conversation['assignment']
+    expect(settleReleases(state, 'p1', noFacts, T).opened).toBeNull()
+    expect(ledgerOf(state).steps!.desktop!.endedAt).toBe(T)
+    expect(settleReleases(state, 'p1', noFacts, T + 59 * MINUTE).opened).toBeNull()
+    expect(settleReleases(state, 'p1', noFacts, T + 60 * MINUTE).opened).not.toBeNull()
+  })
+
+  it('drops a merge no release carried in 14 days', () => {
+    const state = swarm([entry({ groupId: 'g12', mergedAt: T - PENDING_MS - 1, components: ['desktop'] })])
+    expect(settleReleases(state, 'p1', noFacts, vn(20)).dropped.map(e => e.groupId)).toEqual(['g12'])
+    expect(ledgerOf(state).pending).toEqual([])
   })
 })
