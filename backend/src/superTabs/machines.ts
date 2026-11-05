@@ -65,6 +65,10 @@ export interface ContributedMachine {
   /** The projects whose agents may run here, set by its owner (commands.ts machine.projects, Tony 11-03); absent: every
    *  project, as before. A Mac's Harness Team account keeps none of its own: it follows its Mac's (machineProjectRefusal). */
   projects?: string[]
+  /** What it can reach, by macOS account (machine.access, machineAccess.ts, task #3047): its own account's and its Harness
+   *  Team account's, both on the Mac's own entry; never on a Team account's. Kept when the contribution is saved again;
+   *  gone with the machine. At most MAX_ACCESS. */
+  access?: import('./machineAccess.js').AccessEntry[]
   /** Per engine, its failed starts here in a row, until one runs or they suspend it (engineHealth.ts). */
   engineFailures?: Record<string, number>
   /** Per engine, a suspension after failed starts: when, and whether its reading already said signed in with quota then. */

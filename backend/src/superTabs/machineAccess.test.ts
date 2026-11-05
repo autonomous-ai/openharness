@@ -143,11 +143,15 @@ describe('the access list and machine.access', () => {
       f.add('Email', { askedIn }, f.leadActor, context)
       expect(f.entry('Email')).toMatchObject({ state: 'unconfirmed', saidBy, askedIn, addedBy: saidBy })
     }
-    // A chat it does not lead: another agent, not its Lead, passes on Gray's own message.
+    // A chat it does not lead: Gray's own message in a task's chat.
     const f = swarm()
-    const other = f.agent('other-lead', 'owner-mac')
-    f.add('Email', { askedIn }, other, said('gray'))
+    const task = f.group()
+    // Its chat names another Lead.
+    f.state.conversations.find(c => c.id === task)!.leadId = 'someone-else'
+    f.add('Email', { askedIn: { conversationId: task, messageId: 'm-2' } }, f.leadActor, said('gray'))
     expect(f.entry('Email')).toMatchObject({ state: 'unconfirmed', saidBy: 'gray' })
+    // Only a Lead records what people say: any other agent passing on even the owner's message is refused.
+    expect(refusal(() => f.add('Slack', { askedIn }, f.agent('gray-worker'), said('gray')))?.code).toBe('OWNER_REQUIRED')
     // With no message behind it, or a system row, an agent records nothing.
     expect(refusal(() => f.add('Slack', {}, f.leadActor))?.code).toBe('OWNER_REQUIRED')
     expect(refusal(() => f.add('Slack', { askedIn }, f.leadActor, { askedIn: { author: { kind: 'person', id: 'gray' } as never, source: true, createdAt: NOW } }))?.code)

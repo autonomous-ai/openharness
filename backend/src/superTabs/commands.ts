@@ -18,6 +18,7 @@ import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
+import { changeAccess, expireAccess } from './machineAccess.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
@@ -153,6 +154,10 @@ const task = z.object({
     .refine(r => r.focus !== undefined || r.reviews !== undefined, 'Give the review a focus or a number of reviews.').optional(),
 }).strict()
 
+/** An access entry's name and its note or check (machineAccess.ts). */
+const accessName = z.string().trim().min(1).max(60).regex(/^[^\n\r\t]+$/)
+const accessText = z.string().trim().min(1).max(200).regex(/^[^\n\r\t]+$/)
+
 /** The machines a Swarm remembers its people took out. */
 const MAX_REMOVED_MACHINES = 64
 
@@ -169,6 +174,12 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.projects'), machineId: id, projectIds: z.array(id).min(1).max(64).nullable(), askedIn: askedInSchema.optional() }).strict(),
   // Whether teammates' work may also run in the owner's own account on their machine (Scholes, 11-04): its owner's choice.
   z.object({ type: z.literal('machine.ownAccountWork'), machineId: id, allowed: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
+  // One entry of what a machine can reach (machineAccess.ts, task #3047): one at a time, so its owner and a Lead never
+  // overwrite each other's list.
+  z.object({ type: z.literal('machine.access'), machineId: id, action: z.enum(['add', 'change', 'confirm', 'remove']),
+    entryId: z.string().regex(/^[0-9a-f]{16}$/).optional(), name: accessName.optional(), account: z.enum(['own', 'team']).optional(),
+    teammates: z.boolean().optional(), production: z.boolean().optional(), note: accessText.nullable().optional(), check: accessText.nullable().optional(),
+    askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
   z.object({ type: z.literal('machine.cleaned'), machineId: id, removalId: id }).strict(),
   z.object({ type: z.literal('localModels.set'), enabled: z.boolean() }).strict(),
@@ -701,7 +712,8 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
   if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
-    || command.type === 'machine.engineResume' || command.type === 'machine.projects' || command.type === 'machine.ownAccountWork') && command.askedIn) {
+    || command.type === 'machine.engineResume' || command.type === 'machine.projects' || command.type === 'machine.ownAccountWork'
+    || command.type === 'machine.access') && command.askedIn) {
     readConversation(state, actor, command.askedIn.conversationId)
   }
   if ('startId' in command && command.type !== 'route.modelResult') {
@@ -856,6 +868,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   numberConversations(state)
   placeRules(state)
   expireRemovals(state, context.now)
+  expireAccess(state, context.now)
   const deleted = new Set(context.deletedMachineIds ?? [])
   if (deleted.size && state.machineCleanups) {
     state.machineCleanups = state.machineCleanups.filter(c => !deleted.has(c.machineId))
@@ -1923,6 +1936,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // So is their choice of their own account for teammates' work (machine.ownAccountWork), Desktop's join re-save
       // included; not over a removal, so a Mac removed and added again starts Team-account-only.
       const ownAccountChoice = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly && !m.removal)?.ownAccountChoice
+      // And what it can reach (machine.access), the same way: a Mac removed and added again starts with none.
+      const access = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly && !m.removal)?.access
       // Its Agents setting: a client that does not send one (older than #2860) keeps the stored one while the count is the same.
       const previous = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly)
       const agents = command.agents ?? (previous?.agents && previous.maxAgents === command.maxAgents ? previous.agents : undefined)
@@ -1935,7 +1950,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         ...(command.scope ? { scope: command.scope } : {}),
         contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused,
         ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}), ...(projects && !host ? { projects } : {}),
-        ...(ownAccountChoice && !host ? { ownAccountChoice } : {}),
+        ...(ownAccountChoice && !host ? { ownAccountChoice } : {}), ...(access && !host ? { access } : {}),
         ...(othersToldWeek != null ? { othersToldWeek } : {}) })
       // A Mac given other slots or a new name gives its team account the same, and its pause; its own folder, engines and grant stay.
       const added = state.machines.at(-1)!
@@ -1999,6 +2014,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A Lead's relay keeps the message it passed on, so an audit reads the words behind it (security review 1 of #2981).
       pool.ownAccountChoice = { allowed: command.allowed, by: pool.contributorId, at: new Date(context.now).toISOString(),
         ...(actor.kind === 'agent' && command.askedIn ? { askedIn: { conversationId: command.askedIn.conversationId, messageId: command.askedIn.messageId } } : {}) }
+      break
+    }
+    case 'machine.access': {
+      result.entryId = changeAccess(state, actor, command, context, machineOwnerWord, operationId)
       break
     }
     case 'machine.remove': {
