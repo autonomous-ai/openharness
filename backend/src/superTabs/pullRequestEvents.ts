@@ -32,7 +32,7 @@ export interface PullRequestWatch {
 /** One message for the Engineer, and the key it is posted under once. */
 export interface PullRequestEvent { key: string; text: string }
 
-const FAILED = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure'])
+export const FAILED = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure'])
 const PASSED = new Set(['success', 'neutral', 'skipped'])
 /** The keys a group keeps per pull request: its marks, and its newest heads' CI and conflict keys. */
 export const SEEN_KEPT = 50

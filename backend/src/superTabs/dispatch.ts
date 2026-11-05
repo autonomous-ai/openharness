@@ -9,6 +9,7 @@ import { sessionClosed } from './closedAgents.js'
 import { activeWork, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
 import { agentProjectId, projectOf, projectsOf } from './projects.js'
 import { queueOrder, queueSiblings } from './taskQueue.js'
+import { FAILED, type PullRequestWatch } from './pullRequestEvents.js'
 
 const HOUR_MS = 3_600_000
 
@@ -199,4 +200,18 @@ export function derivedLanes(state: SuperTabState, visible: SuperTabState, now =
   const crewed = new Set(state.agents.filter(a => a.crew).map(a => agentProjectId(state, a)))
   const lanes = projectsOf(visible).filter(p => crewed.has(p.id)).map(p => [p.id, laneCapacity(state, p.id, DISPATCH_RULES, now)] as const)
   return lanes.length ? Object.fromEntries(lanes) : undefined
+}
+
+/** What [watch] says its task's builder should come back for: a merge conflict, or a failed check run at its head. */
+export function pullRequestPin(watch: Pick<PullRequestWatch, 'mergeable' | 'checkRuns'>): 'ci' | 'conflict' | null {
+  if (watch.mergeable === false) return 'conflict'
+  return watch.checkRuns.some(run => !!run.conclusion && FAILED.has(run.conclusion)) ? 'ci' : null
+}
+
+/** Pins [group], a task with no active work, to its last attempt's agent for [why]: the dispatch hands it to that member
+ *  first, while it is in the crew (candidatesFor). A pin already there keeps its time; active work is never pinned. */
+export function pinBuilder(group: Conversation, why: NonNullable<Conversation['pin']>['why'], now: number): void {
+  const builder = group.lostAttempt?.agentId ?? group.assignment?.agentId
+  if (!builder || activeWork(group) || group.pin) return
+  group.pin = { agentId: builder, why, at: now }
 }

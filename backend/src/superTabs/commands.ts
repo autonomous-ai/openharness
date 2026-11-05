@@ -64,7 +64,7 @@ import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
 import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
-import { DISPATCH_RULES, laneNamed, spokenList } from './dispatch.js'
+import { DISPATCH_RULES, laneNamed, pinBuilder, spokenList } from './dispatch.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 /** A route override's reason when its agent gave none: following another candidate needs none (project instructions). */
@@ -3952,6 +3952,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!command.passed && byAssignee && actor.kind === 'agent' && group.reviewOf) {
         const build = state.conversations.find(c => c.id === group.reviewOf)
         if (build) changesRequested(state, build, actor.agentId, context.now)
+        // A build nobody holds now waits for its builder to fix what the step found (dispatch.ts).
+        if (build) pinBuilder(build, 'findings', context.now)
       }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       break

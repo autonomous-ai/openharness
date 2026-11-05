@@ -61,7 +61,7 @@ import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from
 import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
-import { candidatesFor, DISPATCH_RULES, dispatchPlan, freeCrew, openTasks } from './dispatch.js'
+import { candidatesFor, DISPATCH_RULES, dispatchPlan, freeCrew, openTasks, pinBuilder, pullRequestPin } from './dispatch.js'
 import { barredFromTeamWritten } from './teamWritten.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
@@ -4734,6 +4734,9 @@ export class SuperTabStore {
       const { events, keys } = pullRequestEvents(watch, seen, botLogin, now)
       if (keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
       group.pullRequestEvents = { ...group.pullRequestEvents, [watch.url]: keys }
+      // A task nobody holds whose pull request turned red or conflicts waits for its builder (dispatch.ts).
+      const pinned = pullRequestPin(watch)
+      if (pinned) pinBuilder(group, pinned, now)
       const ownerId = ownerOf(state, group), owner = ownerId ? state.agents.find(a => a.id === ownerId) : undefined
       // Written as its project's Lead, as the Swarm's own lines are (tidy.ts archiveLine); as the Engineer itself without one.
       const leadId = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId
