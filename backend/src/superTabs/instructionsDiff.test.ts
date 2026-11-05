@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attributedRules, droppedRules, personKey, repeatedRules } from './instructionsDiff.js'
+import { attributedRules, budgetParts, droppedRules, INSTRUCTIONS_BUDGET, personKey, repeatedRules } from './instructionsDiff.js'
 
 // Task #3151 (Ken, 11-05, from lamp): a PM's tidy from revision 70 to 71 dropped Leo's rule and the "(0xken15, 4 Nov)" of a
 // rule it kept, and nothing checked the save.
@@ -158,5 +158,29 @@ describe('repeatedRules', () => {
     const base = '# Project\n\n## PM\n\n- Decides, never asks the owner to choose (Ken, 2026-11-04).\n'
     const added = '- Decides, never asks the owner to choose (Faye, 11-05).'
     expect(repeatedRules(base, `${base}\n## Reviewer\n\n${added}\n`)).toEqual([{ added: added.slice(2), existing: 'Decides, never asks the owner to choose (Ken, 2026-11-04).' }])
+  })
+})
+
+// Task #3392 (anh Dee, 11-05, decision 5): the instructions have a size budget by section, so they stay small.
+describe('budgetParts', () => {
+  const size = (text: string) => Buffer.byteLength(text)
+  const parts = (text: string) => Object.fromEntries(budgetParts(text).map(p => [p.part, p.bytes]))
+
+  it('splits core, each role section under Roles, and people notes, counting UTF-8 bytes', () => {
+    const intro = '# Project instructions\n\nHow this project works.\n\n## Roles\n\nEvery agent reads its role.\n\n'
+    const pm = '### PM\n\n- Opens one task per request.\n\n'
+    const engineer = '### Engineer\n\n- Builds it test first, chị Hà\u2019s way.\n\n'
+    const workflow = '## Workflow\n\n1. One request is one task.\n\n'
+    const notes = '## People notes\n\n- Ken likes short replies (Ken, 11-05).\n'
+    const doc = intro + pm + engineer + workflow + notes
+    expect(parts(doc)).toEqual({ core: size(intro + workflow), 'role PM': size(pm), 'role Engineer': size(engineer), 'people notes': size(notes), total: size(doc) })
+    expect(budgetParts(doc).find(p => p.part === 'role PM')!.budget).toBe(INSTRUCTIONS_BUDGET.role)
+    expect(INSTRUCTIONS_BUDGET).toEqual({ core: 6 * 1024, role: 2 * 1024, people: 3 * 1024, total: 20 * 1024 })
+  })
+
+  it('reads a heading inside a fenced block as text, and a ### outside Roles as core', () => {
+    const doc = '# P\n\n## Roles\n\n### PM\n\n```\n## Workflow\n```\n\n## Routing\n\n### Models\n\n- Opus builds.\n'
+    const pm = '### PM\n\n```\n## Workflow\n```\n\n'
+    expect(parts(doc)).toEqual({ core: size(doc) - size(pm), 'role PM': size(pm), total: size(doc) })
   })
 })

@@ -675,3 +675,50 @@ describe('a project on the template', () => {
     expect(row.instructions).toMatchObject({ revision: 0, hash: FIRST_INSTRUCTIONS.instructionsHash })
   })
 })
+
+// Task #3392 (anh Dee, 11-05, decision 5): the instructions have a size budget by section: core 6 KB, each role section 2 KB,
+// people notes 3 KB, 20 KB in all. A save that makes a part bigger than its budget is refused with the sizes.
+describe('an instructions save keeps to the size budget', () => {
+  const save = (baseRevision: number, text: string): Command =>
+    ({ type: 'instructions.save', projectId: 'lead', baseRevision, text, summary: 'Changed the instructions' })
+  const stored = (text: string, revision = 1) => ({ instructions: { revision, text, at: 500 } })
+  /** [n] distinct lines of about 100 bytes, each too short to read as a repeat of another. */
+  const lines = (n: number, tag: string) => Array.from({ length: n }, (_, i) => `- ${tag}${i} ${'x'.repeat(90)}`)
+  const doc = ({ core = 10, pm = 5, notes = 0 }: { core?: number; pm?: number; notes?: number }) => [
+    '# Project instructions', '', '## Roles', '', '### PM', '', ...lines(pm, 'pm'), '', '## Workflow', '', ...lines(core, 'core'),
+    ...notes ? ['', '## People notes', '', ...lines(notes, 'note')] : []].join('\n')
+  const refusal = (run: () => unknown) => {
+    try { run() } catch (error) { return error as { code: string; status: number; message: string; details: { parts: unknown[] } } }
+    throw new Error('the save went through')
+  }
+
+  it('refuses a save whose core grows past 6 KB, naming its size and budget', () => {
+    const f = fixture()
+    const refused = refusal(() => f.run(save(1, doc({ core: 70 })), owner, stored(doc({}))))
+    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_OVER_BUDGET', status: 409, details: { parts: [{ part: 'core', budget: 6144 }] } })
+    expect(refused.message).toMatch(/Core: 6\.\d KB of 6 KB/)
+    expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 1 })
+  })
+
+  it('refuses a role section past 2 KB, people notes past 3 KB, and a document past 20 KB', () => {
+    const f = fixture()
+    expect(refusal(() => f.run(save(1, doc({ pm: 25 })), owner, stored(doc({}))))).toMatchObject({ details: { parts: [{ part: 'role PM', budget: 2048 }] } })
+    expect(refusal(() => f.run(save(1, doc({ notes: 35 })), owner, stored(doc({}))))).toMatchObject({ details: { parts: [{ part: 'people notes', budget: 3072 }] } })
+    // Every part within its own budget, the whole past 20 KB: eleven roles of 1.9 KB each.
+    const roles = Array.from({ length: 11 }, (_, r) => ['', `### Role${r}`, '', ...lines(18, `r${r}-`)]).flat()
+    const wide = ['# Project instructions', '', '## Roles', ...roles].join('\n')
+    const message = refusal(() => f.run(save(1, wide), owner, stored(doc({})))).message
+    expect(message).toMatch(/Whole document: 2\d\.\d KB of 20 KB/)
+    expect(message).not.toContain('Role0')
+  })
+
+  it('lets a part already over budget be saved when it does not grow, and saves within budget', () => {
+    const f = fixture()
+    // Today's documents are over budget: shrinking a part, or leaving it as it was, is the way down.
+    expect(f.run(save(1, doc({ core: 75 })), owner, stored(doc({ core: 80 }))).result.revision).toBe(2)
+    expect(f.run(save(2, doc({ core: 75, pm: 6 })), owner, stored(doc({ core: 75 }), 2)).result.revision).toBe(3)
+    expect(refusal(() => f.run(save(3, doc({ core: 76, pm: 6 })), owner, stored(doc({ core: 75, pm: 6 }), 3))))
+      .toMatchObject({ code: 'INSTRUCTIONS_OVER_BUDGET', message: expect.stringMatching(/was 7\.\d KB/) })
+    expect(f.run(save(3, doc({ core: 20, pm: 6, notes: 10 })), owner, stored(doc({ core: 75, pm: 6 }), 3)).result.revision).toBe(4)
+  })
+})
