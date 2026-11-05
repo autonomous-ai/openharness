@@ -1582,6 +1582,8 @@ export class SuperTabStore {
     const { operationId, command } = operationSchema.parse(input)
     const [pushOrigin, repositoryReach] = await Promise.all([this.pushOriginFor(user, tabId, command), this.repositoryReachFor(user, tabId, command)])
     let ended: WorkHold[] = [], started: WorkHold[] = []
+    // Whether the Swarm, as this write leaves it, has a crew: only then may the write start a dispatch pass (dispatchSoon).
+    let crewed = false
     const done = await transaction(this.db, async tx => {
       // A retried attempt starts again: only the attempt that commits says which tasks ended or started.
       ended = []
@@ -1886,6 +1888,7 @@ export class SuperTabStore {
         : command.type === 'work.assign' || command.type === 'agent.start' ? command.routeDecisionId : undefined
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
       const effects = applyCommand(original, actor, command, context)
+      crewed = effects.state.agents.some(a => !!a.crew)
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source, message.recipients))
       for (const group of effects.state.conversations) {
@@ -2195,7 +2198,7 @@ export class SuperTabStore {
     this.endWork(tabId, ended)
     this.startWork(tabId, started)
     // A write that may free a crew member or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
-    if (DISPATCH_TRIGGERS.has(command.type)) this.dispatchSoon(tabId)
+    if (crewed && DISPATCH_TRIGGERS.has(command.type)) this.dispatchSoon(tabId)
     return done
   }
 
