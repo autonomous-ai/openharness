@@ -40,6 +40,17 @@ const FILE_PAGES = 30
 /** An original pull request a batch closed: the batch commit naming it is looked for on main from this long before the merge
  *  was recorded (a merge recorded late) to an hour after it, at most COMMIT_PAGES pages of 100. */
 const BATCH_BEFORE_MS = 6 * 3_600_000, BATCH_AFTER_MS = 3_600_000, COMMIT_PAGES = 5
+/** A batch's squash title on main: "Merge batch 11-05 i2205: #3167 #3202 #3201 (#3206)", the originals before the batch's own
+ *  number. Only that list names what a batch merged: other titles end in their task's number, which shares the pull requests'
+ *  range, and a batch's body may name pull requests it did not merge (review 2 of #3228). */
+const BATCH_TITLE = /^Merge batch [^:\n]*:((?:\s+#\d+)+)\s+\(#\d+\)\s*$/
+
+/** Whether the pass looks for [mergedAt]'s merge commit at [now]: every pass for an hour, then every 30 minutes, and after a
+ *  day every 2 hours, so a batch never found costs a few reads an hour rather than five pages every 5 minutes for 14 days. */
+export function batchLookupDue(mergedAt: number, now: number): boolean {
+  const age = now - mergedAt, PASS = 5 * 60_000
+  return age < 3_600_000 || now % (age < 86_400_000 ? 30 * 60_000 : 2 * 3_600_000) < PASS
+}
 type Run = { head_branch?: unknown; head_sha?: unknown; event?: unknown; conclusion?: unknown; run_started_at?: unknown; created_at?: unknown }
 
 /** The reads, over [get]. Each repository's default branch is read once per reader. */
@@ -72,11 +83,11 @@ export function readReleases(get: GitHubGet): Omit<ReleaseReader, 'done'> {
       const body = pull.body as { merged_at?: unknown; merge_commit_sha?: unknown } | null
       if (pull.status !== 200 || !body) return null
       if (typeof body.merged_at === 'string' && typeof body.merge_commit_sha === 'string') return body.merge_commit_sha
-      // Closed into a batch: the batch's squash commit on main names it ("Merge batch …: #6 #7 (#79)"). Newest first, so the
-      // last one naming it is the merge; a later fix that mentions it comes before.
+      // Closed into a batch: the batch's squash title on main lists it ("Merge batch …: #6 #7 (#79)"). Newest first, so the
+      // last such batch is the oldest, the one that merged it.
       const main = await branch(repository)
       if (!main) return null
-      const names = new RegExp(`(^|[^\\w/])#${number}(?!\\d)`)
+      const names = (message: string) => BATCH_TITLE.exec(message.split('\n')[0]!)?.[1]!.trim().split(/\s+/).includes(`#${number}`) ?? false
       let path: string | undefined = `/repos/${repository.fullName}/commits?sha=${encodeURIComponent(main)}&since=${new Date(mergedAt - BATCH_BEFORE_MS).toISOString()}`
         + `&until=${new Date(mergedAt + BATCH_AFTER_MS).toISOString()}&per_page=100`
       let found: string | null = null
@@ -84,7 +95,7 @@ export function readReleases(get: GitHubGet): Omit<ReleaseReader, 'done'> {
         const answer = await get(repository, path)
         if (answer.status !== 200 || !Array.isArray(answer.body)) return null
         for (const commit of answer.body as Array<{ sha?: unknown; commit?: { message?: unknown } }>) {
-          if (typeof commit.sha === 'string' && typeof commit.commit?.message === 'string' && names.test(commit.commit.message)) found = commit.sha
+          if (typeof commit.sha === 'string' && typeof commit.commit?.message === 'string' && names(commit.commit.message)) found = commit.sha
         }
         path = answer.next
       }
@@ -188,7 +199,7 @@ export async function watchReleases(db: PrismaClient, store: Pick<SuperTabStore,
               const files = number ? await reader.files(repository, number) : null
               if (files) known.components = found.components = componentsOf(files)
             }
-            if (known.components?.length && !known.sha) {
+            if (known.components?.length && !known.sha && batchLookupDue(entry.mergedAt, now)) {
               const sha = number ? await reader.mergeCommit(repository, number, entry.mergedAt) : null
               if (sha) { known.sha = found.sha = sha; fresh.add(pendingKey(entry)) }
             }
@@ -214,6 +225,13 @@ export async function watchReleases(db: PrismaClient, store: Pick<SuperTabStore,
             if (unsure) unknown.push(component.id)
             else facts.releases[component.id] = { ...release, carries }
           }
+          // A merge commit found this pass is kept only when every release it waits for was compared with it: one kept after an
+          // unsure comparison is no longer new next pass, so the tag already settled would never be compared with it.
+          facts.resolved = facts.resolved.flatMap(found => {
+            if (!found.sha || !entries.find(e => pendingKey(e) === pendingKey(found))!.components!.some(c => unknown.includes(c))) return [found]
+            const { sha: _again, ...rest } = found
+            return rest.components ? [rest] : []
+          })
           if (unread || unknown.length) {
             log.warn('[swarm-releases] GitHub could not say; those tasks stay waiting and no step opens on a guess', { tabId, projectId: project.id,
               repository: repository.fullName, unreadPullRequests: unread, unreadReleases: unknown })

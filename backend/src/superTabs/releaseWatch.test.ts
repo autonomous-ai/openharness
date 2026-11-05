@@ -152,7 +152,8 @@ describe('watchReleases', () => {
     await watchReleases(s.db, s.store, s.fake, T, { warn: () => {}, info: () => {} })
     expect(s.read).toEqual(['files 7', 'merge 7', 'merge 8', 'files 9', 'latest backend', 'contains m8 b', 'latest desktop', 'latest web', 'done'])
     expect(s.settled).toEqual([{ tabId: 'tab', projectId: 'p1', facts: {
-      resolved: [{ groupId: 'g1', url: 'https://github.com/acme/app/pull/7', components: ['desktop', 'web'], sha: 'm7' },
+      // g1's merge commit waits for Desktop and Web, which GitHub could not read: it is found again next pass.
+      resolved: [{ groupId: 'g1', url: 'https://github.com/acme/app/pull/7', components: ['desktop', 'web'] },
         { groupId: 'g2', url: 'https://github.com/acme/app/pull/8', sha: 'm8' }],
       releases: { backend: { tag: 'v1.4.17_backend', sha: 'b', at: T, carries: [pendingKey({ groupId: 'g2', url: 'https://github.com/acme/app/pull/8' })] } } } }])
   })
@@ -209,7 +210,7 @@ describe('watchReleases', () => {
     const s = scene({ pending: [{ groupId: 'g2', url: 'https://github.com/acme/app/pull/8', mergedAt: T - 1, components: ['backend'] }],
       last: { backend: { tag: 'v1.4.17_backend', sha: 'b', at: T } } }, { contains: async () => null })
     await watchReleases(s.db, s.store, s.fake, T, { warn: () => {}, info: () => {} })
-    expect(s.read).toContain('contains m8 b')
+    expect(s.read).toContain('merge 8')
     expect(s.settled[0]!.facts).toEqual({ resolved: [], releases: {} })
   })
 })
