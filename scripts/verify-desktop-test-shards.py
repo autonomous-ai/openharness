@@ -117,7 +117,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--shards", type=int, default=4)
+    parser.add_argument("--shards", type=int, default=6)  # CI's Desktop shard count (ci.yml, task #3458)
     parser.add_argument("--tests-result", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
