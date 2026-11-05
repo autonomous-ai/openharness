@@ -7,7 +7,7 @@ import { recordDeltaRows } from '../cacheStats.js'
 import type { AgentStart } from '../model.js'
 import { ms } from './light.js'
 import { groupsBy, readBy, type GroupIndex, type NamedCollection } from './indexed.js'
-import { HELD, type HeldParts } from './held.js'
+import { COMMAND_HELD, HELD, type HeldParts, type HeldRead } from './held.js'
 
 type Transaction = Prisma.TransactionClient
 type Where = Record<string, unknown>
@@ -24,19 +24,21 @@ const rawPartRow = (row: Record<string, unknown>): PartRow => ({ ...rawGroupRow(
   ordinal: typeof row.ordinal === 'number' ? row.ordinal : Number((row.ordinal as { $numberDouble?: string; $numberInt?: string }).$numberDouble
     ?? (row.ordinal as { $numberInt?: string }).$numberInt) }) as PartRow
 
-/** The live groups these reads find, each once. */
-async function liveGroups(tx: Transaction, tabId: string, reads: GroupReads): Promise<PartRow[]> {
+/** The live groups these reads find, each once; through `held`, whole only those changed since it last read them. */
+async function liveGroups(tx: Transaction, tabId: string, reads: GroupReads, held?: HeldRead): Promise<PartRow[]> {
+  if (held) return (await held.groups(tx, reads)).map(rawGroupRow)
   const found = await Promise.all(reads.map(([index, match]) => groupsBy(tx, index, [{ $match: { tabId, deleted: false, ...match } as Prisma.InputJsonValue }])))
   return [...new Map(found.flat().map(row => [row.key as string, rawGroupRow(row)])).values()]
 }
 
 /** `null` for a kind leaves it out: none are loaded. Groups go by `where` (every part, tombstones too) or as named reads. */
-async function assemble(tx: Transaction, tabId: string, where: Record<Exclude<PartKind, 'head' | 'group'>, Where | null> & { group: Where | GroupReads }): Promise<SwarmParts> {
+async function assemble(tx: Transaction, tabId: string, where: Record<Exclude<PartKind, 'head' | 'group'>, Where | null> & { group: Where | GroupReads },
+  held?: HeldRead): Promise<SwarmParts> {
   const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') } })
   if (!head) throw Object.assign(new Error(`Swarm ${tabId} has no parts`), { code: 'PARTS_MISSING' })
   const group = where.group
   const [members, agents, groups, machines, starts, progress] = await Promise.all((['member', 'agent', 'group', 'machine', 'start', 'progress'] as const)
-    .map(kind => kind === 'group' && Array.isArray(group) ? liveGroups(tx, tabId, group).then(rows => rows.map(row => toPart(kind, row)))
+    .map(kind => kind === 'group' && Array.isArray(group) ? liveGroups(tx, tabId, group, held).then(rows => rows.map(row => toPart(kind, row)))
       : where[kind] === null ? Promise.resolve([])
       : delegate(tx, kind).findMany({ where: { tabId, ...where[kind] as Where } }).then(rows => rows.map(row => toPart(kind, row)))))
   return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow), members, agents, groups, machines, starts, progress,
@@ -48,25 +50,30 @@ async function assemble(tx: Transaction, tabId: string, where: Record<Exclude<Pa
  * plus the groups named by id, the groups the named agents are in and the named projects' groups (dormant ones too),
  * and the finished starts named by id or by the agent they started.
  */
-export function loadActive(tx: Transaction, tabId: string,
+export async function loadActive(tx: Transaction, tabId: string,
   opts: { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; startIds?: string[]; startAgentIds?: string[]
     /** Also the finished starts not yet expired (finished within 7 days), as a first load shows them (design section 4.3). */
     includeRecentStarts?: boolean
     /** Every live group, dormant ones too: for the rare reads that list across all of them (mentions, route decisions). */
-    allGroups?: boolean } = {}): Promise<SwarmParts> {
+    allGroups?: boolean } = {}, held: HeldParts | null = COMMAND_HELD): Promise<SwarmParts> {
   const live = { deleted: false }
   const or = (always: Where, ...named: Array<Where | false>) => ({ ...live, OR: [always, ...named.filter((w): w is Where => !!w)] })
   // A group stored with no project belongs to the default one (projects.ts groupProject), as in a Swarm from before projects;
   // a null match is a missing field too.
   const projectIds = [...opts.projectIds ?? [], ...opts.projectIds?.includes('lead') ? [null] : []]
-  return assemble(tx, tabId, {
+  // The awake groups through the held index, held (task #3146): each command read every one of them whole. Every live group
+  // (allGroups) is a rare read, made whole as before.
+  const read = held && !opts.allGroups ? held.read(tabId) : undefined
+  const parts = await assemble(tx, tabId, {
     member: live, agent: live, machine: live, progress: live,
-    group: opts.allGroups ? [['live', {}]] : [['dormancy', { dormant: false }], ...opts.groupIds?.length ? [['key', { key: { $in: opts.groupIds } }] as const] : [],
+    group: opts.allGroups ? [['live', {}]] : [['held', { dormant: false }], ...opts.groupIds?.length ? [['key', { key: { $in: opts.groupIds } }] as const] : [],
       ...opts.agentIds?.length ? [['agents', { agentIds: { $in: opts.agentIds } }] as const] : [],
       ...projectIds.length ? [['project', { projectId: { $in: projectIds } }] as const] : []],
     start: opts.includeRecentStarts ? live : or({ finishedAt: null }, !!opts.startIds?.length && { key: { in: opts.startIds } },
       !!opts.startAgentIds?.length && { agentId: { in: opts.startAgentIds } }),
-  })
+  }, read)
+  read?.done()
+  return parts
 }
 
 /**

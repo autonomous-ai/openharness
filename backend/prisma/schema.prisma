@@ -1933,6 +1933,9 @@ model SwarmGroup {
   @@index([tabId, executionMachineId])
   /// The host signature (read/host.ts inputs) reads every conversation's digest and dormancy from this index alone.
   @@index([tabId, deleted, key, hostDigest, dormant])
+  /// A command's awake conversations, listed by the columns it compares with what it holds (parts/held.ts) from this index alone:
+  /// each command read every awake one whole before (task #3146).
+  @@index([tabId, dormant, deleted, key, version, changedAt])
   /// Removed parts go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
   @@index([purgeAt], map: "part_purge")
 }

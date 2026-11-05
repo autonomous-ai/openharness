@@ -18,6 +18,8 @@ export const GROUP_INDEX = {
   agents: { tabId: 1, agentIds: 1 },
   project: { tabId: 1, projectId: 1, dormant: 1, lastActivityAt: 1, key: 1 },
   dormancy: { tabId: 1, dormant: 1, changedAt: 1 },
+  /** A command's awake conversations by the columns a held part is compared by (parts/held.ts): the listing reads no document. */
+  held: { tabId: 1, dormant: 1, deleted: 1, key: 1, version: 1, changedAt: 1 },
   changes: { tabId: 1, changedAt: 1 },
   /** A host's changed conversations: led by the host, so the wake check reads no other host's. */
   wake: { hostMachineIds: 1, tabId: 1, changedAt: 1 },
