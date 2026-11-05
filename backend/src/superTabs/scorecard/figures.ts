@@ -2,6 +2,7 @@
  * A project's scorecard for one local day (task #3386, Dee: judge each change by numbers, daily), from the Swarm's own
  * records: the reader (records.ts) gathers them, this turns them into counts and minutes. Pure: no clock, no database.
  */
+import { isAcknowledgement } from '../acknowledgements.js'
 
 /** What the figures measure against, written into each row with them so an old row keeps its meaning. */
 export const SCORECARD_LIMITS = { lostAfterMinutes: 10, askLookbackDays: 7 } as const
@@ -108,15 +109,6 @@ function phaseOf(row: ScorecardMessage): Phase | null {
 /** Rows that move a task on: a status, a loss or resume, a route. */
 const handles = (row: ScorecardMessage): boolean => phaseOf(row) !== null || row.source?.kind === 'route' || row.source?.kind === 'route-override'
 
-/** Only an acknowledgement (project instructions: react instead): a short stock phrase, or emoji alone. */
-const ACKS = new Set(['on it', 'on it now', 'taken', 'took it', 'taking it', 'confirmed', 'thanks', 'thank you', 'done', 'ok', 'okay', 'got it',
-  'noted', 'understood', 'queued', 'ack', 'will do', 'sure', 'received', 'acknowledged', 'starting', 'starting now', 'looking', 'checking',
-  'already sent', 'sent', 'stopped', 'ok thanks', 'got it thanks'])
-export function ackOnly(text: string): boolean {
-  const words = text.toLowerCase().replace(/[^\p{L}\p{N}\s']/gu, ' ').replace(/\s+/g, ' ').trim()
-  return words ? ACKS.has(words) : text.trim().length > 0
-}
-
 /** A person's own post, or the proposal their Buddy wrote for them: what a person asks the project. A task card's line is
  *  the person's too, and asks nothing. */
 export const isAsk = (m: Pick<ScorecardMessage, 'author' | 'source'>): boolean =>
@@ -167,7 +159,7 @@ export function scorecardDay(input: ScorecardInput): ScorecardFigures {
     startsFailed: input.starts.filter(s => s.failed && inDay(s.requestedAt)).length,
     routeDecisions: input.routeDecisions.filter(d => inDay(d.createdAt)).length,
     typedIntoPm: dayRows.filter(m => m.source?.kind === 'terminal-input' && pm.has(m.source.agentId as string)).length,
-    ackPosts: ownPosts.filter(m => ackOnly(m.text)).length,
+    ackPosts: ownPosts.filter(m => isAcknowledgement(m.text)).length,
     agentPosts: ownPosts.length,
   }
 }
