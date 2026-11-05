@@ -12,9 +12,9 @@ const run = (over: Record<string, unknown> = {}) => ({ head_branch: 'v1.3.78_des
 /** A fake GitHub answering [routes] by path prefix; it records each path asked. */
 function github(routes: Record<string, { status: number; body: unknown; next?: string }>) {
   const asked: string[] = []
-  const get: GitHubGet = async path => {
+  const get: GitHubGet = async (_repository, path) => {
     asked.push(path)
-    const hit = Object.keys(routes).find(prefix => path.startsWith(prefix))
+    const hit = Object.keys(routes).find(key => path === key || path.startsWith(`${key}?`) || (key.endsWith('/') && path.startsWith(key)))
     return hit ? routes[hit]! : { status: 404, body: {} }
   }
   return { get, asked }
