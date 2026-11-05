@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { SWARM_TOOLS_SKILL } from './swarmTools.js'
-import { manualBlocks, sheetEntries, swarmToolsSheet, TOOLS_ROLES, toolsRoleFor, type ToolsRole } from './swarmToolSheets.js'
+import { manualBlocks, sheetEntries, sourceFingerprints, staleSheetEntries, swarmToolsSheet, TOOLS_ROLES, toolsRoleFor, type ToolsRole } from './swarmToolSheets.js'
 
 const bytes = (text: string) => Buffer.byteLength(text, 'utf8')
 const sheet = (role: ToolsRole) => swarmToolsSheet(role)
@@ -79,5 +79,23 @@ describe('the role tools sheets', () => {
     expect(toolsRoleFor({ coordinator: false, roleName: 'Guide' })).toBe('guide')
     expect(toolsRoleFor({ coordinator: false, roleName: 'Integrator' })).toBe('engineer')
     expect(toolsRoleFor({ coordinator: false, fallback: 'review' })).toBe('reviewer')
+  })
+
+  // Review of #3240: the opening of a block says which row is its own, but a rule\'s body can change under it. Each row carries
+  // a fingerprint of the block it summarises; a changed block is a stale one-liner until someone reads it and re-seals the row.
+  it('binds each row to the text of its block, so an edited rule, or a sub-bullet added, leaves its one-liner stale', () => {
+    expect(staleSheetEntries(), 'a rule of the manual changed: update its one-line form in swarmToolSheets.ts, then its fingerprint').toEqual([])
+    expect(Object.keys(sourceFingerprints()).sort()).toEqual(sheetEntries().map(e => e.at).sort())
+    const changed = (from: string, to: string) => {
+      expect(SWARM_TOOLS_SKILL, from).toContain(from)
+      return SWARM_TOOLS_SKILL.replace(from, to)
+    }
+    // Body-only edits: the first line, which names the row, still starts the same.
+    expect(staleSheetEntries(changed('Quote TEXT so the shell keeps it one argument.', 'Quote TEXT.'))).toEqual(['- Quote TEXT'])
+    expect(staleSheetEntries(changed('size is how long the work runs', 'size is how long the work takes'))).toEqual(['- `route GROUP JSON'])
+    expect(staleSheetEntries(changed('  - Starts can be refused when too many starts are pending.', '  - Starts can be refused when too many starts are pending.\n  - A new sub-rule.')))
+      .toEqual(['- `start OPERATION_ID JSON`'])
+    // An edit to a block with no one-liner is stale too: its row may be switched on later.
+    expect(staleSheetEntries(changed('A post stays inside your project.', 'A post stays in your project.'))).toEqual(['- A post stays inside your project'])
   })
 })
