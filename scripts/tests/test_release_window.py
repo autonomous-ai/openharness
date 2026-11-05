@@ -29,15 +29,18 @@ def check(kind, now, last=None, urgent=None):
 
 
 class WindowTests(unittest.TestCase):
-    def test_config_holds_the_numbers(self):
-        self.assertEqual(CONFIG["timeZone"], "Asia/Ho_Chi_Minh")
-        self.assertEqual((CONFIG["windowStart"], CONFIG["windowEnd"]), ("09:00", "18:00"))
-        self.assertEqual(CONFIG["minMinutesBetween"], {"backend": 120})
+    def test_config_holds_the_numbers_in_the_shape_of_the_rules_record(self):
+        # The project rules record (#3216) keeps releaseWindow and releasePace in this shape; the guard reads it
+        # from there once that lands, so these keys are named the same.
+        self.assertEqual(CONFIG["releaseWindow"], {"start": "09:00", "end": "18:00", "timeZone": "Asia/Ho_Chi_Minh"})
+        self.assertEqual(CONFIG["releasePace"], {"backendEveryMinutes": 120, "backendPause": {"start": "09:00", "end": "10:00"}})
 
     def test_inside_the_window_is_allowed_for_every_kind(self):
-        for kind in ["backend", "cli", "desktop", "web"]:
+        for kind in ["cli", "desktop", "web"]:
             for hour, minute in [(9, 0), (12, 30), (17, 59)]:
                 self.assertTrue(check(kind, at(5, hour, minute)).allowed, (kind, hour, minute))
+        for hour, minute in [(10, 0), (12, 30), (17, 59)]:
+            self.assertTrue(check("backend", at(5, hour, minute)).allowed, (hour, minute))
 
     def test_before_the_window_is_refused_with_todays_opening(self):
         verdict = check("cli", at(5, 8, 59))
@@ -72,6 +75,39 @@ class WindowTests(unittest.TestCase):
             check("cli", datetime(2026, 11, 5, 12, 0))
 
 
+class BackendPauseTests(unittest.TestCase):
+    """Ken, 2026-11-05: no backend release inside 09:00-10:00 VN (the morning peak); apps keep 09:00."""
+
+    def test_backend_is_refused_inside_the_pause_with_the_pause_end(self):
+        for hour, minute in [(9, 0), (9, 30), (9, 59)]:
+            verdict = check("backend", at(5, hour, minute))
+            self.assertFalse(verdict.allowed, (hour, minute))
+            self.assertEqual(verdict.next_allowed, at(5, 10, 0))
+            self.assertIn("09:00-10:00", verdict.message)
+
+    def test_backend_opens_at_ten(self):
+        self.assertTrue(check("backend", at(5, 10, 0)).allowed)
+
+    def test_apps_and_web_are_not_paused(self):
+        for kind in ["cli", "desktop", "web"]:
+            self.assertTrue(check(kind, at(5, 9, 30)).allowed, kind)
+
+    def test_before_nine_a_backend_release_waits_for_ten(self):
+        self.assertEqual(check("backend", at(5, 8, 0)).next_allowed, at(5, 10, 0))
+
+    def test_pace_ending_inside_the_pause_waits_for_its_end(self):
+        # Last release 07:30 would allow 09:30, which is paused: the next time is 10:00.
+        verdict = check("backend", at(5, 9, 20), last=at(5, 7, 30))
+        self.assertEqual(verdict.next_allowed, at(5, 10, 0))
+
+    def test_a_null_pause_turns_it_off(self):
+        config = {**CONFIG, "releasePace": {**CONFIG["releasePace"], "backendPause": None}}
+        self.assertTrue(rw.check("backend", at(5, 9, 30), None, config, None).allowed)
+
+    def test_urgent_overrides_the_pause(self):
+        self.assertTrue(check("backend", at(5, 9, 30), urgent="P0: crash loop").allowed)
+
+
 class PaceTests(unittest.TestCase):
     def test_backend_within_two_hours_is_refused_with_the_time_it_opens(self):
         verdict = check("backend", at(5, 12, 0), last=at(5, 10, 30))
@@ -82,14 +118,14 @@ class PaceTests(unittest.TestCase):
         self.assertTrue(check("backend", at(5, 12, 30), last=at(5, 10, 30)).allowed)
         self.assertTrue(check("backend", at(5, 15, 0), last=at(5, 10, 30)).allowed)
 
-    def test_pace_that_ends_after_closing_moves_to_the_next_morning(self):
+    def test_pace_that_ends_after_closing_moves_to_the_next_backend_opening(self):
         verdict = check("backend", at(5, 17, 30), last=at(5, 17, 0))
         self.assertFalse(verdict.allowed)
-        self.assertEqual(verdict.next_allowed, at(6, 9, 0))
+        self.assertEqual(verdict.next_allowed, at(6, 10, 0))
 
     def test_night_and_pace_together_name_the_later_time(self):
         verdict = check("backend", at(5, 23, 0), last=at(5, 22, 0))
-        self.assertEqual(verdict.next_allowed, at(6, 9, 0))
+        self.assertEqual(verdict.next_allowed, at(6, 10, 0))
 
     def test_other_kinds_have_no_pace(self):
         for kind in ["cli", "desktop", "web"]:
