@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { PrismaClient } from '@prisma/client'
 import { readReleases, watchReleases, type GitHubGet, type ReleaseReader } from './releaseWatch.js'
 import type { ReleaseFacts, ReleaseLedger } from './releases.js'
-import { componentNamed } from './releases.js'
+import { componentNamed, pendingKey } from './releases.js'
 
 const REPO = { owner: 'acme', name: 'app', fullName: 'acme/app' }
 const T = Date.UTC(2026, 10, 6, 4, 0)
@@ -23,14 +23,16 @@ const repo = { status: 200, body: { default_branch: 'main' } }
 const onMain = (committed: number, status = 'ahead') => ({ status: 200, body: { status, base_commit: { commit: { committer: { date: new Date(committed).toISOString() } } } } })
 
 describe('readReleases.latest', () => {
-  it('takes the newest successful tag push of the component\'s own workflow, on main, with its commit\'s time', async () => {
+  it('takes the highest successful tag push of the component\'s own workflow, on main', async () => {
     const g = github({
       '/repos/acme/app/actions/workflows/release-desktop.yml/runs': { status: 200, body: { workflow_runs: [
-        run({ head_branch: 'main', event: 'schedule' }), run({ head_branch: 'v1.3.78_desktop-candidate' }), run(), run({ head_branch: 'v1.3.77_desktop', head_sha: 'd0' })] } },
+        run({ head_branch: 'main', event: 'schedule' }), run({ head_branch: 'v1.3.78_desktop-candidate' }),
+        // A re-run of an older tag's workflow, listed first: the higher version still wins.
+        run({ head_branch: 'v1.3.77_desktop', head_sha: 'd0', run_started_at: new Date(T + 60_000).toISOString() }), run()] } },
       '/repos/acme/app/compare/d1...main': onMain(T - 60_000),
       '/repos/acme/app': repo,
     })
-    expect(await readReleases(g.get).latest(REPO, componentNamed('desktop'))).toEqual({ tag: 'v1.3.78_desktop', sha: 'd1', at: T, committedAt: T - 60_000 })
+    expect(await readReleases(g.get).latest(REPO, componentNamed('desktop'))).toEqual({ tag: 'v1.3.78_desktop', sha: 'd1', at: T })
     expect(g.asked[0]).toBe('/repos/acme/app/actions/workflows/release-desktop.yml/runs?event=push&status=success&per_page=30')
   })
 
@@ -63,6 +65,35 @@ describe('readReleases.files', () => {
   })
 })
 
+describe('readReleases.mergeCommit and contains', () => {
+  it('takes a merged pull request\'s own merge commit', async () => {
+    const g = github({ '/repos/acme/app/pulls/7': { status: 200, body: { merged_at: new Date(T).toISOString(), merge_commit_sha: 'm7' } } })
+    expect(await readReleases(g.get).mergeCommit(REPO, 7, T)).toBe('m7')
+  })
+
+  it('finds the batch commit on main that closed an original pull request, the oldest one naming it', async () => {
+    const g = github({
+      '/repos/acme/app/pulls/7': { status: 200, body: { merged_at: null, state: 'closed' } },
+      '/repos/acme/app/commits': { status: 200, body: [
+        { sha: 'later', commit: { message: 'Fix the follow-up of #7' } },
+        { sha: 'other', commit: { message: 'Merge batch i1: #70 #71 (#80)' } },
+        { sha: 'batch', commit: { message: 'Merge batch i0: #6 #7 (#79)' } }] },
+      '/repos/acme/app': repo,
+    })
+    expect(await readReleases(g.get).mergeCommit(REPO, 7, T)).toBe('batch')
+    expect(g.asked.at(-1)).toBe(`/repos/acme/app/commits?sha=main&since=${new Date(T - 6 * 3_600_000).toISOString()}&until=${new Date(T + 3_600_000).toISOString()}&per_page=100`)
+    expect(await readReleases(github({ '/repos/acme/app/pulls/7': { status: 502, body: {} } }).get).mergeCommit(REPO, 7, T)).toBeNull()
+  })
+
+  it('says a tag contains a merge when main\'s history from the merge reaches the tag', async () => {
+    const answer = (status: string) => github({ '/repos/acme/app/compare/m7...t1': { status: 200, body: { status } } }).get
+    expect(await readReleases(answer('identical')).contains(REPO, 'm7', 't1')).toBe(true)
+    expect(await readReleases(answer('ahead')).contains(REPO, 'm7', 't1')).toBe(true)
+    expect(await readReleases(answer('behind')).contains(REPO, 'm7', 't1')).toBe(false)
+    expect(await readReleases(github({}).get).contains(REPO, 'm7', 't1')).toBeNull()
+  })
+})
+
 describe('watchReleases', () => {
   const ledger = (over: Partial<ReleaseLedger> = {}): ReleaseLedger => ({ pending: [
     { groupId: 'g1', url: 'https://github.com/acme/app/pull/7', mergedAt: T - 1 },
@@ -82,7 +113,9 @@ describe('watchReleases', () => {
     const read: string[] = []
     const fake: ReleaseReader = {
       files: async (_repo, number) => { read.push(`files ${number}`); return number === 7 ? ['desktop/lib/a.dart'] : null },
-      latest: async (_repo, component) => { read.push(`latest ${component.id}`); return component.id === 'backend' ? { tag: 'v1.4.17_backend', sha: 'b', at: T, committedAt: T } : null },
+      latest: async (_repo, component) => { read.push(`latest ${component.id}`); return component.id === 'backend' ? { tag: 'v1.4.17_backend', sha: 'b', at: T } : null },
+      mergeCommit: async (_repo, number) => { read.push(`merge ${number}`); return `m${number}` },
+      contains: async (_repo, base, head) => { read.push(`contains ${base} ${head}`); return true },
       done: async () => { read.push('done') },
       ...reader,
     }
@@ -92,10 +125,11 @@ describe('watchReleases', () => {
   it('reads each new entry\'s files once, only the components something waits for, and settles with what it read', async () => {
     const s = scene(ledger())
     await watchReleases(s.db, s.store, s.fake, T, { warn: () => {}, info: () => {} })
-    expect(s.read).toEqual(['files 7', 'files 9', 'latest backend', 'latest desktop', 'latest web', 'done'])
+    expect(s.read).toEqual(['files 7', 'merge 7', 'merge 8', 'files 9', 'latest backend', 'contains m8 b', 'latest desktop', 'latest web', 'done'])
     expect(s.settled).toEqual([{ tabId: 'tab', projectId: 'p1', facts: {
-      components: [{ groupId: 'g1', url: 'https://github.com/acme/app/pull/7', components: ['desktop', 'web'] }],
-      releases: { backend: { tag: 'v1.4.17_backend', sha: 'b', at: T, committedAt: T } } } }])
+      resolved: [{ groupId: 'g1', url: 'https://github.com/acme/app/pull/7', components: ['desktop', 'web'], sha: 'm7' },
+        { groupId: 'g2', url: 'https://github.com/acme/app/pull/8', sha: 'm8' }],
+      releases: { backend: { tag: 'v1.4.17_backend', sha: 'b', at: T, carries: [pendingKey({ groupId: 'g2', url: 'https://github.com/acme/app/pull/8' })] } } } }])
   })
 
   it('reads an open step\'s component too, and nothing for a project with nothing to settle', async () => {
@@ -113,5 +147,34 @@ describe('watchReleases', () => {
     await watchReleases(s.db, s.store, s.fake, T, { warn: message => { warned.push(message) }, info: () => {} })
     expect(warned).toEqual(['[swarm-releases] project skipped'])
     expect(s.read.at(-1)).toBe('done')
+  })
+
+  it('compares again only for a new tag or a newly resolved merge, and leaves out a release whose comparison GitHub could not answer', async () => {
+    const known = { pending: [{ groupId: 'g2', url: 'https://github.com/acme/app/pull/8', mergedAt: T - 1, components: ['backend' as const], sha: 'm8' }],
+      last: { backend: { tag: 'v1.4.17_backend', sha: 'b', at: T } } }
+    const same = scene(known)
+    await watchReleases(same.db, same.store, same.fake, T, { warn: () => {}, info: () => {} })
+    expect(same.read).toEqual(['latest backend', 'done'])
+    const unsure = scene({ ...known, last: {} }, { contains: async () => null })
+    await watchReleases(unsure.db, unsure.store, unsure.fake, T, { warn: () => {}, info: () => {} })
+    expect(unsure.settled[0]!.facts.releases).toEqual({})
+  })
+
+  // Review of #3228: the merge is recorded 20 s after its commit landed, and the CLI release is tagged on that very commit.
+  it('ships a merge recorded after its commit landed, in the release tagged on that commit', async () => {
+    const commitAt = T, recordedAt = T + 20_000
+    const g = github({
+      '/repos/acme/app/pulls/7': { status: 200, body: { merged_at: new Date(commitAt).toISOString(), merge_commit_sha: 'm7' } },
+      '/repos/acme/app/actions/workflows/release.yml/runs': { status: 200, body: { workflow_runs: [run({ head_branch: 'v0.5.55_cli', head_sha: 'm7',
+        run_started_at: new Date(T + 5 * 60_000).toISOString() })] } },
+      '/repos/acme/app/compare/m7...main': { status: 200, body: { status: 'identical' } },
+      '/repos/acme/app/compare/m7...m7': { status: 200, body: { status: 'identical' } },
+      '/repos/acme/app': repo,
+    })
+    const s = scene({ pending: [{ groupId: 'g1', url: 'https://github.com/acme/app/pull/7', mergedAt: recordedAt, components: ['cli'] }] },
+      { ...readReleases(g.get), done: async () => {} })
+    await watchReleases(s.db, s.store, s.fake, T + 6 * 60_000, { warn: () => {}, info: () => {} })
+    expect(s.settled[0]!.facts.releases.cli).toEqual({ tag: 'v0.5.55_cli', sha: 'm7', at: T + 5 * 60_000,
+      carries: [pendingKey({ groupId: 'g1', url: 'https://github.com/acme/app/pull/7' })] })
   })
 })

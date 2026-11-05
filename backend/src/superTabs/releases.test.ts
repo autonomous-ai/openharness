@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Conversation, SuperTabState } from './model.js'
 import type { SwarmProject } from './projects.js'
-import { backendPaused, carries, componentsOf, inReleaseWindow, isReleaseTag, notePendingRelease, PENDING_MAX, RELEASE_COMPONENTS, RELEASE_RULES,
-  releaseDue, settleReleases, PENDING_MS, shipped, waitingFor, type PendingRelease, type ReleaseLedger } from './releases.js'
+import { backendPaused, compareTags, componentsOf, inReleaseWindow, isReleaseTag, notePendingRelease, PENDING_MAX, RELEASE_COMPONENTS, RELEASE_RULES,
+  pendingKey, releaseDue, settleReleases, PENDING_MS, shipped, waitingFor, type PendingRelease, type ReleaseLedger } from './releases.js'
 
 /** A time in Vietnam (UTC+7, no daylight saving) on 6 November 2026. */
 const vn = (hour: number, minute = 0) => Date.UTC(2026, 10, 6, hour - 7, minute)
@@ -72,7 +72,7 @@ describe('releaseDue', () => {
 
   it('opens the backend at most every 120 minutes after its last verified release, never in the pause', () => {
     const backend = (lastAt?: number) => ledger({ pending: [entry({ components: ['backend'] })],
-      ...lastAt === undefined ? {} : { last: { backend: { tag: 'v1.4.16_backend', sha: 'abc', at: lastAt, committedAt: lastAt } } } })
+      ...lastAt === undefined ? {} : { last: { backend: { tag: 'v1.4.16_backend', sha: 'abc', at: lastAt } } } })
     expect(releaseDue(backend(), 'backend', vn(11), RELEASE_RULES)).toBe(true)
     expect(releaseDue(backend(vn(11)), 'backend', vn(11) + 119 * MINUTE, RELEASE_RULES)).toBe(false)
     expect(releaseDue(backend(vn(11)), 'backend', vn(11) + 120 * MINUTE, RELEASE_RULES)).toBe(true)
@@ -87,11 +87,12 @@ describe('releaseDue', () => {
 })
 
 describe('shipping', () => {
-  const release = { tag: 'v1.3.78_desktop', sha: 'abc', at: vn(12), committedAt: vn(11) }
-
-  it('carries the merges that landed on main up to its tag\'s commit', () => {
-    expect(carries(release, entry({ mergedAt: vn(11) }))).toBe(true)
-    expect(carries(release, entry({ mergedAt: vn(11) + 1 }))).toBe(false)
+  it('orders release tags by version, not by when they ran', () => {
+    expect(compareTags('v1.3.78_desktop', 'v1.3.77_desktop')).toBeGreaterThan(0)
+    expect(compareTags('v1.3.100_desktop', 'v1.3.99_desktop')).toBeGreaterThan(0)
+    expect(compareTags('v1.4.0_desktop', 'v1.3.99_desktop')).toBeGreaterThan(0)
+    expect(compareTags('v1.3.77_desktop', 'v1.3.77_desktop')).toBe(0)
+    expect(compareTags('v0.5.53_cli', 'v0.5.54_cli')).toBeLessThan(0)
   })
 
   it('ships a task only when every release it needs carries it', () => {
@@ -146,24 +147,26 @@ describe('settleReleases', () => {
     } as SuperTabState
   }
   const ledgerOf = (state: SuperTabState) => state.projects![0]!.releases!
-  const desktopRelease = (committedAt = T - 10 * MINUTE, at = T - 5 * MINUTE) => ({ tag: 'v1.3.78_desktop', sha: 'd1', at, committedAt })
-  const webRelease = { tag: 'v1.3.98_web', sha: 'w1', at: T - 5 * MINUTE, committedAt: T - 10 * MINUTE }
-  const noFacts = { components: [], releases: {} }
+  const key12 = pendingKey({ groupId: 'g12', url: 'https://github.com/o/r/pull/1' })
+  /** A verified Desktop release whose tag GitHub says contains the merge commits of [carries]. */
+  const desktopRelease = (carries = [key12], tag = 'v1.3.78_desktop', at = T - 5 * MINUTE) => ({ tag, sha: 'd1', at, carries })
+  const webRelease = { tag: 'v1.3.98_web', sha: 'w1', at: T - 5 * MINUTE, carries: [key12] }
+  const noFacts = { resolved: [], releases: {} }
 
   it('marks a task released once every release it needs carries it, and takes it off the list', () => {
     const state = swarm([entry({ groupId: 'g12', mergedAt: T - 20 * MINUTE, components: ['desktop', 'web'] })])
-    const first = settleReleases(state, 'p1', { components: [], releases: { desktop: desktopRelease() } }, T)
+    const first = settleReleases(state, 'p1', { resolved: [], releases: { desktop: desktopRelease() } }, T)
     expect(first.shipped).toEqual([])
     expect(ledgerOf(state).pending[0]!.shippedIn).toEqual({ desktop: 'v1.3.78_desktop' })
-    const second = settleReleases(state, 'p1', { components: [], releases: { desktop: desktopRelease(), web: webRelease } }, T)
+    const second = settleReleases(state, 'p1', { resolved: [], releases: { desktop: desktopRelease(), web: webRelease } }, T)
     expect(second.shipped).toEqual(['g12'])
     expect(state.conversations.find(c => c.id === 'g12')!.released).toEqual({ at: T - 5 * MINUTE, tags: ['v1.3.78_desktop', 'v1.3.98_web'] })
     expect(ledgerOf(state).pending).toEqual([])
   })
 
-  it('leaves a merge that landed after the tag\'s commit waiting, and marks nothing without a verified release', () => {
+  it('leaves a merge the tag does not contain waiting, and marks nothing without a verified release', () => {
     const state = swarm([entry({ groupId: 'g12', mergedAt: T - 5 * MINUTE, components: ['desktop'] })])
-    settleReleases(state, 'p1', { components: [], releases: { desktop: desktopRelease(T - 10 * MINUTE) } }, vn(18, 30))
+    settleReleases(state, 'p1', { resolved: [], releases: { desktop: desktopRelease([]) } }, vn(18, 30))
     settleReleases(state, 'p1', noFacts, vn(18, 30))
     expect(ledgerOf(state).pending[0]!.shippedIn).toBeUndefined()
     expect(state.conversations.find(c => c.id === 'g12')!.released).toBeUndefined()
@@ -171,7 +174,7 @@ describe('settleReleases', () => {
 
   it('ships work that changed no released part at its merge', () => {
     const state = swarm([entry({ groupId: 'g13', url: 'https://github.com/o/r/pull/13', mergedAt: T - MINUTE, components: undefined })])
-    const outcome = settleReleases(state, 'p1', { components: [{ groupId: 'g13', url: 'https://github.com/o/r/pull/13', components: [] }], releases: {} }, vn(20))
+    const outcome = settleReleases(state, 'p1', { resolved: [{ groupId: 'g13', url: 'https://github.com/o/r/pull/13', components: [] }], releases: {} }, vn(20))
     expect(outcome.shipped).toEqual(['g13'])
     expect(state.conversations.find(c => c.id === 'g13')!.released).toEqual({ at: T - MINUTE, tags: [] })
   })
@@ -192,7 +195,7 @@ describe('settleReleases', () => {
     const late = swarm([entry({ components: ['desktop'] })])
     expect(settleReleases(late, 'p1', noFacts, vn(18)).opened).toBeNull()
     const backend = swarm([entry({ components: ['backend'], mergedAt: T - MINUTE })],
-      { last: { backend: { tag: 'v1.4.16_backend', sha: 'b', at: T - 60 * MINUTE, committedAt: T - 70 * MINUTE } } })
+      { last: { backend: { tag: 'v1.4.16_backend', sha: 'b', at: T - 60 * MINUTE } } })
     expect(settleReleases(backend, 'p1', noFacts, T).opened).toBeNull()
     expect(settleReleases(backend, 'p1', noFacts, T + 60 * MINUTE).opened).not.toBeNull()
   })
@@ -207,7 +210,7 @@ describe('settleReleases', () => {
   it('says in the step which verified release carried which tasks, and frees the component for the next step', () => {
     const state = swarm([entry({ groupId: 'g12', mergedAt: T - 20 * MINUTE, components: ['desktop'] })],
       { steps: { desktop: { groupId: 'g13', at: T - 15 * MINUTE } } })
-    const outcome = settleReleases(state, 'p1', { components: [], releases: { desktop: desktopRelease() } }, T)
+    const outcome = settleReleases(state, 'p1', { resolved: [], releases: { desktop: desktopRelease() } }, T)
     expect(outcome.messages).toEqual([expect.objectContaining({ conversationId: 'g13', text: 'Verified v1.3.78_desktop: it carries #12 Task 12.' })])
     expect(ledgerOf(state).steps).toEqual({})
   })
@@ -219,6 +222,18 @@ describe('settleReleases', () => {
     expect(ledgerOf(state).steps!.desktop!.endedAt).toBe(T)
     expect(settleReleases(state, 'p1', noFacts, T + 59 * MINUTE).opened).toBeNull()
     expect(settleReleases(state, 'p1', noFacts, T + 60 * MINUTE).opened).not.toBeNull()
+  })
+
+  it('keeps a resolved merge commit, and marks a task the newest tag carries once it resolves, without moving back to an older tag', () => {
+    const state = swarm([entry({ groupId: 'g12', components: ['desktop'] })], { last: { desktop: { tag: 'v1.3.78_desktop', sha: 'd1', at: T - 5 * MINUTE } } })
+    settleReleases(state, 'p1', { resolved: [{ groupId: 'g12', url: 'https://github.com/o/r/pull/1', sha: 'm12' }], releases: {} }, vn(20))
+    expect(ledgerOf(state).pending[0]!.sha).toBe('m12')
+    // The same tag, read again now that the merge commit is known: it carries the task, and announces nothing new.
+    const again = settleReleases(state, 'p1', { resolved: [], releases: { desktop: desktopRelease() } }, vn(20))
+    expect(again.shipped).toEqual(['g12'])
+    // A re-run of an older tag's workflow is not newer: the last release stays.
+    settleReleases(state, 'p1', { resolved: [], releases: { desktop: desktopRelease([], 'v1.3.77_desktop', T) } }, vn(20))
+    expect(ledgerOf(state).last!.desktop!.tag).toBe('v1.3.78_desktop')
   })
 
   it('drops a merge no release carried in 14 days', () => {
