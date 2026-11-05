@@ -58,6 +58,17 @@ describe('the merge train builds batches', () => {
     expect(swarm.merged).toEqual([])
   })
 
+  it('keeps two pull requests that change the same file in separate batches, so no combination goes unread', async () => {
+    const { repo, swarm, pass } = setup()
+    const a = repo.addPull(7, ['backend/src/a.ts']), b = repo.addPull(8, ['backend/src/a.ts', 'backend/src/b.ts']), c = repo.addPull(9, ['cli/src/c.ts'])
+    swarm.approve(a); swarm.approve(b); swarm.approve(c)
+    await pass()
+    expect(repo.batches().map(p => repo.state.contents.get(p.head))).toEqual([[a.head, c.head]])
+    repo.state.ci.set(repo.batches()[0]!.head, 'success')
+    await pass()
+    expect(repo.batches().map(p => repo.state.contents.get(p.head))).toEqual([[b.head]])
+  })
+
   it('never batches a pull request whose verdict is not at its head', async () => {
     const { repo, swarm, pass } = setup()
     const a = repo.addPull(7, ['backend/src/a.ts'])
