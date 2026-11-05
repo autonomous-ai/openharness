@@ -51,6 +51,11 @@ interface Read { parts: SwarmParts; actor: Actor; view: ReaderView; lastChangedA
 export const GROUP_ROWS_BYTES = 8 * 1024 * 1024
 /** How long one Swarm's machine lookups below are reused: machines report every 15 s anyway (Diego's review, item 5, 2026-10-28). */
 const MACHINE_READS_MS = 15_000
+/** The format and deletion metadata can be reused briefly: deletion and migration take effect on each pod within this window. */
+export const SWARM_ROW_READS_MS = 3_000
+const MAX_SWARM_ROW_READS = 2_000
+type SwarmRow = { format: number | null; deletedAt: Date | null }
+type SwarmRowRead = { at: number; read: Promise<SwarmRow | null> }
 type MachineReads = [teamMachines: string[], otherWorkspaceMachines: string[], machineVersions: Record<string, string>, joiningTeams: string[]]
 
 /** The conversations the reader can read now, a dormant one read by id included. */
@@ -114,6 +119,8 @@ export class SwarmReads {
   private readonly servedTops: ServedTops
   /** The machine lookups of each Swarm read in the last MACHINE_READS_MS, oldest first, keyed by what they depend on. */
   private readonly machineReads = new Map<string, { at: number; read: Promise<MachineReads> }>()
+  /** The small format/deletion row for each Swarm, held briefly per process. */
+  private readonly swarmRows = new Map<string, SwarmRowRead>()
 
   async firstLoad(user: AuthUser, tabId: string, asAgentId?: string): Promise<FirstLoad> {
     const t0 = this.now()
@@ -565,12 +572,33 @@ export class SwarmReads {
    *  and only the read of the base parts on a miss is a transaction (cachedReads.ts). A Swarm still in one row is migrated
    *  first, as a safety net for one the job did not see (design 6.1), and answers 503 while that cannot be done. */
   private async read<T>(user: AuthUser, tabId: string, body: (tx: PrismaClient, view: CacheView) => Promise<T>): Promise<T> {
-    // The row's format only: a migrated row still holds its old state, as large as the Swarm, until the owner drops it.
-    const row = await this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: { format: true, deletedAt: true } })
+    const row = await this.swarmRow(user, tabId)
     // A deleted Swarm reads as one that does not exist (deletion.ts).
     if (!row || row.deletedAt) fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
     if (row.format !== 2 && !(await migrateSwarm(this.db, tabId)).ok) fail(SWARM_MIGRATING.code, SWARM_MIGRATING.message, SWARM_MIGRATING.status)
     return body(this.db, await this.store.view([tabId]))
+  }
+
+  /** The row's format only: a migrated row still holds its old state, as large as the Swarm, until the owner drops it. */
+  private swarmRow(user: AuthUser, tabId: string): Promise<SwarmRow | null> {
+    const now = this.now(), key = JSON.stringify([user.autonomousEnv, tabId])
+    const kept = this.swarmRows.get(key)
+    if (kept && now >= kept.at && now - kept.at < SWARM_ROW_READS_MS) return kept.read
+    if (kept) this.swarmRows.delete(key)
+    // Entries are inserted in time order, so an expired prefix is enough to clear old Swarms on each request.
+    for (const [old, entry] of this.swarmRows) {
+      if (now >= entry.at && now - entry.at < SWARM_ROW_READS_MS) break
+      this.swarmRows.delete(old)
+    }
+    const entry: SwarmRowRead = { at: now, read: this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv },
+      select: { format: true, deletedAt: true } }) }
+    this.swarmRows.set(key, entry)
+    while (this.swarmRows.size > MAX_SWARM_ROW_READS) this.swarmRows.delete(this.swarmRows.keys().next().value!)
+    // A missing row or a failed read is not held: a newly created Swarm and a recovered database answer on the next request.
+    entry.read.then(row => { if (!row && this.swarmRows.get(key) === entry) this.swarmRows.delete(key) }, () => {
+      if (this.swarmRows.get(key) === entry) this.swarmRows.delete(key)
+    })
+    return entry.read
   }
 
   private async load(tx: PrismaClient, cached: CacheView, user: AuthUser, tabId: string, asAgentId: string | undefined, t0: number, opts: LoadOptions,
