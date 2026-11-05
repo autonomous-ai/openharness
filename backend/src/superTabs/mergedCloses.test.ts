@@ -1,6 +1,7 @@
 // Task #3510 (anh Dee's Swarm redesign): a recorded merge closes a task whose builder is gone, so a released builder no longer
 // leaves its merged task in review for good; a live builder still closes its own task.
 import { describe, expect, it } from 'vitest'
+import { appendPullRequestUrls } from './model.js'
 import { stepsFixture } from './steps.test-support.js'
 
 const PR = 'https://github.com/acme/app/pull/7'
@@ -9,6 +10,8 @@ function mergedFixture() {
   const f = stepsFixture()
   const assignment = f.group(f.task).assignment!.id
   f.run({ type: 'work.status', conversationId: f.task, assignmentId: assignment, status: 'review', result: `Ready for review: ${PR} at abc1234` }, f.as(f.dev))
+  // As the store does after each command: the Ready line's link is the task's linked pull request.
+  appendPullRequestUrls(f.group(f.task), [PR])
   const merge = (conversationId = f.task) => f.run({ type: 'conversation.merged', conversationId, pullRequestUrl: PR }, f.as(f.lead))
   /** The builder released and its session gone, as a host's confirmed stop leaves it. */
   const removeBuilder = () => { f.state.agents.splice(f.state.agents.findIndex(a => a.id === f.dev), 1) }
@@ -41,6 +44,16 @@ describe('a recorded merge closes a task whose builder is gone (#3510)', () => {
     f.group(f.task).assignment!.status = 'lost'
     f.merge()
     expect(f.group(f.task).assignment).toMatchObject({ status: 'done' })
+  })
+
+  // Aster's review of #3259: a merge of a pull request the task never linked closes nothing.
+  it('leaves the task in review when the merged pull request was never linked to it', () => {
+    const f = mergedFixture()
+    expect(f.group(f.task).pullRequestUrls).toContain(PR)
+    f.removeBuilder()
+    const effects = f.run({ type: 'conversation.merged', conversationId: f.task, pullRequestUrl: 'https://github.com/acme/app/pull/99' }, f.as(f.lead))
+    expect(f.group(f.task).assignment).toMatchObject({ id: f.assignment, status: 'review' })
+    expect(effects.closedAssignment).toBeUndefined()
   })
 
   it('leaves a live builder\'s task for the builder to close', () => {
