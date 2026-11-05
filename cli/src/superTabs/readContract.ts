@@ -39,6 +39,8 @@ export interface Derived {
   mentionsWaiting?: number
   /** A person only: a digest of which of their tags wait, moving when one is made, answered or expires. */
   mentionsDigest?: string
+  /** A person only: a digest of which decisions asked of them are open (backend read/views.ts). */
+  decisionsDigest?: string
   /** False only in a Swarm Harness Team accounts are not tried in yet (backend machines.ts teamAccountSwarm). */
   teamAccounts?: false
 }

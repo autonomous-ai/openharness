@@ -1258,7 +1258,9 @@ export interface SwarmLead {
 /** One Swarm this account is in, as a Harness Pro's card: its Leads, most urgent first. */
 /** `side` 'buddy' while a swarmBuddy dial keeps the Swarm on its Buddy side (spec 2026-10-29-round-dial-pm-buddy): the dial
  *  follows it as the daemon's, which a face alone cannot tell where no project has a Buddy chat (review of #2218). */
-export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[]; side?: 'buddy' }
+export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[]; side?: 'buddy'
+  /** The reader's own Personal Swarm (the list row's `personal: true`); never set on a Team Swarm. */
+  personal?: true }
 /** A Lead's last message, for its card; `chatId` when it is the last message of the chat on the round dial's face, and
  *  `buddy` when that face is a swarmBuddy dial's (`CardChat` 'buddy'), so each dial takes only the recaps it asked for. */
 export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string; buddy?: true
@@ -1279,7 +1281,11 @@ export interface SwarmChat { kind: ChatKind; id: string; name: string; working: 
  *  reader's Buddy chat or a Chat with PM (`pm`), or a task chat (`group`, #2965); or the newest message the reader's Buddy
  *  wrote in its chat (`buddy`, the quiet one). `thread`: the root of the thread it is in, when it is in that thread only; such
  *  a notice is read only where that thread is open. */
-export interface LeadNotice { chat: 'lead' | 'pm' | 'group' | 'buddy'; chatId: string; id: string; text: string; at: number; thread?: string }
+export interface LeadNotice { chat: 'lead' | 'pm' | 'group' | 'buddy'; chatId: string; id: string; text: string; at: number; thread?: string
+  /** A decision asked of the reader: only a swarmNeedsYou dial hears it. */
+  decision?: true
+  /** On a decision's notice: the tag notice it covers (never a decision), which a dial that hears no decisions keeps showing. */
+  tag?: LeadNotice }
 /** The reader's own Buddy in a project, for a round dial's Buddy screen: its chat, name and engine, Desktop's pattern for
  *  its name (`cells`, the 15 half bits; `color`, `#rrggbb`), and `live` false while it is down. */
 export interface SwarmBuddy { chatId: string; name: string; engine: string; cells: number; color: string; live: boolean

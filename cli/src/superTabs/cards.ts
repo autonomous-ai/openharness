@@ -65,6 +65,13 @@ const isSwarmBuddyChat = (conversation: Json): boolean => conversation.kind === 
 /** A Chat with PM: a private conversation with an audience that is not a Buddy chat. Read-only once Buddies are on
  *  (backend commands.ts `PM_CHAT_READ_ONLY`), so words spoken to it on the dial would only be refused. */
 const isChatWithPm = (conversation: Json): boolean => conversation.audience != null && !isBuddyChat(conversation)
+/** The chat kind of a notice raised in conversation `conversationId` of a project whose Lead conversation is `leadId`: `lead`
+ *  in that conversation, `pm` in the reader's Buddy chat or a Chat with PM, `group` elsewhere. Tags and decisions both. */
+const noticeChat = (state: Json, conversationId: string, leadId: unknown): LeadNotice['chat'] => {
+  if (conversationId === leadId) return 'lead'
+  const conversation = list(state.conversations).find(c => c.id === conversationId)
+  return conversation && (isBuddyChat(conversation) || isChatWithPm(conversation)) ? 'pm' : 'group'
+}
 /** The reader's own: the backend sends a Buddy chat to its owner alone (read/views.ts `groupView`), and the dial checks it
  *  again, so another person's Buddy chat never becomes a face, a buddy block or a notice whatever a read holds. */
 const isReadersBuddyChat = (conversation: Json, me: string | undefined): boolean =>
@@ -311,6 +318,10 @@ export class SwarmCards {
   /** The tags baseline: per Swarm, the mentions digest last read, and the ids of the tags seen waiting since the baseline. */
   private tagDigests = new Map<string, string>()
   private tagsSeen = new Map<string, string[]>()
+  /** The decisions asked of the reader, as the tags: the digest last read and the ids seen. */
+  private decisionDigests = new Map<string, string>()
+  private decisionsSeen = new Map<string, string[]>()
+  private personal = new Set<string>()
   /** Each Lead's newest quiet notice from the reader's Buddy (`${tab}:${lead}`): apart, so it never hides the Lead's. */
   private buddyNotices = new Map<string, LeadNotice>()
   /** The side a swarmBuddy dial swiped to, per Swarm; cleared by the window's next focus change (the newest wins). */
@@ -569,6 +580,7 @@ export class SwarmCards {
       for (const tabId of [...this.threads.keys()]) if (!known.has(tabId)) this.threads.delete(tabId)
       for (const tabId of [...this.left.keys()]) if (!known.has(tabId)) this.left.delete(tabId)
       this.rows = rows.map(row => ({ id: row.id as string, name: row.name }))
+      this.personal = new Set(rows.filter(row => row.personal === true).map(row => row.id as string))
     }
     const me = (await this.core.account.identity().catch(() => null))?.accountId
     // Another person signed in: nothing of the last account's is kept, and the list is said again whatever it is.
@@ -598,7 +610,7 @@ export class SwarmCards {
         return { ...lead, ...(notice ? { notice } : {}), ...(buddyNotice ? { buddyNotice } : {}) }
       })
       cards.push({ id: row.id, name: cut(String(tab.state.name ?? row.name ?? ''), NAME_BYTES), count, leads: noticed,
-        ...(side === 'buddy' ? { side: 'buddy' as const } : {}) })
+        ...(side === 'buddy' ? { side: 'buddy' as const } : {}), ...(this.personal.has(row.id) ? { personal: true as const } : {}) })
     }
     // `since` moves every poll while a turn runs and the Pro counts on by itself, so it alone never re-sends the list.
     // Nor does a clock that keeps its turn; one whose turn changed (the Lead's ended, a worker's goes on) does. The start is
@@ -653,12 +665,14 @@ export class SwarmCards {
       }
       watched.add(`${tabId}:mentions`)
       await this.watchTags(tabId, state, projects)
+      watched.add(`${tabId}:decisions`)
+      await this.watchDecisions(tabId, state, projects)
     }
     // A Swarm or project that left the cards takes its baseline and notices with it.
     for (const key of [...this.seen.keys()]) if (!watched.has(key)) this.seen.delete(key)
     for (const key of [...this.failed]) if (!watched.has(key)) this.failed.delete(key)
     for (const [key, notice] of this.buddyNotices) if (!watched.has(`${key.slice(0, key.indexOf(':'))}:${notice.chatId}`)) this.buddyNotices.delete(key)
-    for (const tabId of [...this.tagDigests.keys()]) if (!this.tabs.has(tabId)) { this.tagDigests.delete(tabId); this.tagsSeen.delete(tabId) }
+    for (const tabId of [...this.tagDigests.keys()]) if (!this.tabs.has(tabId)) { this.tagDigests.delete(tabId); this.tagsSeen.delete(tabId); this.decisionDigests.delete(tabId); this.decisionsSeen.delete(tabId) }
     for (const key of [...this.notices.keys()]) {
       const [tabId, leadId] = key.split(':'), state = this.tabs.get(tabId)?.state
       if (!state || !leadProjects(state).some(p => p.leadId === leadId)) this.notices.delete(key)
@@ -687,7 +701,12 @@ export class SwarmCards {
         const known = new Set(seen)
         this.raiseTags(tabId, state, projects, rows.filter(r => !known.has(r.id as string)))
       }
-      for (const { leadId } of projects) if (this.notices.has(recapKey(tabId, leadId)) && !waiting.has(this.notices.get(recapKey(tabId, leadId))!.id)) this.notices.delete(recapKey(tabId, leadId))
+      // A decision's notice is dropped by watchDecisions, not here; the tag under it goes with the tag.
+      for (const { leadId } of projects) {
+        const held = this.notices.get(recapKey(tabId, leadId))
+        if (held?.decision) { if (held.tag && !waiting.has(held.tag.id)) delete held.tag }
+        else if (held && !waiting.has(held.id)) this.notices.delete(recapKey(tabId, leadId))
+      }
       this.tagsSeen.set(tabId, [...(seen ?? []).filter(id => !waiting.has(id)), ...waiting].slice(-MAX_TAGS_SEEN))
       this.tagDigests.set(tabId, digest)
       this.failed.delete(key)
@@ -699,24 +718,75 @@ export class SwarmCards {
     } finally { this.recapsRunning-- }
   }
 
+  /**
+   * The decisions asked of the reader, as the tags are (spec 2026-11-05-dial-lead-pm-buddy-pair, Notices): read only when the
+   * Swarm read's `decisionsDigest` moved. The server lists the reader's own open ones (`/decisions?state=open`; for a person
+   * it is never another's); the first digest seen is the baseline and never alerts, a decision id seen once is never new
+   * again, and the newest new one of a project is its Lead's notice, "<asker> asks you: <question>". The newest of a tag or a
+   * decision wins. One no longer open drops the notice it made. A failed read keeps the digest, so the next poll reads again.
+   */
+  private async watchDecisions(tabId: string, state: Json, projects: Array<{ project: Json; lead: Json; leadId: string }>): Promise<void> {
+    const digest = state.decisionsDigest, seen = this.decisionsSeen.get(tabId)
+    if (typeof digest !== 'string' || this.decisionDigests.get(tabId) === digest) return
+    if (this.recapsRunning >= MAX_RECAPS_IN_FLIGHT) return
+    const key = `${tabId}:decisions`
+    this.recapsRunning++
+    try {
+      const page = object(await backend(this.core, 'GET', `/api/super-tabs/${tabId}/decisions?state=open`))
+      // One page: with `more`, a decision missing from it may be open still, so none is taken as closed.
+      const more = page.more === true
+      const rows = list(page.decisions).filter(r => cardId(r.id) && (r.answeredAt === null || r.answeredAt === undefined))
+      const open = new Set(rows.map(r => r.id as string))
+      if (seen) {
+        const known = new Set(seen)
+        for (const row of rows.filter(r => !known.has(r.id as string))) {
+          const found = projects.find(p => projectKey(p.project) === row.projectId)
+          if (!found || !cardId(row.conversationId) || typeof row.question !== 'string') continue
+          const stamp = Date.parse(String(row.createdAt))
+          const asker = typeof row.askerName === 'string' && row.askerName ? row.askerName : 'Agent'
+          const notice: LeadNotice = { chat: noticeChat(state, row.conversationId, found.lead.id), chatId: row.conversationId, id: row.id as string,
+            text: cut(`${asker} asks you: ${row.question}`, RECAP_BYTES), at: Number.isFinite(stamp) ? Math.floor(stamp / 1000) : 0, decision: true }
+          const held = this.notices.get(recapKey(tabId, found.leadId))
+          if (held && held.at > notice.at) continue
+          // The tag it covers stays under it, for a dial that hears no decisions.
+          const tagBelow = held?.decision ? held.tag : held
+          this.notices.set(recapKey(tabId, found.leadId), tagBelow ? { ...notice, tag: tagBelow } : notice)
+        }
+      }
+      // A notice made by a decision that is no longer open goes (a tag's own is dropped by watchTags).
+      for (const { leadId } of projects) {
+        const held = this.notices.get(recapKey(tabId, leadId))
+        if (!more && held?.decision && !open.has(held.id)) {
+          if (held.tag) this.notices.set(recapKey(tabId, leadId), held.tag)
+          else this.notices.delete(recapKey(tabId, leadId))
+        }
+      }
+      this.decisionsSeen.set(tabId, [...(seen ?? []).filter(id => !open.has(id)), ...open].slice(-MAX_TAGS_SEEN))
+      this.decisionDigests.set(tabId, digest)
+      this.failed.delete(key)
+    } catch (error) {
+      if (!this.failed.has(key)) {
+        this.failed.add(key)
+        this.log(`[super-tabs] the decisions asked of you could not be read for the dial; tried again at the next poll: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    } finally { this.recapsRunning-- }
+  }
+
   /** New tags (`rows`, as `/mentions` lists them) as their project Lead's notice: the newest of each project, unless the one
    *  held is newer. Its chat is `lead` in the project's Lead conversation, `pm` in the reader's Buddy chat or a Chat with PM,
    *  and `group` elsewhere (a task chat); its text names who tagged. A tag of a project with no Lead makes none. */
   private raiseTags(tabId: string, state: Json, projects: Array<{ project: Json; lead: Json; leadId: string }>, rows: Json[]): void {
-    const conversations = list(state.conversations)
     for (const row of rows) {
       const found = projects.find(p => projectKey(p.project) === row.projectId)
       if (!found || !cardId(row.conversationId) || typeof row.text !== 'string') continue
-      const conversation = conversations.find(c => c.id === row.conversationId)
-      const chat: LeadNotice['chat'] = row.conversationId === found.lead.id ? 'lead'
-        : conversation && (isBuddyChat(conversation) || isChatWithPm(conversation)) ? 'pm' : 'group'
+      const chat = noticeChat(state, row.conversationId, found.lead.id)
       const stamp = Date.parse(String(row.createdAt))
       const at = Number.isFinite(stamp) ? Math.floor(stamp / 1000) : 0
       const who = typeof row.leadName === 'string' && row.leadName ? `${row.leadName}: ` : ''
       const notice: LeadNotice = { chat, chatId: row.conversationId, id: row.id as string, text: cut(`${who}${row.text}`, RECAP_BYTES), at,
         ...(identifier(row.threadId) ? { thread: row.threadId } : {}) }
       const held = this.notices.get(recapKey(tabId, found.leadId))
-      if (held && held.at > notice.at) continue
+      if (held && held.at > notice.at) { if (held.decision && (!held.tag || held.tag.at <= notice.at)) held.tag = notice; continue }
       this.notices.set(recapKey(tabId, found.leadId), notice)
     }
   }
@@ -733,7 +803,7 @@ export class SwarmCards {
     held.set(key, notice)
   }
 
-  private forgetNotices(): void { this.notices.clear(); this.buddyNotices.clear(); this.tagDigests.clear(); this.tagsSeen.clear(); this.failed.clear() }
+  private forgetNotices(): void { this.notices.clear(); this.buddyNotices.clear(); this.tagDigests.clear(); this.tagsSeen.clear(); this.decisionDigests.clear(); this.decisionsSeen.clear(); this.failed.clear() }
 
   /** Which of the Leads that run here are in a turn, and since when (the core's windows' own measure of "working"). */
   private async turnsHere(): Promise<Map<string, { inTurn: boolean; since?: number }>> {
