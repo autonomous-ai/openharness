@@ -68,7 +68,7 @@ void main() {
       ],
       'next': null,
     };
-    fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+    final load = firstLoad(
       head: headData(
         projects: [
           for (final name in names)
@@ -98,6 +98,13 @@ void main() {
         'readMarks': {for (final name in names) 'chat-$name': 1},
       },
     );
+    fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+      ...load,
+      'groups': [
+        for (final group in load['groups'] as List)
+          {...group as Map, 'changedAt': now.millisecondsSinceEpoch},
+      ],
+    };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
     fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
       'mentions': <Object>[],
@@ -196,7 +203,11 @@ void main() {
             cursor: 'c3',
             // A poll carries whole changed groups and the remote marks.
             groups: [
-              for (final name in names) part('chat-$name', 40, chat(name)),
+              for (final name in names)
+                {
+                  ...part('chat-$name', 40, chat(name)),
+                  'changedAt': now.millisecondsSinceEpoch,
+                },
             ],
             derived: {
               'readMarks': {
