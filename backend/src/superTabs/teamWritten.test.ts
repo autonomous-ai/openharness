@@ -75,11 +75,13 @@ describe('a task a Team agent worked on', () => {
     expect(refusal(() => f.run({ type: 'work.assign', conversationId: task, agentId: main }))).toBe(TEAM_WRITTEN_WORK)
   })
 
-  it('refuses joining the main account\'s agent to it, by a person or by another agent\'s post', () => {
+  it('refuses adding the main account\'s agent to it, and another agent\'s post naming it does not add it', () => {
     const f = swarm(), task = f.written(), main = f.member('main-reviewer', 'mac')
     expect(refusal(() => f.run({ type: 'conversation.agent', conversationId: task, agentId: main, present: true, lead: false }))).toBe(TEAM_WRITTEN_WORK)
-    expect(refusal(() => f.run({ type: 'message.send', conversationId: task, text: 'Please test this.', replyTo: null, recipientIds: [main] },
-      { kind: 'agent', agentId: 'team-builder', machineOwnerId: 'owner' }))).toBe(TEAM_WRITTEN_WORK)
+    const sent = f.run({ type: 'message.send', conversationId: task, text: 'Please test this.', replyTo: null, recipientIds: [main] },
+      { kind: 'agent', agentId: 'team-builder', machineOwnerId: 'owner' })
+    expect(f.state.conversations.find(c => c.id === task)!.agentIds).not.toContain(main)
+    expect(sent.result.notReached).toContain('main-reviewer')
   })
 
   it('takes a Team agent as its Reviewer, and that does not mark a clean task', () => {
@@ -166,21 +168,66 @@ describe('a task a Team agent worked on', () => {
     expect(effects.messages.find(m => m.text === TEAM_WRITTEN_STOP)?.recipients).toEqual([builder])
   })
 
-  it('refuses a post that names a main-account member of a marked task: the re-test the workflow asks for', () => {
+  it('delivers a post without a main-account member it names in a marked task, and says who was left out', () => {
     const f = swarm(), task = f.group(), builder = f.member('main-builder', 'mac'), tester = f.member('main-tester', 'mac')
     f.run({ type: 'work.assign', conversationId: task, agentId: builder })
-    const step = f.group({ reviewOf: task, step: 'Test' })
-    f.run({ type: 'work.assign', conversationId: step, agentId: tester })
+    f.run({ type: 'conversation.agent', conversationId: task, agentId: tester, present: true, lead: false })
     f.state.conversations.find(c => c.id === task)!.teamWritten = true
     const asBuilder: Actor = { kind: 'agent', agentId: builder, machineOwnerId: 'owner' }
     const post = (conversationId: string, recipientIds: string[], actor: Actor) => f.run({ type: 'message.send', conversationId, text: 'Please test again.', replyTo: null, recipientIds }, actor)
-    expect(refusal(() => post(step, [tester], asBuilder))).toBe(TEAM_WRITTEN_WORK)
-    expect(refusal(() => post(task, [tester], asBuilder))).toBe(TEAM_WRITTEN_WORK)
+    const sent = post(task, [tester], asBuilder)
+    expect(sent.messages.find(m => m.text === 'Please test again.')!.recipients).not.toContain(tester)
+    // The result names the agent who was left out, and says the post itself went out.
+    expect(sent.result.notReached).toContain('main-tester')
+    expect(sent.result.notReached).toContain('post was delivered')
     // A Team agent may still be named, and a person speaks to whom they choose.
     const team = f.member('team-tester', 'mac-team')
     f.run({ type: 'conversation.agent', conversationId: task, agentId: team, present: true, lead: false })
-    expect(refusal(() => post(task, [team], asBuilder))).toBeNull()
-    expect(refusal(() => post(task, [tester], owner))).toBeNull()
+    const toTeam = post(task, [team], asBuilder)
+    expect(toTeam.messages.find(m => m.text === 'Please test again.')!.recipients).toEqual([team])
+    expect(toTeam.result).not.toHaveProperty('notReached')
+    const byPerson = post(task, [tester], owner)
+    expect(byPerson.messages.find(m => m.text === 'Please test again.')!.recipients).toEqual([tester])
+    expect(byPerson.result).not.toHaveProperty('notReached')
+  })
+
+  // Heron21 (Team Reviewer of #3245) named the Integrator, a main-account agent outside the group: the whole post was refused with a
+  // reason about Team accounts that read as being about Heron21. The post goes out; only the recipient is left out, and by name.
+  it('a Team agent\'s post naming a main-account agent outside the group goes out without it, and the agent does not join', () => {
+    const f = swarm(), task = f.written(), integrator = f.member('main-integrator', 'mac'), team = f.member('team-reviewer', 'mac-team')
+    const step = f.group({ reviewOf: task, step: 'Review' })
+    f.run({ type: 'work.assign', conversationId: step, agentId: team })
+    const asTeam: Actor = { kind: 'agent', agentId: team, machineOwnerId: 'owner' }
+    const sent = f.run({ type: 'message.send', conversationId: step, text: 'Ready to merge: Yes.', replyTo: null, recipientIds: [integrator] }, asTeam)
+    expect(sent.messages.find(m => m.text === 'Ready to merge: Yes.')!.recipients).not.toContain(integrator)
+    expect(sent.result.notReached).toContain('main-integrator')
+    expect(f.state.conversations.find(c => c.id === step)!.agentIds).not.toContain(integrator)
+    expect(f.state.conversations.find(c => c.id === task)!.agentIds).not.toContain(integrator)
+  })
+
+  it('leaves out only the barred recipient when a post names a main-account agent and a Team agent', () => {
+    const f = swarm(), task = f.written(), integrator = f.member('main-integrator', 'mac'), team = f.member('team-reviewer', 'mac-team'), other = f.member('team-other', 'mac-team')
+    const step = f.group({ reviewOf: task, step: 'Review' })
+    f.run({ type: 'work.assign', conversationId: step, agentId: team })
+    f.run({ type: 'conversation.agent', conversationId: step, agentId: other, present: true, lead: false })
+    const sent = f.run({ type: 'message.send', conversationId: step, text: 'Verdict.', replyTo: null, recipientIds: [integrator, other] }, { kind: 'agent', agentId: team, machineOwnerId: 'owner' })
+    expect(sent.messages.find(m => m.text === 'Verdict.')!.recipients).toEqual([other])
+    expect(sent.result.notReached).toContain('main-integrator')
+    expect(sent.result.notReached).not.toContain('team-other')
+  })
+
+  it('does not change a post in a task no Team agent wrote: the main-account agent is named and joins as before', () => {
+    const f = swarm(), task = f.group(), builder = f.member('main-builder', 'mac'), integrator = f.member('main-integrator', 'mac')
+    f.run({ type: 'work.assign', conversationId: task, agentId: builder })
+    const sent = f.run({ type: 'message.send', conversationId: task, text: 'Merge it.', replyTo: null, recipientIds: [integrator] }, { kind: 'agent', agentId: builder, machineOwnerId: 'owner' })
+    expect(sent.messages.find(m => m.text === 'Merge it.')!.recipients).toEqual([integrator])
+    expect(sent.result).not.toHaveProperty('notReached')
+  })
+
+  it('a main-account agent\'s own post in a Team-written group is still refused: the rule about itself is unchanged', () => {
+    const f = swarm(), task = f.written(), main = f.member('main-reviewer', 'mac')
+    const own = () => f.run({ type: 'message.send', conversationId: task, text: 'Looks fine.', replyTo: null, recipientIds: [] }, { kind: 'agent', agentId: main, machineOwnerId: 'owner' })
+    expect(refusal(own)).toBe(TEAM_WRITTEN_WORK)
   })
 
   // #2963: @Name in the text names an agent too, but only one the sender may name; it never turns a post into a refusal.
