@@ -146,6 +146,14 @@ const hash = (value: unknown): string => createHash('sha256').update(JSON.string
  *  for a busy Swarm) until the maintenance script removes it, and every command and read loads this row. */
 /** The most Swarms a rename reaches at once, as many as a host reads (read/host.ts FULL_TABS); its readings do the rest. */
 const MACHINE_RENAME_SWARMS = 500
+/** The project PM the crew dispatch speaks as (store.ts dispatchCrew): it must still lead a project, and it only assigns. */
+function pmActor(state: SuperTabState, agentId: string, command: Command): Actor {
+  const pm = state.agents.find(a => a.id === agentId)
+  const task = command.type === 'work.assign' ? state.conversations.find(c => c.id === command.conversationId) : undefined
+  if (!pm || !task || ledProject(state, agentId)?.id !== groupProject(state, task).id) fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
+  return { kind: 'agent', agentId, machineOwnerId: pm.machineOwnerId }
+}
+
 /** The writes after which the crew dispatch runs (store.ts dispatchSoon): those that may free a member or open a task. */
 const DISPATCH_TRIGGERS: ReadonlySet<string> = new Set(['work.status', 'work.cancel', 'conversation.create', 'work.define', 'work.priority',
   'work.queue', 'work.lane', 'agent.release', 'crew.add'])
@@ -1570,7 +1578,7 @@ export class SuperTabStore {
   /** [only]: what the store alone may give a command: `overdue` for decision.answer (leaveOverdueDecisions), `movedTo` for
    *  machine.moved (computerSignedIn). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string } } = {}) {
+    workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     const [pushOrigin, repositoryReach] = await Promise.all([this.pushOriginFor(user, tabId, command), this.repositoryReachFor(user, tabId, command)])
     let ended: WorkHold[] = [], started: WorkHold[] = []
@@ -1629,6 +1637,9 @@ export class SuperTabStore {
       }
       // A removed agent's or machine's host confirms its close or cleanup as the machine owner, who may have left the Swarm with it.
       const actor: Actor = command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned' ? { kind: 'person', userId: user.sub, email: user.email }
+        // The server's own crew dispatch (dispatchCrew), as the project's PM, with no sign-in of anyone's: only while that
+        // agent still leads a project in this write's state, and only for work.assign. No route reaches it.
+        : only.asProjectPm ? pmActor(original, only.asProjectPm, command)
         : hostMachineId && 'startId' in command
           ? await this.poolHostActor(tx, user, original, hostMachineId, command.startId)
           : await this.actor(tx, user, original, asAgentId, workspaceLeave && command.type === 'member.remove' && command.userId === user.sub && !asAgentId)
@@ -2221,9 +2232,9 @@ export class SuperTabStore {
       if (!free.length) continue
       const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
       const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
-      const host = lead && await this.db.user.findUnique({ where: { id: lead.machineOwnerId }, select: { email: true } })
-      if (!lead || !host) { skip('NO_PM'); continue }
-      const user: AuthUser = { sub: lead.machineOwnerId, email: host.email, autonomousEnv: row.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
+      if (!lead) { skip('NO_PM'); continue }
+      // No one's sign-in: the Swarm's environment for its reads, and the PM as the actor (executeOnce asProjectPm).
+      const user: AuthUser = { sub: lead.machineOwnerId, email: '', autonomousEnv: row.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
       const open = openTasks(state, project.id, now), taken = new Set<string>()
       for (const member of free) {
         let tries = 0
@@ -2234,7 +2245,7 @@ export class SuperTabStore {
           if (++tries > DISPATCH_TRIES) break
           try {
             await this.executeOnce(user, tabId, { operationId: stableId('dispatch', group.id, group.assignment?.id ?? 'first'),
-              command: { type: 'work.assign', conversationId: group.id, agentId: member.id } }, lead.id)
+              command: { type: 'work.assign', conversationId: group.id, agentId: member.id } }, undefined, undefined, false, { asProjectPm: lead.id })
             taken.add(group.id)
             out.assigned++
             break
