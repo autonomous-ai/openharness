@@ -436,6 +436,26 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
     expect(await whom(() => tagging(s.tabId, s.web, 'Peer, if nobody takes this', owner, null, [peer.sub], { mentionsIfNoWorker: true }))).toEqual([])
   })
 
+  it('a decision asked of a person reaches their phone once, worded as the app does, linking its card; asking it again does not', async () => {
+    const s = await scene()
+    const ask = (question: string) => run(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub,
+      questions: [{ question, options: ['Yes', 'No'], recommended: 0, unblocks: 'The release' }] } as Command, owner, s.worker)
+    let ids: string[] = []
+    const notices = await pushed(async () => { ids = (await ask('Ship it today?')).result.decisionIds as string[] })
+    expect(notices).toEqual([{ personId: peer.sub, key: `decision:${ids[0]}`, slot: `decision:${ids[0]}`, title: 'worker-harness asks you',
+      subtitle: await swarmName(s.tabId), body: 'Open Harness to answer.', link: `swarm:${s.tabId}/${s.web}/decision/${ids[0]}` }])
+    // The same open question asked again is the same decision: no second push.
+    expect(await pushed(() => ask('Ship it today?'))).toEqual([])
+  })
+
+  it('one ask of several questions sounds once', async () => {
+    const s = await scene()
+    const notices = await pushed(() => run(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: [
+      { question: 'Which day?', options: ['Mon', 'Tue'], recommended: 0, unblocks: 'The plan' },
+      { question: 'Which machine?', options: ['Mac', 'Linux'], recommended: 0, unblocks: 'The plan' }] } as Command, owner, s.worker))
+    expect(notices.map(n => [n.personId, n.title, n.quiet === true])).toEqual([[peer.sub, 'worker-harness asks you', false], [peer.sub, 'worker-harness asks you', true]])
+  })
+
   it('tags nobody who cannot read the chat, so no push reaches them', async () => {
     const s = await scene()
     await expect(tagging(s.tabId, s.secretGroup, 'Peer, see this', owner, null, [peer.sub])).rejects.toMatchObject({ code: 'INVALID_MENTION' })
