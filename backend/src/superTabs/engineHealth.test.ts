@@ -186,6 +186,14 @@ describe('an engine whose starts fail on a machine', () => {
     expect(suspendedEngines(pool, NOW + 1)).toHaveProperty('claude')
   })
 
+  it('does not combine an unclassified legacy failure counter with a new engine failure', () => {
+    const pool = machine(), state = stateWith(pool)
+    pool.engineFailures = { codex: 1 }
+    expect(noteStartFailed(state, start(), NOW)).toBeNull()
+    expect(engineUnusable(pool, 'codex', NOW)).toBeNull()
+    expect(noteStartFailed(state, start(), NOW)).toContain('Codex is suspended')
+  })
+
   it('does not let a successful grid start reset the subscription engine cooldown', () => {
     const pool = machine(), state = stateWith(pool)
     noteStartFailed(state, start(), NOW); noteStartFailed(state, start(), NOW)
