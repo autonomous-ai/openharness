@@ -141,16 +141,16 @@ describe('choose', () => {
     ], policy, a(), NOW)
     if ('error' in r) throw new Error('unexpected')
     expect(r).toMatchObject({ floor: 1, belowFloor: false, excluded: [] })
-    // A member in another repository would build in that repository's worktree: shown last, with why (#2377).
+    // A member in another repository would build in that repository's worktree: shown last, with why (#2377). Opus is the
+    // strong tier's model: this medium task's slot on remote-1 offers Sonnet (task #3163).
     expect(r.shown.map(s => s.title)).toEqual([
       'New agent · Claude sonnet medium · mac',
       'Multiply · Claude sonnet medium · remote-1',
-      'New agent · Claude opus high · remote-1',
       'New agent · Claude sonnet medium · remote-1',
       'Elsewhere · Claude sonnet medium · remote-1',
     ])
-    expect(r.shown.map(s => s.id)).toEqual(['c0', 'c1', 'c2', 'c3', 'c4'])
-    expect(r.shown[4]!.label).toContain(OTHER_REPOSITORY)
+    expect(r.shown.map(s => s.id)).toEqual(['c0', 'c1', 'c2', 'c3'])
+    expect(r.shown[3]!.label).toContain(OTHER_REPOSITORY)
   })
   // Diego, 10-30: a member in another repository tied a new agent and the title decided, so Ada took the task in her own
   // repository's worktree and Zed did not. Review of #2377: ranking it after a new agent was not enough, since what ranks
@@ -249,15 +249,16 @@ describe('strength, fit and effective cost', () => {
   it('3. low, small: the account nearly spent for the week costs more in effect than the one with room', () => {
     const A = windows([80, 4 * H], [2, 5 * D], 'A'), B = windows([60, 4 * H], [70, 5 * D], 'B')
     const r = route([OPUS, SONNET, HAIKU].flatMap(row => [on(row, 'a', A), on(row, 'b', B)]), { difficulty: 'low', size: 'small' })
-    expect(row(r, 'opus', 'a').fit.effectiveCost).toBeGreaterThan(row(r, 'opus', 'b').fit.effectiveCost)
+    // Small work is offered on Sonnet, not Opus (task #3163): the accounts compare the same on either.
+    expect(row(r, 'sonnet', 'a').fit.effectiveCost).toBeGreaterThan(row(r, 'sonnet', 'b').fit.effectiveCost)
     // A's weekly budget is 0.4% a day; Haiku's 0.5% costs it 1 + 1 × 0.5 / 0.4.
     expect(r.shown.find(s => s.model === 'haiku' && s.machineName === 'a')!.fit.effectiveCost).toBe(2.25)
   })
-  it('4. low, small: Opus high on the account whose 5-hour window resets in 20 minutes costs less in effect: it would otherwise go unused', () => {
+  it('4. low, small: Sonnet on the account whose 5-hour window resets in 20 minutes costs less in effect: it would otherwise go unused', () => {
     const A = windows([60, 20 * M], [60, 2 * D], 'A'), B = windows([90, 4 * H], [80, 5 * D], 'B')
     const r = route([OPUS, SONNET, HAIKU].flatMap(row => [on(row, 'a', A), on(row, 'b', B)]), { difficulty: 'low', size: 'small' })
-    expect(row(r, 'opus', 'a').fit.expiring).toBeGreaterThan(0)
-    expect(row(r, 'opus', 'a').fit.effectiveCost).toBeLessThan(row(r, 'opus', 'b').fit.effectiveCost)
+    expect(row(r, 'sonnet', 'a').fit.expiring).toBeGreaterThan(0)
+    expect(row(r, 'sonnet', 'a').fit.effectiveCost).toBeLessThan(row(r, 'sonnet', 'b').fit.effectiveCost)
   })
   it('5. a second high, medium route a minute after the first sees what the first one holds on its account', () => {
     const probes = [on(OPUS, 'a', windows([60, 3 * H], [80, 5 * D], 'A')), on(OPUS, 'b', windows([58, 3 * H], [80, 5 * D], 'B'))]
@@ -486,10 +487,10 @@ describe('edges', () => {
     expect(parseAssessment({ difficulty: 'low', risk: 'urgent', why: 'x' })).toContain('risk')
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 7 })).toContain('why')
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', needs: null }))
-      .toEqual({ difficulty: 'low', risk: 'low', size: 'medium', why: 'x', needs: { tools: [], devices: [] } })
+      .toEqual({ difficulty: 'low', risk: 'low', size: 'medium', unsized: true, why: 'x', needs: { tools: [], devices: [] } })
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', needs: { tools: 'git', devices: [1], cwd: 5 } })).toContain('absolute')
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', needs: { devices: ['cam'], cwd: '/work' } }))
-      .toEqual({ difficulty: 'low', risk: 'low', size: 'medium', why: 'x', needs: { tools: [], devices: ['cam'], cwd: '/work' } })
+      .toEqual({ difficulty: 'low', risk: 'low', size: 'medium', unsized: true, why: 'x', needs: { tools: [], devices: ['cam'], cwd: '/work' } })
   })
   it('keeps the tightest window whatever its order and drops an unusable reset', () => {
     expect(quotaOf2({ known: true, windows: [{ usedPercent: 70, resetsAt: 1_800_000_000 }, { usedPercent: 20, resetsAt: null }] }))
@@ -988,10 +989,10 @@ describe('routing plug-ins', () => {
       on('a', { model: 'haiku', effort: 'auto', quality: 1, cost: 1 }),
     ] }
     const r = ok(choose(given, policy, a(), NOW, [], [], [], [sneaky]))
-    // By machine, as without plug-ins.
-    expect(r.shown.map(s => s.title)).toEqual(['New agent · Claude opus high · a', 'New agent · Claude sonnet medium · a', 'Kai · Claude opus high · k'])
+    // By machine, as without plug-ins; the added Sonnet is the model this medium task's slot on a offers (task #3163).
+    expect(r.shown.map(s => s.title)).toEqual(['New agent · Claude sonnet medium · a', 'Kai · Claude opus high · k'])
     // The added Sonnet on a keeps a's note and quota reading, not its own.
-    expect(r.shown[1]).toMatchObject({ notes: ['Its last task here was lost.'], quota: given[0]!.quota })
+    expect(r.shown[0]).toMatchObject({ notes: ['Its last task here was lost.'], quota: given[0]!.quota })
     expect(r.excluded).toEqual([
       { title: 'New agent · Claude opus high · b', reason: 'Machine is offline.', machine: 'b' },
       { title: 'New agent · Claude sonnet medium · b', reason: 'Machine is offline.', machine: 'b' },
@@ -1022,7 +1023,8 @@ describe('routing plug-ins', () => {
       on('x', { model: 'haiku', effort: 'auto', quality: 1, cost: 1 })].filter(() => probes.length > 0) }
     const watch: RoutePlugin = { name: 'Watch', candidates: probes => { seen.push(probes.map(p => `${p.model} on ${p.machineId}`)); return [] } }
     const r = ok(route(given, [extra, watch]))
-    expect(r.shown.map(s => `${s.model} on ${s.machineName}`)).toEqual(['opus on a', 'opus on x', 'sonnet on x'])
+    // On x the slot offers Sonnet, this medium task's model, over the added Opus (task #3163).
+    expect(r.shown.map(s => `${s.model} on ${s.machineName}`)).toEqual(['opus on a', 'sonnet on x'])
     expect(seen).toEqual([['opus on a', 'sonnet on x', 'opus on x', 'haiku on x']])
     // A person naming a model still considers that model alone.
     expect(titles(route(given, [extra], { model: 'haiku' }))).toEqual(['x'])

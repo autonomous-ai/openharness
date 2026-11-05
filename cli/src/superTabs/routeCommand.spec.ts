@@ -1583,8 +1583,9 @@ describe('routing contributed capacity', () => {
     const answer = await routeTask(input, s as never, where, opener())
     expect(answer).toMatchObject({ ok: true, routeDecisionId: 'd1' })
     const sent = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0].command.decision.candidates.length)
-    // With no pick, then with c0 as the pick (a backend from before task #2901), then the first 12 of those.
-    expect(sent).toEqual([16, 16, 12])
+    // With no pick, then with c0 as the pick (a backend from before task #2901), then the first 12 of those. The task gives no
+    // size, so each machine's Claude keeps both Opus and Sonnet (task #3163): 8 machines, 3 rows each.
+    expect(sent).toEqual([24, 24, 12])
     const recordedIds = new Set(s.mock.calls.filter(c => c[0].action === 'command').at(-1)![0].command.decision.candidates.map((c: { id: string }) => c.id))
     for (const row of answer.candidates as Array<{ id: string }>) expect(recordedIds.has(row.id)).toBe(true)
   })

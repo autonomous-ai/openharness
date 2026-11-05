@@ -72,52 +72,6 @@
      "machineId": "a",
      "machineName": "a",
      "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "quota": {
-      "known": true,
-      "leftPercent": 80,
-      "resetsAt": null,
-      "windows": [
-       {
-        "name": "5-hour",
-        "leftPercent": 80,
-        "resetsAt": 1010800000
-       },
-       {
-        "name": "weekly",
-        "leftPercent": 90,
-        "resetsAt": 1432000000
-       }
-      ],
-      "account": "a"
-     },
-     "activity": "new",
-     "known": true,
-     "refusals": [],
-     "notes": [],
-     "fit": {
-      "status": "fits",
-      "coverage": 1.78,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "a"
-     },
-     "id": "c1",
-     "title": "New agent · Claude opus high · a",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (80% left, resets in 3h); weekly 6% of 90% · a · new · quota 5-hour 80% left (resets in 3h), weekly 90% left (resets in 5 days)"
-    },
-    {
-     "kind": "new",
-     "machineId": "a",
-     "machineName": "a",
-     "engine": "claude",
      "model": "sonnet",
      "effort": "medium",
      "quality": 2,
@@ -155,7 +109,7 @@
       },
       "account": "a"
      },
-     "id": "c2",
+     "id": "c1",
      "title": "New agent · Claude sonnet medium · a",
      "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (60% left, resets in 3h); weekly 4% of 90% · a · new · quota 5-hour 60% left (resets in 3h), weekly 90% left (resets in 5 days)"
     },
@@ -201,7 +155,7 @@
       },
       "account": "b"
      },
-     "id": "c3",
+     "id": "c2",
      "title": "New agent · Claude sonnet medium · b",
      "label": "New agent · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (80% left, resets in 3h); weekly 4% of 90% · b · new · quota 5-hour 80% left (resets in 3h), weekly 90% left (resets in 5 days)"
     },
@@ -253,7 +207,7 @@
       },
       "account": "b"
      },
-     "id": "c4",
+     "id": "c3",
      "title": "Elsewhere · Claude sonnet medium · b",
      "label": "Member Elsewhere · Claude sonnet medium · strength 2, cost 2 · fits: needs about 30% of the 5-hour window (80% left, resets in 3h); weekly 4% of 90% · It works in another repository, so it would build this in that repository's worktree. A new agent starts in this one. · b · idle · different repo · activity unknown · quota 5-hour 80% left (resets in 3h), weekly 90% left (resets in 5 days)"
     }
@@ -304,29 +258,6 @@
      "kind": "new",
      "machineId": "a",
      "engine": "claude",
-     "model": "opus",
-     "effort": "high",
-     "quality": 3,
-     "cost": 3,
-     "title": "New agent · Claude opus high · a",
-     "label": "New agent · Claude opus high · strength 3, cost 3 · fits: needs about 45% of the 5-hour window (80% left, resets in 3h); weekly 6% of 90% · a · new · quota 5-hour 80% left (resets in 3h), weekly 90% left (resets in 5 days)",
-     "fit": {
-      "status": "fits",
-      "coverage": 1.78,
-      "effectiveCost": 3,
-      "expiring": 0,
-      "spend": {
-       "5-hour": 45,
-       "weekly": 6
-      },
-      "account": "a"
-     }
-    },
-    {
-     "id": "c2",
-     "kind": "new",
-     "machineId": "a",
-     "engine": "claude",
      "model": "sonnet",
      "effort": "medium",
      "quality": 2,
@@ -346,7 +277,7 @@
      }
     },
     {
-     "id": "c3",
+     "id": "c2",
      "kind": "new",
      "machineId": "b",
      "engine": "claude",
@@ -369,7 +300,7 @@
      }
     },
     {
-     "id": "c4",
+     "id": "c3",
      "kind": "member",
      "agentId": "m2",
      "machineId": "b",

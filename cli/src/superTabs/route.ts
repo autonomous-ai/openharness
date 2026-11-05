@@ -23,7 +23,9 @@ export type Size = 'small' | 'medium' | 'large'
 export type HeavyWork = 'build' | 'e2e'
 /** `access`: what the work needs to reach, by the names machines list it under (backend superTabs/machineAccess.ts, task #3047). */
 export interface Needs { tools: string[]; devices: string[]; access?: string[]; cwd?: string; heavy?: HeavyWork[]; ci?: { jobs: number; macos: number } }
-export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; local?: boolean; model?: string; needs: Needs }
+/** `unsized`: the agent gave no size (one from before sizes), so the route keeps both models of each slot ([tierOf]). It is the
+ *  route's own: the record sends the size as before. */
+export interface Assessment { difficulty: Level; risk: Level; size: Size; why: string; kind?: string; local?: boolean; model?: string; needs: Needs; unsized?: true }
 /** A model of the reviewed catalog (backend superTabs/catalog.ts): how strong it is, what it costs, and whether it is offered
  * when nobody names it. */
 export interface CatalogModel { engine: 'claude' | 'codex'; model: string; effort: string; strength: number; cost: number; offered: boolean; engineDefault?: true; note?: string }
@@ -254,7 +256,8 @@ export function parseAssessment(value: unknown): Assessment | string {
   if (ci && (!count(ci.jobs, 100) || (ci.jobs as number) < 1 || (ci.macos !== undefined && !count(ci.macos, ci.jobs as number)))) {
     return 'Set needs.ci to the CI jobs the work starts, as {"jobs": 1 to 100, "macos": how many of them run on macOS}.'
   }
-  return { difficulty: v.difficulty as Level, risk: v.risk as Level, size: size as Size, why, ...(v.kind ? { kind: v.kind as string } : {}),
+  return { difficulty: v.difficulty as Level, risk: v.risk as Level, size: size as Size, why, ...(v.size === undefined ? { unsized: true as const } : {}),
+    ...(v.kind ? { kind: v.kind as string } : {}),
     ...(v.local === true ? { local: true } : {}), ...(typeof v.model === 'string' ? { model: v.model.trim() } : {}),
     needs: { tools: list(needs.tools), devices: list(needs.devices), ...(access.length ? { access } : {}), ...(cwd ? { cwd } : {}),
       ...(Array.isArray(heavy) && heavy.length ? { heavy: [...new Set(heavy as HeavyWork[])] } : {}),
@@ -502,13 +505,52 @@ function compare(x: Probe, y: Probe): number {
  *  between (an account, then whether to reuse an agent on it). */
 export const slotOf = (p: Pick<Probe, 'machineId' | 'engine' | 'gridModel' | 'kind'>) => `${p.machineId}\0${p.gridModel ? 'grid' : p.engine}\0${p.kind}`
 
-/** The rows shown: the first new agent and the first member of every engine on every machine in the neutral order, up to
- *  [RECORD_MAX], then the rest up to 12, all in that order. The agent choosing picks between accounts by the project's order;
- *  one row a machine, cut at 12, hid a Claude account with 99% left behind its machine's used-up Codex (Ken, 2026-11-03). */
-function withEveryAccount<T extends Pick<Probe, 'machineId' | 'engine' | 'gridModel' | 'kind'>>(ranked: T[]): T[] {
-  const keep = new Set<T>(), seen = new Set<string>()
-  for (const p of ranked) if (!seen.has(slotOf(p)) && keep.size < RECORD_MAX) { seen.add(slotOf(p)); keep.add(p) }
-  for (const p of ranked) if (keep.size < MAX_SHOWN) keep.add(p)
+/** The work a slot offers a model for, by the project's Routing rules (Models): `strong` for big, hard or risky work, security
+ *  or a review; `standard` for small, low or medium work; null for a task with no size that nothing makes strong. */
+export type Tier = 'standard' | 'strong'
+export function tierOf(a: Assessment): Tier | null {
+  if (a.size === 'large' || a.difficulty === 'high' || a.risk === 'high' || /(^|-)(security|review)(-|$)/.test(a.kind ?? '')) return 'strong'
+  return a.unsized ? null : 'standard'
+}
+/** Each tier's model on each engine, as the Routing rules name them. */
+const TIER_MODELS: Record<Tier, Record<CatalogModel['engine'], { model: string; effort: string }>> = {
+  standard: { claude: { model: 'sonnet', effort: 'high' }, codex: { model: 'gpt-6.1-sol', effort: 'high' } },
+  strong: { claude: { model: 'opus', effort: 'high' }, codex: { model: 'gpt-6-astra', effort: 'xhigh' } },
+}
+const TIERS = Object.keys(TIER_MODELS) as Tier[]
+/** The tier whose model a candidate runs, at any effort: a member's reported model read through the catalog ([catalogRow]),
+ *  so `claude-opus-4-7` is Opus. Null for a grid model or a model no tier names. */
+function modelTier(p: Probe, catalog: Catalog): Tier | null {
+  if (p.gridModel) return null
+  const model = p.kind === 'member' ? catalogRow(catalog, p.engine, p.model, p.effort)?.model ?? p.model : p.model
+  return TIERS.find(t => TIER_MODELS[t][p.engine].model === model) ?? null
+}
+/** How well a candidate fits [tier]: 0 on the tier's model and effort, 1 on neither tier's model or the tier's at another
+ *  effort, 2 on the other tier's model. */
+function fitRank(p: Probe, catalog: Catalog, tier: Tier): 0 | 1 | 2 {
+  const runs = modelTier(p, catalog)
+  if (runs === null) return 1
+  if (runs !== tier) return 2
+  return p.effort === TIER_MODELS[tier][p.engine].effort ? 0 : 1
+}
+
+/** The rows shown: for every engine on every machine, as a new agent and as an idle member, the candidate that fits the task's
+ *  tier best ([fitRank]), ties by the neutral order, up to [RECORD_MAX]; then more up to 12, none fitting worse than its slot's.
+ *  With no tier, each slot keeps its first row of each tier's model, so both are offered. All come in the neutral order. The
+ *  agent choosing picks between accounts by the project's order; one row a machine, cut at 12, hid a Claude account with 99%
+ *  left behind its machine's used-up Codex (Ken, 2026-11-03). The first row of a slot by title offered Opus and Astra for
+ *  small work 4,366 times against Sonnet and Sol 194 (Ken, 2026-11-05, task #3163). */
+function withEveryAccount<T extends Probe>(ranked: T[], catalog: Catalog, a: Assessment): T[] {
+  const tier = tierOf(a)
+  const rank = (p: T) => tier ? fitRank(p, catalog, tier) : 0
+  const slot = (p: T) => tier ? slotOf(p) : `${slotOf(p)}\0${modelTier(p, catalog) ?? ''}`
+  const best = new Map<string, T>()
+  for (const p of ranked) {
+    const held = best.get(slot(p))
+    if (!held ? best.size < RECORD_MAX : rank(p) < rank(held)) best.set(slot(p), p)
+  }
+  const keep = new Set<T>(best.values())
+  for (const p of ranked) if (keep.size < MAX_SHOWN && rank(p) <= rank(best.get(slot(p))!)) keep.add(p)
   return ranked.filter(p => keep.has(p))
 }
 
@@ -600,7 +642,7 @@ export function choose(given: Probe[], catalog: Catalog, a: Assessment, now: num
     return [{ ...p, notes: [...p.notes, ...reasons] }]
   }).sort(compare)
   if (!listed.length) return { error: 'NO_CANDIDATE', excluded, ...warned() }
-  const shown = withEveryAccount(listed).map(({ tight, text, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
+  const shown = withEveryAccount(listed, catalog, a).map(({ tight, text, ...p }, i) => ({ ...p, id: `c${i}`, title: titleOf(p), label: labelOf({ ...p, tight, text }, now) }))
   // With nothing first, only one thing is worth saying of quota beside each row's fit: that none of them covers the task.
   const none = listed.every(p => p.fit.status === 'short')
   return { shown, excluded, floor: 1, belowFloor: false, ...(none ? { short: NONE_COVERS } : {}),
