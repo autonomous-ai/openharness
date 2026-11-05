@@ -25,8 +25,10 @@ and re-derives the checks of the task and its steps. liveness.ts drops its text 
 - No new refusal: `removedRefusals.test.ts` stays green. A bad `head` is a schema error like any malformed field.
 - Old clients: `head` (the whole commit id) is optional in the command. A verdict counts as before only while its task has
   no watched head; after that, one naming no head, or on a pull request whose head is not watched, counts at none.
-- Fail safe: a head whose patch cannot be read (GitHub error, over 3,000 files, the head moved, a file listed for another
+- Fail safe: a head's patch is read from the comparison of the base and head commits the pull request names in one answer,
+  so no push changes it; a head whose patch cannot be read (GitHub error, 300 files or more, the pull request names another
   head) has patch `null`, so only an exact head match counts there; it is read again after 15 minutes.
+- A task once watched never counts verdicts "as before": a verdict on a pull request it no longer reads is unverified.
 - Reads: per-file patches are read when the watch sees a new head, or again for a null patch every 15 minutes. Steps load
   by key from the task's `stepIds`; a task from before them looks its dormant steps up once.
 - Swarm code stays out of cli/src/core.
@@ -37,7 +39,7 @@ and re-derives the checks of the task and its steps. liveness.ts drops its text 
   (`keepHead`), so the map never drops a head the next pass reads; a verdict on a link no longer read is unverified.
   `stepIds` is capped at 200 (production: at most 14 steps on a task, 1.6 on average, 2026-11-05). Verdicts as before.
 - concurrency: written in the same group transaction as the watch's keys (store.ts pullRequestSeen) and `work.check`.
-- read cost: the files are read once per new head (1 to 30 GitHub calls, plus one PR read to pin the head), and again
+- read cost: a head's patch is two GitHub calls (the pull request, then its base...head comparison), once per new head, and again
   only for a head whose patch could not be read, every 15 minutes. Steps are loaded by key from `stepIds` on a head
   change only. A second watch read takes done, unarchived tasks of any age (cap 100) by the same index, `workFinished:
   true` (production: 51 finished, unarchived groups in all). A task from before `stepIds` looks its dormant steps up once,
@@ -49,6 +51,7 @@ and re-derives the checks of the task and its steps. liveness.ts drops its text 
 - migration + rollback: none. A verdict from before heads counts until its task's pull request is first watched, then
   needs a new check (rollout note). Rolling back leaves extra fields nobody reads.
 - audience: the head and patch id come from the server's GitHub App read; a checker states only the head it read, whole.
+  The patch read uses its own token, read-only (contents, pull_requests, metadata), revoked when the pass ends.
 - identity: N/A because nothing here acts as a person.
 - failure: an unreadable patch is stored as null, so only the exact head counts; the pass logs it and reads it again.
 - platforms: backend, plus one Desktop text line that looks the same on every platform.
