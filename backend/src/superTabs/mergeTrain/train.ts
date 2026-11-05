@@ -14,7 +14,8 @@
  */
 import { TrainReadError, type TrainGitHub, type TrainPull } from '../../github/train.js'
 import { NOT_MERGEABLE_BY_TOKEN, TRAIN_BRANCH_PREFIX, TRAIN_CI_TIMEOUT_MS, TRAIN_MAX_BATCH } from './config.js'
-import { eligible, headReads, laneOf, requiredReads, splitRed, type Ineligible, type ReviewTable, type TrainTask } from './plan.js'
+import { eligible, headReads, laneOf, splitRed, type Ineligible, type TrainTask } from './plan.js'
+import { requiredReads, type ProjectRules } from '../policy.js'
 
 /** A task's linked pull request, as the Swarm holds it: what headReads reads. */
 export interface TrainTaskPull { taskId: string; url: string; task: TrainTask }
@@ -37,7 +38,8 @@ interface Batch { number: number; url: string; branch: string; tip: string; base
 export interface TrainMemory { batches: Map<number, Batch>; failed: Set<string>; splits: string[][] }
 export const newTrainMemory = (): TrainMemory => ({ batches: new Map(), failed: new Set(), splits: [] })
 
-export interface TrainRules { enabled: boolean; reviews?: ReviewTable }
+/** The project's rules record as this pass read it: its switch, and the review table its reads come from (policy.ts). */
+export interface TrainRules { enabled: boolean; rules: ProjectRules }
 export type TrainPassLine = { off: true } | { candidates: number; unreadable: number; built: number; merged: number; split: number; closed: number; refused: number; unrecorded: number }
 
 const short = (sha: string) => sha.slice(0, 12)
@@ -73,7 +75,7 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
     const pull = await github.pull(number)
     if (pull.state !== 'open' || pull.url.toLowerCase() !== linked.url.toLowerCase() || pull.headRef.startsWith(TRAIN_BRANCH_PREFIX)) return null
     const files = await github.files(number), ciRequired = await github.ciRequired(pull.head)
-    const reads = headReads(linked.task, linked.url, pull.head), required = requiredReads(files, rules.reviews)
+    const reads = headReads(linked.task, linked.url, pull.head), required = requiredReads(rules.rules, files)
     const verdict = eligible({ url: linked.url, number, head: pull.head, state: pull.state, draft: pull.draft, base: pull.base, mergeable: pull.mergeable,
       labels: pull.labels, files, ciRequired }, reads, required)
     return { member: { number, url: linked.url, head: pull.head, title: pull.title, files, taskId: linked.taskId }, verdict, reads, required, lane: laneOf(files) }
