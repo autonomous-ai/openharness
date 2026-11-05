@@ -56,6 +56,9 @@ export interface ContributedMachine {
    *  Manager candidate, serves no local models, and no reader sees it (model.ts visibleState). It goes with its last Buddy
    *  (commands.ts dropIdleBuddyMachines), or becomes an ordinary machine when its person adds it with Add machine. */
   buddyOnly?: true
+  /** Who had this computer's entry before the account signed in on it now (commands.ts machine.moved, #3122), and until when:
+   *  Machines says "Was kelvin until 5 Nov". Only the last one; gone with the entry. */
+  previousOwner?: { personId: string; until: string }
   /** Agent-time Swarm agents here spent on other people's tasks, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
   lent?: import('./leaderboard/lent.js').LentWeek[]
   /** The same by day, for the board's rolling periods. Only the leaderboard read gets it (model.ts visibleState). */
@@ -299,7 +302,7 @@ export function observedPrivacy(previous: StoredPrivacy | undefined, reported: M
 }
 
 export type TeamWorkCode = 'TEAM_WRITTEN_WORK' | 'MACHINE_OFFLINE' | 'TEAM_ACCOUNT_REQUIRED' | 'PRIVACY_UNCHECKED' | 'PRIVACY_CHECK_FAILED' | 'PRIVACY_CHECK_STALE'
-  | 'MACHINE_IN_OTHER_WORKSPACE' | 'NOT_SWARM_MACHINE' | 'MACHINE_PROJECTS' | 'ACCESS_MISSING'
+  | 'MACHINE_IN_OTHER_WORKSPACE' | 'NOT_SWARM_MACHINE' | 'MACHINE_PROJECTS' | 'ACCESS_MISSING' | 'TEAM_ACCOUNT_JOINING'
 export interface TeamWorkRefusal { code: TeamWorkCode; reason: string }
 /** Refusals that hold until a person acts on the machine; a stale check or an offline machine may pass again by itself. */
 export const LASTING_TEAM_REFUSALS: readonly string[] = ['TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED', 'MACHINE_IN_OTHER_WORKSPACE']
@@ -459,12 +462,33 @@ export function teamPoolOf(state: SuperTabState, pool: ContributedMachine, live?
  * (2026-10-28). Any other machine, and a Mac without one, reads as itself.
  */
 export function machineTeamWork(state: SuperTabState, pool: ContributedMachine, now: number, teamMachines: readonly string[],
-  otherWorkspaceMachines: readonly string[] = []): TeamWorkRefusal | null {
+  otherWorkspaceMachines: readonly string[] = [], joiningTeams: readonly string[] = []): TeamWorkRefusal | null {
   // Its owner lets teammates' work run in their own account: starts stay on the Mac, so the Mac itself is what routing reads
   // (security review 2 of #2981).
   const team = !pool.hostMachineId && !ownAccountWork(pool) ? teamPoolOf(state, pool, teamMachines) : undefined
   const subject = team ?? pool
-  return teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(), otherWorkspaceMachines.includes(subject.machineId))
+  const refusal = teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(), otherWorkspaceMachines.includes(subject.machineId))
+  // Its owner's Team account is on it and joins on the Mac's next poll (read/hostRows.ts joinTeam): not "not set up" meanwhile,
+  // which offered Set up for those seconds (Scholes, 11-05).
+  if (refusal?.code === 'TEAM_ACCOUNT_REQUIRED' && !team && joiningTeams.includes(pool.machineId)) {
+    return { code: 'TEAM_ACCOUNT_JOINING', reason: `The Harness Team account on ${pool.name} is joining this Swarm, ${ONLY_OWN} until it has.` }
+  }
+  return refusal
+}
+
+/** A Harness Team machine of an account (its account row): the Mac it lives on. */
+export interface TeamMachineRow { machineId: string; userId: string; hostMachineId: string }
+
+/**
+ * The Macs of the Swarm whose owner has a Harness Team account on it that the Swarm does not list yet, and room for it: the
+ * ones its host adds on its next poll (read/hostRows.ts joinTeam), from [teams], those owners' Team machines. A Team account
+ * of another account names that account's own Mac, never this one (#3122).
+ */
+export function joiningTeamMacs(state: SuperTabState, teams: readonly TeamMachineRow[]): string[] {
+  const listed = (machineId: string) => state.machines?.some(m => m.machineId === machineId) || state.machineCleanups?.some(c => c.machineId === machineId)
+  return (state.machines ?? []).filter(mac => !mac.hostMachineId && !mac.removal && !mac.buddyOnly && mac.scope === 'swarm'
+    && teams.some(t => t.hostMachineId === mac.machineId && t.userId === mac.contributorId && !listed(t.machineId))
+    && machineRoom(state, mac.contributorId, { team: true }) > 0).map(mac => mac.machineId)
 }
 
 /** The projects with work on [machineId]: its agents' and its pending starts'. */
