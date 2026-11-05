@@ -226,3 +226,52 @@ describe('an engine a machine cannot run', () => {
     expect(engineUnusable(none, 'codex', NOW)).toBeNull()
   })
 })
+
+
+describe('a machine that does not pick up starts', () => {
+  const timeout = (engine: string) => start({ engine }, 'Worker Mac did not start it within 3 minutes')
+  it('combines timeouts across engines, blocks all engines and never penalizes either engine', () => {
+    const pool = machine(), state = stateWith(pool)
+    expect(noteStartFailed(state, timeout('codex'), NOW)).toBeNull()
+    expect(noteStartFailed(state, timeout('claude'), NOW)).toContain('This machine is suspended')
+    expect(pool.engineFailures ?? {}).toEqual({})
+    expect(pool.engineSuspensions ?? {}).toEqual({})
+    for (const engine of ['codex', 'claude']) expect(engineUnusable(pool, engine, NOW)).toContain('This machine is suspended')
+    expect(suspendedEngines(pool, NOW)).toEqual({ codex: expect.stringContaining('This machine is suspended'), claude: expect.stringContaining('This machine is suspended') })
+    expect(noteStartFailed(state, timeout('codex'), NOW + 1)).toBeNull()
+  })
+
+  it('backs off the machine across readings and resets after a successful grid start', () => {
+    const pool = machine(fine), state = stateWith(pool)
+    let now = NOW
+    for (const minutes of [30, 60, 120, 240, 480, 720, 720]) {
+      noteStartFailed(state, timeout('codex'), now)
+      expect(noteStartFailed(state, timeout('claude'), now)).toContain('This machine is suspended')
+      readingClearsSuspensions(pool, now + 1)
+      expect(engineUnusable(pool, 'codex', now + minutes * 60_000 - 1)).not.toBeNull()
+      now += minutes * 60_000
+      expect(engineUnusable(pool, 'codex', now)).toBeNull()
+      readingClearsSuspensions(pool, now)
+    }
+    noteStartFailed(state, timeout('codex'), now)
+    noteStartFailed(state, timeout('claude'), now)
+    noteStartSucceeded(state, start({ gridModel: 'qwen3' }, ''))
+    expect(engineUnusable(pool, 'claude', now)).toBeNull()
+    noteStartFailed(state, timeout('codex'), now)
+    noteStartFailed(state, timeout('claude'), now)
+    expect(engineUnusable(pool, 'claude', now + 30 * 60_000)).toBeNull()
+  })
+
+  it('does not let an engine resume clear a machine cooldown', () => {
+    const pool = machine(), state = stateWith(pool)
+    noteStartFailed(state, timeout('codex'), NOW); noteStartFailed(state, timeout('claude'), NOW)
+    resumeEngine(pool, 'codex')
+    expect(engineUnusable(pool, 'codex', NOW)).not.toBeNull()
+  })
+
+  it('counts a grid pickup timeout against the machine too', () => {
+    const pool = machine(), state = stateWith(pool)
+    noteStartFailed(state, start({ gridModel: 'qwen3' }, 'Worker Mac did not start it within 3 minutes'), NOW)
+    expect(noteStartFailed(state, timeout('claude'), NOW)).toContain('This machine is suspended')
+  })
+})

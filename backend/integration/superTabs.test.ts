@@ -1154,7 +1154,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     await db.machine.create({ data: { machineId: 'health-host', userId: host.sub, apiKey: 'fixture-health-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
     const team = await teamMachine('health-host')
-    await run(tab, { type: 'machine.contribute', machineId: 'health-host', name: 'Health laptop', cwd: '/project', engines: ['codex'], maxAgents: 2 }, host)
+    await run(tab, { type: 'machine.contribute', machineId: 'health-host', name: 'Health laptop', cwd: '/project', engines: ['codex', 'claude'], maxAgents: 2 }, host)
     const generation = (await poolRows(store, team.session, 'health-host'))[0]!.machine.generation
     const observation = { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
       projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null }, tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [],
@@ -1167,6 +1167,12 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const request = { permissionMode: 'full', conversationId: task, machineId: 'health-host', engine: 'codex', name: 'Builder', cwd: '/project', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const hostRun = (command: Command) => store.execute(team.session, tab, { operationId: randomUUID(), command }, undefined, 'health-host')
+    // Preparation failures remain failed starts, but do not disable either engine.
+    for (let i = 0; i < 2; i++) {
+      const startId = (await run(tab, { type: 'agent.start', request })).result.startId as string
+      await hostRun({ type: 'agent.startFailed', startId, error: 'The Harness server answered without a GitHub token for this project.' })
+    }
+    expect((await pool()).suspendedEngines).toBeUndefined()
     for (let i = 0; i < 2; i++) {
       const startId = (await run(tab, { type: 'agent.start', request })).result.startId as string
       await hostRun({ type: 'agent.startDispatch', startId })
@@ -1191,6 +1197,18 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await expect(run(tab, { type: 'machine.engineResume', machineId: 'health-host', engine: 'codex' })).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
     await run(tab, { type: 'machine.engineResume', machineId: 'health-host', engine: 'codex' }, host)
     expect((await pool()).suspendedEngines).toBeUndefined()
+    // Timeouts of different engines share one machine cooldown, persisted across reports and reads.
+    for (const engine of ['codex', 'claude']) {
+      const startId = (await run(tab, { type: 'agent.start', request: { ...request, engine } })).result.startId as string
+      await hostRun({ type: 'agent.startDispatch', startId })
+      await hostRun({ type: 'agent.startFailed', startId, error: 'Health laptop did not start it within 3 minutes' })
+    }
+    await store.observeMachine(team.session, tab, 'health-host', observation)
+    expect(await pool()).toMatchObject({ machineSuspended: expect.stringContaining('This machine is suspended'),
+      suspendedEngines: { codex: expect.stringContaining('This machine is suspended'), claude: expect.stringContaining('This machine is suspended') } })
+    for (const engine of ['codex', 'claude']) {
+      await expect(run(tab, { type: 'agent.start', request: { ...request, engine } })).rejects.toMatchObject({ code: 'MACHINE_UNAVAILABLE' })
+    }
   })
 
   it('resolves a reply beyond recent history without crossing conversation or membership boundaries', async () => {

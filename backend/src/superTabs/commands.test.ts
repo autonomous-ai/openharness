@@ -1764,6 +1764,7 @@ describe('saving a machine again', () => {
       lentDays: [{ day: week, projectId: 'lead', busyMs: 18_000_000 }],
       engineFailures: { codex: 1 },
       engineBackoff: { codex: { level: 3, cause: 'engine' } },
+      machineFailures: 1, machineBackoff: 2, machineSuspension: { at: NOW, durationMs: 3_600_000 },
       engineSuspensions: { claude: { at: NOW, fine: false } },
       observation: { receivedAt: NOW, runningHarnessIds: ['h1'], stoppedHarnessIds: [] } as never,
     }
@@ -5231,8 +5232,9 @@ describe('an engine that cannot run on a contributed machine', () => {
     expect(late.mentions).toBeUndefined()
     expect(late.text).not.toContain('suspended')
     expect(f.state.machines![0]!.engineSuspensions ?? {}).toEqual({})
-    // A different start that fails next is the second in a row.
-    expect(fail('s2').mentions).toEqual(['owner'])
+    // A different engine failure is only its first; the timeout counted against the machine.
+    expect(fail('s2').mentions).toBeUndefined()
+    expect(fail('s3').mentions).toEqual(['owner'])
   })
 
   // Quota is information, not a gate (project instructions, phase 4).
@@ -5248,6 +5250,17 @@ describe('an engine that cannot run on a contributed machine', () => {
     expect(exhausted.begin().result.startId).toBeTruthy()
     // A reading that says nothing of the engine keeps today's behaviour.
     expect(setup().begin().result.startId).toBeTruthy()
+  })
+
+  it('refuses every engine and grid starts while the machine is suspended', () => {
+    const { f, begin } = setup({ localModels: [{ grid, model: 'qwen3', kind: 'local' }] })
+    f.state.localModels = { grid, enabled: true }
+    f.state.machines![0]!.engines = ['codex', 'claude']
+    for (const startId of ['s1', 's2']) f.run({ type: 'agent.startFailed', startId,
+      error: 'Mac did not start it within 3 minutes' }, owner)
+    for (const extra of [{}, { engine: 'claude' }, { gridModel: 'qwen3', gridName: grid }]) {
+      expect(() => begin(extra)).toThrow('This machine is suspended')
+    }
   })
 
   it('is resumed by the machine owner, or by a Lead passing on the owner\'s message, and by nobody else', () => {
