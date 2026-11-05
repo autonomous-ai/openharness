@@ -22,6 +22,10 @@ export const TOKEN_PERMISSIONS = { contents: 'write', pull_requests: 'write', ch
  * in CI with the repository's secrets, and Team-written branches are among the pushers.
  */
 export const GRANTED_TOKEN_PERMISSIONS = { workflows: 'write', issues: 'write' } as const
+/** What no installation token may ever ask for (task #1788): a new repository is created with the person's own sign-in
+ *  token only (github/repositoryCreate.ts), so a token minted from the app's key can never create, delete or transfer a
+ *  repository, nor widen which repositories the installation covers. */
+export const NEVER_ON_INSTALLATION_TOKENS = ['administration', 'repository_creation', 'installation_repositories'] as const
 /** What preparing an agent's folder may do before the agent has a task: clone and fetch the repository, nothing more. */
 export const PREPARE_PERMISSIONS = { contents: 'read', metadata: 'read' } as const
 /** What the Swarm's tidying reads before it archives a finished group: whether its pull requests are merged or closed. */
@@ -392,6 +396,8 @@ export class GitHubApp {
   }
 
   private async mint(installationId: number, repository: GitHubRepository, permissions: TokenPermissions): Promise<{ token: string; expiresAt: string }> {
+    const forbidden = Object.keys(permissions).filter(name => (NEVER_ON_INSTALLATION_TOKENS as readonly string[]).includes(name))
+    if (forbidden.length) throw new GitHubAppError('GITHUB_APP_PERMISSIONS_FORBIDDEN', `An installation token never asks for ${forbidden.join(', ')}.`, 500)
     const answer = await this.call('POST', `/app/installations/${installationId}/access_tokens`, `Bearer ${this.jwt()}`,
       { repositories: [repository.name], permissions })
     const body = answer.body as Record<string, unknown>
