@@ -5927,21 +5927,45 @@ describe('a PM that stops answering', () => {
     expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Restarting the Product Manager'))
   })
 
-  it('restarts again only after the PM ended a turn and then hung again', async () => {
+  // SecAlder's security review of #3213, Important 1: a relaunched PM reads idle at its prompt before the owed ask is typed
+  // into it, so a guard that reset on idle restarted it every 21 minutes on the same ask until that ask aged out.
+  it('restarts once per owed ask: the same ask hanging it again after its restart is left to people, a new one is not', async () => {
     const t = stuckFixture([owing(0)])
     await t.poll()
     await t.poll(21 * MIN)
     expect(t.restartLead).toHaveBeenCalledTimes(1)
     t.finish()
     await t.poll(2 * MIN)
+    // Back at its prompt, then the same ask is typed into it and it hangs again.
     t.turns.activity = 'idle'
     await t.poll(MIN)
     t.turns.activity = 'working'
-    await t.poll(MIN)
-    await t.poll(19 * MIN)
+    for (let i = 0; i < 8; i++) await t.poll(10 * MIN)
     expect(t.restartLead).toHaveBeenCalledTimes(1)
-    await t.poll(2 * MIN)
+    // That ask was answered; a newer one is owed past its time while the PM is still in that turn.
+    t.rows[0] = owing(60 * MIN)
+    t.rows[0]!.owed = { messageId: 'm2', since: 60 * MIN, restartAfterMs: 20 * MIN }
+    await t.poll(MIN)
     expect(t.restartLead).toHaveBeenCalledTimes(2)
+  })
+
+  // Same review, Minor 2: a reopen that started while the turn was being read must hold the restart.
+  it('does not restart a PM whose reopen began while its turn was being read', async () => {
+    const t = stuckFixture([owing(0)])
+    await t.poll()
+    let read: ((value: Record<string, 'working'>) => void) | null = null
+    t.core.agents.activity = vi.fn(() => new Promise<Record<string, 'working'>>(resolve => { read = resolve }))
+    t.keepLeadAlive.mockImplementation(() => new Promise(() => {}))
+    await t.poll(21 * MIN)
+    expect(read).not.toBeNull()
+    // Its session reads as gone meanwhile: the keep-alive starts reopening it.
+    t.live(false)
+    await t.poll(1_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    t.live(true)
+    read!({ harness: 'working' })
+    await t.poll(0)
+    expect(t.restartLead).not.toHaveBeenCalled()
   })
 
   it('restarts a PM whose screen has not changed while it owes an ask, whatever its turn reads', async () => {
