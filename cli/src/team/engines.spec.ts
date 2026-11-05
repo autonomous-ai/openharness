@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readTeamConfig, type TeamConfig } from './config.js'
-import { checkTeamEngines, engineLines, realEngineCheckDeps, teamEngineBin, teamEngineReporter, TeamEngineReporter, type TeamEngines } from './engines.js'
+import { checkTeamEngines, engineLines, ownerEngineCopies, realEngineCheckDeps, teamEngineBin, teamEngineReporter, TeamEngineReporter, type TeamEngines } from './engines.js'
 import { readTeamStatus, type TeamStatus } from './privacy.js'
 
 vi.mock('./config.js', async (original) => ({ ...await original<typeof import('./config.js')>(), readTeamConfig: vi.fn(() => null) }))
@@ -161,5 +161,50 @@ describe('TeamEngineReporter', () => {
       { ...engines(), codex: { installed: 'yes', signedIn: true } }, { ...engines(), codex: { installed: true, signedIn: 'maybe' } }]) {
       expect(read(bad), JSON.stringify(bad)).toBeUndefined()
     }
+  })
+})
+
+describe('the owner\'s installed engines, for setup to copy (#3169)', () => {
+  function home(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'owner-engines-'))
+    cleanup.push(dir)
+    return dir
+  }
+  function pkg(prefix: string, name: string, bin: unknown, binFile = typeof bin === 'string' ? bin : Object.values(bin as object)[0] as string) {
+    const dir = join(prefix, 'lib', 'node_modules', name)
+    mkdirSync(join(dir, 'bin'), { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, version: '1.0.0', bin }))
+    writeFileSync(join(dir, binFile.replace(/^\.\//, '')), '#!/bin/sh\n', { mode: 0o755 })
+    return dir
+  }
+
+  it('finds each engine where Harness installs it, then in its Node, then in Homebrew\'s, with the command npm links', () => {
+    const owner = home(), node = join(owner, '.harness', 'runtime', 'node-v1'), brew = join(owner, 'brew')
+    const claude = pkg(join(owner, '.local'), '@anthropic-ai/claude-code', { claude: 'bin/claude.exe' })
+    pkg(brew, '@anthropic-ai/claude-code', { claude: 'bin/claude.exe' })
+    const codex = pkg(brew, '@openai/codex', { codex: './bin/codex.js' })
+    expect(ownerEngineCopies({ home: owner, nodeRuntimeDir: node, prefixes: [brew] })).toEqual([
+      { packageName: '@anthropic-ai/claude-code', dir: claude, bin: 'claude', binPath: 'bin/claude.exe' },
+      { packageName: '@openai/codex', dir: codex, bin: 'codex', binPath: 'bin/codex.js' },
+    ])
+    const inNode = pkg(node, '@openai/codex', 'bin/codex.js')
+    expect(ownerEngineCopies({ home: owner, nodeRuntimeDir: node, prefixes: [brew] })[1]).toEqual(
+      { packageName: '@openai/codex', dir: inNode, bin: 'codex', binPath: 'bin/codex.js' })
+  })
+
+  it('leaves out what is not a plain install of that package: another name, no command, a command outside it, a link', () => {
+    const owner = home(), local = join(owner, '.local')
+    pkg(local, '@openai/codex', { codex: '../../../../../bin/sh' }, 'bin/x')
+    const other = pkg(local, '@anthropic-ai/claude-code', { claude: 'bin/claude.exe' })
+    writeFileSync(join(other, 'package.json'), JSON.stringify({ name: 'left-pad', bin: { claude: 'bin/claude.exe' } }))
+    expect(ownerEngineCopies({ home: owner, nodeRuntimeDir: null, prefixes: [] })).toEqual([])
+    // An `npm link` to a source checkout is the owner's work in progress, never copied.
+    const checkout = pkg(join(owner, 'src'), '@openai/codex', 'bin/codex.js')
+    rmSync(join(local, 'lib', 'node_modules', '@openai', 'codex'), { recursive: true })
+    symlinkSync(checkout, join(local, 'lib', 'node_modules', '@openai', 'codex'))
+    expect(ownerEngineCopies({ home: owner, nodeRuntimeDir: null, prefixes: [] })).toEqual([])
+    const noBin = pkg(join(owner, 'nobin'), '@openai/codex', { codex: 'bin/codex.js' })
+    rmSync(join(noBin, 'bin', 'codex.js'))
+    expect(ownerEngineCopies({ home: owner, nodeRuntimeDir: null, prefixes: [join(owner, 'nobin')] })).toEqual([])
   })
 })
