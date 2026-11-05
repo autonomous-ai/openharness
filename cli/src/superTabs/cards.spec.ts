@@ -247,7 +247,7 @@ describe('lastAgentMessage in a chat or a thread', () => {
 })
 
 /** A fake backend: tabs by id with the time each last changed, a message store per conversation, and call counting. */
-function setup(tabs: Record<string, { lastChangedAt: number; state: Record<string, unknown> }>, extra: { activity?: Record<string, 'working' | 'idle'>; elapsed?: number; messages?: (path: string) => unknown; post?: () => { status: number; body: Record<string, unknown> }; delayMs?: number; mentions?: (path: string) => unknown[]; decisions?: (path: string) => unknown[]; personal?: string[] } = {}) {
+function setup(tabs: Record<string, { lastChangedAt: number; state: Record<string, unknown> }>, extra: { activity?: Record<string, 'working' | 'idle'>; elapsed?: number; messages?: (path: string) => unknown; post?: () => { status: number; body: Record<string, unknown> }; delayMs?: number; mentions?: (path: string) => unknown[]; decisions?: (path: string) => unknown[]; decisionsMore?: () => boolean; personal?: string[] } = {}) {
   const calls: string[] = []
   // Message reads in flight now and at most, for a backend whose reads take `delayMs`.
   let reading = 0, mostReading = 0
@@ -281,7 +281,7 @@ function setup(tabs: Record<string, { lastChangedAt: number; state: Record<strin
       if (extra.delayMs) await new Promise(resolve => setTimeout(resolve, extra.delayMs))
       // The reader's tags, as the backend lists them (mentions.ts listMentions).
       if (/^\/api\/super-tabs\/[^/]+\/mentions$/.test(route)) return { status: 200, body: { success: true, data: { mentions: extra.mentions?.(path) ?? [] } } }
-      if (/^\/api\/super-tabs\/[^/]+\/decisions$/.test(route)) return { status: 200, body: { success: true, data: { more: false, decisions: extra.decisions?.(path) ?? [] } } }
+      if (/^\/api\/super-tabs\/[^/]+\/decisions$/.test(route)) return { status: 200, body: { success: true, data: { more: extra.decisionsMore?.() ?? false, decisions: extra.decisions?.(path) ?? [] } } }
       return { status: 200, body: { success: true, data: { ...(extra.messages?.(path) ?? { messages: [], next: null }) as object } } }
     } finally { reading-- }
   })
@@ -864,7 +864,7 @@ describe('SwarmCards personal and decisions', () => {
     await t.cards.tick()
     expect(t.webLead()).not.toHaveProperty('notice')
     await t.asked(decision('dec1'), decision('dec2', { createdAt: '2026-10-22T00:05:00.000Z' }))
-    expect(t.webLead()?.notice).toEqual({ chat: 'lead', chatId: 'lead-web', id: 'dec2', text: 'Dee asks you: Ship it?', at: saidAt + 300 })
+    expect(t.webLead()?.notice).toEqual({ chat: 'lead', chatId: 'lead-web', id: 'dec2', text: 'Dee asks you: Ship it?', at: saidAt + 300, decision: true })
   })
 
   it('closed decision drops its notice', async () => {
@@ -873,6 +873,75 @@ describe('SwarmCards personal and decisions', () => {
     await t.asked(decision('dec2'))
     expect(t.webLead()?.notice).toMatchObject({ id: 'dec2' })
     await t.asked()
+    expect(t.webLead()).not.toHaveProperty('notice')
+  })
+})
+
+/** Tags and decisions behind both digests of one Swarm read. */
+function bothSwarm(more: () => boolean = () => false) {
+  let waiting: Tag[] = [], open: Decision[] = []
+  const state = () => ({ ...chats({ conversations: [conv('lead-web', 'a1', { projectId: 'web' }), conv('lead-mobile', 'a2', { projectId: 'mobile' }), pm(), group()] }),
+    mentionsDigest: digestOf(waiting.map(w => w.id)), decisionsDigest: decisionsDigestOf(open.map(d => d.id)) })
+  const t = setup({ t1: { lastChangedAt: 1, state: state() } }, { mentions: () => waiting, decisions: () => open, decisionsMore: more })
+  const move = async (tags: Tag[], decisions: Decision[]) => { waiting = tags; open = decisions; t.tabs.t1.lastChangedAt++; t.tabs.t1.state = state(); await t.cards.tick() }
+  return { ...t, move, webLead: () => t.seen.at(-1)?.[0].leads.find(l => l.id === 'a1') }
+}
+
+describe('SwarmCards tags and decisions together', () => {
+  const NEW = '2026-10-22T00:10:00.000Z'
+  it('a decision asked in the reader\'s Buddy chat has the chat kind a tag there has', async () => {
+    const tagged = bothSwarm(); await tagged.cards.tick(); await tagged.move([tag('t1', 'pm-web')], [])
+    const asked = bothSwarm(); await asked.cards.tick(); await asked.move([], [decision('d1', { conversationId: 'pm-web' })])
+    expect(tagged.webLead()?.notice?.chat).toBe('pm')
+    expect(asked.webLead()?.notice?.chat).toBe('pm')
+    const group2 = bothSwarm(); await group2.cards.tick(); await group2.move([], [decision('d2', { conversationId: 'g-web' })])
+    expect(group2.webLead()?.notice?.chat).toBe('group')
+  })
+
+  it('the tag digest moving keeps a decision\'s notice', async () => {
+    const t = bothSwarm(); await t.cards.tick()
+    await t.move([], [decision('d1')])
+    expect(t.webLead()?.notice).toMatchObject({ id: 'd1', decision: true })
+    await t.move([tag('t0', 'g-web', { createdAt: '2026-10-21T00:00:00.000Z' })], [decision('d1')])   // an older tag arrives: the decision stays
+    expect(t.webLead()?.notice).toMatchObject({ id: 'd1', decision: true })
+    await t.move([], [decision('d1')])   // and the tag leaving drops nothing of the decision's
+    expect(t.webLead()?.notice).toMatchObject({ id: 'd1', decision: true })
+  })
+
+  it('the newer of a tag and a decision is the notice; a decision keeps the tag it covers for a dial that hears no decisions', async () => {
+    const t = bothSwarm(); await t.cards.tick()
+    await t.move([tag('t1', 'g-web')], [])
+    expect(t.webLead()?.notice).toMatchObject({ id: 't1' })
+    await t.move([tag('t1', 'g-web')], [decision('d1', { createdAt: NEW })])
+    expect(t.webLead()?.notice).toMatchObject({ id: 'd1', decision: true, tag: { id: 't1' } })
+    // A newer tag replaces the decision's notice.
+    await t.move([tag('t1', 'g-web'), tag('t2', 'g-web', { createdAt: '2026-10-22T00:20:00.000Z' })], [decision('d1', { createdAt: NEW })])
+    expect(t.webLead()?.notice).toMatchObject({ id: 't2' })
+    expect(t.webLead()?.notice).not.toHaveProperty('decision')
+    // And the decision closing leaves the tag's.
+    await t.move([tag('t1', 'g-web'), tag('t2', 'g-web', { createdAt: '2026-10-22T00:20:00.000Z' })], [])
+    expect(t.webLead()?.notice).toMatchObject({ id: 't2' })
+  })
+
+  it('closing the decision that covered a tag brings the tag\'s notice back', async () => {
+    const t = bothSwarm(); await t.cards.tick()
+    await t.move([tag('t1', 'g-web')], [])
+    await t.move([tag('t1', 'g-web')], [decision('d1', { createdAt: NEW })])
+    await t.move([tag('t1', 'g-web')], [])
+    expect(t.webLead()?.notice).toMatchObject({ id: 't1' })
+    expect(t.webLead()?.notice).not.toHaveProperty('decision')
+  })
+
+  it('a paged decisions read does not drop the notice of a decision missing from the page', async () => {
+    let more = false
+    const t = bothSwarm(() => more); await t.cards.tick()
+    await t.move([], [decision('d1')])
+    expect(t.webLead()?.notice).toMatchObject({ id: 'd1' })
+    more = true
+    await t.move([], [decision('d2', { createdAt: '2026-10-21T00:00:00.000Z' })])   // d1 is past the page, not closed
+    expect(t.webLead()?.notice).toMatchObject({ id: 'd1' })
+    more = false
+    await t.move([], [])   // the whole list, and empty: d1 is closed
     expect(t.webLead()).not.toHaveProperty('notice')
   })
 })

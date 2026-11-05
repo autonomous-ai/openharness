@@ -1553,7 +1553,7 @@ static void thread_rest(const char *cursor, char out[HT_TEXT_BYTES])
     for (size_t i = 0; i < n; i++) out[i] = cursor[i] == '\n' ? ' ' : cursor[i];
     out[n] = 0;
 }
-static void face_thread(ht_scene_t *f, const ht_lead_t *l, bool buddy, const char *recap, const char *wait)
+static void face_thread(ht_scene_t *f, const ht_lead_t *l, bool buddy, const char *recap, const char *wait, bool bell_above)
 {
     // A Lead waiting on the person stays visible: the wait's text in the card, in the accent the main face writes it in.
     if (wait) recap = wait;
@@ -1581,10 +1581,11 @@ static void face_thread(ht_scene_t *f, const ht_lead_t *l, bool buddy, const cha
     char meta[40] = "";
     if (recap && !wait && l->thread_replies >= 0)
         snprintf(meta, sizeof meta, "%s · %ld repl%s", buddy ? "Buddy" : "PM", (long)l->thread_replies, l->thread_replies == 1 ? "y" : "ies");
-    int rows = recap ? 0 : 1;
+    // The bell at y 346 (pair and bell both showing) leaves the card two lines: it would end at y 369 with three.
+    int rows = recap ? 0 : 1, max_rows = bell_above ? 2 : 3;
     char text[3][HT_TEXT_BYTES] = {{0}};
-    for (const char *p = recap; p && *p && rows < 3; rows++) {
-        if (rows == 2) { thread_rest(p, text[rows++]); break; }
+    for (const char *p = recap; p && *p && rows < max_rows; rows++) {
+        if (rows == max_rows - 1) { thread_rest(p, text[rows++]); break; }
         thread_line(&p, body, 304, text[rows]);
     }
     if (rows == 0) rows = 1;
@@ -1648,7 +1649,7 @@ static void render_swarm_face(ht_scene_t *f)
         s.notice_ms = (clock - ht_focus_alert_pop_ms(&f_)) | 1;
         f_.notice_ms = bell ? s.notice_ms : 0;
     }
-    if (thread) face_thread(f, l, buddy, recap, wait);
+    if (thread) face_thread(f, l, buddy, recap, wait, bell && l->buddies);
     else ht_character_face(f, &character, &f_, ACCENT, recap);
     s.pet_next_ms = focus_face && !thread ? ht_focus_pet_next_ms(&f_, recap) : 0;
     ht_rect_t bubble = {0};
@@ -1656,7 +1657,7 @@ static void render_swarm_face(ht_scene_t *f)
     int bell_y = l->buddies ? 346 : 400;   // clear of the pair
     if (bell && !told) {
         if (focus_face) focus_bell(f, unread, bell_y);
-        else ht_notification_bell(f, unread, f_.ink);
+        else ht_notification_bell_at(f, unread, f_.ink, bell_y);   // a creature skin's too, above the pair
     }
     if (buddy && !thread) {
         // The avatar stands where the pet does on Focus, at 233, 158 or higher: 8 px clear of the recap's card, which keeps
@@ -4061,8 +4062,8 @@ uint32_t habitat_next_wake_ms(void)
         uint32_t left = elapsed >= due ? 1 : due - elapsed;
         if (left < delay) delay = left;
     }
-    uint32_t deadlines[] = {s.pet_pose ? s.pet_until : 0, s.nap ? s.nap_until : 0, s.view == SWARM_PICK ? s.pick_until : 0,
-                            s.voice_retry_until};
+    uint32_t deadlines[] = {s.pet_pose ? s.pet_until : 0, s.nap ? s.nap_until : 0, s.view == SWARM_PICK && !s.touch_down ? s.pick_until : 0,
+                            s.voice_retry_until};   // (the picker's idle waits for the lift: a held finger past it woke every pass)
     for (unsigned i = 0; i < sizeof(deadlines) / sizeof(deadlines[0]); i++)
         if (deadlines[i]) {
             int32_t left = (int32_t)(deadlines[i] - now);

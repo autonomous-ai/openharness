@@ -5347,6 +5347,27 @@ describe('swarm cards', () => {
       }
     })
 
+    it('a decision notice goes only to a swarmNeedsYou dial; any other dial keeps the tag notice it covers, or none', async () => {
+      const tagOne = { chat: 'group' as const, chatId: 'g1', id: 'tag1', text: 'Sam: look', at: 1792560000 }
+      const decided = { chat: 'lead' as const, chatId: 'lead1', id: 'dec1', text: 'Dee asks you: Ship it?', at: 1792560100, decision: true as const }
+      for (const [hello, covered] of [[{ ...BUDDY, swarmNeedsYou: 'v1' }, true], [BUDDY, true], [BUDDY, false]] as const) {
+        const state = { cards: [card('st1', [withBuddy()])] }
+        const { session, port } = await connect(cardHost(state))
+        try {
+          port.say(hello)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          await settle(); await settle()
+          state.cards = [card('st1', [withBuddy({ notice: covered ? { ...decided, tag: tagOne } : decided })])]
+          await session.syncSwarmCards()
+          await new Promise((r) => setTimeout(r, 350))
+          const ids = ofType(port, 'supertab.notice').map((n) => n.id)
+          expect(ids).toEqual('swarmNeedsYou' in hello ? ['dec1'] : covered ? ['tag1'] : [])
+          // Nothing a dial is sent names the daemon's own fields.
+          for (const n of ofType(port, 'supertab.notice')) { expect(n).not.toHaveProperty('decision'); expect(n).not.toHaveProperty('tag') }
+        } finally { await session.stop() }
+      }
+    })
+
     // Review of #2500: with one Swarm Buddy, its one word badges every card; seeing the Buddy side clears them all.
     it('showing the Buddy side reads the Swarm Buddy\'s notice on every card that shares it, and no other chat\'s', async () => {
       const own = { ...buddyNotice('o1'), chatId: 'own-chat' }

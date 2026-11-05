@@ -65,6 +65,13 @@ const isSwarmBuddyChat = (conversation: Json): boolean => conversation.kind === 
 /** A Chat with PM: a private conversation with an audience that is not a Buddy chat. Read-only once Buddies are on
  *  (backend commands.ts `PM_CHAT_READ_ONLY`), so words spoken to it on the dial would only be refused. */
 const isChatWithPm = (conversation: Json): boolean => conversation.audience != null && !isBuddyChat(conversation)
+/** The chat kind of a notice raised in conversation `conversationId` of a project whose Lead conversation is `leadId`: `lead`
+ *  in that conversation, `pm` in the reader's Buddy chat or a Chat with PM, `group` elsewhere. Tags and decisions both. */
+const noticeChat = (state: Json, conversationId: string, leadId: unknown): LeadNotice['chat'] => {
+  if (conversationId === leadId) return 'lead'
+  const conversation = list(state.conversations).find(c => c.id === conversationId)
+  return conversation && (isBuddyChat(conversation) || isChatWithPm(conversation)) ? 'pm' : 'group'
+}
 /** The reader's own: the backend sends a Buddy chat to its owner alone (read/views.ts `groupView`), and the dial checks it
  *  again, so another person's Buddy chat never becomes a face, a buddy block or a notice whatever a read holds. */
 const isReadersBuddyChat = (conversation: Json, me: string | undefined): boolean =>
@@ -694,10 +701,11 @@ export class SwarmCards {
         const known = new Set(seen)
         this.raiseTags(tabId, state, projects, rows.filter(r => !known.has(r.id as string)))
       }
-      // A decision's notice is dropped by watchDecisions, not here.
+      // A decision's notice is dropped by watchDecisions, not here; the tag under it goes with the tag.
       for (const { leadId } of projects) {
         const held = this.notices.get(recapKey(tabId, leadId))
-        if (held && !waiting.has(held.id) && !(this.decisionsSeen.get(tabId) ?? []).includes(held.id)) this.notices.delete(recapKey(tabId, leadId))
+        if (held?.decision) { if (held.tag && !waiting.has(held.tag.id)) delete held.tag }
+        else if (held && !waiting.has(held.id)) this.notices.delete(recapKey(tabId, leadId))
       }
       this.tagsSeen.set(tabId, [...(seen ?? []).filter(id => !waiting.has(id)), ...waiting].slice(-MAX_TAGS_SEEN))
       this.tagDigests.set(tabId, digest)
@@ -724,8 +732,10 @@ export class SwarmCards {
     const key = `${tabId}:decisions`
     this.recapsRunning++
     try {
-      const rows = list(object(await backend(this.core, 'GET', `/api/super-tabs/${tabId}/decisions?state=open`)).decisions)
-        .filter(r => cardId(r.id) && (r.answeredAt === null || r.answeredAt === undefined))
+      const page = object(await backend(this.core, 'GET', `/api/super-tabs/${tabId}/decisions?state=open`))
+      // One page: with `more`, a decision missing from it may be open still, so none is taken as closed.
+      const more = page.more === true
+      const rows = list(page.decisions).filter(r => cardId(r.id) && (r.answeredAt === null || r.answeredAt === undefined))
       const open = new Set(rows.map(r => r.id as string))
       if (seen) {
         const known = new Set(seen)
@@ -734,17 +744,22 @@ export class SwarmCards {
           if (!found || !cardId(row.conversationId) || typeof row.question !== 'string') continue
           const stamp = Date.parse(String(row.createdAt))
           const asker = typeof row.askerName === 'string' && row.askerName ? row.askerName : 'Agent'
-          const notice: LeadNotice = { chat: row.conversationId === found.lead.id ? 'lead' : 'group', chatId: row.conversationId, id: row.id as string,
-            text: cut(`${asker} asks you: ${row.question}`, RECAP_BYTES), at: Number.isFinite(stamp) ? Math.floor(stamp / 1000) : 0 }
+          const notice: LeadNotice = { chat: noticeChat(state, row.conversationId, found.lead.id), chatId: row.conversationId, id: row.id as string,
+            text: cut(`${asker} asks you: ${row.question}`, RECAP_BYTES), at: Number.isFinite(stamp) ? Math.floor(stamp / 1000) : 0, decision: true }
           const held = this.notices.get(recapKey(tabId, found.leadId))
           if (held && held.at > notice.at) continue
-          this.notices.set(recapKey(tabId, found.leadId), notice)
+          // The tag it covers stays under it, for a dial that hears no decisions.
+          const tagBelow = held?.decision ? held.tag : held
+          this.notices.set(recapKey(tabId, found.leadId), tagBelow ? { ...notice, tag: tagBelow } : notice)
         }
       }
       // A notice made by a decision that is no longer open goes (a tag's own is dropped by watchTags).
       for (const { leadId } of projects) {
         const held = this.notices.get(recapKey(tabId, leadId))
-        if (held && (seen ?? []).includes(held.id) && !open.has(held.id)) this.notices.delete(recapKey(tabId, leadId))
+        if (!more && held?.decision && !open.has(held.id)) {
+          if (held.tag) this.notices.set(recapKey(tabId, leadId), held.tag)
+          else this.notices.delete(recapKey(tabId, leadId))
+        }
       }
       this.decisionsSeen.set(tabId, [...(seen ?? []).filter(id => !open.has(id)), ...open].slice(-MAX_TAGS_SEEN))
       this.decisionDigests.set(tabId, digest)
@@ -761,20 +776,17 @@ export class SwarmCards {
    *  held is newer. Its chat is `lead` in the project's Lead conversation, `pm` in the reader's Buddy chat or a Chat with PM,
    *  and `group` elsewhere (a task chat); its text names who tagged. A tag of a project with no Lead makes none. */
   private raiseTags(tabId: string, state: Json, projects: Array<{ project: Json; lead: Json; leadId: string }>, rows: Json[]): void {
-    const conversations = list(state.conversations)
     for (const row of rows) {
       const found = projects.find(p => projectKey(p.project) === row.projectId)
       if (!found || !cardId(row.conversationId) || typeof row.text !== 'string') continue
-      const conversation = conversations.find(c => c.id === row.conversationId)
-      const chat: LeadNotice['chat'] = row.conversationId === found.lead.id ? 'lead'
-        : conversation && (isBuddyChat(conversation) || isChatWithPm(conversation)) ? 'pm' : 'group'
+      const chat = noticeChat(state, row.conversationId, found.lead.id)
       const stamp = Date.parse(String(row.createdAt))
       const at = Number.isFinite(stamp) ? Math.floor(stamp / 1000) : 0
       const who = typeof row.leadName === 'string' && row.leadName ? `${row.leadName}: ` : ''
       const notice: LeadNotice = { chat, chatId: row.conversationId, id: row.id as string, text: cut(`${who}${row.text}`, RECAP_BYTES), at,
         ...(identifier(row.threadId) ? { thread: row.threadId } : {}) }
       const held = this.notices.get(recapKey(tabId, found.leadId))
-      if (held && held.at > notice.at) continue
+      if (held && held.at > notice.at) { if (held.decision && (!held.tag || held.tag.at <= notice.at)) held.tag = notice; continue }
       this.notices.set(recapKey(tabId, found.leadId), notice)
     }
   }

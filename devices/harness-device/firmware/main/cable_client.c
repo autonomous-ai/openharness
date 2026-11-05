@@ -330,7 +330,8 @@ static void send_hello(void)
     // A face in a thread (spec 2026-11-03-dial-thread-face): each Lead's `thread`, `threadTitle`, `threadReplies`, a recap
     // that names its thread, and `supertab.thread.leave` back. Older daemons ignore it and send none.
     msg_string(&root, "swarmThread", "v1");
-    // A Swarm card may be the reader's own (`personal`); older daemons ignore the field.
+    // This dial hears only what needs the reader: no Buddy quiet notices, and a decision asked of the reader is a notice (spec
+    // 2026-11-05-dial-lead-pm-buddy-pair). Also the Swarm card's `personal`. Older daemons ignore it.
     msg_string(&root, "swarmNeedsYou", "v1");
     // No swarmReview: words for a Swarm chat are sent as any harness's are and reviewed only when held (Diego's dial,
     // 2026-10-29), and a daemon that heard it would refuse every word not reviewed (docs/device-voice-swarm-chat.md).

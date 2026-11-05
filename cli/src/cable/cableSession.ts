@@ -3033,7 +3033,9 @@ export class CableSession {
     for (const card of cards) {
       for (const lead of card.leads.slice(0, SWARM_LEADS_MAX)) {
         // The Buddy's quiet notice is held apart (spec 2026-10-29 Alerts), and only a swarmBuddy dial hears it.
-        const notices: Array<[string, LeadNotice | undefined]> = [[`${card.id}:${lead.id}`, lead.notice]]
+        // A decision asked of the reader is heard by a swarmNeedsYou dial alone; any other keeps the tag it covers, else none.
+        const heard = lead.notice?.decision && !this.swarmNeedsYou ? lead.notice.tag : lead.notice
+        const notices: Array<[string, LeadNotice | undefined]> = [[`${card.id}:${lead.id}`, heard]]
         if (this.swarmBuddy && !this.swarmNeedsYou) notices.push([`${card.id}:${lead.id}:buddy`, lead.buddyNotice])
         for (const [key, notice] of notices) {
           live.add(key)

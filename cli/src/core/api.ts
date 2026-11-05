@@ -1281,7 +1281,11 @@ export interface SwarmChat { kind: ChatKind; id: string; name: string; working: 
  *  reader's Buddy chat or a Chat with PM (`pm`), or a task chat (`group`, #2965); or the newest message the reader's Buddy
  *  wrote in its chat (`buddy`, the quiet one). `thread`: the root of the thread it is in, when it is in that thread only; such
  *  a notice is read only where that thread is open. */
-export interface LeadNotice { chat: 'lead' | 'pm' | 'group' | 'buddy'; chatId: string; id: string; text: string; at: number; thread?: string }
+export interface LeadNotice { chat: 'lead' | 'pm' | 'group' | 'buddy'; chatId: string; id: string; text: string; at: number; thread?: string
+  /** A decision asked of the reader: only a swarmNeedsYou dial hears it. */
+  decision?: true
+  /** On a decision's notice: the tag notice it covers (never a decision), which a dial that hears no decisions keeps showing. */
+  tag?: LeadNotice }
 /** The reader's own Buddy in a project, for a round dial's Buddy screen: its chat, name and engine, Desktop's pattern for
  *  its name (`cells`, the 15 half bits; `color`, `#rrggbb`), and `live` false while it is down. */
 export interface SwarmBuddy { chatId: string; name: string; engine: string; cells: number; color: string; live: boolean

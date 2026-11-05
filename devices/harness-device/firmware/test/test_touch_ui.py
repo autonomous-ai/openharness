@@ -2659,6 +2659,12 @@ static void swarm_pick_checks(const char *dir) {
     swarm_sent = 0; fake_ms += 4000; surface_tick(fake_ms); assert(s.view == SWARM_PICK);
     fake_ms += 1000; surface_tick(fake_ms); scene_take();
     assert(s.view == HOME && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "A0") && no_side_since(0));   // (a recap retry may still go out with time)
+    // A finger held down past the idle deadline does not make the wake 1 ms on every pass (the picker waits for the lift).
+    pick_setup(true, 1, "s1");
+    fake_ms += 1000; tap(fake_ms, 233, 30); assert(s.view == SWARM_PICK && s.pick_until);
+    sw.retried = true;   // the recap's own 5 s retry is not under test
+    s.touch_down = true; fake_ms = s.pick_until + 500; assert(habitat_next_wake_ms() > 1); s.touch_down = false;
+    assert(habitat_next_wake_ms() == 1);   // and once lifted the deadline is due
     // No picker without both a Personal card and another: the name keeps opening PANES.
     pick_setup(true, 0, "sp");
     fake_ms += 1000; tap(fake_ms, 233, 30); assert(s.view == AGENTS);
@@ -2749,6 +2755,34 @@ static void swarm_pair_checks(const char *dir) {
     pair_buddy(); assert(swarm_side_buddy("s1") && buddy_dots());
     pair_pm();
     swipe_next(); assert(wire_has(0, "thread-leave s1 B0"));
+    // Audit: a creature skin draws its bell above the pair too, and its tap opens the inbox from there.
+    pair_face("done", -1, true, "lead", "Lead"); ht_character_select(&character, HT_CHARACTER_TIM);
+    assert(ui_supertab_notice("s1", "B1", HT_CHAT_LEAD, "lead-fw", "", "Flashed.", 1792560001u));
+    scene_take();
+    { bool above = false, under = false;
+      for (int i = 0; i < scene.count; i++) if (scene.runs[i].font == &ht_bell_footer) { if (scene.runs[i].y < 388 && scene.runs[i].y + scene.runs[i].font->height <= 388) above = true; else under = true; }
+      assert(above && !under && pair_pill());
+      bool hit = false;
+      for (int i = 0; i < s.hit_count; i++) if (s.hits[i].action == A_INBOX && s.hits[i].rect.y == 346 - 18) hit = true;
+      assert(hit); }
+    pair_buddy(); assert(swarm_side_buddy("s1")); pair_pm(); assert(!swarm_side_buddy("s1"));
+    tap(fake_ms += 1000, 233, 350); assert(s.view == INBOX);
+    dispatch((action_t){.kind = A_HOME});
+    // Audit: a thread face with the pair and the bell holds its card to two lines, clear of the bell at y 346.
+    buddy_setup();
+    card_begin("s1", "t1", "openharness");
+    { ht_lead_in_t in = {.id = "B0", .project = "web-api", .engine = "claude", .local = "h0", .state = "done", .order = 0, .since = -1,
+                         .chat = "pm", .chat_id = "pm1", .chat_name = "PM", .thread = "m9", .thread_title = "Fix the login bug on Safari when the session expires", .thread_replies = 2,
+                         .buddies = true, .buddy = {.present = true, .chat_id = "b0", .name = "diego's Buddy", .engine = "codex", .color = "#d6a79a", .cells = 25513, .live = true}};
+      assert(ht_supertab_lead_add(&card, &in)); }
+    pair_lead("B1", "firmware", "done", -1, true, "lead", "Lead");
+    assert(!card_send()); enter_at("s1", "B0"); swarm_sent = 0;
+    ui_supertab_recap("s1", "B0", "pm1", "m9", "Taken: Milo fixes the login bug now and Quinn reviews it before the end of the day, then we ship the release to everyone on the beta channel.", 1792560000u, false);
+    assert(ui_supertab_notice("s1", "B1", HT_CHAT_LEAD, "lead-fw", "", "Flashed.", 1792560001u));
+    scene_take();
+    assert(scene_says("PM \xc2\xb7 2 replies") && bell_at(346));
+    for (int i = 0; i < scene.count; i++) { const ht_run_t *r = &scene.runs[i]; if (r->text[0] && r->y < 388 && ht_run_bounds(r).y + ht_run_bounds(r).h > 340 && r->y > 100 && r->font != &ht_bell_footer && r->box.h != 32 && r->x < 150) { fprintf(stderr, "card run y=%d \"%s\"\n", r->y, r->text); assert(false); } }
+    { bool dots = false; for (int i = 0; i < scene.count; i++) if (strstr(scene.runs[i].text, "\xe2\x80\xa6")) dots = true; assert(dots); }
     puts("Swarm PM | Buddy pair: drawn at y 388, taps switch sides, vertical swipes inert, the bell opens the inbox at y 346 (400 without Buddies), no PM line, the working line at y 318 PASS");
 }
 int main(int argc, char **argv) {
