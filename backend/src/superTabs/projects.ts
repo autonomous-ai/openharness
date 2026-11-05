@@ -60,6 +60,9 @@ export interface SwarmProject {
    *  time checks last found it (timeChecks.ts owedAsk); absent when it owes none. Its PM's host restarts a PM that hangs while it
    *  owes one (task #3385). Readers never get it: it may name a message in a person's private chat with the PM. */
   owed?: { messageId: string; since: number }
+  /** Its release list (releases.ts, task #3405): merged tasks waiting for a release, each component's last verified release
+   *  and its open release step. Written by the server alone; readers never get it. */
+  releases?: import('./releases.js').ReleaseLedger
   /** The status card at the top of the project chat (Dee, 2026-10-31): the coordinator's last project.report text, which
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null
