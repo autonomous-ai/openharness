@@ -819,7 +819,7 @@ describe('decisions asked of one person (v2)', () => {
     const s = await scene()
     clock = Date.now()
     const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
-    const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship to everyone?',
+    const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Ship to everyone?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'Turning it on' } }, owner, s.worker)
     expect(needs.status, JSON.stringify(needs.body)).toBe(200)
     const [open] = await decisions(s.tabId, peer)
@@ -917,7 +917,7 @@ describe('decisions asked of one person (v2)', () => {
     const s = await scene()
     clock = Date.now()
     const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
-    await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship to everyone?',
+    await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Ship to everyone?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'Turning it on' } }, owner, s.worker)
     await writeGroup(s.tabId, s.web, Date.now(), group => { group.dormant = true })
     const first = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data
@@ -1257,7 +1257,7 @@ describe('decisions asked of one person (v2)', () => {
       projectId: 'lead', conversationId: s.web, assignmentId, personId: peer.sub, askerAgentId: s.worker, question: `Question ${i + 1}?`,
       options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release', createdAt: new Date() })) })
     const before = (await assignment()).leaseUntil as number
-    const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship how?',
+    const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Ship how?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
     expect(needs.status, JSON.stringify(needs.body)).toBe(200)
     const notAsked = `Not asked peer: 20 decisions you asked them are still open, and at most 20 can be. Wait for answers before asking more.`
@@ -1269,7 +1269,7 @@ describe('decisions asked of one person (v2)', () => {
     expect(notice).toMatchObject({ text: `Needs a human\n\nShip how?\n\n${notAsked}`, recipientIds: [s.lead] })
     expect(await db.superTabDecision.count({ where: { tabId: s.tabId, askerAgentId: s.worker } })).toBe(20)
     // A repeat of one still open is that decision again, so it is asked as before.
-    const repeat = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Question 1?',
+    const repeat = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Question 1?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
     expect(repeat.body.data.result.notAsked).toBeUndefined()
     expect((await db.superTabMessage.findFirst({ where: { tabId: s.tabId, conversationId: s.web }, orderBy: { sequence: 'desc' } }))!.text)
@@ -1300,7 +1300,7 @@ describe('decisions asked of one person (v2)', () => {
     const [other] = (await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub,
       questions: [{ ...question('Ship how?'), options: ['Today', 'Next week'] }] }, owner, s.lead)).body.data.result.decisionIds as string[]
     const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
-    expect((await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship how?',
+    expect((await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Ship how?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)).status).toBe(200)
     const open = await decisions(s.tabId, peer)
     expect(open).toHaveLength(3)
@@ -1420,16 +1420,36 @@ describe('what a read costs the database (group 3b)', () => {
     const out = ((await db.$runCommandRaw({ serverStatus: 1 })) as { network: { bytesOut: unknown } }).network.bytesOut
     return typeof out === 'number' ? out : Number((out as { $numberLong?: string; $numberInt?: string }).$numberLong ?? (out as { $numberInt?: string }).$numberInt)
   }
-  /** Waits until nothing else is reading or writing: what MongoDB sends in a tenth of a second (the first read's own answer
-   *  and whatever else lands meanwhile) is the same four times running. Earlier tests' background work (a command's notices
-   *  and wakes, a read a timed-out test left going) would otherwise land in the next test's count. */
+  /** The model calls this client has begun and not finished, and when it last began or finished one. A read that load holds
+   *  back sends nothing yet, so the byte count alone cannot tell it from quiet; the call itself can. Raw commands (the byte
+   *  count's own) carry no model and are left out. */
+  let running = 0, lastBusy = 0
+  /** A model call held back before it goes out, as CPU load holds one back: a test stalls a read with it and lets it go. */
+  let hold: Promise<void> | null = null
+  beforeAll(() => {
+    db.$use(async (params, next) => {
+      if (!params.model) return next(params)
+      running++
+      lastBusy = Date.now()
+      try {
+        if (hold) await hold
+        return await next(params)
+      } finally { running--; lastBusy = Date.now() }
+    })
+  })
+  /** Waits until nothing else is reading or writing: for four tenths of a second no model call began, ended or was running,
+   *  and what MongoDB sends in a tenth of a second (the first read's own answer and whatever else lands meanwhile) is the
+   *  same four times running. Earlier tests' background work (a command's notices and wakes, a read a timed-out test left
+   *  going, one that load has not let out yet) would otherwise land in the next test's count. */
   const quiet = async () => {
     let last = -1, steady = 0
     for (let tries = 0; tries < 300 && steady < 4; tries++) {
+      const windowStart = Date.now()
       const before = await sent()
       await new Promise(done => setTimeout(done, 100))
       const sentSince = await sent() - before
-      steady = sentSince === last ? steady + 1 : 0
+      const still = running === 0 && lastBusy < windowStart
+      steady = still && sentSince === last ? steady + 1 : 0
       last = sentSince
     }
     if (steady < 4) throw new Error('The database never went quiet: something keeps reading or writing.')
@@ -1454,8 +1474,27 @@ describe('what a read costs the database (group 3b)', () => {
   it('counts none of the reads an earlier test left running', async () => {
     const s = await scene(f => bulky(f))
     // What a test that ends before its own background work does: reads of the whole Swarm, still going into the next one.
-    const leftover = (async () => { for (let i = 0; i < 40; i++) await db.$transaction(tx => parts.loadAll(tx, s.tabId)) })()
+    let underway = () => {}
+    const begun = new Promise<void>(done => { underway = done })
+    const leftover = (async () => { for (let i = 0; i < 40; i++) { await db.$transaction(tx => parts.loadAll(tx, s.tabId)); underway() } })()
+    // A transaction that load has not started yet is no model call to see: wait until the reads are going, then for them to end.
+    await begun
     expect(await databaseBytes(() => new Promise(done => setTimeout(done, 200)))).toBeLessThan(1_000)
+    await leftover
+  })
+
+  it('counts none of the reads an earlier test left that had not reached the database yet', async () => {
+    const s = await scene(f => bulky(f))
+    // A read held back by load: it sends nothing until it is let go, so the database looks quiet while it is still coming.
+    let release = () => {}
+    hold = new Promise<void>(done => { release = done })
+    const letGo = () => { hold = null; release() }
+    const timer = setTimeout(letGo, 1_500)
+    const leftover = (async () => { for (let i = 0; i < 40; i++) await db.$transaction(tx => parts.loadAll(tx, s.tabId)) })()
+    try {
+      // The test's own call lets the held read go, the moment counting starts: a count that began while it was still held counts it.
+      expect(await databaseBytes(() => { letGo(); return new Promise(done => setTimeout(done, 200)) })).toBeLessThan(1_000)
+    } finally { clearTimeout(timer); letGo() }
     await leftover
   })
 
