@@ -203,6 +203,15 @@ class SuperTabAgent {
           decision,
         _ => null,
       },
+      crewRole = switch (row['crew']) {
+        {'role': final String role} when role.isNotEmpty => role,
+        _ => null,
+      },
+      crewLane = switch (row['crew']) {
+        {'lane': final String lane} => lane,
+        _ => null,
+      },
+      crewAsleep = row['asleep'] != null,
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
 
@@ -256,6 +265,16 @@ class SuperTabAgent {
   final String? workDecision;
 
   static const _workDecisions = {'awaiting', 'keep', 'stop'};
+
+  /// Its role in its project's crew, the agents the Swarm keeps alive (backend crew.ts, task #3397), as the desktop's model
+  /// reads it; null when not crew.
+  final String? crewRole;
+
+  /// The lane a crew member works in (backend, cli, desktop, mobile or docs); null for none.
+  final String? crewLane;
+
+  /// A crew member put to sleep on purpose (task #3398): its session is closed and nothing reopens it.
+  final bool crewAsleep;
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;
