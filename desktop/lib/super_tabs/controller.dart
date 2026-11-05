@@ -13,6 +13,7 @@ import '../measurement/speed_marks.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
+import 'backlog.dart' show SuperTabTaskPriority;
 import 'message_link.dart';
 import 'identity.dart' show superTabMachineName;
 import 'machine_status.dart' show kSuperTabMachineOfflineAfter;
@@ -3168,6 +3169,23 @@ class SuperTabController extends ChangeNotifier {
       'type': 'work.queue',
       'conversationId': taskId,
       'after': after,
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
+  /// Sets task [taskId]'s priority for everyone (backend `work.priority`,
+  /// task #3117): null once done, else why it was refused. Only a person or
+  /// the project's PM may; an older server refuses the command as unknown.
+  Future<String?> setTaskPriority(
+    String taskId,
+    SuperTabTaskPriority priority,
+  ) async {
+    final done = await command({
+      'type': 'work.priority',
+      'conversationId': taskId,
+      'priority': priority.badge,
     });
     return done != null
         ? null
