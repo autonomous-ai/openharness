@@ -272,6 +272,24 @@ describe('a team session speaking in a Swarm', () => {
     await expect(store.start(team, f.tab, f.startId)).rejects.toMatchObject(LIMITED)
   })
 
+  // Task #2912 (security review 2 of #3015): an agent's name is its person's to give, so its machine's Team account, which is
+  // that person signed in with no person to be, renames nothing: not as the person, and not as the agent it hosts.
+  it('renames no agent, as the person or as its own machine\'s agent', async () => {
+    const f = await fixture()
+    const rename = (agentId: string): Command => ({ type: 'agent.rename', agentId, name: 'Renamed' })
+    const names = async () => (await storedState(f.tab)).agents.map(a => [a.id, a.name, a.displayName])
+    const before = await names()
+    await expect(run(f.tab, rename(f.builder), team)).rejects.toMatchObject(LIMITED)
+    await expect(run(f.tab, rename(f.personal), team)).rejects.toMatchObject(LIMITED)
+    await expect(run(f.tab, rename(f.builder), team, f.builder)).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 })
+    // The person's agent on another machine is not even one it can read.
+    await expect(run(f.tab, rename(f.personal), team, f.builder)).rejects.toThrow('unavailable')
+    expect(await names()).toEqual(before)
+    // The person's own sign-in, the Team machine's owner, still renames the agent there.
+    await run(f.tab, rename(f.builder), person)
+    expect((await storedState(f.tab)).agents.find(a => a.id === f.builder)!.displayName).toBe('Renamed')
+  })
+
   it('cannot contribute, pause or remove a machine, or start, add or drive anything on the person\'s other machines', async () => {
     const f = await fixture()
     const commands: Command[] = [
@@ -771,11 +789,11 @@ describe('one machine: a Mac and its Harness Team account', () => {
     // A host repeating its confirmation gets its own receipt back.
     await expect(cleaned(person, 'personal-mac')).resolves.toBeDefined()
     await expect(cleaned(team, 'team-mac')).resolves.toBeDefined()
-    expect((await store.messages(person, tab, 'lead', {})).messages.filter(m => m.text.includes('left the Swarm')).map(m => m.text))
-      .toEqual(['MacBook Pro left the Swarm: its host confirmed its cleanup.'])
+    // No chat says it left (anh Dee, 11-04, #2742).
+    expect((await store.messages(person, tab, 'lead', {})).messages.filter(m => m.text.includes('left the Swarm')).map(m => m.text)).toEqual([])
   })
 
-  it('leaves 30 minutes after its removal while its host keeps reporting without confirming, and the project\'s chat says why', async () => {
+  it('leaves 30 minutes after its removal while its host keeps reporting without confirming, and no chat says so', async () => {
     let now = Date.now()
     const timed = new SuperTabStore(db, () => now)
     const tab = (await timed.create(owner, randomUUID(), 'Silent host')).id
@@ -801,12 +819,12 @@ describe('one machine: a Mac and its Harness Team account', () => {
     now = removedAt + 30 * 60_000
     await report()
     expect(await listed()).toEqual([])
-    expect(await said()).toEqual(['MacBook Pro left the Swarm: its host did not confirm its cleanup within 30 minutes. It finishes the cleanup when it next connects.'])
-    // Its cleanup still reaches its host, whose late confirmation closes it without another line.
+    expect(await said()).toEqual([])
+    // Its cleanup still reaches its host, whose late confirmation closes it, still without a line.
     expect((await rosterRows(timed, person, 'personal-mac')).filter(r => r.tabId === tab && 'cleanup' in r)).toEqual([{ tabId: tab, cleanup: { machineId: 'personal-mac', removalId } }])
     await timed.execute(person, tab, { operationId: `machine-cleaned-${removalId}`, command: { type: 'machine.cleaned', machineId: 'personal-mac', removalId } })
     expect((await storedState(tab)).machineCleanups).toBeUndefined()
-    expect(await said()).toHaveLength(1)
+    expect(await said()).toEqual([])
   })
 
   // Diego's Mac, 2026-10-28, after #1955: the Mac and its team account were removed together and went past the fallback
@@ -1250,5 +1268,26 @@ describe('a machine its owner keeps for some projects', () => {
       name: 'Second', cwd: '/team', worktree: false, requirements } })).rejects.toMatchObject({ code: 'MACHINE_PROJECTS', message: 'MacBook Pro · Team runs only Own.' })
     await limit(null, person)
     expect((await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!.projects).toBeUndefined()
+  })
+})
+
+// Task #2806 (Scholes, 11-04): a machine's owner lets teammates' work run in their own account there. A guard loosened by the
+// owner alone: never by the Harness Team account that runs on the same Mac as them, nor by anyone else.
+describe('teammates\' work in a machine owner\'s own account', () => {
+  it('is chosen by its owner alone, never by its Team account session, kept across reads and said on the machine', async () => {
+    const f = await fixture()
+    const choose = (allowed: boolean, user: AuthUser) => run(f.tab, { type: 'machine.ownAccountWork', machineId: 'team-mac', allowed } as Command, user)
+    await expect(choose(true, owner)).rejects.toMatchObject({ code: 'OWNER_REQUIRED' })
+    await expect(choose(true, team)).rejects.toMatchObject({ code: 'TEAM_SESSION_LIMITED' })
+    expect((await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!.ownAccountChoice).toBeUndefined()
+    await choose(true, person)
+    const seen = (await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!
+    expect(seen.ownAccountChoice).toMatchObject({ allowed: true, by: person.sub })
+    // Whoever routes a teammate's task there reads it.
+    expect((seen as unknown as { teamWork: { ownAccount?: string } }).teamWork.ownAccount).toMatch(/runs teammates' work in .+'s own account\.$/)
+    await choose(false, person)
+    const off = (await store.read(owner, f.tab)).state.machines!.find(m => m.machineId === 'team-mac')!
+    expect(off.ownAccountChoice).toMatchObject({ allowed: false, by: person.sub })
+    expect((off as unknown as { teamWork: { ownAccount?: string } }).teamWork.ownAccount).toBeUndefined()
   })
 })

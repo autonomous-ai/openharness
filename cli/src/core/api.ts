@@ -1275,10 +1275,11 @@ export interface SwarmChat { kind: ChatKind; id: string; name: string; working: 
   /** While the face is in a thread (the app's, or the one the dial's words started): its root, its title (first line, 80 bytes)
    *  and, when the read gives it, its reply count. Sent only to a dial that speaks swarmThread. */
   thread?: { root: string; title: string; replies?: number } }
-/** The newest message the project's Lead wrote in its Lead conversation or the reader's Buddy chat since the baseline (the
- *  dial's alert), or the reader's Buddy wrote in its chat (`buddy`, the quiet one). `thread`: the root of the thread it
- *  replies in, when it is in that thread only; such a notice is read only where that thread is open. */
-export interface LeadNotice { chat: 'lead' | 'pm' | 'buddy'; chatId: string; id: string; text: string; at: number; thread?: string }
+/** The newest tag of the reader's in the project since the baseline, the dial's alert: in its Lead conversation (`lead`), the
+ *  reader's Buddy chat or a Chat with PM (`pm`), or a task chat (`group`, #2965); or the newest message the reader's Buddy
+ *  wrote in its chat (`buddy`, the quiet one). `thread`: the root of the thread it is in, when it is in that thread only; such
+ *  a notice is read only where that thread is open. */
+export interface LeadNotice { chat: 'lead' | 'pm' | 'group' | 'buddy'; chatId: string; id: string; text: string; at: number; thread?: string }
 /** The reader's own Buddy in a project, for a round dial's Buddy screen: its chat, name and engine, Desktop's pattern for
  *  its name (`cells`, the 15 half bits; `color`, `#rrggbb`), and `live` false while it is down. */
 export interface SwarmBuddy { chatId: string; name: string; engine: string; cells: number; color: string; live: boolean
@@ -1617,6 +1618,9 @@ export type BackendNotice =
   /** A Lead's terminal request waits for an agent of this machine (backend lib/swarmDeliveryPushes.ts): its Swarm host picks
    *  it up now rather than at its next poll (superTabs/terminal.ts). The backend's `__` frame, kept by name. */
   | { type: '__terminal_waiting'; tabId: string; agentId: string }
+  /** The server renews the Swarm host's delivery push lease, each minute through Redis (backend lib/swarmDeliveryPushes.ts):
+   *  the host keeps reading an idle worker's list only when told (superTabs/host.ts PUSH_LEASE_MS). A `__` frame, kept by name. */
+  | { type: '__deliveries_lease' }
   /** A commit changed what this machine's Swarm host reads (backend lib/swarmHostPushes.ts): it reads its changes now. Naming
    *  none, the server says it pushes them, and the host reads only when told (superTabs/hostFeed.ts HOST_PUSH_LEASE_MS). */
   | { type: 'swarm_host_changed'; tabId?: string; lastChangedAt?: number }

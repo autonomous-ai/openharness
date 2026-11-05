@@ -184,6 +184,13 @@ void main() {
     (via: 'order', fallback: 'unsure', text: ranked),
     (via: 'order', fallback: 'unavailable', text: ranked),
     (via: 'only', fallback: null, text: 'Only available candidate'),
+    // Task #2901 (Ken, 2026-11-04): the route names no pick; the start's row
+    // names the candidate the instructions chose.
+    (
+      via: 'instructions',
+      fallback: null,
+      text: 'Chosen by the project\'s Routing instructions',
+    ),
   ]) {
     testWidgets('keeps ${c.via} ${c.fallback ?? ''} explanation in Details', (
       tester,

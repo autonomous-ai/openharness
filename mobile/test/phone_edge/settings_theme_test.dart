@@ -12,16 +12,17 @@ import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/swarm/swarm_row.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
+import 'package:harness_mobile/swarm/swarm_you_page.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../voice_fakes.dart' show MemoryKeyValueStore;
 import 'edge_fixture.dart';
 
-/// Settings opened from Swarm asks light or dark — Theme: System | Dark | Light — in App colors'
-/// place, and every screen turns on the tap; the terminal keeps the dark side. Settings opened from
-/// the terminal keeps App colors, which names the palette on screen and, picked, hands light and
-/// dark back to the palette.
+/// Swarm asks light or dark — Theme: System | Dark | Light — on its You (in its Settings, in App
+/// colors' place, until 2026-11-04), and every screen turns on the tap; the terminal keeps the dark
+/// side. Settings opened from the terminal keeps App colors, which names the palette on screen and,
+/// picked, hands light and dark back to the palette.
 void main() {
   setUpAll(
     () => PackageInfo.setMockInitialValues(
@@ -39,12 +40,12 @@ void main() {
     AppTheme.terminalPaletteOverride.value = null;
   });
 
-  /// Settings pushed over a page, in an app built as `HarnessApp` builds it: on [store]'s
+  /// [page] pushed over a page, in an app built as `HarnessApp` builds it: on the store's
   /// appearance ([AppearanceBuilder]), its brightness set from the palette as `_GridTokenScope`
-  /// sets it — so a choice here repaints the whole app, as it does on a phone.
-  Future<(AppNotifier, AppearancePrefsStore, MemoryKeyValueStore)> openSettings(
-    WidgetTester tester, {
-    required bool swarm,
+  /// sets it — so a choice there repaints the whole app, as it does on a phone.
+  Future<(AppNotifier, AppearancePrefsStore, MemoryKeyValueStore)> open(
+    WidgetTester tester,
+    Widget Function(AppNotifier app, AppearancePrefsStore store) page, {
     AppearancePrefs prefs = const AppearancePrefs(),
     Phone phone = largePhone,
     double textScale = 1,
@@ -58,13 +59,7 @@ void main() {
         name: 'Ada Lovelace',
         email: 'ada@example.com',
       );
-    final page = SettingsPage(
-      notifier: app,
-      large: false,
-      swarm: swarm,
-      experiments: ExperimentalFeaturesStore(storage: MemoryKeyValueStore()),
-      appearance: store,
-    );
+    final shown = page(app, store);
     await tester.pumpWidget(
       AppearanceBuilder(
         store: store,
@@ -75,7 +70,7 @@ void main() {
               builder: (context) => TextButton(
                 onPressed: () =>
                     Navigator.of(context)
-                        .push(MaterialPageRoute<void>(builder: (_) => page)),
+                        .push(MaterialPageRoute<void>(builder: (_) => shown)),
                 child: const Text('open'),
               ),
             ),
@@ -89,6 +84,37 @@ void main() {
     await frames(tester);
     return (app, store, storage);
   }
+
+  /// Settings, opened from Swarm's You ([swarm]) or from the terminal.
+  Future<(AppNotifier, AppearancePrefsStore, MemoryKeyValueStore)> openSettings(
+    WidgetTester tester, {
+    required bool swarm,
+    AppearancePrefs prefs = const AppearancePrefs(),
+  }) => open(
+    tester,
+    (app, store) => SettingsPage(
+      notifier: app,
+      large: false,
+      swarm: swarm,
+      experiments: ExperimentalFeaturesStore(storage: MemoryKeyValueStore()),
+      appearance: store,
+    ),
+    prefs: prefs,
+  );
+
+  /// Swarm's You, where its Theme is.
+  Future<(AppNotifier, AppearancePrefsStore, MemoryKeyValueStore)> openYou(
+    WidgetTester tester, {
+    AppearancePrefs prefs = const AppearancePrefs(),
+    Phone phone = largePhone,
+    double textScale = 1,
+  }) => open(
+    tester,
+    (_, store) => SwarmYouPage(appearance: store),
+    prefs: prefs,
+    phone: phone,
+    textScale: textScale,
+  );
 
   Future<void> close(WidgetTester tester, AppNotifier app) async {
     await tester.pumpWidget(const SizedBox());
@@ -120,22 +146,22 @@ void main() {
       )
       .color;
 
-  /// The ground Settings is drawn on.
-  Color? ground(WidgetTester tester) => tester
+  /// The ground [page] is drawn on: Settings, or Swarm's You.
+  Color? ground(WidgetTester tester, [Type page = SettingsPage]) => tester
       .widget<Scaffold>(
         find
             .descendant(
-              of: find.byType(SettingsPage),
+              of: find.byType(page),
               matching: find.byType(Scaffold),
             )
             .first,
       )
       .backgroundColor;
 
-  group('opened from Swarm', () {
-    testWidgets("Theme stands in App colors' place: System, Dark, Light — "
-        'Dark, for the shipped Graphite', (tester) async {
-      final (app, _, _) = await openSettings(tester, swarm: true);
+  group("on Swarm's You", () {
+    testWidgets('Theme: System, Dark, Light — Dark, for the shipped Graphite — '
+        'in the card with Settings', (tester) async {
+      final (app, _, _) = await openYou(tester);
 
       await reveal(tester, find.text('Theme'));
       expect(find.text('App colors'), findsNothing);
@@ -152,10 +178,10 @@ void main() {
             of: find.text('Theme'),
             matching: find.byType(SwarmGroup),
           ),
-          matching: find.text('Text size'),
+          matching: find.text('Settings'),
         ),
         findsOneWidget,
-        reason: "in Appearance's card",
+        reason: "in Settings' card",
       );
       for (final label in ['System', 'Dark', 'Light']) {
         expect(segment(label), findsOneWidget, reason: label);
@@ -176,7 +202,7 @@ void main() {
 
     testWidgets('a screen reader changes the theme: each segment not chosen '
         'takes a tap, the chosen one none (review of #2920)', (tester) async {
-      final (app, store, storage) = await openSettings(tester, swarm: true);
+      final (app, store, storage) = await openYou(tester);
       await reveal(tester, find.text('Theme'));
       expect(
         tester.getSemantics(find.bySemanticsLabel('Light')),
@@ -200,8 +226,8 @@ void main() {
 
     testWidgets("Light turns the app light at once and is kept; the terminal's "
         'colours stay Graphite', (tester) async {
-      final (app, store, storage) = await openSettings(tester, swarm: true);
-      expect(ground(tester), HarnessPalette.graphite.background);
+      final (app, store, storage) = await openYou(tester);
+      expect(ground(tester, SwarmYouPage), HarnessPalette.graphite.background);
 
       await reveal(tester, find.text('Theme'));
       await tester.tap(segment('Light'));
@@ -210,23 +236,23 @@ void main() {
       expect(store.value.themeMode, AppThemeMode.light);
       expect(storage.values['app_theme_mode'], 'light');
       expect(AppTheme.palette.value, HarnessPalette.paper);
-      expect(ground(tester), HarnessPalette.paper.background, reason: 'now');
+      expect(
+        ground(tester, SwarmYouPage),
+        HarnessPalette.paper.background,
+        reason: 'now',
+      );
       expect(fillOf(tester, 'Light'), AppPalette.textPrimary);
       expect(fillOf(tester, 'Dark'), Colors.transparent);
-
-      await reveal(tester, find.text('Colors'));
       expect(
-        find.descendant(of: rowOf('Colors'), matching: find.text('Graphite')),
-        findsOneWidget,
+        AppTheme.terminalPalette,
+        HarnessPalette.graphite,
         reason: 'the terminal keeps the dark side',
       );
-      expect(AppTheme.terminalPalette, HarnessPalette.graphite);
 
-      await reveal(tester, find.text('Theme'));
       await tester.tap(segment('Dark'));
       await frames(tester);
       expect(AppTheme.palette.value, HarnessPalette.graphite);
-      expect(ground(tester), HarnessPalette.graphite.background);
+      expect(ground(tester, SwarmYouPage), HarnessPalette.graphite.background);
       await close(tester, app);
     });
 
@@ -235,7 +261,7 @@ void main() {
     ) async {
       addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
       tester.platformDispatcher.platformBrightnessTestValue = Brightness.light;
-      final (app, store, _) = await openSettings(tester, swarm: true);
+      final (app, store, _) = await openYou(tester);
       expect(
         AppTheme.palette.value,
         HarnessPalette.graphite,
@@ -246,11 +272,11 @@ void main() {
       await tester.tap(segment('System'));
       await frames(tester);
       expect(store.value.themeMode, AppThemeMode.system);
-      expect(ground(tester), HarnessPalette.paper.background);
+      expect(ground(tester, SwarmYouPage), HarnessPalette.paper.background);
 
       tester.platformDispatcher.platformBrightnessTestValue = Brightness.dark;
       await frames(tester);
-      expect(ground(tester), HarnessPalette.graphite.background);
+      expect(ground(tester, SwarmYouPage), HarnessPalette.graphite.background);
       expect(fillOf(tester, 'System'), AppPalette.textPrimary);
       await close(tester, app);
     });
@@ -258,9 +284,8 @@ void main() {
     testWidgets('a palette chosen in App colors stays on its side', (
       tester,
     ) async {
-      final (app, _, _) = await openSettings(
+      final (app, _, _) = await openYou(
         tester,
-        swarm: true,
         prefs: const AppearancePrefs(palette: HarnessPalette.midnight),
       );
 
@@ -279,11 +304,7 @@ void main() {
     testWidgets("draws a compact control with a control's words", (
       tester,
     ) async {
-      final (app, _, _) = await openSettings(
-        tester,
-        swarm: true,
-        phone: smallPhone,
-      );
+      final (app, _, _) = await openYou(tester, phone: smallPhone);
       await reveal(tester, find.text('Theme'));
 
       // The test font draws every glyph an em wide, so widths here are not a
@@ -307,9 +328,8 @@ void main() {
       tester,
     ) async {
       final errors = await collectErrors(() async {
-        final (app, _, _) = await openSettings(
+        final (app, _, _) = await openYou(
           tester,
-          swarm: true,
           phone: smallPhone,
           textScale: AppearancePrefs.uiSizeMax / AppearancePrefs.uiSizeDefault,
         );
@@ -320,6 +340,19 @@ void main() {
         await close(tester, app);
       });
       expect(errors, isEmpty);
+    });
+  });
+
+  group('Settings opened from Swarm', () {
+    testWidgets('has no Theme and no App colors: Appearance is the text size '
+        'alone', (tester) async {
+      final (app, _, _) = await openSettings(tester, swarm: true);
+
+      await reveal(tester, find.text('Text size'));
+      expect(find.text('Theme'), findsNothing);
+      expect(find.text('App colors'), findsNothing);
+      expect(find.byType(SwarmSegments<AppThemeMode>), findsNothing);
+      await close(tester, app);
     });
   });
 

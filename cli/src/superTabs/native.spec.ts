@@ -233,6 +233,33 @@ describe('durable native conversation recording', () => {
     expect(t.sent.map(e => e.kind)).toEqual(['prompt', 'gap', 'prompt', 'answer'])
   })
 
+  // Task #3127: a core restart, and the history replay its re-attach brings, each start a new epoch. Two views of one
+  // terminal across both posted four "recording interrupted" lines while nothing was lost.
+  it('a restart with no unfinished recorded turn records no gap', async () => {
+    const t = setup(true), host = t.open()
+    await host.prepare('tab', alpha); await host.prepare('tab', beta)
+    t.prompt('Finished before the restart'); t.answer('Answered'); await host.capture(); await host.flush()
+    t.observer.ingest('harness', [], true)
+    await host.capture(); await host.flush()
+    t.observer.ingest('harness', [], true)
+    await host.capture(); await host.flush()
+    expect(t.sent.map(e => e.kind)).toEqual(['prompt', 'answer'])
+  })
+
+  it('one restart and the replay after it give one gap, for the view whose turn it cut', async () => {
+    const t = setup(true), host = t.open()
+    await host.prepare('tab', alpha); await host.prepare('tab', beta)
+    t.prompt('Cut by the restart'); await host.capture(); await host.flush()
+    t.time(100_000)
+    t.observer.ingest('harness', [], true)
+    await host.capture()
+    t.observer.ingest('harness', [], true)
+    await host.capture(); await host.flush()
+    expect(t.sent.map(e => e.kind)).toEqual(['prompt', 'gap'])
+    expect(t.sent[1]).toMatchObject({ gap: { reason: 'recording_restarted' } })
+    expect(t.contexts.get(beta)!.lastEventId).toBeNull()
+  })
+
   it('finishes an already observed turn after closing the view, then stops observing the idle terminal', async () => {
     const t = setup(), host = t.open()
     await host.prepare('tab', alpha); t.prompt('Long task'); await host.capture(); await host.flush()

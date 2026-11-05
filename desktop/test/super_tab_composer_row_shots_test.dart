@@ -7,24 +7,20 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/workspace_chrome.dart';
 import 'package:harness/super_tabs/view.dart';
-import 'package:harness/super_tabs/voice_recorder.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
+import 'support/fake_voice_recorder.dart';
 import 'support/super_tab_fixture.dart';
 
 /// Set to a folder to write the PR's screenshots there.
 final shots = Platform.environment['SUPER_TAB_COMPOSER_ROW_SHOTS'];
 
-/// A recorder for the mic's place only: no take is recorded.
-class _Preview implements SuperTabVoiceRecorder {
-  @override
-  Future<void> start({required String conversationId, String? root}) async {}
-}
-
 /// The composer as the PR shows it (Huy and Scholes, 11-04): the reader's
 /// Buddy chat with New session on offer, a project chat's thread with Also
-/// send, the mic's place once recording comes (`chat-mic`), and the web at a
-/// phone's width (`web-phone`), each with a draft, in both appearances.
+/// send, the mic (`chat-mic`), a voice message recording in the chat and in a
+/// thread (`chat-recording`, `thread-recording`, #2665), a refused microphone
+/// (`chat-refused`), and the web at a phone's width (`web-phone`), each with a
+/// draft, in both appearances.
 void main() {
   setUpAll(() async {
     if (shots != null) await loadPreviewFonts();
@@ -68,10 +64,21 @@ void main() {
   }
 
   for (final brightness in Brightness.values) {
-    for (final scene in ['chat', 'thread', 'chat-mic', 'web-phone']) {
+    for (final scene in [
+      'chat',
+      'thread',
+      'chat-mic',
+      'chat-recording',
+      'thread-recording',
+      'chat-refused',
+      'web-phone',
+    ]) {
       testWidgets('screenshot: $scene (${brightness.name})', (tester) async {
         final picture = GlobalKey();
-        final thread = scene == 'thread';
+        final thread = scene.startsWith('thread');
+        final mic = scene.startsWith('chat-') || scene == 'thread-recording'
+            ? (FakeVoiceRecorder()..allow = scene != 'chat-refused')
+            : null;
         final c = (thread ? projectThread() : buddyChat()).controller();
         addTearDown(c.dispose);
         await c.refresh();
@@ -97,7 +104,7 @@ void main() {
                   onAddAgent: (_) {},
                   onOpenTerminal: (_) {},
                   machineName: (_) => 'Mac Studio',
-                  voiceRecorder: scene == 'chat-mic' ? _Preview() : null,
+                  voiceRecorder: mic == null ? null : () => mic,
                 ),
               ),
             ),
@@ -118,6 +125,19 @@ void main() {
           thread ? 'Here is the trace.' : 'Can you check the release notes?',
         );
         await tester.pumpAndSettle();
+        if (scene.endsWith('-recording') || scene == 'chat-refused') {
+          await tester.tap(
+            find.byKey(
+              ValueKey(thread ? 'super-thread-mic' : 'super-composer-mic'),
+            ),
+          );
+          // The wave keeps moving while it records: pumped, never settled.
+          for (var i = 0; i < 14; i++) {
+            await tester.pump(const Duration(seconds: 1));
+          }
+          mic?.level.value = .6;
+          await tester.pump(const Duration(milliseconds: 700));
+        }
 
         await tester.runAsync(() async {
           final boundary =

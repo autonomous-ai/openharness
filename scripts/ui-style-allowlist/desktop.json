@@ -56,9 +56,6 @@
     "edge-insets": 3,
     "border-radius": 1
   },
-  "desktop/lib/super_tabs/recording_notice.dart": {
-    "edge-insets": 3
-  },
   "desktop/lib/super_tabs/roster.dart": {
     "edge-insets": 1
   },
@@ -82,7 +79,7 @@
     "edge-insets": 2
   },
   "desktop/lib/super_tabs/view.dart": {
-    "edge-insets": 18,
+    "edge-insets": 17,
     "border-radius": 1
   }
 }

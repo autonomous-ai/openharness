@@ -10,6 +10,8 @@ import 'package:harness_mobile/swarm/swarm_attachment.dart';
 import 'package:harness_mobile/swarm/swarm_attachment_store.dart';
 import 'package:harness_mobile/swarm/swarm_file_download.dart';
 
+import '../temp_folder.dart';
+import 'picture_loads.dart';
 import 'swarm_attachment_fakes.dart';
 
 /// A picture in a chat shows in place, as Slack shows one (Dee, 10-29): a
@@ -20,6 +22,7 @@ import 'swarm_attachment_fakes.dart';
 void main() {
   late Directory root;
   late FakeFileStorage storage;
+  late PictureReads reads;
   late SwarmAttachmentStore store;
 
   final link = Uri.parse('https://cdn.example/swarm/a.png');
@@ -36,11 +39,11 @@ void main() {
   setUp(() {
     root = Directory.systemTemp.createTempSync('swarm-attachments-');
     storage = FakeFileStorage();
-    store = storeIn(root, storage);
+    reads = PictureReads();
+    store = storeIn(root, storage, reads: reads);
   });
-  tearDown(() {
-    if (root.existsSync()) root.deleteSync(recursive: true);
-  });
+  // A test can end with a fetch still writing its picture in.
+  tearDown(() => deleteTempFolder(root));
 
   Finder key(String value) => find.byKey(ValueKey(value));
   final chip = key('chip');
@@ -96,9 +99,11 @@ void main() {
     expect(done(), isTrue);
   }
 
-  /// Ends a test that fetched: the chat closed, and the cache's own cleanup,
+  /// Ends a test that fetched: its pictures loaded, the chat closed, and the cache's own cleanup,
   /// which it runs every few seconds, let run.
   Future<void> closed(WidgetTester tester) async {
+    // A picture still loading when its file goes fails the test, after it.
+    await picturesLoaded(tester);
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(minutes: 1));
   }
@@ -389,10 +394,9 @@ void main() {
       final key = (await tester.runAsync(
         () => picture.obtainKey(ImageConfiguration.empty),
       ))!;
-      await until(
-        tester,
-        () => PaintingBinding.instance.imageCache.containsKey(key),
-      );
+      // Asked for is not read: the account's files go next.
+      await picturesLoaded(tester);
+      expect(PaintingBinding.instance.imageCache.containsKey(key), isTrue);
       return key;
     }
 
@@ -508,6 +512,37 @@ void main() {
       await tester.tap(preview);
       await tester.pumpAndSettle();
       expect(viewer, findsOneWidget, reason: "the new account's picture opens");
+      await closed(tester);
+    });
+
+    // The race behind a flake in CI (task #2883): a picture counted as loaded
+    // once its load was asked for, and the files went while the load had not
+    // yet opened its file ('PathNotFoundException ... resolving an image
+    // codec'). Here the load is held open, so it is forced, not waited for.
+    testWidgets('a picture still being read is waited for, and the account\'s '
+        'files go after it', (tester) async {
+      await pump(tester);
+      await until(tester, () => drawn(tester));
+      expect(picturesLoading(tester), isFalse, reason: 'the preview is drawn');
+
+      reads.hold = Completer();
+      await tester.tap(preview);
+      await tester.pumpAndSettle();
+      await until(tester, () => reads.asked == 2);
+      expect(
+        picturesLoading(tester),
+        isTrue,
+        reason: 'the full screen picture is asked for, not read',
+      );
+
+      reads.hold!.complete();
+      await picturesLoaded(tester);
+      expect(picturesLoading(tester), isFalse);
+
+      // Now the files can go: nothing reads them after.
+      var changed = false;
+      unawaited(store.clear().whenComplete(() => changed = true));
+      await until(tester, () => changed);
       await closed(tester);
     });
 

@@ -227,7 +227,8 @@ class SuperTabAgent {
 
   /// A Product Manager's switch to another engine or account that is asked for
   /// and not yet done (backend `switchRequest`), as the desktop's model reads
-  /// it; null otherwise. Not drawn on the phone yet.
+  /// it; null otherwise. While set, the PM reads "Switching…" and Switch PM…
+  /// is not offered (swarm_switch_pm.dart).
   final Map<String, dynamic>? switchRequest;
 
   /// The model on the Swarm's grid it runs on; null on its own subscription
@@ -242,7 +243,7 @@ class SuperTabAgent {
 
   /// The account on its machine it runs in; `default` when none is chosen.
   /// Null until the backend reports it: the engine's default account. As the
-  /// desktop's model reads it; not drawn on the phone yet.
+  /// desktop's model reads it; Switch PM marks it Current.
   final String? profileId;
 
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
@@ -1346,14 +1347,11 @@ class SuperTabThread {
   /// Where the ask at its root stands (backend threads.ts).
   final String? ask;
 
-  /// What its root's row says after the time; null for a message that is no
-  /// ask, and for a state this app does not know.
-  String? get askTag => switch (ask) {
-    'proposal' => '✋ Proposal',
-    'on-it' => '● On it',
-    'shipped' => '✓ Shipped',
-    _ => null,
-  };
+  /// What its root's row says after the time: a Buddy's proposal nobody has
+  /// answered yet; null for any other message. A task's state is no tag: its
+  /// agent reacts 👀 and ✅ on the row instead (anh Dee, 11-04, task #2925),
+  /// so an older server's On it and Shipped draw nothing.
+  String? get askTag => ask == 'proposal' ? '✋ Proposal' : null;
   final int replies, lastSequence;
   final DateTime? lastAt;
 
@@ -1395,6 +1393,8 @@ class SuperTabMessage {
       author = Map.unmodifiable(superTabMap(row['author'])),
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
+      editedAt = DateTime.tryParse(row['editedAt'] as String? ?? ''),
+      deletedAt = DateTime.tryParse(row['deletedAt'] as String? ?? ''),
       attachments = _attachments(row['attachments']),
       reactions = List.unmodifiable(
         SuperTabReactionCount.listFromJson(row['reactions']),
@@ -1434,6 +1434,17 @@ class SuperTabMessage {
   final Map<String, dynamic> author;
   final Map<String, dynamic> source;
   final DateTime? createdAt;
+
+  /// When its author last changed its text; null for one never edited
+  /// (backend messageEdits.ts). No earlier text is kept anywhere.
+  final DateTime? editedAt;
+
+  /// When its author deleted it: kept only as the root of a thread with
+  /// replies, its text then the backend's "This message was deleted.", with
+  /// no files and no reactions. One without replies leaves the pages.
+  final DateTime? deletedAt;
+
+  bool get deleted => deletedAt != null;
   final List<SuperTabAttachment> attachments;
   final List<SuperTabReactionCount> reactions;
 
@@ -1449,8 +1460,23 @@ class SuperTabMessage {
   String get authorId => author['id'] as String? ?? '';
   bool get fromAgent => author['kind'] == 'agent';
   bool get fromTerminal => source['kind'] == 'native';
+
+  /// What was typed into an agent's terminal, a scheduled prompt too: no chat
+  /// row (Ken 11-04, task #2849; the desktop's). Its answer still is one.
+  bool get terminalPrompt => fromTerminal && source['phase'] == 'prompt';
+
+  /// A terminal's recording gap: no chat row and nothing unread, since it gives
+  /// a person nothing to do (Dee 11-05, task #3127). The server keeps it for
+  /// diagnosis, and a required recovery still reaches the coordinator.
+  bool get terminalGap => fromTerminal && source['phase'] == 'gap';
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
+
+  /// A line the backend posted for an instructions save: no chat row and
+  /// nothing unread, since it gives a person nothing to do (Dee 11-05, task
+  /// #3165). The backend posts none since #3132; the History keeps every
+  /// revision.
+  bool get instructionsSave => source['kind'] == 'instructions';
 
   /// A task's root the server posted in its person's name (plain chat, #2294):
   /// theirs to read, not their own writing, so it reads nothing before it and

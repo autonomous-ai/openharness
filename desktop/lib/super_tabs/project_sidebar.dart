@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
@@ -18,10 +17,10 @@ import 'attention.dart';
 import 'controller.dart';
 import 'buddies.dart';
 import 'model.dart';
+import 'places.dart';
 import 'buddy_rows.dart';
 import 'section_heading.dart';
 import 'swarm_switcher.dart';
-import 'task_groups.dart';
 import 'project_github.dart';
 import 'private_project_lock.dart';
 import '../widgets/laid_out_list.dart';
@@ -48,17 +47,17 @@ class ProjectSidebar extends StatelessWidget {
     super.key,
     required this.controller,
     required this.onSelect,
-    required this.needsHuman,
     this.app,
     this.onNewProject,
     this.onNewSwarm,
     this.onManage,
     this.manageSelected = false,
     this.devicesSelected = false,
-    this.onNotifications,
-    this.notificationsSelected = false,
+    this.onPage,
+    this.page,
     this.attention,
     this.activity,
+    this.places,
     this.onOpenBuddyChat,
     this.compact = false,
   });
@@ -67,7 +66,6 @@ class ProjectSidebar extends StatelessWidget {
   /// A phone's layout: its rows keep the app's sizes, not Slack desktop's ([SwarmType]).
   final bool compact;
   final ValueChanged<String> onSelect;
-  final int Function(SuperTabConversation group) needsHuman;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
 
@@ -80,14 +78,20 @@ class ProjectSidebar extends StatelessWidget {
   final bool manageSelected;
   final bool devicesSelected;
 
-  /// Opens the Activity view (Slack's Activity): decisions asked of the
-  /// reader, tags of them, replies to them and reactions to their messages.
-  final VoidCallback? onNotifications;
-  final bool notificationsSelected;
+  /// Opens one of the Swarm's pages: Decisions, Mentions or Threads (anh
+  /// Dee, 11-05, task #2996). Without it the three rows are not shown.
+  final ValueChanged<SwarmPage>? onPage;
 
-  /// What the Activity row counts and whether it is bold; without it the
-  /// row counts the tags and decisions waiting, as Notifications did.
+  /// The page holding the main pane, if one does.
+  final SwarmPage? page;
+
+  /// What the three rows read, to be bold or grey; without it Decisions and
+  /// Mentions read what the server says waits, and Threads nothing.
   final SuperTabActivity? activity;
+
+  /// The reader's places, for the back and forward arrows at the top;
+  /// without it there are none.
+  final SuperTabPlaces? places;
 
   /// What needs the reader, as Slack shows it: each row's red number counts
   /// only tags of them (decisions asked of them among them), and Threads is
@@ -95,10 +99,9 @@ class ProjectSidebar extends StatelessWidget {
   /// it rows carry no number.
   final SuperTabAttention? attention;
 
-  /// Whether a row other than a conversation (Manage, devices, Notifications)
-  /// holds the main pane.
-  bool get _paneCovered =>
-      manageSelected || devicesSelected || notificationsSelected;
+  /// Whether a row other than a conversation (Manage, devices, a page) holds
+  /// the main pane.
+  bool get _paneCovered => manageSelected || devicesSelected || page != null;
 
   /// Opens the reader's Buddy chat in a project, by project id; the
   /// controller's [SuperTabController.openBuddyChat] when not given.
@@ -120,7 +123,7 @@ class ProjectSidebar extends StatelessWidget {
       ? null
       : SwarmType.sidebar(
           compact: false,
-          color: DesktopChrome.muted,
+          color: grid.SidebarInk.inkMuted,
           medium: true,
         );
 
@@ -130,13 +133,12 @@ class ProjectSidebar extends StatelessWidget {
     required IconData icon,
     required VoidCallback? onTap,
     bool selected = false,
-    int badge = 0,
     Widget? trailing,
     bool? unread,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 2),
     child: Material(
-      color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
+      color: selected ? grid.SidebarInk.selected : Colors.transparent,
       borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
       clipBehavior: Clip.antiAlias,
       child: Semantics(
@@ -145,8 +147,8 @@ class ProjectSidebar extends StatelessWidget {
         child: InkWell(
           key: ValueKey(key),
           onTap: onTap,
-          hoverColor: grid.AppSurface.hoverFill,
-          focusColor: grid.AppSurface.hoverFill,
+          hoverColor: grid.SidebarInk.hover,
+          focusColor: grid.SidebarInk.hover,
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
           child: Row(
             children: [
@@ -157,8 +159,8 @@ class ProjectSidebar extends StatelessWidget {
                   icon,
                   size: AppIcons.inlineSize,
                   color: onTap == null
-                      ? DesktopChrome.muted
-                      : DesktopChrome.foreground,
+                      ? grid.SidebarInk.inkMuted
+                      : grid.SidebarInk.ink,
                 ),
               ),
               Expanded(
@@ -186,8 +188,8 @@ class ProjectSidebar extends StatelessWidget {
                             medium: selected,
                             color:
                                 onTap == null || (unread == false && !selected)
-                                ? DesktopChrome.muted
-                                : DesktopChrome.foreground,
+                                ? grid.SidebarInk.inkMuted
+                                : grid.SidebarInk.ink,
                           ).copyWith(
                             fontWeight: unread == true
                                 ? grid.AppFont.semibold
@@ -197,8 +199,7 @@ class ProjectSidebar extends StatelessWidget {
                   ),
                 ),
               ),
-              if (trailing ?? (badge > 0 ? SuperTabCountBadge(badge) : null)
-                  case final mark?)
+              if (trailing case final mark?)
                 Padding(padding: const EdgeInsets.only(right: 10), child: mark),
             ],
           ),
@@ -207,15 +208,53 @@ class ProjectSidebar extends StatelessWidget {
     ),
   );
 
+  /// A page row of Decisions, Mentions or Threads: no number and no red,
+  /// bold at full strength while something waits, grey when nothing does
+  /// (anh Dee, 11-05, task #3128).
+  Widget _pageRow(
+    ValueChanged<SwarmPage> onPage, {
+    required SwarmPage target,
+    required String key,
+    required String label,
+    required IconData icon,
+    required int waiting,
+  }) => _navigationRow(
+    key: key,
+    label: label,
+    icon: icon,
+    onTap: () => onPage(target),
+    selected: page == target,
+    unread: waiting > 0,
+  );
+
+  /// Back and forward over the reader's places (⌘[ and ⌘]), at the top.
+  Widget _arrows(SuperTabPlaces places) => Row(
+    children: [
+      SizedBox(width: SuperTabSectionHeading.indentFor(0)),
+      AppIconButton(
+        key: const ValueKey('super-back'),
+        icon: AppIcons.arrowLeft,
+        tooltip: 'Back',
+        onPressed: places.canGoBack ? () => places.step(-1) : null,
+      ),
+      AppIconButton(
+        key: const ValueKey('super-forward'),
+        icon: AppIcons.arrowRight,
+        tooltip: 'Forward',
+        onPressed: places.canGoForward ? () => places.step(1) : null,
+      ),
+    ],
+  );
+
   /// A project reads as a channel; a private one keeps its lock in this mark slot.
   Widget _channelMark({required bool isPrivate}) => isPrivate
-      ? PrivateProjectLock(size: 14, color: DesktopChrome.muted)
+      ? PrivateProjectLock(size: 14, color: grid.SidebarInk.inkMuted)
       : Text(
           '#',
           textAlign: TextAlign.center,
           style: SwarmType.sidebar(
             compact: compact,
-            color: DesktopChrome.muted,
+            color: grid.SidebarInk.inkMuted,
             medium: true,
           ),
         );
@@ -235,25 +274,19 @@ class ProjectSidebar extends StatelessWidget {
     final selected = !_paneCovered && controller.selectedId == group.id;
     // A project's row is bold for its own chat (Huy, 11-04, task #2638): a
     // person's message or a tag of the reader there, never agents' progress
-    // alone (#2427). A task's unread is on its card and in Activity, and its
-    // tags count in the row's number.
+    // alone (#2427). A task's unread is on its card and in Activity.
     final unread = reading == null
         ? controller.unreadShown(group)
         : reading.unread.contains(group.id);
-    // Tags in its chat, which opening it clears (Dee, Slack's way), and the
-    // tasks that need the reader, so someone in another project still sees
-    // them (task #2569). Tags in tasks count here and are in Activity.
-    final mentions = attention?.mentionsIn(group.id) ?? 0;
-    final needsYou = reading?.needsYou ?? 0;
-    final badge = mentions + needsYou;
-    final badgeTooltip = needsYou == 0
-        ? attention?.badgeTooltipIn(group.id)
-        : [
-            if (mentions > 0)
-              attention?.badgeTooltipIn(group.id) ??
-                  (mentions == 1 ? '1 mention' : '$mentions mentions'),
-            needsYou == 1 ? '1 task needs you' : '$needsYou tasks need you',
-          ].join(' · ');
+    // Only the reader's tags in its chat, which opening it clears (Dee,
+    // Slack's channel badge, task #2927). Tags in its tasks and threads,
+    // decisions and tasks that need the reader are in Activity.
+    final badge = attention?.chatTagsIn(group.id) ?? 0;
+    final badgeTooltip = badge == 0
+        ? null
+        : badge == 1
+        ? '1 tag'
+        : '$badge tags';
     return _drawRow(
       group,
       project: project,
@@ -302,8 +335,8 @@ class ProjectSidebar extends StatelessWidget {
     final style = SwarmType.sidebar(
       compact: compact,
       color: highlighted || (unread && !muted)
-          ? DesktopChrome.foreground
-          : DesktopChrome.muted,
+          ? grid.SidebarInk.ink
+          : grid.SidebarInk.inkMuted,
     ).copyWith(fontWeight: unread && !muted ? grid.AppFont.semibold : null);
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
@@ -320,7 +353,7 @@ class ProjectSidebar extends StatelessWidget {
                 key: ValueKey(key ?? 'super-group-${group.id}'),
                 onTap: !tappable ? null : onTap ?? () => onSelect(group.id),
                 hoverColor: Colors.transparent,
-                focusColor: grid.AppSurface.hoverFill,
+                focusColor: grid.SidebarInk.hover,
                 borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
                 child: Row(
                   children: [
@@ -333,7 +366,7 @@ class ProjectSidebar extends StatelessWidget {
                           ? Icon(
                               AppIcons.bot,
                               size: AppIcons.inlineSize,
-                              color: DesktopChrome.foreground,
+                              color: grid.SidebarInk.ink,
                             )
                           : null,
                     ),
@@ -429,7 +462,7 @@ class ProjectSidebar extends StatelessWidget {
                                           'super-muted-${group.id}',
                                         ),
                                         size: 14,
-                                        color: DesktopChrome.muted,
+                                        color: grid.SidebarInk.inkMuted,
                                       ),
                                     ),
                                   ],
@@ -619,22 +652,32 @@ class ProjectSidebar extends StatelessWidget {
         ),
   ]..sort((a, b) => a.$1.toLowerCase().compareTo(b.$1.toLowerCase()));
 
+  // The sidebar's ink scope (#3006): a theme's own sidebar ink reaches the
+  // shared rows drawn in it.
   @override
-  Widget build(BuildContext context) => switch ([?attention, ?activity]) {
-    final List<Listenable> sources when sources.isNotEmpty => ListenableBuilder(
-      listenable: Listenable.merge(sources),
-      builder: (context, _) => _build(context),
-    ),
-    _ => _build(context),
-  };
+  Widget build(BuildContext context) => grid.SidebarInk.scope(
+    child: switch ([?attention, ?activity, ?places]) {
+      final List<Listenable> sources when sources.isNotEmpty =>
+        ListenableBuilder(
+          listenable: Listenable.merge(sources),
+          builder: (context, _) => _build(context),
+        ),
+      _ => Builder(builder: _build),
+    },
+  );
 
   Widget _build(BuildContext context) {
     final snapshot = controller.snapshot;
     final projects = snapshot?.projects ?? const <SuperTabProject>[];
-    final reading = _SidebarReading(controller, needsHuman, attention);
+    final reading = _SidebarReading(controller, attention);
+    final decisions = activity?.needsCount ?? snapshot?.decisionsWaiting ?? 0;
+    final mentions = activity?.mentionsCount ?? snapshot?.mentionsWaiting ?? 0;
+    final threads = activity?.threadsCount ?? 0;
     return Material(
-      // The page's color: the rule at its edge is what separates them.
-      color: grid.AppPalette.swarmWelcome,
+      // The page's color: the rule at its edge is what separates them. A
+      // theme may give the sidebar its own (Plum's plum).
+      color: grid.AppPalette.swarmSidebar,
+      textStyle: grid.SidebarInk.textStyle(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -642,6 +685,7 @@ class ProjectSidebar extends StatelessWidget {
             child: LaidOutListView(
               padding: const EdgeInsets.all(8),
               children: [
+                if (places case final places?) _arrows(places),
                 if ((app, onNewSwarm) case (final app?, final onNewSwarm?))
                   SwarmSwitcher(
                     app: app,
@@ -661,22 +705,38 @@ class ProjectSidebar extends StatelessWidget {
                           trailing: trailing,
                         ),
                   ),
-                // Slack's Activity, where Notifications was (Lead, 10-31): one row.
-                if (onNotifications != null)
-                  _navigationRow(
-                    key: 'super-activity',
-                    label: 'Activity',
-                    icon: AppIcons.bell,
-                    onTap: onNotifications,
-                    selected: notificationsSelected,
-                    unread: activity?.unread ?? false,
-                    badge:
-                        activity?.count ??
-                        (snapshot?.mentionsWaiting ?? 0) +
-                            (snapshot?.decisionsWaiting ?? 0),
+                // Three rows, each one thing, in anh Dee's order (11-05, task
+                // #2996): bold when something waits, grey when not, and no
+                // numbers (task #3128). The Swarm switcher stands apart from
+                // them by a control gap.
+                if (onPage case final onPage?) ...[
+                  if (app != null && onNewSwarm != null)
+                    const SizedBox(height: DesktopChrome.controlGap),
+                  _pageRow(
+                    onPage,
+                    target: SwarmPage.decisions,
+                    key: 'super-decisions',
+                    label: 'Decisions',
+                    icon: AppIcons.flag,
+                    waiting: decisions,
                   ),
-                // One Buddy for the whole Swarm, under Activity (Quiet Swarm, screen 1).
-                if (controller.oneBuddy) ?_swarmBuddyRow(),
+                  _pageRow(
+                    onPage,
+                    target: SwarmPage.mentions,
+                    key: 'super-mentions',
+                    label: 'Mentions',
+                    icon: AppIcons.atSign,
+                    waiting: mentions,
+                  ),
+                  _pageRow(
+                    onPage,
+                    target: SwarmPage.threads,
+                    key: 'super-threads',
+                    label: 'Threads',
+                    icon: AppIcons.messagesSquare,
+                    waiting: threads,
+                  ),
+                ],
                 const SizedBox(height: 20),
                 SuperTabSectionHeading(
                   key: const ValueKey('project-sidebar-projects'),
@@ -697,13 +757,12 @@ class ProjectSidebar extends StatelessWidget {
                   onAdd: controller.canWrite ? onNewProject : null,
                   addTooltip: 'New project',
                   endInset: 0,
-                  collapsed: !controller.projectsGroupOpen,
-                  onToggleCollapsed: controller.toggleProjectsGroup,
                 ),
-                if (controller.projectsGroupOpen) ...[
-                  for (final (_, channel) in _channels(snapshot, reading))
-                    channel,
-                ],
+                // The reader's one Buddy, the first item under Projects (anh
+                // Dee, 11-05).
+                if (controller.oneBuddy) ?_swarmBuddyRow(),
+                for (final (_, channel) in _channels(snapshot, reading))
+                  channel,
                 const SizedBox(height: 16),
                 // Buddies replaced Chat with PM in every Swarm (Ken, 10-29); where the
                 // server gives one Buddy for the whole Swarm, it is # buddy above.
@@ -777,9 +836,9 @@ class _RowSurfaceState extends State<_RowSurface> {
     onExit: (_) => setState(() => _hovered = false),
     child: Material(
       color: widget.selected
-          ? grid.AppSurface.selectedFill
+          ? grid.SidebarInk.selected
           : _hovered
-          ? grid.AppSurface.hoverFill
+          ? grid.SidebarInk.hover
           : Colors.transparent,
       borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
       clipBehavior: Clip.antiAlias,
@@ -811,9 +870,8 @@ Offset _besideTheRow(TooltipPositionContext context) {
 /// thousands of conversations were scanned again on every rebuild (Diego,
 /// 10-29).
 class _SidebarReading {
-  _SidebarReading(this.controller, this.needsHuman, this.attention);
+  _SidebarReading(this.controller, this.attention);
   final SuperTabController controller;
-  final int Function(SuperTabConversation group) needsHuman;
   final SuperTabAttention? attention;
   final _projects = <String, _ProjectReading>{};
 
@@ -849,20 +907,9 @@ class _ProjectReading {
           !g.isBuddyChat &&
           g.audience == null &&
           (sidebar.controller.unreadForPeople(g) ||
-              (sidebar.attention?.mentionsIn(g.id) ?? 0) > 0))
+              (sidebar.attention?.chatTagsIn(g.id) ?? 0) > 0))
         g.id,
   };
-
-  /// How many of its tasks need the reader: what its row's badge adds.
-  late final int needsYou = superTabTasksNeedingYouIn(
-    superTabProjectBoard(
-      sidebar.controller,
-      project,
-      now: clock.now(),
-      needsHuman: sidebar.needsHuman,
-      attention: sidebar.attention,
-    ),
-  );
 
   /// Tags of the reader in the project's chat and its open workgroups: why the
   /// unread filter keeps a collapsed project. Never its number ([_row]).

@@ -4,6 +4,8 @@
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: the PM's private lines go
  *  to the person's Buddy chat (buddies.ts). Called inside SuperTabStore's transactions. */
 import { isBuddy, isSwarmBuddy, openBuddyChat, openSwarmBuddyChat } from './buddies.js'
+import { usernameOf } from './usernames.js'
+import { agentWrittenNameOf } from './personNames.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
@@ -51,14 +53,17 @@ export interface DecisionTarget {
   withdrawn?: boolean
 }
 /** `delegated`: the person asked left it to the PM, who took the recommended option. */
-export interface DecisionAnswer { id: string; choice: number; note: string | null; delegated?: true }
+/** `choice` null with a `note`: the person typed their own answer instead of choosing an option (task #2996). */
+export interface DecisionAnswer { id: string; choice: number | null; note: string | null; delegated?: true
+  /** Left to the PM by the hourly sweep after 24 hours unanswered, not by the person (overdueDecisions.ts). */
+  overdue?: true }
 
 /** Questions for one person in one conversation they read, from `asker`. One batch: one id ties them, no ping per question. */
 export function askDecisions(state: SuperTabState, group: Conversation, personId: string, questions: Question[],
   from: { operationId: string; askerAgentId: string; assignmentId: string | null; kind?: typeof REFLECTION_DECISION }): DecisionDraft[] {
   const asked = state.people.find(p => p.id === personId) ?? fail('INVALID_PERSON', 'Ask a person in this Swarm.', 400)
   if (!canReadGroup(state, { kind: 'person', userId: asked.id, email: asked.email }, group)) {
-    fail('INVALID_PERSON', `${asked.email} cannot read this conversation.`, 400)
+    fail('INVALID_PERSON', `${usernameOf(state, asked.id)} cannot read this conversation.`, 400)
   }
   for (const q of questions) if (q.recommended >= q.options.length) fail('INVALID_DECISION', 'A question must recommend one of its options.', 400)
   // It would wait for nobody: none waits where the work is over (workOver).
@@ -107,6 +112,9 @@ export const ANSWERED_NOTICE = 'A decision asked in this conversation was answer
  *  its coordinator (instructions.ts coordinatorNameOf). */
 export const delegatedNotice = (name: string) => `A decision asked in this conversation was left to the ${name}, who took its recommended option. `
   + 'Read it with: harness super-tab decisions --answered'
+/** The notice for a decision left to the PM by the sweep, not the person: it says why, so nobody reads it as their choice. */
+export const overdueNotice = (name: string) => `A decision asked in this conversation waited 24 hours, so it was left to the ${name}, who took its recommended option. `
+  + 'Read it with: harness super-tab decisions --answered'
 /** The notices for a decision asked in a closed Chat with PM, told in the project chat instead: never "in this conversation". */
 export const CLOSED_CHAT_ANSWERED_NOTICE = 'A decision you asked in a closed Chat with PM was answered. Read the answer with: harness super-tab decisions --answered'
 export const closedChatDelegatedNotice = (name: string) => `A decision you asked in a closed Chat with PM was left to the ${name}, who took its recommended option. `
@@ -115,12 +123,16 @@ export const closedChatDelegatedNotice = (name: string) => `A decision you asked
 /** How an answer reads in the decisions list: a delegated one never as the person's own choice. */
 const answerText = (option: string, delegated: boolean) => delegated ? `PM decided: ${option}` : option
 
-/** The asked person's one answer, or their leaving it to the PM (`delegate`), which takes the recommended option; the notice
+/** The asked person's one answer (an option, their own words as `note` alone, or both), or their leaving it to the PM
+ *  (`delegate`), which takes the recommended option; the notice
  *  for the asking agent and the Lead, in the conversation it was asked in or, for a closed Chat with PM nobody reads, in
  *  the project chat (`noticeIn`); and for a delegated one, the Lead's line in the person's Buddy chat. */
 export function answerDecision(state: SuperTabState, actor: Actor, decision: DecisionTarget | undefined,
-  given: { choice?: number; note: string | null; delegate: boolean }) {
-  if ((given.choice === undefined) === !given.delegate) fail('INVALID_DECISION', 'Choose one of its options, or leave it to the PM.', 400)
+  given: { choice?: number; note: string | null; delegate: boolean; overdue?: boolean }) {
+  if (given.choice !== undefined ? given.delegate : !given.delegate && given.note === null) {
+    fail('INVALID_DECISION', 'Choose one of its options, type an answer, or leave it to the PM.', 400)
+  }
+  if (given.overdue && !given.delegate) fail('INVALID_DECISION', 'Only a decision left to the PM can be overdue.', 400)
   const group = answerable(state, actor, decision)
   const asked = decision!
   if (asked.withdrawn || workOver(state, group)) fail('DECISION_ANSWERED', NO_LONGER_WAITS)
@@ -128,18 +140,19 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
   if (given.delegate && !(asked.recommended >= 0 && asked.recommended < asked.options.length)) {
     fail('INVALID_DECISION', 'This decision has no recommended option to leave to the PM.', 400)
   }
-  const choice = given.delegate ? asked.recommended : given.choice!
-  if (choice >= asked.options.length) fail('INVALID_DECISION', 'Choose one of its options.', 400)
+  const choice = given.delegate ? asked.recommended : given.choice ?? null
+  if (choice !== null && choice >= asked.options.length) fail('INVALID_DECISION', 'Choose one of its options.', 400)
   const project = groupProject(state, group)
   const lead = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
   const closed = isClosedPmChat(group)
   const noticeIn = closed ? state.conversations.find(c => c.id === project.leadConversationId)! : group
-  const notice = given.delegate ? (closed ? closedChatDelegatedNotice : delegatedNotice)(coordinatorNameOf(project))
+  const delegatedText = closed ? closedChatDelegatedNotice : given.overdue ? overdueNotice : delegatedNotice
+  const notice = given.delegate ? delegatedText(coordinatorNameOf(project))
     : closed ? CLOSED_CHAT_ANSWERED_NOTICE : ANSWERED_NOTICE
   const recipients = [...new Set([asked.askerAgentId, ...lead ? [lead] : []])].filter(id => noticeIn.agentIds.includes(id))
-  const answer: DecisionAnswer = { id: asked.id, choice, note: given.note, ...given.delegate ? { delegated: true as const } : {} }
+  const answer: DecisionAnswer = { id: asked.id, choice, note: given.note, ...given.delegate ? { delegated: true as const, ...given.overdue ? { overdue: true as const } : {} } : {} }
   // A routing reflection's never reaches the Buddy chat: the person's Buddy reads it (review of #2276).
-  const line = given.delegate && lead && asked.kind !== REFLECTION_DECISION ? delegatedLine(state, project.id, lead, asked, choice) : null
+  const line = given.delegate && lead && asked.kind !== REFLECTION_DECISION ? delegatedLine(state, project.id, lead, asked, asked.recommended) : null
   return { answer, noticeIn: noticeIn.id, notice, recipients, source: { ...AGENT_ONLY, decisionId: asked.id }, line }
 }
 
@@ -269,7 +282,8 @@ export async function readAskedDecision(tx: Tx, tabId: string, id: string): Prom
 /** Conflicts with a concurrent answer of the same decision: only the first one counts. */
 export async function recordAnswer(tx: Tx, tabId: string, answer: DecisionAnswer, now: number): Promise<void> {
   const taken = await tx.superTabDecision.updateMany({ where: { id: answer.id, tabId, ...waiting },
-    data: { choice: answer.choice, note: answer.note, answeredAt: new Date(now), ...answer.delegated ? { delegated: true } : {} } })
+    data: { choice: answer.choice, note: answer.note, answeredAt: new Date(now), ...answer.delegated ? { delegated: true } : {},
+      ...answer.overdue ? { overdue: true } : {} } })
   if (!taken.count) fail('DECISION_ANSWERED', 'This decision is already answered.')
 }
 
@@ -378,11 +392,17 @@ export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState,
     const asker = state.agents.find(a => a.id === row.askerAgentId)
     return { id: row.id, batchId: row.batchId, projectId: row.projectId, projectName: projectOf(state, row.projectId).name,
       conversationId: row.conversationId, conversationTitle: group.title, assignmentId: row.assignmentId ?? null,
-      personId: row.personId, personEmail: state.people.find(p => p.id === row.personId)?.email ?? null,
+      // An agent reads whom it asked by name, never email (review of #2954); the person's own app keeps the email.
+      personId: row.personId, personEmail: actor.kind === 'agent' ? null : state.people.find(p => p.id === row.personId)?.email ?? null,
+      personName: agentWrittenNameOf(state, row.personId) ?? null,
       askerAgentId: row.askerAgentId, askerName: asker?.displayName ?? asker?.name ?? 'Agent',
       question: row.question, options: row.options, recommended: row.recommended, unblocks: row.unblocks,
       createdAt: row.createdAt, answeredAt: row.answeredAt ?? null, choice: row.choice ?? null, note: row.note ?? null,
-      delegated: row.delegated === true,
-      answer: row.choice == null || row.options[row.choice] === undefined ? null : answerText(row.options[row.choice]!, row.delegated === true) }
+      delegated: row.delegated === true, overdue: row.overdue === true,
+      // What the 24-hour sweep can take: the sweep skips a reflection and a recommended option that is not one of the options.
+      pmTakesOver: row.kind !== REFLECTION_DECISION && row.recommended >= 0 && row.recommended < row.options.length,
+      // A typed answer (no option) reads as its words.
+      answer: row.choice == null ? (row.answeredAt ? row.note ?? null : null)
+        : row.options[row.choice] === undefined ? null : answerText(row.options[row.choice]!, row.delegated === true) }
   }) }
 }

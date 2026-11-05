@@ -103,10 +103,16 @@ class PersonalLeadStarter extends ChangeNotifier {
     return project != null && snapshot.leadOf(project.id) == null;
   }
 
-  /// Starts [conversationId]'s Lead after a message there, once: a start
+  /// Starts [conversationId]'s Lead after a message there, or from the empty
+  /// chat's card on [machineId] with [engine] (task #2815), once: a start
   /// already running here, or one another of the person's machines claimed,
   /// is the one.
-  Future<void> start(SuperTabController c, String conversationId) async {
+  Future<void> start(
+    SuperTabController c,
+    String conversationId, {
+    String? machineId,
+    String? engine,
+  }) async {
     final key = _key(c, conversationId);
     if (statusOf(c, conversationId) case final status? when !status.failed) {
       return;
@@ -120,7 +126,12 @@ class PersonalLeadStarter extends ChangeNotifier {
           'this project is no longer available',
         );
       }
-      final plan = planFor(c, conversationId);
+      final plan = planFor(
+        c,
+        conversationId,
+        machineId: machineId,
+        engine: engine,
+      );
       final claim = await c.request(
         'POST',
         '/api/super-tabs/${Uri.encodeComponent(c.tabId)}/commands',
@@ -145,16 +156,31 @@ class PersonalLeadStarter extends ChangeNotifier {
     }
   }
 
+  bool _usable(MachineState? m) =>
+      m != null &&
+      !m.belongsToOtherAccount &&
+      !m.machine.isTeamAccount &&
+      !m.isOffline;
+
+  /// The person's own computers a Lead can start on: connected, this one
+  /// first.
+  List<MachineState> machinesFor(SuperTabController c) => [
+    ...app.machineStates.values.where((m) => _usable(m) && m.isLocalMachine),
+    ...app.machineStates.values.where((m) => _usable(m) && !m.isLocalMachine),
+  ];
+
   /// Where [conversationId]'s Lead starts, or throws why it cannot: the repo's
   /// folder on this computer, else on the person's computer whose pane holds
-  /// it; with no repo, this computer, else another of theirs connected.
-  PersonalLeadPlan planFor(SuperTabController c, String conversationId) {
+  /// it; with no repo, this computer, else another of theirs connected. A
+  /// [machineId] the card picked is that computer, in the repo's folder when
+  /// a pane there holds it; an [engine] it picked is that engine.
+  PersonalLeadPlan planFor(
+    SuperTabController c,
+    String conversationId, {
+    String? machineId,
+    String? engine,
+  }) {
     final project = c.snapshot!.projectFor(conversationId)!;
-    bool usable(MachineState? m) =>
-        m != null &&
-        !m.belongsToOtherAccount &&
-        !m.machine.isTeamAccount &&
-        !m.isOffline;
     String? repoFolder(String machineId, String? agentId) {
       final agent = app
           .stateOf(machineId)
@@ -171,30 +197,39 @@ class PersonalLeadStarter extends ChangeNotifier {
       return where.root ?? where.cwd;
     }
 
-    final machines = app.machineStates.values.where(usable).toList();
+    final machines = machinesFor(c);
     final local = machines.where((m) => m.isLocalMachine).firstOrNull;
     final repos = [
       for (final pane in PersonalProjects.of(app).panesFor(c, conversationId))
-        if (usable(app.stateOf(pane.machineId)))
+        if (_usable(app.stateOf(pane.machineId)))
           if (repoFolder(pane.machineId, pane.agentId) case final folder?)
             (machineId: pane.machineId, folder: folder),
     ];
-    final repo =
-        repos
-            .where((r) => r.machineId == local?.machine.machineId)
-            .firstOrNull ??
-        repos.firstOrNull;
-    final machine = repo != null
-        ? app.stateOf(repo.machineId)!
-        : local ?? machines.firstOrNull;
+    final picked = machineId == null
+        ? null
+        : machines.where((m) => m.machine.machineId == machineId).firstOrNull;
+    if (machineId != null && picked == null) {
+      throw const SuperTabFailure('NO_MACHINE', 'that computer isn’t online');
+    }
+    final repo = picked != null
+        ? repos.where((r) => r.machineId == machineId).firstOrNull
+        : repos
+                  .where((r) => r.machineId == local?.machine.machineId)
+                  .firstOrNull ??
+              repos.firstOrNull;
+    final machine =
+        picked ??
+        (repo != null
+            ? app.stateOf(repo.machineId)!
+            : local ?? machines.firstOrNull);
     if (machine == null) {
       throw const SuperTabFailure(
         'NO_MACHINE',
         'none of your computers is online',
       );
     }
-    final engine = _engineOn(machine);
-    if (engine == null) {
+    final chosen = engine ?? _engineOn(machine);
+    if (chosen == null) {
       throw SuperTabFailure(
         'NO_ENGINE',
         'Claude Code and Codex aren’t signed in on '
@@ -203,7 +238,7 @@ class PersonalLeadStarter extends ChangeNotifier {
     }
     return (
       machineId: machine.machine.machineId,
-      engine: engine,
+      engine: chosen,
       folder: repo?.folder,
       projectName: project.name,
     );

@@ -133,3 +133,17 @@ it('logs every interval once started, flushes the last window on stop, and recor
   await new Promise(resolve => setTimeout(resolve, 120))
   expect(lines).toHaveLength(after)
 })
+
+it('names the secondary client\'s queries apart, so `db by shape` tells the reads it moved off the primary', async () => {
+  const someone = person()
+  await db.user.create({ data: someone })
+  const secondary = withQueryStats(base, () => stats, undefined, undefined, 'secondary')
+  await runWork('http GET /api/users/:id', async () => {
+    await secondary.user.findMany({ where: { email: someone.email } })
+    await secondary.$runCommandRaw({ ping: 1 })
+  })
+  const ops = flushed().map(r => r.op)
+  expect(ops).toContain('secondary:User.findMany')
+  expect(ops).toContain('secondary:-.$runCommandRaw ping')
+  expect(ops).not.toContain('User.findMany')
+})

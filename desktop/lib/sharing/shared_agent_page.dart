@@ -12,6 +12,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/empty_state.dart';
 import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
+import '../super_tabs/visible_tick.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/web_download_button.dart';
 import 'shared_agent_location.dart';
@@ -44,7 +45,8 @@ class SharedAgentPage extends StatefulWidget {
   State<SharedAgentPage> createState() => _SharedAgentPageState();
 }
 
-class _SharedAgentPageState extends State<SharedAgentPage> {
+class _SharedAgentPageState extends State<SharedAgentPage>
+    with WidgetsBindingObserver, VisibleTick<SharedAgentPage> {
   late final _dio =
       widget.dio ??
       Dio(
@@ -59,6 +61,9 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
   bool _loading = true;
   int _revision = 0;
   Timer? _offlineRetry;
+
+  /// The owner was offline while the page could not be seen: read once when it can.
+  bool _offlineOwed = false;
   late bool _signedIn = widget.app.status == AppStatus.authenticated;
   late final _usage = widget.usage ?? hubUsage;
   bool _viewCounted = false;
@@ -132,6 +137,18 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
     webOnlyWindowName: '_self',
   );
 
+  /// An offline owner is asked about every 10 seconds only while the page can be seen; a hidden
+  /// tab asks nothing, and asks once as it is shown again.
+  @override
+  void onScreenChanged(bool onScreen) {
+    if (!onScreen) {
+      if (_offlineRetry?.isActive ?? false) _offlineOwed = true;
+      _offlineRetry?.cancel();
+    } else if (_offlineOwed) {
+      unawaited(_load(quietly: true));
+    }
+  }
+
   @override
   void didUpdateWidget(SharedAgentPage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -163,6 +180,7 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
   /// says its state again.
   Future<void> _load({bool quietly = false}) async {
     _offlineRetry?.cancel();
+    _offlineOwed = false;
     final revision = ++_revision;
     if (!quietly) {
       setState(() {
@@ -214,10 +232,14 @@ class _SharedAgentPageState extends State<SharedAgentPage> {
       if (data['online'] != true) {
         _countOpen(SharedOpen.offline);
         _show(SharedLinkProblem.offline);
-        _offlineRetry = Timer(
-          const Duration(seconds: 10),
-          () => unawaited(_load(quietly: true)),
-        );
+        if (onScreen) {
+          _offlineRetry = Timer(
+            const Duration(seconds: 10),
+            () => unawaited(_load(quietly: true)),
+          );
+        } else {
+          _offlineOwed = true;
+        }
         return;
       }
       _countOpen(SharedOpen.live);

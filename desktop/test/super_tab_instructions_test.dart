@@ -27,8 +27,16 @@ void main() {
     WidgetTester tester, {
     String account = 'owner',
     bool instructions = true,
+    List<Map<String, dynamic>> messages = const [],
   }) async {
     final server = ConversationServer();
+    server.messages.addAll(messages);
+    if (messages.isNotEmpty) {
+      (server.state['conversations'] as List)
+              .cast<Map<String, dynamic>>()
+              .firstWhere((g) => g['id'] == 'lead')['lastMessageSequence'] =
+          messages.length;
+    }
     server.state['projects'] = [
       {
         ...projectFixture('lead', 'Pilot', 'lead'),

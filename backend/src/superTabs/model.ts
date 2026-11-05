@@ -10,7 +10,8 @@ import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
-import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { visibleAccess } from './machineAccess.js'
+import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person {
@@ -298,7 +299,8 @@ export const reviewsWanted = (task: WorkTask | undefined): number => task?.revie
  *  machine by policy order). `machines`: it runs only there, or on a Mac's Harness Team account of one of them. `devices`:
  *  full paths every start for it asks its machine to check (cli superTabs/capacity.ts). Never in the rendered brief, since
  *  a reader may not see the machine. A reader is handed only the machines they see, and how many others (`unseenMachines`). */
-export interface TaskRequirement { machines?: string[]; devices?: string[]; unseenMachines?: number }
+/** `access`: what the work needs to reach, by the names machines list it under (machineAccess.ts, task #3047). */
+export interface TaskRequirement { machines?: string[]; devices?: string[]; access?: string[]; unseenMachines?: number }
 
 /** The machines a reader sees: listed in their visible state, or running an agent they see. */
 export const seenMachineIds = (visible: Pick<SuperTabState, 'machines' | 'agents'>): Set<string> =>
@@ -355,6 +357,10 @@ export interface Conversation {
   /** The sequence of its newest main-stream message from a person, not a system row (parts/commit.ts): what makes a task's
    *  sidebar row bold (Huy, 11-03, #2427). Absent until a person's first message after this was added; readers read 0. */
   lastPersonSequence?: number
+  /** When a person last wrote to its project's coordinator here: any message in the project chat (threads included), or one
+   *  reaching the coordinator in another chat of the project (parts/commit.ts). The built-in wake asks the coordinator to save
+   *  what it was taught only after one (pmSchedule.ts; task #3022). Absent until then. */
+  heardAt?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
   /** What its Engineer was already told of each linked pull request, newest first (pullRequestEvents.ts): absent until read. */
@@ -449,6 +455,9 @@ export interface Invitation {
   role: 'collaborator' | 'viewer'
   conversationId: string
   expiresAt: number
+  /** Who sent it: the Workspace check at acceptance reads their role then (store.ts invite.accept). Absent on invitations
+   *  from before it was recorded. */
+  invitedBy?: string
 }
 /** An agent a machine's report removed as closed: as it was, and where it was (closedAgents.ts). */
 export interface RemovedSession {
@@ -472,6 +481,8 @@ export interface SuperTabState {
   overlapAlerts?: string[]
   /** Read-only, for a Lead's own reads (visibleState): the active work of the other projects it may know about. */
   otherProjectsWork?: OtherProjectWork[]
+  /** Read-only, for the Swarm owner's reads (visibleState): the projects nobody owns, by name and size (projects.ts). */
+  ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
   ownerId: string
   /** The Workspace it belongs to (workspaceStore.ts); absent on a Swarm from before Workspaces until the migration gives it one. */
   workspaceId?: string
@@ -611,12 +622,19 @@ export const NOTICE_READERS = {
   'notice-digest': 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
   system: 'people',
-  // A save of the project's instructions, with its summary: the team sees it without opening the document (instructions.ts).
-  instructions: 'people',
+  // A save of the project's instructions was posted in the project chat until #3132 (Dee and Ken, 11-05): the rows stored
+  // before are read by nobody (#3165), and a project chat ending in one is served as read (read/servedTops.ts). A change is
+  // read in the Instructions history.
+  instructions: 'agent',
   // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
-  'decision-delegated': 'people', 'machine-removed': 'people', 'machine-left': 'people', ship: 'people',
+  'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
+  // A computer signed in as another account now, told to its old owner in their Buddy chat (commands.ts machine.moved, #3122).
+  'computer-moved': 'people',
+  // "<machine> left the Swarm: ..." in every project chat, no longer written (anh Dee, 11-04, #2742): the rows stored before are
+  // read by nobody (they have no recipients), and a project chat ending in one is served as read (read/servedTops.ts).
+  'machine-left': 'agent',
   // A task's one line in its project chat, edited as it moves (taskLine.ts): people read a task's state there.
   'task-line': 'people',
   // A project PM's private line in a person's one Buddy chat, marked with its project (commands.ts person.tell): its person
@@ -699,8 +717,12 @@ export interface CommandEffects {
   previousAttempts: Array<{ conversationId: string; brief: string; checks: Check[]; assignment: Assignment }>
   routeDecisions: RouteDecisionEffect[]
   result: Record<string, unknown>
+  /** `message.edit`'s new text, credentials removed (commands.ts WORDS): what the store writes into the row. */
+  messageEdit?: { messageId: string; text: string }
   /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
   terminal?: import('./terminal.js').TerminalEffect
+  /** A Buddy's proposal closed by hand, written into the open proposals by the store (proposals.ts closeProposal). */
+  closedProposal?: { messageId: string; conversationId: string; reason: string }
   /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
   decisions?: import('./decisions.js').DecisionDraft[]
   decisionAnswer?: import('./decisions.js').DecisionAnswer
@@ -711,6 +733,9 @@ export interface CommandEffects {
   instructions?: import('./instructions.js').InstructionsWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
+  /** Reactions the Swarm adds as a task's agent on the message that asked for it (taskLine.ts), written by the store as that
+   *  agent's own `message.react`. */
+  reactions?: Array<{ conversationId: string; messageId: string; agentId: string; emoji: import('./reactions.js').Reaction }>
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {
@@ -894,6 +919,11 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   const ownRemoved = actor.kind === 'person' ? (visible.removedMachines ?? []).filter(r => r.contributorId === actor.userId).map(r => r.machineId) : []
   if (ownRemoved.length) (visible as { removedMachines?: unknown }).removedMachines = ownRemoved
   else delete visible.removedMachines
+  // What a machine can reach: its notes and checks only to those section 4 of the design names (machineAccess.ts).
+  for (const pool of visible.machines ?? []) {
+    const access = visibleAccess(state, pool, actor)
+    if (access) pool.access = access
+  }
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
   // A machine kept for some projects names to each reader only those they may read (machines.ts projects): a private
@@ -909,6 +939,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   assignAgentDisplayNames(visible.agents)
   const led = actor.kind === 'agent' ? ledProject(visible, actor.agentId) : undefined
   if (led) visible.otherProjectsWork = otherProjectsWork(visible, led)
+  const ownerless = ownerlessProjects(state, actor)
+  if (ownerless) visible.ownerlessProjects = ownerless
   for (const target of visible.agents) {
     const since = downSince(state, target, now)
     if (since) target.downSince = since
@@ -929,7 +961,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     const there = state.agents.filter(a => a.machineId === pool.machineId)
     const owners = new Set(there.length ? there.map(a => a.machineOwnerId) : [pool.contributorId])
     const mayMove = actor.kind === 'person' && (owners.has(actor.userId) ||
-      there.some(a => projectsOf(state).some(p => p.ownerId === actor.userId && state.conversations.some(c => c.id === p.leadConversationId && c.leadId === a.id))))
+      there.some(a => projectsOf(state).some(p => ownsProject(state, actor.userId, p) && state.conversations.some(c => c.id === p.leadConversationId && c.leadId === a.id))))
     if (!mayMove) delete pool.observation.profiles
   }
   expireRemovals(visible, now)
@@ -965,6 +997,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
       if (!pool.observation) continue
       pool.observation.runningHarnessIds = pool.observation.runningHarnessIds.filter(id => harnesses.has(id))
       pool.observation.stoppedHarnessIds = pool.observation.stoppedHarnessIds.filter(id => harnesses.has(id))
+      if (pool.observation.closedHarnessIds) pool.observation.closedHarnessIds = pool.observation.closedHarnessIds.filter(id => harnesses.has(id))
       if (pool.observation.harnessProgress) pool.observation.harnessProgress = Object.fromEntries(Object.entries(pool.observation.harnessProgress).filter(([id]) => harnesses.has(id)))
       // Each attempt's tokens are read through the cost summary (costs/read.ts), never from the machine's raw counts.
       delete pool.observation.harnessTokens

@@ -1162,9 +1162,9 @@ void main() {
       expect(told, 1);
       // Its tag draws from the line too, so a changed state is a change.
       c.keepThreads([
-        {...line('m1', 4, 6), 'ask': 'shipped'},
+        {...line('m1', 4, 6), 'ask': 'proposal'},
       ]);
-      expect(c.thread('m1')?.askTag, '✓ Shipped');
+      expect(c.thread('m1')?.askTag, '✋ Proposal');
       expect(told, 2);
     });
 

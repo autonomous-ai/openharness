@@ -76,6 +76,18 @@ describe("Claude Code's composer on Windows", () => {
     expect(composerState(narrow('', '  continued output'))).not.toBe('ready')
   })
 
+  // A real Buddy on DESKTOP-0TFH0OJ, 2026-11-04: after a long message is pasted Claude Code's footer reads only this, the box
+  // read as absent, and the message sat typed and unsent, its Enter held as `prompt_hidden`.
+  it('finds the composer under the footer a pasted message leaves', () => {
+    on('win32')
+    const screen = ['✻ Sautéed for 1m 9s · done 3:48 AM', '', '─'.repeat(133), '\u001b[39m> [Pasted text #1 +8 lines]', '─'.repeat(133),
+      '  paste again to expand', ''].join('\n')
+    expect(composerState(screen)).toBe('ready')
+    // What it holds a new message for: the box has a message in it. The Enter for that message looks at the composer alone.
+    expect(read(screen).pane).toMatchObject({ idle: false, draft: true })
+    expect(composerState(screen.replace('paste again to expand', 'paste again t…'))).toBe('ready')
+  })
+
   it('reads Mac and Linux screens as before', () => {
     on('darwin')
     expect(read(claudeScreen('>'))).toMatchObject({ pane: { idle: false }, hold: 'team_waiting_idle' })

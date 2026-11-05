@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks'
 import type { PrismaClient } from '@prisma/client'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { logger } from '../utils/logger.js'
+import type { EngineCpu, EngineSample } from './engineCpu.js'
 
 /**
  * Which queries this process sends, per kind of work (DB roadmap Phase 1). Atlas logs only operations over 100 ms; the
@@ -114,7 +115,7 @@ export function filterShape(action: string, args: unknown): string {
 }
 
 /** `Model.action`; a raw command by its collection and command name (`SwarmGroup.$runCommandRaw aggregate`). */
-function opName(model: string | undefined, action: string, args: unknown): string {
+export function opName(model: string | undefined, action: string, args: unknown): string {
   if (model) return `${model}.${action}`
   if (action === '$runCommandRaw' && isPlainObject(args)) {
     const command = Object.keys(args)[0] ?? '?'
@@ -125,7 +126,7 @@ function opName(model: string | undefined, action: string, args: unknown): strin
 }
 
 /** Documents a result holds: a list's length, one for a document, a raw cursor reply's first batch. */
-function docsOf(result: unknown): number {
+export function docsOf(result: unknown): number {
   if (Array.isArray(result)) return result.length
   if (isPlainObject(result)) {
     const cursor = result.cursor
@@ -214,10 +215,13 @@ export type QueryStatsOptions = {
   top?: { bytes: number; count: number; ms: number }
   log?: (message: string, context: Record<string, unknown>) => void
   warn?: (message: string, context: Record<string, unknown>) => void
+  /** Every route's totals of the window, before the line's top-40 cut: the counters and the last hour (lib/metrics.ts). */
+  onWindow?: (routes: ReadonlyMap<string, { n: number; ms: number; docs: number; bytes: number }>) => void
 }
 
 export type QueryStats = {
-  record(model: string | undefined, action: string, args: unknown, ms: number, result: unknown, failed?: boolean): void
+  /** [label] names the client a query ran on (`secondary`), ahead of its operation. */
+  record(model: string | undefined, action: string, args: unknown, ms: number, result: unknown, failed?: boolean, label?: string): void
   /** Logs the window so far and starts a new one. */
   flush(): void
 }
@@ -225,12 +229,12 @@ export type QueryStats = {
 const OTHER = 'other'
 
 export function createQueryStats({ pod = `${hostname()}:${process.pid}`, slowMs = 200, slowPerWindow = 20, maxKeys = 1000, sampleEvery = 8, byteBudget = BYTE_BUDGET,
-  top = { bytes: 20, count: 10, ms: 10 }, log = (m, c) => logger.info(m, c), warn = (m, c) => logger.warn(m, c) }: QueryStatsOptions = {}): QueryStats {
+  top = { bytes: 20, count: 10, ms: 10 }, log = (m, c) => logger.info(m, c), warn = (m, c) => logger.warn(m, c), onWindow }: QueryStatsOptions = {}): QueryStats {
   let entries = new Map<string, Entry>()
   let overflowQueries = 0, slowLogged = 0, slowSuppressed = 0, slowQueries = 0, slowTotalMs = 0, bytesCapped = 0, started = performance.now()
 
-  const record: QueryStats['record'] = (model, action, args, ms, result, failed = false) => {
-    const op = opName(model, action, args), shape = filterShape(action, args), route = workKind()
+  const record: QueryStats['record'] = (model, action, args, ms, result, failed = false, label) => {
+    const op = `${label ? `${label}:` : ''}${opName(model, action, args)}`, shape = filterShape(action, args), route = workKind()
     let key = `${op}\0${shape}\0${route}`
     let entry = entries.get(key)
     if (!entry) {
@@ -282,6 +286,8 @@ export function createQueryStats({ pod = `${hostname()}:${process.pid}`, slowMs 
       if (!total) routes.set(r.route, total = { n: 0, ms: 0, docs: 0, bytes: 0, ops: {} })
       total.n += r.n; total.ms += r.ms; total.docs += r.docs; total.bytes += r.bytes; total.ops[r.op] = (total.ops[r.op] ?? 0) + r.n
     }
+    // A failure here must cost the counters, not the line, nor the timer (an exception there would end the process).
+    try { onWindow?.(routes) } catch (error) { warn('query stats window failed', { error: error instanceof Error ? error.message : String(error) }) }
     const byRoute = Object.fromEntries([...routes].sort((a, b) => b[1].ms - a[1].ms).slice(0, 40).map(([route, t]) =>
       [route, { ...t, ops: Object.fromEntries(Object.entries(t.ops).sort((a, b) => b[1] - a[1]).slice(0, 12)) }]))
     log('db by shape', { pod, windowMs: Math.round(performance.now() - started), queries: sum(r => r.n), ms: sum(r => r.ms), docs: sum(r => r.docs),
@@ -311,32 +317,47 @@ export function startQueryStats(options: QueryStatsOptions & { reportMs?: number
   }
 }
 
-/** The client with one query hook that times every operation, model calls and raw commands alike, for `db by shape`.
- *  Query extensions keep the client's types, so it is still a PrismaClient to its callers. A failure of the stats never
- *  reaches the query: it is warned about once per client, and the query's own result or error goes back unchanged. */
+/** The client with one query hook that times every operation, model calls and raw commands alike, for `db by shape` and
+ *  for `observe` (the Prometheus histogram, lib/metrics.ts; `raw` for a call without a model). Query extensions keep the
+ *  client's types, so it is still a PrismaClient to its callers. [label] names this client's queries in `db by shape`
+ *  (`secondary:User.findMany`, lib/prisma.ts prismaSecondary). [engine] is the engine CPU sampler (lib/engineCpu.ts),
+ *  told of every query's start and end. A failure of any of them never reaches the query: it is warned about once per
+ *  client, and the query's own result or error goes back unchanged. */
 export function withQueryStats(client: PrismaClient, stats: () => QueryStats | undefined = () => active,
-  warn: (message: string, context: Record<string, unknown>) => void = (m, c) => logger.warn(m, c)): PrismaClient {
+  warn: (message: string, context: Record<string, unknown>) => void = (m, c) => logger.warn(m, c),
+  observe?: (model: string, operation: string, seconds: number) => void, label?: string,
+  engine: () => EngineCpu | undefined = () => undefined): PrismaClient {
   let warned = false
+  const failedOnce = (error: unknown) => {
+    if (warned) return
+    warned = true
+    warn('query stats failed', { error: error instanceof Error ? error.message : String(error) })
+  }
   const note = (model: string | undefined, operation: string, args: unknown, ms: number, result: unknown, failed: boolean) => {
     try {
-      stats()?.record(model, operation, args, ms, result, failed)
-    } catch (error) {
-      if (warned) return
-      warned = true
-      warn('query stats failed', { error: error instanceof Error ? error.message : String(error) })
-    }
+      observe?.(model ?? 'raw', operation, ms / 1000)
+      stats()?.record(model, operation, args, ms, result, failed, label)
+    } catch (error) { failedOnce(error) }
   }
   return client.$extends({
     query: {
       async $allOperations({ model, operation, args, query }) {
+        // The engine CPU sampler (lib/engineCpu.ts) sees every query's start and end, so it knows which one ran alone.
+        let sampler: EngineCpu | undefined, sample: EngineSample | undefined
+        try { sampler = engine(); sample = sampler?.start() } catch (error) { failedOnce(error) }
+        const ended = (result: unknown) => {
+          try { sampler?.end(sample, model, operation, args, result) } catch (error) { failedOnce(error) }
+        }
         const started = performance.now()
         let result: unknown
         try {
           result = await query(args)
         } catch (error) {
+          ended(undefined)
           note(model, operation, args, performance.now() - started, undefined, true)
           throw error
         }
+        ended(result)
         note(model, operation, args, performance.now() - started, result, false)
         return result
       },

@@ -88,9 +88,21 @@ Future<SuperTabController> showView(
   return c;
 }
 
-Finder notificationsEntry() => find.byKey(const ValueKey('super-activity'));
+Finder notificationsEntry() => find.byKey(const ValueKey('super-decisions'));
+
+FontWeight? entryWeight(WidgetTester tester) => tester
+    .widget<Text>(
+      find.descendant(
+        of: notificationsEntry(),
+        matching: find.text('Decisions'),
+      ),
+    )
+    .style
+    ?.fontWeight;
 Finder option(String id, int index) =>
     find.byKey(ValueKey('super-decision-$id-$index'));
+Finder activityOption(String id, int index) =>
+    find.byKey(ValueKey('super-activity-option:$id:$index'));
 Finder letPmDecide(String id) =>
     find.byKey(ValueKey('super-decision-$id-delegate'));
 Finder notNow(String id) => find.byKey(ValueKey('super-decision-$id-later'));
@@ -137,6 +149,86 @@ void main() {
         expect(decisions.answered.single.choice, 1);
       },
     );
+  });
+
+  test('delegate all sends one answer per decision and reads once', () async {
+    final server = swarm()
+      ..ask(['Ship how?', 'Name it?'])
+      ..ask(['Which day?'], recommended: -1);
+    final controller = server.controller(account: 'peer');
+    addTearDown(controller.dispose);
+    final decisions = SuperTabDecisions.of(controller);
+    await controller.refresh();
+    await decisions.load();
+    final before = (server.posts.length, server.decisionReads);
+
+    final done = await decisions.delegateAll(decisions.open);
+
+    expect(done, 2);
+    expect(
+      [for (final post in server.posts.skip(before.$1)) post['command']],
+      [
+        {
+          'type': 'decision.answer',
+          'decisionId': 'decision-2',
+          'delegate': true,
+        },
+        {
+          'type': 'decision.answer',
+          'decisionId': 'decision-1',
+          'delegate': true,
+        },
+      ],
+    );
+    // One open list and one settled list, once.
+    expect(server.decisionReads - before.$2, 2);
+    expect(decisions.open.single.question, 'Which day?');
+  });
+
+  test('delegate all sends two at a time, never more', () async {
+    final server = swarm()..ask(['a?', 'b?', 'c?', 'd?', 'e?']);
+    final controller = server.controller(account: 'peer');
+    addTearDown(controller.dispose);
+    final decisions = SuperTabDecisions.of(controller);
+    await controller.refresh();
+    await decisions.load();
+    final before = server.posts.length;
+    // Held answers stay in flight: what has been sent is what is in flight.
+    final hold = server.holdCommands = Completer<void>();
+
+    final done = decisions.delegateAll(decisions.open);
+    await pumpEventQueue();
+    expect(server.posts.length - before, 2);
+
+    hold.complete();
+    expect(await done, 5);
+    expect(server.posts.length - before, 5);
+  });
+
+  test('delegate all leaves out what is being answered', () async {
+    final server = swarm()..ask(['a?', 'b?']);
+    final controller = server.controller(account: 'peer');
+    addTearDown(controller.dispose);
+    final decisions = SuperTabDecisions.of(controller);
+    await controller.refresh();
+    await decisions.load();
+    final before = server.posts.length;
+    final hold = server.holdCommands = Completer<void>();
+    final listed = decisions.open;
+
+    final first = decisions.answer(listed.first, 1);
+    await pumpEventQueue();
+    final all = decisions.delegateAll(listed);
+    await pumpEventQueue();
+    hold.complete();
+    await first;
+
+    expect(await all, 1);
+    final delegated = [
+      for (final post in server.posts.skip(before))
+        if (post['command']['delegate'] == true) post['command']['decisionId'],
+    ];
+    expect(delegated, [listed.last.id]);
   });
 
   group('reading the reader\'s decisions', () {
@@ -227,28 +319,22 @@ void main() {
 
   group('the Decisions list', () {
     testWidgets(
-      'lists each question as one row, opens its card with the recommendation, and answers with one tap',
+      'lists each question as one row with its options and the recommendation, and answers with one tap',
       (tester) async {
         final server = swarm()..ask(['Ship how?', 'Name it?']);
         await showView(tester, server);
+        // Two waiting: the row is bold, with no number (task #3128).
         expect(
           find.descendant(of: notificationsEntry(), matching: find.text('2')),
-          findsOneWidget,
+          findsNothing,
         );
+        expect(entryWeight(tester), grid.AppFont.semibold);
         await tester.tap(notificationsEntry());
         await tester.pumpAndSettle();
-        expect(find.text('Needs you'), findsOneWidget);
-        expect(find.text('Answer'), findsNWidgets(2));
-        expect(find.text('Behind a flag · Recommended'), findsNothing);
+        expect(find.text('Decisions'), findsWidgets);
+        expect(find.text('Behind a flag · Recommended'), findsNWidgets(2));
 
-        await tester.tap(
-          find.byKey(const ValueKey('super-activity-row-decision:decision-2')),
-        );
-        await tester.pumpAndSettle();
-        expect(find.text('Behind a flag · Recommended'), findsOneWidget);
-        expect(find.text('Unblocks: The release'), findsOneWidget);
-
-        await tester.tap(option('decision-2', 1));
+        await tester.tap(activityOption('decision-2', 1));
         await tester.pumpAndSettle();
 
         expect(server.posts.last['command'], {
@@ -256,16 +342,14 @@ void main() {
           'decisionId': 'decision-2',
           'choice': 1,
         });
-        // Answered, it leaves Needs you and the number.
+        // Answered, it leaves Needs you; one still waits, so the row stays
+        // bold.
         expect(
           find.byKey(const ValueKey('super-activity-row-decision:decision-2')),
           findsNothing,
         );
         expect(find.text('Ship how?'), findsOneWidget);
-        expect(
-          find.descendant(of: notificationsEntry(), matching: find.text('1')),
-          findsOneWidget,
-        );
+        expect(entryWeight(tester), grid.AppFont.semibold);
       },
     );
 
@@ -312,7 +396,7 @@ void main() {
       await showView(tester, swarm());
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      expect(find.text("You're all caught up."), findsOneWidget);
+      expect(find.text('Nothing needs you'), findsOneWidget);
     });
   });
 
@@ -610,18 +694,14 @@ void main() {
         await showView(tester, server);
         await tester.tap(notificationsEntry());
         await tester.pumpAndSettle();
-        await tester.tap(
-          find.byKey(const ValueKey('super-activity-row-decision:decision-1')),
-        );
-        await tester.pumpAndSettle();
         server.refuse = {'code': 'DECISION_ANSWERED', 'message': 'Answered.'};
 
-        await tester.tap(option('decision-1', 1));
+        await tester.tap(activityOption('decision-1', 1));
         await tester.pumpAndSettle();
 
         expect(find.text(SuperTabDecisions.sendFailed), findsOneWidget);
         expect(
-          find.byKey(const ValueKey('super-decision-decision-1-retry')),
+          find.byKey(const ValueKey('super-activity-retry:decision-1')),
           findsOneWidget,
         );
       },

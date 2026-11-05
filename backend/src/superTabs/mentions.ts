@@ -87,6 +87,22 @@ export function namedIn(state: SuperTabState, text: string, names: ReadonlyMap<s
   return [...new Set(ids)]
 }
 
+/** The agents of [group] that [text] names by `@Name` (task #2963): its display name or name in any case, matched only when
+ *  exactly one agent there goes by it and no person's username is the same, so a person's tag stays a tag. [names] is the
+ *  Swarm's usernames by person (usernames.ts swarmUsernames). A Buddy chat names no one this way: its sessions hear their own
+ *  threads alone (buddySessions.ts). */
+export function agentsNamedIn(state: SuperTabState, group: Conversation, text: string, names: ReadonlyMap<string, string>): string[] {
+  if (isBuddyChat(group)) return []
+  const people = new Set([...names.values()].map(name => name.toLowerCase()))
+  const tokens = tagTokens(text).filter(token => !token.includes('@') && !people.has(token))
+  if (!tokens.length) return []
+  const members = state.agents.filter(a => group.agentIds.includes(a.id))
+  return [...new Set(tokens.flatMap(token => {
+    const matches = members.filter(a => a.displayName?.toLowerCase() === token || a.name.toLowerCase() === token)
+    return matches.length === 1 ? [matches[0]!.id] : []
+  }))]
+}
+
 /** Whether [text] says `@` and exactly [name] outside code and links, in any case: a stored name that ends in a dot, chosen
  *  before such names were refused, reads as a shorter tag in [namedIn] but is still said. */
 export function saysName(text: string, name: string): boolean {
@@ -142,13 +158,36 @@ export function checkMentions(state: SuperTabState, actor: Actor, group: Convers
   return ids
 }
 
-export async function writeMentions(tx: Tx, tabId: string, state: SuperTabState, messages: MessageDraft[], now: number): Promise<void> {
+/** Writes the tags `messages` carry, and answers the rows it wrote (push/notices.ts tells their phones). */
+export async function writeMentions(tx: Tx, tabId: string, state: SuperTabState, messages: MessageDraft[], now: number): Promise<MentionRow[]> {
   const data = messages.flatMap(message => (message.mentions ?? []).map(personId => ({
     id: stableId(tabId, message.id, personId), tabId, personId, projectId: state.conversations.find(c => c.id === message.conversationId)!.projectId ?? 'lead',
     conversationId: message.conversationId, messageId: message.id, authorAgentId: message.author.id,
     createdAt: new Date(now), resolvedAt: null, resolvedBy: null, ...(message.holdMentions ? { holdUntil: new Date(now + NO_WORKER_GRACE_MS) } : {}),
   })))
   if (data.length) await tx.superTabMention.createMany({ data })
+  await bringBackUnfollowed(tx, tabId, messages, now)
+  return data
+}
+type MentionRow = { id: string; personId: string; conversationId: string; messageId: string; holdUntil?: Date }
+
+/** Who tagged, as the inbox and a phone notice name them: a person by the name the Swarm shows for them (a person's name in a
+ *  message is their email, personNames.ts), an agent by its own. */
+export function taggerName(state: SuperTabState, author: { kind?: string; id?: string; name?: string; displayName?: string } | undefined): string {
+  return author?.kind === 'person' ? shownNameOf(state, author.id ?? '') ?? 'Someone' : author?.displayName ?? author?.name ?? 'Lead'
+}
+
+/** A tag in a thread reply puts the thread back on the tagged person's Threads page, as in Slack: their Unfollow of it is cleared
+ *  (follow back to no choice; updatedAt moves so their other devices read the change), in the write of the tag. A reply that tags
+ *  nobody leaves an Unfollow as it is, and a send that tags nobody in a thread sends no command. At most MAX_MENTIONS ids a message,
+ *  in one raw update by `_id`, which Prisma would send as $expr (hotFilters.test.ts). */
+async function bringBackUnfollowed(tx: Tx, tabId: string, messages: MessageDraft[], now: number): Promise<void> {
+  const ids = [...new Set(messages.flatMap(message => message.thread && message.thread !== message.id ? (message.mentions ?? []).map(personId =>
+    stableId(tabId, message.conversationId, message.thread!, personId)) : []))]
+  if (!ids.length) return
+  const answer = await tx.$runCommandRaw({ update: 'SuperTabThreadMark', updates: [{ q: { _id: { $in: ids }, tabId, follow: false },
+    u: { $set: { follow: null, updatedAt: { $date: new Date(now).toISOString() } } }, multi: true }] }) as { writeErrors?: unknown[] }
+  if (answer.writeErrors?.length) throw new Error('The database refused some thread follows')
 }
 
 /** Any post by the tagged person in that conversation answers every earlier tag there, in a thread or not. */
@@ -315,8 +354,7 @@ export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, 
   return tagged.map(({ row, group }) => {
     const message = messages.find(m => m.id === row.messageId)
     const author = message?.author as { kind?: string; name?: string; displayName?: string } | undefined
-    // A person's name in a message is their email: the inbox shows the name the Swarm shows for them (personNames.ts).
-    const authorName = author?.kind === 'person' ? shownNameOf(state, row.authorAgentId) ?? 'Someone' : author?.displayName ?? author?.name ?? 'Lead'
+    const authorName = taggerName(state, author && { ...author, id: row.authorAgentId })
     return { id: row.id, projectId: row.projectId, projectName: projectOf(state, group.projectId ?? 'lead').name,
       conversationId: row.conversationId, conversationTitle: group.title, messageId: row.messageId,
       leadId: row.authorAgentId, leadName: authorName, text: (message?.text ?? '').slice(0, 200),

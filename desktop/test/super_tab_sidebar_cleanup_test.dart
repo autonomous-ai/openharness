@@ -47,7 +47,10 @@ Future<SuperTabController> showSwarm(WidgetTester tester) async {
   final app = createApp(connected: true);
   addTearDown(app.dispose);
   final server = ConversationServer();
+  // Two tags wait and one decision is asked: the Activity row counts only the
+  // decision.
   server.state['mentionsWaiting'] = 2;
+  server.ask(['Ship it?']);
   server.state['decisionsWaiting'] = 1;
   final c = server.controller();
   await c.refresh();
@@ -83,10 +86,10 @@ void main() {
   // Dock. The rest moved
   // into Manage, at the foot (Quiet Swarm, screen 1).
   for (final platform in [TargetPlatform.macOS, TargetPlatform.linux]) {
-    testWidgets('the top reads Activity with its count, and Manage is at the '
-        'foot', (tester) async {
+    testWidgets('the top reads Decisions, Mentions and Threads without '
+        'counts, and Manage is at the foot', (tester) async {
       final c = await showSwarm(tester);
-      expect(topRows(tester), ['Activity3']);
+      expect(topRows(tester), ['Decisions', 'Mentions', 'Threads']);
       expect(
         tester.getTopLeft(find.byKey(const ValueKey('super-manage'))).dy,
         greaterThan(tester.getTopLeft(find.text('Projects')).dy),
@@ -95,7 +98,7 @@ void main() {
       // The foot lines up with the list, and ends on the chat box's bottom line.
       final manage = tester.getRect(find.byKey(const ValueKey('super-manage')));
       final activity = tester.getRect(
-        find.byKey(const ValueKey('super-activity')),
+        find.byKey(const ValueKey('super-decisions')),
       );
       final sidebar = tester.getRect(find.byType(ProjectSidebar));
       expect(manage.left, activity.left);

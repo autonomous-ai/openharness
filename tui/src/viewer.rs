@@ -82,7 +82,7 @@ pub fn ssh() -> bool {
 async fn open(url: &str) -> bool {
     if !valid_url(url) || ssh() { return false }
     if cfg!(target_os = "linux") && ["DISPLAY", "WAYLAND_DISPLAY"].iter().all(|k| std::env::var_os(k).is_none_or(|v| v.is_empty())) { return false }
-    let mut command = tokio::process::Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" });
+    let mut command = crate::sys::url_opener();
     let Ok(mut child) = command.arg(url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).spawn() else { return false };
     matches!(tokio::time::timeout(Duration::from_secs(5), child.wait()).await, Ok(Ok(status)) if status.success())
 }

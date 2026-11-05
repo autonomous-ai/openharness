@@ -5457,12 +5457,13 @@ void ui_supertab_focus(const char *tab, const char *lead)
     display_unlock();
 }
 /*
- * A LEAD'S NEW MESSAGE (design 2026-10-28-round-dial-swarm-chat §3), in its Lead conversation or Chat with PM: the one
- * alert a swarmChat daemon raises. It is that Lead's single entry, news rather than a question, the message as its text
- * and the Swarm's name (with " · PM" for Chat with PM) as its grey line. Each notice counts as unread again; it is read at
- * once only when that Lead's face shows that very chat, and for a reply inside a thread (`thread`, its root) that very
- * thread: the main chat shows it collapsed under its root, so the PM's answer in a task thread rang nowhere (#2463). True
- * when the caller should beep (the coalescing is the audio's).
+ * A LEAD'S NOTICE (design 2026-10-28-round-dial-swarm-chat §3): the one alert a swarmChat daemon raises, a tag of the
+ * person's in that Lead's project since #2965 (`chat` HT_CHAT_GROUP for a task chat's), the Lead's new message in its Lead
+ * conversation or Chat with PM from a daemon before. It is that Lead's single entry, news rather than a question, the
+ * message as its text and the Swarm's name (with " · PM" for Chat with PM) as its grey line. Each notice counts as unread
+ * again; it is read at once only when that Lead's face shows that very chat, and for a reply inside a thread (`thread`, its
+ * root) that very thread: the main chat shows it collapsed under its root, so the PM's answer in a task thread rang nowhere
+ * (#2463). True when the caller should beep (the coalescing is the audio's).
  */
 _Static_assert(SWARM_SAID == NOTICES, "a chat for every inbox entry a Lead's message can take");
 static int swarm_said_of(const char *lead)

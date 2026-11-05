@@ -8,7 +8,6 @@ import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/attachment_upload.dart';
-import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/reading.dart';
 
@@ -58,6 +57,26 @@ class SwarmPartsBackend {
 
   /// The visibility epoch: a test moves it to have the next change read answer a reload.
   int epoch = 1;
+
+  /// A backend with the summary etag (backend read/derivedEtag.ts, #2906). Off, it is one from before it, or one rolled
+  /// back: no etag is sent, and a change read naming one is refused by its strict query.
+  bool stampsDerived = true;
+
+  /// Change reads answered without the summary, its etag still matching.
+  int unchangedSummaries = 0;
+
+  static const _markFields = {
+    'readMarks',
+    'unreadMarks',
+    'threadMarks',
+    'chatSettings',
+  };
+
+  /// The summary without the reader's marks, as one string: equal summaries, equal etag.
+  static String _etag(Map<String, dynamic> derived) => jsonEncode({
+    for (final entry in derived.entries)
+      if (!_markFields.contains(entry.key)) entry.key: entry.value,
+  }).hashCode.toRadixString(36);
 
   /// The ticks a change read sends again, as the 30 s overlap does.
   int overlap = 3;
@@ -274,6 +293,11 @@ class SwarmPartsBackend {
         for (final kind in _kinds) kind: <dynamic>[],
         'derived': _derived(state, reader),
       };
+      if (stampsDerived) {
+        answer['derivedEtag'] = _etag(
+          answer['derived'] as Map<String, dynamic>,
+        );
+      }
       for (final entry in _ordered()) {
         final kind = entry.key.substring(0, entry.key.indexOf(':'));
         if (kind == 'head' || entry.value.deleted) continue;
@@ -285,6 +309,14 @@ class SwarmPartsBackend {
     }
     if (segments.length == 4 && route == 'changes') {
       reads.add(path);
+      final held = uri.queryParameters['derivedEtag'];
+      if (held != null && !stampsDerived) {
+        throw const SuperTabFailure(
+          'VALIDATION_ERROR',
+          'Unrecognized key(s) in object: \'derivedEtag\'',
+          statusCode: 400,
+        );
+      }
       final cursor = RegExp(r'^c(\d+)e(\d+)$')
           .firstMatch(uri.queryParameters['cursor'] ?? '');
       if (cursor == null || int.parse(cursor.group(2)!) != epoch) {
@@ -304,6 +336,18 @@ class SwarmPartsBackend {
         for (final kind in _kinds) kind: <dynamic>[],
         'derived': _derived(state, reader),
       };
+      if (stampsDerived) {
+        final derived = answer['derived'] as Map<String, dynamic>;
+        final etag = answer['derivedEtag'] = _etag(derived);
+        if (held == etag) {
+          unchangedSummaries++;
+          answer['derivedUnchanged'] = true;
+          answer['derived'] = {
+            for (final entry in derived.entries)
+              if (_markFields.contains(entry.key)) entry.key: entry.value,
+          };
+        }
+      }
       for (final entry in _ordered()) {
         if (entry.value.changedAt <= since) continue;
         if (_hides(entry.key, entry.value, reader, state)) continue;
@@ -550,6 +594,10 @@ class ConversationServer {
   /// `{unread, read, more}`; null answers 404, as a server before it does,
   /// and the inbox ([inbox]) is read instead.
   Map<String, dynamic>? followedThreads;
+
+  /// Refuses the followed-threads read's `read` query, as a backend before
+  /// task #2835 does.
+  bool refuseThreadsRead = false;
 
   /// The inbox read's answer (backend read/inbox.ts): `{threads, latest,
   /// more}`; null answers 404.
@@ -1010,6 +1058,48 @@ class ConversationServer {
     return true;
   }
 
+  /// An edit as the backend keeps it (messageEdits.ts): the new text, when it
+  /// changed, and the group's `reactionSeq` moved. False for the same text.
+  bool editMessage(String messageId, String text) {
+    final message = messages.firstWhere((m) => m['id'] == messageId);
+    if (message['text'] == text) return false;
+    message
+      ..['text'] = text
+      ..['editedAt'] = '2026-10-18T00:05:00Z';
+    _messageChanged(message['conversationId'] as String);
+    return true;
+  }
+
+  /// A delete as the backend keeps it (messageEdits.ts): a message with
+  /// replies stays as its tombstone, any other goes from every page. Whether
+  /// it was kept.
+  bool deleteMessage(String messageId) {
+    final message = messages.firstWhere((m) => m['id'] == messageId);
+    final kept = messages.any(
+      (m) => m['thread'] == messageId && m['id'] != messageId,
+    );
+    if (kept) {
+      message
+        ..['text'] = 'This message was deleted.'
+        ..['deletedAt'] = '2026-10-18T00:06:00Z'
+        ..['attachments'] = <dynamic>[]
+        ..['mentions'] = <dynamic>[]
+        ..['reactions'] = <dynamic>[];
+    } else {
+      messages.remove(message);
+    }
+    _messageChanged(message['conversationId'] as String);
+    return kept;
+  }
+
+  void _messageChanged(String conversationId) {
+    final group = (state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == conversationId);
+    group['reactionSeq'] = ((group['reactionSeq'] as int?) ?? 0) + 1;
+    revision++;
+  }
+
   /// What the backend does with a file sent to its upload route.
   Future<Map<String, dynamic>> upload({
     required String tabId,
@@ -1284,14 +1374,25 @@ class ConversationServer {
         _profile(command, reader ?? 'owner');
       } else if (command['type'] == 'message.react') {
         output['changed'] = _react(command, reader ?? 'owner');
+      } else if (command['type'] == 'message.edit') {
+        output['changed'] = editMessage(
+          command['messageId'] as String,
+          command['text'] as String,
+        );
+      } else if (command['type'] == 'message.delete') {
+        output['changed'] = true;
+        output['kept'] = deleteMessage(command['messageId'] as String);
       } else if (command['type'] == 'decision.answer') {
         final id = command['decisionId'] as String;
         if (command['delegate'] == true) {
           // Left to the PM: the backend takes the recommended option.
           final asked = decisions.firstWhere((d) => d['id'] == id);
           answerDecision(id, asked['recommended'] as int, delegated: true);
+        } else if (command['choice'] case final int choice) {
+          answerDecision(id, choice);
         } else {
-          answerDecision(id, command['choice'] as int);
+          // A typed answer: its words, with no option (decisions.ts).
+          answerDecision(id, null, note: command['note'] as String);
         }
       } else if (command['type'] == 'mention.done') {
         mentions.firstWhere((m) => m['id'] == command['mentionId'])
@@ -1323,14 +1424,6 @@ class ConversationServer {
         // buddy.create since 10-31): its chat is in no project.
         final swarm = command['projectId'] == null;
         final projectId = command['projectId'] as String? ?? '';
-        // As the backend: no Codex Buddy for now (security review 1 of #2087).
-        if (command['engine'] == 'codex') {
-          throw SuperTabFailure(
-            'BUDDY_ENGINE',
-            kBuddyEngineRefusals['codex']!,
-            statusCode: 403,
-          );
-        }
         bool mine(Object? a) =>
             a is Map &&
             (a['buddyOf'] as Map?)?['personId'] == person &&
@@ -1477,6 +1570,21 @@ class ConversationServer {
             agent['displayName'] = shown;
           }
         }
+      } else if (command['type'] == 'agent.rename') {
+        // As the backend's: its contributor renames it, for every reader.
+        final agent = (state['agents'] as List)
+            .cast<Map<String, dynamic>>()
+            .where((a) => a['id'] == command['agentId'])
+            .firstOrNull;
+        if (agent == null || agent['contributorId'] != (reader ?? 'owner')) {
+          throw const SuperTabFailure(
+            'FORBIDDEN',
+            'Only the person who runs this agent can rename it.',
+            statusCode: 403,
+          );
+        }
+        revision++;
+        agent['displayName'] = (command['name'] as String).trim();
       } else if (command['type'] == 'buddy.remove') {
         revision++;
         final person = reader ?? 'owner';
@@ -1744,6 +1852,14 @@ class ConversationServer {
           'OFFLINE',
           'No connection.',
           statusCode: threadListStatus,
+        );
+      }
+      // A backend before task #2835: its strict query refuses `read`.
+      if (refuseThreadsRead && uri.queryParameters.containsKey('read')) {
+        throw const SuperTabFailure(
+          'VALIDATION_ERROR',
+          'Unrecognized key: "read"',
+          statusCode: 400,
         );
       }
       final answer = uri.pathSegments.last == 'threads'
@@ -2014,6 +2130,8 @@ class ConversationServer {
         'question': question,
         'options': ['Behind a flag', 'To everyone'],
         'recommended': recommended,
+        // As the backend says it: a recommended option that exists.
+        'pmTakesOver': recommended >= 0 && recommended < 2,
         'unblocks': 'The release',
         'createdAt': '2026-10-27T05:00:00Z',
         'answeredAt': null,
@@ -2029,9 +2147,15 @@ class ConversationServer {
   }
 
   /// The reader answers one, here or on another device.
-  void answerDecision(String id, int choice, {bool delegated = false}) {
+  void answerDecision(
+    String id,
+    int? choice, {
+    bool delegated = false,
+    String? note,
+  }) {
     decisions.firstWhere((d) => d['id'] == id)
       ..['choice'] = choice
+      ..['note'] = note
       ..['delegated'] = delegated
       ..['answeredAt'] = '2026-10-27T06:00:00Z';
     state['decisionsWaiting'] = (state['decisionsWaiting'] as int) - 1;

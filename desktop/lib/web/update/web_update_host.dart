@@ -86,6 +86,12 @@ class _WebUpdateHostState extends State<WebUpdateHost> {
       running: running,
       readLatest: widget.readLatest,
       every: widget.every,
+      shown: () => switch (WidgetsBinding.instance.lifecycleState) {
+        AppLifecycleState.hidden ||
+        AppLifecycleState.paused ||
+        AppLifecycleState.detached => false,
+        _ => true,
+      },
     )..start();
     // A page an old cache kept may be out of date already: ask once now.
     unawaited(watcher.check());

@@ -185,7 +185,9 @@ class SwarmThread extends ChangeNotifier
     if (!identical(_madeFrom?.$1, _rows) ||
         !identical(_madeFrom?.$2, chatRows)) {
       final byId = {
-        for (final m in _rows) m.id: m,
+        // A reply the chat found deleted goes from the thread too.
+        for (final m in _rows)
+          if (!chat.gone(m.id)) m.id: m,
         for (final m in chatRows)
           if (m.thread == root) m.id: m,
       };
@@ -618,7 +620,27 @@ class SwarmThread extends ChangeNotifier
     return done;
   }
 
-  /// The thread's newest page again, over the rows read of it.
+  /// Puts [text] in place of [message]'s ([SwarmConversation.editMessage]),
+  /// then reads the thread's newest page again so it shows here at once.
+  /// Answers why it was refused; null once done or when nothing changed.
+  Future<String?> editMessage(SuperTabMessage message, String text) async {
+    final refused = await chat.editMessage(message, text);
+    if (refused == null && !_disposed && _read) await _reread();
+    return refused;
+  }
+
+  /// Deletes [message] ([SwarmConversation.deleteMessage]), then reads the
+  /// thread's newest page again: a reply leaves it. Answers why it was
+  /// refused; null once done.
+  Future<String?> deleteMessage(SuperTabMessage message) async {
+    final refused = await chat.deleteMessage(message);
+    if (refused == null && !_disposed && _read) await _reread();
+    return refused;
+  }
+
+  /// The thread's newest page again, over the rows read of it: a reply it
+  /// covers and no longer has was deleted, and goes. The root stays; deleted,
+  /// it is the line its replies hang from.
   Future<void> _reread() async {
     final epoch = _epoch;
     try {
@@ -635,9 +657,21 @@ class SwarmThread extends ChangeNotifier
         return;
       }
       final rows = {for (final m in _rows) m.id: m};
+      final read = <SuperTabMessage>[];
       for (final row in answer['messages'] as List) {
         final m = SuperTabMessage.fromJson(superTabMap(row));
-        if (m.conversationId == chat.id && m.thread == root) rows[m.id] = m;
+        if (m.conversationId == chat.id && m.thread == root) read.add(m);
+      }
+      final covers = answer['next'] == null
+          ? 0
+          : read.isEmpty
+          ? null
+          : read.map((m) => m.sequence).reduce((a, b) => a < b ? a : b);
+      if (covers != null) {
+        rows.removeWhere((id, m) => id != root && m.sequence >= covers);
+      }
+      for (final m in read) {
+        rows[m.id] = m;
       }
       _rows = List.unmodifiable(
         rows.values.toList()..sort(superTabMessageOrder),

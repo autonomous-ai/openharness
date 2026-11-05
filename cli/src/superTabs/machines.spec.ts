@@ -1,3 +1,4 @@
+import { RELAY_REASONS } from './relayHealth.js'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -14,6 +15,7 @@ import { PM_HOMES } from './teamDaemon.js'
 import { startAgent } from './start.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
+import { recordCleanupClose } from './cleanupCloses.js'
 import { SwarmReads } from './swarmReads.js'
 import { object } from './wire.js'
 import { processCoreApi } from '../services/processCoreApi.js'
@@ -210,7 +212,7 @@ describe('contributed machine executor', () => {
     const f = fixture()
     f.prepare.mockResolvedValueOnce({ requester: 'olive@example.com' } as never)
     await f.machine.tick()
-    expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, github: { requester: 'olive@example.com' } })
+    expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, signedIn: null, github: { requester: 'olive@example.com' } })
     f.prepare.mockRejectedValueOnce(new Error('This machine could not get a Harness GitHub App token for this project'))
     f.advance()
     await f.machine.tick()
@@ -250,7 +252,7 @@ describe('contributed machine executor', () => {
       await h.pass(16_000)
       expect(h.token).toHaveBeenCalledTimes(2)
       expect(h.failures()).toEqual([])
-      expect((h.f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, github: { requester: 'olive@example.com' } })
+      expect((h.f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, signedIn: null, github: { requester: 'olive@example.com' } })
       // The read-only token is revoked once the start is prepared, as on a first try.
       expect(h.revoked.mock.calls.map(([url, init]) => [url, init.headers.Authorization])).toEqual([['https://api.github.com/installation/token', `Bearer ${TOKEN_ANSWER.token}`]])
     })
@@ -311,7 +313,7 @@ describe('contributed machine executor', () => {
     expect(body).toMatchObject({ generation: 'grant', runningHarnessIds: ['running'], stoppedHarnessIds: ['stopped'], quotas: [{ engine: 'codex', known: true }] })
     expect(JSON.stringify(body)).not.toMatch(/private@example|private-token|account_email/)
     const [input, scoped, where] = (f.start.mock.calls as unknown[][])[0]!
-    expect(input).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true })
+    expect(input).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, signedIn: null })
     expect(where).toMatchObject({ machineId: 'host', dataDir: '/isolated-pool-fixture' })
     await (scoped as (p: unknown) => Promise<unknown>)({ action: 'startStatus' })
     expect(f.backend).toHaveBeenLastCalledWith(f.core, 'GET', '/api/super-tabs/hosts/host/starts/tab/start', undefined)
@@ -330,20 +332,29 @@ describe('contributed machine executor', () => {
     const f = fixture()
     Object.assign(f.pool, { starts: [], buddyStarts: [{ id: 'buddy-start', dispatched: false }] })
     await f.machine.tick()
-    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', hostDispatch: true }])
+    // No account signed in here (the fake has none): the start itself then refuses a Buddy (start.ts buddyOnOwnMachine).
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', hostDispatch: true, signedIn: null }])
+  })
+  // Task #2832: a Buddy launches only where the account signed in here is its owner's; the host hands the start what it reads.
+  it('hands each start the account signed in here, as this machine reads it', async () => {
+    const f = fixture()
+    Object.assign(f.core.account, { identity: vi.fn(async () => ({ accountId: 'peer' })) })
+    Object.assign(f.pool, { starts: [], buddyStarts: [{ id: 'buddy-start', dispatched: false }] })
+    await f.machine.tick()
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', hostDispatch: true, signedIn: 'peer' }])
   })
   it('launches a Product Manager\'s start, which the backend lists apart so that a host from before them never does', async () => {
     const f = fixture()
     Object.assign(f.pool, { starts: [], leadStarts: [{ id: 'lead-start', dispatched: false }] })
     await f.machine.tick()
-    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'lead-start', hostDispatch: true }])
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'lead-start', hostDispatch: true, signedIn: null }])
   })
   it('says in its reading that it starts Product Managers, a Buddy\'s thread sessions and a person\'s one Buddy, to a backend that asks, and to no other', async () => {
     const f = fixture()
     Object.assign(f.pool, { capabilitiesWanted: true })
     await f.machine.tick()
     const posted = (g: typeof f) => g.backend.mock.calls.filter(c => c[1] === 'POST').map(c => c[3] as Record<string, unknown>)
-    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'leadSwitch', 'buddyModel'] })
+    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'leadSwitch', 'buddyModel'] })
     // A backend from before them does not ask, and would refuse the field.
     const older = fixture()
     await older.machine.tick()
@@ -424,6 +435,68 @@ describe('contributed machine executor', () => {
       withEngines(f)
       await f.machine.tick()
       expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: null }])
+    })
+
+    // Task #3106: Kay's Mac read Claude as signed in for its Team account while the owner's relay refused every request, as
+    // the readiness looked only for the relay's file. Routing kept sending work there, and each start lost its task.
+    it('reads a Team account\'s relayed engine as signed out while the relay does not answer, says why, and ready again within a minute', async () => {
+      const f = fixture({}, () => null, () => true)
+      withEngines(f)
+      let health: { ok: true } | { ok: false; reason: string } = { ok: false, reason: RELAY_REASONS.down }
+      const relayHealth = vi.fn(async () => health)
+      const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never)
+      await machine.tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }])
+      health = { ok: true }
+      f.advance(); await machine.tick()
+      // Within the minute the relay's answer is kept for: still read as it was.
+      expect(readings(f)[1]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }])
+      f.step(60_000); await machine.tick()
+      expect(readings(f).at(-1)!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: null }])
+      // The engines themselves were probed once: only the relay is asked again.
+      expect(probes(f)).toHaveLength(1)
+      expect(relayHealth).toHaveBeenCalledTimes(2)
+    })
+
+    // Security review 2 of #3098: the probe asks Claude's path, so an owner sign-in it cannot read is Claude's alone. A Mac
+    // whose owner has only ChatGPT kept getting Codex work before, and must still.
+    it('reads only Claude signed out when the owner\'s Claude sign-in cannot be read, Codex still on the relay', async () => {
+      const f = fixture({}, () => null, () => true)
+      const usage = f.request.getMockImplementation()!
+      f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe'
+        ? { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: false }] } : usage(type, ...rest as []))
+      const relayHealth = vi.fn(async () => ({ ok: false as const, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true as const }))
+      await new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never).tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: true }])
+    })
+
+    // Each probe has the owner's daemon read the owner's Keychain item: while macOS refuses it, it may ask on the owner's screen.
+    it('asks again only five minutes after the owner\'s Claude sign-in could not be read', async () => {
+      const f = fixture({}, () => null, () => true)
+      withEngines(f)
+      const relayHealth = vi.fn(async () => ({ ok: false as const, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true as const }))
+      const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never)
+      await machine.tick()
+      f.step(4 * 60_000); await machine.tick()
+      expect(relayHealth).toHaveBeenCalledOnce()
+      f.step(60_000); await machine.tick()
+      expect(relayHealth).toHaveBeenCalledTimes(2)
+    })
+
+    it('reads a probe that failed outright as a relay that does not answer', async () => {
+      const f = fixture({}, () => null, () => true)
+      withEngines(f)
+      const relayHealth = vi.fn(async () => { throw new Error('unexpected') })
+      await new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never).tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }])
+    })
+
+    it('never asks the relay on a machine without one', async () => {
+      const f = fixture()
+      withEngines(f)
+      const relayHealth = vi.fn(async () => ({ ok: true as const }))
+      await new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never).tick()
+      expect(relayHealth).not.toHaveBeenCalled()
     })
 
     it('reads an engine the probe calls not installed as unknown, since a timed-out shell probe says the same (review of #1743)', async () => {
@@ -919,6 +992,62 @@ describe('contributed machine executor', () => {
       expect(machinePosts(f).at(-1)).not.toHaveProperty('preparingStartIds')
     })
 
+    // Issue #2989 and River on task #2890: a start dispatched here that never got an agent, failed by the Swarm ("did not
+    // start it within 3 minutes"), held its memory on this machine until the ledger's launch deadline. Its host reads the
+    // verdict once the start leaves its pending list, and ends the reservation at once.
+    describe('that the backend fails before any agent joins', () => {
+      const startPath = '/api/super-tabs/hosts/host/starts/tab/start'
+      const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+      function failedEarly(status: () => unknown, ended: () => Promise<Record<string, unknown>> = async () => ({ ok: true, reservationId: 'creation', returned: true })) {
+        const f = fixture()
+        f.start.mockResolvedValue({ ...pendingCreation, state: 'unconfirmed' } as never)
+        const original = f.backend.getMockImplementation()!
+        f.backend.mockImplementation(async (core, method, path, body) => method === 'GET' && path === startPath ? status() : original(core, method, path, body))
+        const usage = f.request.getMockImplementation()!
+        f.request.mockImplementation(async (type, ...rest) => type === 'super_tabs' && (rest[0] as Record<string, unknown>)?.action === 'endCapacity'
+          ? ended() : usage(type, ...rest as []))
+        const ends = () => f.request.mock.calls.filter(c => c[0] === 'super_tabs' && (c[1] as Record<string, unknown>)?.action === 'endCapacity')
+        return { f, ends, fail: () => { f.pool.starts = [] } }
+      }
+
+      it('ends its reservation on this machine once, as soon as the Swarm says it failed', async () => {
+        const { f, ends, fail } = failedEarly(() => ({ error: 'Mac Auto did not start it within 3 minutes' }))
+        await f.machine.tick()
+        f.advance(); await f.machine.tick(); await settle()
+        expect(ends()).toHaveLength(0)
+        fail(); f.advance(); await f.machine.tick(); await settle()
+        await vi.waitFor(() => expect(ends()).toEqual([['super_tabs', { action: 'endCapacity', creationId: 'creation' }, 10_000]]))
+        expect(f.log.mock.calls.flat().join('\n')).toContain('Freed the memory of start start, which the Swarm failed: Mac Auto did not start it within 3 minutes')
+        f.advance(); await f.machine.tick(); await settle()
+        expect(ends()).toHaveLength(1)
+      })
+
+      it('leaves one that settled or got its agent to the ledger, and asks a few times when it cannot tell', async () => {
+        for (const status of [{ harnessId: 'joined' }, { error: null }]) {
+          const { f, ends, fail } = failedEarly(() => status)
+          await f.machine.tick(); fail(); f.advance(); await f.machine.tick(); await settle()
+          f.advance(); await f.machine.tick(); await settle()
+          expect(ends()).toHaveLength(0)
+          expect(f.backend.mock.calls.filter(c => c[2] === startPath)).toHaveLength(1)
+        }
+        const { f, ends, fail } = failedEarly(() => { throw new Error('backend down') })
+        await f.machine.tick(); fail()
+        for (let pass = 0; pass < 7; pass++) { f.advance(); await f.machine.tick(); await settle() }
+        expect(f.backend.mock.calls.filter(c => c[2] === startPath)).toHaveLength(5)
+        expect(ends()).toHaveLength(0)
+        expect(f.log.mock.calls.flat().join('\n')).toContain('Could not free the memory of failed start start: backend down')
+      })
+
+      it('lets an older daemon that cannot end it keep the row for its launch deadline', async () => {
+        const { f, ends, fail } = failedEarly(() => ({ error: 'Mac Auto did not start it within 3 minutes' }), async () => ({ error: 'UNKNOWN_ACTION' }))
+        await f.machine.tick(); fail(); f.advance(); await f.machine.tick(); await settle()
+        await vi.waitFor(() => expect(ends()).toHaveLength(1))
+        f.advance(); await f.machine.tick(); await settle()
+        expect(ends()).toHaveLength(1)
+        expect(f.log.mock.calls.flat().join('\n')).toContain('Could not free the memory of failed start start: UNKNOWN_ACTION')
+      })
+    })
+
     // Mac Auto's Harness Team account, 2026-10-29: the backend failed each start at 3 minutes while its Codex never recorded
     // its session, and the agent the machine launched for it stayed, idle, with no Swarm agent behind it.
     describe('that the backend then fails', () => {
@@ -982,6 +1111,18 @@ describe('contributed machine executor', () => {
         // Once: it is no longer the host's to stop.
         f.advance(); await f.machine.tick(); await settle()
         expect(closeMember).toHaveBeenCalledTimes(1)
+      })
+
+      // The start is still listed for one pass after the Swarm fails it, and that pass reads the failure with no agent named. The
+      // agent was forgotten there and kept running as nobody's: three Codex panes on DESKTOP-0TFH0OJ, 2026-11-04.
+      it('still stops it when a pass reads the failure before the start leaves the list', async () => {
+        const { f, closeMember, fail } = failedLater(() => ({ error: 'Mac Auto did not start it within 3 minutes' }))
+        await f.machine.tick()
+        f.start.mockResolvedValueOnce({ error: 'START_FAILED', startId: 'start', detail: 'Mac Auto did not start it within 3 minutes' } as never)
+        f.advance(); await f.machine.tick(); await settle()
+        expect(closeMember).not.toHaveBeenCalled()
+        fail(); f.advance(); await f.machine.tick(); await settle()
+        expect(closeMember).toHaveBeenCalledWith('launched', 'creation')
       })
 
       // A daemon restarted between the launch and the Swarm failing the start no longer forgets the agent it launched.
@@ -1604,6 +1745,41 @@ describe('contributed machine executor', () => {
       expect(lastBody(f)).toMatchObject({ runningHarnessIds: ['running', 'reopened'], stoppedHarnessIds: ['stopped'] })
     })
 
+    // The review of #2953: the backend refuses new work only for a session the idle cleanup closed, never one stopped for
+    // Change agent or a restart, so the report names those apart, and publishes when one is named.
+    it('names the stopped sessions the idle cleanup closed, and publishes when one is added', async () => {
+      const f = fixture(); quiet(f)
+      const dataDir = mkdtempSync(join(tmpdir(), 'swarm-closed-'))
+      onTestFinished(() => rmSync(dataDir, { recursive: true, force: true }))
+      ;(f.core as { dataDir: string }).dataDir = dataDir
+      // One the cleanup closed that runs again (resumed) is not named: only a stopped one is.
+      recordCleanupClose(dataDir, 'running', f.deps.now())
+      await f.machine.tick()
+      expect(lastBody(f)).toMatchObject({ runningHarnessIds: ['running'], stoppedHarnessIds: ['stopped'] })
+      expect(lastBody(f)).not.toHaveProperty('closedHarnessIds')
+      recordCleanupClose(dataDir, 'stopped', f.deps.now())
+      await after(f, 5_000)
+      expect(posts(f)).toHaveLength(2)
+      expect(lastBody(f)).toMatchObject({ stoppedHarnessIds: ['stopped'], closedHarnessIds: ['stopped'] })
+    })
+
+    it('drops the closed sessions alone for a backend that refuses them', async () => {
+      const f = fixture(); quiet(f)
+      const dataDir = mkdtempSync(join(tmpdir(), 'swarm-closed-'))
+      onTestFinished(() => rmSync(dataDir, { recursive: true, force: true }))
+      ;(f.core as { dataDir: string }).dataDir = dataDir
+      recordCleanupClose(dataDir, 'stopped', f.deps.now())
+      const original = f.backend.getMockImplementation()!
+      f.backend.mockImplementation(async (core, method, path, body) => {
+        if (method === 'POST' && (body as Record<string, unknown>)?.closedHarnessIds) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: closedHarnessIds', 400)
+        return original(core, method, path, body)
+      })
+      await f.machine.tick()
+      expect(posts(f).map(c => 'closedHarnessIds' in (c[3] as object))).toContain(false)
+      expect(lastBody(f)).toMatchObject({ stoppedHarnessIds: ['stopped'] })
+      expect(lastBody(f)).not.toHaveProperty('closedHarnessIds')
+    })
+
     it('reports nothing new from a backend that names no recorded session', async () => {
       const f = fixture(); quiet(f)
       vi.mocked(f.core.agents.byAgent).mockImplementation(id => ['running', 'reopened'].includes(id) ? { agentId: id } as never : undefined)
@@ -1664,7 +1840,7 @@ describe('contributed machine executor', () => {
       await after(f, 5_000)
       expect(posts(f)).toHaveLength(2)
       expect(f.start).toHaveBeenCalledOnce()
-      expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'second', hostDispatch: true })
+      expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'second', hostDispatch: true, signedIn: null })
       // Settled: that too is a change, and is sent.
       f.pool.starts.length = 0
       await after(f, 5_000)
@@ -2490,6 +2666,22 @@ describe('the allowance a machine reports', () => {
     expect(last(f).quotaReasons).toEqual({ codex: "This account runs on its owner's subscription; its allowance is read on the owner's machine." })
   })
 
+  it("says why a Harness Team account cannot use its owner's subscription when the owner's relay does not answer", async () => {
+    const f = fixture({}, () => null, () => true)
+    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth: async () => ({ ok: false, reason: RELAY_REASONS.refused }) } as never)
+    await machine.tick()
+    expect(last(f).quotaReasons).toEqual({ codex: RELAY_REASONS.refused })
+  })
+
+  it("keeps Codex's reason when only the owner's Claude sign-in cannot be read", async () => {
+    const f = fixture({}, () => null, () => true)
+    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth: async () => ({ ok: false, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true }) } as never)
+    await machine.tick()
+    expect(last(f).quotaReasons).toEqual({ codex: "This account runs on its owner's subscription; its allowance is read on the owner's machine." })
+  })
+
   it('drops the reasons for a backend that refuses them, keeping the allowance, and offers them again ten minutes later', async () => {
     const f = fixture()
     f.request.mockImplementation(limited)
@@ -2689,5 +2881,115 @@ describe('the profiles a machine reports', () => {
     expect(has().at(-1)).toBe(false)
     f.step(600_000); await f.machine.tick()
     expect(has().slice(-2)).toEqual([true, false])
+  })
+})
+
+// Task #3009: an engine that stops on a screen before it has a session waits for a person nobody tells. Team-written Codex
+// starts stopped on Codex's trust question and every one timed out at 3 minutes (10 of 10, 2026-10-29..11-05); the start's
+// own check read it as needing a person, and the host did nothing with that.
+describe('a launched start whose engine stops on a screen', () => {
+  const screens = (name: string) => readFileSync(new URL(`./fixtures/screens/${name}.txt`, import.meta.url), 'utf8')
+  const RESTRICTED = screens('codex-0165-open-restricted'), TRUST = screens('codex-0165-trust-fresh-home')
+  const waiting = { error: 'START_PENDING', startId: 'start', creationId: 'creation', harnessId: 'launched',
+    detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
+  function launched(text: string, hold: string | null, request: Record<string, unknown> = { engine: 'codex', projectSettings: 'off' }, result: Record<string, unknown> = waiting) {
+    const f = fixture()
+    f.pool.starts = [{ id: 'start', dispatched: true, request } as never]
+    f.start.mockResolvedValue(result as never)
+    const screen = vi.fn(async (_agentId: string, _scrollback: number) => ({ ok: true as const, text, hold }))
+    const inputIfScreen = vi.fn(async (_agentId: string, _keys: string[], _screen: string) => ({ ok: true as const }))
+    ;(f.core as { superTabs?: unknown }).superTabs = { screen, inputIfScreen }
+    const failures = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).endsWith('/starts/tab/start'))
+      .map(c => (c[3] as { command: { type: string; error?: string } }).command).filter(command => command.type === 'agent.startFailed')
+    return { f, screen, inputIfScreen, failures }
+  }
+  /** Two passes, 16 s apart: a screen fails a start only when two reads in a row show it the same (security review 1 of #3063). */
+  const twice = async (f: ReturnType<typeof fixture>) => { await f.machine.tick(); f.advance(); await f.machine.tick() }
+
+  it('opens a Team-written Codex start\'s untrusted checkout restricted, with Enter on that exact screen alone', async () => {
+    const { f, screen, inputIfScreen, failures } = launched(RESTRICTED, 'trust_open')
+    await f.machine.tick()
+    expect(screen).toHaveBeenCalledWith('launched', 0)
+    expect(inputIfScreen).toHaveBeenCalledWith('launched', ['Enter'], RESTRICTED)
+    expect(failures()).toEqual([])
+  })
+
+  it('fails it at once on the trust question, naming it, and types nothing', async () => {
+    const { f, inputIfScreen, failures } = launched(TRUST, 'trust_open')
+    await twice(f)
+    expect(inputIfScreen).not.toHaveBeenCalled()
+    const [failure] = failures()
+    expect(failure?.error).toBe('Its engine stopped on a folder trust question ("Trust this folder?") that nobody here can answer.')
+  })
+
+  it('also when its own check already read the screen as needing a person', async () => {
+    const { f, failures } = launched(TRUST, 'trust_open', { engine: 'codex', projectSettings: 'off' }, { ...waiting, needsPerson: true })
+    await twice(f)
+    expect(failures()[0]?.error).toContain('folder trust question')
+  })
+
+  it('fails, never answers, the restricted screen of a start that is not Team-written', async () => {
+    const { f, inputIfScreen, failures } = launched(RESTRICTED, 'trust_open', { engine: 'codex' })
+    await twice(f)
+    expect(inputIfScreen).not.toHaveBeenCalled()
+    expect(failures()[0]?.error).toBe('Its engine stopped on a folder trust question ("Trust this folder?") that nobody here can answer.')
+  })
+
+  // Security review 2 of #3063: the whole screen in a reason carried what a terminal shows only its own session (a sign-in
+  // link's state, wrapped onto the next line; a device code; an account's email), and a malformed link threw before the
+  // failure was sent. Its second read: option labels are terminal content too ("Use code 123456", a file path, a name), so
+  // only a fixed summary of the kind of screen is told, none of the screen's words.
+  it('fails a Claude Code start held at its sign-in at once, telling only the kind of screen', async () => {
+    const text = [
+      '  Select login method:', '',
+      '  ❯ 1. Claude account with subscription', '    2. Anthropic Console account', '    3. Use person@example.com',
+      '    4. Code ABCD-1234-EFGH', '    5. https://claude.ai/oauth/authorize?client_id=demo&', '',
+      '  https://auth.example/authorize?client_id=demo&', '  state=FAKE_STATE_123456', '  Paste code here: WXYZ-9876', '  https://[invalid',
+    ].join('\n')
+    const { f, failures } = launched(`${text}\n    6. Use code 123456\n    7. Use account Jane Smith\n    8. Read /Users/jane/private/client-contract.txt\n    ${'9'.repeat(1000)}. Quit`, 'sign_in_open', { engine: 'claude' })
+    await twice(f)
+    const [failure] = failures()
+    expect(failure?.error).toBe('Its engine stopped on a sign-in screen that nobody here can answer.')
+  })
+
+  it('still fails it at once on a screen with no options, and on one whose words cannot be read as links', async () => {
+    const { f, failures } = launched('  https://[invalid\n  Waiting for you to sign in', 'sign_in_open', { engine: 'codex' })
+    await twice(f)
+    expect(failures()[0]?.error).toBe('Its engine stopped on a sign-in screen that nobody here can answer.')
+  })
+
+  it.each([
+    ['nothing on screen that waits for a person', '› Ask Codex to do anything\n  gpt-6-astra high · ~/project', null],
+    ['a popup, which is no question', '› /mo\n  /model  choose what model to use', 'popup_open'],
+  ])('leaves it waiting on %s', async (_name, text, hold) => {
+    const { f, inputIfScreen, failures } = launched(text, hold)
+    await f.machine.tick()
+    expect(inputIfScreen).not.toHaveBeenCalled()
+    expect(failures()).toEqual([])
+  })
+
+  it('leaves it waiting while its creation is still preparing, with no agent to read', async () => {
+    const { f, screen, failures } = launched(TRUST, 'trust_open', { engine: 'codex', projectSettings: 'off' },
+      { error: 'START_PENDING', startId: 'start', creationId: 'creation', state: 'pending', detail: 'Preparing.' })
+    await f.machine.tick()
+    expect(screen).not.toHaveBeenCalled()
+    expect(failures()).toEqual([])
+  })
+
+  // Security review 1 of #3063: one read of a screen still drawing, or of a Codex that words its restricted screen otherwise,
+  // failed a start that would have gone on, and two failures in a row suspend its engine on that machine.
+  it('fails it only once two passes in a row read the same waiting screen', async () => {
+    const { f, failures } = launched(TRUST, 'trust_open')
+    await f.machine.tick()
+    expect(failures()).toEqual([])
+    f.advance(); await f.machine.tick()
+    expect(failures()).toHaveLength(1)
+  })
+
+  it('does not fail it while the waiting screen changes between passes', async () => {
+    const { f, screen, failures } = launched(TRUST, 'trust_open')
+    screen.mockResolvedValueOnce({ ok: true, text: `${TRUST}\n  drawing…`, hold: 'trust_open' })
+    await twice(f)
+    expect(failures()).toEqual([])
   })
 })

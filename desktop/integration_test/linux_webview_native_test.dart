@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/core/linux_webview_runtime.dart';
+import 'package:harness/core/native_webview_runtime.dart';
 import 'package:harness/widgets/native_webview_host.dart';
 import 'package:harness/widgets/pane_menu.dart';
 import 'package:integration_test/integration_test.dart';
@@ -15,8 +15,8 @@ void main() {
   testWidgets('optional Linux runtime and retained native page', (
     tester,
   ) async {
-    await LinuxWebViewRuntime.initialize();
-    expect(LinuxWebViewRuntime.available, isTrue);
+    await NativeWebViewRuntime.initialize();
+    expect(NativeWebViewRuntime.available, isTrue);
 
     final loaded = Completer<void>();
     final controller = WebViewController();

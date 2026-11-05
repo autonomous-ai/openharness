@@ -4,7 +4,7 @@
  * readers show it inside its task. No step name means anything to the server.
  */
 import { describe, expect, it } from 'vitest'
-import { PAIR_CHAIN_LIMIT, type Command } from './commands.js'
+import type { Command } from './commands.js'
 import { agent, type Actor } from './model.js'
 import { extracted } from './parts/write.js'
 import { owner, stepsFixture } from './steps.test-support.js'
@@ -95,9 +95,13 @@ describe('assigning a step', () => {
       const a = reviewing()
       post(a.f, a.id, [a.f.dev], a.rev)
       expect(a.f.group(a.id).assignment!.toldEngineerAt).toBe(a.f.now)
-      // A plain post in a step reaches its Engineer by default, so it counts too.
+      // A reply to the Engineer's message reaches it, so it counts too; a plain post reaches no one since #2963.
       const b = reviewing()
       post(b.f, b.id, [], b.rev)
+      expect(b.f.group(b.id).assignment!.toldEngineerAt).toBeUndefined()
+      const asked = b.f.run({ type: 'message.send', conversationId: b.id, text: 'Ready for review.', replyTo: null, recipientIds: [b.rev] } as Command, b.f.as(b.f.dev)).messages[0]!
+      b.f.run({ type: 'message.send', conversationId: b.id, text: 'Ready to merge: No.', replyTo: asked.id, recipientIds: [] } as Command, b.f.as(b.rev),
+        { reply: { id: asked.id, conversationId: b.id, author: asked.author, createdAt: 0 } })
       expect(b.f.group(b.id).assignment!.toldEngineerAt).toBe(b.f.now)
       // Named from the task's own chat, once the Reviewer is in it.
       const c = reviewing()
@@ -302,10 +306,10 @@ describe('who hears a step', () => {
     expect(to(status('done', 'Passed'), id)).toEqual([[f.dev]])
   })
 
-  it('an unnamed post in the task reaches the owner after the owner\'s own work is done', () => {
+  it('an unnamed post in the task reaches no one after the owner\'s own work is done', () => {
     const { f, post, status } = reviewing()
     status('done', 'Merged', f.task, f.dev)
-    expect(to(post(f.task), f.task)).toEqual([[f.dev]])
+    expect(to(post(f.task), f.task)).toEqual([[]])
   })
 
   it('with the owner gone from the Swarm, a step\'s done reaches the coordinator', () => {
@@ -325,9 +329,10 @@ describe('who hears a step', () => {
     expect(status('review', 'Findings posted').filter(m => m.conversationId === id).map(m => m.text)).toEqual(['Ready\n\nFindings posted'])
   })
 
-  it('a step agent\'s unnamed post reaches the owner, in its step or in its task', () => {
+  // #2963: a step agent names its Engineer; its unnamed post in the task reaches the task's assignee, the Engineer.
+  it('a step agent\'s unnamed post reaches no one in its step, and the owner in its task', () => {
     const { f, id, post } = reviewing()
-    expect(to(post(id), id)).toEqual([[f.dev]])
+    expect(to(post(id), id)).toEqual([[]])
     expect(to(post(f.task), f.task)).toEqual([[f.dev]])
   })
 
@@ -343,26 +348,18 @@ describe('who hears a step', () => {
     expect(to(named, id)).toEqual([[f.lead]])
   })
 
-  // Cleo's review of #2635: nothing is dropped. Where the owner's post does not go to the step's agent, it falls back as before.
-  it('the owner\'s unnamed post after the pair\'s loop guard stops still reaches the coordinator', () => {
+  it('the owner\'s unnamed reply to the PM in its step reaches the PM and the step\'s agent', () => {
     const { f, id, rev } = reviewing()
-    const recent = Array.from({ length: PAIR_CHAIN_LIMIT }, (_, i) => ({ author: { kind: 'agent', id: i % 2 ? rev : f.dev } as never, recipients: [i % 2 ? f.dev : rev] }))
-    const sent = f.run({ type: 'message.send', conversationId: id, text: 'Fixed, please re-check.', replyTo: null, recipientIds: [] } as Command, f.as(f.dev), { recent }).messages
-    expect(to(sent, id)).toEqual([[f.lead]])
-  })
-
-  it('the owner\'s unnamed reply to someone else in its step still reaches the coordinator', () => {
-    const { f, id } = reviewing()
     const asked = f.run({ type: 'message.send', conversationId: id, text: 'Status?', replyTo: null, recipientIds: [f.dev] } as Command, f.as(f.lead)).messages[0]!
     const answer = f.run({ type: 'message.send', conversationId: id, text: 'Almost.', replyTo: asked.id, recipientIds: [] } as Command, f.as(f.dev),
       { reply: { id: asked.id, conversationId: id, author: asked.author, createdAt: 0 } }).messages
-    expect(to(answer, id)).toEqual([[f.lead]])
+    expect(to(answer, id)).toEqual([[f.lead, rev]])
   })
 
-  it('an agent with no open step in the task still reaches the coordinator', () => {
+  it('an agent with no open step in the task reaches the task\'s assignee, never the coordinator', () => {
     const { f, post } = reviewing()
     const other = f.add('other', f.task)
-    expect(to(post(f.task, other), f.task)).toEqual([[f.lead]])
+    expect(to(post(f.task, other), f.task)).toEqual([[f.dev]])
   })
 
 })
@@ -439,10 +436,12 @@ describe('a linked task opened without a step name', () => {
     expect(done.filter(m => m.conversationId === id).map(m => m.recipients)).toEqual([[f.dev], []])
     expect(f.group(f.task).agentIds).toContain(tester)
   })
-  it('an unnamed post from its agent reaches the owner', () => {
+  it('an unnamed post from its agent reaches no one, and one naming the owner reaches it (#2963)', () => {
     const { f, id, tester } = linked()
     const posted = f.run({ type: 'message.send', conversationId: id, text: 'Starting on the simulator.', replyTo: null, recipientIds: [] } as Command, f.as(tester)).messages
-    expect(posted.map(m => m.recipients)).toEqual([[f.dev], []])
+    expect(posted.map(m => m.recipients)).toEqual([[]])
+    const named = f.run({ type: 'message.send', conversationId: id, text: 'Ready to merge: No.', replyTo: null, recipientIds: [f.dev] } as Command, f.as(tester)).messages
+    expect(named.map(m => m.recipients)[0]).toEqual([f.dev])
   })
   it('closes with its task, not on its own clock', () => {
     const { f, id, tester } = linked()
@@ -457,14 +456,16 @@ describe('a linked task opened without a step name', () => {
 
 // Ken, 2026-11-02: in 20 minutes the PM got 23 messages; about half were agents' posts it had nothing to do with.
 describe('the PM is not told what a step\'s agent says to its task', () => {
-  it('a step agent that lost its step still reaches the owner, in the step', () => {
+  it('a step agent that lost its step reaches the owner by name, in the step', () => {
     const f = stepsFixture()
     const id = f.step('Review')
     const rev = f.add('rev', id)
     f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
     f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev))
-    const posted = f.run({ type: 'message.send', conversationId: id, text: 'Re-read the new head: still passes.', replyTo: null, recipientIds: [] } as Command, f.as(rev)).messages
-    expect(posted.map(m => m.recipients)).toEqual([[f.dev]])
+    const unnamed = f.run({ type: 'message.send', conversationId: id, text: 'Re-read the new head: still passes.', replyTo: null, recipientIds: [] } as Command, f.as(rev)).messages
+    expect(unnamed.map(m => m.recipients)).toEqual([[]])
+    const posted = f.run({ type: 'message.send', conversationId: id, text: 'Re-read the new head: still passes.', replyTo: null, recipientIds: [f.dev] } as Command, f.as(rev)).messages
+    expect(posted.map(m => m.recipients)[0]).toEqual([f.dev])
   })
   it('an agent whose step is done still reaches the owner, in the task', () => {
     const f = stepsFixture()

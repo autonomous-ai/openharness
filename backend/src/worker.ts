@@ -21,6 +21,7 @@ import { startSwarmSweeps } from './superTabs/sweeps.js'
 import { requeueCompactedAgents } from './superTabs/agentTombstones.js'
 import { startLegacyDrop } from './superTabs/migration/dropLegacyJob.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
+import { startDeliveryRepush } from './superTabs/deliveryRepush.js'
 import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
 import { startThreadBackfill } from './superTabs/threadBackfill.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
@@ -31,6 +32,7 @@ import { announceSwarmHostChanges } from './lib/swarmHostPushes.js'
 import { announceSwarmChanges } from './lib/swarmClientPushes.js'
 import { GitHubApp, githubAppConfig } from './github/app.js'
 import { env } from './config/env.js'
+import { phoneSendersFromEnv, sendPhoneNotices } from './push/send.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
 import { productUsagePeopleRollupService } from './services/ProductUsagePeopleRollupService.js'
 import { startReceiptSweep } from './lib/productUsageReceiptSweep.js'
@@ -76,6 +78,7 @@ async function start(): Promise<void> {
   let stopArchive = (): void => {}
   let stopPullRequestWatch = (): void => {}
   let stopDeliveries = (): void => {}
+  let stopRepush = (): void => {}
   let stopCompaction = (): void => {}
   let stopThreadBackfill = (): void => {}
   let stopReceiptSweep = (): void => {}
@@ -95,6 +98,7 @@ async function start(): Promise<void> {
     stopArchive()
     stopPullRequestWatch()
     stopDeliveries()
+    stopRepush()
     stopCompaction()
     stopReceiptSweep()
     stopReadMarkSweep()
@@ -128,8 +132,10 @@ async function start(): Promise<void> {
   configureSwarmStamps(redisSwarmStamps(), { reads: false })
   // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once, and of the
   // groups they changed.
+  // Their tags reach the tagged person's phones too (push/send.ts, task #2905).
+  const phones = phoneSendersFromEnv(env)
   const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, terminalWaiting: announceSwarmTerminal, hostsChanged: announceSwarmHostChanges,
-    swarmChanged: announceSwarmChanges })
+    swarmChanged: announceSwarmChanges, phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices) } })
   // Decisions still waiting in work that was over before #2454 closed them where work ends: they counted toward the open
   // limit and came back on a reopen (store.ts withdrawEndedDecisions). Remove in the release after the one that runs it.
   logger.info('[swarm-decisions] closed waiting decisions of finished work', { closed: await swarms.withdrawEndedDecisions() })
@@ -138,7 +144,7 @@ async function start(): Promise<void> {
   // A failure leaves them compacted, as before, and never stops the worker starting.
   await requeueCompactedAgents(prisma, Date.now()).then(queued => logger.info('[swarm-sweeps] queued compacted agent tombstones for purge', { queued }),
     error => logger.warn('[swarm-sweeps] queuing compacted agent tombstones failed', { error: error instanceof Error ? error.message : String(error) }))
-  stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
+  stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals(), now => swarms.leaveOverdueDecisions(now))
   // The dead old state of migrated Swarms goes by itself, a few at a time (superTabs/migration/dropLegacyJob.ts).
   stopLegacyDrop = startLegacyDrop(prisma)
   // Finished groups archive once GitHub says their pull requests are merged or closed; without the app, only groups that
@@ -150,6 +156,9 @@ async function start(): Promise<void> {
   if (githubApp) stopPullRequestWatch = startPullRequestWatch(prisma, swarms, () => appPullRequestWatch(githubApp))
   // A delivery that can no longer move ends as Not sent, instead of waiting for good (superTabs/deliverySettle.ts).
   stopDeliveries = startDeliverySettle(prisma, swarms)
+  // Every 15 s, the machine of each agent with a delivery still queued after 10 s is told again, in case its push was lost:
+  // hosts read an idle worker's list only when told (superTabs/deliveryRepush.ts, task #2800).
+  stopRepush = startDeliveryRepush(prisma, announceSwarmDeliveries)
   // Every hour, finished deliveries 14 days old move into their messages' receipts, kept forever (superTabs/deliveryCompaction.ts).
   stopCompaction = startDeliveryCompaction(prisma, env.SWARM_DELIVERY_COMPACTION)
   // Every 15 minutes, thread summaries for replies no write summed up: all of a Swarm's at first, then only what changed

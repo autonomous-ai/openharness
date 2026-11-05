@@ -3,10 +3,11 @@ import { delegate, extracted, partId, type HeadColumns, type PartRow } from './w
 import type { GroupData, HeadData, MachineData, Part, PartKind, SwarmParts } from './types.js'
 import { PART_KINDS } from './types.js'
 import { noteChange } from '../cache.js'
+import { recordDeltaRows } from '../cacheStats.js'
 import type { AgentStart } from '../model.js'
-import { ms } from './light.js'
+import { ms, rawGroupRow, rawPartRow } from './light.js'
 import { groupsBy, readBy, type GroupIndex, type NamedCollection } from './indexed.js'
-import { HELD, type HeldParts } from './held.js'
+import { COMMAND_HELD, HELD, type HeldParts, type HeldRead } from './held.js'
 
 type Transaction = Prisma.TransactionClient
 type Where = Record<string, unknown>
@@ -16,26 +17,21 @@ type GroupReads = Array<readonly [GroupIndex, Where]>
 const toPart = <T>(kind: PartKind, row: PartRow): Part<T> => ({ kind, key: row.key, version: row.version, changedAt: row.changedAt.getTime(),
   ordinal: row.ordinal, data: row.data as T, ...(row.deleted ? { deleted: true as const } : {}), ...(row.dormant ? { dormant: true as const } : {}) })
 
-/** A group part as `aggregateRaw` returns it, as the PartRow Prisma would. */
-const rawGroupRow = (row: Record<string, unknown>): PartRow => ({ ...row, changedAt: new Date(ms(row.changedAt)) }) as unknown as PartRow
-/** Any part as `aggregateRaw` returns it: a Float ordinal can come wrapped, and a part stored before `deleted` lacks it. */
-const rawPartRow = (row: Record<string, unknown>): PartRow => ({ ...rawGroupRow(row), version: Number(row.version), deleted: !!row.deleted,
-  ordinal: typeof row.ordinal === 'number' ? row.ordinal : Number((row.ordinal as { $numberDouble?: string; $numberInt?: string }).$numberDouble
-    ?? (row.ordinal as { $numberInt?: string }).$numberInt) }) as PartRow
-
-/** The live groups these reads find, each once. */
-async function liveGroups(tx: Transaction, tabId: string, reads: GroupReads): Promise<PartRow[]> {
+/** The live groups these reads find, each once; through `held`, whole only those changed since it last read them. */
+async function liveGroups(tx: Transaction, tabId: string, reads: GroupReads, held?: HeldRead): Promise<PartRow[]> {
+  if (held) return (await held.groups(tx, reads)).map(rawGroupRow)
   const found = await Promise.all(reads.map(([index, match]) => groupsBy(tx, index, [{ $match: { tabId, deleted: false, ...match } as Prisma.InputJsonValue }])))
   return [...new Map(found.flat().map(row => [row.key as string, rawGroupRow(row)])).values()]
 }
 
 /** `null` for a kind leaves it out: none are loaded. Groups go by `where` (every part, tombstones too) or as named reads. */
-async function assemble(tx: Transaction, tabId: string, where: Record<Exclude<PartKind, 'head' | 'group'>, Where | null> & { group: Where | GroupReads }): Promise<SwarmParts> {
+async function assemble(tx: Transaction, tabId: string, where: Record<Exclude<PartKind, 'head' | 'group'>, Where | null> & { group: Where | GroupReads },
+  held?: HeldRead): Promise<SwarmParts> {
   const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') } })
   if (!head) throw Object.assign(new Error(`Swarm ${tabId} has no parts`), { code: 'PARTS_MISSING' })
   const group = where.group
   const [members, agents, groups, machines, starts, progress] = await Promise.all((['member', 'agent', 'group', 'machine', 'start', 'progress'] as const)
-    .map(kind => kind === 'group' && Array.isArray(group) ? liveGroups(tx, tabId, group).then(rows => rows.map(row => toPart(kind, row)))
+    .map(kind => kind === 'group' && Array.isArray(group) ? liveGroups(tx, tabId, group, held).then(rows => rows.map(row => toPart(kind, row)))
       : where[kind] === null ? Promise.resolve([])
       : delegate(tx, kind).findMany({ where: { tabId, ...where[kind] as Where } }).then(rows => rows.map(row => toPart(kind, row)))))
   return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow), members, agents, groups, machines, starts, progress,
@@ -47,25 +43,30 @@ async function assemble(tx: Transaction, tabId: string, where: Record<Exclude<Pa
  * plus the groups named by id, the groups the named agents are in and the named projects' groups (dormant ones too),
  * and the finished starts named by id or by the agent they started.
  */
-export function loadActive(tx: Transaction, tabId: string,
+export async function loadActive(tx: Transaction, tabId: string,
   opts: { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; startIds?: string[]; startAgentIds?: string[]
     /** Also the finished starts not yet expired (finished within 7 days), as a first load shows them (design section 4.3). */
     includeRecentStarts?: boolean
     /** Every live group, dormant ones too: for the rare reads that list across all of them (mentions, route decisions). */
-    allGroups?: boolean } = {}): Promise<SwarmParts> {
+    allGroups?: boolean } = {}, held: HeldParts | null = COMMAND_HELD): Promise<SwarmParts> {
   const live = { deleted: false }
   const or = (always: Where, ...named: Array<Where | false>) => ({ ...live, OR: [always, ...named.filter((w): w is Where => !!w)] })
   // A group stored with no project belongs to the default one (projects.ts groupProject), as in a Swarm from before projects;
   // a null match is a missing field too.
   const projectIds = [...opts.projectIds ?? [], ...opts.projectIds?.includes('lead') ? [null] : []]
-  return assemble(tx, tabId, {
+  // The awake groups through the held index, held (task #3146): each command read every one of them whole. Every live group
+  // (allGroups) is a rare read, made whole as before.
+  const read = held && !opts.allGroups ? held.read(tabId) : undefined
+  const parts = await assemble(tx, tabId, {
     member: live, agent: live, machine: live, progress: live,
-    group: opts.allGroups ? [['live', {}]] : [['dormancy', { dormant: false }], ...opts.groupIds?.length ? [['key', { key: { $in: opts.groupIds } }] as const] : [],
+    group: opts.allGroups ? [['live', {}]] : [['held', { dormant: false }], ...opts.groupIds?.length ? [['key', { key: { $in: opts.groupIds } }] as const] : [],
       ...opts.agentIds?.length ? [['agents', { agentIds: { $in: opts.agentIds } }] as const] : [],
       ...projectIds.length ? [['project', { projectId: { $in: projectIds } }] as const] : []],
     start: opts.includeRecentStarts ? live : or({ finishedAt: null }, !!opts.startIds?.length && { key: { in: opts.startIds } },
       !!opts.startAgentIds?.length && { agentId: { in: opts.startAgentIds } }),
-  })
+  }, read)
+  read?.done()
+  return parts
 }
 
 /**
@@ -120,6 +121,40 @@ export function loadReadBase(tx: Transaction, tabId: string): Promise<SwarmParts
     start: { ...live, finishedAt: null }, progress: live })
 }
 
+/** What a read check needs of a Swarm, and no more (read/service.ts oneGroup, task #2875): its head, members and agents. The
+ *  read cache holds it as `access` and patches it from those kinds alone (cachePatch.ts accessRule). */
+export function loadAccess(tx: Transaction, tabId: string): Promise<SwarmParts> {
+  const live = { deleted: false }
+  return assemble(tx, tabId, { member: live, agent: live, group: [], machine: null, start: null, progress: null })
+}
+
+/** One live group by key in one indexed read: whole, or without its data when `held` is it at the same version and write time,
+ *  and then `held` itself (read/service.ts oneGroup keeps what it read, task #2875). Every write moves a part's version, so a read
+ *  never serves an older group. Null when there is no live group by that key. */
+export async function loadGroupUnless(tx: Transaction, tabId: string, key: string, held?: Part<GroupData>): Promise<Part<GroupData> | null> {
+  // The version and the time of its write: a key made again after its tombstone was purged starts at version 1 again
+  // (security review 1 of #3002).
+  const same = held && { $and: [{ $eq: ['$version', held.version] }, { $eq: ['$changedAt', { $date: new Date(held.changedAt).toISOString() }] }] }
+  const [row] = await groupsBy(tx, 'key', [{ $match: { tabId, deleted: false, key } },
+    ...same ? [{ $set: { data: { $cond: [same, '$$REMOVE', '$data'] } } }] : []] as Prisma.InputJsonValue[])
+  if (!row) return null
+  if (held && row.data === undefined && Number(row.version) === held.version && ms(row.changedAt) === held.changedAt) return held
+  return toPart<GroupData>('group', rawGroupRow(row))
+}
+
+/** These live machine parts by key, in one read by `_id`, with only what says which account an agent there runs as
+ *  (projects.ts teamAccountPool): its host Mac and its session kind. Its lists read empty. What a one-group read checks an
+ *  agent's host against (read/service.ts oneGroup), never a whole machine row with its readings. */
+export async function loadMachineAccounts(tx: Transaction, tabId: string, keys: string[]): Promise<Part<MachineData>[]> {
+  if (!keys.length) return []
+  const none = { $literal: [] }
+  const rows = await tx.swarmMachine.aggregateRaw({ pipeline: [{ $match: { _id: { $in: [...new Set(keys)].map(key => partId(tabId, key)) }, tabId, deleted: false } },
+    { $project: { tabId: 1, key: 1, version: 1, changedAt: 1, deleted: 1, ordinal: 1, 'data.machineId': 1, 'data.contribution.machineId': 1,
+      'data.contribution.hostMachineId': 1, 'data.contribution.observation.sessionKind': 1, 'data.reservations': none, 'data.released': none,
+      'data.closingSessions': none, 'data.cleanups': none } }] }) as unknown as Array<Record<string, unknown>>
+  return rows.map(row => toPart<MachineData>('machine', rawPartRow(row)))
+}
+
 /** A Swarm's live finished starts (they expire 7 days after finishing, sweeps.ts). A plain match: Prisma's `not: null` on
  *  Mongo is an $expr no index bounds. */
 export async function loadFinishedStarts(tx: Transaction, tabId: string): Promise<Part<AgentStart>[]> {
@@ -170,16 +205,17 @@ export async function loadChanged(tx: Transaction, tabIds: string[], since: Date
 }
 
 /** Each kind's rows changed after `since`, read in parallel: a refresh of the read cache waits for one round trip, not seven. */
-async function changedRows(tx: Transaction, tabIds: string[], since: Date, kinds: readonly PartKind[]): Promise<Array<[PartKind, Array<Record<string, unknown>>]>> {
+async function changedRows(tx: Transaction, tabIds: string[], since: Date, kinds: readonly PartKind[], fields: Record<string, number> = CHANGED_FIELDS):
+  Promise<Array<[PartKind, Array<Record<string, unknown>>]>> {
   // Plain matches that name each kind's (tabId, changedAt) index (parts/indexed.ts). Prisma sent `tabId: { in }` as an $expr
   // $or, one planned scan per Swarm, and could pick an index that is not bounded by time at all (roadmap Phase 3.5).
   const after = { $gt: { $date: since.toISOString() } }
-  const read = (kind: PartKind) => readBy(tx, COLLECTION[kind], 'changes', [{ $match: { tabId: { $in: tabIds }, changedAt: after } }, { $project: CHANGED_FIELDS }])
+  const read = (kind: PartKind) => readBy(tx, COLLECTION[kind], 'changes', [{ $match: { tabId: { $in: tabIds }, changedAt: after } }, { $project: fields }])
   return Promise.all(kinds.map(async kind => {
     if (kind !== 'machine') return [kind, await read(kind)] as [PartKind, Array<Record<string, unknown>>]
     // A machine read since the cursor counts as changed too: two bounded reads, not one $or the planner cannot bound.
     const [changes, readings] = await Promise.all([read(kind), readBy(tx, 'SwarmMachine', 'read',
-      [{ $match: { tabId: { $in: tabIds }, readAt: after } }, { $project: CHANGED_FIELDS }])])
+      [{ $match: { tabId: { $in: tabIds }, readAt: after } }, { $project: fields }])])
     return [kind, [...new Map([...changes, ...readings].map(row => [row._id as string, row])).values()]] as [PartKind, Array<Record<string, unknown>>]
   }))
 }
@@ -199,10 +235,23 @@ export interface SwarmDelta {
   hostDigests?: ReadonlyMap<string, string | null>
 }
 
-export async function loadDelta(tx: Transaction, tabId: string, since: number, kinds: readonly PartKind[]): Promise<SwarmDelta> {
+/** Each kind's rows of one Swarm that its last delta read whole, by row id (#2783). */
+export type DeltaRows = Map<PartKind, Map<string, Record<string, unknown>>>
+/** What a delta reads of each changed row first: enough to tell the row it read whole before from a newer one. Every write of
+ *  what a delta reads moves the version (parts/write.ts), and a reading moves `readAt`. */
+const STAMP_FIELDS = { key: 1, version: 1, changedAt: 1, readAt: 1, contentAt: 1, deleted: 1 } as const
+const rowStamp = (row: Record<string, unknown>) => JSON.stringify([Number(row.version), row.changedAt ?? null, row.readAt ?? null, row.contentAt ?? null, !!row.deleted])
+
+/**
+ * The parts of `kinds` changed after `since`. With `held`, the Swarm's rows its last delta read: each changed row is read
+ * as its key and version first, and whole only when `held` lacks it at that version, so a delta reads whole only what
+ * moved since the one before, not every part of its window again (#2783: a 30 s overlap re-read each conversation that
+ * changed in it on every bump). `held` then holds this delta's rows of each kind it read.
+ */
+export async function loadDelta(tx: Transaction, tabId: string, since: number, kinds: readonly PartKind[], held?: DeltaRows): Promise<SwarmDelta> {
   const parts: Part[] = [], hostDigests = new Map<string, string | null>()
   let head: HeadColumns | null = null
-  for (const [kind, rows] of await changedRows(tx, [tabId], new Date(since), kinds)) {
+  for (const [kind, rows] of held ? await heldRows(tx, tabId, since, kinds, held) : await changedRows(tx, [tabId], new Date(since), kinds)) {
     for (const row of rows) {
       parts.push(changedPart(kind, row))
       if (kind === 'group') hostDigests.set(row.key as string, typeof row.hostDigest === 'string' ? row.hostDigest : null)
@@ -210,6 +259,35 @@ export async function loadDelta(tx: Transaction, tabId: string, since: number, k
     }
   }
   return { parts, head, hostDigests }
+}
+
+/** Each kind's changed rows whole: those `held` has at the same version from it, the rest read by id in one read per kind. */
+async function heldRows(tx: Transaction, tabId: string, since: number, kinds: readonly PartKind[], held: DeltaRows):
+  Promise<Array<[PartKind, Array<Record<string, unknown>>]>> {
+  const counted = { stamps: 0, whole: 0 }
+  // A kind with nothing held (the Swarm's first delta of it here) is read whole in one read: by key and version first it
+  // would take two reads for the same rows.
+  const cold = kinds.filter(kind => !held.get(kind)?.size), warm = kinds.filter(kind => held.get(kind)?.size)
+  const whole = cold.length ? await changedRows(tx, [tabId], new Date(since), cold) : []
+  for (const [kind, rows] of whole) {
+    held.set(kind, new Map(rows.map(row => [row._id as string, row])))
+    counted.stamps += rows.length
+    counted.whole += rows.length
+  }
+  const rows = await Promise.all((warm.length ? await changedRows(tx, [tabId], new Date(since), warm, STAMP_FIELDS) : []).map(async ([kind, stamps]) => {
+    const known = held.get(kind)
+    const same = (row: Record<string, unknown>) => { const kept = known?.get(row._id as string); return kept && rowStamp(kept) === rowStamp(row) ? kept : null }
+    const missing = stamps.filter(row => !same(row)).map(row => row._id as string)
+    const read = new Map((missing.length ? await readBy(tx, COLLECTION[kind], 'id', [{ $match: { _id: { $in: missing }, tabId } }, { $project: CHANGED_FIELDS }]) : [])
+      .map(row => [row._id as string, row]))
+    const rows = stamps.flatMap(row => { const whole = same(row) ?? read.get(row._id as string); return whole ? [whole] : [] })
+    held.set(kind, new Map(rows.map(row => [row._id as string, row])))
+    counted.stamps += stamps.length
+    counted.whole += read.size
+    return [kind, rows] as [PartKind, Array<Record<string, unknown>>]
+  }))
+  recordDeltaRows(counted)
+  return [...whole, ...rows]
 }
 
 /** The live starts of these agents (an agent is its machine and harness: write.ts extracted), whole, by the (tabId, agentId)

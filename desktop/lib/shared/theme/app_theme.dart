@@ -173,6 +173,9 @@ abstract final class AppPalette {
   static Color get swarmAccent => AppTheme.surfacePalette.accent;
   // Shared with the native search field for a continuous input/results surface.
   static Color get swarmSearchSurface => AppTheme.surfacePalette.search;
+  // The Swarm's project sidebar: the workspace color, or a palette's own
+  // (Plum's plum). Its ink is `SidebarInk`'s.
+  static Color get swarmSidebar => AppTheme.surfacePalette.sidebar;
   // Getters, not consts: a light palette brings its own panel and card.
   static Color get agentEntrySurface =>
       AppTheme.pick(AppTheme.surfacePalette.panel, const Color(0xff101113));
@@ -383,10 +386,14 @@ abstract final class AppPalette {
   static Color get onboardingTagline =>
       AppTheme.pick(const Color(0xFF7D5A2C), const Color(0xFFD4A574));
 
+  // A palette may bring its own three grays (Plum, Night, Cloud, Storm); the
+  // rest share these ramps.
   static Color get textPrimary =>
+      AppTheme.surfacePalette.text ??
       AppTheme.pick(const Color(0xFF1A1A18), const Color(0xFFF5F5F5));
 
   static Color get textSecondary =>
+      AppTheme.surfacePalette.muted ??
       AppTheme.pick(const Color(0xFF62615B), const Color(0xFFA8A8A2));
 
   /// Meta text and hints. Light is #7A7973, not the #8E8D86 it was: that one
@@ -394,12 +401,14 @@ abstract final class AppPalette {
   /// (#E2E2DF) and 2.60 on Mist's (#DCE4EE). This holds 3.36 / 3.40 there and
   /// 3.49 / 3.51 on the two workspaces, and stays 1.42:1 apart from
   /// [textSecondary] so the three steps still read as three.
-  static Color get textFaint => textFaintFor(isDark: AppTheme.isDark);
+  static Color get textFaint =>
+      AppTheme.surfacePalette.faint ?? textFaintFor(isDark: AppTheme.isDark);
 
   /// [textFaint] for a theme being built, whose brightness need not be the
   /// current one. Every field's placeholder is this color.
   static Color textFaintFor({required bool isDark}) =>
-      isDark ? const Color(0xFF6E6E68) : const Color(0xFF7A7973);
+      AppTheme.paletteFor(isDark ? Brightness.dark : Brightness.light).faint ??
+      (isDark ? const Color(0xFF6E6E68) : const Color(0xFF7A7973));
 
   /// The page a document is drawn on, and the ink on it.
   ///
@@ -608,6 +617,89 @@ abstract final class AppSurface {
       ),
     ],
   );
+}
+
+/// The Swarm sidebar's ink (task #3006).
+///
+/// A theme may draw its sidebar darker than the page around it — Plum's is
+/// plum with white text in an otherwise white app. The tokens above follow
+/// one global brightness and cannot tell the sidebar from the page, so the
+/// sidebar's widgets read their ink here instead: inside [SidebarInk.scope]
+/// on such a theme they get the sidebar's own, anywhere else (the same row
+/// widgets on another page, or any theme without a sidebar of its own) the
+/// page's ordinary tokens.
+class SidebarInk extends InheritedWidget {
+  const SidebarInk._({required super.child});
+
+  /// Marks [child] as the Swarm sidebar, and gives text and icons that pick
+  /// no color of their own the sidebar's ink.
+  static Widget scope({required Widget child}) {
+    final palette = AppTheme.surfacePalette;
+    if (!palette.hasSidebarInk) return SidebarInk._(child: child);
+    return SidebarInk._(
+      child: IconTheme.merge(
+        data: IconThemeData(color: palette.sidebarInk),
+        child: DefaultTextStyle.merge(
+          style: TextStyle(color: palette.sidebarInk),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  /// The default text style of a Material drawn as the sidebar: the theme's,
+  /// in the sidebar's ink when it has its own (a Material sets its own
+  /// default style, which would hide [scope]'s).
+  static TextStyle? textStyle(BuildContext context) => switch (_own(context)) {
+    final palette? => Theme.of(
+      context,
+    ).textTheme.bodyMedium?.copyWith(color: palette.sidebarInk),
+    null => null,
+  };
+
+  static HarnessPalette? _own(BuildContext context) {
+    final palette = AppTheme.surfacePalette;
+    return palette.hasSidebarInk &&
+            context.dependOnInheritedWidgetOfExactType<SidebarInk>() != null
+        ? palette
+        : null;
+  }
+
+  /// The sidebar's inks, for code that draws only the sidebar.
+  static HarnessPalette? get _sidebarOwn =>
+      AppTheme.surfacePalette.hasSidebarInk ? AppTheme.surfacePalette : null;
+  static Color get ink => _sidebarOwn?.sidebarInk ?? AppPalette.textPrimary;
+  static Color get inkMuted => switch (_sidebarOwn) {
+    final palette? => palette.sidebarMuted ?? palette.sidebarInk!,
+    null => AppPalette.textSecondary,
+  };
+  static Color get hover => _sidebarOwn?.sidebarHover ?? AppSurface.hoverFill;
+  static Color get selected =>
+      _sidebarOwn?.sidebarSelected ?? AppSurface.selectedFill;
+
+  /// The same, for a widget that is drawn in the sidebar and elsewhere: the
+  /// sidebar's inside [scope], the page's outside it.
+  static Color foreground(BuildContext context) =>
+      _own(context)?.sidebarInk ?? AppPalette.textPrimary;
+
+  static Color muted(BuildContext context) => switch (_own(context)) {
+    final palette? => palette.sidebarMuted ?? palette.sidebarInk!,
+    null => AppPalette.textSecondary,
+  };
+
+  /// A disabled control's ink: the sidebar's own at half strength on a
+  /// sidebar with its own ink, else the page's faint.
+  static Color faint(BuildContext context) =>
+      _own(context)?.sidebarInk?.withValues(alpha: .5) ?? AppPalette.textFaint;
+
+  static Color hoverFill(BuildContext context) =>
+      _own(context)?.sidebarHover ?? AppSurface.hoverFill;
+
+  static Color selectedFill(BuildContext context) =>
+      _own(context)?.sidebarSelected ?? AppSurface.selectedFill;
+
+  @override
+  bool updateShouldNotify(SidebarInk oldWidget) => false;
 }
 
 /// Translucent Codex-like chrome surfaces used behind a backdrop blur (the
@@ -956,12 +1048,16 @@ ThemeData buildAppTheme({
           onPrimary: Colors.white,
           secondary: AppPalette.accent,
           surface: AppTheme.paletteFor(brightness).background,
-          onSurface: const Color(0xFFF5F5F5),
-          onSurfaceVariant: const Color(0xFFA8A8A2),
+          onSurface:
+              AppTheme.paletteFor(brightness).text ?? const Color(0xFFF5F5F5),
+          onSurfaceVariant:
+              AppTheme.paletteFor(brightness).muted ?? const Color(0xFFA8A8A2),
           surfaceContainerHighest: AppTheme.paletteFor(brightness).card,
           outline: const Color(0x14FFFFFF),
           outlineVariant: const Color(0x14FFFFFF),
-          error: const Color(0xFFFF7068),
+          error:
+              AppTheme.paletteFor(brightness).errorInk ??
+              const Color(0xFFFF7068),
         )
       : ColorScheme.light(
           primary: AppPalette.accent,
@@ -971,14 +1067,17 @@ ThemeData buildAppTheme({
           // the dark scheme's does.
           surface: AppTheme.paletteFor(brightness).background,
           onSurface: AppTheme.paletteFor(brightness).foreground,
-          onSurfaceVariant: const Color(0xFF62615B),
+          onSurfaceVariant:
+              AppTheme.paletteFor(brightness).muted ?? const Color(0xFF62615B),
           // The field fill. Not the card, which is pure white on both light
           // palettes: a white field in a white dialog has no edge at all. The
           // panel tone is the step the old light theme's #F3F3F2 was.
           surfaceContainerHighest: AppTheme.paletteFor(brightness).panel,
           outline: const Color(0x0F000000),
           outlineVariant: const Color(0x0F000000),
-          error: const Color(0xFFB3261E),
+          error:
+              AppTheme.paletteFor(brightness).errorInk ??
+              const Color(0xFFB3261E),
         );
   final scheme = highContrast
       ? baseScheme.copyWith(
@@ -1459,6 +1558,15 @@ abstract final class AppDesktop {
   static const double panelPadding = 24;
   static const double groupGap = 16;
   static const double controlGap = 8;
+
+  /// The Swarm composer's box, as the phone draws it (Huy, 11-04): the
+  /// phone's corners (`SwarmComposer.cardRadius`), the text [composerTop]
+  /// below the top and [composerSide] in from each side, and [composerRowGap]
+  /// between the text and the row of actions under it.
+  static const double composerRadius = 24;
+  static const double composerTop = 12;
+  static const double composerSide = groupGap;
+  static const double composerRowGap = 12;
 
   /// Between one sidebar row and the next (design system: Geometry).
   static const double listRowGap = 2;

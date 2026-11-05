@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/phone/voice_language_store.dart';
+import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -14,6 +15,7 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'model.dart';
 import 'swarm_attach.dart';
+import 'swarm_chat_find.dart';
 import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
 import 'swarm_conversation_page.dart';
@@ -22,11 +24,12 @@ import 'swarm_outbox.dart';
 import 'swarm_paste.dart';
 import 'swarm_session.dart';
 import 'swarm_session_widgets.dart';
+import 'swarm_style.dart' show SwarmIconButton;
 import 'swarm_thread.dart';
 import 'swarm_voice.dart';
 
 /// Draws one of a thread's messages as its chat draws them; a tap on it
-/// opens or closes its actions ([acting]).
+/// opens or closes its actions ([acting]); [match] while it is one of find's.
 typedef SwarmThreadRow = Widget Function(
   SwarmThread thread,
   SuperTabMessage message, {
@@ -34,6 +37,7 @@ typedef SwarmThreadRow = Widget Function(
   required bool acting,
   required bool lit,
   required bool followed,
+  required bool match,
   required VoidCallback onTap,
 });
 
@@ -138,6 +142,79 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
   /// Reply options under the card is open: folded each time the page opens.
   bool _optionsOpen = false;
 
+  /// Find in the thread (task #2826), while its bar is open under the
+  /// header; and its current match as last brought into view, which stays
+  /// [_target] and [_lit] for as long as it is current.
+  SwarmChatFind? _find;
+  String? _found;
+
+  /// The header's search: find opens under it.
+  void _openFind() {
+    if (_find != null) return;
+    final find = SwarmChatFind(
+      rows: _findRows,
+      hasOlder: () => _thread.hasEarlier,
+      readOlder: _findEarlier,
+    )..addListener(_findMoved);
+    setState(() => _find = find);
+  }
+
+  /// ✕: the query, the fills and the light go, and a read-back stops.
+  void _closeFind() {
+    final find = _find;
+    if (find == null) return;
+    find
+      ..removeListener(_findMoved)
+      ..dispose();
+    setState(() {
+      _find = null;
+      if (_target == _found) _target = null;
+      if (_lit == _found) _lit = null;
+      _found = null;
+    });
+  }
+
+  /// The thread's own messages, oldest first: its replies, and its root —
+  /// once no earlier reply waits, as that is when it is the oldest of what
+  /// is read; until then Up reads back to it through the earlier replies.
+  List<SuperTabMessage> _findRows() => [
+    if (!_thread.hasEarlier) ?_thread.rootMessage,
+    ..._thread.replies,
+  ];
+
+  /// One page of earlier replies for find, as Show earlier replies reads it:
+  /// false when it failed, or brought nothing while more is said to be
+  /// there.
+  Future<bool> _findEarlier() async {
+    final t = _thread, read = t.messages.length;
+    await t.loadEarlier();
+    if (!mounted) return false;
+    return t.messages.length > read || (!t.hasEarlier && t.error == null);
+  }
+
+  /// Find moved: a new current match is brought into view and lit, as the
+  /// thread's focus is, and stays lit while it is current.
+  void _findMoved() {
+    final find = _find;
+    if (find == null || !mounted) return;
+    final current = find.current;
+    if (current != _found) {
+      _litTimer?.cancel();
+      if (_target == _found) _target = null;
+      if (_lit == _found) _lit = null;
+      _found = current;
+      if (current != null) {
+        _target = current;
+        _lit = current;
+        _reveal(current, 0);
+      }
+    }
+    setState(() {});
+  }
+
+  /// The thread's messages changed: find counts them again.
+  void _threadMoved() => _find?.refresh();
+
   /// Once the thread is read: finds the focus (reading earlier replies back
   /// to it, a bounded number of pages), scrolls to it and lights it for
   /// 2 seconds, as the chat does for a quoted message.
@@ -236,6 +313,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     _thread.addListener(_seen);
     _thread.addListener(_guardVoice);
     _thread.addListener(_land);
+    _thread.addListener(_threadMoved);
     // Before the thread shows, so showing it does not move the mark first.
     _readThrough;
     unawaited(_thread.load());
@@ -292,6 +370,10 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
     _thread.removeListener(_seen);
     _thread.removeListener(_guardVoice);
     _thread.removeListener(_land);
+    _thread.removeListener(_threadMoved);
+    _find
+      ?..removeListener(_findMoved)
+      ..dispose();
     _litTimer?.cancel();
     _voice?.dispose();
     _thread.dispose();
@@ -402,6 +484,12 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _header(context, tty),
+            if (_find case final find?)
+              SwarmFindBar(
+                find: find,
+                onClose: _closeFind,
+                hint: 'Find in thread',
+              ),
             ListenableBuilder(
               listenable: _thread,
               builder: (context, _) => SwarmThreadSessionLine(thread: _thread),
@@ -516,6 +604,14 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
             ],
           ),
         ),
+        // A thread has no ⋮: its find is here (task #2826).
+        SwarmIconButton(
+          key: const ValueKey('swarm-thread-find'),
+          icon: LucideIcons.search300,
+          size: AppIconSize.standalone,
+          label: 'Find in thread',
+          onPressed: _openFind,
+        ),
       ],
     ),
   );
@@ -560,6 +656,7 @@ class _SwarmThreadPageState extends State<SwarmThreadPage> {
         acting: _acting == m.id,
         lit: _lit == m.id,
         followed: _target == m.id,
+        match: _find?.matching.contains(m.id) ?? false,
         onTap: () => _toggleActions(m.id),
       );
       if (_acting == m.id) return KeyedSubtree(key: _actingKey, child: built);

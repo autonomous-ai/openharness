@@ -75,9 +75,10 @@ export const PERMISSION_MODES: Readonly<Partial<Record<AgentEngine, Readonly<Rec
   opencode: { auto: ['--auto'], ask: [] },
 }
 
-/** Modes a relaunch never trades for the engine's own default when the engine on disk lacks their flag: a Buddy's, whose
- *  default would let it act with its person's own credentials (security review 1 of #2087). The relaunch is held. */
-const KEPT_PERMISSION_MODES: ReadonlySet<string> = new Set(['readOnlyAsk', 'buddy', 'teamWritten'])
+/** Modes a relaunch never trades for the engine's own default when the engine on disk lacks their flag: Team-written work,
+ *  whose default would read the branch's own settings (audit H2). The relaunch is held. A Buddy's were kept too, until a
+ *  Buddy ran in full mode like its owner's own session (task #2832). */
+const KEPT_PERMISSION_MODES: ReadonlySet<string> = new Set(['teamWritten'])
 
 /** The argv of [mode] for [engine], or null when the engine has no such mode. */
 export function permissionModeFlags(engine: AgentEngine, mode: string): readonly string[] | null {
@@ -1316,7 +1317,7 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
 export function buildEngineInstallationArgv(engine: AgentEngine, recipe: EngineInstallRecipe,
   environment: Record<string, string>, runtimeNode: string = managedNodePath()): string[] {
   // The installers are POSIX shell lines (`curl … | bash`, npm under a POSIX prelude): there is nothing to run them in.
-  if (process.platform === 'win32') throw new Error(`Harness cannot install ${engine} on Windows yet; install it, then try again.`)
+  if (process.platform === 'win32') throw new Error(`The POSIX installer of ${engine} does not run on Windows (engines/kit/windowsInstall.ts does).`)
   const shell = interactiveEngineShell(environment.SHELL) ?? { path: posixRunner(), args: ['-c'], label: 'shell' }
   if (Object.keys(environment).some(key => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))) throw new Error('Invalid installation environment name')
   const locations = Object.entries(environment).map(([key, value]) => `export ${key}=${shellSingleQuote(value)}\n`).join('')

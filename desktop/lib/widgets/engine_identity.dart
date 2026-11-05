@@ -333,8 +333,7 @@ const _harnesses = <String, EngineIdentity>{
     color: Color(0xfff4f6ef),
     asset: 'assets/engine-icons/ollama.png',
     homepage: 'https://ollama.com',
-    blurb:
-        'Run and benchmark Ollama models on your Mac through natural language.',
+    blurb: 'Run and benchmark Ollama models on your computer through natural language.',
   ),
   // Original creative identities; source vectors ship in each package under brand/.
   'autonomous/voxel-worlds': EngineIdentity(

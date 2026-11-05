@@ -154,14 +154,20 @@ Future<SuperTabController> _show(
   List<String>? opened,
   List<String>? openedProposals,
   Set<String> asking = const {},
+  Size size = const Size(1400, 900),
+  String? selectedId,
 }) async {
-  await tester.binding.setSurfaceSize(const Size(1400, 900));
+  await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
   final c = server.controller();
   await c.refresh();
   await tester.pumpWidget(
     MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.light),
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(disableAnimations: true),
+        child: child!,
+      ),
       home: Scaffold(
         body: SuperTabTasksView(
           controller: c,
@@ -170,6 +176,7 @@ Future<SuperTabController> _show(
           needsHuman: (task) => asking.contains(task.id) ? 1 : 0,
           onOpenTask: (id) => opened?.add(id),
           onOpenProposal: (id) => openedProposals?.add(id),
+          selectedId: selectedId,
           now: () => _now,
         ),
       ),
@@ -237,6 +244,94 @@ void main() {
     await _close(tester, c);
   });
 
+  testWidgets('each column is a 280-wide panel of card material, rounded 12, '
+      'with no shadow', (tester) async {
+    final c = await _show(tester, tasksServer());
+    for (final name in [
+      'proposals',
+      'nextUp',
+      'working',
+      'waiting',
+      'shipped',
+    ]) {
+      expect(tester.getSize(_column(name)).width, 280, reason: name);
+      final panel = tester.widget<DecoratedBox>(_column(name));
+      final decoration = panel.decoration as BoxDecoration;
+      expect(decoration.color, grid.AppCard.base, reason: name);
+      expect(
+        decoration.borderRadius,
+        BorderRadius.circular(grid.AppCard.radius),
+      );
+      expect(decoration.border, Border.all(color: grid.AppCard.hair));
+      expect(decoration.boxShadow, isNull, reason: 'shadows are for floating');
+    }
+    await _close(tester, c);
+  });
+
+  testWidgets('columns that do not fit scroll sideways', (tester) async {
+    final c = await _show(tester, tasksServer(), size: const Size(900, 800));
+    expect(tester.getTopLeft(_column('shipped')).dx, greaterThan(900));
+    await tester.drag(
+      find.byKey(const ValueKey('super-tasks-board')),
+      const Offset(-800, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getTopRight(_column('shipped')).dx, lessThanOrEqualTo(900));
+    expect(tester.takeException(), isNull);
+    await _close(tester, c);
+  });
+
+  testWidgets('a long title gets three lines on the Board, one in List', (
+    tester,
+  ) async {
+    const long =
+        'A long title that takes all three of its lines on the board, and then '
+        'goes on with more words than three lines of a column can hold, so '
+        'the rest of it is cut';
+    final server = tasksServer();
+    (server.state['conversations'] as List).add(
+      taskFixture('long', long, 17, requester: 'tony'),
+    );
+    final c = await _show(tester, server);
+    Finder title(String id, String text) =>
+        find.descendant(of: _card(id), matching: find.text(text));
+    expect(tester.widget<Text>(title('long', long)).maxLines, 3);
+    final board = tester.getSize(title('long', long)).height;
+    await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
+    await tester.pumpAndSettle();
+    expect(tester.widget<Text>(title('long', long)).maxLines, 1);
+    final line = tester.getSize(title('long', long)).height;
+    expect(board, moreOrLessEquals(line * 3, epsilon: 1));
+    await _close(tester, c);
+  });
+
+  testWidgets('a Board card is an inset tile, rounded 8, with no shadow', (
+    tester,
+  ) async {
+    final c = await _show(tester, tasksServer());
+    for (final id in ['tag', 'preview', 'p-old', 'sender']) {
+      final ink = tester.widget<Ink>(
+        find.descendant(of: _card(id), matching: find.byType(Ink)),
+      );
+      final decoration = ink.decoration! as BoxDecoration;
+      expect(decoration.color, grid.AppCard.inset, reason: id);
+      expect(
+        decoration.borderRadius,
+        BorderRadius.circular(grid.AppCard.insetRadius),
+      );
+      expect(decoration.border, Border.all(color: grid.AppCard.insetHair));
+      expect(decoration.boxShadow, isNull, reason: 'shadows are for floating');
+    }
+    // List keeps its plain rows.
+    await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: _card('tag'), matching: find.byType(Ink)),
+      findsNothing,
+    );
+    await _close(tester, c);
+  });
+
   testWidgets('an empty column keeps its heading with 0', (tester) async {
     final server = tasksServer();
     (server.state['conversations'] as List).removeWhere(
@@ -250,6 +345,72 @@ void main() {
       ),
       findsOneWidget,
     );
+    await _close(tester, c);
+  });
+
+  testWidgets('the open task has the sidebar\'s selected fill and says so', (
+    tester,
+  ) async {
+    final c = await _show(tester, tasksServer(), selectedId: 'tag');
+    Color? fill(String id) =>
+        (tester
+                    .widget<Ink>(
+                      find.descendant(
+                        of: _card(id),
+                        matching: find.byType(Ink),
+                      ),
+                    )
+                    .decoration!
+                as BoxDecoration)
+            .color;
+    expect(
+      fill('tag'),
+      Color.alphaBlend(grid.AppSurface.selectedFill, grid.AppCard.inset),
+    );
+    expect(tester.getSemantics(_card('tag')), isSemantics(isSelected: true));
+    for (final id in ['preview', 'test-copy', 'p-old']) {
+      expect(fill(id), grid.AppCard.inset, reason: id);
+      expect(
+        tester.getSemantics(_card(id)),
+        isNot(isSemantics(isSelected: true)),
+        reason: id,
+      );
+    }
+    // The List shows the same row selected; the others stay plain.
+    await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
+    await tester.pumpAndSettle();
+    expect(fill('tag'), grid.AppSurface.selectedFill);
+    expect(
+      find.descendant(of: _card('preview'), matching: find.byType(Ink)),
+      findsNothing,
+    );
+    await _close(tester, c);
+  });
+
+  testWidgets('an empty column says No tasks in the caption color', (
+    tester,
+  ) async {
+    final server = tasksServer();
+    (server.state['conversations'] as List).removeWhere(
+      (g) => (g as Map)['id'] == 'tag',
+    );
+    final c = await _show(tester, server);
+    final empty = find.descendant(
+      of: _column('working'),
+      matching: find.text('No tasks'),
+    );
+    expect(empty, findsOneWidget);
+    expect(
+      tester.widget<Text>(empty).style?.color,
+      grid.AppPalette.textSecondary,
+    );
+    for (final name in ['proposals', 'nextUp', 'waiting', 'shipped']) {
+      expect(
+        find.descendant(of: _column(name), matching: find.text('No tasks')),
+        findsNothing,
+        reason: name,
+      );
+    }
     await _close(tester, c);
   });
 
@@ -271,7 +432,7 @@ void main() {
     expect(inCard('shipped-means', 'scholes'), findsOneWidget);
     expect(inCard('sender', 'scholes · Finch2 · PR #2870'), findsOneWidget);
     expect(
-      inCard('test-copy', 'ken15 · Finch2 · dee to decide'),
+      inCard('test-copy', 'ken15 · Finch2 · Needs you'),
       findsOneWidget,
     );
     // No task numbers, machines or models.
@@ -297,11 +458,17 @@ void main() {
     final c = await _show(tester, server);
     expect(_cardsIn(tester, 'waiting'), ['test-copy', 'later']);
     expect(
-      find.descendant(of: _card('test-copy'), matching: find.text('Needs you')),
+      find.descendant(
+        of: _card('test-copy'),
+        matching: find.textContaining('Needs you'),
+      ),
       findsOneWidget,
     );
     expect(
-      find.descendant(of: _card('later'), matching: find.text('Needs you')),
+      find.descendant(
+        of: _card('later'),
+        matching: find.textContaining('Needs you'),
+      ),
       findsNothing,
     );
     await _close(tester, c);

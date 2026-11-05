@@ -514,7 +514,7 @@ void main() {
         final (c, picture) = await _show(tester, brightness);
         switch (scene) {
           case 'activity':
-            await tester.tap(find.byKey(const ValueKey('super-activity')));
+            await tester.tap(find.byKey(const ValueKey('super-decisions')));
             await tester.pumpAndSettle();
           case 'filter':
             await tester.tap(find.byKey(const ValueKey('super-unread-only')));

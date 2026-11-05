@@ -138,6 +138,8 @@ export interface TeamStatus {
   engines?: TeamEngines
   /** The data of ended sessions not deleted yet (superTabs/inCore/teamPurge.ts): a count, never a name. */
   purges?: { pending: number; unreadable: boolean; at: number }
+  /** A model API handed over on Windows (./modelHandoff.ts): whether it went in, never what it was. */
+  model?: { state: "applied" | "failed"; at: number; detail?: string }
 }
 
 /** The `engines` field of the status file, or undefined when it is not one. */
@@ -281,6 +283,10 @@ export function readTeamStatus(path: string, read: (path: string) => string = (a
   if (purges && typeof purges === 'object' && Number.isSafeInteger(purges.pending) && (purges.pending as number) >= 0
     && typeof purges.unreadable === 'boolean' && typeof purges.at === 'number' && Number.isFinite(purges.at)) {
     status.purges = { pending: purges.pending as number, unreadable: purges.unreadable, at: purges.at }
+  }
+  const model = value.model as Record<string, unknown> | undefined
+  if (model && typeof model === "object" && (model.state === "applied" || model.state === "failed") && typeof model.at === "number" && Number.isFinite(model.at)) {
+    status.model = { state: model.state, at: model.at, ...(typeof model.detail === "string" ? { detail: statusText(model.detail) } : {}) }
   }
   return status
 }

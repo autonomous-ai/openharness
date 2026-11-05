@@ -21,6 +21,10 @@ const fakes = vi.hoisted(() => {
       if (failRedis) throw new Error('redis down')
       return redis.get(key) ?? null
     }),
+    mget: vi.fn(async (...keys: string[]) => {
+      if (failRedis) throw new Error('redis down')
+      return keys.map((key) => redis.get(key) ?? null)
+    }),
     // GET then DEL, in one transaction — how a redeem spends a code.
     multi: vi.fn(() => {
       const ops: Array<() => unknown> = []
@@ -66,8 +70,10 @@ const fakes = vi.hoisted(() => {
   const transaction = vi.fn(async (body: (tx: unknown) => Promise<unknown>) => body({ harnessSession, machine }))
   const publishDown = vi.fn(async () => 1)
   const activeMachineKeys = vi.fn(async (_userId: string): Promise<Array<{ pub: string; machineId: string; kind: string }>> => [])
+  // Whether another account's Harness Team machine on the redeeming computer still has a Swarm cleanup (superTabs/computerMoves.ts).
+  const teamCleanupPending = vi.fn(async (_db: unknown, _of: { computerId: string; userId: string }) => false)
   return {
-    redis, ttls, sessions, users, machines, pub, harnessSession, machine, transaction, publishDown, activeMachineKeys,
+    redis, ttls, sessions, users, machines, pub, harnessSession, machine, transaction, publishDown, activeMachineKeys, teamCleanupPending,
     setFailRedis: (v: boolean) => { failRedis = v },
     get: vi.fn(async (id: string) => users.get(id) ?? null),
     findByEmail: vi.fn(),
@@ -76,6 +82,7 @@ const fakes = vi.hoisted(() => {
 
 vi.mock('./bus.js', () => ({ pub: fakes.pub, publishDown: fakes.publishDown }))
 vi.mock('./deviceKeyLog.js', () => ({ activeMachineKeys: fakes.activeMachineKeys }))
+vi.mock('../superTabs/computerMoves.js', () => ({ teamCleanupPending: fakes.teamCleanupPending }))
 vi.mock('./prisma.js', () => ({
   prisma: { harnessSession: fakes.harnessSession, machine: fakes.machine, $transaction: fakes.transaction },
   machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] },
@@ -88,7 +95,8 @@ vi.mock('../services/UserService.js', () => ({
 vi.mock('../services/index.js', () => ({ userService: { get: fakes.get, toPublic: (u: unknown) => u } }))
 
 import { authenticateAccessToken, SsoAuthError } from './ssoAuth.js'
-import { HANDOFF_TTL_SEC, redeemHandoff, refreshHarnessSession, revokeHarnessSession, startHandoff } from './harnessSession.js'
+import { HANDOFF_TTL_SEC, redeemHandoff, refreshHarnessSession, revokeHarnessSession, revokeHarnessSessionById, startHandoff } from './harnessSession.js'
+import { harnessAuthCache } from './harnessAuthCache.js'
 import { HARNESS_ACCESS_PREFIX, harnessTokenHash, newHarnessToken } from './harnessTokenFormat.js'
 import { teamConversionMessage } from './teamSession.js'
 import { ed25519 } from '@noble/curves/ed25519.js'
@@ -102,6 +110,7 @@ beforeEach(() => {
   fakes.redis.clear(); fakes.ttls.clear(); fakes.sessions.length = 0; fakes.users.clear(); fakes.machines.length = 0
   fakes.users.set(USER.id, USER)
   fakes.setFailRedis(false)
+  harnessAuthCache.clear()
   vi.clearAllMocks()
 })
 
@@ -164,6 +173,99 @@ describe('scan to sign in — the handoff', () => {
   })
 })
 
+describe('a sign-in remembered for 30 seconds per pod (#3041)', () => {
+  const signIn = async () => (await redeemHandoff((await startHandoff(USER.id)).code, 'phone'))!
+
+  it('a second request in the window reads neither the session nor the user from Mongo, and answers the same', async () => {
+    const { token } = await signIn()
+    const first = await authenticateAccessToken(token)
+    fakes.harnessSession.findUnique.mockClear(); fakes.get.mockClear()
+    const second = await authenticateAccessToken(token)
+    expect(second).toEqual(first)
+    expect(fakes.harnessSession.findUnique).not.toHaveBeenCalled()
+    expect(fakes.get).not.toHaveBeenCalled()
+  })
+
+  it('every request still checks its token in Redis: an access token gone from Redis stops at once', async () => {
+    const { token } = await signIn()
+    await authenticateAccessToken(token)
+    for (const key of [...fakes.redis.keys()]) if (key.startsWith('hnauth:access:')) fakes.redis.delete(key)
+    await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+  })
+
+  it('signing out ends a remembered sign-in at once', async () => {
+    const { token, refreshToken } = await signIn()
+    await authenticateAccessToken(token)
+    await revokeHarnessSession(refreshToken!)
+    await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+  })
+
+  it('revoking a device by id ends its remembered sign-in at once', async () => {
+    const { token } = await signIn()
+    await authenticateAccessToken(token)
+    await revokeHarnessSessionById('s1', USER.id)
+    await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+  })
+
+  it('a pod that remembers nothing of the sign-out still learns it from Redis: the change is not kept in this pod alone', async () => {
+    const { token, refreshToken } = await signIn()
+    await authenticateAccessToken(token)
+    // The sign-out ran on another pod: only Redis and Mongo saw it.
+    const remembered = harnessAuthCache.get(harnessTokenHash(token))
+    await revokeHarnessSession(refreshToken!)
+    expect(harnessAuthCache.get(harnessTokenHash(token))).toBe(remembered)
+    await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+  })
+
+  it('a sign-out that lands between reading the session and remembering it is not missed', async () => {
+    const { token } = await signIn()
+    const read = fakes.harnessSession.findUnique.getMockImplementation()!
+    fakes.harnessSession.findUnique.mockImplementationOnce(async (args: { where: Record<string, unknown> }) => {
+      const live = { ...(await read(args))! }
+      await revokeHarnessSessionById('s1', USER.id)
+      return live
+    })
+    // This request read the session while it was live.
+    await expect(authenticateAccessToken(token)).resolves.toMatchObject({ harnessSessionId: 's1' })
+    await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+  })
+
+  it('a sign-in is read again after 30 seconds', async () => {
+    const { token } = await signIn()
+    const now = vi.spyOn(Date, 'now')
+    const start = Date.now()
+    now.mockReturnValue(start)
+    await authenticateAccessToken(token)
+    fakes.harnessSession.findUnique.mockClear()
+    now.mockReturnValue(start + 30_000)
+    await authenticateAccessToken(token)
+    expect(fakes.harnessSession.findUnique).toHaveBeenCalledTimes(1)
+    now.mockRestore()
+  })
+
+  it('Redis down on a remembered sign-in is still an outage, not a sign-in', async () => {
+    const { token } = await signIn()
+    await authenticateAccessToken(token)
+    fakes.setFailRedis(true)
+    await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'AUTH_SERVICE_UNAVAILABLE' })
+  })
+
+  it('remembers no refusal: a token refused once is read again next time', async () => {
+    const { token } = await signIn()
+    fakes.users.delete(USER.id)
+    await expect(authenticateAccessToken(token)).rejects.toMatchObject({ code: 'INVALID_TOKEN' })
+    fakes.users.set(USER.id, USER)
+    await expect(authenticateAccessToken(token)).resolves.toMatchObject({ sub: USER.id })
+  })
+
+  it('a caller changing what it was handed changes nothing for the next request', async () => {
+    const { token } = await signIn()
+    const first = await authenticateAccessToken(token) as unknown as Record<string, unknown>
+    first.role = 'admin'
+    await expect(authenticateAccessToken(token)).resolves.toMatchObject({ role: 'user' })
+  })
+})
+
 describe('scan to sign in — the routes', () => {
   let app: FastifyInstance
   const signedIn = { sub: USER.id, email: USER.email, role: 'user', autonomousEnv: 'prod' as const }
@@ -181,6 +283,16 @@ describe('scan to sign in — the routes', () => {
     // The computer's Autonomous token is faked; a Harness token goes through the real check.
     app = await build(async (token, env, opts) =>
       token === 'sso-token' ? signedIn : authenticateAccessToken(token, env, opts))
+  })
+
+  it("answers a team sign-in refused for another account's pending Swarm cleanup in words its person can act on", async () => {
+    fakes.teamCleanupPending.mockResolvedValueOnce(true)
+    const { code } = await startHandoff(USER.id, 'team')
+    const redeemed = await app.inject({ method: 'POST', url: '/api/auth/handoff/redeem',
+      payload: { code, label: 'Mac · Team', computerId: 'ab12cd34ef56ab12cd34ef56ab12cd34' } })
+    expect(redeemed.statusCode).toBe(409)
+    expect(redeemed.json().error).toMatchObject({ code: 'TEAM_CLEANUP_PENDING' })
+    expect(JSON.stringify(redeemed.json())).toContain('Try Repair again in a few minutes')
   })
 
   it('the computer mints a code, the phone redeems it, refreshes, and signs out', async () => {
@@ -287,6 +399,19 @@ describe('team sessions — minting and redeeming', () => {
       expect(await redeemHandoff(code, 'x', COMPUTER)).toBeNull() // spent: a second try with a good id gets nothing either
     }
     expect(fakes.sessions).toHaveLength(0)
+  })
+
+  // Security review 2 of #3100: after a computer moved to another account, Repair signs its Harness Team account in for the
+  // new one. The old account's Team machine still has its Swarm folders to delete, and only its own sign-in can: replaced
+  // first, that cleanup could never finish, and the old Swarms' checkouts would stay where the new account's work runs.
+  it("a team code is refused while another account's Team machine on that computer still has a Swarm cleanup to do", async () => {
+    fakes.teamCleanupPending.mockResolvedValueOnce(true)
+    const { code } = await startHandoff(USER.id, 'team')
+    await expect(redeemHandoff(code, 'x', COMPUTER)).rejects.toThrow('still being cleaned up')
+    expect(fakes.teamCleanupPending).toHaveBeenCalledWith(expect.anything(), { computerId: COMPUTER, userId: USER.id })
+    expect(fakes.sessions).toHaveLength(0)
+    const again = await startHandoff(USER.id, 'team')
+    expect(await redeemHandoff(again.code, 'x', COMPUTER)).not.toBeNull()
   })
 
   it('a team code never binds to a computer the account already runs with a normal sign-in', async () => {

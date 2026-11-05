@@ -6,7 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/super_tabs/backlog_view.dart';
+import 'package:harness/super_tabs/pull_request_facts.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/super_tab_fixture.dart';
@@ -71,11 +73,12 @@ void main() {
       {'machineId': 'pro9', 'name': 'MacBook Pro-9'},
       {'machineId': 'studio', 'name': 'Mac Studio'},
     ];
+    // Two marked with a priority, as the PM writes it into a title (#2774).
     const titles = [
       'New session starts on the last project',
-      'Sidebar task groups',
+      'URGENT: sidebar task groups lose their counts',
       'Machine names in every row',
-      'Thread reply bar',
+      'Thread reply bar (Scholes, high)',
       'Status menu fixture',
       'GitHub setup line clears in seconds',
     ];
@@ -181,12 +184,44 @@ void main() {
     ]);
   }
 
+  /// [count] more shipped tasks, an hour apart, so Shipped folds the rest
+  /// under Show N more (#2774).
+  void manyShipped(ConversationServer server, int count) {
+    final shipped = DateTime(2026, 11, 3, 16).millisecondsSinceEpoch;
+    (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+      for (var i = 0; i < count; i++)
+        {
+          ...conversationFixture('more-$i', 'Shipped work number ${i + 1}'),
+          'projectId': 'p${i % 2}',
+          'number': 2100 - i,
+          'requesterId': 'owner',
+          'agentIds': ['quill'],
+          'assignment': {'id': 'a-m$i', 'agentId': 'quill', 'status': 'done'},
+          'shippedAt': shipped - i * 3600000,
+          'pullRequestUrls': [
+            'https://github.com/autonomous-ai/openharness/pull/${2500 + i}',
+          ],
+          'cards': {
+            'pullRequests': [
+              {
+                'url':
+                    'https://github.com/autonomous-ai/openharness/pull/${2500 + i}',
+                'messageId': 'card-m$i',
+                'mergedAt': shipped,
+              },
+            ],
+          },
+        },
+    ]);
+  }
+
   Future<void> show(
     WidgetTester tester,
     ConversationServer server, {
     Brightness brightness = Brightness.light,
     GlobalKey? picture,
     Stopwatch? firstFrame,
+    SuperTabPullRequestFacts? facts,
   }) async {
     final c = server.controller();
     addTearDown(c.dispose);
@@ -195,7 +230,7 @@ void main() {
     if (firstFrame != null) server.holdReads = Completer<void>();
     grid.AppTheme.brightness.value = brightness;
     addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
-    await tester.binding.setSurfaceSize(const Size(900, 640));
+    await tester.binding.setSurfaceSize(const Size(1280, 1900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     firstFrame?.start();
     await tester.pumpWidget(
@@ -209,6 +244,7 @@ void main() {
             listenable: c,
             builder: (context, _) => SuperTabBacklogView(
               controller: c,
+              facts: facts,
               onOpenConversation: (_) {},
               now: () => (c.groupChangedAt('t2301') ?? DateTime(2026)).add(
                 const Duration(minutes: 7),
@@ -225,31 +261,64 @@ void main() {
   for (final brightness in Brightness.values) {
     for (final scene in [
       'all',
+      'many-shipped',
       'mine',
       'project',
+      'mine-nothing-open',
       'mine-empty',
-      'mine-shipped',
     ]) {
       testWidgets('screenshots for review ($scene, ${brightness.name})', (
         tester,
       ) async {
         final picture = GlobalKey();
         final server = swarm(perProject: 3);
-        if (scene.startsWith('mine-')) nothingOpenWithArchived(server);
-        await show(tester, server, brightness: brightness, picture: picture);
+        if (scene == 'mine-nothing-open') {
+          // Scholes's 72 (#2885): nothing open, and Shipped still lists.
+          nothingOpenWithArchived(server);
+          manyShipped(server, 69);
+        }
+        if (scene == 'mine-empty') {
+          // Nothing open and nothing shipped: the one empty message.
+          for (final g in (server.state['conversations'] as List).cast<Map>()) {
+            if (g['requesterId'] == 'owner') g['requesterId'] = 'huy';
+          }
+        }
+        if (scene == 'many-shipped') manyShipped(server, 12);
+        // GitHub's answer for the open pull requests: checks passed on the
+        // one in review, and its approval; checks running on the others.
+        final facts = SuperTabPullRequestFacts(
+          (urls) async => {
+            'account': 'scholes',
+            'rows': [
+              for (final url in urls)
+                {
+                  'url': url,
+                  'status': 'found',
+                  'title': 'PR',
+                  'state': 'Open',
+                  'reviewDecision': url.endsWith('/2703') ? 'APPROVED' : '',
+                  'checks': url.endsWith('/2703')
+                      ? {'passed': 8, 'failed': 0, 'pending': 0, 'total': 8}
+                      : {'passed': 3, 'failed': 0, 'pending': 5, 'total': 8},
+                },
+            ],
+          },
+        );
+        addTearDown(facts.dispose);
+        await show(
+          tester,
+          server,
+          brightness: brightness,
+          picture: picture,
+          facts: facts,
+        );
         if (scene.startsWith('mine')) {
           await tester.tap(find.byKey(const ValueKey('super-backlog-mine')));
           await tester.pumpAndSettle();
-          if (scene == 'mine-shipped') {
-            await tester.tap(
-              find.byKey(const ValueKey('super-backlog-mine-shipped')),
-            );
-            await tester.pumpAndSettle();
-          }
         } else if (scene == 'project') {
           await tester.tap(find.byKey(const ValueKey('super-backlog-project')));
           await tester.pumpAndSettle();
-          await tester.tap(find.text('lampos').last);
+          await tester.tap(find.widgetWithText(AppMenuItem, 'lampos').last);
           await tester.pumpAndSettle();
         }
         await tester.runAsync(() async {

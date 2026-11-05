@@ -40,6 +40,7 @@ import { submitContent, submitSettleMs } from './submitTiming.js'
 import type { TerminalBackend, TerminalBackendPrepared } from './terminalBackend.js'
 import { TMUX_KEYS } from './terminalKeys.js'
 import { processIdentityOf, sameProcessIdentity, terminalRouteKey } from './terminalRuntime.js'
+import { windowsBlockedReason } from './windows/launch.js'
 import { windowsProcessRows } from './windows/processTable.js'
 import { defaultWindowsShell } from './windows/shell.js'
 import { endProcessTree, processTreeKillDeps, type TreeKillOutcome } from './windows/treeKill.js'
@@ -608,7 +609,10 @@ export class PtyHostBackend implements TerminalBackend<PtyRuntimeRef> {
       // Windows: what the pane must not inherit from the host's environment (a grid launch's provider keys).
       ...(request.clearInherited?.length ? { clearInherited: [...request.clearInherited] } : {}),
     })
-    if (result.state !== 'ok') return actionOf(result) as TerminalCreateResult<PtyRuntimeRef>
+    if (result.state !== 'ok') {
+      const action = actionOf(result) as TerminalCreateResult<PtyRuntimeRef>
+      return action.state === 'failed' ? { ...action, reason: windowsBlockedReason(request.command ?? [], action.reason) } : action
+    }
     // Recorded here, before any other await: an exit that overtook this reply is released by the client
     // on the next turn (client.ts), and must find the pane known.
     this.panes.set(result.value.pane, { hold: true })

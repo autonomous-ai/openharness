@@ -3,7 +3,7 @@ import { storeOldLeads } from './leads.test-support.js'
 import type { Prisma } from '@prisma/client'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
-import { checkAsker, decisionsWaiting, listDecisions, waitingInProject, withdrawIn, workEnded, workOver, type DecisionTarget } from './decisions.js'
+import { ANSWERED_NOTICE, askDecisions, checkAsker, decisionsWaiting, listDecisions, overdueNotice, delegatedNotice, answerDecision, waitingInProject, withdrawIn, workEnded, workOver, type DecisionTarget } from './decisions.js'
 import { buddyChatId } from './buddies.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -55,6 +55,11 @@ describe('asking a person for decisions', () => {
     expect(ask(owner)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
     expect(ask(asAgent(s.lead), 'stranger')).toThrow('person in this Swarm')
     expect(ask(asAgent(s.lead), 'peer', 2)).toThrow('recommend one of its options')
+    // Someone who cannot read the conversation is named by username, never email (task #2954).
+    const group = s.state.conversations.find(c => c.id === s.group)!
+    const narrowed = { ...group, audience: { people: [{ id: 'owner', generation: s.state.people[0]!.generation }] } }
+    expect(() => askDecisions(s.state, narrowed, 'peer', [question('Ship how?')], { operationId: 'op', askerAgentId: s.lead, assignmentId: null }))
+      .toThrow(/^peer cannot read this conversation\.$/)
     expect(commandSchema.safeParse({ type: 'decision.ask', conversationId: s.group, personId: 'peer',
       questions: [{ ...question('One option only'), options: ['Yes'] }] }).success).toBe(false)
     expect(commandSchema.safeParse({ type: 'decision.ask', conversationId: s.group, personId: 'peer',
@@ -67,7 +72,7 @@ describe('asking a person for decisions', () => {
       ask: { personId: 'peer', options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'Turning the feature on' } }, asAgent(s.worker))
     expect(needs.decisions).toEqual([expect.objectContaining({ personId: 'peer', askerAgentId: s.worker, assignmentId: s.assignmentId,
       question: 'Ship to everyone, or behind a flag?', recommended: 0, unblocks: 'Turning the feature on' })])
-    expect(needs.messages[0]).toMatchObject({ text: 'Needs a human\n\nShip to everyone, or behind a flag?\n\nAsked peer@example.com.', recipients: [s.lead] })
+    expect(needs.messages[0]).toMatchObject({ text: 'Needs a human\n\nShip to everyone, or behind a flag?\n\nAsked peer.', recipients: [s.lead] })
     // Without a person and options it reaches the Lead as before, who asks.
     const plain = s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'needs_human', result: 'Which database?' }, asAgent(s.worker))
     expect(plain.decisions ?? []).toEqual([])
@@ -120,6 +125,16 @@ describe('answering a decision', () => {
       brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'owner', generation: s.state.people[0]!.generation }] } })
     expect(answer(peer, open(s, { conversationId: hidden }))).toThrow('unavailable')
     expect(answer(peer, open(s, { conversationId: 'gone' }))).toThrow('unavailable')
+  })
+
+  it('takes a typed answer as its note with no option, and tells the asker as it does for an option', () => {
+    const s = swarm()
+    expect(commandSchema.safeParse({ type: 'decision.answer', decisionId: 'decision-1', note: 'Use the Mac Studio' }).success).toBe(true)
+    const answered = s.run({ type: 'decision.answer', decisionId: 'decision-1', note: 'Use the Mac Studio' }, peer, { decision: open(s) })
+    expect(answered.decisionAnswer).toEqual({ id: 'decision-1', choice: null, note: 'Use the Mac Studio' })
+    expect(answered.messages).toEqual([expect.objectContaining({ conversationId: s.group, recipients: [s.worker, s.lead], text: ANSWERED_NOTICE,
+      source: { kind: 'agent-only', decisionId: 'decision-1' } })])
+    expect(answered.messages[0]!.text).not.toContain('Mac Studio')
   })
 
   it('still records the answer when the asker has left the conversation, telling whoever of them is left', () => {
@@ -190,11 +205,32 @@ describe('leaving a decision to the PM', () => {
     expect(() => delegate(s, peer, open(s, { recommended: 2 }))).toThrow('no recommended option')
   })
 
-  it('takes either a choice or a delegation, not both or neither', () => {
+  it('takes a choice, a typed answer or a delegation, not a choice and a delegation or none of them', () => {
     const s = swarm()
     expect(() => s.run({ type: 'decision.answer', decisionId: 'decision-1', choice: 0, delegate: true }, peer, { decision: open(s) })).toThrow('or leave it to the PM')
-    expect(() => s.run({ type: 'decision.answer', decisionId: 'decision-1' }, peer, { decision: open(s) })).toThrow('or leave it to the PM')
+    expect(() => s.run({ type: 'decision.answer', decisionId: 'decision-1' }, peer, { decision: open(s) }))
+      .toThrow('Choose one of its options, type an answer, or leave it to the PM.')
     expect(commandSchema.safeParse({ type: 'decision.answer', decisionId: 'decision-1', delegate: false }).success).toBe(false)
+  })
+
+  it('an overdue answer takes the recommended option and says it waited 24 hours', () => {
+    const s = swarm()
+    const answered = s.run({ type: 'decision.answer', decisionId: 'decision-1', delegate: true }, peer, { decision: open(s), overdue: true })
+    expect(answered.decisionAnswer).toEqual({ id: 'decision-1', choice: 1, note: null, delegated: true, overdue: true })
+    expect(answered.messages[0]!.text).toBe(overdueNotice('Product Manager'))
+  })
+
+  it('overdue without delegate is refused', () => {
+    const s = swarm()
+    expect(() => answerDecision(s.state, peer, open(s), { choice: 0, note: null, delegate: false, overdue: true }))
+      .toThrow(expect.objectContaining({ code: 'INVALID_DECISION', status: 400 }))
+  })
+
+  it('a person\'s delegate is not overdue', () => {
+    const s = swarm()
+    const answered = delegate(s, peer, open(s))
+    expect(answered.decisionAnswer).not.toHaveProperty('overdue')
+    expect(answered.messages[0]!.text).toBe(delegatedNotice('Product Manager'))
   })
 })
 
@@ -218,6 +254,19 @@ describe('listing a person\'s decisions', () => {
     const all = await listDecisions(reading(s, 3).tx, 'tab', s.state, peer, 'open')
     expect(all.decisions.map(d => d.id)).toEqual(['decision-0', 'decision-1', 'decision-2'])
     expect(all.more).toBe(false)
+  })
+})
+
+describe('reading a typed answer', () => {
+  it('shows the asker the note as the answer, with no option', async () => {
+    const s = swarm()
+    const row = { id: 'decision-1', batchId: 'batch-1', projectId: 'lead', conversationId: s.group, assignmentId: null, personId: 'peer',
+      askerAgentId: s.worker, question: 'Which machine runs the phone tests?', options: ['Tony\'s Mac', 'Mac Studio'], recommended: 0,
+      unblocks: 'The phone tests', createdAt: new Date(1000), answeredAt: new Date(2000), choice: null, note: 'Use the Mac Studio', delegated: null,
+      overdue: null, kind: null, withdrawn: null }
+    const tx = { superTabDecision: { findMany: async () => [row] } } as unknown as Prisma.TransactionClient
+    const read = await listDecisions(tx, 'tab', s.state, asAgent(s.worker), 'answered')
+    expect(read.decisions).toEqual([expect.objectContaining({ id: 'decision-1', choice: null, note: 'Use the Mac Studio', answer: 'Use the Mac Studio' })])
   })
 })
 
@@ -304,6 +353,17 @@ describe('a decision whose work is over', () => {
     const answered = rows.map(r => ({ ...r, answeredAt: new Date(2), choice: 0 }))
     const read = { superTabDecision: { findMany: async () => answered } } as unknown as Prisma.TransactionClient
     expect((await listDecisions(read, 'tab', s.state, peer, 'settled')).decisions.map(d => d.id)).toEqual(['open-task', 'done-task', 'project-chat'])
+  })
+
+  it('says which decisions the 24-hour sweep takes over: not a reflection, not a recommended option that does not exist', async () => {
+    const s = swarm()
+    const row = (id: string, extra: Record<string, unknown>) => ({ id, batchId: id, projectId: 'lead', conversationId: 'lead', assignmentId: null, personId: 'peer',
+      askerAgentId: s.lead, question: id, options: ['A', 'B'], recommended: 0, unblocks: 'X', createdAt: new Date(1), answeredAt: null, choice: null,
+      note: null, delegated: null, ...extra })
+    const rows = [row('plain', {}), row('reflection', { kind: 'routing-reflection' }), row('out-of-range', { recommended: 9 }), row('negative', { recommended: -1 })]
+    const tx = { superTabDecision: { findMany: async () => rows } } as unknown as Prisma.TransactionClient
+    const listed = (await listDecisions(tx, 'tab', s.state, peer, 'open')).decisions
+    expect(Object.fromEntries(listed.map(d => [d.id, d.pmTakesOver]))).toEqual({ plain: true, reflection: false, 'out-of-range': false, negative: false })
   })
 
   it('takes no new question in finished work, where it would wait for nobody', () => {

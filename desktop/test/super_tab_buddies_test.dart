@@ -5,10 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/widgets/app_menu.dart' show AppMenuItem;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
-import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
 import 'package:harness/super_tabs/buddy_machines.dart' show kBuddyNoMachine;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -83,7 +83,9 @@ void main() {
       },
     );
 
-    test('a Codex Buddy is refused, as the backend does for now', () async {
+    // Ken, 11-04 (#2832): a Buddy runs with its owner's full access on their
+    // own machine, Codex as Claude Code.
+    test('a Codex Buddy is added as a Claude one is', () async {
       final server = buddySwarm();
       final c = server.controller(account: 'peer');
       addTearDown(c.dispose);
@@ -95,10 +97,11 @@ void main() {
           machineId: 'ken-mac',
           engine: 'codex',
         ),
-        isFalse,
+        isTrue,
       );
-      expect(c.operationError, kBuddyEngineRefusals['codex']);
-      expect(c.buddy('lead'), isNull);
+      expect(c.operationError, isNull);
+      expect(commands(server, 'buddy.create').single['engine'], 'codex');
+      expect(c.buddy('lead'), isNotNull);
     });
 
     test('a refused add says why and opens nothing', () async {
@@ -779,7 +782,9 @@ void main() {
         await close(tester, c);
       });
 
-      testWidgets('offers Codex turned off, saying why, and starts Claude', (
+      // Ken, 11-04 (#2832): Codex is offered as Claude is, with nothing
+      // beside it.
+      testWidgets('offers Codex turned on, and starts it when chosen', (
         tester,
       ) async {
         final server = buddySwarm();
@@ -787,19 +792,19 @@ void main() {
         await open(tester);
 
         final codex = find.widgetWithText(RadioListTile<String>, 'Codex');
-        expect(tester.widget<RadioListTile<String>>(codex).enabled, isFalse);
+        expect(tester.widget<RadioListTile<String>>(codex).enabled, isTrue);
         expect(
           find.descendant(
             of: find.byType(AlertDialog),
-            matching: find.text(kBuddyEngineRefusals['codex']!),
+            matching: find.textContaining('Codex Buddy'),
           ),
-          findsOneWidget,
+          findsNothing,
         );
         await tester.tap(codex);
         await tester.pumpAndSettle();
         await tester.tap(submit);
         await tester.pumpAndSettle();
-        expect(commands(server, 'buddy.create').single['engine'], 'claude');
+        expect(commands(server, 'buddy.create').single['engine'], 'codex');
         await close(tester, c);
       });
 
@@ -888,19 +893,22 @@ void main() {
       );
 
       testWidgets(
-        'the Start bar offers no Codex while the server refuses it, saying why, as Add a Buddy does (#2087)',
+        'the Start bar offers Codex with nothing beside it, as Add a Buddy does (#2832)',
         (tester) async {
-          final c = await show(tester, buddySwarm());
+          final server = buddySwarm();
+          final c = await show(tester, server);
           await tester.tap(buddyEntry);
           await tester.pumpAndSettle();
 
           final engine = find.byKey(const ValueKey('super-buddy-start-engine'));
           await tester.tap(engine);
           await tester.pumpAndSettle();
-          expect(find.text('Codex'), findsNothing);
-          await tester.tapAt(Offset.zero);
+          await tester.tap(find.widgetWithText(AppMenuItem, 'Codex'));
           await tester.pumpAndSettle();
-          expect(find.text(kBuddyEngineRefusals['codex']!), findsOneWidget);
+          expect(find.textContaining('Codex Buddy'), findsNothing);
+          await tester.tap(find.widgetWithText(FilledButton, 'Start'));
+          await tester.pumpAndSettle();
+          expect(commands(server, 'buddy.create').single['engine'], 'codex');
           await close(tester, c);
         },
       );
@@ -1019,7 +1027,7 @@ void main() {
       );
 
       testWidgets(
-        'a down Codex Buddy offers Claude Code in its place, on the same machine (review 2 of #2087)',
+        'a down Codex Buddy starts again on Codex, on the same machine (#2832)',
         (tester) async {
           final server = buddySwarm();
           giveBuddy(server, engine: 'codex');
@@ -1029,16 +1037,17 @@ void main() {
           await tester.tap(buddyEntry);
           await tester.pumpAndSettle();
 
-          expect(find.widgetWithText(TextButton, 'Start again'), findsNothing);
-          await tester.tap(
+          expect(
             find.widgetWithText(TextButton, 'Start with Claude Code'),
+            findsNothing,
           );
+          await tester.tap(find.widgetWithText(TextButton, 'Start again'));
           await tester.pumpAndSettle();
           expect(commands(server, 'buddy.create').single, {
             'type': 'buddy.create',
             'projectId': 'lead',
             'machineId': 'ken-mac',
-            'engine': 'claude',
+            'engine': 'codex',
           });
           expect(c.operationError, isNull);
           await close(tester, c);
@@ -1046,7 +1055,7 @@ void main() {
       );
 
       testWidgets(
-        'a Codex Buddy whose start failed offers Claude Code in its place (review 2 of #2087)',
+        'a Codex Buddy whose start failed starts again on Codex (#2832)',
         (tester) async {
           final server = buddySwarm();
           startBuddy(
@@ -1058,11 +1067,9 @@ void main() {
           await tester.tap(buddyEntry);
           await tester.pumpAndSettle();
 
-          await tester.tap(
-            find.widgetWithText(TextButton, 'Start with Claude Code'),
-          );
+          await tester.tap(find.widgetWithText(TextButton, 'Start again'));
           await tester.pumpAndSettle();
-          expect(commands(server, 'buddy.create').single['engine'], 'claude');
+          expect(commands(server, 'buddy.create').single['engine'], 'codex');
           await close(tester, c);
         },
       );
@@ -1513,15 +1520,15 @@ void main() {
       });
 
       testWidgets(
-        'Activity keeps Needs you, for anyone with or without a Buddy',
+        'Decisions lists what waits on the reader, with or without a Buddy',
         (tester) async {
           final server = buddySwarm();
           server.ask(['Ship it?']);
           final c = await show(tester, server);
-          await tester.tap(find.byKey(const ValueKey('super-activity')));
+          await tester.tap(find.byKey(const ValueKey('super-decisions')));
           await tester.pumpAndSettle();
 
-          expect(find.text('Needs you'), findsOneWidget);
+          expect(find.text('Decisions'), findsWidgets);
           expect(find.text('Ship it?'), findsOneWidget);
           await close(tester, c);
         },
@@ -1544,7 +1551,7 @@ void main() {
         'a tag from the old Chat with PM is placed in the project chat and opens it',
         (tester) async {
           final (_, c) = await withHistory(tester);
-          await tester.tap(find.byKey(const ValueKey('super-activity')));
+          await tester.tap(find.byKey(const ValueKey('super-mentions')));
           await tester.pumpAndSettle();
 
           expect(find.textContaining('Chat with PM'), findsNothing);

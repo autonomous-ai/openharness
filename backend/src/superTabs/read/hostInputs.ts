@@ -12,7 +12,8 @@ import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import type { CacheView } from '../cache.js'
 import type { PatchRule } from '../cachePatch.js'
-import { groupsBy } from '../parts/indexed.js'
+import { groupsBy, readBy } from '../parts/indexed.js'
+import { ms } from '../parts/light.js'
 
 type Transaction = Prisma.TransactionClient
 /** The row hash's length at the front of an etag (read/hostEtag.ts); the input signature follows it. */
@@ -68,6 +69,50 @@ export const hostGroupsRule: PatchRule<HostGroups> = {
   },
 }
 
+/** The kinds whose live rows the signature reads by their data stamp. */
+const STAMP_KINDS = ['member', 'agent', 'start'] as const
+type StampKind = typeof STAMP_KINDS[number]
+/** Every live member, agent and start of a Swarm: its data stamp (`changedAt`, in ms), by kind and key. */
+export type HostStamps = Readonly<Record<StampKind, Readonly<Record<string, number>>>>
+const STAMP_COLLECTION = { member: 'SwarmMember', agent: 'SwarmAgent', start: 'SwarmStart' } as const
+
+/** The stamps of every live member, agent and start, in one reply each. */
+export async function loadHostStamps(tx: Transaction, tabId: string): Promise<HostStamps> {
+  const [member, agent, start] = await Promise.all(STAMP_KINDS.map(async kind => Object.fromEntries((await readBy(tx, STAMP_COLLECTION[kind], 'changes',
+    [{ $match: { tabId, deleted: false } }, { $project: { _id: 0, key: 1, changedAt: 1 } }])).map(row => [row.key as string, ms(row.changedAt)]))))
+  return { member: member!, agent: agent!, start: start! }
+}
+
+/**
+ * The `host:stamps` entry (#2839): a host's check after any change read every live start's stamp again, and finished starts
+ * stay live for 7 days, so the read grew with the Swarm's history (Atlas ops per request up 38% at flat traffic). A changed
+ * part comes as its row is now, so applying one twice does nothing; a tombstone takes its key out. A touch moves no
+ * `changedAt`, so it is in no delta and changes no stamp, as it changed none of the rows read before.
+ */
+export const hostStampsRule: PatchRule<HostStamps> = {
+  kinds: [...STAMP_KINDS],
+  apply(held, delta) {
+    let next: Record<StampKind, Record<string, number>> | null = null
+    const copied = new Set<StampKind>()
+    const writable = (kind: StampKind) => {
+      next ??= { ...held } as Record<StampKind, Record<string, number>>
+      if (!copied.has(kind)) { next[kind] = { ...held[kind] }; copied.add(kind) }
+      return next[kind]
+    }
+    for (const part of delta.parts) {
+      const kind = part.kind as StampKind
+      if (!STAMP_KINDS.includes(kind)) continue
+      const current = (next ?? held)[kind]
+      if (part.deleted) {
+        if (Object.hasOwn(current, part.key)) delete writable(kind)[part.key]
+        continue
+      }
+      if (current[part.key] !== part.changedAt) writable(kind)[part.key] = part.changedAt
+    }
+    return next ?? held
+  },
+}
+
 /** Every live conversation's row, through the live index alone: it holds the key, digest and dormancy, so no document is read. */
 export async function loadHostGroups(tx: Transaction, tabId: string): Promise<HostGroups> {
   const rows = await groupsBy(tx, 'live', [{ $match: { tabId, deleted: false } },
@@ -76,17 +121,19 @@ export async function loadHostGroups(tx: Transaction, tabId: string): Promise<Ho
 }
 
 export async function hostInputs(tx: Transaction, view: CacheView, tabId: string): Promise<string | null> {
-  const live = { tabId, deleted: false }, stamp = { key: true, changedAt: true } as const
-  const [head, members, agents, starts, machines, held] = await Promise.all([
+  const live = { tabId, deleted: false }
+  const [head, stamps, machines, held] = await Promise.all([
     tx.swarmHead.findUnique({ where: { id: `${tabId}:head` }, select: { changedAt: true } }),
-    tx.swarmMember.findMany({ where: live, select: stamp }), tx.swarmAgent.findMany({ where: live, select: stamp }),
-    tx.swarmStart.findMany({ where: live, select: stamp }),
+    view.get(tabId, 'host:stamps', 'main', () => loadHostStamps(tx, tabId), hostStampsRule),
     tx.swarmMachine.findMany({ where: live, select: { key: true, hostChangedAt: true } }),
     view.get(tabId, 'host:groups', 'main', () => loadHostGroups(tx, tabId), hostGroupsRule),
   ])
+  // As the rows read before gave them: key, then the stamp as a date.
+  const rows = (kind: StampKind) => Object.entries(stamps[kind]).map(([key, at]) => ({ key, changedAt: new Date(at) }))
+  const [members, agents, starts] = STAMP_KINDS.map(rows)
   const groups = hostGroupsSignature(held)
   if (!head || groups.missing) return null
   const keyed = <T extends { key: string }>(rows: T[]) => rows.sort((a, b) => byCodeUnit(a.key, b.key))
-  return createHash('sha256').update(JSON.stringify([head.changedAt, keyed(members), keyed(agents), keyed(starts), keyed(machines), groups.all]))
+  return createHash('sha256').update(JSON.stringify([head.changedAt, keyed(members!), keyed(agents!), keyed(starts!), keyed(machines), groups.all]))
     .digest('base64url').slice(0, ROW_HASH)
 }

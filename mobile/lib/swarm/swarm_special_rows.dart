@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import 'package:harness_mobile/core/relative_time.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
@@ -11,6 +10,7 @@ import 'model.dart';
 import 'swarm_message_row.dart' show SwarmMessageFrame, swarmChatText;
 import 'swarm_reader.dart';
 import 'swarm_session.dart';
+import 'swarm_switch_pm.dart';
 
 // The notes in a chat that are not chat from their author, drawn as Desktop
 // draws them: a routing note (route_row.dart), a note about a terminal
@@ -41,7 +41,7 @@ const EdgeInsets _inset = EdgeInsets.fromLTRB(
 
 /// A quiet action beside a note, a finger's size.
 class _NoteAction extends StatelessWidget {
-  const _NoteAction({required this.label, required this.onTap});
+  const _NoteAction({super.key, required this.label, required this.onTap});
   final String label;
   final VoidCallback onTap;
 
@@ -100,6 +100,9 @@ class _SwarmRouteRowState extends State<SwarmRouteRow> {
   String get _how => switch (widget.route.via) {
     'jev' => 'Jev ${((widget.route.p ?? 0) * 100).round()}%',
     'only' => 'Only available candidate',
+    // Task #2901 (Ken, 2026-11-04): the route names no pick; the coordinator
+    // chose by the project's Routing instructions, and its start says which.
+    'instructions' => 'Chosen by the project\'s Routing instructions',
     _ => 'Ranked by strength, price and quota',
   };
 
@@ -207,8 +210,9 @@ class _SwarmRouteRowState extends State<SwarmRouteRow> {
 }
 
 /// A Lead's typing into a worker's terminal, or a machine's alert about one
-/// (Desktop's `SuperTabTerminalRow`). Desktop's Switch PM… on a PM's limit
-/// note waits for the phone's Switch PM screen.
+/// (Desktop's `SuperTabTerminalRow`). A Product Manager's usage-limit note
+/// offers Switch PM… as Desktop's does ([swarmLimitNoteSwitchPm]), following
+/// the Swarm as it is read again.
 class SwarmTerminalRow extends StatelessWidget {
   const SwarmTerminalRow({super.key, required this.message});
   final SuperTabMessage message;
@@ -234,12 +238,51 @@ class SwarmTerminalRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
+    // A row kept as it was is not built again: the PM's limit note follows
+    // the Swarm itself, as the ship card does.
+    final inbox = message.leadLimitAgentId == null
+        ? null
+        : SwarmScope.of(context)?.inbox;
+    if (inbox == null) return _row(null);
+    return ListenableBuilder(
+      listenable: inbox,
+      builder: (context, _) {
+        final reader = swarmReaderOf(context, message.conversationId);
+        final projectId = reader == null
+            ? null
+            : swarmLimitNoteSwitchPm(reader, message);
+        return _row(
+          projectId == null
+              ? null
+              : _NoteAction(
+                  key: const ValueKey('swarm-limit-switch-pm'),
+                  label: 'Switch PM…',
+                  onTap: () => unawaited(
+                    showSwarmSwitchPm(context, reader!, projectId),
+                  ),
+                ),
+        );
+      },
+    );
+  }
+
+  Widget _row(Widget? action) {
     final alert = message.source['kind'] != 'terminal-input';
     final style = _quiet();
     // Only the coordinator's: a worker's note says its time in its own words.
     final until = message.leadLimitAgentId != null
         ? DateTime.tryParse(message.source['limitedUntil'] as String? ?? '')
         : null;
+    final text = Text.rich(
+      TextSpan(
+        children: [
+          typed(message.text, style),
+          if (until != null)
+            TextSpan(text: ' until ${swarmSwitchPmTime(until)}'),
+        ],
+      ),
+      style: style,
+    );
     return Padding(
       padding: EdgeInsets.fromLTRB(
         AppSpace.s,
@@ -248,7 +291,11 @@ class SwarmTerminalRow extends StatelessWidget {
         _inset.bottom,
       ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        // Beside an action a finger's size, the mark and the words sit on
+        // its middle.
+        crossAxisAlignment: action == null
+            ? CrossAxisAlignment.start
+            : CrossAxisAlignment.center,
         children: [
           SizedBox(
             width: SwarmMessageFrame.column,
@@ -267,32 +314,14 @@ class SwarmTerminalRow extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: Text.rich(
-              TextSpan(
-                children: [
-                  typed(message.text, style),
-                  if (until != null) TextSpan(text: ' until ${_time(until)}'),
-                ],
-              ),
-              style: style,
-            ),
+            child: action == null
+                ? text
+                : Row(children: [Flexible(child: text), action]),
           ),
         ],
       ),
     );
   }
-}
-
-/// The time when [at] is today, else the date and time, in local time.
-String _time(DateTime at) {
-  final local = at.toLocal(), today = DateTime.now();
-  if (local.year == today.year &&
-      local.month == today.month &&
-      local.day == today.day) {
-    String two(int n) => n.toString().padLeft(2, '0');
-    return '${two(local.hour)}:${two(local.minute)}';
-  }
-  return fullDateTime(at);
 }
 
 /// The quiet line a terminal's answer starts with, and the one under a

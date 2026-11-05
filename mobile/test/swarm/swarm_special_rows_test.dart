@@ -162,6 +162,22 @@ void main() {
       expect(fake.paths.where((p) => p == decisions), hasLength(1));
     });
 
+    // Task #2901 (Ken, 2026-11-04): the route names no pick; the start's row
+    // names the candidate the instructions chose.
+    testWidgets('Details says the Routing instructions chose', (tester) async {
+      final fake = backend([
+        row('r1', 2, 'x', {...routeSource(), 'via': 'instructions'}),
+      ]);
+      fake.routes[decisions] = (_) => {
+        'record': {'instructionsRevision': 7},
+      };
+      const chosen = 'Chosen by the project\'s Routing instructions';
+      await show(tester, fake);
+      await tester.tap(inRow('r1', find.text('Details')));
+      await tester.pumpAndSettle();
+      expect(inRow('r1', find.text('Selection: $chosen')), findsOneWidget);
+    });
+
     testWidgets('a failed read says so, and Retry reads again', (tester) async {
       final fake = backend([row('r1', 2, 'x', routeSource())]);
       var fails = true;
@@ -334,6 +350,78 @@ void main() {
         );
       },
     );
+  });
+
+  // Ken, 11-04 (task #2849): what was typed into an agent's terminal (a
+  // scheduled prompt too) is no chat row; the terminal's answer still is.
+  testWidgets('a terminal\'s prompt is no chat row; its answer still is', (
+    tester,
+  ) async {
+    await show(
+      tester,
+      backend([
+        row('typed', 2, 'Run the hourly cleanup.', {
+          'kind': 'native',
+          'phase': 'prompt',
+          'operator': {'name': 'ken15@autonomous.ai'},
+        }),
+        row('answered', 3, 'Cleanup done.', {'kind': 'native'}),
+      ]),
+    );
+    expect(find.text('Run the hourly cleanup.'), findsNothing);
+    expect(find.textContaining('Terminal input'), findsNothing);
+    expect(inRow('answered', find.text('Cleanup done.')), findsOneWidget);
+    expect(inRow('answered', find.text('Terminal answer')), findsOneWidget);
+  });
+
+  // Dee, 11-05 (task #3127): a terminal's recording gap gives a person
+  // nothing to do, so it is no chat row; the server keeps it for diagnosis.
+  testWidgets('a recording gap is no chat row', (tester) async {
+    await show(
+      tester,
+      backend([
+        row('said', 2, 'A real update', {}),
+        for (final sequence in [3, 4])
+          row(
+            'gap-$sequence',
+            sequence,
+            'Some terminal activity could not be recorded.',
+            {'kind': 'native', 'phase': 'gap'},
+          ),
+      ]),
+    );
+    expect(inRow('said', find.text('A real update')), findsOneWidget);
+    expect(
+      find.text('Some terminal activity could not be recorded.'),
+      findsNothing,
+    );
+    expect(find.text('Terminal recording interrupted'), findsNothing);
+  });
+
+  // Dee, 11-05 (task #3165): an instructions save's chat line gives a person
+  // nothing to do, so the ones already posted are no chat row. The History
+  // keeps every revision.
+  testWidgets('an instruction-change post is no chat row; others show', (
+    tester,
+  ) async {
+    await show(
+      tester,
+      backend([
+        row('said', 2, 'A real update', {}),
+        row(
+          'saved',
+          3,
+          'Lead changed the instructions for dee: Routing: no Haiku.\n\n'
+              'In Routing:\nRemoved: Haiku reviews.\nAdded: Opus reviews.',
+          {'kind': 'instructions', 'projectId': 'lead', 'revision': 8},
+        ),
+        row('later', 4, 'Next', {}),
+      ]),
+    );
+    expect(inRow('said', find.text('A real update')), findsOneWidget);
+    expect(inRow('later', find.text('Next')), findsOneWidget);
+    expect(find.textContaining('changed the instructions'), findsNothing);
+    expect(find.textContaining('See revision'), findsNothing);
   });
 
   group('an ordinary message says', () {

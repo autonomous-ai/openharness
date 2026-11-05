@@ -1,8 +1,8 @@
 import type { Prisma } from '@prisma/client'
-import { agentOnly, conversation, fail, isLeads, type AgentStart, type MessageDraft, type SuperTabState } from '../model.js'
+import { agentOnly, conversation, fail, isLeads, type AgentStart, type Conversation, type MessageDraft, type SuperTabState } from '../model.js'
 import { autoJoinOn } from '../autoJoinDomain.js'
 import { split } from './shape.js'
-import { guardedWrite, PartConflict, type HeadColumns, type HostColumns, type PartWrite } from './write.js'
+import { guardedWrite, PartConflict, plainHost, type HeadColumns, type HostColumns, type PartWrite } from './write.js'
 import type { GroupData, MachineData, Part, PartKind, SwarmParts } from './types.js'
 import { RELEASED_CAP } from './types.js'
 
@@ -59,11 +59,11 @@ export function sameData(a: unknown, b: unknown): boolean {
 }
 
 /**
- * Who sees what changed (design section 4.2): a project's visibility or members, a person removed or rejoined, the set of
+ * Who sees what changed (design section 4.2): a project's visibility, owner or members, a person removed or rejoined, the set of
  * Leads (the Leads conversation's members), a conversation's audience, or a project removed. Readers reload in full.
  */
 export function visibilityChanged(before: SuperTabState, after: SuperTabState): boolean {
-  const projects = (state: SuperTabState) => canonical((state.projects ?? []).map(p => [p.id, p.visibility, p.members]))
+  const projects = (state: SuperTabState) => canonical((state.projects ?? []).map(p => [p.id, p.visibility, p.ownerId, p.members]))
   const people = (state: SuperTabState) => canonical(state.people.map(p => [p.id, p.generation, p.role]))
   const leads = (state: SuperTabState) => canonical(state.conversations.filter(isLeads).map(c => c.agentIds))
   const audiences = (state: SuperTabState) => new Map(state.conversations.map(c => [c.id, canonical(c.audience ?? null)]))
@@ -89,6 +89,18 @@ export function indexesOf(state: SuperTabState) {
   }
 }
 
+/** Whether [message], in [group], is a person's message to its project's coordinator: anywhere in the project chat, any of its
+ *  threads, or in another chat of the project where it reaches the coordinator (task #3022, pmSchedule.ts). Who wrote and whom
+ *  it reaches, never its words. Marked on [group] itself, which this write already writes (review of #3066, 1). */
+function toCoordinator(state: SuperTabState, group: Conversation, message: MessageDraft): boolean {
+  if (message.author.kind !== 'person' || message.source) return false
+  const projects = state.projects ?? [{ id: 'lead', leadConversationId: 'lead' }]
+  if (projects.some(p => p.leadConversationId === group.id)) return true
+  const project = projects.find(p => p.id === (group.projectId ?? 'lead'))
+  const coordinator = project && state.conversations.find(c => c.id === project.leadConversationId)?.leadId
+  return !!coordinator && message.recipients.includes(coordinator)
+}
+
 /**
  * Numbers each message in its conversation (design section 1.1 D4): the conversation's counter moves by one per message, in
  * draft order. A shown message is the conversation's latest and wakes a dormant one; an agent-only notice is numbered but
@@ -107,6 +119,7 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
       group.lastMainSequence = sequence
       if (message.author.kind === 'person' && !message.source) group.lastPersonSequence = sequence
     }
+    if (toCoordinator(state, group, message)) group.heardAt = now
     group.lastActivityAt = new Date(now).toISOString()
     delete group.dormant
   }
@@ -166,26 +179,6 @@ export function hostMarker(kind: PartKind, before: unknown, after: unknown, mach
   const machines = ([before, after] as Array<GroupData | undefined>).flatMap(g => g
     ? [...g.agentIds.flatMap(id => machineOf.get(id) ?? []), ...(g.assignment ? [g.assignment.execution.machineId] : [])] : [])
   return { host: { hostMachineIds: [...new Set(machines)] } }
-}
-
-/**
- * Which host a part concerns from its data alone: every host of the Swarm for the head and its people (names, pause,
- * observers), the machine of an agent or a start, none for the other kinds, whose writes leave markers instead (hostMarker).
- * The one rule the host read wakes by (read/host.ts) and the push names hosts by (hostsToTell).
- */
-export function plainHost(kind: PartKind, data: unknown): 'all' | string | null {
-  switch (kind) {
-    case 'head': case 'member': return 'all'
-    case 'agent': {
-      const machineId = (data as { machineId?: unknown } | null)?.machineId
-      return typeof machineId === 'string' ? machineId : null
-    }
-    case 'start': {
-      const machineId = (data as AgentStart | null)?.request?.machineId
-      return typeof machineId === 'string' ? machineId : null
-    }
-    default: return null
-  }
 }
 
 /**

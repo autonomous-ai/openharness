@@ -12,7 +12,7 @@ String? Function()? superTabLocalTimeZoneOverride;
 /// This computer's time zone by its IANA name ("Asia/Ho_Chi_Minh"), which
 /// the reader's app tells the Swarm for the local time on their card
 /// (Huy, 11-04; River: the name, so daylight saving stays right). Null when
-/// it names none: Windows, whose zones have names of their own, and a test.
+/// it names none: a test, or a computer that cannot say.
 String? superTabLocalTimeZone() {
   if (superTabLocalTimeZoneOverride case final override?) return override();
   if (kUnderTest) return null;

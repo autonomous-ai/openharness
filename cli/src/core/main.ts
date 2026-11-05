@@ -14,6 +14,7 @@ import { nativeHookLocations } from '../engines/kit/nativeLocations.js'
 import { createNativeLaunchPreparer } from '../engines/prepareNativeLaunch.js'
 import { engineDownloading } from '../engines/kit/downloadMarker.js'
 import { createNativeInstallations } from '../engines/kit/nativeInstall.js'
+import { createWindowsInstallations } from '../engines/kit/windowsInstall.js'
 import { publishGridConfigDir } from '../lib/publishedGridConfig.js'
 import { masterRunsEngineScreen } from '../harnessd/services.js'
 import { createSubmissions } from './engines/submissions.js'
@@ -1772,7 +1773,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The recaps: in this process, or in the edge host (services/recapsProcess.ts), told each turn's lifecycle.
   if (outOfProcess.has('recaps')) ports.recaps = recapsLink.port; else serviceHost.start('recaps', inline!.startRecaps, coreApi, RECAPS_FALLBACKS)
   // Cleaning up after agents: the harnesses a closed harness started, and those idle half an hour (services/agentCleanup.ts).
-  if (outOfProcess.has('agentCleanup')) ports.agentCleanup = agentCleanupLink.port; else serviceHost.start('agentCleanup', (core, given) => inline!.startAgentCleanup(core, given, swarm?.retainedHarnesses), coreApi, AGENT_CLEANUP_FALLBACKS)
+  if (outOfProcess.has('agentCleanup')) ports.agentCleanup = agentCleanupLink.port; else serviceHost.start('agentCleanup', (core, given) => inline!.startAgentCleanup(core, given, swarm ? { retained: swarm.retainedHarnesses, closed: swarm.recordCleanupClose } : undefined), coreApi, AGENT_CLEANUP_FALLBACKS)
   if (!outOfProcess.has('shell')) serviceHost.serve('shell', inline!.startShell, coreApi, SHELL_REQUESTS)
   // Models: grid access and its pin, the model pictures on agents' frames, the keystroke prewarm, where an
   // agent on a grid model sends its inference, and the models requests the apps send (services/models.ts):
@@ -2425,7 +2426,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const dshLaunch = dshThrough({ store: () => ports.store ?? STORE_OFF,
     nameOf: id => installedDsh(id)?.manifest.name, account: () => ({ privateGrid: backend.gridName() }) })
   const prepareNativeLaunch = createNativeLaunchPreparer({
-    installations: createNativeInstallations({ directory: join(env.ADAPTER_DATA_DIR, 'native-installations') }),
+    installations: (process.platform === 'win32' ? createWindowsInstallations : createNativeInstallations)({ directory: join(env.ADAPTER_DATA_DIR, 'native-installations') }),
     inspect: (engine, source) => inspectNativeLaunch(engine, source, {
       confirmHome: (engine, home) => { confirmHomes({ [sessionStoreContracts[engine].sessions.moved.variable]: home }) },
     }),

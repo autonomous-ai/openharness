@@ -106,6 +106,16 @@ class SwarmActivityFeed extends ChangeNotifier {
   /// The server answered 404 to the list: it has no Activity.
   bool _refused = false;
 
+  /// Told of each reply row that a read lists and the one before it did not,
+  /// unread: what came in since the first read, which tells nothing, as a
+  /// read under another hold of the Swarm ([SwarmReader.generation]) does
+  /// not either. Never a reaction.
+  void Function(SwarmActivityEntry entry)? onReply;
+
+  /// The ids the last read listed, in any chat: a reply among them is not
+  /// new. Null before the first read.
+  Set<String>? _listed;
+
   /// Rows unread when Activity opened, or that came in while it was open:
   /// bold until it is left, though another device read them meanwhile.
   final _newThisVisit = <String>{};
@@ -230,6 +240,7 @@ class SwarmActivityFeed extends ChangeNotifier {
     // An answer on its way belongs to what was held before.
     _shown = ++_asked;
     _digest = _failedDigest = null;
+    _listed = null;
   }
 
   void _changed() {
@@ -310,6 +321,7 @@ class SwarmActivityFeed extends ChangeNotifier {
       _shown = asked;
       final snapshot = reader.snapshot;
       final read = <SwarmActivityEntry>[];
+      final before = _listed, listed = <String>{};
       for (final row in answer['items'] as List? ?? const []) {
         final SwarmActivityEntry entry;
         try {
@@ -318,6 +330,8 @@ class SwarmActivityFeed extends ChangeNotifier {
           // A row this build cannot read is left out, not the list.
           continue;
         }
+        // A chat the person joins later lists its older rows: not news.
+        listed.add(entry.id);
         // Only chats this reader holds; a chat lost since is not shown on
         // the server's word alone.
         if (snapshot?.conversation(entry.conversationId) == null) continue;
@@ -331,6 +345,16 @@ class SwarmActivityFeed extends ChangeNotifier {
       _waitUntil = null;
       if (_open) {
         _newThisVisit.addAll(items.where((e) => !e.read).map((e) => e.id));
+      }
+      _listed = listed;
+      if (before != null) {
+        for (final entry in items) {
+          if (entry.kind == SwarmActivityKind.reply &&
+              !entry.read &&
+              !before.contains(entry.id)) {
+            onReply?.call(entry);
+          }
+        }
       }
       notifyListeners();
     } catch (failure) {

@@ -2180,7 +2180,7 @@ describe('a Buddy passes its owner\'s words to their own harnesses on this Mac (
       for (const run of [tellCommand, replyCommand]) {
         const h = buddyIn(d, far, r.record)
         expect(await run([name, '--', 'x'], h.deps), name).toBe(EXIT.refused)
-        expect(h.err.join('\n'), name).toBe('That is not one of your owner\'s harnesses on this Mac, or it no longer runs. Nothing was sent.')
+        expect(h.err.join('\n'), name).toBe('That is not one of your owner\'s harnesses on this computer, or it no longer runs. Nothing was sent.')
       }
     }
     expect(r.calls).toEqual([])

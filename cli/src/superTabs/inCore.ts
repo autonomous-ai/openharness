@@ -21,6 +21,7 @@ export { SWARM_LAUNCH } from './inCore/launch.js'
 export { createConfidentialPurge, isTeamDaemon, purgeRecord, teamAppPolicyFor, teamPurgeReport, withPurgeRetries } from './inCore/teamApps.js'
 export { typesWhileBusy } from './inCore/deliveries.js'
 export { mayBeBuddy, retainedHarnesses, retainedLeads } from './retention.js'
+export { recordCleanupClose } from './cleanupCloses.js'
 // A Product Manager switched from its pane (Change agent) is the one stop of a Lead its close guard and stop guard let through.
 export { leadCloseProtected, leadSwitchEnded, leadSwitching, mayBeLead } from './leadSwitch.js'
 export { forwardAttachmentUpload } from '../lib/superTabAttachmentProxy.js'

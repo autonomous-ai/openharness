@@ -1,5 +1,13 @@
+import '../core/models.dart';
 import '../state/app_state.dart';
 import 'controller.dart';
+
+/// The name an agent is added to the Swarm with: the name its person gave the
+/// harness, else `Agent`, which the Swarm answers with a member name. Never the
+/// harness's session title, which an automatic name shows instead (a terminal
+/// title such as "cd /Users/…"; task #2912).
+String superTabAddName(Agent native) =>
+    isAutomaticHarnessName(native.name) ? 'Agent' : native.name;
 
 Future<void> addSuperTabAgent(
   AppNotifier app,
@@ -39,7 +47,7 @@ Future<void> addSuperTabAgent(
       'conversationId': conversationId,
       'machineId': machineId,
       'harnessId': harnessId,
-      'name': native.displayName,
+      'name': superTabAddName(native),
       'lead': false,
       'configuration': {
         'engine': native.engine ?? '',

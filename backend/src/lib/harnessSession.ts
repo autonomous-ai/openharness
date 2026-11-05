@@ -1,4 +1,5 @@
 import { randomInt } from 'node:crypto'
+import { teamCleanupPending } from '../superTabs/computerMoves.js'
 import { pub, publishDown } from './bus.js'
 import type { Prisma } from '@prisma/client'
 import { machineAlive, prisma } from './prisma.js'
@@ -7,6 +8,7 @@ import { TEAM_CONVERTED_FRAME } from './teamSession.js'
 import { userService } from '../services/UserService.js'
 import { storedAutonomousEnvironment, type AutonomousEnvironment } from './autonomousEnvironment.js'
 import { SsoAuthError, type AuthUser } from './ssoAuth.js'
+import { authEpochKey, harnessAuthCache, signInsChanged } from './harnessAuthCache.js'
 import type { SsoClientId } from './sso.js'
 import {
   endedSessionData,
@@ -129,6 +131,15 @@ function handoffOf(held: unknown): { userId: string; kind: HandoffKind; convert?
   } catch { return null }
 }
 
+/** A team sign-in for another account while the previous account's Swarm work in that Harness Team account is still being
+ *  deleted (superTabs/computerMoves.ts teamCleanupPending): what its person reads, and does. */
+export class TeamCleanupPending extends Error {
+  readonly code = 'TEAM_CLEANUP_PENDING'
+  constructor() {
+    super("The previous account's Swarm work in Harness Team on this computer is still being cleaned up, so it was not signed in for you yet. Try Repair again in a few minutes.")
+  }
+}
+
 /**
  * Spend [code] and sign [label]'s device in as the account that minted it, as the kind it was minted
  * for. A team code also needs the redeeming daemon's [computerId], which its session is bound to. Null
@@ -150,6 +161,8 @@ export async function redeemHandoff(code: string, label: string, computerId?: st
   // The computer that asked to become a team machine, and no other.
   if (handoff.convert) return handoff.convert === computer ? convertComputer(handoff.userId, label || 'Team', computer) : null
   if (await computerHeldByAnotherSignIn(handoff.userId, computer)) return null
+  // Another account's Team machine here still has Swarm folders to delete, which only its own sign-in can (#3122).
+  if (await teamCleanupPending(prisma, { computerId: computer, userId: handoff.userId })) throw new TeamCleanupPending()
   // A repair run signs the same team account in again: its machine already exists and records its Mac now. A new one
   // records it when it registers (MachineService.resolveForTeamComputer), from the session made here.
   if (handoff.host) {
@@ -182,6 +195,7 @@ async function convertComputer(userId: string, label: string, computerId: string
     } })
     return { session: created, machineIds: machines.map((m) => m.machineId) }
   })
+  await signInsChanged(userId)
   for (const machineId of machineIds) {
     await publishDown(machineId, { connId: '', frame: { type: TEAM_CONVERTED_FRAME } }).catch(() => { /* best effort: the next connect decides */ })
   }
@@ -289,10 +303,12 @@ export async function refreshHarnessSession(refreshToken: string): Promise<Harne
  *  tokens it held are deleted. */
 export async function revokeHarnessSession(refreshToken: string): Promise<void> {
   if (!isHarnessRefreshToken(refreshToken)) return
-  await prisma.harnessSession.updateMany({
-    where: { refreshHash: harnessTokenHash(refreshToken), ...notRevoked },
-    data: endedSessionData(),
-  })
+  const refreshHash = harnessTokenHash(refreshToken)
+  const session = await prisma.harnessSession.findUnique({ where: { refreshHash }, select: { userId: true } })
+  if (!session) return
+  await prisma.harnessSession.updateMany({ where: { refreshHash, ...notRevoked }, data: endedSessionData() })
+  // Even when it was already revoked: a retry after a failed epoch write must still reach every pod.
+  await signInsChanged(session.userId)
 }
 
 async function issueAccess(sessionId: string, userId: string, kind: HarnessSessionKind): Promise<string> {
@@ -306,36 +322,71 @@ async function issueAccess(sessionId: string, userId: string, kind: HarnessSessi
   return token
 }
 
+const invalid = (): SsoAuthError => new SsoAuthError('Invalid or expired access token', 'INVALID_TOKEN')
+
 /**
  * The account a Harness access token speaks for. The session is read on every call, so a revoked
- * one stops at once rather than when its access token runs out.
+ * one stops at once rather than when its access token runs out — or, within [AUTH_CACHE_TTL_MS] of the
+ * last read, remembered by this pod and checked against the person's sign-in epoch instead
+ * (lib/harnessAuthCache.ts), which every sign-out moves. The access token is read from Redis either way.
  *
  * Only a token that is not good is `INVALID_TOKEN`. Redis or Mongo failing is
  * `AUTH_SERVICE_UNAVAILABLE` — the caller's 503, not its 401 — because a 401 sends the phone to
  * refresh and, failing that, to sign in again, over what is only an outage.
  */
 export async function authenticateHarnessAccessToken(token: string): Promise<AuthUser> {
-  const invalid = (): SsoAuthError => new SsoAuthError('Invalid or expired access token', 'INVALID_TOKEN')
+  const hash = harnessTokenHash(token)
+  const remembered = harnessAuthCache.get(hash)
   let user: Awaited<ReturnType<typeof userService.get>>
   let sessionId: string
+  let userId: string
+  let epoch: string | null
   let kind: string | null | undefined
   let computerId: string | null | undefined
   try {
-    const raw = await pub.get(accessKey(harnessTokenHash(token)))
-    if (!raw) throw invalid()
+    let raw: string | null
+    if (remembered) {
+      [raw, epoch] = await pub.mget(accessKey(hash), authEpochKey(remembered.userId))
+    } else {
+      raw = await pub.get(accessKey(hash))
+      epoch = null
+    }
+    if (!raw) {
+      harnessAuthCache.delete(hash)
+      throw invalid()
+    }
     const held = JSON.parse(raw) as { sessionId?: unknown; userId?: unknown }
     if (typeof held.sessionId !== 'string' || typeof held.userId !== 'string') throw invalid()
     sessionId = held.sessionId
+    userId = held.userId
+    if (remembered && remembered.sessionId === sessionId && remembered.userId === userId && remembered.epoch === epoch) {
+      return { ...remembered.user }
+    }
+    // The epoch before the session and the user: a sign-out landing between these reads leaves it stale.
+    if (!remembered || remembered.userId !== userId) epoch = await pub.get(authEpochKey(userId))
     const session = await prisma.harnessSession.findUnique({ where: { id: sessionId } })
-    if (!session || session.revokedAt || session.userId !== held.userId) throw invalid()
+    if (!session || session.revokedAt || session.userId !== userId) throw invalid()
     kind = session.kind
     computerId = session.computerId
-    user = await userService.get(held.userId)
+    user = await userService.get(userId)
   } catch (err) {
     if (err instanceof SsoAuthError) throw err
     throw new SsoAuthError('Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE')
   }
   if (!user) throw invalid()
+  const answer = identityOf(token, user, sessionId, kind, computerId)
+  harnessAuthCache.set(hash, { sessionId, userId, epoch, user: answer })
+  return { ...answer }
+}
+
+/** What a live session answers for [token]; throws INVALID_TOKEN for a session of the wrong kind or bound to nothing. */
+function identityOf(
+  token: string,
+  user: NonNullable<Awaited<ReturnType<typeof userService.get>>>,
+  sessionId: string,
+  kind: string | null | undefined,
+  computerId: string | null | undefined,
+): AuthUser {
   const identity = {
     sub: user.id,
     email: user.email,
@@ -357,6 +408,7 @@ export async function authenticateHarnessAccessToken(token: string): Promise<Aut
 /** Revoke the session with this id (a device removed from the account's device key log). */
 export async function revokeHarnessSessionById(sessionId: string, userId: string): Promise<void> {
   await prisma.harnessSession.updateMany({ where: { id: sessionId, userId, ...notRevoked }, data: endedSessionData() })
+  await signInsChanged(userId)
 }
 
 // ── Sign in a computer by scanning its QR with a signed-in phone ──────────────────────────────────

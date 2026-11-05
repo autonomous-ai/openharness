@@ -24,8 +24,11 @@ class SuperTabDecision {
       unblocks = row['unblocks'] as String? ?? '',
       choice = (row['choice'] as num?)?.toInt(),
       delegated = row['delegated'] == true,
+      overdue = row['overdue'] == true,
+      pmTakesOver = row['pmTakesOver'] == true,
       note = row['note'] as String?,
-      createdAt = DateTime.tryParse(row['createdAt'] as String? ?? '');
+      createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
+      answeredAt = DateTime.tryParse(row['answeredAt'] as String? ?? '');
   final String id, batchId, projectId, projectName, conversationId;
   final String conversationTitle, askerName, question, unblocks;
   final List<String> options;
@@ -46,8 +49,20 @@ class SuperTabDecision {
 
   /// The reader left it to the PM, who took the recommended option.
   final bool delegated;
+
+  /// The PM answered it because it waited 24 hours, not because the reader
+  /// chose Let PM decide.
+  final bool overdue;
+
+  /// Whether the 24-hour sweep will take it over (the backend says: not a
+  /// reflection, and the recommended option exists). Only then does its row say
+  /// `PM in ...`.
+  final bool pmTakesOver;
   final String? note;
   final DateTime? createdAt;
+
+  /// When it was answered; null while it is open.
+  final DateTime? answeredAt;
 }
 
 /// The reader's decisions in one Swarm: open and answered, read from the
@@ -68,6 +83,10 @@ class SuperTabDecisions extends ChangeNotifier {
 
   final SuperTabController controller;
   List<SuperTabDecision> open = const [], answered = const [];
+
+  /// Whether [open] was read since the Swarm was opened or its audience last
+  /// changed. Before that, the server's count is all there is.
+  bool loaded = false;
   String? error;
 
   /// Decisions being answered: their buttons wait for the backend.
@@ -135,6 +154,7 @@ class SuperTabDecisions extends ChangeNotifier {
     if (epoch != null && epoch != _epoch) {
       // Who may read what changed: nothing read before shows until read again
       // (review of #1820), even while the count stays.
+      if (_epoch != null) loaded = false;
       if (_epoch != null && (open.isNotEmpty || answered.isNotEmpty)) {
         open = answered = const [];
         notifyListeners();
@@ -206,6 +226,7 @@ class SuperTabDecisions extends ChangeNotifier {
       if (epoch != _epoch) return;
       open = nextOpen;
       answered = nextAnswered;
+      loaded = true;
       _openComplete = openComplete;
       // The lists are the newest of each (the backend caps them): what is
       // set aside is forgotten only once it is known answered or gone.
@@ -238,12 +259,55 @@ class SuperTabDecisions extends ChangeNotifier {
   Future<bool> answer(SuperTabDecision decision, int choice) =>
       _answer(decision, {'choice': choice});
 
+  /// The reader's answer in their own words, for the asker to read as the
+  /// decision's note with no option (task #2996).
+  Future<bool> answerInWords(SuperTabDecision decision, String words) {
+    final note = words.trim();
+    if (note.isEmpty) return Future.value(false);
+    return _answer(decision, {'note': note});
+  }
+
+  /// Decisions whose answer in words the server refused: one before typed
+  /// answers takes an option only. The words stay with the reader, who can
+  /// answer in the chat instead.
+  final Set<String> _refusedWords = {};
+
+  /// Whether the server refused [decision]'s answer in words.
+  bool refusedWords(SuperTabDecision decision) =>
+      _refusedWords.contains(decision.id);
+
   /// Let PM decide: the backend answers with the recommended option on the
   /// reader's behalf, recorded as the PM's choice, never as theirs.
   Future<bool> delegate(SuperTabDecision decision) =>
       _answer(decision, {'delegate': true});
 
+  /// Let PM decide for every one of [decisions] it can (those with a
+  /// recommended option) that are not being answered, two at a time and read
+  /// back once; how many the backend took. A failed one stays on its card for
+  /// [retry].
+  Future<int> delegateAll(List<SuperTabDecision> decisions) async {
+    final sent = await superTabTwoAtATime([
+      for (final d in decisions)
+        if (d.canDelegate && !answering.contains(d.id)) d,
+    ], (d) => _send(d, {'delegate': true}));
+    await load();
+    unawaited(controller.refresh());
+    return sent.where((ok) => ok).length;
+  }
+
   Future<bool> _answer(
+    SuperTabDecision decision,
+    Map<String, dynamic> answer,
+  ) async {
+    if (!await _send(decision, answer)) return false;
+    await load();
+    unawaited(controller.refresh());
+    return true;
+  }
+
+  /// Sends one answer and keeps what it needs to be sent again; the callers
+  /// read the decisions back, once for all they sent.
+  Future<bool> _send(
     SuperTabDecision decision,
     Map<String, dynamic> answer,
   ) async {
@@ -263,7 +327,18 @@ class SuperTabDecisions extends ChangeNotifier {
         },
       );
       _failed.remove(decision.id);
-    } catch (_) {
+      _refusedWords.remove(decision.id);
+      return true;
+    } catch (failure) {
+      if (failure is SuperTabFailure &&
+          failure.statusCode == 400 &&
+          answer.containsKey('note') &&
+          !answer.containsKey('choice')) {
+        // Sending it again gets the same answer: not a failure to retry.
+        _refusedWords.add(decision.id);
+        _failed.remove(decision.id);
+        return false;
+      }
       // Said on the card that sent it ([failedToSend]), wherever it shows.
       _failed[decision.id] = answer;
       return false;
@@ -271,8 +346,5 @@ class SuperTabDecisions extends ChangeNotifier {
       answering.remove(decision.id);
       notifyListeners();
     }
-    await load();
-    unawaited(controller.refresh());
-    return true;
   }
 }

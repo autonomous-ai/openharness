@@ -24,6 +24,11 @@ const String kLinkServerStartCommand =
     'harness start && harness remote-password set';
 final Uri kHarnessDownloadUrl = Uri.parse('https://www.autonomous.ai/harness');
 
+/// The same steps on a Windows machine, whose PowerShell has neither `curl | bash` nor, in version 5, `&&`.
+const String kLinkServerWindowsNote =
+    'On Windows, in PowerShell: irm https://cdn.autonomous.ai/harness/cli/install.ps1 | iex, '
+    'then harness login, harness start and harness remote-password set.';
+
 Future<void> showLinkAnotherMachineDialog(
   BuildContext context,
   AppNotifier notifier, {
@@ -168,7 +173,7 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
       const _LinkEntry(
         'desktop',
         'Set up a desktop',
-        'macOS or Linux · install the app',
+        'macOS, Windows or Linux · install the app',
       ),
       const _LinkEntry(
         'server',
@@ -568,8 +573,16 @@ class _LinkAnotherMachineDialogState extends State<_LinkAnotherMachineDialog> {
               key: const Key('link-copy-all'),
             ),
           ),
+          const SizedBox(height: 8),
+          SelectableText(
+            kLinkServerWindowsNote,
+            style: boxMonoStyle(color: kBoxFaint),
+          ),
         ] else ...[
-          Text('1. Install Harness for macOS or Linux.', style: boxMonoStyle()),
+          Text(
+            '1. Install Harness for macOS, Windows or Linux.',
+            style: boxMonoStyle(),
+          ),
           const SizedBox(height: 4),
           SelectableText(
             kHarnessDownloadUrl.toString(),

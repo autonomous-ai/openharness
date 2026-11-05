@@ -19,8 +19,9 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
-import { INBOX_READS, INBOX_WINDOW_MS, LATEST_CHATS, MAX_THREADS, newestInThreads, perRange, PREVIEW_CHARS, resetInboxReads, SCAN_FIELDS, THREAD_CHATS } from '../src/superTabs/read/inbox.js'
+import { INBOX_READS, INBOX_WINDOW_MS, LATEST_CHATS, MAX_THREADS, newestInThreads, perRange, PREVIEW_CHARS, resetInboxReads, SCAN_FIELDS, THREAD_CHATS, UNREAD_SCAN } from '../src/superTabs/read/inbox.js'
 import { SEED_SCAN } from '../src/superTabs/read/threadMarkSeeds.js'
+import { resetRangeCache } from '../src/superTabs/read/rangeCache.js'
 import { stableId, type Author, type Conversation, type SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
@@ -194,7 +195,7 @@ async function busyScene() {
   return { ...s, webRoot, webLatest }
 }
 
-beforeEach(() => resetInboxReads())
+beforeEach(() => { resetInboxReads(); resetRangeCache() })
 
 describe('a person\'s inbox: unread threads and each chat\'s latest message', () => {
   it('gives a collaborator exactly the chats the messages read gives them: their own Buddy chat, never the private project or the closed chat', async () => {
@@ -822,6 +823,105 @@ describe('what the inbox costs the database', () => {
   }, 120_000)
 })
 
+// Ken's slow log of 11-04: a getMore of `{tabId, conversationId, sequence $gt}` returning ~419 rows was 32% of the evening's slow
+// message ops. It was the unread scan's second batch: its union over the unread chats asked for Mongo's default first batch.
+describe('the inbox\'s scan of unread chats', () => {
+  it(`reads ${THREAD_CHATS} unread chats of ${UNREAD_SCAN + 1} rows each in one operation, never a getMore`, async () => {
+    const s = await scene(f => { for (let i = 0; i < THREAD_CHATS; i++) f.group(`Busy ${i}`) })
+    const chats = (await store.readLoad(peer, s.tabId)).state.conversations.filter(c => c.title.startsWith('Busy ')).map(c => c.id)
+    for (const chat of chats) {
+      const [root] = await insert(s.tabId, chat, [{ text: `Root in ${chat}`, author: personAuthor(owner), mentions: [peer.sub] }])
+      await markRead(s.tabId, chat, await sequenceOf(root!), peer)
+      await insert(s.tabId, chat, Array.from({ length: UNREAD_SCAN + 5 }, (_, i) => ({ text: `Reply ${i}`, author: agentAuthor(s.worker), thread: root })))
+    }
+    const entries = await profiled(db, async () => expect((await inbox(s.tabId, peer)).status).toBe(200))
+    const messages = entries.filter(e => e.ns.endsWith('.SuperTabMessage'))
+    expect(messages.filter(e => e.op === 'getmore'), JSON.stringify(messages.map(e => [e.op, e.nreturned]))).toEqual([])
+    const scan = messages.filter(e => e.op !== 'getmore' && JSON.stringify(filterOf(e)).includes('"$gt"'))
+    expect(scan.reduce((n, e) => n + (e.nreturned ?? 0), 0)).toBe(THREAD_CHATS * (UNREAD_SCAN + 1))
+  }, 120_000)
+})
+
+// Ken's slow log of 11-04: the `$or` over threads' ranges (66% of the peak's slow message ops) and the chats' unread scans were read
+// again on every inbox read, which apps make whenever the Swarm moves, though most of the ranges had not changed. A range is kept
+// (read/rangeCache.ts) under its chat's newest sequence and reactionSeq, which every new row, edit and delete moves.
+describe('re-reading the inbox', () => {
+  /** Peer in two chats. Web: peer's root, read in the thread at the first of two worker replies, then the chat read past a main
+   *  message, so the thread's mark is behind the chat's. Other: owner's root tagging peer, read at the root, then two worker
+   *  replies. */
+  async function rereadScene() {
+    const s = await scene(f => { f.group('Other') })
+    const other = (await store.readLoad(peer, s.tabId)).state.conversations.find(c => c.title === 'Other')!.id
+    const [webRoot] = await insert(s.tabId, s.web, [{ text: 'Web root', author: personAuthor(peer) }])
+    await markRead(s.tabId, s.web, await sequenceOf(webRoot!), peer)
+    const [first] = await insert(s.tabId, s.web, [{ text: 'Web 1', author: agentAuthor(s.worker), thread: webRoot }])
+    await insert(s.tabId, s.web, [{ text: 'Web 2', author: agentAuthor(s.worker), thread: webRoot }])
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${s.tabId}/conversations/${s.web}/threads/${webRoot}/read`,
+      headers: { authorization: `Bearer ${peer.sub}` }, payload: { sequence: await sequenceOf(first!) } })
+    expect(response.statusCode).toBe(200)
+    const [main] = await insert(s.tabId, s.web, [{ text: 'Web main', author: personAuthor(owner) }])
+    await markRead(s.tabId, s.web, await sequenceOf(main!), peer)
+    const [otherRoot] = await insert(s.tabId, other, [{ text: 'Other root', author: personAuthor(owner), mentions: [peer.sub] }])
+    await markRead(s.tabId, other, await sequenceOf(otherRoot!), peer)
+    await insert(s.tabId, other, [1, 2].map(i => ({ text: `Other ${i}`, author: agentAuthor(s.worker), thread: otherRoot })))
+    return { ...s, other, webRoot: webRoot!, otherRoot: otherRoot! }
+  }
+  /** The message reads that read a range of rows (by sequence), and what they cost. */
+  const ranges = (entries: ProfileEntry[]) => entries.filter(e => e.ns.endsWith('.SuperTabMessage') && JSON.stringify(filterOf(e) ?? {}).includes('"sequence"'))
+  const cost = (entries: ProfileEntry[]) => {
+    const messages = entries.filter(e => e.ns.endsWith('.SuperTabMessage'))
+    return { reads: messages.length, ranges: ranges(entries).length, docsExamined: messages.reduce((n, e) => n + (e.docsExamined ?? 0), 0),
+      returned: messages.reduce((n, e) => n + (e.nreturned ?? 0), 0), bytes: messages.reduce((n, e) => n + (e.responseLength ?? 0), 0) }
+  }
+  const read = async (tabId: string) => {
+    let body: any
+    const entries = await profiled(db, async () => { const reply = await inbox(tabId, peer); expect(reply.status).toBe(200); body = reply.body.data })
+    return { body, entries }
+  }
+
+  it('reads no range again when nothing in it changed, and answers the same', async () => {
+    const s = await rereadScene()
+    const cold = await read(s.tabId)
+    expect(threadsOf(cold.body).sort((a, b) => a.root < b.root ? -1 : 1)).toEqual([
+      { chat: s.other, root: 'Other root', unread: 2, last: s.worker }, { chat: s.web, root: 'Web root', unread: 1, last: s.worker }])
+    const warm = await read(s.tabId)
+    console.info(`inbox message reads, cold: ${JSON.stringify(cost(cold.entries))}; re-read unchanged: ${JSON.stringify(cost(warm.entries))}`)
+    expect(ranges(cold.entries).length).toBeGreaterThan(0)
+    expect(ranges(warm.entries), JSON.stringify(ranges(warm.entries).map(filterOf))).toEqual([])
+    expect(warm.body).toEqual(cold.body)
+  })
+
+  it('reads again only the chat a new reply is in, and counts it', async () => {
+    const s = await rereadScene()
+    await read(s.tabId)
+    await insert(s.tabId, s.other, [{ text: 'Other 3', author: agentAuthor(s.worker), thread: s.otherRoot }])
+    const after = await read(s.tabId)
+    const named = ranges(after.entries).map(e => JSON.stringify(filterOf(e)))
+    expect(named.length).toBeGreaterThan(0)
+    for (const filter of named) {
+      expect(filter).toContain(s.other)
+      expect(filter).not.toContain(s.web)
+    }
+    expect(threadsOf(after.body).find(t => t.chat === s.other)!.unread).toBe(3)
+    expect(threadsOf(after.body).find(t => t.chat === s.web)!.unread).toBe(1)
+  })
+
+  it('no longer counts a reply deleted after it was read', async () => {
+    const s = await rereadScene()
+    const reply = await send(s.tabId, s.web, 'Owner reply', { replyTo: s.webRoot })
+    expect(threadsOf((await read(s.tabId)).body).find(t => t.chat === s.web)).toMatchObject({ unread: 2, last: owner.sub })
+    await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'message.delete', conversationId: s.web, messageId: reply.id } })
+    expect(await db.superTabMessage.findUnique({ where: { id: reply.id } })).toBeNull()
+    expect(threadsOf((await read(s.tabId)).body).find(t => t.chat === s.web)).toMatchObject({ unread: 1, last: s.worker })
+  })
+
+  it('never answers one Swarm\'s rows for another\'s same chat numbers', async () => {
+    const a = await rereadScene(), b = await rereadScene()
+    expect(threadsOf((await read(a.tabId)).body).map(t => t.chat).sort()).toEqual([a.other, a.web].sort())
+    expect(threadsOf((await read(b.tabId)).body).map(t => t.chat).sort()).toEqual([b.other, b.web].sort())
+  })
+})
+
 // Task #2148: Ken's profile showed these reads spending their time racing two plans per range, in a union no hint can reach.
 describe('reading many thread ranges at once', () => {
   /** What one pipeline per thread answers, as these reads were written before: the answers the single read must keep. */
@@ -916,4 +1016,65 @@ describe('reading many thread ranges at once', () => {
     expect(reads.filter(e => e.command?.hint)).toHaveLength(1)
     expect(filterOf(reads.find(e => !e.command?.hint)!)).not.toHaveProperty('$or')
   }, 60_000)
+})
+
+// anh Dee, 11-04 (#2742): "remove these messages", the "<machine> left the Swarm: ..." lines in every project chat. Those already
+// stored are read by nobody, and a project chat whose newest row is one does not stay unread. The same for the "<who> changed the
+// instructions" lines already stored (Dee and Ken, 11-05, #3165): read by nobody, in every app, whatever its version.
+describe.each([
+  ['a machine-left line stored before #2742', 'left the Swarm', { text: 'Studio left the Swarm: its host confirmed its cleanup.', author: personAuthor(owner),
+    source: { kind: 'machine-left', machine: 'Studio' } }],
+  ['an instructions line stored before #3132', 'changed the instructions', { text: 'Lead changed the instructions for owner: Routing: No Haiku.\n\nIn Routing:\nAdded: No Haiku.', author: personAuthor(owner),
+    source: { kind: 'instructions', projectId: 'lead', revision: 2 } }],
+])('%s', (_name, hidden, left) => {
+  /** The project chat as a person's first load serves it, with their read mark there. */
+  const served = async (tabId: string, as: AuthUser) => {
+    const data = (await get(`/api/super-tabs/${tabId}/parts`, as)).body.data
+    const chat = (data.groups as any[]).find(g => g.key === 'lead')!.data
+    return { lastMainSequence: chat.lastMainSequence as number, mark: (data.derived.readMarks ?? {}).lead as number | undefined }
+  }
+
+  it('is in no page and no preview', async () => {
+    const s = await scene()
+    await send(s.tabId, 'lead', 'Project latest')
+    await insert(s.tabId, 'lead', [left])
+    for (const as of [owner, peer]) {
+      const page = (await get(`/api/super-tabs/${s.tabId}/conversations/lead/messages`, as)).body.data.messages as any[]
+      expect(page.map(m => m.text)).toContain('Project latest')
+      expect(JSON.stringify(page)).not.toContain(hidden)
+      expect(latestOf((await inbox(s.tabId, as)).body.data).lead).toBe('Project latest')
+    }
+  })
+
+  it('leaves a person who had read the chat with it read, though their app sends no read', async () => {
+    const s = await scene()
+    const latest = await send(s.tabId, 'lead', 'Project latest')
+    await markRead(s.tabId, 'lead', latest.sequence, peer)
+    await insert(s.tabId, 'lead', [left])
+    // Desktop and the phone count a chat unread while its newest main row is past their mark, and send no read at or below
+    // the mark the server holds: the chat's newest main row is served as the newest one people read.
+    expect(await served(s.tabId, peer)).toEqual({ lastMainSequence: latest.sequence, mark: latest.sequence })
+    // Asked again, from what this server already learned, the answer is the same.
+    expect((await served(s.tabId, peer)).lastMainSequence).toBe(latest.sequence)
+  })
+
+  it('serves a poll the same number when the project chat is sent again, as for a reply in a thread', async () => {
+    const s = await scene()
+    const latest = await send(s.tabId, 'lead', 'Project latest')
+    await markRead(s.tabId, 'lead', latest.sequence, peer)
+    await insert(s.tabId, 'lead', [left])
+    const { cursor } = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data
+    // A reply only in a thread: the chat comes again whole from the change feed, its newest main row still the hidden line.
+    await send(s.tabId, 'lead', 'A reply', { replyTo: latest.id })
+    const changes = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer)).body.data
+    const chat = (changes.groups as any[]).find(g => g.key === 'lead')
+    expect(chat?.data.lastMainSequence).toBe(latest.sequence)
+  })
+
+  it('serves a row people read after the line as the chat\'s newest', async () => {
+    const s = await scene()
+    await insert(s.tabId, 'lead', [left])
+    const after = await send(s.tabId, 'lead', 'After the line')
+    expect((await served(s.tabId, peer)).lastMainSequence).toBe(after.sequence)
+  })
 })

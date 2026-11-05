@@ -198,7 +198,9 @@ fn osc7(bytes: &[u8]) -> Option<(String, String)> {
         out.push(b[i]);
         i += 1;
     }
-    String::from_utf8(out).ok().filter(|p| p.starts_with('/')).map(|p| (url.to_string(), p))
+    // On Windows a file URL's path is /C:/work: the folder is C:/work.
+    String::from_utf8(out).ok().map(|p| match p.strip_prefix('/') { Some(rest) if crate::sys::windows_path(rest) => rest.to_string(), _ => p })
+        .filter(|p| crate::sys::path_absolute(p)).map(|p| (url.to_string(), p))
 }
 
 // A hollow block marks "the program never chose a cursor": the user's own shape stays.

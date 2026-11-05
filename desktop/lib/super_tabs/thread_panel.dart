@@ -9,6 +9,7 @@ import '../shared/widgets/app_icon_button.dart';
 import '../state/harness_attachments.dart';
 import '../widgets/desktop_chrome.dart';
 import 'buddy_sessions.dart';
+import 'chat_find.dart';
 import 'composer_tags.dart';
 import 'composer_toggle.dart';
 import 'day_pill.dart';
@@ -20,7 +21,8 @@ import 'model.dart';
 import 'thread_scroll.dart';
 import '../widgets/laid_out_list.dart';
 import 'swarm_type.dart';
-import 'voice_recorder.dart';
+import 'voice_row.dart';
+import 'voice_take.dart';
 
 /// One thread beside the chat (Dee, 2026-10-29): its root, a "N replies"
 /// divider, the replies, and a composer whose reply goes to the root.
@@ -34,7 +36,7 @@ class SuperTabThreadPanel extends StatefulWidget {
     this.sessionActivity,
     this.machineName,
     this.onScroll,
-    this.voiceRecorder,
+    this.voice,
   });
 
   final SuperTabController controller;
@@ -57,14 +59,15 @@ class SuperTabThreadPanel extends StatefulWidget {
   /// so a device scrolling this Swarm scrolls the thread, not the chat.
   final ValueChanged<ScrollController?>? onScroll;
 
-  /// What the reply box's mic records with; without it, no mic shows.
-  final SuperTabVoiceRecorder? voiceRecorder;
+  /// The composers' voice message (the view's one take); without it, no mic
+  /// shows. Its row takes the reply box's row while it is this thread's.
+  final SuperTabVoiceTake? voice;
 
   @override
-  State<SuperTabThreadPanel> createState() => _SuperTabThreadPanelState();
+  State<SuperTabThreadPanel> createState() => SuperTabThreadPanelState();
 }
 
-class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
+class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   late final _composer = TextEditingController(
     text: c.threadDraft(widget.root),
   );
@@ -94,11 +97,74 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
 
   SuperTabController get c => widget.controller;
 
-  // The day pill's jump (Huy 11-04): the row it lands on, and the one lit.
+  // The reply the thread was opened at (#2814): its row, and the one lit.
   final _targetKey = GlobalKey();
   String? _target, _lit;
   Timer? _litTimer;
   int _jumps = 0;
+  // Find in this thread (task #2826): its root and replies, the earlier
+  // replies read as Show earlier replies reads them.
+  SuperTabChatFind? _find;
+  String? _foundMatch;
+  final _findFocus = FocusNode(debugLabel: 'Find in thread');
+
+  /// Whether what has focus is in this thread: Cmd+F finds here then.
+  bool get focused =>
+      FocusManager.instance.primaryFocus?.context
+          ?.findAncestorStateOfType<SuperTabThreadPanelState>() ==
+      this;
+
+  void openFind() {
+    if (_find != null) return _findFocus.requestFocus();
+    final root = widget.root;
+    setState(
+      () => _find = SuperTabChatFind(
+        // The root counts once no earlier replies are left to read: Up
+        // from the oldest loaded reply reads them first.
+        rows: () => [
+          for (final m in c.threadMessages(root))
+            if (m.id != root || !c.hasEarlierReplies(root)) m,
+        ],
+        hasOlder: () => c.hasEarlierReplies(root),
+        readOlder: () async {
+          final loaded = c.threadMessages(root).length;
+          _scroll.holdPlace();
+          await c.loadThread(earlier: true);
+          return c.threadMessages(root).length > loaded ||
+              !c.hasEarlierReplies(root);
+        },
+      )..addListener(_findMoved),
+    );
+  }
+
+  void _closeFind({bool refocus = true}) {
+    final find = _find;
+    if (find == null) return;
+    find
+      ..removeListener(_findMoved)
+      ..clear()
+      ..dispose();
+    _find = _foundMatch = null;
+    if (!mounted) return;
+    setState(() {});
+    if (refocus) _focus.requestFocus();
+  }
+
+  /// A new current match is brought into view, as a followed link is.
+  void _findMoved() {
+    final match = _find?.current;
+    if (!mounted) return;
+    setState(() {});
+    if (match == null || match == _foundMatch) return;
+    _foundMatch = match;
+    // Brought into view as the reply a thread opens at is.
+    final messages = c.threadMessages(widget.root);
+    final at = messages.indexWhere((m) => m.id == match);
+    if (at < 0) return;
+    final jump = ++_jumps;
+    setState(() => _target = match);
+    _reveal(jump, at / messages.length, 0);
+  }
 
   /// [row] with its message's time, for the day pill over the list. Keyed
   /// by the message, so the list keeps each row's place as replies arrive.
@@ -107,52 +173,37 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     time: message.createdAt,
     child: KeyedSubtree(
       key: message.id == _target ? _targetKey : null,
-      child: SuperTabMessageHighlight(on: message.id == _lit, child: row),
+      // Lit as the reply opened at, or as find's current match; find's
+      // other matches more quietly.
+      child: SuperTabMessageHighlight(
+        on: message.id == _lit || message.id == _find?.current,
+        match: _find?.matching.contains(message.id) ?? false,
+        child: row,
+      ),
     ),
   );
 
-  /// The day pill's choice, as in the chat: the first of the root and its
-  /// replies on or after [from], lit; the root for the very beginning (null),
-  /// the newest reply for a time after everything said. Earlier replies are
-  /// read until one from before [from] is held, at most 50 pages.
-  Future<void> _jumpToTime(DateTime? from) async {
+  /// The reply the thread was opened at ([SuperTabController.threadTarget]),
+  /// once [messages] hold it: brought into view and lit for two seconds, and
+  /// the list reads on from it rather than following the end.
+  void _takeTarget(List<SuperTabMessage> messages) {
+    final target = c.threadTarget;
+    if (target == null || target.root != widget.root) return;
+    final at = messages.indexWhere((m) => m.id == target.messageId);
+    if (at < 0) return;
+    c.threadTarget = null;
     final jump = ++_jumps;
-    bool before(SuperTabMessage m) =>
-        from == null || (m.createdAt?.isBefore(from) ?? false);
-    List<SuperTabMessage> held() => c.threadMessages(widget.root);
-    void say(String text) =>
-        ScaffoldMessenger.maybeOf(context)
-            ?.showSnackBar(SnackBar(content: Text(text)));
-    // They read on from the row they land on, not the newest.
-    _scroll.holdPlace();
-    // The root is always held, at the top: the very beginning reads nothing.
-    for (var page = 0; from != null; page++) {
-      final reached = held().any((m) => m.id != widget.root && before(m));
-      if (reached || !c.hasEarlierReplies(widget.root)) break;
-      if (page == 50) {
-        say('That day is too far back to open.');
-        return;
-      }
-      // A read that fails keeps its error and its place: nothing came.
-      final loaded = held().length;
-      await c.loadThread(earlier: true);
+    // After the frame: a panel just opened has no list to hold before it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || jump != _jumps) return;
-      if (held().length == loaded) {
-        say('Couldn’t load earlier replies.');
-        return;
-      }
-    }
-    final messages = held();
-    final target = from == null
-        ? messages.firstOrNull
-        : messages.where((m) => !before(m)).firstOrNull ?? messages.lastOrNull;
-    if (target == null) return;
-    _litTimer?.cancel();
-    setState(() => _target = _lit = target.id);
-    _litTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _lit = null);
+      _scroll.holdPlace();
+      _litTimer?.cancel();
+      setState(() => _target = _lit = target.messageId);
+      _litTimer = Timer(const Duration(seconds: 2), () {
+        if (mounted) setState(() => _lit = null);
+      });
+      _reveal(jump, at / messages.length, 0);
     });
-    _reveal(jump, messages.indexOf(target) / messages.length, 0);
   }
 
   /// The list is lazy: jump near the target's place ([at], its share of the
@@ -203,6 +254,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
       _newSession = false;
       _tagIndex.value = 0;
       _tagDismissed.value = null;
+      _closeFind(refocus: false);
     }
   }
 
@@ -210,6 +262,10 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   void dispose() {
     _litTimer?.cancel();
     widget.onScroll?.call(null);
+    _find
+      ?..removeListener(_findMoved)
+      ..dispose();
+    _findFocus.dispose();
     _scroll.dispose();
     _composer.dispose();
     _focus.dispose();
@@ -412,6 +468,9 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final messages = c.threadMessages(widget.root);
+    _takeTarget(messages);
+    // Find matches the rows as they are drawn now.
+    _find?.refresh();
     final root = messages.where((m) => m.id == widget.root).firstOrNull;
     final replies = messages.where((m) => m.id != widget.root).toList();
     final pending = c
@@ -457,6 +516,13 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                     ),
                   ),
                   AppIconButton(
+                    key: const ValueKey('super-thread-find-button'),
+                    icon: AppIcons.search,
+                    tooltip: 'Find in thread',
+                    selected: _find != null,
+                    onPressed: openFind,
+                  ),
+                  AppIconButton(
                     key: const ValueKey('super-thread-close'),
                     icon: AppIcons.close,
                     tooltip: 'Close thread',
@@ -466,6 +532,13 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
               ),
             ),
             Divider(height: 1, thickness: 1, color: DesktopChrome.rim),
+            if (_find case final find?)
+              SuperTabFindBar(
+                key: ValueKey('super-thread-find-${widget.root}'),
+                find: find,
+                focus: _findFocus,
+                onClose: _closeFind,
+              ),
             SuperTabThreadSessionLine(
               key: ValueKey('super-thread-session-${widget.root}'),
               controller: c,
@@ -479,7 +552,6 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                 children: [
                   SuperTabStickyDay(
                     pillKey: const ValueKey('super-thread-day-pill'),
-                    onJump: (from) => unawaited(_jumpToTime(from)),
                     // As in the chat, a message's text can be selected and
                     // copied.
                     child: SelectionArea(
@@ -651,9 +723,34 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     onSend: () => unawaited(_send()),
     options: _choices(_writable),
     onTag: _promptTag,
-    onMic: switch (widget.voiceRecorder) {
-      final recorder? => () => unawaited(
-        recorder.start(conversationId: _conversationId, root: widget.root),
+    onMic: switch (widget.voice) {
+      final voice? => () => voice.start(
+        conversationId: _conversationId,
+        root: widget.root,
+      ),
+      null => null,
+    },
+    voiceRow: switch (widget.voice) {
+      final voice? when voice.activeIn(_conversationId, widget.root) =>
+        SuperTabVoiceRow(
+          key: const ValueKey('super-thread-voice-row'),
+          take: voice,
+          discardKey: const ValueKey('super-thread-voice-discard'),
+          sendKey: const ValueKey('super-thread-voice-send'),
+        ),
+      _ => null,
+    },
+    voiceNotice: switch (widget.voice) {
+      final voice? => SuperTabVoiceNotice(
+        take: voice,
+        conversationId: _conversationId,
+        root: widget.root,
+        padding: const EdgeInsets.fromLTRB(
+          grid.AppDesktop.composerSide,
+          grid.AppDesktop.controlGap,
+          grid.AppDesktop.composerSide,
+          grid.AppDesktop.controlGap,
+        ),
       ),
       null => null,
     },

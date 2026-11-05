@@ -12,11 +12,21 @@ const bus = vi.hoisted(() => {
       return () => { set.delete(cb) }
     },
     publish(machineId: string, msg: unknown) { for (const cb of channels.get(machineId) ?? []) cb(msg) },
+    published: [] as Array<[string, unknown]>,
+    /** False: Redis has gone silent, and a publish reaches nobody. */
+    carries: true,
   }
 })
+const warn = vi.hoisted(() => vi.fn())
+vi.mock('../utils/logger.js', () => ({ logger: { warn, info: vi.fn(), error: vi.fn() } }))
 vi.mock('./bus.js', () => ({
   subscribeSwarmDeliveries: (machineId: string, cb: (msg: unknown) => void) => bus.subscribe(machineId, cb),
-  publishSwarmDeliveries: async (machineId: string, msg: unknown) => { bus.publish(machineId, JSON.parse(JSON.stringify(msg))); return 1 },
+  publishSwarmDeliveries: async (machineId: string, msg: unknown) => {
+    bus.published.push([machineId, msg])
+    if (!bus.carries) return 0
+    bus.publish(machineId, JSON.parse(JSON.stringify(msg)))
+    return 1
+  },
 }))
 
 import { announceSwarmDeliveries, announceSwarmTerminal, relaySwarmDeliveries } from './swarmDeliveryPushes.js'
@@ -25,7 +35,7 @@ const pushes = (send: ReturnType<typeof vi.fn>) => send.mock.calls.map(([frame])
 const told = (payload: object) => ({ t: 'down', connId: '', frame: { type: 'super_tab_deliveries', payload } })
 
 describe('Swarm delivery pushes on a daemon socket', () => {
-  beforeEach(() => { bus.channels.clear(); vi.useFakeTimers() })
+  beforeEach(() => { bus.channels.clear(); bus.published.length = 0; bus.carries = true; warn.mockClear(); vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
   it('says it pushes as soon as the socket is attached, so the host reads every 30 s instead of each second', async () => {
@@ -95,15 +105,39 @@ describe('Swarm delivery pushes on a daemon socket', () => {
     expect(pushes(send)).toEqual([told({ tabId: 'tab-1', agentId: 'agent-1' })])
   })
 
-  // The host goes back to reading each second 10 minutes after it last heard this (cli superTabs/host.ts PUSH_LEASE_MS).
-  it('says again that it pushes every 4 minutes', async () => {
+  // Review of #2977 (Important 1): an idle worker's list is read only when told, so a host must learn within minutes that the
+  // channel went silent. Each minute the server renews the host's push lease through Redis (cli superTabs/host.ts
+  // PUSH_LEASE_MS, 2.5 min) with a `__` frame an older daemon drops; every 4 minutes it also says it pushes as before, which
+  // makes a host read every list once, the net an older daemon already had.
+  const lease = { t: 'down', connId: '', frame: { type: '__deliveries_lease', payload: {} } }
+  it('renews the lease each minute, and says it pushes every 4 minutes', async () => {
     const send = vi.fn()
     await relaySwarmDeliveries('machine-a', send)
     send.mockClear()
-    await vi.advanceTimersByTimeAsync(4 * 60_000 - 1)
+    await vi.advanceTimersByTimeAsync(60_000 - 1)
     expect(pushes(send)).toEqual([])
     await vi.advanceTimersByTimeAsync(1)
-    expect(pushes(send)).toEqual([told({})])
+    expect(pushes(send)).toEqual([lease])
+    await vi.advanceTimersByTimeAsync(3 * 60_000)
+    expect(pushes(send)).toEqual([lease, lease, lease, lease, told({})])
+    expect(bus.published).toHaveLength(4)
+  })
+
+  // Task #2800: an idle worker's list is read only when the server says so, so a repeat from a local timer would keep a host
+  // sure that pushes come while Redis is silent, and nothing would be read for good. As the host-changes repeat (review of
+  // #2113), it goes through the machine's own channel: no Redis, no repeat, and in 10 minutes the host reads each second again.
+  it('says it again through the machine\'s own channel, and logs a repeat nobody heard', async () => {
+    const send = vi.fn()
+    await relaySwarmDeliveries('machine-a', send)
+    send.mockClear()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(bus.published).toEqual([['machine-a', { pushes: true }]])
+    expect(pushes(send)).toEqual([lease])
+    send.mockClear()
+    bus.carries = false
+    await vi.advanceTimersByTimeAsync(4 * 60_000)
+    expect(pushes(send)).toEqual([])
+    expect(warn).toHaveBeenCalledWith('[swarm] delivery push repeat reached no one; hosts fall back to reading each second', { machineId: 'machine-a' })
   })
 
   // The host keeps reading each second while it has not heard that the server pushes: nothing is lost, only the saving.

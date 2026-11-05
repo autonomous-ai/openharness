@@ -64,7 +64,7 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
 
   it('leaves a post\'s recipients alone, so workers posting to their Lead in different groups never meet on the Lead', () => {
     const f = swarm(), a = f.group('A')
-    const { effects, touches } = f.run({ type: 'message.send', conversationId: a.id, text: 'Report', replyTo: null, recipientIds: [] }, f.agentActor(a.worker))
+    const { effects, touches } = f.run({ type: 'message.send', conversationId: a.id, text: 'Report', replyTo: null, recipientIds: [f.lead] }, f.agentActor(a.worker))
     expect(effects.messages[0]!.recipients).toEqual([f.lead])
     expect(has(touches, 'agent', f.lead)).toBe(false)
   })

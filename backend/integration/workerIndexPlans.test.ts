@@ -318,3 +318,24 @@ describe('the hourly unused-upload sweep', () => {
     expect(taken[0]!.planSummary, JSON.stringify(plan(taken))).toMatch(/IXSCAN \{ usedBy: 1/)
   })
 })
+
+describe('the delivery re-push pass (superTabs/deliveryRepush.ts, task #2800)', () => {
+  // Every 15 s for every Swarm: it must read the queued deliveries alone, by the (status, _id) index, never the finished
+  // ones that make up almost all of the collection.
+  it('reads only the queued deliveries, by the status index, and tells each of their agents', async () => {
+    const { repushQueuedDeliveries } = await import('../src/superTabs/deliveryRepush.js')
+    const row = (status: string, agentId: string) => ({ id: randomUUID(), tabId: 'repush-tab', conversationId: 'c', messageId: randomUUID(), agentId,
+      machineId: 'repush-machine', membershipGeneration: 'g', authorKind: 'person', authorId: 'p', authorGeneration: 'g', status })
+    await db.superTabDelivery.createMany({ data: [...Array.from({ length: 40 }, () => row('delivered', 'done')), row('claimed', 'busy'),
+      ...['a1', 'a1', 'a2'].map(agent => row('queued', agent))] })
+    const told: unknown[] = []
+    const entries = await profiled(db, () => repushQueuedDeliveries(db, waiting => { told.push(waiting) }, Date.now() + 60_000))
+    expect(told).toHaveLength(2)
+    expect(told).toEqual(expect.arrayContaining([{ machineId: 'repush-machine', tabId: 'repush-tab', agentId: 'a1' },
+      { machineId: 'repush-machine', tabId: 'repush-tab', agentId: 'a2' }]))
+    const read = plan(reads(entries, 'SuperTabDelivery', ['status']))
+    expect(read).toHaveLength(1)
+    expect(read[0]!.plan).toMatch(/^IXSCAN \{ status: 1, _id: 1 \}/)
+    expect(read[0]!.docsExamined).toBe(3)
+  })
+})

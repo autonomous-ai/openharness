@@ -14,7 +14,8 @@ import 'support/humans_fixture.dart';
 /// added later without a chevron fails here.
 void main() {
   testWidgets(
-    'every sidebar heading collapses all of its rows and expands them again',
+    'every sidebar heading that folds collapses all of its rows and expands '
+    'them again',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1300, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -81,7 +82,8 @@ void main() {
       final titles = [for (final s in sections()) s.title];
       // Not a vacuous walk: the sections people asked about are all here.
       expect(titles, ['Projects', 'Buddies']);
-      for (final title in titles) {
+      // Projects no longer folds (anh Dee, 11-05, task #2996).
+      for (final title in ['Buddies']) {
         final heading = find.descendant(
           of: sidebar,
           matching: find.byWidgetPredicate(

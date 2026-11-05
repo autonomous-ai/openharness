@@ -11,6 +11,8 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { logger } from '../src/utils/logger.js'
 import type { Conversation } from '../src/superTabs/model.js'
+import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
+import { profiled } from './plans.test-support.js'
 
 // Ken's prod DB profile, 2026-11-02: a command naming the PM read every group the PM was ever in, 1,628 of them and growing with
 // every task, up to 1.66 s a read. Those that write its groups need them; those that only ask about it do not.
@@ -30,14 +32,17 @@ beforeAll(async () => {
   db = new PrismaClient({ datasources: { db: { url: uri } } })
   await db.user.create({ data: { id: owner.sub, externalId: `fixture-${owner.sub}`, email: owner.email, autonomousEnv: owner.autonomousEnv } })
   await db.machine.create({ data: { machineId: 'mac', userId: owner.sub, apiKey: 'fixture-mac', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  // As each server does at startup (server.ts): reads name only the indexes the database has.
+  await listNamedIndexes(db)
 }, 120_000)
 afterAll(async () => {
   await db?.$disconnect()
   await replica?.stop()
 })
 
-/** A Swarm with a coordinator, a worker and [dormant] archived-free dormant groups holding the coordinator. */
-async function swarm(dormant = 0) {
+/** A Swarm with a coordinator, a worker, [dormant] archived-free dormant groups holding the coordinator, and [awake] more awake
+ *  ones, each with a brief the size of a real task's. */
+async function swarm(dormant = 0, awake = 0) {
   const store = new SuperTabStore(db)
   const tab = (await store.create(owner, randomUUID(), 'Loads', 'public')).id
   const execute = (command: Command, asAgentId?: string) => store.execute(owner, tab, { operationId: randomUUID(), command }, asAgentId)
@@ -53,6 +58,12 @@ async function swarm(dormant = 0) {
     return { ...shape, id: `${tab}:group:${key}`, key, dormant: true, agentIds: [lead], executionMachineId: null,
       data: { ...part.data as object, id: key, title: `Old ${i}`, agentIds: [lead], leadId: lead, assignment: null, dormant: true } } as Prisma.SwarmGroupCreateManyInput
   })
+  const brief = 'Implement it. '.repeat(300)
+  rows.push(...Array.from({ length: awake }, (_, i) => {
+    const key = `awake-${i}`
+    return { ...shape, id: `${tab}:group:${key}`, key, dormant: false, agentIds: [lead], executionMachineId: null,
+      data: { ...part.data as object, id: key, title: `Awake ${i}`, brief, agentIds: [lead], leadId: lead, assignment: null } } as Prisma.SwarmGroupCreateManyInput
+  }))
   for (let i = 0; i < rows.length; i += 200) await db.swarmGroup.createMany({ data: rows.slice(i, i + 200) })
   return { store, tab, execute, lead, worker, group, harness }
 }
@@ -125,6 +136,43 @@ describe('a command naming the coordinator', () => {
     const read = await groupsRead(() => f.execute({ type: 'agent.input', agentId: f.lead, text: 'hello' } as Command, f.worker).catch(error => { refused = error }))
     expect(read).toBeLessThan(FEW)
     expect(refused).toMatchObject({ code: expect.stringMatching(/TERMINAL_PRIVATE|FORBIDDEN|CONFIDENTIAL/) })
+  })
+})
+
+// Ken's 13:20 VN prod scan, 2026-11-05 (task #3146): SwarmGroup.aggregateRaw became a top-5 slow shape under POST commands.
+// Every command read each awake conversation of its Swarm whole, 180 of about 5.6 KB in the busiest, to find the one or two
+// that changed. A command now lists them from an index that holds every column it compares (no document read), and reads
+// whole only those that changed since this server last read them.
+describe('a command in a Swarm with many awake conversations (#3146)', () => {
+  const AWAKE = 150
+  const posted = (f: Awaited<ReturnType<typeof swarm>>) => f.execute({ type: 'message.send', conversationId: f.group, text: 'hello', replyTo: null, recipientIds: [] } as Command, f.worker)
+
+  it('reads none of them whole once this server has read them, only the conversation it writes', async () => {
+    const f = await swarm(0, AWAKE)
+    await posted(f)
+    const groups = (await profiled(db, () => posted(f))).filter(e => e.ns.endsWith('.SwarmGroup'))
+    const examined = groups.reduce((n, e) => n + (e.docsExamined ?? 0), 0)
+    expect(examined).toBeLessThanOrEqual(4)
+  })
+
+  it('lists them from the held index alone, examining no document', async () => {
+    const f = await swarm(0, AWAKE)
+    await posted(f)
+    const groups = (await profiled(db, () => posted(f))).filter(e => e.ns.endsWith('.SwarmGroup'))
+    const listing = groups.filter(e => JSON.stringify((e.command?.pipeline as unknown[] | undefined)?.[0] ?? null).includes('"dormant":false'))
+    expect(listing.map(e => ({ plan: e.planSummary, docs: e.docsExamined, returned: e.nreturned })))
+      .toEqual([{ plan: 'IXSCAN { tabId: 1, dormant: 1, deleted: 1, key: 1, version: 1, changedAt: 1 }', docs: 0, returned: AWAKE + 2 }])
+  })
+
+  it('still sees a conversation another server changed', async () => {
+    const f = await swarm(0, AWAKE)
+    await posted(f)
+    const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: 'awake-7' } })
+    await db.swarmGroup.update({ where: { id: row.id }, data: { version: row.version + 1, changedAt: new Date(),
+      data: { ...row.data as object, title: 'Renamed elsewhere' } } })
+    await posted(f)
+    const loaded = await f.store.load(db as never, owner, f.tab)
+    expect(loaded.state.conversations.find(c => c.id === 'awake-7')?.title).toBe('Renamed elsewhere')
   })
 })
 

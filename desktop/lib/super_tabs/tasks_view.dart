@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../core/local_key_value_store.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../state/harness_activity.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'attention.dart';
@@ -29,6 +30,7 @@ class SuperTabTasksView extends StatefulWidget {
     required this.needsHuman,
     required this.onOpenTask,
     required this.onOpenProposal,
+    this.selectedId,
     this.storage,
     this.now = DateTime.now,
   });
@@ -43,9 +45,17 @@ class SuperTabTasksView extends StatefulWidget {
   /// Opens a proposal's thread in the project chat, by its message id.
   final ValueChanged<String> onOpenProposal;
 
+  /// The task (or proposal, by its message id) the reader has open: its card
+  /// shows selected (task #2948).
+  final String? selectedId;
+
   /// Where Board or List, and Mine, are kept for this reader on this Mac.
   final LocalKeyValueStore? storage;
   final DateTime Function() now;
+
+  /// A Board column's width: about a card and a half of title per line, so
+  /// five fit a wide window and a narrow one scrolls sideways (task #2948).
+  static const columnWidth = 280.0;
 
   static String storageKey(String accountId) =>
       'super-tab-tasks-view/$accountId';
@@ -317,12 +327,54 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     }
     final task = entry.task!;
     final agentId = task.assignment?['agentId'];
+    final agent = agentId is String && snapshot != null
+        ? snapshot.agentName(agentId, fallback: '')
+        : '';
+    final waitingOnReader =
+        entry.needsYou &&
+        !superTabTaskShipped(task) &&
+        (task.assignment?['status'] == 'needs_human' ||
+            task.liveness?['why'] == 'person');
     return [
       ?_person(task.requesterId),
       if (agentId is String && snapshot != null)
-        snapshot.agentName(agentId, fallback: 'Agent unavailable'),
-      ?entry.state,
+        if (agent.isNotEmpty)
+          agent
+        else if (!superTabTaskShipped(task))
+          'Agent unavailable',
+      if (entry.needsYou) 'Needs you',
+      if (!waitingOnReader) ?entry.state,
     ].join(' · ');
+  }
+
+  HarnessActivity _activity(SuperTabTaskEntry entry) {
+    if (entry.needsYou) return HarnessActivity.needsInput;
+    final task = entry.task;
+    if (task == null) return HarnessActivity.starting;
+    if (superTabTaskShipped(task)) return HarnessActivity.done;
+    final status = task.assignment?['status'];
+    final state = task.liveness?['state'];
+    final why = task.liveness?['why'];
+    if (status == 'failed') return HarnessActivity.failed;
+    if (status == 'blocked' ||
+        status == 'lost' ||
+        state == 'orphaned' ||
+        state == 'quiet' ||
+        state == 'waiting' && why == 'blocked') {
+      return HarnessActivity.offline;
+    }
+    if (status == 'needs_human' ||
+        status == 'review' ||
+        status == 'done' ||
+        state == 'waiting' &&
+            (why == 'person' || why == 'review' || why == 'revision')) {
+      return HarnessActivity.needsInput;
+    }
+    if (task.assignment?['agentId'] is! String ||
+        state == 'waiting' && why == 'queued') {
+      return HarnessActivity.starting;
+    }
+    return HarnessActivity.working;
   }
 
   Widget _card(SuperTabTaskEntry entry, DateTime now, {required bool list}) {
@@ -334,47 +386,92 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       caption: _caption(entry, now),
       needsYou: entry.needsYou,
       unread: task != null && widget.controller.unreadShown(task),
-      titleLines: list ? 1 : 2,
+      activity: _activity(entry),
+      titleLines: list ? 1 : 3,
+      tile: !list,
+      selected: id == widget.selectedId,
       onOpen: () =>
           task == null ? widget.onOpenProposal(id) : widget.onOpenTask(task.id),
     );
   }
 
+  /// The Board: each column a neutral panel of a fixed width (Huy, task
+  /// #2948), side by side in one row that scrolls sideways when the window is
+  /// narrower than all five; each column scrolls its own cards.
   Widget _boardView(
     Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> shown,
     DateTime now,
-  ) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: grid.AppDesktop.controlGap),
+  ) => SingleChildScrollView(
+    key: const ValueKey('super-tasks-board'),
+    scrollDirection: Axis.horizontal,
+    padding: const EdgeInsets.only(
+      left: grid.AppDesktop.groupGap,
+      right: grid.AppDesktop.groupGap,
+      bottom: grid.AppDesktop.groupGap,
+    ),
     child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         for (final column in SuperTabTaskColumn.values) ...[
           if (column != SuperTabTaskColumn.values.first)
             const SizedBox(width: _columnGap),
-          Expanded(
-            child: Column(
-              key: ValueKey('super-tasks-column-${column.name}'),
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _heading(column, shown[column]!.length),
-                Expanded(
-                  child: column == SuperTabTaskColumn.nextUp
-                      ? _nextUp(shown[column]!, now)
-                      : LaidOutListView.builder(
-                          itemCount: shown[column]!.length,
-                          itemBuilder: (context, i) => Padding(
-                            padding: const EdgeInsets.only(
-                              bottom: grid.AppDesktop.listRowGap,
-                            ),
-                            child: _card(shown[column]![i], now, list: false),
-                          ),
-                        ),
-                ),
-              ],
-            ),
+          SizedBox(
+            width: SuperTabTasksView.columnWidth,
+            child: _panel(column, shown[column]!, now),
           ),
         ],
       ],
+    ),
+  );
+
+  /// One column of the Board: card material with its hairline rim at the
+  /// card radius, and no shadow, which is for floating content only.
+  Widget _panel(
+    SuperTabTaskColumn column,
+    List<SuperTabTaskEntry> entries,
+    DateTime now,
+  ) => DecoratedBox(
+    key: ValueKey('super-tasks-column-${column.name}'),
+    decoration: BoxDecoration(
+      color: grid.AppCard.base,
+      borderRadius: BorderRadius.circular(grid.AppCard.radius),
+      border: Border.all(color: grid.AppCard.hair),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.all(grid.AppDesktop.controlGap),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _heading(column, entries.length),
+          const SizedBox(height: grid.AppDesktop.listRowGap),
+          Expanded(
+            child: entries.isEmpty
+                // Said, not left blank: a column with nothing in it reads
+                // as one still loading (task #2948).
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: grid.AppDesktop.groupGap,
+                    ),
+                    child: Text(
+                      'No tasks',
+                      textAlign: TextAlign.center,
+                      style: DesktopChrome.metadata(),
+                    ),
+                  )
+                : column == SuperTabTaskColumn.nextUp
+                ? _nextUp(entries, now)
+                : LaidOutListView.builder(
+                    itemCount: entries.length,
+                    itemBuilder: (context, i) => Padding(
+                      padding: const EdgeInsets.only(
+                        bottom: grid.AppDesktop.controlGap,
+                      ),
+                      child: _card(entries[i], now, list: false),
+                    ),
+                  ),
+          ),
+        ],
+      ),
     ),
   );
 
@@ -476,7 +573,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
             index: i,
             child: Padding(
               padding: const EdgeInsets.only(
-                bottom: grid.AppDesktop.listRowGap,
+                bottom: grid.AppDesktop.controlGap,
               ),
               child: CallbackShortcuts(
                 bindings: {

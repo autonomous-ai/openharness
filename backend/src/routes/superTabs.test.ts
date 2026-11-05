@@ -12,6 +12,7 @@ const fakes = vi.hoisted(() => {
     pub: {
       set: vi.fn(async (key: string, value: string) => { redis.set(key, value); return 'OK' }),
       get: vi.fn(async (key: string) => redis.get(key) ?? null),
+      mget: vi.fn(async (...keys: string[]) => keys.map((key) => redis.get(key) ?? null)),
       multi: vi.fn(() => {
         const ops: Array<() => unknown> = []
         const chain = {
@@ -32,6 +33,8 @@ const fakes = vi.hoisted(() => {
       machine: {
         findMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => where.computerId === 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
           ? [{ machineId: 'team-mac', userId: 'owner', computerId: where.computerId, billingStatus: 'not_required', sessionKind: 'team' }] : []),
+        // Other accounts' Team machines on the redeeming computer (superTabs/computerMoves.ts teamCleanupPending): none here.
+        aggregateRaw: vi.fn(async () => []),
       },
     },
     user: { id: 'owner', email: 'owner@example.com', role: 'user', autonomousEnv: 'prod' },
@@ -331,6 +334,23 @@ describe('the machine lines of a change read', () => {
 
   it('refuses any other value', async () => {
     expect((await get('/api/super-tabs/tab1/changes?cursor=abc&machines=all')).statusCode).toBe(400)
+    expect(changes).not.toHaveBeenCalled()
+  })
+
+  // Task #2906: a client that holds the summary echoes its etag; a released client sends none and is asked nothing new.
+  it('passes the summary etag a client echoes, with lines or without', async () => {
+    expect((await get('/api/super-tabs/tab1/changes?cursor=abc&derivedEtag=e1_-Z')).statusCode).toBe(200)
+    expect(changes.mock.calls[0]!.slice(2)).toEqual(['abc', undefined, { derivedEtag: 'e1_-Z' }])
+    expect((await get('/api/super-tabs/tab1/changes?cursor=abc&machines=light&derivedEtag=e2')).statusCode).toBe(200)
+    expect(changes.mock.calls[1]!.slice(2)).toEqual(['abc', undefined, { lightMachines: true, derivedEtag: 'e2' }])
+  })
+
+  it('refuses a malformed summary etag', async () => {
+    for (const etag of ['bad!', '', 'x'.repeat(65)]) {
+      const res = await get(`/api/super-tabs/tab1/changes?cursor=abc&derivedEtag=${etag}`)
+      expect(res.statusCode, etag).toBe(400)
+      expect(res.json().error.code).toBe('VALIDATION_ERROR')
+    }
     expect(changes).not.toHaveBeenCalled()
   })
 

@@ -41,6 +41,15 @@ describe('harness swarm', () => {
     expect(text).toContain('1 agent, 1 failed')
   })
 
+  it('reads the Swarm --tab names, not the first, with the flag before or after the verb', async () => {
+    for (const argv of [['status', '--tab', 't2'], ['--tab', 't2', 'status'], ['status', '--tab=t2']]) {
+      const f = setup({ '/api/super-tabs/list': { tabs: [{ id: 't1', name: 'first' }, { id: 't2', name: 'second' }] }, '/api/super-tabs/t2/parts': parts() })
+      expect(await swarmCommand(argv, f.deps), argv.join(' ')).toBe(0)
+      expect(f.get).toHaveBeenCalledWith('/api/super-tabs/t2/parts', expect.anything())
+      expect(f.get).not.toHaveBeenCalledWith('/api/super-tabs/t1/parts', expect.anything())
+    }
+  })
+
   it('shows one Swarm: people, machines, work, lead, updated', async () => {
     const f = setup(routes)
     expect(await swarmCommand(['status'], f.deps)).toBe(0)

@@ -22,6 +22,7 @@ class DesktopVerificationTests(unittest.TestCase):
         self.active = 0
         self.peak = 0
         self.delay = 0.03
+        self.drops_left = 0
         self.lock = threading.Lock()
         test = self
 
@@ -36,6 +37,15 @@ class DesktopVerificationTests(unittest.TestCase):
                 elif self.path == "/missing":
                     self.send_error(404)
                     return
+                elif self.path == "/flaky":
+                    # The connection dropped with no answer, as Harness-macos.zip's did in 1.3.65's publish.
+                    with test.lock:
+                        test.drops_left -= 1
+                        drop = test.drops_left >= 0
+                    if drop:
+                        self.close_connection = True
+                        return
+                    payload = test.payload
                 else:
                     with test.lock:
                         test.active += 1
@@ -99,6 +109,33 @@ class DesktopVerificationTests(unittest.TestCase):
                 self.assertEqual(self.run_verification()["status"], "failed")
                 self.assertEqual(len(self.requests), 1)
                 self.manifest[verify.KEYS[0]] = original
+
+    def flaky_first_artifact(self, drops):
+        self.manifest[verify.KEYS[0]]["url"] = f"{self.base}/flaky"
+        self.drops_left = drops
+        return self.run_verification()
+
+    def test_a_dropped_connection_is_tried_again_and_passes(self):
+        receipt = self.flaky_first_artifact(drops=2)
+        self.assertEqual(receipt["status"], "passed")
+        self.assertEqual(sum(path == "/flaky" for path, _ in self.requests), 3)
+
+    def test_a_connection_that_keeps_dropping_fails_naming_the_download(self):
+        receipt = self.flaky_first_artifact(drops=99)
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(sum(path == "/flaky" for path, _ in self.requests), 3)
+        self.assertIn("download failed", receipt["artifacts"][0]["error"])
+
+    def test_wrong_bytes_and_a_refused_download_are_not_tried_again(self):
+        self.manifest[verify.KEYS[0]]["sha256"] = "0" * 64
+        key = f"/{verify.KEYS[0]}"
+        receipt = self.run_verification()
+        self.assertEqual(receipt["artifacts"][0]["error"], "SHA-256 mismatch")
+        self.assertEqual(sum(path == key for path, _ in self.requests), 1)
+        self.requests.clear()
+        self.manifest[verify.KEYS[0]]["url"] = f"{self.base}/missing"
+        self.assertEqual(self.run_verification()["status"], "failed")
+        self.assertEqual(sum(path == "/missing" for path, _ in self.requests), 1)
 
     def test_hash_size_and_http_failures_are_not_reported_as_passed(self):
         for patch in ({"sha256": "0" * 64}, {"size": len(self.payload) + 1}, {"size": len(self.payload) - 1}, {"url": self.base + "/missing"}):

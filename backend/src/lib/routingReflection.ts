@@ -8,8 +8,8 @@ import { logger } from '../utils/logger.js'
 
 /**
  * The nightly routing reflection (Scholes's roadmap, piece 2, 2026-10-30): at 23:00 in each project's time zone, the singleton
- * worker posts in the project chat what its routed work cost and how it went, with at most three routing changes asked of
- * its owner (superTabs/costs/reflection.ts, store.ts postReflection). Nothing changes routing without the owner's answer.
+ * worker asks its owner about at most three routing changes as Decisions (superTabs/costs/reflection.ts, store.ts
+ * postReflection). It never posts reports in project chats; the coordinator reads the numbers with costs.
  *
  * - Which projects: those with evidence rows (superTabs/evidence/store.ts) from the last two weeks, grouped in Mongo by the
  *   evidence collection's week index; a project with no routed work has none and is never read. Then one head per Swarm,

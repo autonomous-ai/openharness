@@ -35,7 +35,7 @@ import type { LaunchModel } from './lib/launchModel.js'
 import type { ScmLaunchRecord } from './scm/types.js'
 import type { StartedBy } from './lib/agentAttribution.js'
 import { probeEngines } from './lib/engineProbe.js'
-import { engineInstallRecipe } from './lib/engineInstall.js'
+import { engineInstallLine, engineInstallRecipe } from './lib/engineInstall.js'
 import { supportsFirstPrompt } from './lib/engineLaunch.js'
 import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import type { AgentTokenUsage } from './lib/agentUsageWire.js'
@@ -54,6 +54,12 @@ export { isLocalClientId, type DownTransport }
 /** Requests one local connection may queue before the daemon is ready (see `openRequests`). The app
  *  sends a handful on connect; hundreds is a client looping, not a person. */
 const MAX_REQUESTS_BEFORE_READY = 256
+/** The line Desktop shows before installing an engine here. */
+const installRecipeLine = (engine: Parameters<typeof engineInstallRecipe>[0]): string | undefined => {
+  const recipe = engineInstallRecipe(engine)
+  return recipe && engineInstallLine(recipe)
+}
+
 /** Within how long this computer's windows hear an invitation given or taken back: the backend now answers the shares list in
  *  tens of milliseconds, and 10 s spreads every member's read of it over a hundred times that. */
 const SHARES_NOTICE_SPREAD_MS = 10_000
@@ -479,7 +485,7 @@ export class BackendSocket {
     notice: (notice: BackendNotice) => {
       this.onAccountNotice?.(notice)
       // Only the Swarm host acts on these (superTabs/host.ts): the windows have nothing to re-read.
-      if (notice.type === 'super_tab_deliveries' || notice.type === 'swarm_host_changed' || notice.type === '__terminal_waiting') return
+      if (notice.type === 'super_tab_deliveries' || notice.type === 'swarm_host_changed' || notice.type === '__terminal_waiting' || notice.type === '__deliveries_lease') return
       if (notice.type === 'machines_changed' && notice.reason === 'harness_shares') { this.sharesNotice.tell(); return }
       // A Swarm changed: its id, time and parts, or nothing for the server's word that it pushes (desktop swarm_pushes.dart).
       if (notice.type === 'swarm_changed') {
@@ -1196,7 +1202,7 @@ export class BackendSocket {
                 installed: entry.installed,
                 command: entry.command,
                 installable: entry.installable,
-                installCommand: entry.installable ? engineInstallRecipe(entry.engine)?.command ?? null : null,
+                installCommand: (entry.installable && installRecipeLine(entry.engine)) || null,
                 ...(entry.signedIn !== undefined ? { signedIn: entry.signedIn, lastUsedAt: entry.lastUsedAt ?? null } : {}),
                 // Static per-CLI-version capability, not a probe result: its mere presence is what
                 // lets an older CLI (which never sends the field) keep reading as "unknown" rather

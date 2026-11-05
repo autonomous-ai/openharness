@@ -201,14 +201,97 @@ export const PROPOSAL_SENT_KIND = 'buddy-proposal-sent'
 export const proposalSentText = (project: string, proposal: { goal: string; scope: string }): string =>
   `Your Buddy sent this to the ${project} PM for you.\n\nGoal: ${proposal.goal}\nScope: ${proposal.scope}`
 
-/** Written by the server, never the Buddy: who it is for and on whose behalf, then the three parts the PM needs. */
-/** A proposal's first reply in its thread, from the Buddy: its author says whose Buddy sent it. */
+/** A proposal's goal, scope and priority as the PM reads them: kept in its root's source since task #2926, and the brief of a
+ *  task opened from it. A proposal from before kept them in its Buddy's first reply in the thread instead. */
 export function proposalText(proposal: { goal: string; scope: string; priority: string }): string {
   return `Goal: ${proposal.goal}\nScope: ${proposal.scope}\nPriority: ${proposal.priority}`
 }
 
-/** A short opening message, with the complete goal kept in its thread. */
-export function proposalTitle(proposal: { title?: string; goal: string }): string {
-  const goal = proposal.goal.replace(/^Requested by [^\r\n]+?\.(?:\s+|$)/i, '').trim() || proposal.goal.trim()
-  return (proposal.title?.trim() || (goal.match(/^[^.!?。！？\r\n]+[.!?。！？]?/)?.[0] || goal).replace(/[.。]$/, '')).slice(0, 80).trim()
+/** The brief a proposal's root gives a task opened from it; '' for a row from before task #2926, which kept none. */
+export function proposalBrief(source: Record<string, unknown> | null | undefined): string {
+  const { goal, scope, priority } = source ?? {}
+  return typeof goal === 'string' && typeof scope === 'string' && typeof priority === 'string' ? proposalText({ goal, scope, priority }) : ''
+}
+
+/** Words as the okayed check compares them: NFKC, each run of whitespace one space. A line the chat shows wrapped or with
+ *  its spaces doubled is the same line; any other change is not. */
+const comparable = (text: string): string => text.normalize('NFKC').replace(/\s+/gu, ' ').trim()
+
+const unquoted = (text: string): string => text.replace(/^["“”']+|["“”']+$/gu, '').trim()
+const quotedIn = (text: string): string[] => [...text.matchAll(/“([^“”]+)”|"([^"]+)"/gu)].map(match => match[1] ?? match[2]!)
+
+/** A lead-in that asks the Buddy to send what follows it ("Send this to the PM", "ok, post it", "Gửi PM"): it opens with a
+ *  send word, after at most a few ok/please words; it says no "not", has no sentence break and is at most 10 words. Words
+ *  that read as a label as often as an ask ("Report: …", "File: …", "Pass: …") are left out: in doubt, the Buddy shows the line. */
+const SEND_LEAD = /^(?:(?:ok(?:ay)?|yes|yeah|sure|please|pls|can you|could you|would you|go ahead and|and|then|just|ừ|vâng|được|làm ơn|hãy)[\s,]+)*(?:post|send|share|propose|tell|forward|submit|raise|gửi|đăng|chuyển|nói|đề xuất)(?=[\s,]|$)/iu
+/** A "no" anywhere in the lead-in, before or after its send word ("Tell nobody", "Send nothing yet", "Gửi ko được"; security
+ *  review 1 of #3055), with the chat spellings of không (ko) and chẳng, khỏi. */
+const NEGATED = /(?:^|[^\p{L}])(?:not|no|never|nobody|nothing|none|neither|nor|without|đừng|không|ko|chưa|chẳng|khỏi)(?![\p{L}])|n['’]t(?![\p{L}])/iu
+/** "Tell me why …", "send us …", "nói cho tôi …": a question to the Buddy, not an ask to send (security review 2 of #3055). */
+const TO_ME = /(?:^|[^\p{L}])(?:post|send|share|tell|forward|gửi|chuyển|nói)\s+(?:(?:cho|với)\s+)?(?:me|us|tôi|mình)(?![\p{L}])/iu
+const asksToSend = (lead: string): boolean => {
+  const said = lead.normalize('NFKC').trim()
+  return SEND_LEAD.test(said) && !NEGATED.test(said) && !TO_ME.test(said) && !/[.!?;\n]/u.test(said) && said.split(/\s+/u).length <= 10
+}
+
+/** The whole lines the owner's own message offers to post: all of it, each quoted line in it, and all after its first colon
+ *  when what comes before asks to send it (task #2989). A label ("Bug: …"), someone else's words ("Ken said: …") or a
+ *  "don't post this: …" is not their ask, so the rest of that message alone is not their words to post. Never a piece of a
+ *  line (security review 1 of #3024): a fragment can change what it says. */
+const ownerLines = (said: string): string[] => {
+  const colon = said.indexOf(':')
+  const lead = colon >= 0 && asksToSend(said.slice(0, colon))
+  return [said, ...lead ? [unquoted(said.slice(colon + 1))] : [], ...quotedIn(said)].map(comparable).filter(Boolean)
+}
+
+/** The skill's marker before the line a Buddy shows its owner (swarmSkills.ts): "I'll post this as you: …". */
+const SHOWN_MARKER = /post this as you\s*:/giu
+
+/** The line a Buddy's message showed to post, or null with no marker. Only what follows its last marker counts (security
+ *  review 2 of #3024): what comes before is the Buddy's own talk, which may quote any project. If it opens with a quote, only
+ *  that first quoted line counts (task #2989): after the closing quote comes the Buddy's talk again ("OK?", another quote).
+ *  Otherwise all of it counts, whole. */
+const shownLine = (said: string): string | null => {
+  const marker = [...said.matchAll(SHOWN_MARKER)].at(-1)
+  if (!marker) return null
+  const after = said.slice(marker.index! + marker[0].length)
+  // A pair of the same kind, with no curly opener inside (security review 2 of #3055): a mixed or nested quote is part of the
+  // line the owner read, so it never ends it early; with no such pair, all of it counts whole.
+  const quoted = /^\s*(?:“([^“”]*)”|"([^"]*)")/u.exec(after)
+  return comparable(quoted ? quoted[1] ?? quoted[2]! : unquoted(after))
+}
+
+/** Whether [words] are what the owner okayed (anh Dee, task #2926): the whole of their own message that asked, or the line
+ *  their Buddy showed them just before it (shownBefore, newest first). Only the newest shown line counts (task #2989): once
+ *  the Buddy shows a new line, the older one is replaced. Nothing else of their private chat goes out as them. */
+export function okayedWords(words: string, ask: { text?: string; shown?: readonly string[] }): boolean {
+  const wanted = comparable(words)
+  const newest = (ask.shown ?? []).map(shownLine).find(line => line !== null)
+  return !!wanted && (ownerLines(ask.text ?? '').includes(wanted) || newest === wanted)
+}
+
+/** One row of a Buddy chat as the store reads it for a proposal, newest first. */
+export interface BuddyChatRow { id: string; author: { kind: string; id: string }; text: string; source: unknown; thread: string | null
+  editedAt: Date | null; deletedAt: Date | null }
+
+/** The lines [buddyId] showed its owner just before their message [askId] said ok, from [recent] (newest first): its own plain
+ *  messages in the same lane (the main chat, or the ask's thread and its root), since the owner's previous message there. A system row, an
+ *  edited or deleted one, another lane's and anyone else's never count, so the owner saw each line as it stands. */
+export function shownBefore(recent: readonly BuddyChatRow[], askId: string, buddyId: string): string[] {
+  const at = recent.findIndex(row => row.id === askId)
+  if (at < 0) return []
+  const lane = (row: BuddyChatRow) => row.thread && row.thread !== row.id ? row.thread : null
+  const ask = recent[at]!, root = lane(ask), shown: string[] = []
+  for (const row of recent.slice(at + 1)) {
+    // An ok in the thread of the shown line itself, as Desktop's reply sends it (security review 2 of #3024): the thread's root
+    // is its oldest row, so nothing before it counts.
+    if (row.id === root) {
+      if (row.author.kind === 'agent' && row.author.id === buddyId && !row.source && !row.editedAt && !row.deletedAt) shown.push(row.text)
+      break
+    }
+    if (lane(row) !== root) continue
+    if (row.author.kind === 'person' && row.author.id === ask.author.id && !row.source) break
+    if (row.author.kind === 'agent' && row.author.id === buddyId && !row.source && !row.editedAt && !row.deletedAt) shown.push(row.text)
+  }
+  return shown
 }

@@ -719,6 +719,12 @@ export class RelayGateway implements GatewayPort {
       if (typeof p.tabId === 'string' && typeof p.agentId === 'string') this.core.notice({ type, tabId: p.tabId, agentId: p.agentId })
       return
     }
+    // The server renews the Swarm host's delivery push lease (task #2800, review of #2977): nothing to read, the host only
+    // keeps reading idle workers' lists when told. A `__` frame, so a daemon from before it drops it below.
+    if (type === '__deliveries_lease') {
+      this.core.notice({ type })
+      return
+    }
     // Other backend-hub internal control frames (__clients_dirty) — not for us; drop silently.
     if (type.startsWith('__')) return
 

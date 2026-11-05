@@ -183,10 +183,14 @@ describe('message page reads', () => {
       row('merged', 'merged', 8, person), row('merged-1', 'merged', 9, agent('pm'), { kind: 'system', ask: 'on-it' }),
       row('merged-2', 'merged', 10, agent('pm'), { kind: 'system', ask: 'shipped' }), row('merged-3', 'merged', 11, person),
       row('plain', 'plain', 12, person), row('plain-1', 'plain', 13, agent('pm')),
+      // A proposal a task took, its mark written by a coordinator since replaced: the mark alone clears the tag.
+      row('taken', 'taken', 14, person, { kind: 'buddy-proposal' }), row('taken-1', 'taken', 15, agent('buddy')),
+      row('taken-2', 'taken', 16, agent('former-pm'), { kind: 'system', ask: 'on-it' }),
     ] })
-    const roots = ['asked', 'declined', 'own', 'merged', 'plain']
+    const roots = ['asked', 'declined', 'own', 'merged', 'plain', 'taken']
     const asks = async () => Object.fromEntries(threadSummaries(s.state, chat, await pageThreads(db, 'ASK', 'chat', roots)).map(t => [t.id, t.ask]))
-    const expected = { asked: 'proposal', declined: undefined, own: 'on-it', merged: 'shipped', plain: undefined }
+    // No On it / Shipped: a task's agent reacts on the row instead (anh Dee, 11-04, #2925); only an unanswered proposal is tagged.
+    const expected = { asked: 'proposal', declined: undefined, own: undefined, merged: undefined, plain: undefined, taken: undefined }
     expect(await asks()).toEqual(expected)
     await refreshThreads(db, 'ASK', 'chat', roots)
     noteBackfilled('ASK')

@@ -58,7 +58,8 @@ export async function setMachineAgents(core: CoreApi, input: { tabId: string; ma
   const engines = (Array.isArray(machine.engines) ? machine.engines : []).filter(e => e === 'claude' || e === 'codex')
   if (!engines.length) return { error: 'NO_SWARM_ENGINE', detail: `${name} runs neither Claude Code nor Codex. Configure it from Desktop.` }
   const command = { type: 'machine.contribute', machineId: input.machineId, name, cwd: machine.cwd,
-    ...(machine.scope === 'swarm' ? { scope: 'swarm' } : {}), engines, maxAgents: input.maxAgents }
+    // A number set here is its owner's own At most (backend superTabs/machines.ts agentLimit, #2860).
+    ...(machine.scope === 'swarm' ? { scope: 'swarm' } : {}), engines, maxAgents: input.maxAgents, agents: 'atMost' }
   const sent = await ownerRequest(core, 'POST', `/api/super-tabs/${input.tabId}/commands`,
     { operationId: `machine-agents-${randomUUID()}`, command }, deps.backend)
   return { ok: true, machineId: input.machineId, maxAgents: sent.offered16 ? 16 : input.maxAgents, maximum,

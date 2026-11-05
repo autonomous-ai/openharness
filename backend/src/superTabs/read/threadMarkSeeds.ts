@@ -12,7 +12,8 @@
  *
  * Cost: read at most SEED_ROWS indexed rows and retain at most SEED_SCAN replies. Main rows do not spend the reply
  * budget, but the row ceiling bounds database work. Roots and marks are fetched for at most SEED_SCAN candidate threads;
- * at most SEED_THREADS unknown memberships use MEMBER_SCAN look-back rows each, and at most SEED_THREADS marks are written.
+ * at most SEED_THREADS unknown memberships are read from their threads' summaries in one read (inbox.ts namedInThreads), and at
+ * most SEED_THREADS marks are written.
  * Any unhandled range or thread holds the chat mark before it. A later request can advance it; clients may defer that
  * request until another message arrives. Privacy and membership checks below still apply before a mark is written.
  */
@@ -22,7 +23,7 @@ import { stableId, type Author, type SuperTabState } from '../model.js'
 import { seedThreadMark, writeReadMark } from '../readMarks.js'
 import { markActivityChatRead } from '../activity.js'
 import { readBy } from '../parts/indexed.js'
-import { BEHIND_THREADS, groupBy, isReply, MEMBER_SCAN, newestInThreads, readable, row, SCAN_FIELDS, UNREAD_SCAN, type Row } from './inbox.js'
+import { BEHIND_THREADS, groupBy, isReply, namedInThreads, readable, row, SCAN_FIELDS, threadKey, UNREAD_SCAN, type Row } from './inbox.js'
 
 /** Thread replies of the range one chat read looks at, from the old mark upward. */
 export const SEED_SCAN = 5 * UNREAD_SCAN
@@ -86,13 +87,12 @@ export async function seedThreadMarks(db: PrismaClient, input: SeedInput): Promi
   const roots = new Map((await readable(db, tabId, found.filter(m => !isReply(m)), state)).map(m => [m.id, m]))
   const withRoot = open.filter(thread => roots.has(thread))
   const member = new Set(withRoot.filter(thread => held.get(thread)?.follow === true || inIt(roots.get(thread)!) || threads.get(thread)!.some(inIt)))
-  // The rest: did the person write or get tagged before the old mark? Each thread's newest MEMBER_SCAN rows there, by its
-  // thread index range; only the rows that name them come back.
+  // The rest: did the person write or get tagged in it before? From the threads' summaries, in one read (inbox.ts namedInThreads).
   const unknown = withRoot.filter(thread => !member.has(thread))
   if (unknown.length) {
     if (unknown.length > SEED_THREADS) holdBefore(unknown[SEED_THREADS]!)
-    const named = await newestInThreads(db, tabId, unknown.slice(0, SEED_THREADS).map(thread => ({ conversationId, thread, sequence: { $lte: old } })), MEMBER_SCAN, personId)
-    for (const m of await readable(db, tabId, named, state)) member.add(m.thread!)
+    const named = await namedInThreads(db, tabId, state, unknown.slice(0, SEED_THREADS).map(thread => ({ conversationId, thread, sequence: old })), personId)
+    for (const thread of unknown.slice(0, SEED_THREADS)) if (named.has(threadKey(conversationId, thread))) member.add(thread)
   }
   const eligible = withRoot.filter(t => member.has(t))
   if (eligible.length > SEED_THREADS) holdBefore(eligible[SEED_THREADS]!)

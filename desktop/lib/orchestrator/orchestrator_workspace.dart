@@ -9,6 +9,7 @@ import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../state/app_state.dart';
 import '../state/terminal_pane.dart';
+import '../super_tabs/visible_tick.dart';
 import '../widgets/web_pane_panel.dart';
 import 'orchestrator_controller.dart';
 import 'orchestrator_launcher.dart';
@@ -29,7 +30,8 @@ class OrchestratorWorkspace extends StatefulWidget {
   State<OrchestratorWorkspace> createState() => _OrchestratorWorkspaceState();
 }
 
-class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
+class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace>
+    with WidgetsBindingObserver, VisibleTick<OrchestratorWorkspace> {
   late final OrchestratorController model =
       widget.controller ??
       widget.notifier.orchestratorProject(widget.machineId, widget.projectId);
@@ -39,12 +41,30 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
   int _nextPane = -1;
   String? _expanded;
 
+  /// Whether this view is one of [model]'s readers: only while it can be seen. A hidden app or a
+  /// tab not showing reads nothing; seen again, [OrchestratorController.watch] reads at once.
+  bool _watching = false;
+
   @override
   void initState() {
     super.initState();
     model.addListener(_changed);
     widget.notifier.addListener(_attentionChanged);
-    model.watch();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _follow(onScreen);
+  }
+
+  @override
+  void onScreenChanged(bool onScreen) => _follow(onScreen);
+
+  void _follow(bool seen) {
+    if (seen == _watching) return;
+    _watching = seen;
+    seen ? model.watch() : model.unwatch();
   }
 
   void _attentionChanged() {
@@ -70,7 +90,7 @@ class _OrchestratorWorkspaceState extends State<OrchestratorWorkspace> {
   void dispose() {
     model.removeListener(_changed);
     widget.notifier.removeListener(_attentionChanged);
-    model.unwatch();
+    if (_watching) model.unwatch();
     _composer.dispose();
     _composerFocus.dispose();
     _messagesScroll.dispose();

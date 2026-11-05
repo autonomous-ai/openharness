@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 
 import '../../core/harness_file_store.dart';
@@ -131,6 +132,26 @@ class PanePrefs {
   );
 }
 
+/// Light, Dark, or whatever the computer's own setting is (task #3006).
+enum AppearanceMode {
+  light('Light'),
+  dark('Dark'),
+  system('Match macOS');
+
+  const AppearanceMode(this.label);
+  final String label;
+
+  /// What the third choice is called on this computer: the Mac's own name for
+  /// it there, the plain one elsewhere.
+  String labelFor(TargetPlatform platform) =>
+      this == system && platform != TargetPlatform.macOS
+      ? 'Match system'
+      : label;
+
+  static AppearanceMode? byId(String? id) =>
+      values.where((mode) => mode.name == id).firstOrNull;
+}
+
 /// Palette, background, and prompt preferences on this computer.
 /// Legacy UI font fields remain readable for older builds; current typography
 /// is controlled only by TerminalFontStore.
@@ -140,6 +161,9 @@ class AppearancePrefs {
     this.uiFamily,
     this.uiSize = uiSizeDefault,
     this.palette = HarnessPalette.graphite,
+    this.mode = AppearanceMode.dark,
+    this.lightPalette = defaultLightPalette,
+    this.darkPalette = defaultDarkPalette,
     this.background = HarnessBackground.plain,
     this.custom = const CustomBackground(),
     this.paneOpacity = paneOpacityDefault,
@@ -149,7 +173,25 @@ class AppearancePrefs {
   });
 
   final PromptPrefs prompt;
+
+  /// The palette the app is wearing now: [lightPalette] or [darkPalette], as
+  /// [mode] and (in Match macOS) the computer's setting decide. Everything
+  /// that colors the app reads this one.
   final HarnessPalette palette;
+  final AppearanceMode mode;
+
+  /// The themes Light and Dark use, each chosen on its own.
+  final HarnessPalette lightPalette, darkPalette;
+  static const defaultLightPalette = HarnessPalette.cloud;
+  static const defaultDarkPalette = HarnessPalette.graphite;
+
+  /// The palette [mode] shows when the computer is [system].
+  HarnessPalette resolve(Brightness system) => switch (mode) {
+    AppearanceMode.light => lightPalette,
+    AppearanceMode.dark => darkPalette,
+    AppearanceMode.system =>
+      system == Brightness.dark ? darkPalette : lightPalette,
+  };
   final HarnessBackground background;
 
   /// Kept while a built-in background is showing, so switching back is one
@@ -194,6 +236,9 @@ class AppearancePrefs {
     String? uiFamily,
     double? uiSize,
     HarnessPalette? palette,
+    AppearanceMode? mode,
+    HarnessPalette? lightPalette,
+    HarnessPalette? darkPalette,
     HarnessBackground? background,
     CustomBackground? custom,
     double? paneOpacity,
@@ -206,6 +251,9 @@ class AppearancePrefs {
     uiFamily: clearUiFamily ? null : (uiFamily ?? this.uiFamily),
     uiSize: uiSize ?? this.uiSize,
     palette: palette ?? this.palette,
+    mode: mode ?? this.mode,
+    lightPalette: lightPalette ?? this.lightPalette,
+    darkPalette: darkPalette ?? this.darkPalette,
     background: background ?? this.background,
     custom: custom ?? this.custom,
     paneOpacity: paneOpacity ?? this.paneOpacity,
@@ -224,6 +272,9 @@ class AppearancePrefs {
       other.uiFamily == uiFamily &&
       other.uiSize == uiSize &&
       other.palette == palette &&
+      other.mode == mode &&
+      other.lightPalette == lightPalette &&
+      other.darkPalette == darkPalette &&
       other.background == background &&
       other.custom == custom &&
       other.paneOpacity == paneOpacity &&
@@ -236,6 +287,9 @@ class AppearancePrefs {
     uiFamily,
     uiSize,
     palette,
+    mode,
+    lightPalette,
+    darkPalette,
     background,
     custom,
     paneOpacity,
@@ -252,7 +306,8 @@ class AppearancePrefs {
 /// before the first frame. Not a Riverpod provider — `MaterialApp` is built
 /// above every provider scope in this app, and these values have to resolve
 /// before there is a scope at all.
-class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
+class AppearancePrefsStore extends ValueNotifier<AppearancePrefs>
+    with WidgetsBindingObserver {
   AppearancePrefsStore({
     LocalKeyValueStore? storage,
     this._backgroundsDirectory,
@@ -261,7 +316,12 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
 
   static const _familyKey = 'app_ui_font_family';
   static const _sizeKey = 'app_ui_font_size';
+  // Holds the palette on screen at the last choice, which is all an older
+  // build reads.
   static const _paletteKey = 'app_color_palette';
+  static const _modeKey = 'app_theme_mode';
+  static const _lightPaletteKey = 'app_light_palette';
+  static const _darkPaletteKey = 'app_dark_palette';
   static const _backgroundKey = 'harness_start_background';
   static const _customKey = 'harness_custom_background';
   // Named for the retired on/off choice; it now holds only pane opacity.
@@ -281,6 +341,48 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
 
   final LocalKeyValueStore _storage;
   final Directory? _backgroundsDirectory;
+
+  /// The computer's own light or dark setting, which Match macOS shows.
+  Brightness _system = _platformBrightness();
+  bool _following = false;
+  bool _disposed = false;
+
+  static Brightness _platformBrightness() {
+    try {
+      return WidgetsBinding.instance.platformDispatcher.platformBrightness;
+    } catch (_) {
+      // No binding yet (a plain unit test, or before `ensureInitialized`).
+      return PlatformDispatcher.instance.platformBrightness;
+    }
+  }
+
+  /// Follow the computer's light/dark setting from now on: in Match macOS a
+  /// change there repaints the app at once. The engine reports the system
+  /// setting itself, not the window's appearance the app sets from its
+  /// palette, so the two never chase each other. Call once the binding exists.
+  void followSystemBrightness() {
+    if (_following || _disposed) return;
+    _following = true;
+    WidgetsBinding.instance.addObserver(this);
+    _systemChanged(_platformBrightness());
+  }
+
+  @override
+  void didChangePlatformBrightness() => _systemChanged(_platformBrightness());
+
+  void _systemChanged(Brightness system) {
+    if (_disposed) return;
+    _system = system;
+    final shown = value.resolve(system);
+    if (shown != value.palette) value = value.copyWith(palette: shown);
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    if (_following) WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
 
   /// Harness's copies of custom backgrounds, beside `state.json`. Resolved on
   /// first use: the browser build has no such folder and never asks for it.
@@ -305,6 +407,9 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
         _familyKey,
         _sizeKey,
         _paletteKey,
+        _modeKey,
+        _lightPaletteKey,
+        _darkPaletteKey,
         _backgroundKey,
         _customKey,
         _paneOpacityKey,
@@ -315,10 +420,32 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
       ]);
       final custom = _customFrom(saved[_customKey]);
       final background = HarnessBackground.fromId(saved[_backgroundKey]);
+      // A save from before the switch has only the palette: its brightness
+      // is the mode, and it fills that slot.
+      final shown = HarnessPalette.fromId(saved[_paletteKey]);
+      HarnessPalette slot(String key, Brightness brightness) {
+        final chosen = HarnessPalette.byId(saved[key]);
+        if (chosen?.brightness == brightness) return chosen!;
+        if (shown.brightness == brightness) return shown;
+        return brightness == Brightness.light
+            ? AppearancePrefs.defaultLightPalette
+            : AppearancePrefs.defaultDarkPalette;
+      }
+
+      final themes = AppearancePrefs(
+        mode:
+            AppearanceMode.byId(saved[_modeKey]) ??
+            (shown.isDark ? AppearanceMode.dark : AppearanceMode.light),
+        lightPalette: slot(_lightPaletteKey, Brightness.light),
+        darkPalette: slot(_darkPaletteKey, Brightness.dark),
+      );
       value = AppearancePrefs(
         uiFamily: _familyFrom(saved[_familyKey]),
         uiSize: _sizeFrom(saved[_sizeKey]),
-        palette: HarnessPalette.fromId(saved[_paletteKey]),
+        palette: themes.resolve(_system),
+        mode: themes.mode,
+        lightPalette: themes.lightPalette,
+        darkPalette: themes.darkPalette,
         // Custom with no image to show is Blank, not an empty selection.
         background:
             background == HarnessBackground.custom && custom.image == null
@@ -344,18 +471,49 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
 
   /// Preview now, persist in order. Rapid choices coalesce while storage is
   /// busy so an older write cannot replace the user's final selection.
+  ///
+  /// A palette fills the slot of its own brightness. In Light or Dark, one of
+  /// the other brightness also moves the mode, so the click shows; in Match
+  /// macOS the computer still decides which slot shows.
   Future<void> setPalette(HarnessPalette palette) {
-    if (value.palette == palette) return _paletteSave ?? Future.value();
-    value = value.copyWith(palette: palette);
+    final mode = switch (value.mode) {
+      AppearanceMode.system => AppearanceMode.system,
+      _ => palette.isDark ? AppearanceMode.dark : AppearanceMode.light,
+    };
+    return _setThemes(
+      value.copyWith(
+        mode: mode,
+        lightPalette: palette.isDark ? null : palette,
+        darkPalette: palette.isDark ? palette : null,
+      ),
+    );
+  }
+
+  /// Light, Dark or Match macOS.
+  Future<void> setMode(AppearanceMode mode) =>
+      _setThemes(value.copyWith(mode: mode));
+
+  Future<void> _setThemes(AppearancePrefs next) {
+    next = next.copyWith(palette: next.resolve(_system));
+    if (next == value) return _paletteSave ?? Future.value();
+    value = next;
     return _paletteSave ??= _savePalette();
   }
 
   Future<void> _savePalette() async {
     try {
       while (true) {
-        final id = value.palette.name;
-        await _storage.write(_paletteKey, id);
-        if (value.palette.name == id) break;
+        final saving = value;
+        await _storage.write(_paletteKey, saving.palette.name);
+        await _storage.write(_modeKey, saving.mode.name);
+        await _storage.write(_lightPaletteKey, saving.lightPalette.name);
+        await _storage.write(_darkPaletteKey, saving.darkPalette.name);
+        if (value.palette == saving.palette &&
+            value.mode == saving.mode &&
+            value.lightPalette == saving.lightPalette &&
+            value.darkPalette == saving.darkPalette) {
+          break;
+        }
       }
     } catch (_) {
       // The chosen palette remains usable for this run if storage fails.
@@ -613,6 +771,7 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
   /// Back to the shipped defaults.
   Future<void> reset() async {
     value = const AppearancePrefs();
+    _systemChanged(_system);
     await _paletteSave;
     await _backgroundSave;
     await _customSave;
@@ -624,6 +783,9 @@ class AppearancePrefsStore extends ValueNotifier<AppearancePrefs> {
       await _storage.delete(_familyKey);
       await _storage.delete(_sizeKey);
       await _storage.delete(_paletteKey);
+      await _storage.delete(_modeKey);
+      await _storage.delete(_lightPaletteKey);
+      await _storage.delete(_darkPaletteKey);
       await _storage.delete(_backgroundKey);
       await _storage.delete(_customKey);
       await _storage.delete(_paneOpacityKey);

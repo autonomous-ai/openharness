@@ -2,9 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { TeamConfig } from './config.js'
-import { checkTeamEngines, engineLines, realEngineCheckDeps, teamEngineBin, TeamEngineReporter, type TeamEngines } from './engines.js'
+import { readTeamConfig, type TeamConfig } from './config.js'
+import { checkTeamEngines, engineLines, realEngineCheckDeps, teamEngineBin, teamEngineReporter, TeamEngineReporter, type TeamEngines } from './engines.js'
 import { readTeamStatus, type TeamStatus } from './privacy.js'
+
+vi.mock('./config.js', async (original) => ({ ...await original<typeof import('./config.js')>(), readTeamConfig: vi.fn(() => null) }))
 
 const config = { user: 'harnessteam', home: '/Users/harnessteam', statusFile: '/status.json' } as TeamConfig
 const engines = (over: Partial<TeamEngines> = {}): TeamEngines =>
@@ -12,6 +14,22 @@ const engines = (over: Partial<TeamEngines> = {}): TeamEngines =>
 
 const cleanup: string[] = []
 afterEach(() => { for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+
+describe('the reporter on this computer', () => {
+  // Windows has had Team accounts since 0.5.4: its daemon never reported, so its owner read "not reported yet" for good.
+  it('reads the Team account of a Windows PC, as of a Mac and a Linux computer', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    try {
+      const reads = vi.mocked(readTeamConfig)
+      reads.mockClear()
+      const reporter = teamEngineReporter()
+      reporter.start()
+      reporter.stop()
+      expect(reads).toHaveBeenCalled()
+    } finally { Object.defineProperty(process, 'platform', platform) }
+  })
+})
 
 describe('the team account\'s engines', () => {
   it('are installed when its own ~/.local/bin holds them, and signed in as the engine\'s own files say', async () => {

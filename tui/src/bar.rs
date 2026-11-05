@@ -272,7 +272,7 @@ fn pane_entry(app: &App, c: &Colours, width: u16, window: usize, id: u64, last: 
     let pane = app.panes.get(&id);
     let agent = pane.and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id));
     let harness = agent.filter(|a| a.engine != "terminal");
-    let folder = |path: &str| path.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
+    let folder = |path: &str| crate::sys::path_name(path).to_string();
     let name = match harness { Some(a) if !a.name.is_empty() => a.name.clone(), _ => crate::format::pane_title(app, window, id) };
     let room = width.saturating_sub(1 + 5 + 2) as usize;
     let where_ = match harness {

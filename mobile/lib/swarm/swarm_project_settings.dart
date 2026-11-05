@@ -17,6 +17,7 @@ import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'swarm_row.dart';
 import 'swarm_style.dart';
+import 'swarm_switch_pm.dart';
 
 /// Whether the person may rename [projectId] and change its sharing: its
 /// owner, while they may write (the desktop's `editable && owner`; the
@@ -94,10 +95,11 @@ const _notAllowed = 'Only the project owner can manage this project.';
 const _notSent = 'Could not reach this Swarm. Try again.';
 
 /// The project menu's Project settings… (the desktop's `showProjectSettings`):
-/// Rename project for its owner who may write, and Project details
-/// ([onDetails]) for everyone who reads it. Each runs once the sheet has
-/// closed. [onShown] is handed its route, for the page to take it down with
-/// the project.
+/// Rename project for its owner who may write, Project details ([onDetails])
+/// for everyone who reads it, and Switch PM… for whoever may switch its
+/// Product Manager while no switch is under way ([swarmCanSwitchPm]). Each
+/// runs once the sheet has closed. [onShown] is handed its route, for the
+/// page to take it down with the project.
 Future<void> showSwarmProjectSettings(
   BuildContext context,
   SwarmReader reader,
@@ -108,7 +110,8 @@ Future<void> showSwarmProjectSettings(
   context,
   title: 'Project settings',
   onShown: onShown,
-  // Made the owner's, or no longer, on another device meanwhile.
+  // Made the owner's, or no longer, on another device meanwhile; its PM
+  // switched, or being switched.
   rebuildOn: reader,
   rows: () => (
     actions: [
@@ -125,6 +128,13 @@ Future<void> showSwarmProjectSettings(
         chevron: true,
         onTap: onDetails,
       ),
+      if (swarmCanSwitchPm(reader, projectId))
+        PhoneSheetAction(
+          icon: LucideIcons.arrowLeftRight300,
+          label: 'Switch PM…',
+          onTap: () =>
+              unawaited(showSwarmSwitchPm(context, reader, projectId)),
+        ),
     ],
     sections: const <PhoneSheetSection>[],
   ),

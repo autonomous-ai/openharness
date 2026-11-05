@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { configureSwarmStamps, freeze, noteChange, readStamps, sizeOf, stampOwed, swarmTransaction, SwarmCache } from './cache.js'
+import { ALL_HOSTS, configureSwarmStamps, freeze, noteChange, readHostStamp, sizeOf, stampOwed, swarmTransaction, SwarmCache } from './cache.js'
 import { MemoryStamps } from './cache.test-support.js'
-import { feedRule, machinesRule, type PatchRule } from './cachePatch.js'
+import { machineFeedRule, machinesRule, type PatchRule } from './cachePatch.js'
 import { logger } from '../utils/logger.js'
 import type { MachineData, Part, PartKind } from './parts/index.js'
 import type { SwarmDelta } from './parts/load.js'
@@ -228,16 +228,40 @@ describe('the stamps a machine report reads (DB 2.5)', () => {
   const db = { $transaction: async <T>(body: (tx: object) => Promise<T>) => body({}) }
 
   it('reads them, or none without stamps, while they fail, or late', async () => {
-    expect(await readStamps(['t1'])).toBeNull()
+    expect(await readHostStamp('t1', 'm1')).toBeNull()
     const stamps = new MemoryStamps()
     configureSwarmStamps(stamps)
-    await stamps.bump('t1', ['main'])
-    expect((await readStamps(['t1']))?.get('t1')).toEqual({ main: 1, machine: 0 })
+    await stamps.bump('t1', ['main'], ['m1'])
+    expect(await readHostStamp('t1', 'm1')).toEqual({ main: 1, hosted: 1, uncovered: 0, host: 1, all: 0 })
     stamps.down = true
-    expect(await readStamps(['t1'])).toBeNull()
+    expect(await readHostStamp('t1', 'm1')).toBeNull()
     stamps.down = false
     stamps.slowMs = 300
-    expect(await readStamps(['t1'])).toBeNull()
+    expect(await readHostStamp('t1', 'm1')).toBeNull()
+  })
+
+  it('moves the host stamps a transaction\'s writes named, every host\'s for a change that names none (task #3119)', async () => {
+    const stamps = new MemoryStamps()
+    configureSwarmStamps(stamps)
+    await swarmTransaction(db as never, async tx => { noteChange(tx, 't1', 'main', ['m1']); noteChange(tx, 't1', 'machine', []) })
+    expect(await readHostStamp('t1', 'm1')).toMatchObject({ host: 1, all: 0 })
+    expect(await readHostStamp('t1', 'm2')).toMatchObject({ host: 0, all: 0 })
+    await swarmTransaction(db as never, async tx => noteChange(tx, 't1', 'main'))
+    expect(await readHostStamp('t1', 'm2')).toMatchObject({ host: 0, all: 1 })
+    await swarmTransaction(db as never, async tx => noteChange(tx, 't1', 'machine'))
+    expect(await readHostStamp('t1', 'm2')).toMatchObject({ all: 1 })
+    await swarmTransaction(db as never, async tx => noteChange(tx, 't1', 'main', [ALL_HOSTS, 'm2']))
+    expect(await readHostStamp('t1', 'm2')).toMatchObject({ host: 1, all: 2 })
+  })
+
+  it('pays an owed bump with its host stamps', async () => {
+    const stamps = new MemoryStamps()
+    configureSwarmStamps(stamps)
+    stamps.down = true
+    await swarmTransaction(db as never, async tx => noteChange(tx, 't1', 'main', ['m1']))
+    stamps.down = false
+    await vi.waitFor(() => expect(stampOwed('t1')).toBe(false), { timeout: 5_000 })
+    expect(await readHostStamp('t1', 'm1')).toMatchObject({ host: 1, all: 0 })
   })
 
   it('knows a Swarm whose change committed here before Redis took its bump, until it is paid', async () => {
@@ -296,6 +320,36 @@ describe('a stale entry is patched, not loaded again (spec 2026-11-02, Phase 1)'
     await read()
     expect(delta.mock.calls[0]![1]).toBe(1_000_000 - 30_000)
     expect(delta.mock.calls[0]![2]).toEqual(['group'])
+  })
+
+  // Task #2875: a one-group read refreshed the whole base, so every pod read the Swarm's group, machine and progress feeds at
+  // every stamp. Its access entry reads its own kinds.
+  it('an entry whose rule reads alone refreshes from its kinds only, and no other entry\'s delta takes it in', async () => {
+    const { stamps, delta, read, advance } = setup({ parts: [part('a2', 1, 'agent')] })
+    const alone: PatchRule<Held> = { ...rule(['head', 'member', 'agent']), alone: true }
+    await read(rule(['group']), 'main', 'base')
+    await read(rule(['machine']), 'all', 'machines')
+    advance(1)
+    await read(alone, 'main', 'access')
+    advance(1)
+    await stamps.bump('t1', ['main'])
+    expect(await read(alone, 'main', 'access')).toEqual({ keys: ['g1', 'a2'] })
+    expect(delta).toHaveBeenCalledTimes(1)
+    expect([...delta.mock.calls[0]![2]].sort()).toEqual(['agent', 'head', 'member'])
+    // The base's delta at the same stamp reads its own kinds, not the access entry's again or from its time.
+    await read(rule(['group']), 'main', 'base')
+    expect(delta).toHaveBeenCalledTimes(2)
+    expect([...delta.mock.calls[1]![2]].sort()).toEqual(['group', 'machine'])
+    // Each is shared with its own kind of entry at that stamp: no third read.
+    await read(alone, 'main', 'access')
+    await read(rule(['machine']), 'all', 'machines')
+    expect(delta).toHaveBeenCalledTimes(2)
+    // A bump forgets both: the next refresh of each reads again.
+    advance(1)
+    await stamps.bump('t1', ['main'])
+    await read(alone, 'main', 'access')
+    expect(delta).toHaveBeenCalledTimes(3)
+    expect([...delta.mock.calls[2]![2]].sort()).toEqual(['agent', 'head', 'member'])
   })
 
   it('one delta per Swarm and stamp, over the kinds its stale entries need', async () => {
@@ -405,6 +459,21 @@ describe('a stale entry is patched, not loaded again (spec 2026-11-02, Phase 1)'
     await read(rule(), 'main', 'old')
     // old: loaded, hot: loaded, old: loaded again (too old to patch).
     expect(load).toHaveBeenCalledTimes(3)
+  })
+
+  it('an entry nobody read since an earlier stamp does not drag a hot entry\'s delta back, and is still patched when read (#2783)', async () => {
+    const { stamps, delta, read, advance } = setup()
+    await read(rule(), 'main', 'cold')
+    await read(rule(), 'main', 'hot')
+    for (let i = 0; i < 3; i++) {
+      advance(20_000)
+      await stamps.bump('t1', ['main'])
+      await read(rule(), 'main', 'hot')
+    }
+    // From the hot entry's last refresh (1_040_000), not the cold one's (1_000_000), less the overlap.
+    expect(delta.mock.calls.map(c => c[1])).toEqual([970_000, 990_000, 1_010_000])
+    expect(await read(rule(), 'main', 'cold')).toEqual({ keys: ['g1', 'g2'] })
+    expect(delta.mock.calls.at(-1)![1]).toBe(970_000)
   })
 
   it('readers of one Swarm at one stamp share one delta', async () => {
@@ -580,7 +649,7 @@ describe('the verify sample (spec 2026-11-02, "Checking it on prod")', () => {
     const cache = new SwarmCache(stamps, { verifyRate: 1, random: () => 0, delta: async () => ({ parts: [machine('m1', 2, { a: 2 })], head: null }) })
     let from = 100
     const load = vi.fn(async () => ({ from: from += 50, parts: [machine('m1', from > 200 ? 2 : 1, { a: from > 200 ? 2 : 1 })] }))
-    const read = async () => (await cache.at(['t1'])).get('t1', 'feed', 'all', load, feedRule)
+    const read = async () => (await cache.at(['t1'])).get('t1', 'machine-feed', 'all', load, machineFeedRule)
     await read()
     await stamps.bump('t1', ['machine'])
     from = 200

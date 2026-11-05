@@ -18,6 +18,17 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // and toasts post under it.
   ::SetCurrentProcessExplicitAppUserModelID(L"Autonomous.Harness");
 
+  // A web pane's WebView2 keeps its data under the user's profile, never beside
+  // the app, in a folder an update replaces.
+  wchar_t local_app_data[MAX_PATH];
+  const DWORD local_length =
+      ::GetEnvironmentVariableW(L"LOCALAPPDATA", local_app_data, MAX_PATH);
+  if (local_length > 0 && local_length < MAX_PATH) {
+    const std::wstring folder =
+        std::wstring(local_app_data) + L"\\Harness\\WebView2";
+    ::SetEnvironmentVariableW(L"WEBVIEW2_USER_DATA_FOLDER", folder.c_str());
+  }
+
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
 

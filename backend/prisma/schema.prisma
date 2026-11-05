@@ -295,6 +295,9 @@ model Machine {
 
   @@index([userId])
   @@index([userId, computerId])
+  /// A computer's rows of every account (superTabs/computerMoves.ts otherAccountsOnComputer): another account's sign-in there
+  /// moves the computer's Swarm entries to it (#3122).
+  @@index([computerId, userId])
   @@index([managerId, billingStatus])
   @@index([billingStatus, externalSubscriptionStatus, externalSubscriptionEndAt])
   @@map("machines")
@@ -543,7 +546,8 @@ model ProductUsagePreference {
   @@map("product_usage_preferences")
 }
 
-/// Only fleet-wide counters. Never add an account, machine, agent, location or event timestamp.
+/// Only fleet-wide counters. Never add an account, machine, agent, location or event timestamp. So no index on `machineId`
+/// either, as the Atlas advisor suggested on 2026-11-04 (task #2841): no row has one, and no backend read asks for it.
 model ProductUsageTotal {
   id     String   @id @default(auto()) @map("_id") @db.ObjectId
   dayUtc DateTime
@@ -1127,6 +1131,11 @@ model SuperTabMessage {
   /// The project a row of a person's one Buddy chat belongs to (superTabs/buddySessions.ts lostProjectRow): a project
   /// session's thread and a PM's private line. Hidden once its person no longer reads that project.
   buddyProject    String?
+  /// When its author last edited its text (superTabs/messageEdits.ts); no earlier text is kept.
+  editedAt        DateTime?
+  /// When its author deleted it while replies hung under it: its text is then DELETED_TEXT and its files are gone. A deleted
+  /// message with no replies is removed, row and all.
+  deletedAt       DateTime?
   createdAt       DateTime @default(now())
 
   /// Pages read by (sequence, id): older rows of one command share a sequence.
@@ -1207,6 +1216,9 @@ model SuperTabActivity {
   @@index([tabId, personId, createdAt])
   /// One thread's or chat's rows of a person, for the read marks that clear them (activity.ts markActivityThreadRead).
   @@index([tabId, personId, conversationId, threadId])
+  /// A person's unread rows, newest first: the digest each of their reads asks for (activity.ts activityDigest). Through the
+  /// index above it examined every row of 30 days to find the unread (task #3146).
+  @@index([tabId, personId, readAt, createdAt])
   /// The sweep's rows past their expiry (activity.ts sweepActivity); no TTL option, which the app user cannot set (#2238).
   @@index([createdAt])
 }
@@ -1286,6 +1298,25 @@ model SuperTabThreadMark {
   @@index([updatedAt])
 }
 
+/// A project chat's Buddy proposal roots not yet seen answered (superTabs/proposals.ts), read by the Tasks view's Proposals in place
+/// of a walk of the whole chat (task #2777). Written in the transaction that inserts each root (store.ts writeMessages), and by
+/// a chat's first reads, which seed it from the chat's rows; a row id `seeded:<tabId>:<conversationId>`, sequence -1, marks a
+/// chat seeded. Removed by the read once it finds a root answered or gone, and with its Swarm (purge.ts). Under 10 per project.
+/// A root closed by hand (proposal.close, task #2926) stays, with sequence -2 and `closed` { reason, by, at }, out of every
+/// read, so no seed opens it again: one row per closed proposal (about 50 per project at first), removed with its Swarm.
+model SuperTabOpenProposal {
+  /// The root message's id, or the chat's seed mark.
+  id             String   @id @map("_id")
+  tabId          String
+  conversationId String
+  /// The root's sequence in its chat; -1 for the seed mark.
+  sequence       Int
+  createdAt      DateTime @default(now())
+
+  /// A chat's open roots, newest first (proposals.ts databaseProposalReads listed).
+  @@index([tabId, conversationId, sequence])
+}
+
 /// One thread with at least one reply, summed up as pageThreads' $facet gives it (pageReads.ts refreshThreads): rewritten in the
 /// transaction that inserts each reply, and read by root id instead of the $facet once its Swarm is backfilled
 /// (SuperTabThreadBackfill). No text; never returned as is. Kept with its messages.
@@ -1340,6 +1371,8 @@ model SuperTabDecision {
   note           String?
   /// The person asked left it to the PM, who took the recommended option: never shown as their own choice.
   delegated      Boolean?
+  /// With `delegated`: the hourly sweep left it to the PM after 24 hours unanswered, not the person (overdueDecisions.ts).
+  overdue        Boolean?
   /// "routing-reflection" for a proposal of the nightly routing reflection (costs/reflection.ts): never a Buddy's to read,
   /// and an approved one is kept past the ledger's weeks. Absent on every other decision.
   kind           String?
@@ -1353,6 +1386,8 @@ model SuperTabDecision {
   @@index([tabId, projectId, createdAt])
   /// The decisions waiting in a conversation whose work ended (decisions.ts withdrawIn).
   @@index([tabId, conversationId])
+  /// The hourly overdue sweep reads only the waiting decisions of the last 8 days through it (superTabs/overdueDecisions.ts).
+  @@index([answeredAt, createdAt], map: "decision_waiting_created")
 }
 
 /// One uploaded file, which one message of the actor that uploaded it can send once.
@@ -1886,6 +1921,9 @@ model SwarmGroup {
   /// written before it (markFinishedGroups).
   workFinished       Boolean   @default(false)
 
+  /// Not indexed on `data.kind` (Atlas advisor, 2026-11-04, task #2841): no backend read filters by it, the only one that
+  /// does is the rollback script scripts/buddy-sessions/end-all.ts, across every Swarm; and every hot read keeps its plan
+  /// with such an index (the numbers are in task #2841's pull request). The top-level `kind` holds the same value.
   @@unique([tabId, key])
   @@index([tabId, changedAt])
   @@index([tabId, dormant, changedAt])
@@ -1901,6 +1939,9 @@ model SwarmGroup {
   @@index([tabId, executionMachineId])
   /// The host signature (read/host.ts inputs) reads every conversation's digest and dormancy from this index alone.
   @@index([tabId, deleted, key, hostDigest, dormant])
+  /// A command's awake conversations, listed by the columns it compares with what it holds (parts/held.ts) from this index alone:
+  /// each command read every awake one whole before (task #3146).
+  @@index([tabId, dormant, deleted, key, version, changedAt])
   /// Removed parts go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
   @@index([purgeAt], map: "part_purge")
 }
@@ -2290,4 +2331,26 @@ model GitHubApprovalRefusal {
 
   @@unique([autonomousEnv, tabId, repository, projectId, userId])
   @@index([tabId])
+}
+
+/// A phone's push token (task #2905): where the server sends a thread reply or a tag for its person while the app is closed
+/// (push/devices.ts). One row per token, `_id` the SHA-256 of platform and token, so a phone signed in as someone else moves
+/// to them. Removed: by the phone at sign-out, when Apple or Google call the token dead, past the 10 newest of a person, and by
+/// the TTL index 90 days after `seenAt` (push_device_expiry); a signed-in phone registers again at every launch. About 300 bytes
+/// a row, at most 10 a person.
+model PushDevice {
+  id       String   @id @map("_id")
+  userId   String
+  /// ios | android
+  platform String
+  token    String
+  /// An iOS token from a development build, which only Apple's sandbox host accepts (push/apns.ts).
+  sandbox  Boolean  @default(false)
+  seenAt   DateTime
+
+  /// A command's told people's phones (devicesOf), and a person's newest ten.
+  @@index([userId])
+  /// Expires these rows (push/devices.ts ensurePushDeviceExpiry, made before the push). Declared so db push keeps it.
+  @@index([seenAt], map: "push_device_expiry")
+  @@map("push_devices")
 }

@@ -78,7 +78,8 @@ export const TEMPLATE_WORKFLOW = `## Workflow
    and the evidence in its result: that status is how the PM hears, once. A Reviewer or Tester is heard the same way,
    through its step's result. No agent sends the PM any other message besides a task that needs a person (Workflow 6)
    or the answer to a question the PM asked: no progress notes, no "ready for review", no separate verdict or "done"
-   message, and no acknowledgement such as "understood", "on it" or "stopped".
+   message, and no acknowledgement such as "understood", "on it" or "stopped". A verdict goes to the Engineer by name
+   (--to, or a reply to its request); a result reaches the PM through status, never by a post to the PM.
 5. The PM checks CI on the pull requests that passed, merges them, and tells the people who asked.
 6. A task that needs a person, or a machine that is down, goes to the PM at once, by name.
 7. Idle Engineers are stopped. Reviewers and Testers are kept while the work they checked is open.
@@ -111,9 +112,10 @@ export const TEMPLATE_ROUTING = `## Routing
   5. Between equals, the machine with fewer agents working. Then price.
 - When no other account has weekly quota left, the PM's account takes work as any other account does.
 - The route lists the best new agent and the best idle agent of every engine on every machine, each with its quota:
-  fits or short, weekly quota left and reset time. Its order does not rank by quota: the PM applies this order itself.
-  Picking against it needs a reason in the route's override: urgency, context, or a machine the work needs. "Idle" is
-  not a reason.
+  fits or short, weekly quota left and reset time. It lists them by machine name, with no ranking and no pick: the PM
+  applies this order itself. Every start or assignment from a route gives as its reason the rule above that chose it:
+  urgency, context or a machine the work needs where it departs from the order. "Idle" or "first in the list" is not a
+  reason.
 - An agent whose account runs out of weekly quota mid-task, or whose account is the PM's and falls below its line,
   hands its pushed branch to an agent on another account.
 - Urgent work (production down, security) ignores quota.`

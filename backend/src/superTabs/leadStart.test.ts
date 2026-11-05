@@ -111,6 +111,14 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
     expect(none.state.starts ?? []).toEqual([])
   })
 
+  // Task #2806: its owner let teammates' work run in their own account there (machine.ownAccountWork).
+  it('on a teammate\'s Mac whose owner lets teammates\' work run in their own account, runs on the Mac itself', () => {
+    const f = swarm()
+    f.machine('mate-mac').teamAccountOnly = true
+    f.run({ type: 'machine.ownAccountWork', machineId: 'mate-mac', allowed: true } as Command, mate)
+    expect(f.lead('mate-mac').result).toMatchObject({ machineId: 'mate-mac' })
+  })
+
   it('on a teammate\'s Mac with no Team account, runs on the Mac itself, whatever the Swarm\'s switch says for workers', () => {
     process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1'
     const f = swarm()
@@ -229,6 +237,20 @@ describe('the Product Manager\'s model and effort (Scholes\'s roadmap, piece 1)'
     Object.assign(claude.project(), { skillSet: 'custom', roles: structuredClone(roles) })
     claude.lead('owner-mac')
     expect(requestOf(claude)).toMatchObject({ engine: 'claude', model: 'opus', effort: 'xhigh' })
+  })
+  // Task #3022 (Ken, 11-05): a PM runs at high effort or above, whoever starts it.
+  it('refuses an effort below high, and changes nothing', () => {
+    for (const effort of ['medium', 'low', 'minimal', 'Medium']) {
+      const f = swarm()
+      expect(refusal(() => f.lead('owner-mac', { effort }))?.code).toBe('EFFORT_TOO_LOW')
+      expect(f.state.starts ?? []).toEqual([])
+      expect(f.project().lead).toBeUndefined()
+    }
+    for (const effort of ['high', 'xhigh', 'max']) {
+      const f = swarm()
+      f.lead('owner-mac', { effort })
+      expect(requestOf(f)).toMatchObject({ effort })
+    }
   })
   it('never takes another project\'s role default', () => {
     const f = swarm()

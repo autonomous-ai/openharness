@@ -5,6 +5,8 @@
  * readers need it. Nothing here decides workflow: when to read them is the project's instructions'.
  */
 
+import { personName } from './personName.js'
+
 type Json = Record<string, unknown>
 const object = (value: unknown): Json => value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {}
 const list = (value: unknown): Json[] => Array.isArray(value) ? value.map(object) : []
@@ -155,10 +157,10 @@ export function mineText(state: Json, groupChangedAt: ReadonlyMap<string, number
     ...line.step ? [] : [...stepsLine(state, line.id), ...linkedTo(state, groups.get(line.id)!).map(linked => `  linked: ${otherLine(linked)}`)]].join('\n')).join('\n')
 }
 
-/** Who an actor key (`agent:ID` or `person:ID`) names: an agent by its name, a person by their email. */
+/** Who an actor key (`agent:ID` or `person:ID`) names: an agent by its name, a person by theirs, never their email (task #2954). */
 function checkerName(state: Json, by: string): string {
   const [kind, id] = by.split(':', 2)
-  return (kind === 'agent' ? agentName(state, id) : text(list(state.people).find(p => p.id === id)?.email)) ?? id ?? by
+  return (kind === 'agent' ? agentName(state, id) : personName(list(state.people).find(p => p.id === id))) ?? id ?? by
 }
 
 /** A check with each checker's latest verdict (backend checkVerdicts.ts, #2311): failed while any of them failed, each
