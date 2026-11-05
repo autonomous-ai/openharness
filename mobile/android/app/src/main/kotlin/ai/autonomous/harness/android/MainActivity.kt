@@ -157,7 +157,7 @@ class MainActivity : FlutterActivity() {
     receiveLink(intent)
 
     // `harness/push` — this phone's push address, and the pushes tapped (Dart:
-    // `lib/notify/push_channel.dart`; drawn by PushService.kt). `address` turns pushes on and answers
+    // `lib/notify/push_channel.dart`; drawn by Android itself). `address` turns pushes on and answers
     // the FCM token; `forget` turns them off and deletes the token, so a phone signed out is reached
     // by nothing. A tapped push's data waits here until `take`, as a link does; `arrived` says more
     // wait, `changed` that FCM handed over a new token.
@@ -196,16 +196,6 @@ class MainActivity : FlutterActivity() {
     receivePush(intent)
   }
 
-  override fun onResume() {
-    super.onResume()
-    PushService.inFront = true
-  }
-
-  override fun onPause() {
-    PushService.inFront = false
-    super.onPause()
-  }
-
   // The registration token, deprecated since firebase-messaging 25.1.0 for an Installation ID
   // (`register()`): FCM's HTTP v1 send, which the backend uses, documents tokens only so far.
   @Suppress("DEPRECATION")
@@ -215,7 +205,6 @@ class MainActivity : FlutterActivity() {
       result.success(null)
       return
     }
-    PushService.setEnabled(this, true)
     val messaging = FirebaseMessaging.getInstance()
     messaging.isAutoInitEnabled = true
     messaging.token.addOnCompleteListener { task ->
@@ -230,7 +219,6 @@ class MainActivity : FlutterActivity() {
 
   @Suppress("DEPRECATION")
   private fun forgetPush(result: MethodChannel.Result) {
-    PushService.setEnabled(this, false)
     if (FirebaseApp.getApps(this).isEmpty()) {
       result.success(null)
       return
@@ -240,16 +228,21 @@ class MainActivity : FlutterActivity() {
     messaging.deleteToken().addOnCompleteListener { result.success(null) }
   }
 
+  // The server's push is a notification Android draws itself while the app is away
+  // (backend/src/push/fcm.ts). Its tap starts the app with the push's data as extras, beside FCM's
+  // own `google.message_id`. Only `key` and `link` go on to Dart, which opens nothing but the chat a
+  // `swarm:` link names, as a message link (`receiveLink`) already can.
   private fun receivePush(intent: Intent?) {
-    if (intent?.action != PushService.OPEN) return
+    if (intent == null) return
+    val extras = intent.extras ?: return
+    if (extras.getString(PushService.MESSAGE_ID).isNullOrEmpty()) return
     // Reopened from Recents, Android hands back the intent that first started the app: that push
     // was opened then.
     if ((intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
-    val extras = intent.getBundleExtra(PushService.DATA) ?: return
     val data = HashMap<String, String>()
-    for (key in extras.keySet()) extras.getString(key)?.let { data[key] = it }
+    for (key in PushService.KEYS) extras.getString(key)?.let { data[key] = it }
     // Taken: the same intent handed back to a recreated activity is not tapped again.
-    intent.action = Intent.ACTION_MAIN
+    intent.removeExtra(PushService.MESSAGE_ID)
     waitingPushes.add(data)
     while (waitingPushes.size > 20) waitingPushes.removeAt(0)
     push?.invokeMethod("arrived", null)

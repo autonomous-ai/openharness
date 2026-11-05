@@ -89,8 +89,8 @@ import UserNotifications
 /// `lib/notify/push_channel.dart`).
 ///
 /// `address` asks iOS for the APNs device token, which comes back to the app delegate; every call
-/// waiting then hears it, with the APNs gateway it belongs to. `forget` stops iOS delivering to it:
-/// the phone signed out. `changed` tells Dart that iOS handed over another token while the app ran.
+/// waiting then hears it. `forget` stops iOS delivering to it: the phone signed out. `changed` tells
+/// Dart that iOS handed over another token while the app ran.
 ///
 /// A tapped push's data waits here until Dart's `take` answers it, as `LinkChannel`'s links do: the
 /// push that launched the app is tapped before the engine is up. At most 20 wait, the newest kept;
@@ -133,7 +133,7 @@ final class PushChannel {
     let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
     let moved = token != nil && token != hex
     token = hex
-    let answer: [String: Any] = ["token": hex, "platform": "ios", "environment": Self.environment]
+    let answer: [String: Any] = ["token": hex, "platform": "ios"]
     let answering = asking
     asking.removeAll()
     answering.forEach { $0(answer) }
@@ -157,24 +157,6 @@ final class PushChannel {
     waiting = Array((waiting + [data]).suffix(20))
     channel?.invokeMethod("arrived", arguments: nil)
   }
-
-  /// The APNs gateway this build's token belongs to: a build Xcode signed for development carries a
-  /// profile saying `development`, and its token works on the sandbox only; the App Store and
-  /// TestFlight strip the profile, and theirs is production's. The simulator's is the sandbox's.
-  static let environment: String = {
-    #if targetEnvironment(simulator)
-      return "sandbox"
-    #else
-      guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
-        let data = try? Data(contentsOf: url),
-        let text = String(data: data, encoding: .isoLatin1),
-        let key = text.range(of: "<key>aps-environment</key>"),
-        let open = text.range(of: "<string>", range: key.upperBound..<text.endIndex),
-        let close = text.range(of: "</string>", range: open.upperBound..<text.endIndex)
-      else { return "production" }
-      return text[open.upperBound..<close.lowerBound] == "development" ? "sandbox" : "production"
-    #endif
-  }()
 }
 
 /// `harness/setup_wifi` — joining a new device's setup hotspot (Dart: `lib/phone/add_device/setup_hotspot.dart`),

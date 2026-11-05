@@ -88,7 +88,7 @@
                 <data android:scheme="ai.autonomous.harness.signin" />
             </intent-filter>
         </activity>
-        <!-- Pushes from FCM (PushService.kt): data-only, so the service draws each one itself. -->
+        <!-- Pushes from FCM (PushService.kt): Android draws them; the service hears new tokens. -->
         <service
             android:name=".PushService"
             android:exported="false">
