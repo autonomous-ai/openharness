@@ -11,6 +11,8 @@ const _sayMacBehindACheck = {
   'lib/models/model_search_catalog.dart',
   'lib/notify/system_notifications.dart',
   'lib/settings/sections/terminal_section.dart',
+  // AppearanceMode.labelFor says Match system off the Mac (#3006).
+  'lib/shared/theme/appearance_prefs_store.dart',
   'lib/shortcuts/shortcut_recorder.dart',
   'lib/state/harness_monitor.dart',
   'lib/super_tabs/team_account_setup.dart',

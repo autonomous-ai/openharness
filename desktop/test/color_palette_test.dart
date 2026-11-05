@@ -239,11 +239,13 @@ void main() {
         ),
       );
       expect(tester.takeException(), isNull);
-      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      // Light, Dark and Match first; then the light themes, Paper and Mist.
+      for (var i = 0; i < 5; i++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      }
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
-      expect(store.value.palette, HarnessPalette.dusk);
+      expect(store.value.palette, HarnessPalette.mist);
       await tester.ensureVisible(find.byKey(const ValueKey('palette-forest')));
       expect(
         tester

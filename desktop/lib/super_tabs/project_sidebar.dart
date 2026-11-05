@@ -123,7 +123,7 @@ class ProjectSidebar extends StatelessWidget {
       ? null
       : SwarmType.sidebar(
           compact: false,
-          color: DesktopChrome.muted,
+          color: grid.SidebarInk.inkMuted,
           medium: true,
         );
 
@@ -139,7 +139,7 @@ class ProjectSidebar extends StatelessWidget {
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 2),
     child: Material(
-      color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
+      color: selected ? grid.SidebarInk.selected : Colors.transparent,
       borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
       clipBehavior: Clip.antiAlias,
       child: Semantics(
@@ -148,8 +148,8 @@ class ProjectSidebar extends StatelessWidget {
         child: InkWell(
           key: ValueKey(key),
           onTap: onTap,
-          hoverColor: grid.AppSurface.hoverFill,
-          focusColor: grid.AppSurface.hoverFill,
+          hoverColor: grid.SidebarInk.hover,
+          focusColor: grid.SidebarInk.hover,
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
           child: Row(
             children: [
@@ -160,8 +160,8 @@ class ProjectSidebar extends StatelessWidget {
                   icon,
                   size: AppIcons.inlineSize,
                   color: onTap == null
-                      ? DesktopChrome.muted
-                      : DesktopChrome.foreground,
+                      ? grid.SidebarInk.inkMuted
+                      : grid.SidebarInk.ink,
                 ),
               ),
               Expanded(
@@ -189,8 +189,8 @@ class ProjectSidebar extends StatelessWidget {
                             medium: selected,
                             color:
                                 onTap == null || (unread == false && !selected)
-                                ? DesktopChrome.muted
-                                : DesktopChrome.foreground,
+                                ? grid.SidebarInk.inkMuted
+                                : grid.SidebarInk.ink,
                           ).copyWith(
                             fontWeight: unread == true
                                 ? grid.AppFont.semibold
@@ -226,7 +226,7 @@ class ProjectSidebar extends StatelessWidget {
               '$count',
               style: SwarmType.sidebar(
                 compact: compact,
-                color: DesktopChrome.foreground,
+                color: grid.SidebarInk.ink,
               ).copyWith(fontWeight: grid.AppFont.semibold),
             )
           : null,
@@ -254,13 +254,13 @@ class ProjectSidebar extends StatelessWidget {
 
   /// A project reads as a channel; a private one keeps its lock in this mark slot.
   Widget _channelMark({required bool isPrivate}) => isPrivate
-      ? PrivateProjectLock(size: 14, color: DesktopChrome.muted)
+      ? PrivateProjectLock(size: 14, color: grid.SidebarInk.inkMuted)
       : Text(
           '#',
           textAlign: TextAlign.center,
           style: SwarmType.sidebar(
             compact: compact,
-            color: DesktopChrome.muted,
+            color: grid.SidebarInk.inkMuted,
             medium: true,
           ),
         );
@@ -341,8 +341,8 @@ class ProjectSidebar extends StatelessWidget {
     final style = SwarmType.sidebar(
       compact: compact,
       color: highlighted || (unread && !muted)
-          ? DesktopChrome.foreground
-          : DesktopChrome.muted,
+          ? grid.SidebarInk.ink
+          : grid.SidebarInk.inkMuted,
     ).copyWith(fontWeight: unread && !muted ? grid.AppFont.semibold : null);
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
@@ -359,7 +359,7 @@ class ProjectSidebar extends StatelessWidget {
                 key: ValueKey(key ?? 'super-group-${group.id}'),
                 onTap: !tappable ? null : onTap ?? () => onSelect(group.id),
                 hoverColor: Colors.transparent,
-                focusColor: grid.AppSurface.hoverFill,
+                focusColor: grid.SidebarInk.hover,
                 borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
                 child: Row(
                   children: [
@@ -372,7 +372,7 @@ class ProjectSidebar extends StatelessWidget {
                           ? Icon(
                               AppIcons.bot,
                               size: AppIcons.inlineSize,
-                              color: DesktopChrome.foreground,
+                              color: grid.SidebarInk.ink,
                             )
                           : null,
                     ),
@@ -468,7 +468,7 @@ class ProjectSidebar extends StatelessWidget {
                                           'super-muted-${group.id}',
                                         ),
                                         size: 14,
-                                        color: DesktopChrome.muted,
+                                        color: grid.SidebarInk.inkMuted,
                                       ),
                                     ),
                                   ],
@@ -658,26 +658,29 @@ class ProjectSidebar extends StatelessWidget {
         ),
   ]..sort((a, b) => a.$1.toLowerCase().compareTo(b.$1.toLowerCase()));
 
+  // The sidebar's ink scope (#3006): a theme's own sidebar ink reaches the
+  // shared rows drawn in it.
   @override
-  Widget build(BuildContext context) => switch ([
-    ?attention,
-    ?activity,
-    ?places,
-  ]) {
-    final List<Listenable> sources when sources.isNotEmpty => ListenableBuilder(
-      listenable: Listenable.merge(sources),
-      builder: (context, _) => _build(context),
-    ),
-    _ => _build(context),
-  };
+  Widget build(BuildContext context) => grid.SidebarInk.scope(
+    child: switch ([?attention, ?activity, ?places]) {
+      final List<Listenable> sources when sources.isNotEmpty =>
+        ListenableBuilder(
+          listenable: Listenable.merge(sources),
+          builder: (context, _) => _build(context),
+        ),
+      _ => Builder(builder: _build),
+    },
+  );
 
   Widget _build(BuildContext context) {
     final snapshot = controller.snapshot;
     final projects = snapshot?.projects ?? const <SuperTabProject>[];
     final reading = _SidebarReading(controller, attention);
     return Material(
-      // The page's color: the rule at its edge is what separates them.
-      color: grid.AppPalette.swarmWelcome,
+      // The page's color: the rule at its edge is what separates them. A
+      // theme may give the sidebar its own (Plum's plum).
+      color: grid.AppPalette.swarmSidebar,
+      textStyle: grid.SidebarInk.textStyle(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -829,9 +832,9 @@ class _RowSurfaceState extends State<_RowSurface> {
     onExit: (_) => setState(() => _hovered = false),
     child: Material(
       color: widget.selected
-          ? grid.AppSurface.selectedFill
+          ? grid.SidebarInk.selected
           : _hovered
-          ? grid.AppSurface.hoverFill
+          ? grid.SidebarInk.hover
           : Colors.transparent,
       borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
       clipBehavior: Clip.antiAlias,
