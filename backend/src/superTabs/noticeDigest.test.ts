@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { agentOnly, type Conversation, type SuperTabState } from './model.js'
-import { digestIsDue, digestMessage, digestText, gatheredNotice, NOTICE_DIGEST_MS, noticeLine } from './noticeDigest.js'
+import { agentPost, digestIsDue, digestMessage, digestText, gatheredMessage, gatheredNotice, NOTICE_DIGEST_MS, noticeLine } from './noticeDigest.js'
 
 const task = { id: 'task', title: 'Web app: an account menu that opens everywhere and keeps going on', number: 1959 } as Conversation
 const step = { id: 'step', title: 'Review: Buddy copies', number: 1991, reviewOf: 'task', step: 'Review' } as Conversation
@@ -45,6 +45,39 @@ describe('what is gathered', () => {
   })
 })
 
+// Anh Dee, 11-05 (#3387): agents' posts to the PM were pasted into its terminal one by one, each a new turn of a long
+// session. They wait for its digest now; a person's message still goes at once.
+describe('which messages are gathered', () => {
+  const agents = { agents: [{ id: 'worker' }, { id: 'buddy', buddyOf: 'person-1' }] } as unknown as SuperTabState
+  const by = (kind: 'agent' | 'person', id = 'worker') => ({ kind, id, name: id, membershipGeneration: 'g' })
+  it('an agent\'s post', () => {
+    expect(gatheredMessage(agents, { author: by('agent'), post: true })).toBe(true)
+    expect(agentPost(agents, { author: by('agent') })).toBe(true)
+  })
+  it('never a notice the server writes under an agent\'s name with no source, such as a confirmed stop', () => {
+    expect(gatheredMessage(agents, { author: by('agent') })).toBe(false)
+  })
+  it('never a person\'s message, nor a Buddy\'s post, which carries its person\'s words', () => {
+    expect(gatheredMessage(agents, { author: by('person', 'person-1'), post: true })).toBe(false)
+    expect(gatheredMessage(agents, { author: by('agent', 'buddy'), post: true })).toBe(false)
+  })
+  it('never an agent\'s post with files, which a digest line cannot carry', () => {
+    const attachments = [{ id: 'file' }] as never
+    expect(gatheredMessage(agents, { author: by('agent'), attachments, post: true })).toBe(false)
+    expect(gatheredMessage(agents, { author: by('agent'), attachments: [], post: true })).toBe(true)
+  })
+  it('never an agent\'s row of a kind that goes at once, and every notice gatheredNotice takes', () => {
+    for (const kind of ['agent-only', 'pair-loop', 'terminal-alert', 'buddy-proposal', 'system']) {
+      expect(gatheredMessage(agents, { author: by('agent'), source: { kind }, post: true })).toBe(false)
+      expect(agentPost(agents, { author: by('agent'), source: { kind } })).toBe(false)
+    }
+    for (const source of [{ kind: 'idle' }, { kind: 'system', status: 'done' }, { kind: 'agent-only', notice: 'skills' }]) {
+      expect(gatheredMessage(agents, { author: by('agent'), source })).toBe(true)
+      expect(agentPost(agents, { author: by('agent'), source })).toBe(false)
+    }
+  })
+})
+
 describe('when it is due', () => {
   const at = (ms: number) => ({ createdAt: new Date(ms) })
   it('5 minutes after the oldest, not before', () => {
@@ -65,6 +98,10 @@ describe('a line', () => {
   })
   it('names no task in the project chat', () => {
     expect(noticeLine(state, row('lead'), 'Tester has had no open task for 15 minutes.')).toBe(`- Tester has had no open task for 15 minutes. (message ${'a'.repeat(24)} in lead)`)
+  })
+  it('names who wrote a post (#3387)', () => {
+    expect(noticeLine(state, row('task'), 'Can I take #12 too?', false, 'Fir')).toMatch(/^- #1959 "[^"]+": Fir: Can I take #12 too\? \(message a{24} in task\)$/)
+    expect(noticeLine(state, row('lead'), 'Ready.', true, 'Fir')).toBe(`- From another account: Fir: Ready. (message ${'a'.repeat(24)} in lead)`)
   })
   it('names a message it could not read by its id alone', () => {
     expect(noticeLine(state, row('lead'), null)).toBe(`- (message ${'a'.repeat(24)} in lead)`)

@@ -627,7 +627,8 @@ describe('a review nobody reviews', () => {
   it('is cancelled by its coordinator with "current": it archives with the reason, and what waited there for the coordinator ends', async () => {
     const f = await waiting()
     await f.execute({ type: 'message.send', conversationId: f.review.key, text: 'No reviewer is free yet.', replyTo: null, recipientIds: [f.lead] }, host, f.builder)
-    const waitingFor = await db.superTabDelivery.findMany({ where: { tabId: f.tab, conversationId: f.review.key, status: 'queued' } })
+    // An agent's post to the coordinator waits for its digest (#3387).
+    const waitingFor = await db.superTabDelivery.findMany({ where: { tabId: f.tab, conversationId: f.review.key, status: 'gathered' } })
     expect(waitingFor.map(d => d.agentId)).toEqual([f.lead])
     await f.execute({ type: 'work.cancel', conversationId: f.review.key, assignmentId: 'current', reason: 'Reviewed outside the Swarm' }, host, f.lead)
     expect(await f.isArchived()).toBe(true)

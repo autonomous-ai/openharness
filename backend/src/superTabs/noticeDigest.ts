@@ -1,10 +1,12 @@
 import type { SuperTabDelivery } from '@prisma/client'
+import { isBuddy } from './buddies.js'
 import { forRecipients, stableId, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { projectsOf } from './projects.js'
 
 // The server's routine notices to a project's coordinator go in one message at most every 5 minutes, and what someone waits on
 // still goes at once (Ken, 2026-11-02; docs/plans/2026-11-02-pm-notice-digest-design.md): every message starts a new turn of a
-// long-context session, and in 20 minutes 10 of 23 were notices like these. Only the server's own notices: never a post.
+// long-context session, and in 20 minutes 10 of 23 were notices like these. Agents' posts to it are gathered too (anh Dee,
+// 11-05, #3387): each was pasted into its terminal on its own. A person's message is never gathered.
 
 /** How long after the first notice gathered its digest is due: never on a fixed clock, and nothing when nothing was gathered. */
 export const NOTICE_DIGEST_MS = 5 * 60_000
@@ -35,6 +37,21 @@ export function gatheredNotice(source: unknown): boolean {
   return DIGEST_KINDS.has(row?.kind) || doneRow(source)
     || (row?.kind === 'agent-only' && row.notice === 'skills')
     || (row?.kind === 'terminal-alert' && GATHERED_ALERTS.has(row.alert))
+}
+
+/** A row as an agent's post is stored: by an agent that is not a Buddy, with no source of its own. A Buddy carries its person's
+ *  words, so it goes at once, as a person's message does. An agent gone from the Swarm counts as an agent. */
+export function agentPost(state: Pick<SuperTabState, 'agents'>, message: Pick<MessageDraft, 'author' | 'source'>): boolean {
+  if (message.author.kind !== 'agent' || message.source) return false
+  const sender = state.agents.find(a => a.id === message.author.id)
+  return !sender || !isBuddy(sender)
+}
+
+/** Whether a message to a coordinator waits for its digest: a notice gatheredNotice takes, or an agent's post (message.send, never
+ *  a notice the server writes under an agent's name, such as a confirmed stop) with no files: a digest line carries none, and a
+ *  host fetches a message's files only for a delivery it lists. */
+export function gatheredMessage(state: Pick<SuperTabState, 'agents'>, message: Pick<MessageDraft, 'author' | 'source' | 'attachments' | 'post'>): boolean {
+  return gatheredNotice(message.source) || (!!message.post && agentPost(state, message) && !message.attachments?.length)
 }
 
 /** A gathered alert whose agent no longer has that alert: it ended before the digest went, so the digest leaves it out. An agent
@@ -69,15 +86,17 @@ function taskName(state: SuperTabState, group: Conversation | undefined): string
 }
 
 /** One notice as one line of at most 200 characters, whatever it holds: a worker's result collapses to one line, so it cannot
- *  write a line of its own. [text] is null for a message that could not be read, which its ids still name. */
+ *  write a line of its own. [text] is null for a message that could not be read, which its ids still name. [from] names who
+ *  wrote a post. */
 export function noticeLine(state: SuperTabState, delivery: Pick<SuperTabDelivery, 'conversationId' | 'messageId'>, text: string | null,
-  otherAccount = false): string {
+  otherAccount = false, from?: string): string {
   const group = state.conversations.find(c => c.id === delivery.conversationId)
   // A step with no step name goes by its raw title, which may hold a newline (review of #2560).
   const name = taskName(state, group).replace(/\s+/g, ' ')
   const ids = ` (message ${delivery.messageId} in ${delivery.conversationId})`
   // A status row is its label, a blank line and its result (commands.ts work.status).
-  const body = (text ?? '').trim().replace(/\s*\n\s*\n\s*/, ' — ').replace(/\s+/g, ' ')
+  const said = (text ?? '').trim().replace(/\s*\n\s*\n\s*/, ' — ').replace(/\s+/g, ' ')
+  const body = from ? `${from.replace(/\s+/g, ' ').trim()}:${said ? ` ${said}` : ''}` : said
   // An agent of another account wrote what it quotes (store.ts otherAccount, audit M3): the line, on one line, says so first.
   const head = `- ${otherAccount ? `${OTHER_ACCOUNT_LINE} ` : ''}${name}${name && body ? ': ' : ''}`
   return `${head}${shortened(body, LINE_MAX - head.length - ids.length)}${ids}`.replace(/^- +/, '- ')

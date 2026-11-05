@@ -613,6 +613,9 @@ export interface MessageDraft {
   mentions?: string[]
   /** Its tags wait until the group has had no worker and no Lead action for a while (mentions.ts NO_WORKER_GRACE_MS). */
   holdMentions?: true
+  /** Written by message.send: a post, not a notice the server writes under an agent's name. Never stored; an agent's post to its
+   *  project's coordinator waits for its digest (noticeDigest.ts gatheredMessage). */
+  post?: true
   /** The root of the thread this reply is in; absent on a top-level message, which is its own thread (writeMessages). */
   thread?: string
   /** A thread reply also shown in the conversation's main stream. */
