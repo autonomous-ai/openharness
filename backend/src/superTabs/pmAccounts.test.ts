@@ -30,6 +30,13 @@ describe('pmAccounts', () => {
     ])
   })
 
+  // Review of #3134: an agent reads only its own project, so a public project was "another project" too.
+  it('names a public project to every project agent, as otherProjectsWork does', () => {
+    const s = twoPms()
+    s.edit(draft => { draft.projects!.find(p => p.id === s.secret)!.visibility = 'public' })
+    expect(visibleState(s.state, agentActor(s.lead), NOW).pmAccounts!.map(a => a.project)).toContain('Secret')
+  })
+
   it('names the private project to a reader who may read it', () => {
     const s = twoPms()
     expect(pmAccounts(s.state, owner).map(a => a.project)).toContain('Secret')
