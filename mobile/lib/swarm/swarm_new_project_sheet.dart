@@ -2182,6 +2182,21 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
           ],
         ),
         const SizedBox(height: AppSpace.m),
+        // Named above its field, as the mockup has it: the hint goes once
+        // something is typed.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.xs,
+            0,
+            AppSpace.xs,
+            AppSpace.s,
+          ),
+          child: Text(
+            'Name',
+            key: const ValueKey('swarm-new-repo-name-label'),
+            style: AppType.label(color: AppPalette.textSecondary),
+          ),
+        ),
         TextField(
           key: const ValueKey('swarm-new-repo-name'),
           controller: _newName,
