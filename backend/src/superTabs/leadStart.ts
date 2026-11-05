@@ -5,7 +5,7 @@
  *  names the machine: only they know which one stays on (Ken, 10-29). Desktop's own-machine flow (project.create, a local
  *  start, agent.add) is unchanged. */
 import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, projectFolder, projectsOnMachine, teamAccountPool, teamPoolOf,
-  slotCounter, teamWorkRefusal, ownAccountWork, type ContributedMachine } from './machines.js'
+  slotCounter, teamWorkRefusal, ownAccountWork, ownAccountTeamEntry, failOwnAccountTeamEntry, type ContributedMachine } from './machines.js'
 import { actorKey, fail, person, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import { projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
@@ -81,6 +81,9 @@ export function leadHost(state: SuperTabState, project: SwarmProject, machineId:
   let candidates: ContributedMachine[]
   if (named.contributorId === project.ownerId) candidates = [named]
   else if (teamAccountPool(named)) {
+    // Its Mac's owner runs teammates' work in their own account: the Mac, not this entry (machines.ts ownAccountTeamEntry, #3060).
+    const mac = ownAccountTeamEntry(state, named.machineId, project, false)
+    if (mac) failOwnAccountTeamEntry(mac)
     if (!teamsWork) fail('TEAM_ACCOUNT_REQUIRED', `Harness Team accounts take no work in this Swarm yet, so ${named.name} runs only its owner's projects.`, 403)
     const why = refusal(named)
     if (why) failTeamWork(why)
