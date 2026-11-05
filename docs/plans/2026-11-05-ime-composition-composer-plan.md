@@ -46,6 +46,8 @@ overwritten moves to the end of a composition.
       after `@F ` in the main box, with a controller update carrying a lagging saved draft mid-composition. Each step's
       value (text and composing range) is intact; the committed text is the draft. Run, see it fail on main.
 - [ ] Code: route the draft sync and the zip-path removal through `SuperTabComposerWrites`. Run, see it pass.
+- [ ] Test (`super_tab_folder_drop_test.dart`): a folder zip that lands while `à` is composed replaces nothing until
+      composing ends, then takes its path out. Red with main's `view.dart`, green with the change.
 
 ## Task 2: The thread box keeps a composition the same way
 
