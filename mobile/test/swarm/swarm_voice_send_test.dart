@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/phone/voice_recorder.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
+import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_thread.dart';
 import 'package:harness_mobile/swarm/swarm_voice_send.dart';
@@ -96,6 +97,125 @@ void main() {
     // What was typed stays in the box.
     expect(c.draft, 'typed before');
   });
+
+  for (final inThread in [false, true]) {
+    final where = inThread ? 'thread' : 'chat';
+    test(
+      '$where sends attached image and file with the clip in one post',
+      () async {
+        final r = rig();
+        final c = await open(r.reader);
+        final thread = SwarmThread(c, 'root-1');
+        addTearDown(thread.dispose);
+        final files = inThread ? thread.files : c.files;
+        files.add([
+          SwarmOutgoingFile('picture.png', Uint8List.fromList([1, 2])),
+          SwarmOutgoingFile('notes.txt', Uint8List.fromList([3])),
+        ]);
+        c.draft = 'keep typing';
+        thread.draft = 'keep replying';
+        final sent = inThread
+            ? await thread.sendVoice(take, 'en')
+            : await c.sendVoice(take, 'en');
+        expect(sent.sent, isTrue);
+        expect(r.swarm.commands.single['attachmentIds'], [
+          'id-picture.png',
+          'id-notes.txt',
+          'id-Voice message.wav',
+        ]);
+        expect(r.swarm.commands.single['replyTo'], inThread ? 'root-1' : null);
+        expect(files.files, isEmpty);
+        expect(c.draft, 'keep typing');
+        expect(thread.draft, 'keep replying');
+      },
+    );
+
+    test('$where keeps attachments when their upload fails', () async {
+      final r = rig();
+      final c = await open(r.reader);
+      final thread = SwarmThread(c, 'root-1');
+      addTearDown(thread.dispose);
+      final files = inThread ? thread.files : c.files;
+      final image = SwarmOutgoingFile('picture.png', Uint8List.fromList([1]));
+      files.add([image]);
+      r.uploads.refuse['picture.png'] = const SuperTabFailure(
+        'UPLOAD_FAILED',
+        'Try again',
+      );
+      final sent = inThread
+          ? await thread.sendVoice(take, 'en')
+          : await c.sendVoice(take, 'en');
+      expect(sent.sent, isFalse);
+      expect(r.swarm.commands, isEmpty);
+      expect(files.files, [image]);
+    });
+
+    test('$where keeps attachments when voice reading fails', () async {
+      final r = rig();
+      final c = await open(r.reader);
+      final thread = SwarmThread(c, 'root-1');
+      addTearDown(thread.dispose);
+      final files = inThread ? thread.files : c.files;
+      final image = SwarmOutgoingFile('picture.png', Uint8List.fromList([1]));
+      files.add([image]);
+      r.swarm.routes['/api/super-tabs/$tab/attachments/'] = (_) =>
+          throw TimeoutException('offline');
+      final sent = inThread
+          ? await thread.sendVoice(take, 'en')
+          : await c.sendVoice(take, 'en');
+      expect(sent.sent, isFalse);
+      expect(r.swarm.commands, isEmpty);
+      expect(files.files, [image]);
+    });
+
+    test(
+      '$where leaves files added while the clip is read for next time',
+      () async {
+        final r = rig();
+        final c = await open(r.reader);
+        final thread = SwarmThread(c, 'root-1');
+        addTearDown(thread.dispose);
+        final files = inThread ? thread.files : c.files;
+        files.add([
+          SwarmOutgoingFile('picture.png', Uint8List.fromList([1])),
+        ]);
+        final later = SwarmOutgoingFile('later.txt', Uint8List.fromList([2]));
+        r.swarm.routes['/api/super-tabs/$tab/attachments/'] = (_) {
+          files.add([later]);
+          return facts();
+        };
+        final sent = inThread
+            ? await thread.sendVoice(take, 'en')
+            : await c.sendVoice(take, 'en');
+        expect(sent.sent, isTrue);
+        expect(files.files, [later]);
+        expect(r.swarm.commands.single['attachmentIds'], [
+          'id-picture.png',
+          'id-Voice message.wav',
+        ]);
+      },
+    );
+
+    test('$where counts the clip toward the ten-file limit', () async {
+      final r = rig();
+      final c = await open(r.reader);
+      final thread = SwarmThread(c, 'root-1');
+      addTearDown(thread.dispose);
+      final files = inThread ? thread.files : c.files;
+      files.add([
+        for (var i = 0; i < 10; i++)
+          SwarmOutgoingFile('$i.txt', Uint8List.fromList([1])),
+      ]);
+      final sent = inThread
+          ? await thread.sendVoice(take, 'en')
+          : await c.sendVoice(take, 'en');
+      expect(sent.sent, isFalse);
+      expect(sent.notice, isNotEmpty);
+      expect(r.uploads.asked, isEmpty);
+      expect(r.swarm.commands, isEmpty);
+      expect(files.files, hasLength(10));
+    });
+  }
 
   test('waits while the backend still transcribes it', () async {
     final r = rig();
