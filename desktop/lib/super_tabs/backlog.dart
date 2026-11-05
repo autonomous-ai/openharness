@@ -33,11 +33,11 @@ bool superTabTaskReleasing(SuperTabConversation task) => task.releasing != null;
 /// no release still waits on, or Done with none to merge. Its `shippedAt`
 /// alone cannot say: the server sets that at the first Done.
 bool superTabTaskShipped(SuperTabConversation task) =>
-    (task.cards.pullRequests.any((card) => card.merged) &&
-        !superTabTaskReleasing(task)) ||
-    (task.assignment?['status'] == 'done' &&
-        task.cards.pullRequests.isEmpty &&
-        task.pullRequestUrls.isEmpty);
+    !superTabTaskReleasing(task) &&
+    (task.cards.pullRequests.any((card) => card.merged) ||
+        (task.assignment?['status'] == 'done' &&
+            task.cards.pullRequests.isEmpty &&
+            task.pullRequestUrls.isEmpty));
 
 /// Which group [task] is listed in at [now]; null for one that is not listed:
 /// cancelled, closed without shipping, or shipped before the window. A wait on

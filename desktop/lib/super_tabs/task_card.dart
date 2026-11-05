@@ -40,7 +40,10 @@ class SuperTabTaskCard extends StatelessWidget {
   final HarnessActivity activity;
   final VoidCallback onOpen;
   final SuperTabTaskPriority? priority;
-  final int titleLines, captionLines;
+  final int titleLines;
+
+  /// How many lines the caption takes; null takes as many as it needs.
+  final int? captionLines;
   final bool tile, selected;
   final Widget? trailing;
 
@@ -110,7 +113,11 @@ class SuperTabTaskCard extends StatelessWidget {
                               child: Text(
                                 caption,
                                 maxLines: captionLines,
-                                overflow: TextOverflow.ellipsis,
+                                // An ellipsis without a line limit still cuts
+                                // the text to one line.
+                                overflow: captionLines == null
+                                    ? TextOverflow.clip
+                                    : TextOverflow.ellipsis,
                                 style: muted,
                               ),
                             ),

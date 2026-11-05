@@ -408,6 +408,9 @@ class SuperTabConversation {
           : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       requesterId = row['requesterId'] as String?,
+      releasing = row['releasing'] is List
+          ? List.unmodifiable((row['releasing'] as List).whereType<String>())
+          : null,
       shippedAt = row['shippedAt'] is num
           ? DateTime.fromMillisecondsSinceEpoch(
               (row['shippedAt'] as num).toInt(),
@@ -469,6 +472,11 @@ class SuperTabConversation {
   /// When it shipped (its first Done); null until it has, and from a server
   /// that does not say.
   final DateTime? shippedAt;
+
+  /// The parts a merged task still waits on for a verified release; null
+  /// when it is not on the server's release list (the desktop's model reads
+  /// it for its board; the phone carries it as the desktop does).
+  final List<String>? releasing;
 
   /// Its place in its project's shared Next up and the day before which it
   /// may not start, as Desktop's Tasks view reads them (task #2569); read here
