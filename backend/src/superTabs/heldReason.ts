@@ -36,16 +36,21 @@ export function missingReason(): never {
 
 /**
  * The facts a reason claims, checked against the Swarm: the task it waits on is another task of this project, the person is a
- * member, the requester exists. A reason that is not true is no reason.
+ * member (not checked: that they were asked, which lives in their decisions), the requester exists, and a time is still ahead.
+ * A reason that is not true is no reason.
  */
-export function checkReason(state: SuperTabState, group: Conversation, reason: HeldReason): void {
+export function checkReason(state: SuperTabState, group: Conversation, reason: HeldReason, now: number): void {
   if (reason.kind === 'task') {
     const project = groupProject(state, group).id
-    const other = state.conversations.find(c => c.number === reason.taskNumber && !c.archived && groupProject(state, c).id === project)
+    const other = state.conversations.find(c => c.number === reason.taskNumber && !c.archived && !c.reviewOf && !c.kind && groupProject(state, c).id === project)
     if (!other || other.id === group.id) fail('HOLD_REASON_MISSING', `Task #${reason.taskNumber} is not another open task of this project. ${HELD_REASON_HELP}`, 400)
   }
   else if (reason.kind === 'person') {
+    if (Date.parse(reason.defaultAt) <= now) fail('HOLD_REASON_MISSING', `The default time ${reason.defaultAt} has passed. ${HELD_REASON_HELP}`, 400)
     if (!state.people.some(p => p.id === reason.personId)) fail('HOLD_REASON_MISSING', `${reason.personId} is not a member of this Swarm. ${HELD_REASON_HELP}`, 400)
+  }
+  else if (reason.kind === 'reset') {
+    if (Date.parse(reason.at) <= now) fail('HOLD_REASON_MISSING', `The reset time ${reason.at} has passed. ${HELD_REASON_HELP}`, 400)
   }
   else if (reason.kind === 'requester' && !group.requesterId) {
     fail('HOLD_REASON_MISSING', `This task has no requester who could have asked for later. ${HELD_REASON_HELP}`, 400)

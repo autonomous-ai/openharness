@@ -2383,7 +2383,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.notBefore === null) { delete task.notBefore; delete task.hold }
       else if (command.notBefore !== undefined) {
         if (!command.hold) missingReason()
-        checkReason(state, task, command.hold)
+        checkReason(state, task, command.hold, context.now)
         task.notBefore = command.notBefore
         task.hold = command.hold
       }
@@ -3746,10 +3746,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.status === 'stopped' && !context.confirmedStopped) fail('STOP_UNCONFIRMED', 'Wait for the execution host to confirm the stop.')
       if (assignment.status === 'reconciling' && command.status !== 'stopped') fail('RECONCILING', 'Reconcile the previous assignment before continuing.')
       const holding = command.status === 'blocked' || command.status === 'needs_human'
-      if (holding) {
-        if (!command.hold) missingReason()
-        checkReason(state, group, command.hold)
-      }
+      // Staged (review of #3215): a client from before reasons sends none, so blocked and needs_human take it for now and show
+      // "no reason"; a reason that is sent is still checked. The refusal follows once the CLI sends one.
+      if (holding && command.hold) checkReason(state, group, command.hold, context.now)
       let asked: string | undefined
       if (command.ask) {
         if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {

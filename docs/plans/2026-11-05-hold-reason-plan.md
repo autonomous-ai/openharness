@@ -20,6 +20,8 @@ hold from before reasons.
 - No numbers in constants: the reasons carry their own times (`defaultAt`, `at`); the server adds none.
 - The release window never holds building or merging: nothing here reads it.
 - `model.ts` gains fields: `parts/light.ts` and its test place them (light.test.ts fails otherwise).
+- Staged (review of #3215, ENGINEERING.md §5): `blocked` and `needs_human` from today's CLI carry no `hold`, so they are accepted without one and shown as `none`; a `hold` that is sent is checked. `work.queue` (the PM's own call) already refuses a not-before date without one. The refusal for statuses follows once the CLI's examples, rules text and skill send `hold`.
+- "Waits on a person already asked" checks that the person is a member, not that a decision to them is open (decisions live outside the Swarm state). A reason's time must still be ahead; a task reason must name a task, not a step.
 - No new collection, index or stored shape outside the existing Swarm parts.
 
 ## Review Focus
