@@ -36,7 +36,7 @@ import { recipientShare } from '../src/routes/harnessShares.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { wantDefaultDigest } from './noDefaultDigest.test-support.js'
 import { startMessageReachStats } from '../src/superTabs/messageReachStats.js'
-import { profiled } from './plans.test-support.js'
+import { plan as planOf, profiled, reads } from './plans.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -575,7 +575,7 @@ describe('five-part task persistence', () => {
     const checks = [{ description: 'Draft survives reconnect', independent: false }]
     const created = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`,
       headers: { authorization: `Bearer ${host.sub}` }, payload: { operationId: randomUUID(), asAgentId: lead,
-        command: { type: 'conversation.create', title: 'Drafts', task, checks } } })
+        command: { type: 'conversation.create', title: 'Drafts', task, checks, priority: 'P2', requesterId: owner.sub } } })
     expect(created.statusCode, created.body).toBe(200)
     const group = created.json().data.result.conversationId as string
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId as string
@@ -2070,6 +2070,50 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
     await expect(run(tab, { type: 'message.send', conversationId: group, text: 'Here.', replyTo: null, answers: messageId, recipientIds: [] } as Command, host, lead))
       .rejects.toMatchObject({ code: 'INVALID_ANSWER' })
+  })
+
+  // Task #3391: acknowledging is a reaction, not a post, so a reaction settles the recipient's delivery as an answer does.
+  it('closes the reacting agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
+    const { tab, lead } = await fixture()
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    const helper = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Helper', configuration: config, lead: false })).result.agentId as string
+    await invite(tab)
+    const asked = await run(tab, { type: 'message.send', conversationId: group, text: 'Please look at the failing build.', replyTo: null,
+      recipientIds: [lead, helper] }, peer)
+    const messageId = asked.result.messageId as string
+    const held = (await store.deliveries(host, tab, lead)).find(d => d.messageId === messageId)!
+    const other = (await store.deliveries(host, tab, helper)).find(d => d.messageId === messageId)!
+    await store.delivery(host, tab, lead, held.id, { type: 'claim', claimId: randomUUID() })
+    const react = (emoji: string, on = true) => ({ type: 'message.react', conversationId: group, messageId, emoji, on }) as Command
+    // A person's reaction, and an agent taking its reaction back, settle nothing.
+    await run(tab, react('eyes'), peer)
+    await run(tab, react('eyes', false), host, lead)
+    expect(await store.deliveryReceipt(host, tab, lead, held.id)).toEqual({ id: held.id, status: 'claimed' })
+    await run(tab, react('check'), host, lead)
+    expect(await store.deliveryReceipt(host, tab, lead, held.id)).toEqual({ id: held.id, status: 'answered' })
+    expect((await store.deliveries(host, tab, lead)).map(d => d.messageId)).not.toContain(messageId)
+    expect(await store.deliveryReceipt(host, tab, helper, other.id)).toEqual({ id: other.id, status: 'queued' })
+  })
+
+  // Backend AGENTS.md rule 3, ENGINEERING §4: the reaction's delivery queries are indexed and read only the agent's claimed rows and
+  // that message's deliveries, however many deliveries the Swarm holds.
+  it('settles a reaction\'s deliveries by index, examining only the claimed rows and that message\'s rows', async () => {
+    const { tab, lead } = await fixture()
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
+    await invite(tab)
+    const ids: string[] = []
+    // Twenty messages to the Lead, so the Swarm holds many deliveries beside the one this reaction settles.
+    for (let i = 0; i < 20; i++) {
+      ids.push((await run(tab, { type: 'message.send', conversationId: group, text: `Question ${i}`, replyTo: null, recipientIds: [lead] }, peer)).result.messageId as string)
+    }
+    const entries = await profiled(db, () => run(tab, { type: 'message.react', conversationId: group, messageId: ids[7]!, emoji: 'eyes', on: true } as Command, host, lead))
+    const queries = reads(entries, 'SuperTabDelivery', ['tabId', 'messageId', 'agentId'])
+    // The claimed-rows read (endDeliveries) goes by the agent's claimed rows, the update by the message: two operations, one row.
+    const plans = planOf(queries)
+    expect(plans.map(q => q.plan)).toEqual(['IXSCAN { tabId: 1, agentId: 1, status: 1, createdAt: 1 }', 'IXSCAN { tabId: 1, messageId: 1 }'])
+    expect(plans.map(q => q.docsExamined)).toEqual([0, 1])
+    expect(plans.map(q => q.keysExamined)).toEqual([0, 1])
   })
 
   it('durably resumes a claim, never steals it on timeout, and does not resurrect revoked messages on rejoin', async () => {
@@ -4082,7 +4126,7 @@ describe('Product Managers chat, removed (Dee, 2026-10-31)', () => {
       title: 'Roster', owns: ['desktop/lib/super_tabs'], status: 'working' })])
     expect((await store.read(host, tab, worker)).state).not.toHaveProperty('otherProjectsWork')
 
-    const filter = String((await run(tab, { type: 'conversation.create', title: 'Agents filter', task: task(['desktop/lib/super_tabs/roster.dart']), checks },
+    const filter = String((await run(tab, { type: 'conversation.create', title: 'Agents filter', task: task(['desktop/lib/super_tabs/roster.dart']), checks, priority: 'P2', requesterId: owner.sub },
       host, lead)).result.conversationId)
     await run(tab, { type: 'work.define', conversationId: filter, task: task(['desktop/lib/super_tabs']), checks }, host, lead)
     const alerts = await db.superTabMessage.findMany({ where: { tabId: tab, source: { equals: { kind: 'overlap', conversationIds: [filter, roster] } } } })
@@ -4553,7 +4597,7 @@ describe('Lead mentions', () => {
     const earlierAt = async (tab: string, minutes: number) => (await after(minutes).mentions(peer, tab, 'earlier')).mentions
     const as = (minutes: number, user: AuthUser, tab: string, command: Command, agent?: string) =>
       after(minutes).execute(user, tab, { operationId: randomUUID(), command }, agent)
-    const post = (group: string): Command => ({ type: 'message.send', conversationId: group, text: 'On it.', replyTo: null, recipientIds: [] })
+    const post = (group: string): Command => ({ type: 'message.send', conversationId: group, text: 'On it, rebasing now.', replyTo: null, recipientIds: [] })
 
     it('keeps a tag the Lead acted on out of Waiting and Earlier, also when a worker is assigned or the requester replies later', async () => {
       const { tab, lead, group } = await held()
@@ -5332,18 +5376,22 @@ describe('Swarm parts under concurrent writes', () => {
     expect(c.attempts).toBe(contexts.length * 4)
   })
 
-  it('lets a Lead\'s host claim its deliveries while the Lead posts, without a conflict between them', async () => {
-    const { tab, lead } = await fixture()
+  // An agent of four tasks stands in for the coordinator: agents' posts to the coordinator wait for its digest (#3387),
+  // which no host claims.
+  it('lets an agent\'s host claim its deliveries while it posts, without a conflict between them', async () => {
+    const { tab } = await fixture()
+    const { group: own, worker: hub } = await workGroup(tab, 'Hub')
     const groups = await Promise.all(['North', 'South', 'East'].map(title => workGroup(tab, title)))
     for (const { group, worker } of groups) {
-      for (let i = 0; i < 2; i++) await run(tab, { type: 'message.send', conversationId: group, text: `Report ${i}`, replyTo: null, recipientIds: [lead] }, host, worker)
+      await run(tab, { type: 'conversation.agent', conversationId: group, agentId: hub, present: true, lead: false })
+      for (let i = 0; i < 2; i++) await run(tab, { type: 'message.send', conversationId: group, text: `Report ${i}`, replyTo: null, recipientIds: [hub] }, host, worker)
     }
-    const waiting = await store.deliveries(host, tab, lead)
+    const waiting = await store.deliveries(host, tab, hub)
     expect(waiting.length).toBeGreaterThanOrEqual(6)
     const c = counted()
     await Promise.all([
-      ...waiting.map(d => c.store.delivery(host, tab, lead, d.id, { type: 'claim', claimId: randomUUID() })),
-      c.store.execute(host, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text: 'Planning.', replyTo: null, recipientIds: [] } }, lead),
+      ...waiting.map(d => c.store.delivery(host, tab, hub, d.id, { type: 'claim', claimId: randomUUID() })),
+      c.store.execute(host, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: own, text: 'Planning.', replyTo: null, recipientIds: [] } }, hub),
     ])
     expect(c.attempts).toBe(waiting.length + 1)
   })
@@ -5379,19 +5427,22 @@ describe('Swarm parts under concurrent writes', () => {
   })
 
   it('serializes a claim against revoking an agent sender', async () => {
-    const { tab, lead } = await fixture()
+    const { tab } = await fixture()
     const { group, worker } = await workGroup(tab, 'Revoked')
-    await run(tab, { type: 'message.send', conversationId: group, text: 'Report for the Lead.', replyTo: null, recipientIds: [lead] }, host, worker)
-    const delivery = (await store.deliveries(host, tab, lead)).find(d => d.authorId === worker)!
+    // Another agent of the task hears it: an agent's post to the coordinator waits for its digest (#3387), which no host claims.
+    const reader = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Reader', configuration: config, lead: false })).result.agentId)
+    await run(tab, { type: 'message.send', conversationId: group, text: 'Report for the reader.', replyTo: null, recipientIds: [reader] }, host, worker)
+    const delivery = (await store.deliveries(host, tab, reader)).find(d => d.authorId === worker)!
     await run(tab, { type: 'work.cancel', conversationId: group, assignmentId: (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.id,
       reason: 'Withdrawing the worker' })
     const results = await Promise.allSettled([
-      store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() }),
+      store.delivery(host, tab, reader, delivery.id, { type: 'claim', claimId: randomUUID() }),
       run(tab, { type: 'agent.remove', agentId: worker }),
     ])
     expect(results[1]!.status).toBe('fulfilled')
     expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).status).toBe('cancelled')
-    expect((await store.deliveries(host, tab, lead)).map(d => d.id)).not.toContain(delivery.id)
+    expect((await store.deliveries(host, tab, reader)).map(d => d.id)).not.toContain(delivery.id)
   })
 
   it('serializes a claim against removing its receiving agent', async () => {

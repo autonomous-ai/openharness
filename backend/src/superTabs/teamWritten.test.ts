@@ -63,7 +63,7 @@ describe('a task a Team agent worked on', () => {
   it('does not mark a task when a Team agent opens it, is added to it, is named into it or posts there', () => {
     const f = swarm(), builder = f.member('main-builder', 'mac')
     const asBuilder: Actor = { kind: 'agent', agentId: builder, machineOwnerId: 'owner' }
-    const opened = f.group({}, { kind: 'agent', agentId: f.member('team-a', 'mac-team'), machineOwnerId: 'owner' })
+    const opened = f.group({ checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'owner' }, { kind: 'agent', agentId: f.member('team-a', 'mac-team'), machineOwnerId: 'owner' })
     const added = f.group(), named = f.group(), posted = f.group()
     for (const task of [added, named, posted]) f.run({ type: 'conversation.agent', conversationId: task, agentId: builder, present: true, lead: false })
     const told = [
