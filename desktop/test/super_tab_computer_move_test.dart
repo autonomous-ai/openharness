@@ -202,6 +202,35 @@ void main() {
     app.dispose();
   });
 
+  // Amon, 11-05: the row's Repair looked out of place. Set up and Repair are the design system's own secondary action, a
+  // themed outlined button as drawn everywhere else, never a text button squeezed to the line's height.
+  testWidgets('Set up and Repair on the row are the standard secondary button', (tester) async {
+    final daemon = _TeamDaemon();
+    final app = createApp(connectionForTest: (_) => daemon, connected: true)
+      ..teamAccountHereForTest = true;
+    app.machineStates['m']!.localOnly = true;
+    final c = await _mount(
+      tester,
+      _swarm(
+        _pool(
+          teamWork: {
+            'allowed': false,
+            'code': 'TEAM_ACCOUNT_REQUIRED',
+            'reason': 'Refused.',
+          },
+        ),
+      ),
+      app: app,
+    );
+    final button = tester.widget<ButtonStyleButton>(
+      find.byKey(const ValueKey('super-machine-team-setup-m')),
+    );
+    expect(button, isA<OutlinedButton>());
+    expect(button.style, isNull);
+    await _unmount(tester, c);
+    app.dispose();
+  });
+
   test("the row's button reads Repair for an account already here, Set up otherwise", () {
     expect(superTabTeamSetupAction((state: 'exists', detail: null)), 'Repair');
     expect(superTabTeamSetupAction((state: 'none', detail: null)), 'Set up');
