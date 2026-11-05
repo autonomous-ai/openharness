@@ -8,6 +8,7 @@
  */
 import type { Agent, AgentStart, Conversation, Person, SuperTabState, WorkStatus } from '../model.js'
 import type { ContributedMachine } from '../machines.js'
+import type { PromptWait } from '../promptWaits.js'
 
 export const READ_FORMAT = 2
 export type PartKind = 'head' | 'member' | 'agent' | 'group' | 'machine' | 'start' | 'progress'
@@ -84,6 +85,9 @@ export interface Derived {
   decisionsWaiting?: number
   /** A person only: a digest of which decisions are open, moving when they change though the count may not. */
   decisionsDigest?: string
+  /** A person only: the task agents waiting at a prompt in their terminals for them (promptWaits.ts), shown under Decisions and
+   *  counted with them. Absent from an older backend, and for an agent. */
+  promptsWaiting?: PromptWait[]
   /** A person only: a digest of which of their Activity rows are unread (activity.ts), moving when one is written, read or
    *  removed. No count and no chat: the client reads its list again when it moves. Absent from an older backend. */
   activityDigest?: string
