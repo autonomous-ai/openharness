@@ -264,6 +264,21 @@ void main() {
     return (f, c);
   }
 
+  void openKnownThread(SuperTabLaunchFixture f, SuperTabController c) {
+    f.connection.server.messages.add({
+      'id': 'm-root',
+      'conversationId': c.selectedId,
+      'sequence': 1,
+      'thread': 'm-root',
+      'text': 'An existing thread root',
+      'attachments': <dynamic>[],
+      'createdAt': '2026-10-18T00:00:00Z',
+      'author': {'kind': 'person', 'id': 'owner', 'name': 'Owner'},
+      'deliveries': <dynamic>[],
+    });
+    c.openThread('m-root');
+  }
+
   // The desktop follows the round dial into Buddy chats (Diego, 10-30): the
   // dial's side, and a tap on its Buddy's notification, open the chat in the
   // Swarm tab, never a terminal tab of its own.
@@ -469,7 +484,7 @@ void main() {
     c.select('design-fix');
     await settle();
     expect(row(announces(f).last).containsKey('threadRoot'), isFalse);
-    c.openThread('m-root');
+    openKnownThread(f, c);
     await settle();
     expect(row(announces(f).last)['conversationId'], 'design-fix');
     expect(row(announces(f).last)['threadRoot'], 'm-root');
@@ -478,7 +493,7 @@ void main() {
     expect(row(announces(f).last)['conversationId'], 'design-fix');
     expect(row(announces(f).last).containsKey('threadRoot'), isFalse);
     // A thread of another conversation is not on screen beside this one.
-    c.openThread('m-root');
+    openKnownThread(f, c);
     c.select('design-lead');
     await settle();
     expect(row(announces(f).last)['conversationId'], 'design-lead');
@@ -488,7 +503,7 @@ void main() {
   test('a hidden thread pane still names its root to the dial', () async {
     final (f, c) = await openChats();
     c.select('design-fix');
-    c.openThread('m-root');
+    openKnownThread(f, c);
     await settle();
     final before = announces(f).length;
     c.threadPaneHidden();
@@ -504,7 +519,7 @@ void main() {
   test('closing the pane drops the root from the announce', () async {
     final (f, c) = await openChats();
     c.select('design-fix');
-    c.openThread('m-root');
+    openKnownThread(f, c);
     c.threadPaneHidden();
     await settle();
     c.closeThread();
@@ -559,7 +574,7 @@ void main() {
   test('a threadOnly close closes only that conversation\'s thread', () async {
     final (f, c) = await openChats();
     c.select('design-fix');
-    c.openThread('m-root');
+    openKnownThread(f, c);
     await threadOnly(f, 'design-fix', null);
     await settle();
     expect(c.openedThread, isNull);
@@ -569,7 +584,7 @@ void main() {
   test('a threadOnly close for another conversation changes nothing', () async {
     final (f, c) = await openChats();
     c.select('design-fix');
-    c.openThread('m-root');
+    openKnownThread(f, c);
     await threadOnly(f, 'design-lead', null);
     await settle();
     expect(c.openedThread?.root, 'm-root');
@@ -592,7 +607,7 @@ void main() {
     await threadOnly(f, 'design-lead', root);
     await settle();
     expect(c.openedThread, isNull);
-    c.openThread('m-root');
+    openKnownThread(f, c);
     await arrive(f, c);
     expect(c.openedThread?.root, 'm-root');
   });
@@ -650,7 +665,7 @@ void main() {
     final posted = 'message-${f.connection.server.revision}';
     c.select('design-lead');
     await settle();
-    c.openThread('m-root');
+    openKnownThread(f, c);
     for (final root in [posted, null]) {
       await f.app.handleEventForTest('m', {
         'type': 'dial_super_tab',

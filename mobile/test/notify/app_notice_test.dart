@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/notify/agent_notice.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
@@ -72,6 +73,39 @@ void main() {
     await turn(app, 'b');
     expect(unread(app, 'b'), isTrue);
     expect(app.agentNotices.unread.count, 1);
+  });
+
+  group('a machine that is a Harness Team account', () {
+    // Dee, 2026-11-05: a teammate's tester on her Mac's Team account put a
+    // banner on her phone. The machine says it signed in as `team`.
+    void becomeTeam(AppNotifier app, {String kind = 'team'}) {
+      final state = app.machineStates['m']!;
+      state.machine = Machine(
+        machineId: 'm',
+        authMode: MachineAuthMode.remote,
+        name: 'Macs-Mac-Studio-2.local',
+        sessionKind: kind,
+      );
+    }
+
+    test('its agents finishing are no news', () async {
+      becomeTeam(app);
+      await turn(app, 'b');
+      await turn(app, 'b', summary: {'tier': 'alert'});
+      expect(app.agentNotices.unread.count, 0);
+    });
+
+    test('its agents asking are no news', () async {
+      becomeTeam(app);
+      await ask(app, 'b');
+      expect(unread(app, 'b'), isFalse);
+    });
+
+    test('the same machine signed in as the owner tells as before', () async {
+      becomeTeam(app, kind: 'user');
+      await turn(app, 'b');
+      expect(kindOf(app, 'b'), NoticeKind.done);
+    });
   });
 
   test('the agent on screen is never marked', () async {

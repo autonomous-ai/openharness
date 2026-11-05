@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/new_harness_paste.dart';
 
@@ -599,6 +600,187 @@ void main() {
       await c.flush();
       c.dispose();
       expect((await again(server)).threadDraft('message-1'), isEmpty);
+    });
+
+    test(
+      'each conversation keeps its open thread when switching away',
+      () async {
+        final server = threaded();
+        server.append('Offline topic.', conversationId: 'offline');
+        final c = server.controller();
+        addTearDown(c.dispose);
+        await c.refresh();
+
+        c.openThread('message-1');
+        await c.select('offline');
+        c.openThread('message-6');
+        await c.select('lead');
+        expect(c.threadOnScreen, 'message-1');
+        await c.select('offline');
+        expect(c.threadOnScreen, 'message-6');
+      },
+    );
+
+    test(
+      'open threads survive a saved view restart per conversation',
+      () async {
+        final server = threaded();
+        server.append('Offline topic.', conversationId: 'offline');
+        final c = server.controller();
+        await c.refresh();
+
+        c.openThread('message-1');
+        await c.select('offline');
+        c.openThread('message-6');
+        await c.flush();
+        expect(server.saved?['openThreads'], {
+          'lead': 'message-1',
+          'offline': 'message-6',
+        });
+        expect(server.saved?['selectedId'], 'offline');
+        c.dispose();
+
+        final next = await again(server);
+        await next.refresh();
+        expect(next.threadOnScreen, 'message-6');
+        await next.select('lead');
+        expect(next.threadOnScreen, 'message-1');
+      },
+    );
+
+    test('closing one conversation thread keeps the others saved', () async {
+      final server = threaded();
+      server.append('Offline topic.', conversationId: 'offline');
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+
+      c.openThread('message-1');
+      await c.select('offline');
+      c.openThread('message-6');
+      c.closeThread();
+      await c.flush();
+      await c.select('lead');
+      expect(c.threadOnScreen, 'message-1');
+      expect(server.saved?['openThreads'], {'lead': 'message-1'});
+    });
+
+    test('saved open threads keep only the newest 500 conversations', () async {
+      final server = threaded();
+      final c = server.controller(
+        initial: {
+          'tabId': 'tab',
+          'accountId': 'owner',
+          'openThreads': {for (var n = 0; n < 501; n++) 'chat-$n': 'root-$n'},
+        },
+      );
+      addTearDown(c.dispose);
+
+      c.openThread('message-1');
+      await c.flush();
+      final saved = server.saved?['openThreads'] as Map;
+      expect(saved, hasLength(500));
+      expect(saved.containsKey('chat-0'), isFalse);
+      expect(saved['chat-500'], 'root-500');
+      expect(saved['lead'], 'message-1');
+    });
+
+    test('a saved legacy root outside the chat page restores open', () async {
+      final server = threaded()..messagePage = 1;
+      server.messages.first.remove('thread');
+      final c = server.controller(
+        initial: {
+          'tabId': 'tab',
+          'accountId': 'owner',
+          'selectedId': 'lead',
+          'openThreads': {'lead': 'message-1'},
+        },
+      );
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.loadThread();
+      expect(c.threadOnScreen, 'message-1');
+      expect(c.threadMessages('message-1').first.id, 'message-1');
+    });
+
+    test('a saved thread whose root is gone restores closed', () async {
+      final server = threaded();
+      final c = server.controller(
+        initial: {
+          'tabId': 'tab',
+          'accountId': 'owner',
+          'selectedId': 'lead',
+          'openThread': {'conversationId': 'lead', 'root': 'deleted-root'},
+        },
+      );
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.loadThread();
+      expect(c.openedThread, isNull);
+    });
+
+    test('a saved thread whose root cannot be read restores closed', () async {
+      final server = threaded()
+        ..messages.removeWhere((message) => message['id'] == 'message-1')
+        ..forbidMessageReads.add('lead');
+      final c = server.controller(
+        initial: {
+          'tabId': 'tab',
+          'accountId': 'owner',
+          'selectedId': 'lead',
+          'openThread': {'conversationId': 'lead', 'root': 'message-1'},
+        },
+      );
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.loadThread();
+      expect(c.openedThread, isNull);
+    });
+
+    testThread('project switching restores each conversation thread in view', (
+      tester,
+    ) async {
+      final server = threaded()
+        ..append('Offline topic.', conversationId: 'offline');
+      final c = await show(tester, server);
+      c.openThread('message-1');
+      await tester.pumpAndSettle();
+      expect(panel, findsOneWidget);
+
+      await c.select('offline');
+      await tester.pumpAndSettle();
+      c.openThread('message-6');
+      await tester.pumpAndSettle();
+      await c.select('lead');
+      await tester.pumpAndSettle();
+      expect(c.threadOnScreen, 'message-1');
+      expect(panel, findsOneWidget);
+
+      await c.select('offline');
+      await tester.pumpAndSettle();
+      expect(c.threadOnScreen, 'message-6');
+      expect(panel, findsOneWidget);
+    });
+
+    testThread('Back and Forward restore the recorded thread place', (
+      tester,
+    ) async {
+      final server = threaded();
+      final c = await show(tester, server);
+      c.openThread('message-1');
+      await tester.pumpAndSettle();
+      final places = SuperTabPlaces.of(c);
+      expect(places.canGoBack, isTrue);
+
+      places.step(-1);
+      await tester.pumpAndSettle();
+      expect(c.threadOnScreen, isNull);
+      expect(panel, findsNothing);
+
+      places.step(1);
+      await tester.pumpAndSettle();
+      expect(c.threadOnScreen, 'message-1');
+      expect(panel, findsOneWidget);
     });
 
     test(

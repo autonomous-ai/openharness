@@ -336,6 +336,20 @@ void main() {
     });
   });
 
+  test('a finished turn sounds once until the person goes to the agent; '
+      'the next only replaces it quietly (task #3248)', () {
+    front = false;
+    const other = (ref: (machineId: 'm', agentId: 'b'), name: 'Docs', machine: 'MacBook');
+    announcer.turnEnded(agent, news, watching: () => false);
+    announcer.turnEnded(agent, news, watching: () => false);
+    announcer.turnEnded(other, news, watching: () => false);
+    expect([for (final n in system.shown) (n.agent.agentId, n.quiet)], [('a', false), ('a', true), ('b', false)]);
+
+    announcer.seen(ref);
+    announcer.turnEnded(agent, news, watching: () => false);
+    expect(system.shown.last.quiet, isFalse, reason: 'seen: the next is news again');
+  });
+
   test('an agent is one mark however many turns it finished', () {
     announcer.turnEnded(agent, news, watching: () => false);
     announcer.turnEnded(agent, news, watching: () => false);
@@ -835,6 +849,77 @@ void main() {
         a.dispose();
         expect(time.pendingTimers, isEmpty);
       });
+    });
+  });
+
+  group('a Harness Team account\'s agents (2026-11-05: Dee\'s phone buzzed for a teammate\'s tester)', () {
+    const teamRef = (machineId: 'team-mac', agentId: 't');
+    const teamAgent = (ref: teamRef, name: 'Tester 3256', machine: 'Macs-Mac-Studio-2.local · Team');
+
+    late AgentAnnouncer withTeam;
+
+    setUp(() {
+      withTeam = AgentAnnouncer(
+        system: system,
+        chime: () async => chimes++,
+        inFront: () => front,
+        questionGrace: Duration.zero,
+        inTeamAccount: (ref) => ref.machineId == 'team-mac',
+      );
+      addTearDown(withTeam.dispose);
+    });
+
+    test('a turn end says nothing: no chime, no mark, no notice', () {
+      front = false;
+      final notice = withTeam.turnEnded(teamAgent, news, watching: () => false);
+
+      expect(notice, AgentNotice.none);
+      expect(chimes, 0);
+      expect(withTeam.unread.count, 0);
+      expect(system.shown, isEmpty);
+    });
+
+    test('a turn end waiting for its tier says nothing either', () {
+      front = false;
+      withTeam.turnEndedAwaitingTier(teamAgent, news, watching: () => false);
+      final notice = withTeam.tierDecided(teamRef, NoticeTier.alert);
+
+      expect(notice, isNull);
+      expect(withTeam.unread.count, 0);
+      expect(system.shown, isEmpty);
+    });
+
+    test('a question says nothing, in front or away', () {
+      for (final away in [true, false]) {
+        front = !away;
+        final notice = withTeam.questionAsked(
+          teamAgent,
+          requestId: 'q${away ? 1 : 2}',
+          prompt: 'Approve Bash command: git push',
+          watching: () => false,
+        );
+        expect(notice, AgentNotice.none);
+      }
+      expect(chimes, 0);
+      expect(withTeam.unread.count, 0);
+      expect(system.shown, isEmpty);
+    });
+
+    test('the owner\'s own agent still tells, beside it', () {
+      front = false;
+      withTeam.turnEnded(teamAgent, news, watching: () => false);
+      final notice = withTeam.turnEnded(agent, news, watching: () => false);
+
+      expect(notice, AgentNotice.alert);
+      expect(system.shown.map((m) => m.agent), [ref]);
+      expect(withTeam.unread.contains(ref), isTrue);
+      expect(withTeam.unread.contains(teamRef), isFalse);
+    });
+
+    test('with no rule given every agent tells, as before', () {
+      front = false;
+      final notice = announcer.turnEnded(teamAgent, news, watching: () => false);
+      expect(notice, AgentNotice.alert);
     });
   });
 

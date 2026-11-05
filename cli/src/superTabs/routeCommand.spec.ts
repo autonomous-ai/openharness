@@ -1408,6 +1408,50 @@ describe('routing contributed capacity', () => {
       expect(JSON.stringify(reasons(both.answer))).not.toMatch(/suspended|Suspended/)
     })
 
+    it('leaves out all new starts, including grid models, during a machine cooldown', async () => {
+      const grid = 'swarm-0123456789ab', pool = swarm()
+      pool.machineSuspended = 'This machine is suspended for new work: its last 2 starts timed out. It is offered again after 30 minutes.'
+      pool.observation.localModels = [{ grid, model: 'qwen3' }]
+      const { answer } = await runPool(pool, false, {}, project, { state: { localModels: { grid, enabled: true } }, kind: 'tests' })
+      expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(reasons(answer).some(row => row.reason.includes('This machine is suspended'))).toBe(true)
+      delete pool.machineSuspended
+      expect((await runPool(pool, false, {}, project)).answer.ok).toBe(true)
+    })
+
+    it.each([
+      ['Could not clone the repository at /private/project.', 'repository'],
+      ['The Harness server answered without a GitHub token for this project.', 'GitHub'],
+      ['The project folder does not exist: /private/project.', 'folder'],
+      ['The repository has no commits.', 'commit'],
+      ['Required tool gh is not installed.', 'tool'],
+      ["This machine's ChatGPT account (private-account) does not offer gpt-6-astra; choose another model.", 'model'],
+      ["This machine held the agent's launch for 3 minutes and stopped it: Waiting to confirm the selected executable’s permission flags.", 'permission'],
+    ])('notes setup failures while keeping the engine available: %s', async (error, category) => {
+      const { answer, s } = await runPool(swarm(), false, {}, project, { state: { starts: [
+        { id: 'failed', requestedAt: Date.now(), error, request: { machineId: 'm1', engine: 'claude', conversationId: 'group' } },
+      ] } })
+      expect(answer.ok).toBe(true)
+      const candidates = answer.candidates as Array<{ notes: string[] }>
+      expect(candidates.some(row => (row.notes ?? []).some(note => note.includes(category)))).toBe(true)
+      const recordedText = JSON.stringify(recorded(s).command.decision)
+      expect(recordedText).not.toContain('/private/project')
+      expect(recordedText).not.toContain('private-account')
+    })
+
+    it('drops setup notes after a later success or 30 minutes, without noting another engine', async () => {
+      const failed = { requestedAt: Date.now(), error: 'The project folder does not exist.', request: { machineId: 'm1', engine: 'claude' } }
+      for (const starts of [
+        [{ ...failed, requestedAt: Date.now() - 30 * 60_000 }],
+        [failed, { ...failed, harnessId: 'created', error: null }],
+        [{ ...failed, request: { machineId: 'm1', engine: 'codex' } }],
+      ]) {
+        const { answer } = await runPool(swarm(), false, {}, project, { state: { starts } })
+        expect(answer.ok).toBe(true)
+        expect(JSON.stringify(answer.candidates)).not.toContain('Its last start failed while preparing')
+      }
+    })
+
     it('still offers a local model on a machine whose engine is signed out, since the grid needs no subscription', async () => {
       const grid = 'swarm-0123456789ab', pool = swarm(undefined, [{ engine: 'claude', installed: true, signedIn: false }])
       pool.observation.localModels = [{ grid, model: 'qwen3' }]
@@ -1683,8 +1727,8 @@ describe('routing contributed capacity', () => {
       teamWork: { allowed: false, code: 'TEAM_ACCOUNT_REQUIRED', reason: NO_ACCOUNT } })
     const team = () => ({ ...healthy(), machineId: 'm1-team', hostMachineId: 'm1', name: 'MacBook Pro', scope: 'swarm', cwd: '/team/swarm', contributorId: 'mate',
       teamWork: { allowed: true } })
-    async function route(ownerId: string, machines: Record<string, unknown>[] = [mac(), team()]) {
-      const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: [], conversations: conversations(), machines,
+    async function route(ownerId: string, machines: Record<string, unknown>[] = [mac(), team()], groups: Record<string, unknown>[] = conversations()) {
+      const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: [], conversations: groups, machines,
         projects: [{ id: 'lead', ownerId, repository: { repositoryUrl: 'https://github.com/example/project' } }] } },
         policy: { policy, warnings: [] }, machines: [] } } })
       const answer = await routeTask(input, s, where, opener())
@@ -1714,6 +1758,56 @@ describe('routing contributed capacity', () => {
       expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
       expect(excluded.map(e => e.reason)).toContain(reason)
       expect(excluded.some(e => e.reason === NO_ACCOUNT)).toBe(false)
+    })
+
+    // Task #3060 (Scholes, 11-05): the Mac's owner turned on own-account work (backend machines.ts ownAccountWork), and a lamp
+    // start still went to their Team account. A teammate's work no Team agent wrote is offered on the Mac itself; work a Team
+    // agent wrote stays in the Team account.
+    describe('when the Mac\'s owner runs teammates\' work in their own account', () => {
+      const said = 'MacBook Pro runs teammates\' work in Mate\'s own account.'
+      const ownAccountMac = () => ({ ...mac(), teamWork: { allowed: true, ownAccount: said } })
+      const newOn = (candidates: Array<{ machineId: string; kind: string }>) => candidates.filter(c => c.kind === 'new').map(c => c.machineId)
+
+      it('offers the Mac\'s own entry for a teammate\'s task, never its Team account entry', async () => {
+        const { answer, candidates } = await route('owner', [ownAccountMac(), team()])
+        expect(answer).toMatchObject({ ok: true })
+        expect(newOn(candidates)).toContain('m1')
+        expect(newOn(candidates)).not.toContain('m1-team')
+        expect(JSON.stringify(answer.candidates)).not.toContain('"cwd":"/team/swarm/lead"')
+      })
+
+      it('still offers the Team account entry, and not the Mac, for a task a Team agent wrote', async () => {
+        const written = conversations().map(c => c.id === 'g1' ? { ...c, teamWritten: true } : c)
+        const { candidates } = await route('owner', [ownAccountMac(), team()], written)
+        expect(newOn(candidates)).toContain('m1-team')
+        expect(newOn(candidates)).not.toContain('m1')
+      })
+
+      it('reads a step of a Team-written task as Team-written too', async () => {
+        const groups = [...conversations().map(c => c.id === 'g1' ? { ...c, id: 'task', teamWritten: true } : c),
+          { id: 'g1', title: 'Review', leadId: 'lead', agentIds: ['lead'], archived: false, brief: 'Review it.', checks: [], assignment: null, reviewOf: 'task' }]
+        const { candidates } = await route('owner', [ownAccountMac(), team()], groups)
+        expect(newOn(candidates)).toContain('m1-team')
+        expect(newOn(candidates)).not.toContain('m1')
+      })
+
+      it('reads a task from before the mark, assigned to an agent in a Team account, as Team-written, as the backend does', async () => {
+        const assigned = conversations({ agentId: 'tw', status: 'working' })
+        const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', conversations: assigned, machines: [ownAccountMac(), team()],
+          agents: [{ id: 'tw', name: 'Writer', machineId: 'm9', harnessId: 'htw', teamAccount: true, configuration: { engine: 'claude', model: 'opus', effort: 'high' } }],
+          projects: [{ id: 'lead', ownerId: 'owner', repository: { repositoryUrl: 'https://github.com/example/project' } }] } },
+          policy: { policy, warnings: [] }, machines: [] } } })
+        await routeTask(input, s, where, opener())
+        const candidates = (recorded(s).command.decision.candidates ?? []) as Array<{ machineId: string; kind: string }>
+        expect(newOn(candidates)).toContain('m1-team')
+        expect(newOn(candidates)).not.toContain('m1')
+      })
+
+      it('keeps the Mac\'s owner\'s own project on the Mac', async () => {
+        const { candidates } = await route('mate', [ownAccountMac(), team()])
+        expect(newOn(candidates)).toContain('m1')
+        expect(newOn(candidates)).not.toContain('m1-team')
+      })
     })
 
     it('offers a team account whose Mac is not in the Swarm as itself, folded into nothing', async () => {

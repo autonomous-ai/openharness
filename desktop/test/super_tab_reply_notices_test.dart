@@ -40,6 +40,10 @@ Map<String, dynamic> row(
 Future<(ConversationServer, SuperTabController, List<SuperTabReplyRow>)>
 opened([List<Map<String, dynamic>> items = const []]) async {
   final server = ConversationServer();
+  server.append('The open thread root');
+  server.messages.last
+    ..['id'] = 'root-1'
+    ..['thread'] = 'root-1';
   server.state['activityDigest'] = 'd1';
   server.activity = {'items': items, 'more': false};
   final c = server.controller();

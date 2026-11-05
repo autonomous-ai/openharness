@@ -10,7 +10,7 @@ import { START_DEADLINE_MS, START_WINDOW_MS } from './reservations.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
 import { withPmAccounts } from './pmAccounts.js'
-import { accountOf, API_BUILDERS, bytes, machineBrief, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, OLD_RECORD_MAX, quotaBrief, quotaLine, quotaOf2, UNRATED, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type Shown, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, bytes, machineBrief, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, OLD_RECORD_MAX, quotaBrief, quotaLine, quotaOf2, recentStartNotes, UNRATED, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type Shown, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
 import { makePlugins, ROUTE_PLUGIN_MAKERS, type PluginMaker } from './routePlugins.js'
 import { CI_HOLD_OPENING, CI_RETRY_MINUTES, heavyOfStart, MACHINE_FIT_MAKER } from './machineFit.js'
 import { stat } from 'node:fs/promises'
@@ -194,6 +194,7 @@ export function unreadyPool(pool: Json, project: Json | undefined, projectId: st
   const checkout = pool.scope === 'swarm' && repository.machineId !== pool.machineId ? list(readiness.checkouts).find(c => c.folder === projectId) : undefined
   const wanted = typeof repository.repositoryUrl === 'string' ? repositoryKey(repository.repositoryUrl) : null
   const all = [
+    ...(typeof pool.machineSuspended === 'string' ? [pool.machineSuspended] : []),
     ...(NO_SWARM_AGENTS_ON.includes(String(object(observed.resources).os)) ? [`Swarm agents do not run on ${String(object(observed.resources).os)} yet.`] : []),
     ...(checkout?.git === false ? ['The project folder on this machine is not a git checkout. Its owner can remove it, and the next start clones the project.'] : []),
     ...(checkout?.git === true && wanted && typeof checkout.repository === 'string' && checkout.repository !== wanted
@@ -419,11 +420,22 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is that Mac, under its name. A
   // teammate's project starts only in the team account and the Mac's owner's own projects only with the owner, so only one
   // of the two offers new agents here, and the other is not listed as unfit; agents already on either stay members.
+  // Not when the Mac's owner runs teammates' work in their own account (backend machines.ts ownAccountWork, task #3060): a
+  // teammate's work no Team agent wrote starts on the Mac, and the server refuses a start naming the Team account there.
+  // Work a Team agent wrote stays in the Team account (backend teamWritten.ts teamWrittenTask): a step reads its task's mark,
+  // an unknown task counts as written, and so does a task from before the mark whose assignee runs in a Team account.
+  const task = group.reviewOf ? conversations.find(c => c.id === group.reviewOf) : group
+  const assignee = task ? agents.find(a => a.id === object(task.assignment).agentId) : undefined
+  const onTeam = (agent: Json) => agent.teamAccount === true || list(state.machines).some(m => m.machineId === agent.machineId
+    && (typeof m.hostMachineId === 'string' || object(m.observation).sessionKind === 'team'))
+  const teamWritten = group.teamWritten === true || !task || task.teamWritten === true || (!!assignee && onTeam(assignee))
   for (const [team, mac] of macOf) {
     const pool = machines.get(team)?.pool
     if (!pool || !machines.has(mac)) continue
-    // A teammate's task needing only what the owner shared stays on the Mac (backend teamMachineFor): its Team account folds.
-    const onMac = projectOwner === pool.contributorId || (taskNamed && sharedOwnAccess(list(state.machines).find(m => m.machineId === mac), needed))
+    // Its owner runs teammates' work no Team agent wrote in their own account (#3060), or a teammate's task needs only what
+    // the owner shared (backend teamMachineFor): either stays on the Mac, and its Team account folds.
+    const ownAccount = typeof machines.get(mac)!.pool?.ownAccount === 'string' && !teamWritten
+    const onMac = projectOwner === pool.contributorId || ownAccount || (taskNamed && sharedOwnAccess(list(state.machines).find(m => m.machineId === mac), needed))
     machines.get(onMac ? team : mac)!.folded = true
   }
   // Every row of the catalog is probed: one not offered by default is offered when a person names it (route.ts choose).
@@ -488,6 +500,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     ...probes.filter(p => p.machineId === failedOn && p.engine === failedEngine && !p.gridModel).map(accountOf)] : [])
   for (const [i, p] of probes.entries()) {
     const notes = [...(outside(p.machineId) ? [ELSEWHERE] : []), ...(p.kind === 'member' && !checked(p.agentId) ? [UNCHECKED_DEVICE] : []),
+      ...(p.kind === 'new' ? recentStartNotes(list(state.starts), p.machineId, p.engine, Date.now()) : []),
       ...(avoid.has(accountOf(p)) ? [AVOIDED] : [])]
     if (notes.length) probes[i] = { ...p, notes: [...p.notes, ...notes] }
   }

@@ -70,8 +70,7 @@ SwarmHomeLists swarmHomeLists(
     } else if (sort == SwarmHomeSort.sections &&
         active != null &&
         now.difference(active) > swarmQuietAfter &&
-        !project.news.bold &&
-        project.news.tags == 0) {
+        !_hasNews(project)) {
       quiet.add(project);
     } else {
       recent.add(project);

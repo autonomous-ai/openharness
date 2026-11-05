@@ -330,6 +330,50 @@ void main() {
     await close(tester, controller);
   });
 
+  testWidgets('a zip that lands while an input method composes takes its '
+      'path out once composing ends', (tester) async {
+    final controller = await open(tester, machineId: 'studio');
+    final src = folder('src');
+    File('${src.path}/main.dart').writeAsStringSync('void main() {}');
+    await tester.enterText(composer, 'Look at');
+    await drop(tester, [
+      src.path,
+    ], until: () => field(tester).text.contains(src.path));
+
+    await tester.tap(find.text('Attach as zip'));
+    await tester.pump();
+    // Telex is composing `à` when the zip lands (task #3245).
+    await tester.tap(composer);
+    await tester.pump();
+    final typed = 'Look at ${src.path} à';
+    final composing = TextEditingValue(
+      text: typed,
+      selection: TextSelection.collapsed(offset: typed.length),
+      composing: TextRange(start: typed.length - 1, end: typed.length),
+    );
+    tester.testTextInput.updateEditingValue(composing);
+    await tester.pump();
+    await settle(tester, () => names(controller).isNotEmpty);
+
+    expect(names(controller), ['src.zip']);
+    expect(
+      field(tester).value,
+      composing,
+      reason: 'the zip replaces nothing under the marked text',
+    );
+
+    tester.testTextInput.updateEditingValue(
+      TextEditingValue(
+        text: typed,
+        selection: TextSelection.collapsed(offset: typed.length),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(field(tester).text, 'Look at à');
+    expect(controller.draft('lead'), 'Look at à');
+    await close(tester, controller);
+  });
+
   testWidgets('a folder over the attachment limit is not zipped, and its '
       'path stays', (tester) async {
     final controller = await open(tester, machineId: 'studio');

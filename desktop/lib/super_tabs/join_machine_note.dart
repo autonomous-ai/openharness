@@ -27,6 +27,11 @@ void showJoinedMachineNote(
   final text = switch (note) {
     SwarmJoinedMachine(added: false) =>
       '$here was not added to ${note.swarmName}. ${note.problem}',
+    SwarmJoinedMachine(accountProblem: final String problem) =>
+      '$here was added to ${note.swarmName}. $problem',
+    SwarmJoinedMachine(ownAccount: true) =>
+      '$here was added to ${note.swarmName}. Teammates\' agents run as you '
+          'and can access your files, tools and sign-ins.',
     SwarmJoinedMachine(teamProblem: final String problem) =>
       '$here was added to ${note.swarmName}, but Harness could not offer its '
           'Harness Team account. $problem',

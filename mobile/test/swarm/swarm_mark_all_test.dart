@@ -516,38 +516,49 @@ void main() {
       return on;
     }
 
-    testWidgets('Mark all read tells how many with Undo; Undo puts the bold '
-        'back and sends nothing, and with nothing unread it is greyed', (
-      tester,
-    ) async {
-      final fake = backend();
-      await pump(tester, fake);
-      expect(bold(tester, project), isTrue);
-      expect(await markable(tester), isTrue);
+    testWidgets(
+      'Mark all read tells how many with Undo; task reads are restored '
+      'without bolding the read project, and nothing unread greys the action',
+      (tester) async {
+        final fake = backend();
+        final host = await pump(tester, fake);
+        final reader = host.session!.inbox.reader(tab)!;
+        bool taskUnread() =>
+            reader.readMarks!.unread(reader.snapshot!.conversation('g1')!);
+        // Only the tasks are unread; the project's own chat is already read.
+        expect(taskUnread(), isTrue);
+        expect(bold(tester, project), isFalse);
+        expect(await markable(tester), isTrue);
 
-      await markAll(tester);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 500));
+        await markAll(tester);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
 
-      expect(find.text('Marked 2 chats read'), findsOneWidget);
-      expect(bold(tester, project), isFalse);
-      expect(await markable(tester), isFalse);
+        expect(find.text('Marked 2 chats read'), findsOneWidget);
+        expect(taskUnread(), isFalse);
+        expect(bold(tester, project), isFalse);
+        expect(await markable(tester), isFalse);
 
-      await tester.tap(find.text('Undo'));
-      await tester.pump();
-      await tester.pump(const Duration(seconds: 7));
-      await tester.pumpAndSettle();
+        await tester.tap(find.text('Undo'));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 7));
+        await tester.pumpAndSettle();
 
-      expect(marksSent(fake), isEmpty);
-      expect(bold(tester, project), isTrue);
+        expect(marksSent(fake), isEmpty);
+        expect(taskUnread(), isTrue);
+        expect(bold(tester, project), isFalse);
+        expect(await markable(tester), isTrue);
 
-      await markAll(tester);
-      await tester.pump();
-      await tester.pump(const Duration(seconds: 7));
-      await tester.pumpAndSettle();
-      expect(marksSent(fake), [('g1', 5), ('g2', 4)]);
-      expect(await markable(tester), isFalse);
-    });
+        await markAll(tester);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 7));
+        await tester.pumpAndSettle();
+        expect(marksSent(fake), [('g1', 5), ('g2', 4)]);
+        expect(taskUnread(), isFalse);
+        expect(bold(tester, project), isFalse);
+        expect(await markable(tester), isFalse);
+      },
+    );
 
     testWidgets('a chat muted on this phone a moment ago is not marked: the '
         'toast counts the rest, and with all muted the button greys', (

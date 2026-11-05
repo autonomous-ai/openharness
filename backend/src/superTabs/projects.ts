@@ -53,8 +53,9 @@ export interface SwarmProject {
    *  (pmSchedule.ts), woken or held back, and the message that last carried a wake (its own, an update request or a notice
    *  digest): no new wake while that one is unread. A slot with nothing to sweep is not written. Readers never get it.
    *  `heardAt`: when the last wake asked it to save what people taught it; `tidiedOn` and `tidiedRevision`: the local date
-   *  and instructions revision of the last daily tidy it was asked for (pmSchedule.ts recordWake; task #3022). */
-  schedule?: { lastSlot: number; wakeId?: string; heardAt?: number; tidiedOn?: string; tidiedRevision?: number }
+   *  the daily tidy was last asked, and the instructions revision its last save made; `tidyPending`: asked, and no save has
+   *  followed yet (pmSchedule.ts tidyRequest; tasks #3022, #3151). */
+  schedule?: { lastSlot: number; wakeId?: string; heardAt?: number; tidiedOn?: string; tidiedRevision?: number; tidyPending?: boolean }
   /** The status card at the top of the project chat (Dee, 2026-10-31): the coordinator's last project.report text, which
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null
