@@ -57,8 +57,8 @@ describe('crew.add and crew.remove', () => {
     // The Swarm's own guard refuses a viewer's every write first.
     expect(() => f.run({ type: 'crew.add', agentId: f.worker }, peer)).toThrow(/read-only/)
     const other = f.add('other')
-    expect(() => f.run({ type: 'crew.add', agentId: f.worker }, f.agentActor(other))).toThrow(/PM or a person of the project/)
-    expect(() => f.run({ type: 'crew.remove', agentId: f.worker }, f.agentActor(other))).toThrow(/PM or a person of the project/)
+    expect(() => f.run({ type: 'crew.add', agentId: f.worker }, f.agentActor(other))).toThrow(/PM or the person who runs/)
+    expect(() => f.run({ type: 'crew.remove', agentId: f.worker }, f.agentActor(other))).toThrow(/PM or the person who runs/)
     expect(() => f.run({ type: 'crew.add', agentId: f.pm })).toThrow(/already kept/)
     f.target(other).buddyOf = { personId: 'owner', generation: f.state.people[0]!.generation }
     expect(() => f.run({ type: 'crew.add', agentId: other })).toThrow(/Buddy/)
@@ -83,7 +83,7 @@ describe('crew.add and crew.remove', () => {
     f.invite('collaborator')
     expect(() => f.run({ type: 'crew.add', agentId: f.worker }, peer)).toThrow(/PM or the person who runs/)
     expect(f.target().crew).toBeUndefined()
-    f.target().contributorId = 'peer'
+    f.target().machineOwnerId = 'peer'
     f.run({ type: 'crew.add', agentId: f.worker }, peer)
     expect(f.target().crew).toMatchObject({ by: 'peer' })
   })
@@ -91,7 +91,7 @@ describe('crew.add and crew.remove', () => {
   it('refuses the person who runs the agent once they cannot read its private project', () => {
     const f = fixture()
     f.invite('collaborator')
-    f.target().contributorId = 'peer'
+    f.target().machineOwnerId = 'peer'
     f.state.projects = projectsOf(f.state).map(p => ({ ...p, visibility: 'private' as const, members: [] }))
     expect(() => f.run({ type: 'crew.add', agentId: f.worker }, peer)).toThrow()
     expect(f.target().crew).toBeUndefined()

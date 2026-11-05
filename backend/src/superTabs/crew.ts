@@ -9,7 +9,7 @@
 import { isBuddy } from './buddies.js'
 import { roleNameOf } from './instructions.js'
 import { fail, type Actor, type Agent, type SuperTabState } from './model.js'
-import { agentProjectId, canReadProject, ledProject, projectOf } from './projects.js'
+import { agentProjectId, canReadProject, ledProject, ownsProject, projectOf } from './projects.js'
 
 /** How long a crew member whose session stopped keeps its task while its host reopens it in place. */
 export const CREW_REOPEN_GRACE_MS = 5 * 60_000
@@ -22,13 +22,16 @@ export type CrewLane = typeof CREW_LANES[number]
 
 export const isCrew = (target: Pick<Agent, 'crew'>): boolean => !!target.crew
 
-/** Who may change [target]'s crew mark: its project's PM, or a person of the project who is not a viewer. */
+/** Who may change [target]'s crew mark: its project's PM, or, of the people who read the project and are no viewer, the
+ *  Swarm's owner, the project's owner, the person who runs the agent or the owner of the machine it runs on, as agent.release
+ *  takes (River for security review 1 of #3222, before the Swarm goes public): a crew mark makes that machine reopen it. */
 function mayManageCrew(state: SuperTabState, actor: Actor, target: Agent): void {
   const project = projectOf(state, agentProjectId(state, target))
   const allowed = actor.kind === 'agent'
     ? ledProject(state, actor.agentId)?.id === project.id
     : state.people.find(p => p.id === actor.userId)?.role !== 'viewer' && canReadProject(state, actor, project)
-  if (!allowed) fail('FORBIDDEN', 'Only the project\'s PM or a person of the project can change its crew.', 403)
+      && (actor.userId === state.ownerId || ownsProject(state, actor.userId, project) || [target.contributorId, target.machineOwnerId].includes(actor.userId))
+  if (!allowed) fail('FORBIDDEN', 'Only the project\'s PM or the person who runs this agent, its machine\'s owner or the project\'s owner can change its crew.', 403)
 }
 
 /** `crew.add`: marks [target] as crew, with [role] or the role it goes by, and its [lane] if any. Again on crew replaces it.
