@@ -38,6 +38,9 @@ turning itself into a team machine (`convertComputer`), SSO refusing a renewal (
 computer that ends its team session (`MachineService`), and user rows changing what a sign-in answers: `UserService`
 update (role, plane), remove, a provisional row merged away, and an SSO sign-in that rewrites the email, role or subject.
 
+Also not changed: the one-time email migration at start (lib/db/migrate.ts) only lower-cases an email; a pod may
+answer the old casing for up to 30 seconds.
+
 Not changed: SSO-token requests (no Harness session) keep their path; they are about 5 of the 53 user reads a second.
 
 ## Design
@@ -68,21 +71,21 @@ reviews before merge (sign-in and tokens).
 
 ### 1. The cache and the epoch (`backend/src/lib/harnessAuthCache.ts`)
 
-- [ ] Failing tests: 30 s life, bound, fresh epochs that never repeat with an hour's life, a failed write throws.
-- [ ] Code that passes them.
+- [x] Failing tests: 30 s life, bound, fresh epochs that never repeat with an hour's life, a failed write throws.
+- [x] Code that passes them.
 
 ### 2. Authentication uses it (`backend/src/lib/harnessSession.ts`)
 
-- [ ] Failing tests: a second request reads no Mongo; a token gone from Redis stops; sign-out and revoke by id end a
+- [x] Failing tests: a second request reads no Mongo; a token gone from Redis stops; sign-out and revoke by id end a
       remembered sign-in at once, with nothing cleared in the pod; a sign-out between the reads is not missed; read again
       after 30 s; Redis down is an outage; no refusal remembered; callers get a copy.
-- [ ] Code: the cached path, the miss path's order, epochs set by sign-out, revoke and conversion.
+- [x] Code: the cached path, the miss path's order, epochs set by sign-out, revoke and conversion.
 
 ### 3. Every other writer sets the epoch
 
-- [ ] Failing tests: SSO refusing a renewal, removing a computer, and `UserService` update, remove, merge and an
+- [x] Failing tests: SSO refusing a renewal, removing a computer, and `UserService` update, remove, merge and an
       SSO rewrite each set the person's epoch.
-- [ ] Code.
+- [x] Code.
 
 ### 4. Before and after
 

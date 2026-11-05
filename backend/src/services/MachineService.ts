@@ -16,6 +16,7 @@ import { machineBillingService } from './MachineBillingService.js'
 import { storedAutonomousEnvironment, type AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import { TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
+import { signInsChanged } from '../lib/harnessAuthCache.js'
 import { machineRenamed } from '../superTabs/machineRenames.js'
 
 /** The agent's tier / how it runs Claude, resolved through its plan.
@@ -709,7 +710,8 @@ export const machineService = {
         await prisma.harnessSession.updateMany({
           where: { userId: binding.userId, kind: 'team', computerId: binding.computerId, OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] },
           data: { revokedAt: new Date() },
-        }).catch((err: unknown) => logger.warn('team session revoke failed', { machineId, error: String(err) }))
+        }).then(() => signInsChanged(binding.userId))
+          .catch((err: unknown) => logger.warn('team session revoke failed', { machineId, error: String(err) }))
       }
     } else {
       // Managed: reap the container + node row in the background (idempotent on the manager → retryable).
