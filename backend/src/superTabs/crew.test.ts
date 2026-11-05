@@ -53,7 +53,8 @@ describe('crew.add and crew.remove', () => {
   it('refuses a viewer, another agent that is not the PM, the PM itself and a Buddy', () => {
     const f = fixture()
     f.invite('viewer')
-    expect(() => f.run({ type: 'crew.add', agentId: f.worker }, peer)).toThrow(/PM or a person of the project/)
+    // The Swarm's own guard refuses a viewer's every write first.
+    expect(() => f.run({ type: 'crew.add', agentId: f.worker }, peer)).toThrow(/read-only/)
     const other = f.add('other')
     expect(() => f.run({ type: 'crew.add', agentId: f.worker }, f.agentActor(other))).toThrow(/PM or a person of the project/)
     expect(() => f.run({ type: 'crew.remove', agentId: f.worker }, f.agentActor(other))).toThrow(/PM or a person of the project/)

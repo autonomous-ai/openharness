@@ -5,6 +5,7 @@ import { admitByRoom, admitMachineStart, noRepositoryStart, failOwnAccountTeamEn
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
+import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
 import { z } from 'zod'
@@ -336,6 +337,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   // Rename Harness on the agent's Mac renames the agent for every reader (task #2912); the contributor or machine owner only.
   z.object({ type: z.literal('agent.rename'), agentId: id, name: z.string().max(200) }).strict(),
   z.object({ type: z.literal('agent.release'), agentId: id, decision: z.enum(['keep', 'stop']) }).strict(),
+  z.object({ type: z.literal('crew.add'), agentId: id, role: z.string().trim().min(1).max(CREW_ROLE_MAX).regex(/^[^\x00-\x1f\x7f]+$/).optional() }).strict(),
+  z.object({ type: z.literal('crew.remove'), agentId: id }).strict(),
   z.object({ type: z.literal('agent.sessionClosed'), agentId: id, harnessId: id }).strict(),
   z.object({ type: z.literal('agent.configuration'), previousVersion: id.nullable(), configuration }).strict(),
   z.object({ type: z.literal('agent.rebind'), agentId: id, machineId: id, projectId: id,
@@ -422,6 +425,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'member.status': ['status.text'],
   'agent.add': ['name', 'initialMessage'],
   'agent.rename': ['name'],
+  'crew.add': ['role'],
   'agent.start': ['request.name', 'overrideReason'],
   'agent.startFailed': ['error'],
   'agent.switchResult': ['error'],
@@ -3209,6 +3213,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'agent.rename':
       renameAgentTo(state, actor, agent(state, command.agentId), command.name)
+      break
+    case 'crew.add':
+      addCrew(state, actor, agent(state, command.agentId), command.role, context.now)
+      break
+    case 'crew.remove':
+      removeCrew(state, actor, agent(state, command.agentId))
       break
     case 'agent.remove': {
       const target = agent(state, command.agentId)

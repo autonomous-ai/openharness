@@ -169,7 +169,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       head()
       break
     }
-    case 'agent.release':
+    case 'agent.release': case 'crew.add': case 'crew.remove':
       leadCheck(agentProject(command.agentId))
       break
     case 'agent.rebind':
