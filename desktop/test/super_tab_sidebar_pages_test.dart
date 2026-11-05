@@ -1,20 +1,30 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/buddy_rows.dart' show SuperTabCountBadge;
 import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 
 import 'super_tab_activity_lists_test.dart' show load, swarm, unreadThread;
+import 'support/capture.dart';
 import 'swarm_state_test.dart' show createApp;
+
+/// Set to a folder to write the PR's before and after pictures there.
+final shots = Platform.environment['SUPER_TAB_SIDEBAR_SHOTS'];
 
 /// The sidebar of task #2996 (anh Dee, 11-05): Decisions, Mentions and
 /// Threads under the Swarm, each one thing; Buddy first under Projects; the
 /// back and forward arrows at the top.
 void main() {
+  setUpAll(() => loadCaptureFonts(shots));
+
   Finder key(String k) => find.byKey(ValueKey(k));
   Finder inRow(String row, Finder what) =>
       find.descendant(of: key(row), matching: what);
@@ -22,13 +32,17 @@ void main() {
   Future<({SuperTabActivity activity, List<SwarmPage> opened})> show(
     WidgetTester tester, {
     SwarmPage? page,
+    bool waiting = true,
+    GlobalKey? picture,
   }) async {
     final server = swarm()..state['swarmBuddy'] = true;
-    server.ask(['Ship it?']);
-    server.tag('message-1');
-    server.tag('message-2');
+    if (waiting) {
+      server.ask(['Ship it?']);
+      server.tag('message-1');
+      server.tag('message-2');
+    }
     server.followedThreads = {
-      'unread': [unreadThread('message-1')],
+      'unread': [if (waiting) unreadThread('message-1')],
       'read': [],
       'more': false,
     };
@@ -42,19 +56,22 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.dark),
-        home: Scaffold(
-          body: ProjectSidebar(
-            controller: c,
-            app: app,
-            onSelect: c.select,
-            onNewSwarm: () {},
-            onNewProject: () {},
-            onPage: opened.add,
-            page: page,
-            activity: activity,
-            attention: activity.attention,
-            places: SuperTabPlaces.of(c),
-            onManage: () {},
+        home: RepaintBoundary(
+          key: picture,
+          child: Scaffold(
+            body: ProjectSidebar(
+              controller: c,
+              app: app,
+              onSelect: c.select,
+              onNewSwarm: () {},
+              onNewProject: () {},
+              onPage: opened.add,
+              page: page,
+              activity: activity,
+              attention: activity.attention,
+              places: SuperTabPlaces.of(c),
+              onManage: () {},
+            ),
           ),
         ),
       ),
@@ -111,6 +128,59 @@ void main() {
       inRow('super-threads', find.text('Threads')),
     );
     expect(label.style?.fontWeight, grid.AppFont.semibold);
+  });
+
+  // Anh Dee, 11-05, task #3128: a row with nothing waiting is grey, as
+  // Threads is, so Decisions no longer shouts when there is nothing to decide.
+  Color? ink(WidgetTester tester, String row, String label) =>
+      tester.widget<Text>(inRow(row, find.text(label))).style?.color;
+
+  testWidgets('Decisions, Mentions and Threads are grey with nothing waiting, '
+      'and none shows a count', (tester) async {
+    await show(tester, waiting: false);
+    for (final (row, label) in [
+      ('super-decisions', 'Decisions'),
+      ('super-mentions', 'Mentions'),
+      ('super-threads', 'Threads'),
+    ]) {
+      expect(ink(tester, row, label), grid.SidebarInk.inkMuted, reason: row);
+      expect(inRow(row, find.byType(SuperTabCountBadge)), findsNothing);
+    }
+  });
+
+  testWidgets('Decisions and Mentions are full strength with a red count '
+      'while something waits', (tester) async {
+    await show(tester);
+    expect(grid.SidebarInk.ink, isNot(grid.SidebarInk.inkMuted));
+    for (final (row, label) in [
+      ('super-decisions', 'Decisions'),
+      ('super-mentions', 'Mentions'),
+    ]) {
+      expect(ink(tester, row, label), grid.SidebarInk.ink, reason: row);
+      expect(inRow(row, find.byType(SuperTabCountBadge)), findsOneWidget);
+      // Colour only: the weight is what it was before (task #3128).
+      expect(
+        tester.widget<Text>(inRow(row, find.text(label))).style?.fontWeight,
+        isNot(grid.AppFont.semibold),
+      );
+    }
+  });
+
+  testWidgets('a selected row stays at full strength with nothing waiting', (
+    tester,
+  ) async {
+    await show(tester, page: SwarmPage.decisions, waiting: false);
+    expect(ink(tester, 'super-decisions', 'Decisions'), grid.SidebarInk.ink);
+    expect(ink(tester, 'super-mentions', 'Mentions'), grid.SidebarInk.inkMuted);
+  });
+
+  testWidgets('the Swarm switcher is set apart from the three rows by a '
+      'spacing token, the other rows keeping their gap', (tester) async {
+    await show(tester);
+    double bottom(String k) => tester.getBottomLeft(key(k)).dy;
+    final gap = top(tester, 'super-decisions') - bottom('super-swarm-switcher');
+    final rowGap = top(tester, 'super-mentions') - bottom('super-decisions');
+    expect(gap - rowGap, DesktopChrome.controlGap);
   });
 
   testWidgets('each row opens its page, and the open one is selected', (
@@ -172,4 +242,22 @@ void main() {
     await tester.tap(key('super-back'));
     expect(places.takeStep(), const SuperTabPlace.page(SwarmPage.threads));
   });
+
+  // The PR's picture (task #3128): the sidebar with nothing waiting and with
+  // something waiting. Writes nothing unless SUPER_TAB_SIDEBAR_SHOTS is set.
+  for (final waiting in [false, true]) {
+    testWidgets('picture of the sidebar, ${waiting ? 'something' : 'nothing'} '
+        'waiting', (tester) async {
+      if (shots == null) return;
+      tester.view.devicePixelRatio = 2;
+      final picture = GlobalKey();
+      await show(tester, waiting: waiting, picture: picture);
+      await captureBoundary(
+        tester,
+        picture.currentContext!.findRenderObject()! as RenderRepaintBoundary,
+        shots,
+        'sidebar-${waiting ? 'waiting' : 'nothing-waiting'}',
+      );
+    });
+  }
 }
