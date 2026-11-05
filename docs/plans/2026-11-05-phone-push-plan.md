@@ -82,7 +82,7 @@ for who is told.
 - Create: `backend/src/push/devices.ts`
 - Modify: `backend/src/lib/db/schemaRelease.ts` (`ensurePushDeviceExpiry` before `ensureSchema`)
 - Modify: `backend/integration/schemaRelease.test.ts` (the new expiry index in its list)
-- Test: `backend/src/push/devices.test.ts`, `backend/integration/pushDevicePlans.test.ts`
+- Test: `backend/integration/pushDevices.test.ts` (a real replica set, with the plan check; listed in `vitest.super-tabs.config.ts`)
 
 **Interfaces:**
 - Produces: `type PushPlatform = 'ios' | 'android'`; `interface PushDevice { id: string; userId: string; platform: PushPlatform; token: string; sandbox: boolean }`;
@@ -95,7 +95,7 @@ for who is told.
 - [ ] Step 1: tests: register then `devicesOf([A])` returns it; register as A then B: `devicesOf([A])` is empty and B has it;
   the 11th register keeps the 10 newest; `dropPushDevice` by another person returns false and keeps the row; by the owner
   deletes it; `devicesOf([])` reads nothing.
-- [ ] Step 2: run `npx vitest run src/push/devices.test.ts`: FAIL (module missing). Commit the test.
+- [ ] Step 2: run `npx vitest run --config vitest.super-tabs.config.ts integration/pushDevices.test.ts`: FAIL (module missing). Commit the test.
 - [ ] Step 3: implement. `_id` = hex SHA-256 of `platform + '\n' + token`. `devicesOf` is an `aggregateRaw` `$match` on
   `userId $in` (rule 3: Prisma's `in` is `$expr`). The cap deletes beyond the 10 newest `seenAt` of that person.
 - [ ] Step 4: run it: PASS. Integration plan test: `devicesOf` is an IXSCAN on `userId`. Commit.
@@ -119,14 +119,15 @@ for who is told.
 ### Task 3: Senders (APNs and FCM)
 
 **Files:**
-- Create: `backend/src/push/apns.ts`, `backend/src/push/fcm.ts`, `backend/src/push/keys.ts`
+- Create: `backend/src/push/sender.ts` (the shared types), `backend/src/push/apns.ts`, `backend/src/push/fcm.ts`, `backend/src/push/keys.ts`
 - Modify: `backend/src/config/env.ts` (the five variables, read through `push/keys.ts`)
 - Test: `backend/src/push/apns.test.ts`, `backend/src/push/fcm.test.ts`, `backend/src/push/keys.test.ts`
 
 **Interfaces:**
 - Produces: `interface PhoneNotice { personId: string; key: string; title: string; subtitle: string; body: string; link: string }`;
-  `type SendOutcome = 'sent' | 'gone' | 'sandbox' | 'failed'`; `interface Sender { send(device: PushDevice, notice: PhoneNotice): Promise<SendOutcome> }`;
-  `apnsSender(keys: ApnsKeys, transport?: ApnsTransport): Sender`; `fcmSender(account: FcmAccount, fetcher?: typeof fetch): Sender`;
+  `type SendOutcome = 'sent' | 'gone' | 'sandbox' | 'failed'`; `interface SendResult { outcome: SendOutcome; reason?: string }`;
+  `interface Sender { send(device: PushDevice, notice: PhoneNotice): Promise<SendResult> }`;
+  `apnsSender(keys: ApnsKeys, options?: { transport?; now?; timeoutMs? }): Sender`; `fcmSender(account: FcmAccount, options?: { fetcher?; now?; timeoutMs? }): Sender`;
   `pushKeysFromEnv(env): { apns: ApnsKeys | null; fcm: FcmAccount | null }` (throws a message without the key on a bad one).
 
 - [ ] Step 1: tests. APNs: the request has `:path /3/device/<token>`, `apns-topic`, `apns-push-type: alert`, priority 10,
@@ -149,21 +150,22 @@ for who is told.
   `backend/src/superTabs/mentions.ts` (`writeMentions` returns its rows), `backend/src/superTabs/store.ts` (hook
   `phoneNotices` after commit), `backend/src/routes/superTabs.ts` and `backend/src/worker.ts` (wire it),
   `backend/src/lib/metrics.ts` (`phone_pushes_total{platform,outcome}`)
-- Test: `backend/src/push/notices.test.ts`, `backend/src/push/send.test.ts`, `backend/src/superTabs/phonePush.test.ts`
+- Test: `backend/src/push/notices.test.ts`, `backend/src/push/send.test.ts`, `backend/integration/superTabActivity.test.ts` (the store's hook)
 
 **Interfaces:**
 - Consumes: Tasks 1 and 3; `actorName`, `threadOf`-like rule (a thread-only message links its thread).
 - Produces: `phoneNotices(tabId: string, state: SuperTabState, written: { replies: ReplyRow[]; tags: TagRow[] }, messages: MessageDraft[]): PhoneNotice[]`;
   `sendPhoneNotices(db, senders: { ios: Sender | null; android: Sender | null }, notices: PhoneNotice[]): Promise<void>`;
+  `phoneSendersFromEnv(env): PhoneSenders`;
   `SuperTabStoreHooks.phoneNotices?: (notices: PhoneNotice[]) => void`.
 
 - [ ] Step 1: tests. `phoneNotices`: a reply row → title `Mia replied in a thread`, subtitle the conversation's project
   name, body `Open Harness to read it.`, key `reply:<tab>:<row id>`, link `swarm:<tab>/<conversation>/message/<message>/thread/<root>`;
   a tag → `Mia tagged you`, key `mention:<mention id>`, link to the message (with its thread when only in the thread); a
   held tag → nothing. `sendPhoneNotices`: one devices read for all people; each device sent once; `gone` deletes the row;
-  `sandbox` marks it; no sender for a platform → counted `unconfigured` and logged. Store (`phonePush.test.ts`): a reply
-  by B in A's thread calls the hook once with A's notice after commit; a muted A gets no reply notice but gets a tag; a
-  write that fails calls nothing.
+  `sandbox` marks it; no sender for a platform → counted `unconfigured` and logged. Store (`superTabActivity.test.ts`): a reply
+  by B in A's thread calls the hook once with A's notice after commit, keyed by A's Activity row; a muted A gets no reply
+  notice but gets a tag. A write that fails calls nothing because the hook runs through `afterCommit`.
 - [ ] Step 2: FAIL; commit. Step 3: implement; the hook runs `sendPhoneNotices` unawaited with its errors caught and
   logged. Step 4: PASS, plus the existing `activity`, `mentions` and `replyAudience` tests; commit.
 
@@ -197,14 +199,16 @@ for who is told.
   `didReceive` hands its `link` to Dart (held until Dart is listening, for a tap that launched the app); `delivered` lists
   the `key` of delivered pushes. Android: Firebase app from `BuildConfig` values (none: `token` answers null and logs why);
   `onNewToken` → Dart; a launch intent with a `link` extra → Dart; `delivered` lists active notifications' tags.
-- [ ] Verify: `flutter build ios --no-codesign --debug` and `flutter build apk --debug` compile. Device behavior is the
-  Tester's, on Tony's Mac with a Tony-approved build.
+- [ ] Verify: `flutter build ios --no-codesign --debug` and `flutter build apk --debug` compile. PR CI builds neither and
+  the Engineer's account has no Xcode or Android SDK, so this and the device behavior are the Tester's, on Tony's Mac
+  with a Tony-approved build. Here: `swiftc -parse`, `plutil -lint` and the manifest's XML only.
 
 ### Task 7: No second notice for a push already shown
 
 **Files:**
-- Modify: `mobile/lib/swarm/swarm_notices.dart` (`SwarmAnnouncer.toldElsewhere(Iterable<String> keys)`), the phone shell
-  where the app comes back to the front (calls it with `deliveredKeys()` before the next read)
+- Modify: `mobile/lib/swarm/swarm_notices.dart` (`SwarmTold.addAll(Iterable<String> keys)`),
+  `mobile/lib/swarm/swarm_session.dart` (`SwarmHost.toldElsewhere`), `mobile/lib/phone/phone_shell.dart` (back in front:
+  `pushDeliveredKeys()` first, then Swarm reads)
 - Test: `mobile/test/swarm/swarm_notices_test.dart`
 
 - [ ] Step 1: test: keys marked told elsewhere are not announced (a reply row and a tag with those keys post nothing);
