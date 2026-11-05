@@ -106,6 +106,7 @@ typedef enum {
     A_ANSWER, A_QUESTION_READ, A_QUESTION_CHOICES, A_QUESTION_REVIEW, A_QUESTION_BACK, A_QUESTION_SAY,
     A_TAB_LIST,
     A_INBOX,
+    A_SIDE_PM, A_SIDE_BUDDY,
     A_NOTICE,
     A_TABS,
     A_TAB, A_TAB_REFRESH, A_TAB_DONE,
@@ -712,21 +713,16 @@ static void swarm_buddy_seen(void)
     int i = swarm_on_buddy(l) ? swarm_heard_of(l->id) : -1;
     if (i >= 0) sw.heard[i].lead[0] = 0;
 }
-// Swipe up opens the Buddy side, down the PM side again (spec 2026-10-29 Switching); true when the swipe was the side's.
-// Down on the PM side is not: it still pulls the inbox. Without Buddies neither is.
-static bool swarm_side_swipe(int dy)
+// Tapping the other half of the pair shows that side (spec 2026-11-05 PM | Buddy pair): the side kept, told to the daemon,
+// its quiet badge read. The current half, a Lead without Buddies, or no link: nothing.
+static void swarm_side_set(bool buddy)
 {
     const ht_lead_t *l = swarm_lead();
-    if (!l || !l->buddies || !s.connected) return false;
-    bool buddy = swarm_side_buddy(sw.tab), up = dy < 0;
-    if (!up && !buddy) return false;
-    if (up != buddy) {
-        swarm_side_put(sw.tab, up);
-        swarm_side_send(sw.tab);
-        swarm_buddy_seen();
-        change();
-    }
-    return true;
+    if (!l || !l->buddies || !s.connected || swarm_side_buddy(sw.tab) == buddy) return;
+    swarm_side_put(sw.tab, buddy);
+    swarm_side_send(sw.tab);
+    swarm_buddy_seen();
+    change();
 }
 // The Lead at `i` comes onto the face: its recap is asked for afresh. `select` moves the desktop there too; a
 // supertab.focus does not need it, the desktop is already there.
@@ -1409,12 +1405,24 @@ static void face_buddy_ring(ht_scene_t *f)
 {
     ht_ring_arc(f, 233 * 16, 233 * 16, 230 * 16, 3 * 16, 90, 180, color(mix_black(BUDDY_LILAC, 32)));
 }
-// The upper dot lit on the PM side, the lower one (lilac) on the Buddy side. [replied]: on the PM side, the Buddy has a word
-// not yet heard, so the lower dot takes its colour, at its own place and size.
-static void face_buddy_dots(ht_scene_t *f, bool buddy, bool replied)
+/*
+ * THE PM | BUDDY PAIR (spec 2026-11-05): a dark pill 180 x 44 px at y 388 with two equal halves, the current side's filled.
+ * A tap on the other half shows that side. Four runs always (pill, current half, two labels), and the two hits.
+ */
+static void swarm_pair(ht_scene_t *f, bool buddy)
 {
-    face_buddy_disc(f, 442, 218, buddy ? 9 : 12, buddy ? 0x55565fu : 0xeaeaf0u);
-    face_buddy_disc(f, 442, 248, buddy ? 12 : 9, buddy || replied ? BUDDY_LILAC : 0x55565fu);
+    enum { X = 143, Y = 388, W = 180, H = 44, HALF = W / 2, INSET = 3 };
+    const ht_font_t *font = &ht_lv_inter_20.base;
+    uint16_t pill = color(0x141518), edge = color(0x2e3035), on = color(0x2b2d33), white = color(0xffffff), grey = color(0x9a9ca3);
+    ht_box(f, X, Y, W, H, H / 2, pill, edge);
+    ht_box(f, X + (buddy ? HALF : 0) + INSET, Y + INSET, HALF - 2 * INSET, H - 2 * INSET, (H - 2 * INSET) / 2, on, on);
+    const char *names[2] = {"PM", "Buddy"};
+    for (int k = 0; k < 2; k++) {
+        int w = ht_measure(font, names[k]), cur = (k == 1) == buddy;
+        ht_text(f, X + k * HALF + (HALF - w) / 2, Y + (H - font->height) / 2, w, font, cur ? white : grey, cur ? on : pill, names[k]);
+    }
+    s.hits[s.hit_count++] = (hit_t){{X, Y, HALF, H}, A_SIDE_PM, 0, true};
+    s.hits[s.hit_count++] = (hit_t){{X + HALF, Y, HALF, H}, A_SIDE_BUDDY, 0, true};
 }
 /*
  * Desktop's agent pattern (avatar_art.dart superTabAgentPattern; the daemon sends its 15 half bits and colour): mirrored on
@@ -1450,7 +1458,7 @@ static void render_buddy_empty(ht_scene_t *f, const ht_lead_t *l)
     focus_put(f, 63, 238, 340, &ht_lv_inter_28.base, color(0x8a8a99), BG, "No Buddy here yet", true);
     focus_put(f, 63, 280, 340, &ht_lv_inter_20.base, color(0x6b6d78), BG, "Add one in the Harness app.", true);
     face_buddy_ring(f);
-    face_buddy_dots(f, true, false);
+    swarm_pair(f, true);
     s.hits[s.hit_count++] = (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
 }
 /*
@@ -1564,7 +1572,7 @@ static void render_swarm_face(ht_scene_t *f)
     const ht_supertab_t *t = swarm_here();
     ht_character_face_t f_ = {.recipient = l->project[0] ? l->project : "Untitled", .status = "", .hint = "",
         .tab = t ? t->name : "", .engine = buddy ? "" : l->engine, .activity = working && !s.nap ? "Working" : "",
-        .chat = !buddy && l->chat != HT_CHAT_LEAD && l->chat != HT_CHAT_BUDDY ? l->chat_name : NULL,
+        .chat = !buddy && l->chat != HT_CHAT_LEAD && l->chat != HT_CHAT_PM && l->chat != HT_CHAT_BUDDY ? l->chat_name : NULL,
         .elapsed = since, .detail = "", .mood = character_mood(), .pose = character.motion.reaction.pose,
         .asking = asking,
         .clock_ms = (s.quiet || display_is_asleep()) ? 0 : clock,
@@ -1582,7 +1590,7 @@ static void render_swarm_face(ht_scene_t *f)
     s.pet_next_ms = focus_face && !thread ? ht_focus_pet_next_ms(&f_, recap) : 0;
     ht_rect_t bubble = {0};
     bool told = bell && focus_face && !thread && ht_focus_alert_shown(&f_, recap, &bubble);
-    int bell_y = 400;
+    int bell_y = l->buddies ? 346 : 400;   // clear of the pair
     if (bell && !told) {
         if (focus_face) focus_bell(f, unread, bell_y);
         else ht_notification_bell(f, unread, f_.ink);
@@ -1611,14 +1619,25 @@ static void render_swarm_face(ht_scene_t *f)
         face_buddy_ring(f);
     }
     if (l->buddies) {
-        // The PM side's quiet sign of the Buddy's word: the lower dot's colour, and a line on the lower arc unless the bell or
-        // the face has it. Empty runs in their place, so the count never moves.
-        bool heard = !buddy && swarm_heard_of(l->id) >= 0, lower = bell && !told;
-        face_buddy_dots(f, buddy, heard);
-        for (int i = 0; i < f->count; i++) lower |= f->runs[i].arc == 2 && f->runs[i].text[0];
-        ht_box(f, 0, 0, 1, 1, 0, BG, BG); ht_box(f, 0, 0, 1, 1, 0, BG, BG);
-        if (heard && !lower && !thread) ht_arc_status_face(f, color(BUDDY_LILAC), "Your Buddy replied", &ht_arc_inter_lower);
-        else ht_text(f, 0, 0, 1, &ht_lv_inter_20.base, BG, BG, "");
+        // The pair stands at the bottom, so the lower arc is bare: the face's hint goes, and its working line (and the PM side's
+        // "Your Buddy replied") is one centred line at y 318 in its place. Empty runs where nothing is said, so the count holds.
+        char say[HT_TEXT_BYTES] = "";
+        uint16_t say_fg = color(BUDDY_LILAC);
+        for (int i = 0; i < f->count; i++) {
+            ht_run_t *r = &f->runs[i];
+            if (r->arc != 2 || !r->text[0]) continue;
+            if (working) { snprintf(say, sizeof say, "%s", r->text); say_fg = r->fg; }
+            uint8_t at = f->count;
+            f->count = (uint8_t)i;
+            ht_text(f, 0, 0, 1, &ht_lv_inter_20.base, BG, BG, "");
+            f->count = at;
+        }
+        if (!say[0] && !buddy && !thread && swarm_heard_of(l->id) >= 0) snprintf(say, sizeof say, "Your Buddy replied");
+        const ht_font_t *lf = &ht_lv_inter_20.base;
+        int w = say[0] ? ht_measure(lf, say) : 1;
+        if (w > 360) w = 360;
+        ht_text(f, 233 - w / 2, 318, w, lf, say_fg, BG, say);
+        swarm_pair(f, buddy);
     }
     // The same targets as a pane's face: the name opens PANES, the bell the inbox, the rest talks (to a local Lead).
     s.hits[s.hit_count++] = (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
@@ -3061,6 +3080,10 @@ static void dispatch(action_t a)
     case A_INBOX:
         notice_open();
         break;
+    case A_SIDE_PM:
+    case A_SIDE_BUDDY:
+        swarm_side_set(a.kind == A_SIDE_BUDDY);
+        break;
     case A_NOTICE: {
         if (s.connected && a.id[0] && swarm_notice(a.id) >= 0) {
             // The dial's own entry: enter that Swarm at that Lead, read-only for a remote one (spec §5).
@@ -3695,7 +3718,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             change();
         } else {
             // A Swarm's face scrolls the Swarm chat the desktop has open (the daemon names its tab), once a vertical drag
-            // has outlasted a flick: a quick flick up or down is still the side's (swarm_side_swipe) and sends nothing.
+            // has outlasted a flick: a quick flick up or down is still the side's (the pair's taps now) and sends nothing.
             if (gesture.axis == 1 && !sw.drag_at) sw.drag_at = now | 1;   // | 1: 0 is "not yet", so it may be now + 1
             uint32_t dragged = sw.drag_at && (int32_t)(now - sw.drag_at) > 0 ? now - sw.drag_at : 0;
             if (!scroll.live && surface && gesture.axis == 1 && swarm_scroll_reportable(dragged))
@@ -3845,8 +3868,8 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 // Reading/choosing consumed this contact; motion cannot submit an answer.
             } else if (s.view == SELECTION) {
                 // Its bounded reading cursor already consumed this vertical drag.
-            } else if (surface && swarm_mode() && swarm_side_swipe(dy)) {
-                // A Swarm project's PM side and Buddy side (spec 2026-10-29-round-dial-pm-buddy): up and back down.
+            } else if (surface && swarm_mode()) {
+                // A Swarm face's vertical swipe does nothing (spec 2026-11-05): the pair switches sides, the bell opens the inbox.
             } else if (surface && character.id == HT_CHARACTER_FOCUS && dy > 0 && notice_unread(face_id())) {
                 // Pull down from the badge. The creature skins keep this drag inert — their footer
                 // badge is a target you tap — but on Focus the badge sits at the top edge and a pull
