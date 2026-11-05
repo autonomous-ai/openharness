@@ -3,7 +3,7 @@ import type { Conversation, MessageDraft, SuperTabState } from '../model.js'
 import { numberMessages } from './commit.js'
 
 // Task #3022 (Ken, 11-05): the built-in wake checks what people taught the coordinator only when a person wrote to it since
-// the last wake. The Swarm counts that from who wrote where, never by reading the words.
+// the last wake. The Swarm counts that from who wrote where, never by reading the words, on the chat written to.
 describe('when a person last wrote to a project\'s coordinator', () => {
   const person: MessageDraft['author'] = { kind: 'person', id: 'owner', name: 'owner', membershipGeneration: 'g' }
   const agent: MessageDraft['author'] = { kind: 'agent', id: 'eng', name: 'Engineer', membershipGeneration: 'g' }
@@ -24,11 +24,14 @@ describe('when a person last wrote to a project\'s coordinator', () => {
     expect(chat(state).heardAt).toBe(20)
   })
 
-  it('moves with a person\'s message naming the coordinator in another chat of its project', () => {
+  // Review of #3066, 1: a post writes only its own chat. Marking the project chat for a post elsewhere wrote a second part on
+  // nearly every person's post, and every reader reloaded the project chat after it.
+  it('moves on the chat itself with a person\'s message naming the coordinator there, and leaves the project chat as it was', () => {
     const state = swarm()
+    const before = structuredClone(chat(state))
     numberMessages(state, [draft('p1', 'task', person, { recipients: ['pm'] })], 30)
-    expect(chat(state).heardAt).toBe(30)
-    expect(state.conversations.find(c => c.id === 'task')!.heardAt).toBeUndefined()
+    expect(state.conversations.find(c => c.id === 'task')!.heardAt).toBe(30)
+    expect(chat(state)).toEqual(before)
   })
 
   it('does not move with an agent\'s message, a system row, an agent-only notice, or a person\'s message to another agent', () => {
@@ -41,5 +44,6 @@ describe('when a person last wrote to a project\'s coordinator', () => {
       draft('p2', 'task', person),
     ], 40)
     expect(chat(state).heardAt).toBeUndefined()
+    expect(state.conversations.find(c => c.id === 'task')!.heardAt).toBeUndefined()
   })
 })

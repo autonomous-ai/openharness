@@ -142,6 +142,17 @@ describe('the built-in wake\'s jobs for what people teach the coordinator', () =
     expect(scheduled.draft.text).not.toContain('- Open-task sweep:')
   })
 
+  it('wakes it when a person wrote to it in another chat of the project', () => {
+    const state = busy()
+    state.conversations.find(c => c.id === 'g1')!.heardAt = T - 1
+    expect(wake(state)!.jobs).toEqual(['heard'])
+    // Another project's chat is not this coordinator's.
+    const other = busy()
+    other.conversations.push({ ...task(9, null, { projectId: 'p2', archived: true }), heardAt: T - 1 })
+    other.conversations.push({ ...task(8, work('working'), { projectId: 'p2' }), heardAt: T - 1 })
+    expect(wake(other)).toBeNull()
+  })
+
   it('does not wake it when nobody wrote to it since the last wake', () => {
     const state = busy()
     expect(wake(state)).toBeNull()

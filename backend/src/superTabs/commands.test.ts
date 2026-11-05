@@ -5336,6 +5336,10 @@ describe('lead.switch', () => {
     const xhigh = setup()
     xhigh.f.run({ ...xhigh.request, model: 'gpt-6-astra', effort: 'xhigh' })
     expect(xhigh.agent().switchRequest).toMatchObject({ effort: 'xhigh' })
+    // Review of #3066, 3: Claude Opus named with no effort keeps the coordinator's own default, as its start does.
+    const opus = setup()
+    opus.f.run({ ...opus.request, engine: 'claude', profileId: 'default', model: 'opus' })
+    expect(opus.agent().switchRequest).toMatchObject({ model: 'opus', effort: 'xhigh' })
     // No model named: the engine's own model and effort, as before.
     const own = setup()
     own.f.run(own.request)
