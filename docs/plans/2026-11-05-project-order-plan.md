@@ -28,20 +28,20 @@
 **Files:** Modify `mobile/lib/swarm/swarm_home_list.dart`; test `mobile/test/swarm/swarm_home_list_test.dart` and `mobile/test/swarm/swarm_home_view_test.dart`.
 **Interfaces:** Consume `swarmHomeLists`; preserve its signature and return sections.
 
-- [ ] Add regressions for A–Z mixed-case/hash names, activity/unread updates, equal names and pinned/quiet sections; update old default-order expectations.
-- [ ] Run the named phone tests, observe ordering failures and commit tests.
-- [ ] Replace default activity comparison with normalized name ordering and deterministic key tie-break; preserve explicit newest/unread choices.
-- [ ] Run affected phone tests; commit and push.
+- [x] Add regressions for A–Z mixed-case/hash names, activity/unread updates, equal names and pinned/quiet sections; update old default-order expectations.
+- [x] Run the named phone tests, observe ordering failures and commit tests.
+- [x] Replace default activity comparison with normalized name ordering and deterministic key tie-break; preserve explicit newest/unread choices.
+- [x] Run affected phone tests; commit and push.
 
 ## Task 2: Desktop/web sidebar ordering
 
 **Files:** Modify `desktop/lib/super_tabs/project_sidebar.dart`; test `desktop/test/super_tab_sidebar_test.dart`.
 **Interfaces:** Preserve `ProjectSidebar` and `superTabSidebarOrder` APIs.
 
-- [ ] Add widget regression for hash/mixed-case project names and unchanged positions after new activity; verify navigation order too.
-- [ ] Run that test, observe the ordering failure and commit tests.
-- [ ] Normalize names and use deterministic ties in row/navigation sorting.
-- [ ] Run affected Desktop tests and `python3 scripts/check-ui-style.py`; commit and push.
+- [x] Add widget regression for hash/mixed-case project names and unchanged positions after new activity; verify navigation order too.
+- [x] Run that test, observe the ordering failure and commit tests.
+- [x] Normalize names and use deterministic ties in row/navigation sorting.
+- [x] Run affected Desktop tests and `python3 scripts/check-ui-style.py`; commit and push.
 
 ## Validation scope
 
