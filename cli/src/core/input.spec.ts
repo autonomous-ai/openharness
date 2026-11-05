@@ -349,6 +349,44 @@ describe('the session input controller\'s dependencies', () => {
     expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual([])
   })
 
+  // Codex on Windows takes a paste as keys, and an Enter too soon became a newline in it, stuck in the composer (lib/pasteOnScreen.ts).
+  it.each([
+    ['once the paste shows and has stopped changing', [{ draft: false, screen: 'empty' }, { draft: true, screen: 'pasted' }, { draft: true, screen: 'pasted' }], false],
+    ['anyway at its limit, and says so', [{ draft: false, screen: 'empty' }], true],
+  ])('on Windows, presses Codex\'s Enter %s', async (_name, panes, warned) => {
+    const platform = process.platform
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    agents.set('c1', { ...agents.get('a1')!, agentId: 'c1', engine: 'codex' })
+    let read = 0, entered = false
+    const write = messageWriter({
+      readScreen: vi.fn(async (_session: unknown, capture: string | null) => ({ messageHold: null, pane: { draft: capture === 'pasted' } })) as unknown as InputDeps['readScreen'],
+      resolve: (id) => agents.get(id),
+      terminal: {
+        validateTerminal: vi.fn(async () => true),
+        captureTerminal: vi.fn(async () => panes[Math.min(read++, panes.length - 1)]!.screen),
+        submitTerminalAction: vi.fn(async (_id: string, _text: string, options?: { beforeEnter?: () => Promise<string | null> }) => {
+          expect(await options!.beforeEnter!()).toBeNull()
+          entered = true
+          return ok
+        }),
+      } as unknown as InputDeps['terminal'],
+    })
+    vi.useFakeTimers()
+    try {
+      const written = write('c1', 'a long message')
+      await vi.advanceTimersByTimeAsync(10_000)
+      await written
+    } finally {
+      vi.useRealTimers()
+      Object.defineProperty(process, 'platform', { value: platform, configurable: true })
+      agents.delete('c1')
+    }
+    expect(entered).toBe(true)
+    expect(warn.mock.calls.some(([line]) => String(line).includes('did not show in its composer'))).toBe(warned)
+    warn.mockRestore()
+  })
+
   it('reads the pane again right before the Enter, and gives the reason not to press it, a popup of the message\'s own aside', async () => {
     const screens = [READY_PANE, CLAUDE_PERMISSION, READY_PANE, null, READY_PANE, READY_PANE, `────────────\n❯ /mo\n────────────\n  /model   Set the AI model`]
     const answers: Array<string | null> = []

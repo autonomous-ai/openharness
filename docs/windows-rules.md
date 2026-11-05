@@ -62,6 +62,11 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 - `-EncodedCommand` makes PowerShell write CLIXML to stderr. Use `-Command` when anyone reads the error.
   Inside `-Command`, `-ErrorAction Stop` needs `try`/`catch` for the script to end.
 
+- **A paste can arrive as keys.** The Mac gets one paste event, so Enter after it is safe. Codex on Windows gets a stream of key
+  presses, and an Enter within 120 ms of the last becomes a newline in the paste (codex-rs `paste_burst.rs`): the message stays in
+  the composer and every later one waits behind that "draft". Wait for the paste to show on screen (`lib/pasteOnScreen.ts`), not a
+  fixed time.
+
 ## 3. Files
 
 - **A file's change time moves when its last handle closes**, after a rename that published it. Measured 2026-11-05: `ctimeNs`

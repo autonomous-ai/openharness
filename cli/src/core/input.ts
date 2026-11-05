@@ -21,6 +21,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import type { MoveGate } from '../lib/hostMove/gate.js'
 import { SessionInputController, type MessageReceipt, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
 import { passingHold } from '../lib/messageHolds.js'
+import { pasteComesAsKeys, pasteOnScreen } from '../lib/pasteOnScreen.js'
 import type { ScreenReader } from '../lib/screenReader.js'
 import type { SubmissionReader } from '../lib/submissionReader.js'
 import type { ScreenReading } from '../engines/facets/screen.js'
@@ -110,6 +111,13 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
     else promptTyped?.(session, capture, screen)
     return submitTerminalAction(id, text, {
       beforeEnter: async () => {
+        if (pasteComesAsKeys(session.engine)) {
+          const landed = await pasteOnScreen(async () => {
+            const now = await captureTerminal(id)
+            return { draft: (await readScreen(launchBound(session, resolve(id)), now))?.pane.draft === true, screen: now }
+          }, capture)
+          if (!landed) console.warn(`[inject] ${sid(id)} the paste did not show in its composer in time; pressing Enter anyway`)
+        }
         // A read that came back empty, or a composer caught between frames, is asked again for a moment
         // (a re-attach can blank one capture): only what is on screen holds the Enter back, never a
         // read that failed once. Still not read after that, it is held, as nothing says it is safe.

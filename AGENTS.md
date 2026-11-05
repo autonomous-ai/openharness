@@ -94,6 +94,8 @@ that starts a process or before testing on Windows. Every feature must look and 
 3. Prove it by recording the windows through the flow, in the person's session and on the signed build. Tests over SSH
    cannot see windows, and a detached PowerShell exits 0 having run nothing.
 4. Found a new Windows mistake? Add it to the rules in the same change, with a test that fails if it comes back.
+5. Meet a problem on Windows? First read how the Mac path solves it, and do the same thing the Windows way. The Mac is the
+   reference for what the person sees; only the mechanism differs.
 
 # Feature design rules
 
