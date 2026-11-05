@@ -21,7 +21,7 @@ the train as merged from #3226 (read on main once it lands; its branch is Team-w
 ## Global Constraints
 
 - PR body first line: "Requested by Dee through Harness."
-- Owns `backend/src/mergeTrain/` and `backend/src/github/train.ts`; `policy.ts` is used, not changed.
+- Owns the merge train (`backend/src/superTabs/mergeTrain/`, where it landed, and `backend/src/github/train.ts`) and its wiring in `backend/src/worker.ts`; `policy.ts` is used, not changed.
 - Built from main only after #3226 merges; started blocked until then.
 - No path may let the train merge with fewer reads than the rules require: an unreadable rules record or file list fails
   closed (holds the batch), never falls back to fewer reads.
@@ -39,13 +39,13 @@ the train as merged from #3226 (read on main once it lands; its branch is Team-w
 ---
 
 ### Task 1: The train reads the record
-**Files:** `backend/src/mergeTrain/*` (the gate and its config), tests beside them.
+**Files:** `backend/src/superTabs/mergeTrain/` (plan.ts, config.ts, train.ts, run.ts and their tests), `backend/src/worker.ts` (the reader).
 - [ ] Failing tests: a saved record with a new two-read area makes the train wait for two reads on a file there; with no
   record the seed applies; an unreadable record holds the batch; `mergeTrain.enabled` false starts nothing.
 - [ ] Code: call `currentRules`/`requiredReads`/`testsFor`; delete the local table, matcher and constants.
 
 ### Task 2: The train and the review steps agree
-**Files:** a test in `backend/src/mergeTrain/`.
+**Files:** `backend/src/superTabs/mergeTrain/rulesRecord.test.ts`.
 - [ ] Failing test: for the seed and for a saved record, over a fixed set of changed-file lists (security paths, tests-only,
   Desktop, unknown), the train's required reads equal what the review steps plan (`requiredReads`, or `reviewPlan` if
   #3227 is on main by then).

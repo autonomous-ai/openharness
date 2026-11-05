@@ -1,7 +1,7 @@
 /**
  * Runs the merge train (train.ts) in the singleton worker: every minute it looks at the projects with tasks that link pull
- * requests, and runs a pass for each whose train is switched on and whose interval has passed. The switch and the interval
- * are the project's rules (task #3393); until that record lands they are [TRAIN_DEFAULTS], off.
+ * requests, and runs a pass for each whose train is switched on and whose interval has passed. The switch, the interval and
+ * the reads a change needs are the project's rules record (policy.ts, task #3475): the seed, off, until a project saves one.
  *
  * A project runs only where its repository may get the app's tokens at all: the app installed there, and approved for the
  * project wherever approval is asked (github/approvals.ts), as an agent's token would be.
@@ -11,21 +11,26 @@ import { githubRepository } from '../../github/repository.js'
 import { repositoryTrain } from '../../github/train.js'
 import { logger } from '../../utils/logger.js'
 import type { SuperTabStore, TrainProject } from '../store.js'
-import { TRAIN_DEFAULTS } from './config.js'
-import type { ReviewTable } from './plan.js'
+import type { ProjectRules } from '../policy.js'
+import { currentRules } from '../policyStore.js'
 import { newTrainMemory, trainPass, type TrainMemory } from './train.js'
 
-export interface ProjectTrainRules { enabled: boolean; everyMinutes: number; reviews?: ReviewTable }
+export interface ProjectTrainRules { enabled: boolean; everyMinutes: number; rules: ProjectRules }
 export type TrainRulesReader = (tabId: string, projectId: string) => Promise<ProjectTrainRules>
-/** Until the project rules record lands (task #3393): the defaults, off for every project. */
-export const defaultTrainRules: TrainRulesReader = async () => ({ ...TRAIN_DEFAULTS })
+/** Each project's rules record as it is now (policyStore.ts currentRules): the seed, off, when it saved none. A record that
+ *  cannot be read throws, and the run skips that project: never the seed's numbers in place of a saved record. */
+export const recordTrainRules = (db: Parameters<typeof currentRules>[0]): TrainRulesReader => async (tabId, projectId) => {
+  const { rules } = await currentRules(db, tabId, projectId)
+  return { enabled: rules.mergeTrain.enabled, everyMinutes: rules.mergeTrain.everyMinutes, rules }
+}
 
 export interface MergeTrainDeps {
   store: Pick<SuperTabStore, 'trainProjects' | 'trainMerged' | 'trainTell'>
   app: Pick<GitHubApp, 'installation' | 'createToken' | 'installationCall' | 'revoke'>
   /** Whether [repository] may get the app's tokens for this project. */
   approved: (project: TrainProject, repository: string) => Promise<boolean>
-  rules?: TrainRulesReader
+  /** Each project's rules: its record (recordTrainRules). */
+  rules: TrainRulesReader
 }
 
 /** What a worker keeps per project between runs: its train's memory and when it last ran. */
@@ -33,7 +38,7 @@ export type TrainMemories = Map<string, { memory: TrainMemory; ranAt: number }>
 
 /** One run over every project. The passes that ran. */
 export async function runMergeTrain(deps: MergeTrainDeps, memories: TrainMemories, now: number): Promise<number> {
-  const rules = deps.rules ?? defaultTrainRules
+  const rules = deps.rules
   let ran = 0
   for (const project of await deps.store.trainProjects(now)) {
     const key = `${project.tabId}:${project.projectId}`

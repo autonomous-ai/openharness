@@ -123,10 +123,10 @@ describe('the merge train reads each project\'s record', () => {
   it('runs on a saved record\'s switch, at its interval', async () => {
     const on = { ...structuredClone(SEED_RULES), mergeTrain: { enabled: true, everyMinutes: 30 } }
     const { value } = deps(recordTrainRules(db(row(on))))
-    const memories = new Map()
-    expect(await runMergeTrain(value, memories, 1_000_000)).toBe(1)
-    expect(await runMergeTrain(value, memories, 1_000_000 + 20 * MINUTE)).toBe(0)
-    expect(await runMergeTrain(value, memories, 1_000_000 + 30 * MINUTE)).toBe(1)
+    const memories = new Map(), start = 100 * MINUTE
+    expect(await runMergeTrain(value, memories, start)).toBe(1)
+    expect(await runMergeTrain(value, memories, start + 20 * MINUTE)).toBe(0)
+    expect(await runMergeTrain(value, memories, start + 30 * MINUTE)).toBe(1)
   })
 
   it('holds a project whose record cannot be read: nothing read from GitHub, never the seed\'s numbers instead', async () => {
