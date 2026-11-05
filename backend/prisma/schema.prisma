@@ -1213,6 +1213,9 @@ model SuperTabActivity {
   @@index([tabId, personId, createdAt])
   /// One thread's or chat's rows of a person, for the read marks that clear them (activity.ts markActivityThreadRead).
   @@index([tabId, personId, conversationId, threadId])
+  /// A person's unread rows, newest first: the digest each of their reads asks for (activity.ts activityDigest). Through the
+  /// index above it examined every row of 30 days to find the unread (task #3146).
+  @@index([tabId, personId, readAt, createdAt])
   /// The sweep's rows past their expiry (activity.ts sweepActivity); no TTL option, which the app user cannot set (#2238).
   @@index([createdAt])
 }

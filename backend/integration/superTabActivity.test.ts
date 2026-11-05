@@ -640,6 +640,7 @@ describe('the unread-activity digest\'s plan (#3146)', () => {
     const unread = [`act-${tabId}-1`, `act-${tabId}-2`, `act-${tabId}-3`]
     expect(digest).toBe(createHash('sha256').update(unread.sort().join('\n')).digest('base64url').slice(0, 16))
     expect(reads.map(e => ({ plan: e.planSummary, keys: e.keysExamined, docs: e.docsExamined, returned: e.nreturned })))
-      .toEqual([{ plan: 'IXSCAN { tabId: 1, personId: 1, readAt: 1, createdAt: 1 }', keys: 3, docs: 3, returned: 3 }])
+      // `readAt: null` is two ranges of the index, null and missing: one scan of each.
+      .toEqual([{ plan: expect.stringMatching(/^(IXSCAN \{ tabId: 1, personId: 1, readAt: 1, createdAt: 1 \}(, |$))+$/), keys: 3, docs: 3, returned: 3 }])
   })
 })
