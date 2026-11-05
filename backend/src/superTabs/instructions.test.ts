@@ -445,6 +445,16 @@ describe('an instructions save keeps the rules people gave', () => {
       approvals: [approval('p', { kind: 'person', id: 'peer' }), approval('o', { kind: 'person', id: 'owner' })] }).result.revision).toBe(3)
   })
 
+  // A tidy counts as done only when a save follows it (pmSchedule.ts tidyRequest): the coordinator's save, not a person's.
+  it('marks a pending daily tidy done on the coordinator\'s save', () => {
+    const { f, lead } = pm()
+    f.state.projects![0]!.schedule = { lastSlot: 1, tidiedOn: '2026-11-04', tidyPending: true }
+    f.run(save(1, `${base}\n- Tests run first.`), peer, stored())
+    expect(f.state.projects![0]!.schedule).toMatchObject({ tidyPending: true })
+    f.run(save(2, base, { askedBy: 'owner' }), as(lead), stored(`${base}\n- Tests run first.`, 2))
+    expect(f.state.projects![0]!.schedule).toEqual({ lastSlot: 1, tidiedOn: '2026-11-04', tidiedRevision: 3 })
+  })
+
   it('leaves a rule whose person is no member to the project\'s owner', () => {
     const { f, lead } = pm()
     const ghost = doc('Ship on Fridays (Ghost, 2026-11-01).')
