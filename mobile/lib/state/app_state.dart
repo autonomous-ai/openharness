@@ -17,7 +17,8 @@ import 'package:dio/dio.dart';
 import 'package:xterm/xterm.dart' show RemoteScrollMemory, Terminal;
 import 'package:flutter/foundation.dart';
 // The 80-character limit on a fork's name counts what a person sees, as the desktop's does.
-import 'package:flutter/widgets.dart' show AppLifecycleListener, StringCharacters;
+import 'package:flutter/widgets.dart'
+    show AppLifecycleListener, StringCharacters;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_client.dart';
@@ -3609,10 +3610,6 @@ class AppNotifier extends ChangeNotifier {
                 channel: PushChannel(),
                 storage: paneLayoutStore.storage,
                 allowed: () => noticesEnabled(agentNotices.system),
-                device: () => viewer.keys.identity().then<String?>(
-                  (i) => b64e(i.pub),
-                  onError: (Object _) => null,
-                ),
               ));
     if (push == null) return;
     // Before the shell is up, so the push that launched the app is waiting for it as a tapped

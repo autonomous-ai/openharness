@@ -5,10 +5,8 @@ import 'package:flutter/services.dart';
 import '../logging/app_log.dart';
 
 /// Where the OS delivers this phone's pushes: the APNs device token on iOS, the FCM registration
-/// token on Android. [environment] is the APNs gateway the token belongs to (`sandbox` for a build
-/// Xcode signed for development, `production` for TestFlight and the App Store); null on Android,
-/// where FCM has only one.
-typedef PushAddress = ({String token, String platform, String? environment});
+/// token on Android. The server finds an Xcode build's sandbox token by itself (`push/apns.ts`).
+typedef PushAddress = ({String token, String platform});
 
 /// `harness/push` (iOS: `PushChannel` in `ios/Runner/AppDelegate.swift`; Android: `MainActivity.kt`
 /// and `PushService.kt`): this phone's push address, and the pushes the person tapped.
@@ -103,15 +101,7 @@ PushAddress? pushAddressFrom(Map<String, Object?>? answer) {
   final token = answer?['token'], platform = answer?['platform'];
   if (token is! String || token.isEmpty) return null;
   if (platform != 'ios' && platform != 'android') return null;
-  final environment = answer?['environment'];
-  if (platform == 'ios' && environment != 'sandbox' && environment != 'production') {
-    return null;
-  }
-  return (
-    token: token,
-    platform: platform as String,
-    environment: platform == 'ios' ? environment as String : null,
-  );
+  return (token: token, platform: platform as String);
 }
 
 /// A push's data as strings: APNs may nest values the app does not read; those are dropped.

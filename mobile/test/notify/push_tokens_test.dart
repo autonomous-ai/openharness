@@ -48,7 +48,11 @@ void main() {
 
     now = now.add(const Duration(days: 2));
     await sync();
-    expect(api.registered, hasLength(2), reason: 'renewed, so the backend keeps it');
+    expect(
+      api.registered,
+      hasLength(2),
+      reason: 'renewed, so the backend keeps it',
+    );
   });
 
   test('tells again when the token or the account changes', () async {
@@ -56,17 +60,24 @@ void main() {
     channel.next = (token: 'apns-2', platform: 'ios');
     await sync();
     await sync(account: 'acct-2');
-    expect(api.registered, [ios, (token: 'apns-2', platform: 'ios'), (token: 'apns-2', platform: 'ios')]);
+    expect(api.registered, [
+      ios,
+      (token: 'apns-2', platform: 'ios'),
+      (token: 'apns-2', platform: 'ios'),
+    ]);
   });
 
-  test('an Android token is registered and dropped with its platform', () async {
-    channel.next = (token: 'fcm:1', platform: 'android');
-    await sync();
-    await sync();
-    expect(api.registered, [(token: 'fcm:1', platform: 'android')]);
-    await push.forget(api);
-    expect(api.forgotten, [(token: 'fcm:1', platform: 'android')]);
-  });
+  test(
+    'an Android token is registered and dropped with its platform',
+    () async {
+      channel.next = (token: 'fcm:1', platform: 'android');
+      await sync();
+      await sync();
+      expect(api.registered, [(token: 'fcm:1', platform: 'android')]);
+      await push.forget(api);
+      expect(api.forgotten, [(token: 'fcm:1', platform: 'android')]);
+    },
+  );
 
   test('nothing while the OS cannot say whether notices are allowed', () async {
     allowed = null;
@@ -81,7 +92,11 @@ void main() {
     allowed = false;
     await sync();
     expect(api.forgotten, [ios]);
-    expect(channel.asked, 1, reason: 'no address is asked for while notices are off');
+    expect(
+      channel.asked,
+      1,
+      reason: 'no address is asked for while notices are off',
+    );
 
     // Back on: told again at once, not a week later.
     allowed = true;
@@ -95,12 +110,15 @@ void main() {
     expect(api.forgotten, isEmpty);
   });
 
-  test('no address (no push in this build, or the OS gave none): nothing is sent', () async {
-    channel.next = null;
-    await sync();
-    expect(api.registered, isEmpty);
-    expect(storage.values, isEmpty);
-  });
+  test(
+    'no address (no push in this build, or the OS gave none): nothing is sent',
+    () async {
+      channel.next = null;
+      await sync();
+      expect(api.registered, isEmpty);
+      expect(storage.values, isEmpty);
+    },
+  );
 
   test('a backend that did not take it is asked again after an hour, not at every resume', () async {
     api.refuseRegister = ApiException('Request failed (404)', status: 404);
@@ -121,42 +139,55 @@ void main() {
     expect(storage.values, isEmpty);
   });
 
-  test('a sign-out takes the address back and stops the OS delivering to it', () async {
-    await sync();
-    await push.forget(api);
-    expect(api.forgotten, [ios]);
-    expect(channel.forgot, 1);
-    expect(storage.values, isEmpty);
+  test(
+    'a sign-out takes the address back and stops the OS delivering to it',
+    () async {
+      await sync();
+      await push.forget(api);
+      expect(api.forgotten, [ios]);
+      expect(channel.forgot, 1);
+      expect(storage.values, isEmpty);
 
-    // The next sign-in tells the backend again, whatever the week said.
-    await sync();
-    expect(api.registered, hasLength(2));
-  });
+      // The next sign-in tells the backend again, whatever the week said.
+      await sync();
+      expect(api.registered, hasLength(2));
+    },
+  );
 
-  test('a sign-out the backend did not hear still stops the OS delivering', () async {
-    await sync();
-    api.refuseForget = ApiException('Request failed (503)', status: 503);
-    await push.forget(api);
-    expect(api.forgotten, isEmpty);
-    expect(channel.forgot, 1);
-    expect(storage.values, isEmpty, reason: 'the next account starts from nothing');
-  });
+  test(
+    'a sign-out the backend did not hear still stops the OS delivering',
+    () async {
+      await sync();
+      api.refuseForget = ApiException('Request failed (503)', status: 503);
+      await push.forget(api);
+      expect(api.forgotten, isEmpty);
+      expect(channel.forgot, 1);
+      expect(
+        storage.values,
+        isEmpty,
+        reason: 'the next account starts from nothing',
+      );
+    },
+  );
 
-  test('a sync asked for before a sign-out registers nothing after it', () async {
-    final answer = Completer<bool?>();
-    push = PushTokens(
-      channel: channel,
-      storage: storage,
-      allowed: () => answer.future,
-      now: () => now,
-    );
-    final syncing = sync();
-    final forgetting = push.forget(api);
-    answer.complete(true);
-    await Future.wait([syncing, forgetting]);
-    expect(api.registered, isEmpty);
-    expect(channel.forgot, 1);
-  });
+  test(
+    'a sync asked for before a sign-out registers nothing after it',
+    () async {
+      final answer = Completer<bool?>();
+      push = PushTokens(
+        channel: channel,
+        storage: storage,
+        allowed: () => answer.future,
+        now: () => now,
+      );
+      final syncing = sync();
+      final forgetting = push.forget(api);
+      answer.complete(true);
+      await Future.wait([syncing, forgetting]);
+      expect(api.registered, isEmpty);
+      expect(channel.forgot, 1);
+    },
+  );
 
   test('a record on disk it cannot read counts as never told', () async {
     await storage.write('push_token_sent_v1', '{not json');
@@ -168,15 +199,21 @@ void main() {
     expect(kept['platform'], 'ios');
   });
 
-  test('a record from before the platform was kept counts as never told', () async {
-    await storage.write(
-      'push_token_sent_v1',
-      jsonEncode({'account': 'acct-1', 'token': 'apns-1', 'at': now.millisecondsSinceEpoch}),
-    );
-    await sync();
-    expect(api.registered, [ios]);
-  });
-
+  test(
+    'a record from before the platform was kept counts as never told',
+    () async {
+      await storage.write(
+        'push_token_sent_v1',
+        jsonEncode({
+          'account': 'acct-1',
+          'token': 'apns-1',
+          'at': now.millisecondsSinceEpoch,
+        }),
+      );
+      await sync();
+      expect(api.registered, [ios]);
+    },
+  );
 }
 
 class _Channel extends PushChannel {

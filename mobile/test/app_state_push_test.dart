@@ -24,18 +24,21 @@ void main() {
     );
   });
 
-  test('signed in, the address reaches the backend; signed out, it is taken back', () async {
-    final rig = viewerApp(pushTokens: push);
-    await rig.app.bootstrap();
-    await settle();
-    expect(rig.api.pushRegistered, [apns1]);
+  test(
+    'signed in, the address reaches the backend; signed out, it is taken back',
+    () async {
+      final rig = viewerApp(pushTokens: push);
+      await rig.app.bootstrap();
+      await settle();
+      expect(rig.api.pushRegistered, [apns1]);
 
-    await rig.app.logout();
-    await settle();
-    expect(rig.api.pushForgotten, [apns1]);
-    expect(channel.forgot, 1);
-    rig.app.dispose();
-  });
+      await rig.app.logout();
+      await settle();
+      expect(rig.api.pushForgotten, [apns1]);
+      expect(channel.forgot, 1);
+      rig.app.dispose();
+    },
+  );
 
   test('signed out, nothing reaches the backend', () async {
     final rig = viewerApp(signedIn: false, pushTokens: push);
@@ -62,8 +65,15 @@ void main() {
     final rig = viewerApp(pushTokens: push);
     await rig.app.bootstrap();
     await settle();
-    channel.onOpened!({'kind': 'agent_question', 'machine': 'm1', 'agent': 'a1'});
-    expect(rig.app.agentNotices.system.opened.value, (machineId: 'm1', agentId: 'a1'));
+    channel.onOpened!({
+      'kind': 'agent_question',
+      'machine': 'm1',
+      'agent': 'a1',
+    });
+    expect(rig.app.agentNotices.system.opened.value, (
+      machineId: 'm1',
+      agentId: 'a1',
+    ));
     rig.app.dispose();
     expect(channel.closed, isTrue);
   });

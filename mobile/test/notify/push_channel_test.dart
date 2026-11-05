@@ -42,12 +42,22 @@ void main() {
   }
 
   group('address', () {
-    test('an iOS or Android token is its platform and token, nothing else', () async {
-      answer = (_) => {'token': 'abc', 'platform': 'ios', 'environment': 'sandbox'};
-      expect(await PushChannel().address(), (token: 'abc', platform: 'ios'));
-      answer = (_) => {'token': 'fcm:1', 'platform': 'android'};
-      expect(await PushChannel().address(), (token: 'fcm:1', platform: 'android'));
-    });
+    test(
+      'an iOS or Android token is its platform and token, nothing else',
+      () async {
+        answer = (_) => {
+          'token': 'abc',
+          'platform': 'ios',
+          'environment': 'sandbox',
+        };
+        expect(await PushChannel().address(), (token: 'abc', platform: 'ios'));
+        answer = (_) => {'token': 'fcm:1', 'platform': 'android'};
+        expect(await PushChannel().address(), (
+          token: 'fcm:1',
+          platform: 'android',
+        ));
+      },
+    );
 
     test('anything else names no address', () async {
       for (final bad in <Object?>[
@@ -62,10 +72,16 @@ void main() {
       }
     });
 
-    test('the OS refusing (no network, no entitlement) is no address, not a crash', () async {
-      answer = (_) => throw PlatformException(code: 'unregistered', message: 'no aps-environment');
-      expect(await PushChannel().address(), isNull);
-    });
+    test(
+      'the OS refusing (no network, no entitlement) is no address, not a crash',
+      () async {
+        answer = (_) => throw PlatformException(
+          code: 'unregistered',
+          message: 'no aps-environment',
+        );
+        expect(await PushChannel().address(), isNull);
+      },
+    );
 
     test('a build with no push side at all is no address', () async {
       messenger.setMockMethodCallHandler(method, null);
@@ -80,29 +96,40 @@ void main() {
   });
 
   group('tapped pushes', () {
-    test('the one that launched the app is taken when Dart starts listening', () async {
-      waiting.add({'kind': 'swarm', 'swarm': 's1', 'conversation': 'c1'});
-      final opened = <Map<String, String>>[];
-      PushChannel().listen(onOpened: opened.add, onChanged: () {});
-      await pumpEventQueue();
-      expect(opened, [
-        {'kind': 'swarm', 'swarm': 's1', 'conversation': 'c1'},
-      ]);
-    });
+    test(
+      'the one that launched the app is taken when Dart starts listening',
+      () async {
+        waiting.add({'kind': 'swarm', 'swarm': 's1', 'conversation': 'c1'});
+        final opened = <Map<String, String>>[];
+        PushChannel().listen(onOpened: opened.add, onChanged: () {});
+        await pumpEventQueue();
+        expect(opened, [
+          {'kind': 'swarm', 'swarm': 's1', 'conversation': 'c1'},
+        ]);
+      },
+    );
 
-    test('one tapped while running is taken when the native side says it arrived', () async {
-      final opened = <Map<String, String>>[];
-      PushChannel().listen(onOpened: opened.add, onChanged: () {});
-      await pumpEventQueue();
-      expect(opened, isEmpty);
+    test(
+      'one tapped while running is taken when the native side says it arrived',
+      () async {
+        final opened = <Map<String, String>>[];
+        PushChannel().listen(onOpened: opened.add, onChanged: () {});
+        await pumpEventQueue();
+        expect(opened, isEmpty);
 
-      waiting.add({'kind': 'agent_done', 'machine': 'm1', 'agent': 'a1', 'aps': {'alert': 'x'}});
-      await fromNative('arrived');
-      await pumpEventQueue();
-      expect(opened, [
-        {'kind': 'agent_done', 'machine': 'm1', 'agent': 'a1'},
-      ], reason: 'values that are not strings are dropped');
-    });
+        waiting.add({
+          'kind': 'agent_done',
+          'machine': 'm1',
+          'agent': 'a1',
+          'aps': {'alert': 'x'},
+        });
+        await fromNative('arrived');
+        await pumpEventQueue();
+        expect(opened, [
+          {'kind': 'agent_done', 'machine': 'm1', 'agent': 'a1'},
+        ], reason: 'values that are not strings are dropped');
+      },
+    );
 
     test('a new address from the OS is told', () async {
       var changed = 0;

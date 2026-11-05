@@ -5,30 +5,28 @@ import '../core/local_key_value_store.dart';
 import '../logging/app_log.dart';
 import 'push_channel.dart';
 
-/// What the backend keeps of a phone's push address (`docs/design/2026-11-05-phone-push.md`).
+/// What the backend keeps of a phone's push address (`backend/src/routes/pushDevices.ts`).
 abstract interface class PushTokenApi {
-  /// `PUT /api/push-tokens`: [address] reaches the signed-in account from now on, and [device] (this
-  /// phone's device key, when it has one) ties it to this phone, so removing the phone from the
-  /// account removes it too. Throws when the backend did not take it.
-  Future<void> registerPushToken(PushAddress address, {String? device});
+  /// `POST /api/push-devices`: [address] reaches the signed-in account from now on. Throws when
+  /// the backend did not take it.
+  Future<void> registerPushToken(PushAddress address);
 
-  /// `DELETE /api/push-tokens`: [token] no longer reaches the account. Throws when the backend did
-  /// not let it go.
-  Future<void> forgetPushToken(String token);
+  /// `POST /api/push-devices/drop`: [address] no longer reaches the account. Throws when the
+  /// backend did not let it go.
+  Future<void> forgetPushToken(PushAddress address);
 }
 
 /// Tells the backend where to push to this phone while someone is signed in, and takes it back when
 /// they sign out or turn notifications off.
 ///
 /// The address sent last is kept on disk with the account and the time, so a launch tells the
-/// backend only when something changed, or when [renewEvery] has passed: the backend lets go of an
-/// address no phone renewed for 60 days. Calls run one at a time, in the order made.
+/// backend only when something changed, or when [renewEvery] has passed: the backend lets go of a
+/// phone not seen for 90 days (`push/devices.ts`). Calls run one at a time, in the order made.
 class PushTokens {
   PushTokens({
     required this.channel,
     required this._storage,
     required this._allowed,
-    required this._device,
     DateTime Function()? now,
   }) : _now = now ?? DateTime.now;
 
@@ -38,13 +36,11 @@ class PushTokens {
   /// Whether the OS lets this app post notices: null when it cannot say.
   final Future<bool?> Function() _allowed;
 
-  /// This phone's device key, null when there is none yet.
-  final Future<String?> Function() _device;
   final DateTime Function() _now;
 
   static const _key = 'push_token_sent_v1';
 
-  /// How often an unchanged address is told again, well inside the backend's 60 days.
+  /// How often an unchanged address is told again, well inside the backend's 90 days.
   static const renewEvery = Duration(days: 7);
 
   /// After the backend did not take an address, how long this launch waits before asking again: a
@@ -84,27 +80,24 @@ class PushTokens {
       if (address == null) return;
       if (sent != null &&
           sent.account == account &&
-          sent.token == address.token &&
-          sent.environment == address.environment &&
+          sent.address == address &&
           _now().difference(sent.at) < renewEvery) {
         return;
       }
-      final device = await _device();
       if (epoch != _epoch || !current()) return;
       try {
-        await api.registerPushToken(address, device: device).timeout(callTimeout);
+        await api.registerPushToken(address).timeout(callTimeout);
       } catch (error) {
         _failedAt = _now();
-        appLog.warn('push', 'push address not registered', error: _describe(error));
+        appLog.warn(
+          'push',
+          'push address not registered',
+          error: _describe(error),
+        );
         return;
       }
       _failedAt = null;
-      await _write((
-        account: account,
-        token: address.token,
-        environment: address.environment,
-        at: _now(),
-      ));
+      await _write((account: account, address: address, at: _now()));
       appLog.info('push', 'push address registered (${address.platform})');
     });
   }
@@ -125,11 +118,15 @@ class PushTokens {
 
   Future<void> _take(PushTokenApi api, _Sent sent) async {
     try {
-      await api.forgetPushToken(sent.token).timeout(callTimeout);
+      await api.forgetPushToken(sent.address).timeout(callTimeout);
       await _storage.delete(_key);
       appLog.info('push', 'push address forgotten');
     } catch (error) {
-      appLog.warn('push', 'push address not forgotten', error: _describe(error));
+      appLog.warn(
+        'push',
+        'push address not forgotten',
+        error: _describe(error),
+      );
     }
   }
 
@@ -148,14 +145,15 @@ class PushTokens {
       if (raw == null) return null;
       final json = jsonDecode(raw);
       if (json is! Map) return null;
-      final account = json['account'], token = json['token'], at = json['at'];
-      final environment = json['environment'];
-      if (account is! String || token is! String || at is! int) return null;
-      if (environment != null && environment is! String) return null;
+      final account = json['account'], at = json['at'];
+      final address = pushAddressFrom({
+        'token': json['token'],
+        'platform': json['platform'],
+      });
+      if (account is! String || address == null || at is! int) return null;
       return (
         account: account,
-        token: token,
-        environment: environment as String?,
+        address: address,
         at: DateTime.fromMillisecondsSinceEpoch(at),
       );
     } on FormatException {
@@ -167,14 +165,14 @@ class PushTokens {
     _key,
     jsonEncode({
       'account': sent.account,
-      'token': sent.token,
-      'environment': sent.environment,
+      'platform': sent.address.platform,
+      'token': sent.address.token,
       'at': sent.at.millisecondsSinceEpoch,
     }),
   );
 }
 
-typedef _Sent = ({String account, String token, String? environment, DateTime at});
+typedef _Sent = ({String account, PushAddress address, DateTime at});
 
 /// The failure, short. Neither an `ApiException` nor a `DioException` says the request's body, which
 /// is where the token is.
