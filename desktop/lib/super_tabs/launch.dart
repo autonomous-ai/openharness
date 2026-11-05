@@ -663,7 +663,6 @@ class SuperTabLaunch {
   /// the Swarm to start it on [LeadSwarmStart.machineId]. Each step keeps
   /// its receipt in the journal, so a retry repeats none of them.
   Future<void> startInSwarm(LeadSwarmStart start) async {
-    refuseFullDesk();
     checkAccount();
     saved['initialMessage'] = start.task;
     await _createProject(start.task);
@@ -821,15 +820,24 @@ class SuperTabLaunch {
   }
 
   /// A Personal start whose pane would need a tab the full desk cannot hold
-  /// is refused here, before any agent runs (task #3099).
+  /// is refused here, before any agent runs (task #3099). A start already
+  /// asked for is not: its agent may be running. A Product Manager started
+  /// on a Swarm machine ([startInSwarm]) puts no pane on this desk, so it
+  /// needs no tab.
   void refuseFullDesk() {
+    if (started) return;
     final refusal = PersonalProjects.of(app).startRefusal(
       saved['tabId'] as String?,
       saved['conversationId'] as String?,
       newProject:
           saved['newProject'] == true && saved['projectPrepared'] != true,
     );
-    if (refusal != null) throw SuperTabFailure('TABS_FULL', refusal);
+    if (refusal != null) {
+      // Said in the log by its code alone: how often a full desk stops a
+      // start is what warns that the desk's 24 tabs are near.
+      appLog.warn('super-tabs', 'Personal start refused (TABS_FULL)');
+      throw SuperTabFailure('TABS_FULL', refusal);
+    }
   }
 
   Future<String> prepare(String machine, String task) async {

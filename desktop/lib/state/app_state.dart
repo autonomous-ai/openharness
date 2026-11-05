@@ -21362,10 +21362,6 @@ class AppNotifier extends ChangeNotifier {
   /// How many of this window's tabs the desk holds.
   int get deskTabCount => swarms.where(_deskTracks).length;
 
-  /// Tab [id] named [name], made in the background when it is not here yet:
-  /// the tab on screen stays, and the name is not the person's, so it may
-  /// follow what it is named after (a Personal project's own tab, task
-  /// #3099). It reaches the desk as any new tab does.
   /// Tab [id] takes [name] without it becoming the person's: a Personal
   /// project's tab following its project's rename. A name the person chose
   /// stays.
@@ -21380,6 +21376,10 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Tab [id] named [name], made in the background when it is not here yet:
+  /// the tab on screen stays, and the name is not the person's, so it may
+  /// follow what it is named after (a Personal project's own tab, task
+  /// #3099). It reaches the desk as any new tab does.
   Swarm ensureBackgroundTab(String id, String name) {
     final existing = swarms.where((s) => s.id == id).firstOrNull;
     if (existing != null) return existing;

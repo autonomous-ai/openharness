@@ -39,14 +39,16 @@ sign-in, fake Swarm server).
 
 - **Id:** `project-` + the first 24 hex characters of sha256(`project:<projectId>`); the second and third tabs add
   `-2`, `-3`. The same project id gives the same tab id on every computer.
-- **Link:** a tab whose id has that shape belongs to the Personal project whose id hashes to it. A no-repo pane in it
-  joins that project. If no project of Personal matches (deleted, or not read yet), no project is made for it: the
-  pane stays in its tab only, so no computer makes a second project for that tab.
+- **Link:** a tab whose id has that shape belongs to the Personal project whose id hashes to it. Every pane in it joins
+  that project, a pane with a repo too: it was started there, and its repo must not get a second project for it
+  (Reed's review). If no project of Personal matches (deleted, or not read yet), no project is made for the tab: a
+  no-repo pane stays in its tab only, and a repo pane joins its repo's project as in any ordinary tab.
 - **Name:** the first tab takes the project's name, the next ones "api 2", "api 3". On each Personal sync a tab whose
   name the person did not choose follows the project's current name. A person's rename (`nameIsCustom`) stays.
 - **Room:** a project tab is full at 9 harness panes (`PaneLayoutStore.maxPanes`, the desk's `DESK_MAX_PANES`). With
   no project tab of the project having room and 24 tabs on the desk, `prepare` throws `TABS_FULL` with the message.
-  A new project needs a new tab, so it is refused at 24 tabs too.
+  A new project needs a new tab, so it is refused at 24 tabs too. A start already asked for (a retried journal) is
+  never refused, and a Product Manager started on a Swarm machine puts no pane here, so it is not checked.
 - **Layout:** saved when the person drags the dividers or picks a preset in Personal while it shows a project whose
   panes are not exactly one tab's (where `soleTab` already gives the sizes). Applied when that project is shown again
   with the same number of panes. Removed when the project is gone from Personal.
@@ -144,7 +146,9 @@ the new test file.
 - Concurrency: desk changes go through the desk's existing idempotent ops (`tab.create` of an id already there changes
   nothing), so two computers placing at once make one tab. Local store writes are per account, as today.
 - Read cost: nothing new is read; the link hashes the projects the Personal snapshot already holds.
-- Scale: the desk's 24 tabs is reached first; the refusal names it. Its count is the metric that warns.
+- Scale: the desk's 24 tabs is reached first; the refusal names it and is logged by its code (`TABS_FULL`). A product
+  measure of refusals needs a new flow in the shared measurement vocabulary (backend and phone), proposed separately
+  rather than built here.
 - Compatibility: older Desktops, the phone and the web read a project tab as an ordinary desk tab. An older Desktop
   maps its no-repo panes to a `tab:` project as today (one stray project there, until it updates).
 - Migration and rollback: no data migrated; a revert leaves project tabs as ordinary tabs.
