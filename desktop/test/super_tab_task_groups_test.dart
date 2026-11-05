@@ -82,7 +82,7 @@ Future<SuperTabController> pumpGrouped(
             onSelect: c.select,
             attention: SuperTabAttention.of(c),
             activity: SuperTabActivity.of(c),
-            onNotifications: () {},
+            onPage: (_) {},
           ),
         ),
       ),

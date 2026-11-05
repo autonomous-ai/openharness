@@ -233,7 +233,7 @@ void main() {
       await shot('toast-opened');
 
       await back();
-      await tester.tap(find.byKey(const ValueKey('super-activity')));
+      await tester.tap(find.byKey(const ValueKey('super-decisions')));
       await frames();
       await shot('activity');
       await tester.tap(find.text('Nova is waiting on you'));

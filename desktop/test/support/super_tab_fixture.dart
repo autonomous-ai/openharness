@@ -1388,8 +1388,11 @@ class ConversationServer {
           // Left to the PM: the backend takes the recommended option.
           final asked = decisions.firstWhere((d) => d['id'] == id);
           answerDecision(id, asked['recommended'] as int, delegated: true);
+        } else if (command['choice'] case final int choice) {
+          answerDecision(id, choice);
         } else {
-          answerDecision(id, command['choice'] as int);
+          // A typed answer: its words, with no option (decisions.ts).
+          answerDecision(id, null, note: command['note'] as String);
         }
       } else if (command['type'] == 'mention.done') {
         mentions.firstWhere((m) => m['id'] == command['mentionId'])
@@ -2144,9 +2147,15 @@ class ConversationServer {
   }
 
   /// The reader answers one, here or on another device.
-  void answerDecision(String id, int choice, {bool delegated = false}) {
+  void answerDecision(
+    String id,
+    int? choice, {
+    bool delegated = false,
+    String? note,
+  }) {
     decisions.firstWhere((d) => d['id'] == id)
       ..['choice'] = choice
+      ..['note'] = note
       ..['delegated'] = delegated
       ..['answeredAt'] = '2026-10-27T06:00:00Z';
     state['decisionsWaiting'] = (state['decisionsWaiting'] as int) - 1;

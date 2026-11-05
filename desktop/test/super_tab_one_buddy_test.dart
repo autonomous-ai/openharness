@@ -142,7 +142,7 @@ void main() {
 
   group('the sidebar', () {
     testWidgets(
-      'shows Buddy above Projects, with no # and no Buddies section',
+      'shows Buddy first under Projects, with no # and no Buddies section',
       (tester) async {
         final server = oneBuddySwarm();
         giveSwarmBuddy(server);
@@ -159,12 +159,12 @@ void main() {
         );
         expect(titles(tester), isNot(contains('Buddies')));
         expect(titles(tester), contains('Projects'));
-        // Over Projects' heading, so over every project's row (Quiet Swarm,
-        // screen 1).
-        final projectsHeading = tester.getTopLeft(find.text('Projects')).dy;
-        expect(tester.getBottomLeft(buddyRow).dy, lessThan(projectsHeading));
+        // The first row under Projects, over every project's row (anh Dee,
+        // 11-05, task #2996).
+        final projectsHeading = tester.getBottomLeft(find.text('Projects')).dy;
+        expect(tester.getTopLeft(buddyRow).dy, greaterThan(projectsHeading));
         expect(
-          projectsHeading,
+          tester.getBottomLeft(buddyRow).dy,
           lessThan(
             tester
                 .getTopLeft(find.byKey(const ValueKey('super-project-lead')))
