@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -12,6 +14,7 @@ import '../finder/finder_file_kind.dart';
 import '../widgets/desktop_chrome.dart';
 import 'attachment_upload.dart' show kSuperTabFormAttachmentMaxBytes;
 import 'file_links.dart';
+import 'image_cache.dart';
 import 'model.dart';
 
 /// The largest file read into the chat's text viewer; a bigger one opens in
@@ -27,12 +30,18 @@ Future<Uint8List> Function(Uri url, {int? maxBytes}) attachmentFetcher =
 /// A picture off the attachments host, drawn where the chat shows it; tests
 /// hand it bytes instead.
 @visibleForTesting
-ImageProvider Function(Uri url) attachmentImage = _networkImage;
+ImageProvider Function(AttachmentImage picture) attachmentImage = _asItIs;
 
-ImageProvider _networkImage(Uri url) => AttachmentImage(url);
+ImageProvider _asItIs(AttachmentImage picture) => picture;
 
-/// The picture at [url] through [attachmentImage].
-ImageProvider attachmentPicture(Uri url) => attachmentImage(url);
+/// File [fileId]'s picture, read from [url] unless this computer already has
+/// it, through [attachmentImage]: no more than [side] points each way, or the
+/// original without one.
+ImageProvider attachmentPicture(
+  Uri url, {
+  required String fileId,
+  double? side,
+}) => attachmentImage(AttachmentImage(url, fileId: fileId, side: side));
 
 /// The file at [url] through [attachmentFetcher], for the text viewer
 /// (`attachment_text_viewer.dart`), which a browser downloads apart.
@@ -221,41 +230,118 @@ class _AttachmentViewerActionsState extends State<AttachmentViewerActions> {
   }
 }
 
-/// The picture at [url], read through [attachmentFetcher] like any chat file:
-/// a redirect is refused, so nothing from another host is fetched or drawn
-/// (`NetworkImage` follows one).
+/// File [fileId]'s picture, read at [url] through [attachmentFetcher] like any
+/// chat file: a redirect is refused, so nothing from another host is fetched
+/// or drawn (`NetworkImage` follows one). It is the file's, whatever link it
+/// came by: Flutter holds it by [fileId], and the disk keeps its bytes
+/// ([superTabImageCache]), so a fresh short-lived link to a file already seen
+/// downloads nothing. With [side], it is decoded no larger than [side] points
+/// each way at the screen's pixel ratio, as the chat shows it; without, whole,
+/// as the full-screen viewer does.
+///
+/// Built only with a link that opens now, the message's own or a fresh one the
+/// server granted, so the cache serves only a file this reader may read.
 @immutable
-class AttachmentImage extends ImageProvider<AttachmentImage> {
-  const AttachmentImage(this.url);
+class AttachmentImage extends ImageProvider<AttachmentPictureKey> {
+  const AttachmentImage(this.url, {required this.fileId, this.side});
 
   final Uri url;
+  final String fileId;
+  final double? side;
 
   @override
-  Future<AttachmentImage> obtainKey(ImageConfiguration configuration) =>
-      SynchronousFuture(this);
+  Future<AttachmentPictureKey> obtainKey(ImageConfiguration configuration) {
+    final side = this.side;
+    final ratio = configuration.devicePixelRatio ?? 1;
+    return SynchronousFuture(
+      AttachmentPictureKey(fileId, side == null ? null : (side * ratio).ceil()),
+    );
+  }
 
   @override
   ImageStreamCompleter loadImage(
-    AttachmentImage key,
+    AttachmentPictureKey key,
     ImageDecoderCallback decode,
   ) => MultiFrameImageStreamCompleter(
-    codec: _decode(decode),
+    codec: _load(key, decode),
     scale: 1,
-    debugLabel: url.toString(),
+    debugLabel: 'attachment ${key.fileId}',
   );
 
-  // No more than a picture shown in place may weigh, whatever its row says:
-  // a larger one fails to draw rather than being read whole.
-  Future<ui.Codec> _decode(ImageDecoderCallback decode) async => decode(
-    await ui.ImmutableBuffer.fromUint8List(
-      await readAttachment(url, maxBytes: kSuperTabFormAttachmentMaxBytes),
-    ),
-  );
+  Future<ui.Codec> _load(
+    AttachmentPictureKey key,
+    ImageDecoderCallback decode,
+  ) async {
+    final cache = superTabImageCache;
+    final began = cache.generation;
+    try {
+      final kept = await cache.read(fileId);
+      // No more than a picture shown in place may weigh, whatever its row
+      // says: a larger one fails to draw rather than being read whole.
+      final bytes =
+          kept ??
+          await readAttachment(url, maxBytes: kSuperTabFormAttachmentMaxBytes);
+      Size? shape;
+      final codec = await decode(
+        await ui.ImmutableBuffer.fromUint8List(bytes),
+        getTargetSize: (width, height) {
+          shape = Size(width.toDouble(), height.toDouble());
+          final pixels = key.pixels;
+          if (pixels == null || math.max(width, height) <= pixels) {
+            return const ui.TargetImageSize();
+          }
+          return width >= height
+              ? ui.TargetImageSize(width: pixels)
+              : ui.TargetImageSize(height: pixels);
+        },
+      );
+      if (kept == null && shape != null) {
+        unawaited(cache.keep(fileId, bytes, shape!, generation: began));
+      }
+      return codec;
+    } catch (_) {
+      // Held by the file's id, a failure would answer every later link to
+      // it, the fresh one asked for because this one ended included.
+      PaintingBinding.instance.imageCache.evict(key);
+      rethrow;
+    }
+  }
 
   @override
   bool operator ==(Object other) =>
-      other is AttachmentImage && other.url == url;
+      other is AttachmentImage &&
+      other.fileId == fileId &&
+      other.side == side &&
+      other.url == url;
 
   @override
-  int get hashCode => url.hashCode;
+  int get hashCode => Object.hash(fileId, side, url);
+}
+
+/// Signing out, or a session that ends: the chat's pictures are the
+/// account's, and none outlives it, on disk or decoded in memory.
+Future<void> superTabForgetPictures() {
+  PaintingBinding.instance.imageCache
+    ..clear()
+    ..clearLiveImages();
+  return superTabImageCache.clear();
+}
+
+/// What Flutter holds a chat picture by: its file, and the pixels it was
+/// decoded at (null: the original). Never its link, which changes.
+@immutable
+class AttachmentPictureKey {
+  const AttachmentPictureKey(this.fileId, this.pixels);
+
+  final String fileId;
+  final int? pixels;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AttachmentPictureKey &&
+      other.fileId == fileId &&
+      other.pixels == pixels;
+
+  @override
+  int get hashCode => Object.hash(fileId, pixels);
 }

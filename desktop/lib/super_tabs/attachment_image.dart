@@ -134,7 +134,7 @@ class _SuperTabInlineImageState extends State<SuperTabInlineImage> {
               borderRadius: radius,
               child: ExcludeSemantics(
                 child: Image(
-                  image: attachmentPicture(url),
+                  image: attachmentPicture(url, fileId: file.id),
                   fit: BoxFit.contain,
                   frameBuilder: (_, child, frame, synchronous) =>
                       frame == null && !synchronous ? _loading() : child,
@@ -556,7 +556,7 @@ class _SuperTabImageViewerState extends State<SuperTabImageViewer> {
       quarterTurns: _turns,
       child: Image(
         key: ValueKey('super-attachment-image:${file.id}'),
-        image: attachmentPicture(url),
+        image: attachmentPicture(url, fileId: file.id),
         fit: BoxFit.contain,
         loadingBuilder: (_, child, progress) => progress == null
             ? child
