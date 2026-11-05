@@ -139,7 +139,6 @@ void main() {
       'Retry recovers an update refusal, first load: $firstLoad, web: $web',
       (tester) async {
         final c = open();
-        addTearDown(c.dispose);
         if (!firstLoad) await c.refresh();
         refuse = true;
         await c.refresh();
@@ -159,6 +158,7 @@ void main() {
         );
         await tester.pumpWidget(const SizedBox());
         await c.flush();
+        c.dispose();
       },
     );
   }
@@ -167,7 +167,6 @@ void main() {
     'Retry preserves a real refusal and keeps automatic reads stopped',
     (tester) async {
       final c = open(poll: const Duration(seconds: 3));
-      addTearDown(c.dispose);
       refuse = true;
       c.start();
       await show(tester, c);
@@ -183,6 +182,7 @@ void main() {
       expect(reads, hasLength(after));
       await tester.pumpWidget(const SizedBox());
       await c.flush();
+      c.dispose();
     },
   );
 
@@ -190,7 +190,6 @@ void main() {
     'successful Retry resumes polling and overlapping retries share a read',
     (tester) async {
       final c = open(poll: const Duration(seconds: 3));
-      addTearDown(c.dispose);
       c.start();
       await tester.pump();
       refuse = true;
@@ -220,6 +219,7 @@ void main() {
       expect(c.stateReads, greaterThan(recovered));
       await tester.pumpWidget(const SizedBox());
       await c.flush();
+      c.dispose();
     },
   );
 }
