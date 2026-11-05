@@ -52,6 +52,8 @@ const KEPT = [...days('2026-09-28', '2026-10-02'), '2026-10-30'].flatMap(day => 
 const TOTALS = [{ dayUtc: new Date('2026-10-20'), metric: 'turns_started', value: 41 }, { dayUtc: new Date('2026-11-01'), metric: 'turns_started', value: 7 }]
 
 beforeEach(async () => {
+  // Totals a test left waiting in memory must not land in the next test's database.
+  await usage.flushRelayUsage().catch(() => {})
   // The database as it is before the release: no receipt rule yet.
   await db.$runCommandRaw({ collMod: 'product_usage_receipts', validator: {}, validationLevel: 'off' })
   await db.productUsageReceipt.deleteMany()
@@ -133,8 +135,13 @@ const turnsEnded = async (day: string) =>
   (await db.productUsageTotal.findUnique({ where: { dayUtc_metric: { dayUtc: new Date(day), metric: 'turns_ended' } } }))?.value
 const drain = async (at = now) => { while ((await pass(at)).removed) { /* the next chunks */ } }
 const account = '6a0000000000000000000c01'
-const signedIn = (report: ReturnType<typeof late>, at = now) => usage.ingestProductUsage(account, { schemaVersion: 1, revision: 0,
-  ...report, context: { surface: 'cli', release: '0.4.92', platform: 'macos', channel: 'production' } }, at)
+// A report's totals wait in memory until the minute's flush; the flush is part of counting it.
+const signedIn = async (report: ReturnType<typeof late>, at = now) => {
+  const answer = await usage.ingestProductUsage(account, { schemaVersion: 1, revision: 0,
+    ...report, context: { surface: 'cli', release: '0.4.92', platform: 'macos', channel: 'production' } }, at)
+  await usage.flushRelayUsage()
+  return answer
+}
 
 it('an old server still running cannot count a late report twice across the sweep (review of c20be500d)', async () => {
   // 2 November 00:01: no report for today yet, and an old server takes a 29 October report.
@@ -294,7 +301,10 @@ it('counting stays exact: a report inside the window counts once across the swee
   expect(await usage.ingestProductUsage('6a0000000000000000000c01', report, now)).toEqual({ accepted: true })
   expect(await db.productUsageReceipt.findUnique({ where: { id: report.id } })).toEqual({ id: report.id, expiresAt: new Date('2026-11-05'), life: 4 })
   while ((await pass()).removed) { /* every old receipt outside the new life */ }
+  // The rule is up now: the flush writing the report's totals must carry its life too, or it would count nothing.
+  await usage.flushRelayUsage()
   expect(await usage.ingestProductUsage('6a0000000000000000000c01', report, now)).toEqual({ accepted: true })
+  await usage.flushRelayUsage()
   expect(await turnsEnded()).toBe(2)
 
   const late = { ...report, id: randomUUID(), day: '2026-10-30' }

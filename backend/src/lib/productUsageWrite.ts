@@ -7,11 +7,22 @@ export interface UsageIncrement { dayUtc: Date; metric: string; value: number }
  * overlapping uploads to exhaust retries. No report body or identity becomes a stored document. */
 export async function incrementUsageTotals(tx: Pick<Prisma.TransactionClient, '$runCommandRaw'>, increments: UsageIncrement[]): Promise<void> {
   if (!increments.length) return
+  await runTotals(tx, increments, '$inc')
+}
+
+/** Sets each total to its value, in as few commands as fit: the hourly people rollup. Prisma's `upsert` on the
+ * compound key reads, then writes, each total; this is one command per [SET_CHUNK] totals and reads nothing. */
+export const SET_CHUNK = 500
+export async function setUsageTotals(db: Pick<Prisma.TransactionClient, '$runCommandRaw'>, totals: UsageIncrement[]): Promise<void> {
+  for (let i = 0; i < totals.length; i += SET_CHUNK) await runTotals(db, totals.slice(i, i + SET_CHUNK), '$set')
+}
+
+async function runTotals(tx: Pick<Prisma.TransactionClient, '$runCommandRaw'>, increments: UsageIncrement[], op: '$inc' | '$set'): Promise<void> {
   const result = await tx.$runCommandRaw({
     update: 'product_usage_totals', ordered: true,
     updates: increments.map(({ dayUtc, metric, value }) => ({
       q: { dayUtc: { $date: dayUtc.toISOString() }, metric },
-      u: { $inc: { value } }, upsert: true,
+      u: { [op]: { value } }, upsert: true,
     })),
   })
   // A command can return ok:1 with writeErrors. Never commit its receipt after a partial write.

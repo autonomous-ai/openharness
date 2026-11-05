@@ -991,6 +991,50 @@ describe('Super Tab native delivery handoff', () => {
       expect(prompt).toContain('In task #12 "Fix login" (conversation g12).\nYou are assigned task #12 "Fix login" (working).\n')
       expect(prompt.indexOf('You are assigned')).toBeLessThan(prompt.indexOf('Message message from'))
     })
+    // Task #3057 (Ken, 11-05): the reply line carried --to <sender>, and agents copied --to the PM into their own task, so
+    // 29 of 55 acknowledgements still reached it. In its own task or step a coordinator's message gets the plain form.
+    describe('the reply line to the coordinator in the reader\'s own task (#3057)', () => {
+      const PM = { kind: 'agent', id: 'pm', name: 'River' }
+      const STEP = { id: 'g13', projectId: 'app', number: 13, title: 'Review login', reviewOf: 'g12', step: 'review', leadId: 'pm', archived: false, assignment: { agentId: 'agent', status: 'working' } }
+      const replyLines = (prompt: string) => prompt.split('\n').filter(l => l.startsWith('Reply there: ') || l.startsWith('To acknowledge'))
+      it('shows the plain post form, with no --reply-to and no --to, and says to react to acknowledge', async () => {
+        const { t } = wired({ author: PM, text: 'Fern4, task #12 is yours: read it in full. Tests first.', thread: 'message' })
+        const lines = replyLines(await delivered(t))
+        expect(lines[0]).toContain("post 'g12' 'your message' UNIQUE_OPERATION_ID")
+        expect(lines[0]).not.toContain('--to')
+        expect(lines[0]).not.toContain('--reply-to')
+        expect(lines[0]).not.toContain('--answers')
+        expect(lines[0]).toContain('reaches no agent')
+        expect(lines[1]).toContain("react 'g12' 'message' eyes UNIQUE_OPERATION_ID")
+      })
+      it('does the same in a step the reader is assigned', async () => {
+        const swarm = { ...SWARM, conversations: [...SWARM.conversations, STEP] }
+        const { t } = wired({ conversationId: 'g13', author: PM, text: 'Review the pull request.', thread: 'message' }, {}, () => swarm)
+        const lines = replyLines(await delivered(t))
+        expect(lines[0]).not.toContain('--to')
+        expect(lines[0]).not.toContain('--reply-to')
+        expect(lines[1]).toContain('react')
+      })
+      it('keeps --reply-to and --to when the coordinator asks the reader a question', async () => {
+        const { t } = wired({ author: PM, text: 'Is the draft pull request open yet?', thread: 'message' })
+        const [line] = replyLines(await delivered(t))
+        expect(line).toMatch(/ --answers 'message' --to 'pm'$/)
+      })
+      it('keeps --reply-to in a thread when the coordinator asks the reader a question', async () => {
+        const { t } = wired({ author: PM, text: 'Which file is it in?', thread: 'root', replyTo: 'root' })
+        const [line] = replyLines(await delivered(t))
+        expect(line).toMatch(/ --reply-to 'message' --to 'pm'$/)
+      })
+      it('keeps the named form for an agent that is not the coordinator, a task the reader does not hold, and the project chat', async () => {
+        const reviewer = wired({ author: { kind: 'agent', id: 'rev', name: 'Rev1' }, text: 'Two findings.', thread: 'message' })
+        expect(replyLines(await delivered(reviewer.t))[0]).toMatch(/ --answers 'message' --to 'rev'$/)
+        const other = { ...SWARM, conversations: [SWARM.conversations[0]!, { ...SWARM.conversations[1]!, assignment: { agentId: 'someone', status: 'working' } }] }
+        const notMine = wired({ author: PM, text: 'FYI.', thread: 'message' }, {}, () => other)
+        expect(replyLines(await delivered(notMine.t))[0]).toMatch(/ --answers 'message' --to 'pm'$/)
+        const chat = wired({ conversationId: 'lead', author: PM, text: 'Hello.', thread: 'message' })
+        expect(replyLines(await delivered(chat.t))[0]).toMatch(/ --answers 'message' --to 'pm'$/)
+      })
+    })
     it('a delivery whose read fails still goes, without its lines', async () => {
       const { t } = wired({}, {}, () => { throw new Error('offline') })
       const prompt = await delivered(t)
