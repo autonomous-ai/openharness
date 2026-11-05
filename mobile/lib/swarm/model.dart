@@ -212,6 +212,13 @@ class SuperTabAgent {
         _ => null,
       },
       crewAsleep = row['asleep'] != null,
+      crewAsleepSince = switch (row['asleep']) {
+        {'since': final num since} => DateTime.fromMillisecondsSinceEpoch(
+          since.toInt(),
+        ),
+        _ => null,
+      },
+      crewMoving = row['movedTo'] != null,
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
 
@@ -275,6 +282,13 @@ class SuperTabAgent {
 
   /// A crew member put to sleep on purpose (task #3398): its session is closed and nothing reopens it.
   final bool crewAsleep;
+
+  /// Since when it sleeps (backend crewKeep.ts `asleep.since`), as the desktop's model reads it (task #3412). Null when
+  /// awake, or when the server sent no time.
+  final DateTime? crewAsleepSince;
+
+  /// A crew member on its way to another machine (backend `movedTo`, task #3398), as the desktop's model reads it.
+  final bool crewMoving;
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;
