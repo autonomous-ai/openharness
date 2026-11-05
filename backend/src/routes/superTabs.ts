@@ -28,7 +28,7 @@ import { githubSignIn, PrismaApprovals, readState, signState, stateSecret, type 
 import type { GitHubRepository } from '../github/repository.js'
 import { githubRepository } from '../github/repository.js'
 import { attribution } from '../github/attribution.js'
-import { createRepository, GITHUB_OWNER, readCreateState, repositoryNameProblem, signCreateState } from '../github/repositoryCreate.js'
+import { createRepository, createStateSecret, GITHUB_OWNER, ownerCheckAllowed, readCreateState, repositoryNameProblem, signCreateState } from '../github/repositoryCreate.js'
 import { githubTokensFromEnv, type GitHubTokens } from '../github/tokens.js'
 import { logger } from '../utils/logger.js'
 import { SwarmReads } from '../superTabs/read/service.js'
@@ -303,6 +303,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   const approvals = options.approvals ?? new PrismaApprovals(prisma)
   const signIn = options.signIn !== undefined ? options.signIn : githubSignIn(env)
   const approvalSecret = github ? stateSecret(github.app.config) : null
+  const createSecret = github ? createStateSecret(github.app.config) : null
   // No token for a repository nobody who can push to it approved for this project: a project names its repository as
   // text, and the app is on other people's repositories too.
   // Rolled out with the team account (machines.ts `teamAccountRequired`): a Swarm outside it gets tokens as before, so a
@@ -324,6 +325,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   const hosts = options.hosts ?? new HostReads(store, { githubApp: !!github, teamAccountsIdle: !github })
   // Members' apps read a project's GitHub access again when its revision moves (projects.ts githubRevision). A move that
   // fails is logged and changes no answer: the apps then read again within 5 minutes, as before.
+  /** One organization check against GitHub for [userId], within OWNER_CHECKS_PER_MINUTE (security reviews of #3201). */
+  const limitOwnerChecks = async (userId: string) => {
+    if (!await ownerCheckAllowed(userId)) throw new SuperTabError('RATE_LIMITED', 'Too many organization checks. Try again in a minute.', 429)
+  }
   const recorded = (tabId: string, move: () => Promise<unknown>) => move().catch(error => {
     logger.warn('[github] access change not recorded', { tabId, error: String(error) })
   })
@@ -413,7 +418,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof ownerParams> }>('/api/super-tabs/:tabId/github/owners/:owner', { preHandler: validateParams(ownerParams) },
     (req, reply) => respond(reply, async () => {
       await store.requireWriter(req.user!, req.params.tabId)
-      if (!github || !signIn || !approvalSecret) return { state: 'not-configured' }
+      if (!github || !signIn || !createSecret) return { state: 'not-configured' }
+      await limitOwnerChecks(req.user!.sub)
       const readiness = await github.app.ownerReadiness(req.params.owner)
       return readiness.state === 'not-installed' ? { state: readiness.state, ...(readiness.installUrl ? { installUrl: readiness.installUrl } : {}) } : { state: readiness.state }
     }))
@@ -421,11 +427,14 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   // GitHub's sign-in, whose callback creates it with their own token (github/repositoryCreate.ts).
   app.post<{ Params: z.infer<typeof projectParams>; Body: z.infer<typeof repositoryBody> }>('/api/super-tabs/:tabId/projects/:projectId/github/repository',
     { preHandler: [validateParams(projectParams), validateBody(repositoryBody)] }, (req, reply) => respond(reply, async () => {
-      if (!github || !approvalSecret) throw new GitHubAppError('GITHUB_APP_NOT_CONFIGURED', 'This Harness server has no GitHub App configured.', 503)
+      if (!github || !createSecret) throw new GitHubAppError('GITHUB_APP_NOT_CONFIGURED', 'This Harness server has no GitHub App configured.', 503)
       if (!signIn) throw new GitHubAppError('GITHUB_APPROVAL_NOT_CONFIGURED', 'This Harness server cannot create repositories yet: its administrator sets GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET.', 503)
       const { owner, name } = req.body
       const problem = repositoryNameProblem(name)
       if (problem) throw new SuperTabError('REPOSITORY_NAME', problem, 400)
+      // Who may, before any call signed with the app's key (security review 1 of #3201).
+      await store.mayCreateRepository(req.user!, req.params.tabId, req.params.projectId)
+      await limitOwnerChecks(req.user!.sub)
       const readiness = await github.app.ownerReadiness(owner)
       if (readiness.state === 'not-installed') {
         throw new GitHubAppError('GITHUB_APP_NOT_INSTALLED', `Harness isn't on ${owner}'s GitHub yet.`, 409, readiness.installUrl ? { installUrl: readiness.installUrl } : undefined)
@@ -435,22 +444,28 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       }
       const at = Date.now()
       await store.startRepositoryCreation(req.user!, req.params.tabId, req.params.projectId, { owner, name, private: req.body.private }, at)
-      const state = signCreateState(approvalSecret, { userId: req.user!.sub, autonomousEnv: req.user!.autonomousEnv, tabId: req.params.tabId,
+      const state = signCreateState(createSecret, { userId: req.user!.sub, autonomousEnv: req.user!.autonomousEnv, tabId: req.params.tabId,
         projectId: req.params.projectId, owner, name, private: req.body.private, at }, at)
       return { authorizeUrl: signIn.authorizeUrl(state), at }
     }))
   app.get<{ Querystring: z.infer<typeof callbackQuery> }>('/api/github/callback', { preHandler: validateQuery(callbackQuery) }, async (req, reply) => {
     const page = (title: string, text: string, status = 200) => reply.status(status).type('text/html; charset=utf-8').send(githubPage(title, text))
-    const create = approvalSecret && github && req.query.state ? readCreateState(approvalSecret, req.query.state, Date.now()) : null
+    const create = createSecret && github && req.query.state ? readCreateState(createSecret, req.query.state, Date.now()) : null
     if (create && github) {
       const githubApp = github.app
       const expired = () => page('This link has expired', 'Go back to Harness and create the repository again.', 400)
+      const deleted = (made: string | null) => page('The project was deleted meanwhile',
+        made ? `${made} was made on GitHub, but no project uses it. You can go back to Harness.` : 'Nothing was created. You can go back to Harness.', 410)
       if (!await store.isLive(create.tabId)) return expired()
+      // Claimed before the code is used: a replay, or the same link opened twice, finds nothing to claim (security review 2).
+      const claimed = await store.claimRepositoryAsk(create.tabId, create.projectId, create.userId, create.at)
+      if (claimed === 'gone') return deleted(null)
+      if (!claimed) return expired()
       const finish = (outcome: Parameters<SuperTabStore['finishRepositoryCreation']>[4]) =>
-        recorded(create.tabId, () => store.finishRepositoryCreation(create.tabId, create.projectId, create.userId, create.at, outcome))
-      const asked = await store.repositoryAsk(create.tabId, create.projectId, create.userId, create.at)
-      if (asked === 'gone') return page('The project was deleted meanwhile', 'Nothing was created. You can go back to Harness.', 410)
-      if (!asked) return expired()
+        store.finishRepositoryCreation(create.tabId, create.projectId, create.userId, create.at, outcome).catch(error => {
+          logger.warn('[github] repository creation outcome not recorded', { tabId: create.tabId, error: String(error) })
+          return 'error' as const
+        })
       const full = `${create.owner}/${create.name}`
       if (req.query.error || !req.query.code || !signIn) {
         await finish({ state: 'cancelled' })
@@ -469,10 +484,15 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
         await finish({ state: 'refused', reason: outcome.reason })
         return page(`GitHub didn't let you create a repository in ${create.owner}`, `${outcome.reason} Go back to Harness to choose another way.`, 403)
       }
-      // Its creator can push to it, so it is allowed for this project as their sign-in for it would.
+      // Allowed for the project only once its outcome is recorded on it: a project deleted meanwhile, or an ask replaced,
+      // gets no approval (security review 1 of #3201). Its creator can push, so it is allowed as their sign-in for it would.
+      const written = await finish({ state: 'created', repositoryUrl: outcome.repositoryUrl, reachable: outcome.reachable })
+      if (written === 'gone') return deleted(outcome.repository)
+      if (written !== 'recorded') {
+        return page(`${outcome.repository} is made`, 'Harness could not record it on your project. Go back to Harness and choose Try again: it finds the repository you just made.', 500)
+      }
       await approvals.approve({ userId: create.userId, autonomousEnv: create.autonomousEnv, tabId: create.tabId, projectId: create.projectId,
         repository: outcome.repository.toLowerCase(), scope: 'project' }, outcome.login)
-      await finish({ state: 'created', repositoryUrl: outcome.repositoryUrl, reachable: outcome.reachable })
       return page(`${outcome.repository} is ready`, outcome.reachable ? 'Go back to Harness: your project starts in it.'
         : `Go back to Harness. Teammates' agents can use it once an owner of ${create.owner} adds it to Harness in GitHub: Settings → GitHub Apps → Harness → Configure.`)
     }

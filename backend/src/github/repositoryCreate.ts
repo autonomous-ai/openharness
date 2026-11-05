@@ -6,9 +6,10 @@
  * ([NEVER_ON_INSTALLATION_TOKENS]): GitHub then decides whether they may create repositories in that organization, and its
  * record names them. The token is used for at most four calls here and revoked by [GitHubSignIn.withUserToken].
  */
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, hkdfSync, timingSafeEqual } from 'node:crypto'
 import { STATE_TTL_MS, type UserCall } from './approvals.js'
-import type { GitHubApp } from './app.js'
+import type { GitHubApp, GitHubAppConfig } from './app.js'
+import { createRateLimiter } from '../lib/rateLimit.js'
 import { githubRepository } from './repository.js'
 
 /** GitHub's repository name rule, and an organization login's. */
@@ -18,6 +19,22 @@ export const GITHUB_OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/
  *  (clock skew between GitHub and the server). */
 const SKEW_MS = 60_000
 const REASON_MAX = 300
+
+/** How many organizations one person may have checked against GitHub in a minute, by New Project's organization row and
+ *  its create (security reviews of #3201): each check is a call signed with the app's own key. */
+export const OWNER_CHECKS_PER_MINUTE = 30
+const ownerChecks = createRateLimiter('github-owner-checks', 60_000, OWNER_CHECKS_PER_MINUTE)
+/** Whether [userId] may have one more organization checked now. */
+export const ownerCheckAllowed = (userId: string, now = Date.now()) => ownerChecks.allows(userId, now)
+/** Test seam: forget this process's counts. */
+export const resetOwnerChecks = () => ownerChecks.reset()
+
+/** The key create states are signed with: the app's own private key, under a label of its own, so a create state and an
+ *  approval state (approvals.ts stateSecret) never share a key (security review 2 of #3201). */
+export function createStateSecret(config: GitHubAppConfig): Buffer {
+  const der = config.privateKey.export({ type: 'pkcs8', format: 'der' })
+  return Buffer.from(hkdfSync('sha256', der, 'harness-github-create-state', config.appId, 32))
+}
 
 /** What is wrong with [name] as a new repository's name, in the words New Project shows (F1), or null. */
 export function repositoryNameProblem(name: string): string | null {

@@ -114,7 +114,10 @@ export class GitHubSignIn {
         headers: { Accept: 'application/vnd.github+json', Authorization: `Basic ${Buffer.from(`${this.deps.clientId}:${this.deps.clientSecret}`).toString('base64')}`,
           'Content-Type': 'application/json' },
         body: JSON.stringify({ access_token: token }),
-      }).catch(() => undefined)
+      }).then(answer => answer.status, () => 'no answer').then(status => {
+        // Said, never with the token, so a token left live shows (security review 1 of #3201); it ends on its own at its expiry.
+        if (status !== 204) console.warn(`[github] a sign-in's user token was not revoked (${status === 'no answer' ? status : `HTTP ${status}`})`)
+      })
     }
   }
 }
