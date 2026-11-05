@@ -549,6 +549,13 @@ export function deletableProject(state: SuperTabState, actor: Actor, projectId: 
   return projectOf(state, projectId)
 }
 
+/** The account of [project]'s owner, which the GitHub token and a start's preparation name the work for: nobody for a project
+ *  nobody owns, never looked up by its empty id, which is no ObjectId (the lookup would throw). */
+export async function ownerAccount(users: { findUnique(args: { where: { id: string }; select: { name: true; email: true } }): Promise<{ name: string | null; email: string } | null> },
+  project: SwarmProject): Promise<{ name: string | null; email: string } | null> {
+  return project.ownerId ? users.findUnique({ where: { id: project.ownerId }, select: { name: true, email: true } }) : null
+}
+
 /** A project nobody owns: its owner left with no member left to take it (settleOwners). */
 export const isOwnerless = (project: SwarmProject): boolean => !project.ownerId
 
