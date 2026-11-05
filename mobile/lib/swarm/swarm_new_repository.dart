@@ -80,6 +80,24 @@ String swarmRepositoryStuck(String owner, String name) =>
 bool swarmRepositoryStuckAt(int at, DateTime now) =>
     now.millisecondsSinceEpoch - at > swarmRepositoryStuckAfter.inMilliseconds;
 
+/// How long GitHub's sign-in link for a request lasts (the server signs it
+/// for ten minutes): a request still waiting after it was not completed, and
+/// nothing was made (F8).
+const swarmRepositorySignInTtl = Duration(minutes: 10);
+
+/// Whether a request asked at [at] (milliseconds) and still waiting at [now]
+/// has outlived its sign-in link.
+bool swarmSignInExpiredAt(int at, DateTime now) =>
+    now.millisecondsSinceEpoch - at > swarmRepositorySignInTtl.inMilliseconds;
+
+/// GitHub's sign-in did not open in the browser (Guide's review of #3204).
+const swarmRepositoryOpenFailed =
+    'GitHub didn’t open. Open it again to continue.';
+
+/// An organization's check got no answer: the choice stays, to check again.
+String swarmOwnerUnchecked(String owner) =>
+    'Couldn’t check $owner on GitHub just now.';
+
 /// F11: the project was deleted while the person was in GitHub. The callback
 /// checks the ask is still current before it calls GitHub, so nothing was
 /// made (the design's table, as #3201 has it now).
@@ -143,10 +161,13 @@ Future<SwarmOwnerCheck?> swarmCheckGitHubOwner(
     if (swarmRateLimited(failure)) {
       return (state: 'rate-limited', installUrl: null);
     }
-    // Refused (404 from a server before New repository).
-    return null;
+    // A server before New repository has no such route.
+    if (failure.statusCode == 404) return null;
+    return (state: 'unavailable', installUrl: null);
   } catch (_) {
-    return null;
+    // No answer: kept apart from a server that cannot make one, so the
+    // choice stays and can be checked again (Guide's review of #3204).
+    return (state: 'unavailable', installUrl: null);
   }
 }
 
@@ -158,17 +179,22 @@ String? swarmOwnerProblem(String owner, SwarmOwnerCheck check) =>
       'not-installed' => swarmRepositoryNotInstalled(owner),
       'not-accepted' => swarmRepositoryNotAccepted(owner),
       'rate-limited' => swarmRepositoryRateLimited,
+      'unavailable' => swarmOwnerUnchecked(owner),
       _ => swarmRepositoryNoAnswer,
     };
 
 /// Opens [uri] in the system browser: GitHub's sign-in, or where an app is
-/// installed. Replaced by tests.
-Future<void> swarmOpenInBrowser(Uri uri) async {
-  await launchUrl(uri, mode: LaunchMode.externalApplication);
+/// installed. Whether it opened.
+Future<bool> swarmOpenInBrowser(Uri uri) async {
+  try {
+    return await launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (_) {
+    return false;
+  }
 }
 
 /// How New repository opens GitHub ([swarmOpenInBrowser]); tests record it.
-Future<void> Function(Uri uri) swarmOpenGitHub = swarmOpenInBrowser;
+Future<bool> Function(Uri uri) swarmOpenGitHub = swarmOpenInBrowser;
 
 /// New repository's request is out: GitHub's sign-in is open, and the steps
 /// wait for its outcome in the Swarm state. Not a failure: the sheet shows

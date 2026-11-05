@@ -664,6 +664,17 @@ class SwarmNewProjectSteps with ChangeNotifier {
   /// The repository New repository made is not yet in reach of Harness (F7):
   /// its Product Manager was started all the same.
   bool unreachable = false;
+
+  /// New repository's request while it is out, before its answer is kept: a
+  /// run after an answer that never came asks it again as it was.
+  SwarmNewRepository? _asking;
+
+  /// The request held while its answer is unknown.
+  SwarmNewRepository? get asking => _asking;
+
+  /// GitHub's sign-in did not open in the browser: the sheet says so, and
+  /// [openSignIn] opens it again.
+  bool openFailed = false;
   bool _briefPosted = false, _started = false, _named = false;
 
   /// The files its brief goes with, as they were when its creation was
@@ -1040,6 +1051,11 @@ class SwarmNewProjectSteps with ChangeNotifier {
         case 'creating' when swarmRepositoryStuckAt(sent.at, now()):
           _creation = null;
           throw SwarmRepositoryFailure(swarmRepositoryStuck(owner, name));
+        // Its sign-in link has expired: nothing was made, and the next run
+        // asks again for this same project (Guide's review of #3204).
+        case 'waiting' when swarmSignInExpiredAt(sent.at, now()):
+          _creation = null;
+          throw const SwarmRepositoryFailure(swarmRepositoryNotCreated);
         case 'waiting' || 'creating':
           throw const SwarmRepositoryWaiting();
         case 'taken':
@@ -1064,6 +1080,10 @@ class SwarmNewProjectSteps with ChangeNotifier {
           throw const SwarmRepositoryFailure(swarmRepositoryNoAnswer);
       }
     }
+    // Held before it is sent, as the other steps are: an answer that never
+    // came is asked again as first written, whatever is chosen since. Only a
+    // definite refusal lets it go (Guide's review of #3204).
+    final asking = _asking ??= asked;
     final Map<String, dynamic> answer;
     try {
       answer = superTabMap(
@@ -1072,42 +1092,58 @@ class SwarmNewProjectSteps with ChangeNotifier {
           '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/projects/'
               '${Uri.encodeComponent(projectId)}/github/repository',
           body: {
-            'owner': asked.owner,
-            'name': asked.name,
-            'private': asked.private,
+            'owner': asking.owner,
+            'name': asking.name,
+            'private': asking.private,
           },
         ),
       );
     } on SuperTabFailure catch (failure) {
-      if (swarmRateLimited(failure)) {
+      final limited = swarmRateLimited(failure);
+      if (limited || _refusedOutright(failure)) _asking = null;
+      if (limited) {
         throw const SwarmRepositoryFailure(swarmRepositoryRateLimited);
       }
       throw switch (failure.code) {
         'GITHUB_APP_NOT_INSTALLED' => SwarmRepositoryFailure(
-          swarmRepositoryNotInstalled(asked.owner),
+          swarmRepositoryNotInstalled(asking.owner),
         ),
         'GITHUB_APP_PERMISSIONS' => SwarmRepositoryFailure(
-          swarmRepositoryNotAccepted(asked.owner),
+          swarmRepositoryNotAccepted(asking.owner),
         ),
         'REPOSITORY_NAME' => SwarmRepositoryFailure(failure.message),
         _ => failure,
       };
     }
-    check();
     final (authorizeUrl, at) = switch (answer) {
       {'authorizeUrl': final String link, 'at': final num at}
           when Uri.tryParse(link)?.isScheme('https') ?? false =>
         (link, at.toInt()),
       _ => throw const SwarmRepositoryFailure(swarmRepositoryNoAnswer),
     };
-    _creation = (repository: asked, at: at, authorizeUrl: authorizeUrl);
+    // Kept before anything else is asked: a sheet gone meanwhile finds it
+    // when it opens again, and waits for this sign-in.
+    _creation = (repository: asking, at: at, authorizeUrl: authorizeUrl);
+    _asking = null;
     notifyListeners();
-    try {
-      await swarmOpenGitHub(Uri.parse(authorizeUrl));
-    } catch (_) {
-      // Not opened: Check again reads the outcome, and Start over lets go.
-    }
+    check();
+    await openSignIn();
     throw const SwarmRepositoryWaiting();
+  }
+
+  /// Opens GitHub's sign-in for the request [creating] waits for, again if
+  /// asked; [openFailed] says whether it did not open.
+  Future<void> openSignIn() async {
+    final url = authorizeUrl;
+    if (url == null) return;
+    bool opened;
+    try {
+      opened = await swarmOpenGitHub(Uri.parse(url));
+    } catch (_) {
+      opened = false;
+    }
+    openFailed = !opened;
+    notifyListeners();
   }
 
   /// GitHub's sign-in for the request [creating] waits for, to open again.
@@ -1889,8 +1925,13 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
               hint: repository == null && newRepository == null
                   ? 'Or enter a link'
                   : null,
-              // Fixed while GitHub's sign-in is out for it.
-              onTap: startSent || _busy || creating != null
+              // Fixed while GitHub's sign-in is out for it, or its request's
+              // answer is unknown.
+              onTap:
+                  startSent ||
+                      _busy ||
+                      creating != null ||
+                      steps?.asking != null
                   ? null
                   : () => setState(() => _picking = _Pick.repository),
             ),
@@ -1994,14 +2035,32 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
               Navigator.of(context).pop(made);
             },
           )
-        // Out in GitHub: what it waits for, and a way to look again.
+        // Out in GitHub: what it waits for, a way to look again, and to open
+        // GitHub again (it may not have opened, or been closed).
         else if (creating != null && _error == null && !_busy) ...[
+          if (steps!.openFailed) ...[
+            SwarmRow.line(
+              swarmRepositoryOpenFailed,
+              key: const ValueKey('swarm-new-project-open-failed'),
+              lines: 2,
+            ),
+            const SizedBox(height: AppSpace.s),
+          ],
           SwarmButton(
             key: const ValueKey('swarm-new-project-create'),
             label: 'Creating ${creating.owner}/${creating.name}…',
             style: SwarmButtonStyle.fill,
             wide: true,
             onPressed: null,
+          ),
+          const SizedBox(height: AppSpace.s),
+          SwarmButton(
+            key: const ValueKey('swarm-new-project-open-github'),
+            label: 'Open GitHub',
+            icon: LucideIcons.externalLink300,
+            style: SwarmButtonStyle.link,
+            wide: true,
+            onPressed: () => unawaited(steps.openSignIn()),
           ),
           const SizedBox(height: AppSpace.s),
           SwarmButton(
@@ -2112,6 +2171,18 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
       );
     }
     return _ownerChecks[key];
+  }
+
+  /// Asks [owner]'s check again: after installing Harness or accepting its
+  /// permission on GitHub, or a check that got no answer (Guide's review of
+  /// #3204). The name and visibility typed stay.
+  void _recheckOwner(String swarmId, String owner) {
+    final key = '$swarmId/${owner.toLowerCase()}';
+    setState(() {
+      _ownerAsked.remove(key);
+      _ownerChecks.remove(key);
+      _ownerLimitedAt.remove(key);
+    });
   }
 
   /// Whether Repository offers New repository: the Swarm uses a GitHub
@@ -2290,6 +2361,16 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
             ownerLine,
             link: check?.state == 'not-installed' ? check?.installUrl : null,
           ),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: SwarmButton(
+              key: const ValueKey('swarm-new-repo-recheck'),
+              label: 'Check again',
+              icon: LucideIcons.refreshCw300,
+              style: SwarmButtonStyle.link,
+              onPressed: () => _recheckOwner(swarmId, owner),
+            ),
+          ),
         ],
         Padding(
           padding: const EdgeInsets.fromLTRB(
@@ -2412,13 +2493,15 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
     if (_busy || _error != null || steps!.running != null) return;
     final outcome = snapshot.projectById(projectId)?.repositoryCreation;
     final state = outcome?['state'];
-    // Creating goes on by itself only once it is stuck: Try again then.
-    final stuck =
-        state == 'creating' && swarmRepositoryStuckAt(at, widget.now());
+    // Waiting and creating go on by themselves only once too old: their
+    // sign-in link expired, or the server stopped mid-create. Try again then.
+    final now = widget.now();
+    final old =
+        (state == 'creating' && swarmRepositoryStuckAt(at, now)) ||
+        (state == 'waiting' && swarmSignInExpiredAt(at, now));
     if (outcome?['at'] != at ||
         state is! String ||
-        state == 'waiting' ||
-        (state == 'creating' && !stuck)) {
+        ((state == 'waiting' || state == 'creating') && !old)) {
       return;
     }
     final key = '$at/$state';
@@ -2713,10 +2796,23 @@ class _SwarmNewProjectSheetState extends State<SwarmNewProjectSheet>
                             size: 20,
                             color: AppPalette.swarmAccent,
                           ),
-                    onTap: () => setState(() {
-                      _picking = _Pick.newRepository;
-                      _newOwner ??= swarmGitHubOwners(repositories).firstOrNull;
-                    }),
+                    onTap: () {
+                      final owner =
+                          _newOwner ??
+                          swarmGitHubOwners(repositories).firstOrNull;
+                      // Back from GitHub, say: an organization that could not
+                      // be used is asked again.
+                      if (owner != null &&
+                          _ownerChecks['$swarmId/${owner.toLowerCase()}']
+                                  ?.state !=
+                              'ready') {
+                        _recheckOwner(swarmId, owner);
+                      }
+                      setState(() {
+                        _picking = _Pick.newRepository;
+                        _newOwner = owner;
+                      });
+                    },
                   ),
                 _Option(
                   key: const ValueKey('swarm-new-project-pick-link'),
