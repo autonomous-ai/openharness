@@ -331,16 +331,16 @@ describe('a start its machine has launched', () => {
     expect(sweep(launched(), at + 1).error).toBe('Worker Mac did not start it within 3 minutes')
   })
 
-  // A start its machine never started counts against its engine there as a host's failure does (engineHealth.ts).
-  it('suspends its engine on its machine with the second one, saying so once and tagging the machine owner', () => {
+  // Pickup timeouts describe the machine, regardless of the engine requested.
+  it('suspends the machine with the second timeout, saying so once and tagging the machine owner', () => {
     const at = LAUNCHED + 3 * MINUTE + 1
     const state = launched([{ receivedAt: at }], { machineOwnerId: 'o', request: { conversationId: 'lead', machineId: 'm', engine: 'codex', name: 'Builder' } })
     state.starts!.push(...['s2', 's3'].map(id => ({ ...structuredClone(state.starts![0]!), id })))
     const rows = () => sweepLiveness(state, at).filter(row => row.source?.kind === 'start-timeout')
-    // All three time out in this one sweep: the second suspends Codex there, the third says nothing more.
+    // All three time out in this one sweep: the second suspends the machine, the third says nothing more.
     const told = rows()
     expect(told.map(row => row.mentions)).toEqual([undefined, ['o'], undefined])
-    expect(told[1]!.text).toContain('Codex is suspended on this machine for new work: its last 2 starts there failed.')
+    expect(told[1]!.text).toContain('This machine is suspended for new work: its last 2 starts timed out.')
     expect(told[2]!.text).not.toContain('suspended')
   })
 

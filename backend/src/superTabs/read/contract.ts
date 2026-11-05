@@ -68,6 +68,8 @@ export interface Derived {
   machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown }; clientVersion?: string
     /** Engines suspended there now after failed starts, with why (engineHealth.ts); absent when none. */
     suspendedEngines?: Record<string, string>
+    /** Pickup timeout cooldown: applies to every new start, including grid models. */
+    machineSuspended?: string
     /** A person reading a teammate's machine: where New Project's Product Manager would run there by engine, the machine
      *  (its Team account or itself), or why it cannot now (leadStart.ts leadChoices). Absent for their own machines. */
     lead?: Record<string, { machineId: string } | { refused: string }> }>
