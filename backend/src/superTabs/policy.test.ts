@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
@@ -119,6 +121,119 @@ const later = (): ProjectRules => ({ ...copy(), releaseWindow: { ...SEED_RULES.r
 const set = (baseRevision: number, rules: ProjectRules, extra: Partial<Extract<Command, { type: 'rules.set' }>> = {}): Command =>
   ({ type: 'rules.set', projectId: 'lead', baseRevision, rules, summary: 'Releases start at 10', ...extra })
 const code = (run: () => unknown): unknown => { try { run() } catch (error) { return (error as { code?: string }).code ?? 'INVALID' } return undefined }
+
+// Task #3475 (review of #3250): the merge train used these patterns before it read the record. They held a file at two reads
+// wherever they matched, and the seed must hold at least as much (River, 11-05: fail closed on the review table).
+const OLD_TRAIN_AREAS: ReadonlyArray<{ area: string; paths: RegExp }> = [
+  { area: 'Sign-in', paths: /(^|\/)(auth|login|sign_?in|signin|session)[^/]*$|^backend\/src\/middlewares\//i },
+  { area: 'Tokens', paths: /token|^backend\/src\/github\//i },
+  { area: 'Encryption', paths: /crypt|cipher|secret|credential|key(s|chain)?\b/i },
+  { area: 'Access', paths: /access|permission|audience|membership/i },
+  { area: 'Buddy guard', paths: /guard/i },
+  { area: 'Device links', paths: /device|harness_?links|pairing|join_?link/i },
+  { area: 'Deletion', paths: /purge|delet|cleanup|sweep|prune/i },
+]
+const oldTrainHeldAtTwo = (file: string) => OLD_TRAIN_AREAS.some(({ paths }) => paths.test(file))
+
+describe('the seed asks two reads wherever the merge train did', () => {
+  it('holds the files the review of #3250 named at two reads', () => {
+    for (const file of ['backend/src/lib/deviceRevoke.ts', 'backend/src/lib/deviceKeyLog.ts', 'backend/src/lib/deviceWs.ts',
+      'backend/src/push/devices.ts', 'backend/src/superTabs/sessionScope.ts',
+      'backend/src/push/keys.ts', 'backend/src/routes/deviceKeys.ts', 'cli/src/gateway/tabKey.ts', 'cli/src/lib/terminalKeys.ts',
+      'backend/src/superTabs/ruleGuard.ts', 'backend/src/superTabs/sweeps.ts', 'backend/src/lib/attachmentSweep.ts',
+      'backend/src/lib/chunkSweep.ts', 'backend/src/lib/harness_links.ts', 'mobile/lib/join_link.dart', 'backend/src/audience.ts',
+      'backend/src/membership/rows.ts', 'tools/prune-caches.sh', 'backend/src/crypto/box.ts', 'backend/src/lib/keys/store.ts',
+      // SecAlder's security review of #3250.
+      'backend/src/routes/harnessLinks.ts', 'backend/src/lib/deviceLogCore.ts', 'cli/src/core/devicesLink.ts',
+      'cli/src/gateway/observerKey.ts', 'backend/src/lib/pendingUploadSweep.ts', 'cli/src/lib/worktreeSweep.ts',
+      // Kept when the false hits were narrowed (River, SecAlder, ReviewLinnea): the real sign-in sessions, guards, device code
+      // and the device link's own files in the firmware.
+      'website/src/lib/community/session.ts', 'os/packaging/labwc/session-lock-presentation.patch', 'cli/src/lib/turnTlsGuard.ts',
+      'cli/src/services/devicesGuard.ts', 'desktop/lib/super_tabs/lead_guard.dart', 'backend/src/superTabs/anyGuard.ts',
+      'desktop/lib/devices/wifi_robots.dart', 'mobile/lib/phone/add_device/saved_wifi.dart', 'cli/src/devices/client.ts',
+      'devices/harness-device/firmware/main/cable_client.c', 'devices/harness-pro/firmware/main/pair_ble.c',
+      // Aster's security review of #3250: the vLLM server's API-key check, the companions' secret-redaction guard, and the
+      // team handoff with its machine-key proof.
+      'store/agents/vllm/guard.py', 'companions/src/shared/guard.ts', 'cli/src/team/handoff.ts']) {
+      expect(requiredReads(SEED_RULES, [file]), file).toBe(2)
+    }
+  })
+
+  // River, 11-06: fail closed, but a pattern that catches unrelated files is narrowed. These stay at one read.
+  it('leaves the old matcher\'s false hits at one read', () => {
+    for (const file of ['devices/harness-device/firmware/main/app_main.c', '.github/assets/readme/device.gif',
+      'output/orchestrator-live/token/model.stl', 'docs/autonomous-device-integration.md', 'desktop/tool/accessibility_regression/main.dart',
+      'backend/src/lib/redisGuard.ts', 'cli/src/engines/claude/sessionStore.ts', 'cli/src/core/terminals/sessions.ts',
+      'desktop/lib/finder/widgets/finder_diff_keys.dart', 'docs/performance/2026-09-22-pane-data/pane-sweep-after-1.json']) {
+      expect(requiredReads(SEED_RULES, [file]), file).toBe(1)
+    }
+  })
+
+  // Every file the old matcher held stays at two reads, except what the reviews dropped on purpose: whole classes by rule
+  // here, and single files in policy.securityExclusions.json, each under its reason. A file dropping out of the security
+  // areas fails this until a review adds it there.
+  it('holds every file of this repository the old patterns held, at two reads, except the reviewed exclusions', () => {
+    const DROPPED_BY_RULE: ReadonlyArray<{ reason: string; test: (file: string) => boolean }> = [
+      { reason: 'Runs no code: images (not SVG, which can carry script), video, 3D models, Markdown, docs/, samples/, output/',
+        test: file => /\.(png|jpe?g|gif|webp|ico|icns|mp4|mov|webm|stl|step|stp|3mf|obj|glb|gltf|f3d|md)$|^(docs|samples|output)\//i.test(file) },
+      { reason: 'Firmware and hardware under devices/ that is not a link file (cable, pair, link and key files stay held)',
+        test: file => file.startsWith('devices/') },
+      { reason: 'Accessibility is not access control', test: file => /accessib/i.test(file) },
+    ]
+    const listed = new Set((JSON.parse(readFileSync(new URL('./policy.securityExclusions.json', import.meta.url), 'utf8')) as
+      { dropped: Array<{ reason: string; files: string[] }> }).dropped.flatMap(group => group.files))
+    const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()
+    const files = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n').filter(Boolean)
+    expect(files.length).toBeGreaterThan(100)
+    const missed = files.filter(file => oldTrainHeldAtTwo(file) && requiredReads(SEED_RULES, [file]) < 2
+      && !listed.has(file) && !DROPPED_BY_RULE.some(rule => rule.test(file)))
+    expect(missed, `${missed.length} files the train held at two now need one, and no review dropped them`).toEqual([])
+  })
+})
+
+describe('a saved record can raise a security area, never lower it below two reads', () => {
+  // River, 11-06 (#3475): the floor is code, whatever a saved record says.
+  const lowered = (reads: number): ProjectRules => ({ ...copy(), reviews: { ...copy().reviews,
+    rows: SEED_RULES.reviews.rows.map(row => ({ ...row, reads })) } })
+  const removed = (): ProjectRules => ({ ...copy(), reviews: { ...copy().reviews, rows: [] } })
+
+  it('keeps two reads on a security file when a record lowers or removes its area', () => {
+    for (const rules of [lowered(1), removed()]) {
+      expect(requiredReads(rules, ['backend/src/github/tokens.ts'])).toBe(2)
+      expect(requiredReads(rules, ['backend/src/lib/deviceRevoke.ts'])).toBe(2)
+      expect(requiredReads(rules, null)).toBe(2)
+      expect(requiredReads(rules, ['backend/src/superTabs/cards.ts'])).toBe(1)
+    }
+  })
+
+  // SecAlder, re-review of #3250: the non-code and accessibility filter trims the built-in patterns only. A path a person puts
+  // in a security row of their record counts exactly as written.
+  it('counts a path a person added to a security row as written, non-code and accessibility too', () => {
+    const added = (area: string, glob: string): ProjectRules => ({ ...copy(), reviews: { ...copy().reviews,
+      rows: SEED_RULES.reviews.rows.map(row => row.area === area ? { ...row, paths: [...row.paths, glob] } : row) } })
+    expect(requiredReads(added('Sign-in', 'samples/**'), ['samples/x.ts'])).toBe(2)
+    expect(requiredReads(added('Sign-in', 'web/**/*.svg'), ['web/a/login-form.svg'])).toBe(2)
+    expect(requiredReads(added('Sign-in', 'web/**/*.svg'), ['web/a/icon.svg'])).toBe(2)
+    expect(requiredReads(added('Access', '**/accessibility/**'), ['desktop/accessibility/main.dart'])).toBe(2)
+    expect(requiredReads(added('Access', 'docs/**'), ['docs/plan.md'])).toBe(2)
+    // The seed's own patterns still leave those out.
+    expect(requiredReads(SEED_RULES, ['samples/x.ts', 'desktop/accessibility/main.dart', 'docs/token.md'])).toBe(1)
+  })
+
+  // ReviewLinnea, re-review of #3250: account_keys decides which stored Swarm data is forgotten at sign-out (deletion).
+  it('holds the account storage keys forgotten at sign-out at two reads', () => {
+    expect(requiredReads(SEED_RULES, ['desktop/lib/super_tabs/account_keys.dart'])).toBe(2)
+  })
+
+  it('holds an SVG named for a security area: an SVG can carry script', () => {
+    expect(requiredReads(SEED_RULES, ['website/public/auth-logo.svg'])).toBe(2)
+  })
+
+  it('takes a record that raises a security area', () => {
+    expect(requiredReads(lowered(3), ['backend/src/github/tokens.ts'])).toBe(3)
+    expect(requiredReads(lowered(3), null)).toBe(3)
+  })
+})
 
 describe('reads and tests a change needs', () => {
   it('matches globs as the review steps do: ** any folders, * and ? in one name, ignoring case', () => {
