@@ -86,6 +86,8 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
     // Its worker keeps saying where it is, as a live one does; a finished task refuses the line and nothing changes.
     await execute({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: randomUUID() }, host, worker).catch(() => {})
     await report()
+    // The worker's time checks run every 30 s (timeChecks.ts): one runs before each poll here.
+    await timed.runTimeChecks(tab)
     return timed.deliveries(host, tab, lead)
   }
   const status = (s: 'done' | 'blocked' | 'needs_human' | 'working', result = 'A result') =>

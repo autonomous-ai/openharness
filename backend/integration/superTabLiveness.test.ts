@@ -85,6 +85,8 @@ async function swarm({ legacy = false, client = db, hooks, independent = false, 
   /** What the Lead's host receives now (this poll is also the Lead's wake-up path), with each row's text, and what it hears in a
    *  digest (noticeDigest.ts): gathered for one, or named by one. Those of no digest of its own come first, in the order written. */
   const leadInbox = async () => {
+    // The worker's time checks run every 30 s (timeChecks.ts): one runs before each poll here.
+    await timed.runTimeChecks(tab)
     const rows = await timed.deliveries(host, tab, lead)
     const digest = await db.superTabDelivery.findMany({ where: { tabId: tab, agentId: lead, status: { in: ['gathered', 'digested'] } }, orderBy: { createdAt: 'asc' } })
     const ids = [...rows, ...digest].map(r => r.messageId)
@@ -160,7 +162,7 @@ describe('work that loses its owner', () => {
       raced = true
       await f.observe('test-host', [f.harness.worker], { harnessProgress: { [f.harness.worker]: f.clock.now } })
     }), () => f.clock.now)
-    await racing.deliveries(host, f.tab, f.lead)
+    await racing.runTimeChecks(f.tab)
     expect(raced).toBe(true)
     expect((await f.assignment()).status).toBe('working')
     expect(await f.lostRows()).toEqual([])
@@ -182,7 +184,7 @@ describe('work that loses its owner', () => {
       raced = true
       await f.execute({ type: 'agent.alert', agentId: other, alert: 'model', active: false }, host, other)
     }), () => f.clock.now)
-    await racing.deliveries(host, f.tab, f.lead)
+    await racing.runTimeChecks(f.tab)
     expect(raced).toBe(true)
     expect((await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === group)!.assignment!.status).toBe('working')
   })
@@ -1050,7 +1052,7 @@ describe('an agent whose task was lost', () => {
       if (next) return
       next = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: f.worker })).result.assignmentId)
     }), () => f.clock.now)
-    await racing.deliveries(host, f.tab, f.lead)
+    await racing.runTimeChecks(f.tab)
     expect(next).not.toBe('')
     expect(await runOf(f.worker)).toMatchObject({ tabId: f.tab, assignmentId: next })
     expect(await f.assignment()).toMatchObject({ id: next, status: 'working' })
@@ -1183,9 +1185,9 @@ describe('a start that never runs', () => {
     }
   })
 
-  // The time checks run on the Lead's poll and on any other machine's report (store.ts).
+  // The time checks run in the worker (timeChecks.ts) and on any other machine's report (store.ts).
   it.each([
-    ['the Lead\'s poll', (racing: SuperTabStore, f: Awaited<ReturnType<typeof swarm>>) => racing.deliveries(host, f.tab, f.lead)],
+    ['the worker\'s time checks', (racing: SuperTabStore, f: Awaited<ReturnType<typeof swarm>>) => racing.runTimeChecks(f.tab)],
     ['another machine\'s report', (racing: SuperTabStore, f: Awaited<ReturnType<typeof swarm>>) => f.observe('lead-host', [f.harness.lead], {}, racing)],
   ])('is not failed by %s that read its machine silent while that machine reported it preparing', async (_, sweep) => {
     const f = await swarm()
@@ -1706,7 +1708,8 @@ describe('the delivery poll of an agent with a held delivery', () => {
     }
     f.clock.now += 6 * MINUTE
     const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
-    await f.timed.deliveries(host, f.tab, f.lead)
+    // The worker's time checks lose the tasks.
+    await f.timed.runTimeChecks(f.tab)
     // Gathered for a digest; each goes on its own after the settle pass's 30 minutes, the ones these cases are about.
     await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: f.lead, status: 'gathered' }, data: { status: 'queued' } })
     const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
@@ -1785,8 +1788,8 @@ describe('the push for a new delivery', () => {
     f.clock.now += 6 * MINUTE
     // Each loss notice is named by its task and the time of the loss (this poll).
     const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
-    // One poll expires all three assignments and inserts their messages/deliveries together.
-    await f.timed.deliveries(host, f.tab, f.lead)
+    // One run of the worker's time checks expires all three assignments and inserts their messages/deliveries together.
+    await f.timed.runTimeChecks(f.tab)
     // Gathered for a digest; each goes on its own after the settle pass's 30 minutes, the ones these cases are about.
     await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: f.lead, status: 'gathered' }, data: { status: 'queued' } })
     const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))

@@ -3989,8 +3989,6 @@ export class SuperTabStore {
         asked = await waitingInProject(tx, tabId, led.id)
         for (const id of [...finished.map(g => g.key), ...asked.map(d => d.conversationId)]) groupIds.add(id)
       }
-      // A task its sweep may lose says Stuck in its project chat's thread (taskLine.ts endedReply, task #2693).
-      for (const id of taskLineChats(loaded.state)) groupIds.add(id)
       // One load for both: a second would drop the first's groups.
       if (groupIds.size) loaded = await this.ensure(tx, loaded, { groupIds: [...groupIds] })
       const state = cloneData(loaded.state)
@@ -4000,12 +3998,8 @@ export class SuperTabStore {
       }
       author(state, await this.actor(tx, user, state, agentId), true)
       const target = agent(state, agentId)
-      // A Lead's poll runs the time checks (liveness.ts): lost work wakes it in this same poll.
-      const written = ledProject(state, agentId) ? sweepForLead(state, this.now()) : []
-      // The coordinator's poll tells it of its project's idle agents (tidy.ts): it is where what waits for each agent is known.
-      // It reads no asleep group: only loaded groups' active work keeps an agent from being idle (project instructions, phase 4).
-      if (led) written.push(...idleNotices(state, led.id, this.now(), new Set((await tx.superTabDelivery.findMany({
-        where: { tabId, status: { in: [...OPEN_DELIVERY] } }, select: { agentId: true }, distinct: ['agentId'] })).map(d => d.agentId))))
+      // The time checks and idle notices run in the backend worker (runTimeChecks), so they go on while this poll does not.
+      const written: MessageDraft[] = []
       // Before the update request, which may carry them. Same rules as a listed delivery; a refused row ends as a refused one does.
       const { notices, refused } = await this.releasableNotices(tx, state, target, release)
       const update = projectUpdateRequest(state, target, this.now())
@@ -4597,7 +4591,42 @@ export class SuperTabStore {
     })
   }
 
-  async runTimeChecks(_tabId: string): Promise<number> { return 0 }
+  /**
+   * The Swarm's time checks, run by the backend worker every 30 s (timeChecks.ts): lost and stalled work and failed starts
+   * (liveness.ts sweepForLead), then each project's idle agents (tidy.ts idleNotices), written as each project's PM to its PM.
+   * They ran on the PM's own poll before, so a PM that hung stopped them too (task #3385: five people's asks waited 3 to 10
+   * hours). Whatever they find is recorded in this same write, so a second run, or one racing it, finds nothing new. The
+   * messages written.
+   */
+  async runTimeChecks(tabId: string): Promise<number> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt || row.format !== 2) return 0
+      let loaded = await loadRow(tx, requireParts(row), {})
+      // A task its sweep may lose says Stuck in its project chat's thread (taskLine.ts endedReply, task #2693).
+      const chats = taskLineChats(loaded.state)
+      if (chats.length) loaded = await this.ensure(tx, loaded, { groupIds: chats })
+      const state = cloneData(loaded.state), now = this.now()
+      const written = sweepForLead(state, now)
+      // What waits for each agent: an agent with a delivery open is not idle. Only loaded groups' active work keeps an agent
+      // from being idle (project instructions, phase 4).
+      const projects = projectsOf(state).filter(p => state.conversations.find(c => c.id === p.leadConversationId)?.leadId)
+      if (projects.length) {
+        const busy = new Set((await tx.superTabDelivery.findMany({ where: { tabId, status: { in: [...OPEN_DELIVERY] } },
+          select: { agentId: true }, distinct: ['agentId'] })).map(d => d.agentId))
+        for (const project of projects) written.push(...idleNotices(state, project.id, now, busy))
+      }
+      // It frees the agents whose task the checks just lost, as the PM's poll did.
+      await this.endRuns(tx, tabId, loaded.state, state)
+      await recordAttempts(tx, tabId, loaded.state, state, now)
+      await recordEvidence(tx, tabId, loaded.state, state, now)
+      const sequences = numberMessages(state, written, now)
+      // A loss or a start's failure was judged from a machine's report: a newer report makes this write retry.
+      await this.save(tx, loaded, state, clock.next(), judgedMachines(loaded.state, state, written))
+      await this.writeMessages(tx, tabId, state, written, sequences, true)
+      return written.length
+    })
+  }
 
   async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, SettledPullRequest>>, reviewOf?: string): Promise<boolean> {
     return transaction(this.db, async tx => {

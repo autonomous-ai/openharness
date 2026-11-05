@@ -177,7 +177,7 @@ describe('which messages to the coordinator are gathered', () => {
     const id = await f.write({ kind: 'idle' }, f.worker)
     await db.superTabDelivery.update({ where: { id: stableId(id, f.worker) }, data: { status: 'gathered' } })
     f.clock.now += 16 * MINUTE
-    await f.poll()
+    await f.timed.runTimeChecks(f.tab)
     const told = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => kindOf(m) === 'idle' && m.text.includes('no open task'))
     expect(told).toHaveLength(1)
   })

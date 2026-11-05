@@ -339,3 +339,27 @@ describe('the delivery re-push pass (superTabs/deliveryRepush.ts, task #2800)', 
     expect(read[0]!.docsExamined).toBe(3)
   })
 })
+
+describe('the time checks\' pass', () => {
+  // Task #3385: every 30 s the worker picks the Swarms to check by their groups awake and active this week, on the
+  // [dormant, lastActivityAt] index: never every group of every Swarm.
+  it('reads only the groups awake and active in the last week, by the activity index', async () => {
+    const { timeCheckSwarms, TIME_CHECK_QUIET_MS } = await import('../src/superTabs/timeChecks.js')
+    const group = (tabId: string, at: number, dormant: boolean) => ({ id: randomUUID(), tabId, key: randomUUID(), version: 1, changedAt: new Date(at),
+      ordinal: 1, data: {}, agentIds: [], dormant, lastActivityAt: new Date(at) })
+    await db.swarmGroup.createMany({ data: [
+      ...Array.from({ length: 20 }, (_, i) => group(`asleep-${i}`, NOW - DAY, true)),
+      ...Array.from({ length: 20 }, (_, i) => group(`old-${i}`, NOW - TIME_CHECK_QUIET_MS - DAY, false)),
+      group('busy', NOW - 60_000, false), group('busy', NOW - 120_000, false), group('quiet', NOW - 3 * DAY, false),
+    ] })
+    let tabs: string[] = []
+    const entries = await profiled(db, async () => { tabs = await timeCheckSwarms(db, NOW) })
+    // Newest first; other tests' groups may be there too.
+    expect(tabs.filter(t => t === 'busy' || t === 'quiet' || t.startsWith('asleep-') || t.startsWith('old-'))).toEqual(['busy', 'quiet'])
+    const awake = await db.swarmGroup.count({ where: { dormant: false, lastActivityAt: { gte: new Date(NOW - TIME_CHECK_QUIET_MS) } } })
+    const rows = reads(entries, 'SwarmGroup', ['dormant', 'lastActivityAt'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ dormant: 1, lastActivityAt: 1/)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(awake)
+  })
+})
