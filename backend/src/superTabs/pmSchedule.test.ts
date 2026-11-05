@@ -122,8 +122,11 @@ describe('the built-in PM schedule', () => {
   it('tells the coordinator to run a start in the background and keep answering people', () => {
     const text = PM_SCHEDULE_TEXT.replace(/\s+/g, ' ')
     expect(text).toContain('while a command runs you read no one\'s messages')
-    expect(text).toContain('as one background command when your tool has them (Claude Code: run_in_background)')
-    expect(text).toContain('Never wait for a start in a loop in the foreground')
+    expect(text).toContain('When your tool runs commands in the background (Claude Code: run_in_background)')
+    // Only resume finishes a pending start, and an assignment before it settles is refused (START_PENDING): a PM without
+    // background commands needs the command by name, once a turn (review of #3121).
+    expect(text).toContain('on your next turn run `resume START_ID` once')
+    expect(text).toContain('Never repeat `resume` in a loop in the foreground')
   })
 
   it('keeps the instructions short, and counts what a person had to repeat in the nightly reflection', () => {
