@@ -67,6 +67,8 @@ const _swarmEngines = {'claude', 'codex'};
 /// This computer, added to a Swarm by the join that just let its person in
 /// (Scholes, 2026-10-29): what [SwarmJoinMachine.add] did, for the note the
 /// person sees. [problem]: why it was not added, in a sentence for them.
+/// [teamProblem]: it was added, but its Harness Team account could not be
+/// offered, and where to set it up (task #3160).
 class SwarmJoinedMachine {
   const SwarmJoinedMachine({
     required this.tabId,
@@ -74,11 +76,21 @@ class SwarmJoinedMachine {
     required this.machineId,
     required this.machineName,
     this.problem,
+    this.teamProblem,
   });
 
   final String tabId, swarmName, machineId, machineName;
-  final String? problem;
+  final String? problem, teamProblem;
   bool get added => problem == null;
+
+  /// The same machine, added, whose Team account offer failed.
+  SwarmJoinedMachine withoutTeamOffer() => SwarmJoinedMachine(
+    tabId: tabId,
+    swarmName: swarmName,
+    machineId: machineId,
+    machineName: machineName,
+    teamProblem: 'Set it up from Machines.',
+  );
 }
 
 /// Adds this computer to a Swarm its person just joined, with Add machine's

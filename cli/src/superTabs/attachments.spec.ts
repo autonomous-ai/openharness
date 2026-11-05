@@ -4,6 +4,21 @@ import { describe, expect, it, vi } from 'vitest'
 import { PASTE_DROPS_DIR } from '../lib/pasteDropFiles.js'
 import { attachedFiles, attachmentsOf, diskName, formatSize, MAX_ATTACHMENT_BYTES, sameObject, servedFrom } from './attachments.js'
 
+/** A disk that fills up while a file is written: after [writeAfter] chunks of a download, or at a copy for a second delivery
+ *  (task #3159: Scholes's Mac ran out of room mid-upload). Off unless a spec sets it. */
+const full = vi.hoisted(() => ({ writeAfter: null as number | null, copy: false }))
+const ENOSPC = (call: string) => Object.assign(new Error(`ENOSPC: no space left on device, ${call}`), { code: 'ENOSPC', syscall: call })
+vi.mock('../lib/pasteDropFiles.js', async original => {
+  const real = await original<typeof import('../lib/pasteDropFiles.js')>()
+  return { ...real,
+    writePasteDropStream: (name: string, source: AsyncIterable<Uint8Array>) => real.writePasteDropStream(name, full.writeAfter === null ? source
+      : (async function* () { let chunks = 0; for await (const chunk of source) { if (chunks++ >= full.writeAfter!) throw ENOSPC('write'); yield chunk } })()),
+    copyPasteDropFile: async (path: string, name: string) => {
+      if (full.copy) throw ENOSPC(`copyfile '${path}' -> '${PASTE_DROPS_DIR}/${name}'`)
+      return real.copyPasteDropFile(path, name)
+    } }
+})
+
 const base = 'https://cdn.example.test'
 const file = (over: Record<string, unknown> = {}) => ({ id: 'a1', name: 'screen.png', mime: 'image/png', size: 5, url: `${base}/super-tabs/tab/abc/screen.png`, ...over })
 const replying = (bytes: Uint8Array, status = 200) => vi.fn(async () => new Response(bytes, { status }))
@@ -175,6 +190,29 @@ describe('Super Tab attachment downloads', () => {
     // With the room, it goes ahead.
     const roomy = vi.fn(async () => ({ bavail: 2 * 1024 * 1024 * 1024 / 4096, bsize: 4096 }))
     expect(await attachedFiles({ attachments: [file()] }, { base, fetch: fetcher, statfs: roomy })).toMatchObject({ complete: true })
+  })
+  it('says plainly when the disk fills up during a download, keeps no part of the file and does not try again', async () => {
+    const name = 'filled-the-disk.png', fetcher = streamed(4)
+    full.writeAfter = 2
+    try {
+      const listed = await attachedFiles({ attachments: [file({ name, size: 4 * 64 * 1024 })] }, { base, fetch: fetcher })
+      expect(listed).toEqual({ text: `Attached files:\n- Could not download a file (sent as "${name}", 256.0 KB): not enough free disk space`,
+        complete: false, paths: [] })
+      expect(fetcher).toHaveBeenCalledTimes(1)
+      expect(dropped(name)).toEqual([])
+    } finally { full.writeAfter = null }
+  })
+  it('says plainly when the disk has no room for a second delivery\'s copy, naming no path', async () => {
+    const name = 'copied-to-full.png', inFlight = new Map(), fetcher = replying(new Uint8Array(5))
+    full.copy = true
+    try {
+      const [first, second] = await Promise.all([attachedFiles({ attachments: [file({ name })] }, { base, fetch: fetcher, inFlight }),
+        attachedFiles({ attachments: [file({ name })] }, { base, fetch: fetcher, inFlight })])
+      expect(first!.complete).toBe(true)
+      expect(second).toEqual({ text: `Attached files:\n- Could not download a file (sent as "${name}", 5 B): not enough free disk space`,
+        complete: false, paths: [] })
+      expect(dropped(name)).toEqual([basename(first!.paths[0]!)])
+    } finally { full.copy = false }
   })
   it('keeps a shared download going while one delivery still wants it, and stops it, keeping nothing, once none does', async () => {
     const name = 'wanted-by-two.bin', inFlight = new Map()

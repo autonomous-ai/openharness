@@ -177,6 +177,34 @@ void main() {
     });
   });
 
+  group('where to push to this phone (backend routes/pushDevices.ts)', () {
+    test('registers on the merged route with exactly platform and token, signed as the phone', () async {
+      await client(_Tokens(['phone-token'])).registerPushToken((token: 'apns-1', platform: 'ios'));
+      final request = backend.requests.single;
+      expect(request.method, 'POST');
+      expect(request.path, '/api/push-devices');
+      expect(request.headers.value('authorization'), 'Bearer phone-token');
+      // The server's body is strict: any other key answers 400.
+      expect(jsonDecode(utf8.decode(request.body)), {'platform': 'ios', 'token': 'apns-1'});
+    });
+
+    test('drops with the same body, never the token in the path', () async {
+      await client(_Tokens(['t'])).forgetPushToken((token: 'fcm-1', platform: 'android'));
+      final request = backend.requests.single;
+      expect(request.method, 'POST');
+      expect(request.path, '/api/push-devices/drop');
+      expect(jsonDecode(utf8.decode(request.body)), {'platform': 'android', 'token': 'fcm-1'});
+    });
+
+    test('a backend that refuses throws with its status', () async {
+      backend.answer = (_, _) => (status: 404, body: {'success': false, 'error': {'code': 'NOT_FOUND', 'message': 'Not found'}});
+      await expectLater(
+        client(_Tokens(['t'])).registerPushToken((token: 'a', platform: 'android')),
+        throwsA(isA<ApiException>().having((e) => e.status, 'status', 404)),
+      );
+    });
+  });
+
   group('a Swarm read', () {
     test('answers the value, signed with this sign-in, its query kept', () async {
       backend.answer = (_, _) => (status: 200, body: ok({'tabs': <Object>[]}));

@@ -5,5 +5,9 @@
 	<!-- Joining a new device's open setup hotspot, Harness-XXXX (SetupWifiChannel in AppDelegate.swift). -->
 	<key>com.apple.developer.networking.HotspotConfiguration</key>
 	<true/>
+	<!-- Pushes (PushChannel in AppDelegate.swift). An App Store export signs it as `production`, from
+	     the distribution profile; Xcode's own builds stay on the sandbox gateway. -->
+	<key>aps-environment</key>
+	<string>development</string>
 </dict>
 </plist>

@@ -1,5 +1,7 @@
 import 'package:flutter/widgets.dart';
 
+import '../swarm/swarm_home_root.dart';
+
 /// What a page deep inside one tab can ask of the shell around all three.
 ///
 /// The pages live in per-tab navigators, so none of them can switch tabs or push onto another tab's
@@ -11,6 +13,7 @@ class PhoneShellScope extends InheritedWidget {
     required this.onMachineLinked,
     required this.onOpenAgent,
     this.onShowSwarm,
+    this.home,
     this.canOpenMachine,
     this.agentStopped,
     this.onResumeAgent,
@@ -45,6 +48,11 @@ class PhoneShellScope extends InheritedWidget {
   /// the terminal (its mark, Find). Null where the shell has no Swarm Home to
   /// go back to, and a Swarm page is pushed instead (`openSwarmHome`).
   final VoidCallback? onShowSwarm;
+
+  /// What the root shows, Swarm Home or the terminal ([SwarmHomeChoice]): a terminal over Swarm
+  /// Home asks it whether there is a Swarm to go back to ([SwarmHomeChoice.harnessOverSwarm]).
+  /// Null outside the shell.
+  final SwarmHomeChoice? home;
 
   /// Null outside the shell — a page pumped on its own in a test simply has nowhere to go.
   static PhoneShellScope? maybeOf(BuildContext context) =>

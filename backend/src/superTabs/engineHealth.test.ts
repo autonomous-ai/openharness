@@ -31,6 +31,22 @@ describe('an engine whose starts fail on a machine', () => {
     expect(engineUnusable(pool, 'claude', NOW)).toBeNull()
   })
 
+  // 11-05: six first starts failed to clone on four machines, and each pair suspended the engine there for hours.
+  it('is never suspended by starts that failed to clone the project, which is the network or GitHub, not the engine', () => {
+    const pool = machine(), state = stateWith(pool)
+    for (const error of ["This machine could not clone the project repository with the Harness GitHub App's token: Could not clone the repository (git said: early EOF). Check the URL and connection, then retry.",
+      "This machine could not clone the project repository with the Harness GitHub App's token: Cloning stopped making progress after 120 s.",
+      'This machine could not access the project repository over HTTPS or SSH. Its owner needs GitHub access to it here: run gh auth login.']) {
+      for (let i = 0; i < 3; i++) expect(noteStartFailed(state, start({}, error), NOW)).toBeNull()
+    }
+    expect(pool.engineFailures).toBeUndefined()
+    expect(suspendedEngines(pool, NOW)).toEqual({})
+    // A real failure in between still counts, and clone failures do not reset the count.
+    noteStartFailed(state, start(), NOW)
+    expect(noteStartFailed(state, start({}, 'Could not clone the repository.'), NOW)).toBeNull()
+    expect(noteStartFailed(state, start(), NOW)).not.toBeNull()
+  })
+
   it('says so once per suspension, never on a later failed start or report', () => {
     const pool = machine(), state = stateWith(pool)
     noteStartFailed(state, start(), NOW)

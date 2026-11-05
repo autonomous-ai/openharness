@@ -3,6 +3,7 @@ import type { openDaemon } from '../agentClient/daemon.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PM_ACCOUNT_NOTE } from './pmAccounts.js'
 import { ELSEWHERE, heldByStarts, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf, RELAYED_QUOTA, USED_UP_WINDOW } from './capacity.js'
@@ -242,6 +243,18 @@ describe('routeTask', () => {
     expect(request.heavy).toEqual(['build'])
     expect(placedHeavyWork([{ request, requestedAt: Date.now() }], Date.now()).get('m1')).toMatchObject({ agents: 1, memoryBytes: 8e9 })
   })
+  // Ken, 11-05: a PM put work on the account another project's PM ran on; the row now says whose PM it keeps running.
+  it('notes on each candidate whose account a project\'s PM runs on which project and PM that is', async () => {
+    const project = { id: 'p1', name: 'openharness', leadConversationId: 'lead' }
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents, conversations: conversations(), projects: [project] } },
+      policy: { policy, warnings: [] }, machines: [] } } })
+    const answer = await routeTask(input, s, where as never, opener(), () => 'op') as { candidates: Array<{ machineId: string; engine?: string; title: string; notes?: string[] }> }
+    const onPm = answer.candidates.filter(c => c.machineId === 'm1' && c.title.includes('Claude'))
+    expect(onPm.length).toBeGreaterThan(0)
+    for (const row of onPm) expect(row.notes).toContain(PM_ACCOUNT_NOTE(['openharness (Lead)']))
+    expect(answer.candidates.filter(c => !(c.machineId === 'm1' && c.title.includes('Claude'))).every(c => !(c.notes ?? []).some(n => n.startsWith('This account runs the PM')))).toBe(true)
+  })
+
   it('does not offer a member whose task is working', async () => {
     const state = tab({ id: 'x', agentId: 'a1', status: 'working' })
     const s = scoped({ tab: state })
@@ -312,7 +325,8 @@ describe('routeTask', () => {
       const { result, candidates } = await route([...marked, healthy],
         [earlier({ id: 'y', agentId: 'a3', status: 'working' }, { lostAttempt: { id: 'x', agentId: 'a1' } })])
       expect(lineOf(candidates, 'Multiply')).toContain(note)
-      expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', agentId: 'a1', notes: [note] })]) })
+      // a1 shares the Lead's account (m1, Claude), so the PM-account note sits beside it (pmAccounts.ts).
+      expect(result).toMatchObject({ ok: true, candidates: expect.arrayContaining([expect.objectContaining({ kind: 'member', agentId: 'a1', notes: [note, PM_ACCOUNT_NOTE(['lead (Lead)'])] })]) })
     })
     it('carries no note once it finished a new task, which clears its mark', async () => {
       const { candidates } = await route([...agents, healthy],
@@ -710,14 +724,45 @@ describe('routeTask', () => {
     expect((await routeWith(queued)).every(candidate => candidate.fit.status === 'short')).toBe(true)
     expect((await routeWith({ ...queued, outcome: 'done' })).some(candidate => candidate.fit.status === 'fits')).toBe(true)
   })
+  // Task #3163: each candidate's weekly % left and reset go with its fit; a backend from before them refuses them, and the
+  // decision is then recorded without them, still with no pick, before any older shape is tried.
+  it('records each candidate\'s quota, and without it for a backend that refuses it, still with no pick', async () => {
+    const s = scoped(), base = s.getMockImplementation()!
+    s.mockImplementation(async payload => payload.action === 'command' && JSON.stringify(payload.command).includes('"left"')
+      ? { error: 'VALIDATION_ERROR', detail: 'decision.candidates.0.fit: Unrecognized key: "left"', status: 400 } : base(payload))
+    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
+    const [quoted, unquoted, ...rest] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
+    expect(rest).toEqual([])
+    expect(quoted.command.decision.candidates[0].fit).toHaveProperty('left')
+    expect(quoted.command.decision.candidates[0].fit).toHaveProperty('resetsAt')
+    expect(unquoted.operationId).toBe(quoted.operationId)
+    expect(unquoted.command.decision).not.toHaveProperty('pick')
+    expect(unquoted.command.decision.candidates[0].fit).not.toHaveProperty('left')
+    expect(unquoted.command.decision.candidates[0].fit).toHaveProperty('status')
+  })
+  // Review of #3117: small work steps up to Opus or Astra after its second failed attempt (Routing, Models). The route counts
+  // the task's ended attempts from the history it reads; when that read fails it keeps both models.
+  it('offers Opus to a small task once two of its attempts ended, and both models when its attempts cannot be read', async () => {
+    const small = { ...input, assessment: { ...input.assessment, size: 'small' } }
+    const offered = async (history: Answer) => {
+      const answer = await routeTask(small, scoped({ history }), where as never, opener(), () => 'op')
+      return [...new Set((answer.candidates as Array<{ kind: string; engine: string; model: string }>).filter(c => c.kind === 'new' && c.engine === 'claude').map(c => c.model))].sort()
+    }
+    const ended = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `as-${i}`, agentId: `gone-${i}`, status: 'stopped', result: 'Review failed.' }))
+    expect(await offered({ ok: true, value: { decisions: [], attempts: ended(1) } })).toEqual(['sonnet'])
+    expect(await offered({ ok: true, value: { decisions: [], attempts: ended(2) } })).toEqual(['opus'])
+    expect(await offered({ error: 'BACKEND_UNAVAILABLE' })).toEqual(['opus', 'sonnet'])
+  })
   it('records again in the shape an older backend knows when it refuses the new fields as invalid', async () => {
     const s = scoped(), base = s.getMockImplementation()!
     s.mockImplementation(async payload => payload.action === 'command' && JSON.stringify(payload.command).includes('"fit"')
       ? { error: 'VALIDATION_ERROR', detail: 'decision.candidates.0: Unrecognized key: "fit"', status: 400 } : base(payload))
     expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
-    // With no pick, then with c0 standing in for one (task #2901), then in the shape from before phase 1.
-    const [current, phase1, v1] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
+    // With no pick, then without the candidates' quota (task #3163), then with c0 standing in for one (task #2901), then in the
+    // shape from before phase 1.
+    const [current, unquoted, phase1, v1] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
     expect(current.command.decision).not.toHaveProperty('pick')
+    expect(unquoted.command.decision).not.toHaveProperty('pick')
     expect(phase1.command.decision).toMatchObject({ pick: 'c0', assessment: { size: 'medium' } })
     expect(phase1.command.decision.candidates[0]).toHaveProperty('fit')
     expect(v1.operationId).toBe(phase1.operationId)
@@ -742,15 +787,16 @@ describe('routeTask', () => {
     const beforeKinds = refusing(['kind":"docs'])
     expect(await routeTask(kinded, beforeKinds, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
     const kind = ['difficulty', 'risk', 'why', 'size', 'kind']
-    // Each refusal of the record with no pick tries it once more with c0 as the pick, the shape a backend from before task #2901 takes.
-    expect(commands(beforeKinds).map(a => Object.keys(a))).toEqual([kind, kind, ['difficulty', 'risk', 'why', 'size']])
+    // Each refusal of the record with no pick tries it without the candidates' quota (task #3163), then with c0 as the pick, the
+    // shape a backend from before task #2901 takes.
+    expect(commands(beforeKinds).map(a => Object.keys(a))).toEqual([kind, kind, kind, ['difficulty', 'risk', 'why', 'size']])
     const beforePhase1 = refusing(['kind":"docs', 'size'])
     expect(await routeTask(kinded, beforePhase1, where as never, opener(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1' })
-    expect(commands(beforePhase1).map(a => Object.keys(a))).toEqual([kind, kind, ['difficulty', 'risk', 'why', 'size'], ['difficulty', 'risk', 'why']])
+    expect(commands(beforePhase1).map(a => Object.keys(a))).toEqual([kind, kind, kind, ['difficulty', 'risk', 'why', 'size'], ['difficulty', 'risk', 'why']])
     // A task with no kind never needs the extra try.
     const plain = refusing(['size'])
     await routeTask(input, plain, where as never, opener(), () => 'op')
-    expect(commands(plain)).toHaveLength(3)
+    expect(commands(plain)).toHaveLength(4)
   })
   it('still routes when recording fails or the connection is lost', async () => {
     const result = await routeTask(input, scoped({ record: { error: 'BACKEND_UNAVAILABLE' } }), where as never, opener())
@@ -899,11 +945,13 @@ describe('route answers with no pick (task #2901)', () => {
     s.mockImplementation(async payload => payload.action === 'command' && !('pick' in payload.command.decision)
       ? { error: 'VALIDATION_ERROR', detail: 'decision.pick: Required', status: 400 } : base(payload))
     expect(await routeTask(input, s, where as never, both(), () => 'op')).toMatchObject({ ok: true, routeDecisionId: 'd1', via: 'instructions' })
-    const [current, picked] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
+    const [current, unquoted, picked] = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0])
     expect(current.command.decision).not.toHaveProperty('pick')
+    expect(unquoted.command.decision).not.toHaveProperty('pick')
     expect(picked.command.decision).toMatchObject({ pick: 'c0', via: 'order' })
     expect(picked.operationId).toBe(current.operationId)
-    expect(picked.command.decision.candidates).toEqual(current.command.decision.candidates)
+    // The candidates as the record without their quota sent them (task #3163).
+    expect(picked.command.decision.candidates).toEqual(unquoted.command.decision.candidates)
   })
 })
 
@@ -1567,8 +1615,10 @@ describe('routing contributed capacity', () => {
     const answer = await routeTask(input, s as never, where, opener())
     expect(answer).toMatchObject({ ok: true, routeDecisionId: 'd1' })
     const sent = s.mock.calls.filter(c => c[0].action === 'command').map(c => c[0].command.decision.candidates.length)
-    // With no pick, then with c0 as the pick (a backend from before task #2901), then the first 12 of those.
-    expect(sent).toEqual([16, 16, 12])
+    // With no pick, then without the candidates' quota, then with c0 as the pick (a backend from before task #2901), then the
+    // first 12 of those. The task gives no size, so each machine's Claude keeps both Opus and Sonnet (task #3163): 8 machines,
+    // 3 rows each.
+    expect(sent).toEqual([24, 24, 24, 12])
     const recordedIds = new Set(s.mock.calls.filter(c => c[0].action === 'command').at(-1)![0].command.decision.candidates.map((c: { id: string }) => c.id))
     for (const row of answer.candidates as Array<{ id: string }>) expect(recordedIds.has(row.id)).toBe(true)
   })

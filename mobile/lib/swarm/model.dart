@@ -395,6 +395,7 @@ class SuperTabConversation {
             )
           : null,
       queueRank = (row['queueRank'] as num?)?.toDouble(),
+      priority = row['priority'] as String?,
       notBefore = DateTime.tryParse(row['notBefore'] as String? ?? ''),
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       lastPersonSequence = (row['lastPersonSequence'] as num?)?.toInt() ?? 0,
@@ -455,6 +456,11 @@ class SuperTabConversation {
   /// for the phone's Tasks view to come.
   final double? queueRank;
   final DateTime? notBefore;
+
+  /// A task's priority, `P0` to `P3`, as the server keeps it (backend
+  /// taskPriority.ts, task #3117); null on a step, a chat and a task from
+  /// before it. Read here for the phone's Tasks view to come.
+  final String? priority;
   String get label => number == null ? title : '#$number $title';
   final String? leadId;
   final List<String> agentIds;
@@ -1472,16 +1478,11 @@ class SuperTabMessage {
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
 
-  /// The project and revision an instructions save's chat line names, which
-  /// its "See revision" link opens (#3021); null for any other row.
-  ({String projectId, int revision})? get instructionsSave =>
-      switch ((source['kind'], source['projectId'], source['revision'])) {
-        ('instructions', final String projectId, final num revision) => (
-          projectId: projectId,
-          revision: revision.toInt(),
-        ),
-        _ => null,
-      };
+  /// A line the backend posted for an instructions save: no chat row and
+  /// nothing unread, since it gives a person nothing to do (Dee 11-05, task
+  /// #3165). The backend posts none since #3132; the History keeps every
+  /// revision.
+  bool get instructionsSave => source['kind'] == 'instructions';
 
   /// A task's root the server posted in its person's name (plain chat, #2294):
   /// theirs to read, not their own writing, so it reads nothing before it and

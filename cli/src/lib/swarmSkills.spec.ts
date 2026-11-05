@@ -143,6 +143,16 @@ describe('built-in Swarm skills', () => {
     + '- When a bug or failure is reported, decide its impact before anything else and say it, with the reason, in your reply. Impact 0: something that already shipped is broken, loses data, or stops people\'s or agents\' work (a stuck workflow). Impact 1: needed by users soon. Impact 2: planned goals. Impact 3: tools, docs, process.\n'
     + '- Impact 0 is a hotfix: give it an agent at once and put it ahead of everything else. Its reviews run in parallel. It ships in its own release as soon as its checks pass, outside the usual release spacing and inside the project\'s release hours unless a person says otherwise. The reporter hears the cause, the workaround and when the fix arrives.\n'
     + '- Check open work against these impacts whenever a new report arrives, and do not wait for someone to say urgent.\n\n'
+  // The named-owner section (Leo, 2026-11-05; task #3180): the Lead's alone, in both modes, right after the impact section.
+  const owner = '## Work that has an owner\n'
+    + '- When the project\'s instructions name an agent or a person for a job (an order, a queue, a device, a release), you do not do that job yourself, even when it is urgent. Message that owner with the priority or the change you want, and wait for them.\n'
+    + '- An urgent case means telling the owner first, at once and with the reason; it never means taking over.\n'
+    + '- Setting priorities is not doing the owner\'s job: ask for the order you want, and never reorder, stop or restart their work yourself.\n\n'
+  // The quota section (Ken and Dee, 2026-11-05; replaces #3180's 10% ask): the Lead's alone, in both modes, right after the
+  // named-owner section. Never ask about quota; only an account a PM runs on stops taking work, below 20% of its weekly quota.
+  const quota = '## Quota\n'
+    + '- Never ask anyone about quota or whose account to use: pick by your project\'s Routing and go. When no account fits, the work waits for the soonest reset, and the task says so.\n'
+    + '- An account any project\'s PM runs on (the route notes it) takes no new work while it has less than 20% of its weekly quota left. Every other account is used without asking.\n\n'
   // Last in the Default Lead text, which has no red flags: after a blank line, ending the text.
   const requestsLast = `\n${requests.trimEnd()}\n`
   // The shared-machine rules (Ken, 2026-10-28): the Builder's and the Reviewer's alone, in both modes, in a section of their
@@ -247,7 +257,7 @@ describe('built-in Swarm skills', () => {
   it('has every role acknowledge with reactions and post only substance, the Lead adding 🚀 at a merge', () => {
     for (const mode of ['orchestration', 'default'] as const) for (const role of ['lead', 'dev', 'review'] as const) {
       const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
-      expect(text, `${mode} ${role}`).toContain(`\n\n${reactions(role)}${role === 'lead' ? impact : ''}## ${role === 'lead' ? 'Requests and Done' : 'Shared machines and secrets'}\n`)
+      expect(text, `${mode} ${role}`).toContain(`\n\n${reactions(role)}${role === 'lead' ? impact + owner + quota : ''}## ${role === 'lead' ? 'Requests and Done' : 'Shared machines and secrets'}\n`)
       expect(text.split('## Reactions\n'), `${mode} ${role}`).toHaveLength(2)
       expect(text.split(rocket), `${mode} ${role}`).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(took), `${mode} ${role}`).toHaveLength(role === 'dev' ? 2 : 1)
@@ -323,6 +333,8 @@ describe('built-in Swarm skills', () => {
       expect(text.split(ask)).toHaveLength(role === 'dev' ? 2 : 1)
       expect(text.split(requests)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(impact)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(owner)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(quota)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(failedStart)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(shared)).toHaveLength(role === 'lead' ? 1 : 2)
       expect(text.split(report)).toHaveLength(role === 'lead' ? 2 : 1)
@@ -333,7 +345,7 @@ describe('built-in Swarm skills', () => {
       expect(text.split(thread)).toHaveLength(role === 'lead' ? 2 : 1)
       expect([cardLead, cardDev, cardReview].map(line => text.split(line).length)).toEqual([role === 'lead' ? 2 : 1, role === 'dev' ? 2 : 1, role === 'review' ? 2 : 1])
       expect(sha(approved(text, 'orchestration', role).replace(whoReaches(role), '').replace(reactions(role), '').replace(twoHours, '').replace(terminal, '').replace(update, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(impact, '').replace(requests, '').replace(shared, '').replace(report, '').replace(quiet, '')
+        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(impact, '').replace(owner, '').replace(quota, '').replace(requests, '').replace(shared, '').replace(report, '').replace(quiet, '')
         .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, '').replace(thread, '').replace(queue, '')
         .replace(cardLead, '').replace(cardDev, '').replace(cardReview, ''))).toBe(sha256)
     }
@@ -414,12 +426,12 @@ describe('built-in Swarm skills', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
     expect(orchestration).toContain(`\n\n${requests}## Red flags`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
-    expect(plain.endsWith(`Call the roles Product Manager, Engineer and Reviewer.\n${thread}\n${whoReaches('lead')}${reactionsBefore('lead').slice(1)}\n${impact.trimEnd()}\n${requestsLast}`)).toBe(true)
+    expect(plain.endsWith(`Call the roles Product Manager, Engineer and Reviewer.\n${thread}\n${whoReaches('lead')}${reactionsBefore('lead').slice(1)}\n${impact}${owner}${quota.trimEnd()}\n${requestsLast}`)).toBe(true)
   })
   it('gives each Lead skill an impact section right before its requests section, and no other role', () => {
     for (const mode of ['orchestration', 'default'] as const) {
       const lead = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8')
-      expect(lead).toContain(`${impact}${mode === 'default' ? requestsLast.slice(1) : requests}`)
+      expect(lead).toContain(`${impact}${owner}${quota}${mode === 'default' ? requestsLast.slice(1) : requests}`)
       // The impact levels and every hotfix step the section promises.
       for (const part of ['decide its impact before anything else', 'say it, with the reason, in your reply', 'Impact 0: something that already shipped is broken, loses data, or stops people\'s or agents\' work (a stuck workflow)',
         'Impact 1: needed by users soon', 'Impact 2: planned goals', 'Impact 3: tools, docs, process', 'Impact 0 is a hotfix', 'an agent at once', 'ahead of everything else',
@@ -427,6 +439,28 @@ describe('built-in Swarm skills', () => {
         'the cause, the workaround and when the fix arrives', 'whenever a new report arrives', 'do not wait for someone to say urgent']) expect(lead).toContain(part)
       for (const role of ['dev', 'review', 'buddy'] as const) {
         expect(readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')).not.toContain('## Impact of a report')
+      }
+    }
+  })
+  it('tells each Lead, and no other role, not to do work its instructions give to a named owner, even when urgent', () => {
+    for (const mode of ['orchestration', 'default'] as const) {
+      const lead = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8')
+      // Each promise: it names the jobs, bars doing them, covers the urgent case, and sends the change to the owner to wait on.
+      for (const part of ['## Work that has an owner', 'name an agent or a person for a job', 'you do not do that job yourself, even when it is urgent', 'Message that owner with the priority or the change you want, and wait for them',
+        'An urgent case means telling the owner first', 'it never means taking over', 'never reorder, stop or restart their work yourself']) expect(lead).toContain(part)
+      for (const role of ['dev', 'review', 'buddy'] as const) {
+        expect(readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')).not.toContain('## Work that has an owner')
+      }
+    }
+  })
+  // Dee, 11-05: asking a person about quota is bad UX ("why restrict, why ask"); Ken kept one line: a PM's account below 20%.
+  it('tells each Lead, and no other role, never to ask about quota, and to keep an account a PM runs on below 20% free of new work', () => {
+    for (const mode of ['orchestration', 'default'] as const) {
+      const lead = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8')
+      for (const part of ['## Quota', 'Never ask anyone about quota or whose account to use', 'less than 20% of its weekly quota left', 'Every other account is used without asking']) expect(lead).toContain(part)
+      for (const gone of ['10% of its week', 'ask the person, with your recommendation', '## Spending a person']) expect(lead).not.toContain(gone)
+      for (const role of ['dev', 'review', 'buddy'] as const) {
+        expect(readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')).not.toContain('## Quota')
       }
     }
   })
@@ -524,6 +558,8 @@ describe('built-in Swarm skills', () => {
     expect(text.split(ask)).toHaveLength(role === 'dev' ? 2 : 1)
     expect(text.split(requestsLast)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(impact)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(owner)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(quota)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(failedStart)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(sharedLast)).toHaveLength(role === 'lead' ? 1 : 2)
     expect(text.split(report)).toHaveLength(role === 'lead' ? 2 : 1)
@@ -534,7 +570,7 @@ describe('built-in Swarm skills', () => {
     expect(text.split(thread)).toHaveLength(role === 'lead' ? 2 : 1)
     expect([cardLead, cardDev, cardReview].map(line => text.split(line).length)).toEqual([role === 'lead' ? 2 : 1, role === 'dev' ? 2 : 1, role === 'review' ? 2 : 1])
     expect(sha(approved(text, 'default', role).replace(whoReaches(role), '').replace(reactions(role), '').replace(terminal, '').replace(update, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(impact, '').replace(requestsLast, '').replace(sharedLast, '').replace(report, '').replace(quiet, '')
+      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(impact, '').replace(owner, '').replace(quota, '').replace(requestsLast, '').replace(sharedLast, '').replace(report, '').replace(quiet, '')
       .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, '').replace(thread, '').replace(queue, '')
         .replace(cardLead, '').replace(cardDev, '').replace(cardReview, ''))).toBe(sha256)
     expect(prepared.instructions).toMatch(/^Use the built-in swarm-tools skill /)

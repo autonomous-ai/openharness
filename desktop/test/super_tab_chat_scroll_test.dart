@@ -256,7 +256,8 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    expect(c.messages('lead').length, 40);
+    // The page above, and the rest read ahead of the reader.
+    expect(c.messages('lead').length, greaterThanOrEqualTo(40));
     for (final id in shown) {
       expect(top(tester, id), moreOrLessEquals(tops[id]!, epsilon: .5));
     }
