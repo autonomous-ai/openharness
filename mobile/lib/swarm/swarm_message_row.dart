@@ -293,6 +293,7 @@ class SwarmMessageRow extends StatelessWidget {
     this.onLongPress,
     this.references = const {},
     this.onOpenConversation,
+    this.onOpenInstructions,
   });
 
   final SuperTabMessage message;
@@ -342,6 +343,10 @@ class SwarmMessageRow extends StatelessWidget {
 
   /// Opens a conversation resolved from [references].
   final ValueChanged<String>? onOpenConversation;
+
+  /// Opens the revision an instructions save's line names
+  /// ([SuperTabMessage.instructionsSave]), to read the change whole.
+  final ValueChanged<({String projectId, int revision})>? onOpenInstructions;
 
   /// Null where the person cannot post, or in the thread itself.
   final VoidCallback? onReply;
@@ -510,6 +515,22 @@ class SwarmMessageRow extends StatelessWidget {
                       onOpenConversation: onOpenConversation,
                     ),
                   ),
+            if ((message.instructionsSave, onOpenInstructions) case (
+              final saved?,
+              final open?,
+            ))
+              TtyTap(
+                key: ValueKey('swarm-instructions-link-${message.id}'),
+                semanticsLabel: 'See revision ${saved.revision}',
+                onTap: () => open(saved),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: AppSpace.xs),
+                  child: Text(
+                    'See revision ${saved.revision}',
+                    style: swarmChatText(14, color: AppPalette.accentOnSurface),
+                  ),
+                ),
+              ),
             if (message.editedAt != null)
               Padding(
                 padding: const EdgeInsets.only(top: AppSpace.xs),

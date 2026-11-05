@@ -1550,6 +1550,17 @@ class SuperTabMessage {
   /// The project chat's line when linked work is Done (ship_row.dart).
   bool get shipLine => source['kind'] == 'ship';
 
+  /// The project and revision an instructions save's chat line names, which
+  /// its "See revision" link opens (#3021); null for any other row.
+  ({String projectId, int revision})? get instructionsSave =>
+      switch ((source['kind'], source['projectId'], source['revision'])) {
+        ('instructions', final String projectId, final num revision) => (
+          projectId: projectId,
+          revision: revision.toInt(),
+        ),
+        _ => null,
+      };
+
   /// A line the chat draws as its own row, with no sender's header (view.dart):
   /// a message after it has no header to join (Diego, #2547).
   bool get drawsOwnRow => shipLine || terminalEvent || route != null;

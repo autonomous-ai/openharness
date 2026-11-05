@@ -110,7 +110,10 @@ describe('project instructions storage', () => {
     expect(second.json().error).toMatchObject({ code: 'INSTRUCTIONS_STALE', revision: 2, text: 'Reviews run on Opus.' })
     expect((await post(peer, tab, save(2, 'Reviews run on Opus.\nTests run on the Mac.', 'Tests run on the Mac'))).statusCode).toBe(200)
     const lines = (await store.messages(owner, tab, 'lead', {})).messages.filter(m => (m.source as { kind?: string } | null)?.kind === 'instructions')
-    expect(lines.map(m => m.text)).toEqual(['owner changed the instructions: Reviews run on Opus.', 'peer changed the instructions: Tests run on the Mac.'])
+    // Each line shows what its save really changed against the stored revision before it (#3021): the first replaced the template.
+    expect(lines.map(m => m.text)).toEqual([expect.stringMatching(/^owner changed the instructions: Reviews run on Opus\.\n\nRemoved section: Project instructions\n[^]*\n\nand \d+ more changes\.$/),
+      // Its text adds a line to the same paragraph (no blank line), so the paragraph shows whole, as it was and as it is.
+      'peer changed the instructions: Tests run on the Mac.\n\nRemoved: Reviews run on Opus.\nAdded: Reviews run on Opus. Tests run on the Mac.'])
     expect((await db.superTabInstructions.findFirstOrThrow({ where: { tabId: tab, projectId: 'lead' } })).revision).toBe(3)
   })
 
