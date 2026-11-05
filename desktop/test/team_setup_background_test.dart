@@ -2,6 +2,8 @@
 // runs in the background: the lock steps aside once the password is accepted, this Mac's row in Machines says the step
 // and the time left, and a notice says when it is ready or failed, with Retry. Nothing here opens a socket, signs the
 // CLI in or out, or makes a macOS account: the daemon's answers are a fake's.
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -9,6 +11,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/team_account_setup.dart';
 
+import 'support/capture.dart';
 import 'support/rename_connection.dart';
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
@@ -52,7 +55,12 @@ Map<String, dynamic> _running(String step, {int elapsedMs = 20000}) => {
   'elapsedMs': elapsedMs,
 };
 
+/// Set to a folder to write the PR's pictures there.
+final shots = Platform.environment['TEAM_SETUP_SHOTS'];
+
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUpAll(() => loadCaptureFonts(shots));
   late _Daemon daemon;
   late AppNotifier app;
 
@@ -260,6 +268,9 @@ void main() {
           find.byKey(const ValueKey('super-machine-team-setup-m')),
           findsNothing,
         );
+        // Past the row's arrival fade, for the picture.
+        await tester.pump(const Duration(milliseconds: 1500));
+        await captureWindow(tester, shots, 'row-setting-up');
         await tester.pumpWidget(const SizedBox());
         await shown.flush();
         shown.dispose();
@@ -290,6 +301,7 @@ void main() {
         );
         expect(app.teamSetupLocked, isFalse);
         expect(find.byKey(const Key('team-account-lock')), findsNothing);
+        await captureWindow(tester, shots, 'notice-ready');
         // Nothing is read once it has ended.
         final reads = daemon.asked.where((a) => a == 'teamSetupStatus').length;
         await tester.pump(const Duration(seconds: 10));
@@ -355,6 +367,7 @@ void main() {
           find.text('Harness Team setup did not finish. dscl exited 64.'),
           findsOneWidget,
         );
+        await captureWindow(tester, shots, 'notice-failed');
         daemon.statuses
           ..clear()
           ..add(_running('password'));
