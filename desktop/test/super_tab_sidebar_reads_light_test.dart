@@ -162,7 +162,7 @@ void main() {
     final controller = await show(tester, server);
     final other = SwarmType.sidebarRowHeight(compact: false);
     expect(
-      tester.getSize(find.byKey(const ValueKey('super-activity'))).height,
+      tester.getSize(find.byKey(const ValueKey('super-decisions'))).height,
       other,
     );
     expect(tester.getSize(project).height, other + 4);

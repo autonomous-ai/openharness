@@ -17,6 +17,7 @@ import 'attention.dart';
 import 'controller.dart';
 import 'buddies.dart';
 import 'model.dart';
+import 'places.dart';
 import 'buddy_rows.dart';
 import 'section_heading.dart';
 import 'swarm_switcher.dart';
@@ -52,10 +53,11 @@ class ProjectSidebar extends StatelessWidget {
     this.onManage,
     this.manageSelected = false,
     this.devicesSelected = false,
-    this.onNotifications,
-    this.notificationsSelected = false,
+    this.onPage,
+    this.page,
     this.attention,
     this.activity,
+    this.places,
     this.onOpenBuddyChat,
     this.compact = false,
   });
@@ -76,14 +78,20 @@ class ProjectSidebar extends StatelessWidget {
   final bool manageSelected;
   final bool devicesSelected;
 
-  /// Opens the Activity view (Slack's Activity): decisions asked of the
-  /// reader, tags of them, replies to them and reactions to their messages.
-  final VoidCallback? onNotifications;
-  final bool notificationsSelected;
+  /// Opens one of the Swarm's pages: Decisions, Mentions or Threads (anh
+  /// Dee, 11-05, task #2996). Without it the three rows are not shown.
+  final ValueChanged<SwarmPage>? onPage;
 
-  /// What the Activity row counts and whether it is bold; without it the
-  /// row counts the tags and decisions waiting, as Notifications did.
+  /// The page holding the main pane, if one does.
+  final SwarmPage? page;
+
+  /// What the three rows count; without it Decisions and Mentions count what
+  /// the server says waits, and Threads nothing.
   final SuperTabActivity? activity;
+
+  /// The reader's places, for the back and forward arrows at the top;
+  /// without it there are none.
+  final SuperTabPlaces? places;
 
   /// What needs the reader, as Slack shows it: each row's red number counts
   /// only tags of them (decisions asked of them among them), and Threads is
@@ -91,10 +99,9 @@ class ProjectSidebar extends StatelessWidget {
   /// it rows carry no number.
   final SuperTabAttention? attention;
 
-  /// Whether a row other than a conversation (Manage, devices, Notifications)
-  /// holds the main pane.
-  bool get _paneCovered =>
-      manageSelected || devicesSelected || notificationsSelected;
+  /// Whether a row other than a conversation (Manage, devices, a page) holds
+  /// the main pane.
+  bool get _paneCovered => manageSelected || devicesSelected || page != null;
 
   /// Opens the reader's Buddy chat in a project, by project id; the
   /// controller's [SuperTabController.openBuddyChat] when not given.
@@ -201,6 +208,48 @@ class ProjectSidebar extends StatelessWidget {
         ),
       ),
     ),
+  );
+
+  /// Threads: bold with a plain count while followed threads have unread
+  /// replies, never red (anh Dee, 11-05).
+  Widget _threadsRow(ValueChanged<SwarmPage> onPage) {
+    final count = activity?.threadsCount ?? 0;
+    return _navigationRow(
+      key: 'super-threads',
+      label: 'Threads',
+      icon: AppIcons.messagesSquare,
+      onTap: () => onPage(SwarmPage.threads),
+      selected: page == SwarmPage.threads,
+      unread: count > 0,
+      trailing: count > 0
+          ? Text(
+              '$count',
+              style: SwarmType.sidebar(
+                compact: compact,
+                color: DesktopChrome.foreground,
+              ).copyWith(fontWeight: grid.AppFont.semibold),
+            )
+          : null,
+    );
+  }
+
+  /// Back and forward over the reader's places (⌘[ and ⌘]), at the top.
+  Widget _arrows(SuperTabPlaces places) => Row(
+    children: [
+      SizedBox(width: SuperTabSectionHeading.indentFor(0)),
+      AppIconButton(
+        key: const ValueKey('super-back'),
+        icon: AppIcons.arrowLeft,
+        tooltip: 'Back',
+        onPressed: places.canGoBack ? () => places.step(-1) : null,
+      ),
+      AppIconButton(
+        key: const ValueKey('super-forward'),
+        icon: AppIcons.arrowRight,
+        tooltip: 'Forward',
+        onPressed: places.canGoForward ? () => places.step(1) : null,
+      ),
+    ],
   );
 
   /// A project reads as a channel; a private one keeps its lock in this mark slot.
@@ -613,7 +662,7 @@ class ProjectSidebar extends StatelessWidget {
   // shared rows drawn in it.
   @override
   Widget build(BuildContext context) => grid.SidebarInk.scope(
-    child: switch ([?attention, ?activity]) {
+    child: switch ([?attention, ?activity, ?places]) {
       final List<Listenable> sources when sources.isNotEmpty =>
         ListenableBuilder(
           listenable: Listenable.merge(sources),
@@ -639,6 +688,7 @@ class ProjectSidebar extends StatelessWidget {
             child: LaidOutListView(
               padding: const EdgeInsets.all(8),
               children: [
+                if (places case final places?) _arrows(places),
                 if ((app, onNewSwarm) case (final app?, final onNewSwarm?))
                   SwarmSwitcher(
                     app: app,
@@ -658,24 +708,31 @@ class ProjectSidebar extends StatelessWidget {
                           trailing: trailing,
                         ),
                   ),
-                // Slack's Activity, where Notifications was (Lead, 10-31): one row.
-                if (onNotifications != null)
+                // Three rows, each one thing, in anh Dee's order (11-05, task
+                // #2996): only Decisions and Mentions are ever red.
+                if (onPage case final onPage?) ...[
                   _navigationRow(
-                    key: 'super-activity',
-                    label: 'Activity',
-                    icon: AppIcons.bell,
-                    onTap: onNotifications,
-                    selected: notificationsSelected,
-                    unread: activity?.unread ?? false,
+                    key: 'super-decisions',
+                    label: 'Decisions',
+                    icon: AppIcons.flag,
+                    onTap: () => onPage(SwarmPage.decisions),
+                    selected: page == SwarmPage.decisions,
                     badge:
-                        activity?.count ??
-                        (snapshot == null
-                            ? 0
-                            : snapshot.decisionsWaiting +
-                                  snapshot.mentionsWaiting),
+                        activity?.needsCount ?? snapshot?.decisionsWaiting ?? 0,
                   ),
-                // One Buddy for the whole Swarm, under Activity (Quiet Swarm, screen 1).
-                if (controller.oneBuddy) ?_swarmBuddyRow(),
+                  _navigationRow(
+                    key: 'super-mentions',
+                    label: 'Mentions',
+                    icon: AppIcons.atSign,
+                    onTap: () => onPage(SwarmPage.mentions),
+                    selected: page == SwarmPage.mentions,
+                    badge:
+                        activity?.mentionsCount ??
+                        snapshot?.mentionsWaiting ??
+                        0,
+                  ),
+                  _threadsRow(onPage),
+                ],
                 const SizedBox(height: 20),
                 SuperTabSectionHeading(
                   key: const ValueKey('project-sidebar-projects'),
@@ -696,13 +753,12 @@ class ProjectSidebar extends StatelessWidget {
                   onAdd: controller.canWrite ? onNewProject : null,
                   addTooltip: 'New project',
                   endInset: 0,
-                  collapsed: !controller.projectsGroupOpen,
-                  onToggleCollapsed: controller.toggleProjectsGroup,
                 ),
-                if (controller.projectsGroupOpen) ...[
-                  for (final (_, channel) in _channels(snapshot, reading))
-                    channel,
-                ],
+                // The reader's one Buddy, the first item under Projects (anh
+                // Dee, 11-05).
+                if (controller.oneBuddy) ?_swarmBuddyRow(),
+                for (final (_, channel) in _channels(snapshot, reading))
+                  channel,
                 const SizedBox(height: 16),
                 // Buddies replaced Chat with PM in every Swarm (Ken, 10-29); where the
                 // server gives one Buddy for the whole Swarm, it is # buddy above.

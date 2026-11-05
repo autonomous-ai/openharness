@@ -13,6 +13,7 @@ import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/manage_page.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/section_heading.dart';
 
@@ -53,7 +54,7 @@ Future<void> pumpSidebar(
   double scale = 1,
   VoidCallback? onNewProject,
   VoidCallback? onManage,
-  VoidCallback? onNotifications,
+  ValueChanged<SwarmPage>? onPage,
 }) async {
   await tester.binding.setSurfaceSize(Size(width, 1000));
   await tester.pumpWidget(
@@ -73,7 +74,7 @@ Future<void> pumpSidebar(
             attention: SuperTabAttention.of(controller),
             onSelect: controller.select,
             onNewProject: onNewProject ?? () {},
-            onNotifications: onNotifications ?? () {},
+            onPage: onPage ?? (_) {},
             onManage: () {
               onManage?.call();
               controller.selectDevices();
@@ -236,12 +237,12 @@ void main() {
           scale: scale,
           onNewProject: () => created++,
           onManage: () => openedManage++,
-          onNotifications: () => openedActivity++,
+          onPage: (_) => openedActivity++,
         );
         final project = find.byKey(const ValueKey('super-group-lead'));
         final empty = find.byKey(const ValueKey('super-group-empty-lead'));
         final manage = find.byKey(const ValueKey('super-manage'));
-        final activity = find.byKey(const ValueKey('super-activity'));
+        final activity = find.byKey(const ValueKey('super-decisions'));
         expect(find.byType(OutlinedButton), findsNothing);
         expect(
           tester.getBottomLeft(activity).dy,
@@ -275,7 +276,7 @@ void main() {
             .getTopLeft(inRow('super-group-lead', find.text('web-project')))
             .dx;
         for (final label in [
-          find.text('Activity'),
+          find.text('Decisions'),
           find.text('Manage'),
           sample,
         ]) {
@@ -302,7 +303,7 @@ void main() {
         }
 
         // The plain rows retain keyboard operation and do not create tabs.
-        Focus.of(tester.element(find.text('Activity'))).requestFocus();
+        Focus.of(tester.element(find.text('Decisions'))).requestFocus();
         await tester.pump();
         await tester.sendKeyEvent(LogicalKeyboardKey.enter);
         await tester.pumpAndSettle();
@@ -345,9 +346,7 @@ void main() {
   }
 
   testWidgets('reads like a chat app: Activity, Projects A to Z, Buddies, '
-      'then Manage; no # product-managers, no tasks', (
-    tester,
-  ) async {
+      'then Manage; no # product-managers, no tasks', (tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final app = createApp(connected: true);
     addTearDown(app.dispose);
@@ -363,7 +362,7 @@ void main() {
     await pumpSidebar(tester, controller, app);
 
     final order = [
-      find.byKey(const ValueKey('super-activity')),
+      find.byKey(const ValueKey('super-decisions')),
       find.text('Projects'),
       find.byKey(const ValueKey('super-group-empty-lead')),
       find.byKey(const ValueKey('super-group-lead')),
@@ -414,7 +413,8 @@ void main() {
     final controller = await projectSidebar(ConversationServer());
     for (final width in [180.0, 280.0, 420.0]) {
       await pumpSidebar(tester, controller, app, width: width);
-      for (final title in ['Projects', 'Buddies']) {
+      // Projects no longer folds (task #2996); Buddies does.
+      for (final title in ['Buddies']) {
         final heading = find.ancestor(
           of: find.text(title),
           matching: find.byType(SuperTabSectionHeading),
@@ -620,30 +620,22 @@ void main() {
     expect(inRow('super-group-lead', find.text('web-project')), findsOneWidget);
     expect(buddy, findsOneWidget);
 
-    await tester.tap(find.byTooltip('Collapse Projects'));
-    await tester.pumpAndSettle();
-    expect(inRow('super-group-lead', find.text('web-project')), findsNothing);
-    expect(controller.projectsGroupOpen, isFalse);
+    // Projects no longer folds (anh Dee, 11-05, task #2996).
+    expect(find.byTooltip('Collapse Projects'), findsNothing);
     await tester.tap(find.byTooltip('Collapse Buddies'));
     await tester.pumpAndSettle();
     expect(buddy, findsNothing);
     expect(controller.buddiesGroupOpen, isFalse);
-    expect(find.text('Activity'), findsOneWidget);
+    expect(find.text('Decisions'), findsOneWidget);
     expect(find.text('Manage'), findsOneWidget);
 
     await controller.flush();
     final saved = server.saved!;
-    expect(saved['projectsGroupOpen'], isFalse);
     expect(saved['buddiesGroupOpen'], isFalse);
     final reopened = server.controller(initial: saved);
     await reopened.refresh();
-    expect(reopened.projectsGroupOpen, isFalse);
     expect(reopened.buddiesGroupOpen, isFalse);
 
-    Focus.of(tester.element(find.text('Projects'))).requestFocus();
-    await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
     expect(inRow('super-group-lead', find.text('web-project')), findsOneWidget);
     await disposeSidebar(tester, controller);
     await reopened.flush();
@@ -798,62 +790,59 @@ void main() {
       },
     );
 
-    test(
-      'lists only fresh readings, once per machine, and none while the add-on is off',
-      () {
-        final now = DateTime.fromMillisecondsSinceEpoch(1000000);
-        SuperTabSnapshot snapshot({bool enabled = true, int at = 990000}) =>
-            SuperTabSnapshot.fromJson({
-              'version': 1,
-              'id': 'tab',
-              'name': 'Swarm',
-              'ownerId': 'owner',
-              'people': <Object>[],
-              'agents': <Object>[],
-              'conversations': <Object>[],
-              'invitations': <Object>[],
-              'localModels': {'grid': swarmGrid, 'enabled': enabled},
-              'machines': [
-                {'machineId': 'a', 'observation': 'junk'},
-                {
-                  'machineId': 'b',
-                  'observation': {
-                    'receivedAt': at,
-                    'localModels': [
-                      {'grid': swarmGrid, 'model': 'm'},
-                      {'grid': 'team', 'model': 'n'},
-                      {'grid': swarmGrid, 'model': 7},
-                      'junk',
-                    ],
-                  },
+    test('lists only fresh readings, once per machine, and none while the add-on is off', () {
+      final now = DateTime.fromMillisecondsSinceEpoch(1000000);
+      SuperTabSnapshot snapshot({bool enabled = true, int at = 990000}) =>
+          SuperTabSnapshot.fromJson({
+            'version': 1,
+            'id': 'tab',
+            'name': 'Swarm',
+            'ownerId': 'owner',
+            'people': <Object>[],
+            'agents': <Object>[],
+            'conversations': <Object>[],
+            'invitations': <Object>[],
+            'localModels': {'grid': swarmGrid, 'enabled': enabled},
+            'machines': [
+              {'machineId': 'a', 'observation': 'junk'},
+              {
+                'machineId': 'b',
+                'observation': {
+                  'receivedAt': at,
+                  'localModels': [
+                    {'grid': swarmGrid, 'model': 'm'},
+                    {'grid': 'team', 'model': 'n'},
+                    {'grid': swarmGrid, 'model': 7},
+                    'junk',
+                  ],
                 },
-              ],
-            });
-        expect(superTabLocalModelRows(snapshot(), now: now), [
-          (
-            grid: swarmGrid,
-            model: 'm',
-            name: 'm',
-            machineId: 'b',
-            machine: 'A machine',
-            kind: 'local',
-          ),
-          (
-            grid: 'team',
-            model: 'n',
-            name: 'n',
-            machineId: 'b',
-            machine: 'A machine',
-            kind: 'shared',
-          ),
-        ]);
-        expect(superTabLocalModelRows(snapshot(at: 900000), now: now), isEmpty);
-        expect(
-          superTabLocalModelRows(snapshot(enabled: false), now: now),
-          isEmpty,
-        );
-        expect(superTabLocalModelRows(null, now: now), isEmpty);
-      },
-    );
+              },
+            ],
+          });
+      expect(superTabLocalModelRows(snapshot(), now: now), [
+        (
+          grid: swarmGrid,
+          model: 'm',
+          name: 'm',
+          machineId: 'b',
+          machine: 'A machine',
+          kind: 'local',
+        ),
+        (
+          grid: 'team',
+          model: 'n',
+          name: 'n',
+          machineId: 'b',
+          machine: 'A machine',
+          kind: 'shared',
+        ),
+      ]);
+      expect(superTabLocalModelRows(snapshot(at: 900000), now: now), isEmpty);
+      expect(
+        superTabLocalModelRows(snapshot(enabled: false), now: now),
+        isEmpty,
+      );
+      expect(superTabLocalModelRows(null, now: now), isEmpty);
+    });
   });
 }
