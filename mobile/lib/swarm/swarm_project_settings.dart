@@ -132,7 +132,8 @@ Future<void> showSwarmProjectSettings(
         PhoneSheetAction(
           icon: LucideIcons.arrowLeftRight300,
           label: 'Switch PM…',
-          onTap: () => unawaited(showSwarmSwitchPm(context, reader, projectId)),
+          onTap: () =>
+              unawaited(showSwarmSwitchPm(context, reader, projectId)),
         ),
     ],
     sections: const <PhoneSheetSection>[],
