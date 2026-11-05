@@ -149,6 +149,22 @@ describe('reads and tests a change needs', () => {
     expect(globMatch('a/**/b.ts', 'a/x/y/c.ts')).toBe(false)
   })
 
+  // Reviewers, after #3216: the linear matcher let `**/` end inside a name, so a folder pattern matched a name that only ends
+  // with it. The regex it replaced, `(?:.*/)?`, ends only at a slash or matches nothing.
+  it('ends a double star with a slash only at a folder boundary', () => {
+    expect(globMatch('a/**/b', 'a/xb')).toBe(false)
+    expect(globMatch('a/**/b', 'a/b')).toBe(true)
+    expect(globMatch('a/**/b', 'a/x/b')).toBe(true)
+    expect(globMatch('a/**/b', 'a/x/yb')).toBe(false)
+    expect(globMatch('**/tests/**', 'latests/x.ts')).toBe(false)
+    expect(globMatch('**/tests/**', 'pkg/latests/x.ts')).toBe(false)
+    expect(globMatch('**/tests/**', 'tests/x.ts')).toBe(true)
+    expect(globMatch('**/tests/**', 'pkg/tests/x.ts')).toBe(true)
+    expect(globMatch('**/e2ee/**', 'mobile/lib/notee2ee/box.dart')).toBe(false)
+    expect(globMatch('**/*auth*', 'backend/src/lib/ssoAuth.ts')).toBe(true)
+    expect(testsFor(SEED_RULES, ['desktop/lib/latests/a.dart'])).toEqual(['Desktop on a Mac'])
+  })
+
   it('asks the most reads any touched row asks, at least the default, and fails closed on files it cannot read', () => {
     expect(requiredReads(SEED_RULES, ['desktop/lib/super_tabs/view.dart'])).toBe(1)
     expect(requiredReads(SEED_RULES, ['desktop/lib/super_tabs/view.dart', 'backend/src/lib/ssoAuth.ts'])).toBe(2)
