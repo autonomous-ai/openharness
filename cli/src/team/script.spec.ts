@@ -4,7 +4,7 @@
  * osascript, launchctl, dscl or sudo: the whole scripts are only parsed (`sh -n`), never run.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -274,6 +274,13 @@ describe('the team account\'s engines, copied from the owner\'s', () => {
     const cases: [string, (root: string) => string[], string?][] = [
       ['another package', (root) => ['@openai/codex', ownerPackage(root, '@anthropic-ai/claude-code', 'bin/codex.js'), 'codex', 'bin/codex.js']],
       ['no command', (root) => ['@openai/codex', ownerPackage(root), 'codex', 'bin/missing.js']],
+      // Security review 1 of #3124: a command that is a link points wherever it was made to, outside the package too.
+      ['a command that is a link', (root) => {
+        const dir = ownerPackage(root)
+        rmSync(join(dir, 'bin', 'codex.js'))
+        symlinkSync('/bin/sh', join(dir, 'bin', 'codex.js'))
+        return ['@openai/codex', dir, 'codex', 'bin/codex.js']
+      }],
       ['no folder', (root) => ['@openai/codex', join(root, 'nothing-here'), 'codex', 'bin/codex.js']],
       // The owner's tar sends a whole package, then fails (a file it could not read): the copy is not kept.
       ['reading failed', (root) => ['@openai/codex', ownerPackage(root), 'codex', 'bin/codex.js'], '"$@"; return 1'],

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -203,8 +203,41 @@ describe('the owner\'s installed engines, for setup to copy (#3169)', () => {
     rmSync(join(local, 'lib', 'node_modules', '@openai', 'codex'), { recursive: true })
     symlinkSync(checkout, join(local, 'lib', 'node_modules', '@openai', 'codex'))
     expect(ownerEngineCopies({ home: owner, nodeRuntimeDir: null, prefixes: [] })).toEqual([])
+    // A command that is a link: where it points is not the package's to say.
+    const linked = pkg(join(owner, 'linked'), '@openai/codex', { codex: 'bin/codex.js' })
+    rmSync(join(linked, 'bin', 'codex.js'))
+    symlinkSync('/bin/sh', join(linked, 'bin', 'codex.js'))
+    expect(ownerEngineCopies({ home: owner, nodeRuntimeDir: null, prefixes: [join(owner, 'linked')] })).toEqual([])
     const noBin = pkg(join(owner, 'nobin'), '@openai/codex', { codex: 'bin/codex.js' })
     rmSync(join(noBin, 'bin', 'codex.js'))
     expect(ownerEngineCopies({ home: owner, nodeRuntimeDir: null, prefixes: [join(owner, 'nobin')] })).toEqual([])
   })
+
+  // Security review 1 of #3124 (Dahlia): Homebrew's folders may belong to another person on this Mac, and a folder anyone
+  // else can write decides what the Team account would run. Only a package whose every folder, from / down, and every
+  // file is the owner's or root's and writable by no one else is copied; anything else goes to npm.
+  it('copies nothing another person, or anyone in a group, could have changed', () => {
+    const owner = home(), brew = join(owner, 'brew')
+    const dir = pkg(brew, '@openai/codex', { codex: 'bin/codex.js' })
+    const found = () => ownerEngineCopies({ home: join(owner, 'nobody'), nodeRuntimeDir: null, prefixes: [brew] })
+    expect(found()).toHaveLength(1)
+    // Another person's Homebrew: the same files, owned by someone who is not the owner and not root.
+    expect(ownerEngineCopies({ home: join(owner, 'nobody'), nodeRuntimeDir: null, prefixes: [brew], uid: process.getuid!() + 12345 })).toEqual([])
+    // A prefix folder others can write, and a file inside the package others can write.
+    chmodSync(join(brew, 'lib'), 0o775)
+    expect(found()).toEqual([])
+    chmodSync(join(brew, 'lib'), 0o755)
+    expect(found()).toHaveLength(1)
+    writeFileSync(join(dir, 'index.js'), '// engine', { mode: 0o666 })
+    chmodSync(join(dir, 'index.js'), 0o666)
+    expect(found()).toEqual([])
+    chmodSync(join(dir, 'index.js'), 0o644)
+    // A folder anyone can write is fine only with the sticky bit (/tmp), where nobody else can swap what is in it.
+    chmodSync(brew, 0o1777)
+    expect(found()).toHaveLength(1)
+    chmodSync(brew, 0o777)
+    expect(found()).toEqual([])
+    chmodSync(brew, 0o755)
+  })
 })
+
