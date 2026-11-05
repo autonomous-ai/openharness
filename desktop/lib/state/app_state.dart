@@ -1,6 +1,7 @@
 import '../core/home_dir.dart';
 import '../usage/usage_account_key.dart';
 import '../measurement/product_measurement.dart';
+import '../measurement/speed_marks.dart';
 import '../measurement/product_runtime_health.dart';
 import '../measurement/product_connections.dart';
 import '../core/crash_log.dart';
@@ -2628,14 +2629,17 @@ class AppNotifier extends ChangeNotifier {
   /// Starts the Harness Team account's setup on this Mac, the person having
   /// asked: macOS's administrator prompt follows. Answers the daemon's state
   /// (`started`, `exists`, `running`, ...), or `update` from a daemon too old
-  /// to set it up from here.
-  Future<String> setUpTeamAccount() async {
+  /// to set it up from here. With [signInAgain], an account already here is
+  /// signed in again for this account: the Swarm found it serving another
+  /// account of this computer (#3122).
+  Future<String> setUpTeamAccount({bool signInAgain = false}) async {
     final here = _teamAccountHere();
     if (here == null) return 'unsupported';
     try {
       final answer = await superTabMachineRequest(here, {
         'action': 'teamSetup',
         'reason': 'manual',
+        if (signInAgain) 'signInAgain': true,
       });
       return answer['state']?.toString() ?? 'started';
     } on SuperTabFailure catch (failure) {
@@ -7023,6 +7027,7 @@ class AppNotifier extends ChangeNotifier {
   final _startupTimings = <String, int>{};
   final _startupClock = Stopwatch();
   void _markStartup(String step) {
+    speedMarks.launch(step);
     if (_startupClock.isRunning)
       _startupTimings[step] = _startupClock.elapsedMilliseconds;
   }
@@ -7662,6 +7667,7 @@ class AppNotifier extends ChangeNotifier {
     }
     try {
       await refreshMachines();
+      speedMarks.launch('machines listed');
     } catch (error) {
       if (!_authWorkCurrent(revision)) return;
       _reportMachineLoadError(error);

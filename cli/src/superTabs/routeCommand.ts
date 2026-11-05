@@ -291,6 +291,15 @@ function endedWork(conversations: Json[], decisions: Json[] | null, attempts: Js
   }
   return ended
 }
+/** How many of the task's attempts ended: its earlier assignments the route read and its own last one, once each; null when its
+ *  attempts could not be read. The route steps small work up after the second (route.ts tierOf). */
+function endedAttempts(group: Json, attempts: Json[] | null): number | null {
+  if (!attempts) return null
+  const ended = new Set(attempts.filter(a => typeof a.id === 'string' && !active(a)).map(a => a.id))
+  const current = object(group.assignment)
+  if (current.id && !active(current)) ended.add(current.id)
+  return ended.size
+}
 /** The fields of a frame that say what the agent works on; an absent or malformed one says nothing. */
 function frameOf(frame: Json): MemberFrame {
   const project = object(frame.project), updatedAt = Date.parse(String(frame.updatedAt))
@@ -487,7 +496,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // A model a host now offline served is left out with that reason, and a person naming it gets no stand-in (route.ts choose).
   const offline = offlineModels(state)
   const now = Date.now()
-  const choice = choose(probes, catalog, assessment, now, working, heldLocalModels(state), offline, made.plugins)
+  const choice = choose(probes, catalog, { ...assessment, ended: endedAttempts(group, attempts) }, now, working, heldLocalModels(state), offline, made.plugins)
   const skipped = [...made.warnings, ...(choice.warnings ?? [])]
   choice.excluded.push(...offline, ...(catalog.models.length ? [] : [{ title: 'New agents', reason: CATALOG_UNREADABLE }]))
   // The task stays in the agent's queue rather than going where it cannot be done.
@@ -504,6 +513,8 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const record = (shape: RecordShape) => scoped({ action: 'command', operationId,
     command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf({ ...choice, shown: offered }, verdict, assessment, shape) } })
   let recorded = await record('current')
+  // A backend from before task #3163 refuses each candidate's weekly % left and reset: the same decision without them.
+  if (recorded.error === 'VALIDATION_ERROR') recorded = await record('unquoted')
   // A backend from before task #2901 takes a record only with a pick: c0 stands in for one, so its decision log and the starts
   // linked to it still work (route.ts recordOf).
   if (recorded.error === 'VALIDATION_ERROR') recorded = await record('picked')

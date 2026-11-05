@@ -79,6 +79,13 @@ export async function addMember(tx: Transaction, workspaceId: string, person: { 
     : tx.swarmWorkspaceMember.create({ data: { id, workspaceId, userId: person.id, ...data } })
 }
 
+/** When this Workspace last removed `userId`, or null. An invitation sent before then is refused (task #3173). Removal records
+ *  outlive any invitation (30 days after they finish), so none sent before a removal is missed. */
+export async function latestRemovalAt(tx: Transaction, workspaceId: string, userId: string): Promise<number | null> {
+  const removal = await tx.swarmWorkspaceRemoval.findFirst({ where: { workspaceId, userId }, orderBy: { removedAt: 'desc' }, select: { removedAt: true } })
+  return removal ? removal.removedAt.getTime() : null
+}
+
 /** Whether this Workspace removed `userId`: auto-join never adds them to its Swarms. Unlike the member row, never purged. */
 export async function autoJoinDeclinedBy(tx: Transaction, workspaceId: string, userId: string): Promise<boolean> {
   const workspace = await tx.swarmWorkspace.findUnique({ where: { id: workspaceId }, select: { autoJoinDeclined: true } })
@@ -155,6 +162,8 @@ export async function listWorkspaces(db: PrismaClient, user: AuthUser): Promise<
 /** How long a removed person's row and a deleted Workspace stay before they are purged (design, Growth). */
 export const WORKSPACE_PURGE_MS = 30 * 24 * 60 * 60 * 1000
 const INVITATION_MS = 14 * 24 * 60 * 60 * 1000
+/** When an invitation was last sent: `invite` sets, and every resend moves, `expiresAt` to then plus INVITATION_MS. */
+const sentAt = (invitation: { expiresAt: Date }): number => invitation.expiresAt.getTime() - INVITATION_MS
 
 interface WorkspaceDeps {
   transaction<T>(body: (tx: Transaction) => Promise<T>): Promise<T>
@@ -226,6 +235,22 @@ export class SwarmWorkspaces {
     })
   }
 
+  /** Withdraws a pending invitation, for owners and admins, and only one for a role they may give (task #3173). */
+  async revokeInvitation(user: AuthUser, workspaceId: string, email: string) {
+    const address = email.trim().toLowerCase()
+    return this.deps.transaction(async tx => {
+      await this.workspace(tx, user, workspaceId)
+      const me = await requireWorkspaceRole(tx, workspaceId, user.sub, 'workspace.invite')
+      const invitation = await tx.swarmWorkspaceInvitation.findUnique({ where: { id: `${workspaceId}:${address}` } })
+      if (!invitation || invitation.expiresAt.getTime() <= this.deps.now()) fail('NOT_FOUND', 'This invitation is unavailable.', 404)
+      if (!mayAssignRole(me.role, invitation.role as WorkspaceRole)) {
+        fail('WORKSPACE_ROLE_REQUIRED', `Your role in this ${WORKSPACE_LABEL} cannot revoke an invitation as ${invitation.role}.`, 403)
+      }
+      await tx.swarmWorkspaceInvitation.delete({ where: { id: invitation.id } })
+      return { email: address, revoked: true as const }
+    })
+  }
+
   /** Invitations waiting for the signed-in person. */
   async invitationsFor(user: AuthUser) {
     const rows = await this.db.swarmWorkspaceInvitation.findMany({ where: { email: user.email.trim().toLowerCase(), expiresAt: { gt: new Date(this.deps.now()) } }, take: 100 })
@@ -246,6 +271,10 @@ export class SwarmWorkspaces {
       await this.workspace(tx, user, workspaceId)
       const invitation = await tx.swarmWorkspaceInvitation.findUnique({ where: { id: `${workspaceId}:${address}` } })
       if (!invitation || invitation.expiresAt.getTime() <= this.deps.now()) fail('NOT_FOUND', 'This invitation is unavailable.', 404)
+      // A removal is final against an invitation sent before it (task #3173): `remove` deletes the pending one, and this
+      // refuses one a removal from before that fix left behind. One sent after the removal is a new decision and stands.
+      const removedAt = await latestRemovalAt(tx, workspaceId, user.sub)
+      if (removedAt !== null && sentAt(invitation) < removedAt) fail('NOT_FOUND', 'This invitation is unavailable.', 404)
       await tx.swarmWorkspaceInvitation.delete({ where: { id: invitation.id } })
       const role = invitation.role as WorkspaceRole
       const current = await activeMember(tx, workspaceId, user.sub)
@@ -310,6 +339,8 @@ export class SwarmWorkspaces {
       const now = new Date(this.deps.now())
       await tx.swarmWorkspaceMember.update({ where: { id: target.id }, data: { removedAt: now, removedBy: user.sub,
         purgeAt: new Date(now.getTime() + WORKSPACE_PURGE_MS), version: { increment: 1 } } })
+      // An invitation still pending would bring them back with its role (task #3173), as a Swarm's member.remove drops theirs.
+      await tx.swarmWorkspaceInvitation.deleteMany({ where: { id: `${workspaceId}:${target.email}` } })
       // Swarm auto-join never adds them back, even after this row is purged (spec 2026-11-03; security review 2 of #2714).
       const declined = (await tx.swarmWorkspace.findUnique({ where: { id: workspaceId }, select: { autoJoinDeclined: true } }))?.autoJoinDeclined ?? []
       if (!declined.includes(userId)) await tx.swarmWorkspace.update({ where: { id: workspaceId }, data: { autoJoinDeclined: [...declined, userId].sort() } })

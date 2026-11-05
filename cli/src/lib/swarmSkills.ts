@@ -1,6 +1,6 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
-import { buddyLaunchFile, buddyOwnerOf, buddyReadsOf, revokeBuddyWide, signedInAccount } from './buddyGuard.js'
+import { buddyLaunchFile, buddyOwnerOf, buddyReadsOf, heldByOldGuard, revokeBuddyWide, signedInAccount } from './buddyGuard.js'
 import { isTeamAccount } from '../team/config.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
@@ -175,6 +175,14 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - When a bug or failure is reported, decide its impact before anything else and say it, with the reason, in your reply. Impact 0: something that already shipped is broken, loses data, or stops people's or agents' work (a stuck workflow). Impact 1: needed by users soon. Impact 2: planned goals. Impact 3: tools, docs, process.
 - Impact 0 is a hotfix: give it an agent at once and put it ahead of everything else. Its reviews run in parallel. It ships in its own release as soon as its checks pass, outside the usual release spacing and inside the project's release hours unless a person says otherwise. The reporter hears the cause, the workaround and when the fix arrives.
 - Check open work against these impacts whenever a new report arrives, and do not wait for someone to say urgent.
+
+## Work that has an owner
+- When the project's instructions name an agent or a person for a job (an order, a queue, a device, a release), you do not do that job yourself, even when it is urgent. Message that owner with the priority or the change you want, and wait for them.
+- An urgent case means telling the owner first, at once and with the reason; it never means taking over.
+- Setting priorities is not doing the owner's job: ask for the order you want, and never reorder, stop or restart their work yourself.
+
+## Spending a person's quota
+- You may spend a requester's own account quota on that person's own task without asking, as long as that account has more than 10% of its week left. Below 10%, ask the person, with your recommendation.
 
 ## Requests and Done
 - When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote. Name the message it came from as well: proposalMessageId for their Buddy's proposal, requestMessageId for their own message in the project chat. That message stays the task's one message in the chat; without one, the Swarm posts the title as them, marked as a task. The Swarm replies in its thread at each change, so you post no progress there.
@@ -506,6 +514,14 @@ When the project owner asks in chat to switch this project's skills (Default or 
 - Impact 0 is a hotfix: give it an agent at once and put it ahead of everything else. Its reviews run in parallel. It ships in its own release as soon as its checks pass, outside the usual release spacing and inside the project's release hours unless a person says otherwise. The reporter hears the cause, the workaround and when the fix arrives.
 - Check open work against these impacts whenever a new report arrives, and do not wait for someone to say urgent.
 
+## Work that has an owner
+- When the project's instructions name an agent or a person for a job (an order, a queue, a device, a release), you do not do that job yourself, even when it is urgent. Message that owner with the priority or the change you want, and wait for them.
+- An urgent case means telling the owner first, at once and with the reason; it never means taking over.
+- Setting priorities is not doing the owner's job: ask for the order you want, and never reorder, stop or restart their work yourself.
+
+## Spending a person's quota
+- You may spend a requester's own account quota on that person's own task without asking, as long as that account has more than 10% of its week left. Below 10%, ask the person, with your recommendation.
+
 ## Requests and Done
 - When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote. Name the message it came from as well: proposalMessageId for their Buddy's proposal, requestMessageId for their own message in the project chat. That message stays the task's one message in the chat; without one, the Swarm posts the title as them, marked as a task. The Swarm replies in its thread at each change, so you post no progress there.
 - Right after you merge a group's pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.
@@ -800,10 +816,8 @@ function prepareBuddyFolder(root: string, key: string): void {
   if (!owner) throw new Error(BUDDY_START_AGAIN)
   if (account && account !== owner) throw new Error(BUDDY_NOT_HERE)
   const claude = join(root, '.claude'), guard = join(claude, 'buddy-guard.mjs'), settings = join(claude, 'settings.local.json')
-  // Harness's lock, and nothing else: its settings named its guard by this folder's own path, which no commit can know
-  // (security review 2 of #2832). A project's own file of either name is left as it is.
-  const locked = isPlainFile(guard) && isPlainFile(settings) && readFileSync(settings, 'utf8').includes(guard)
-  if (locked) {
+  // Harness's lock, and nothing else (heldByOldGuard): a project's own file of either name is left as it is.
+  if (heldByOldGuard(root)) {
     rmSync(settings, { force: true })
     rmSync(guard, { force: true })
     const walk = (dir: string) => {
@@ -829,7 +843,6 @@ function prepareBuddyFolder(root: string, key: string): void {
 const BUDDY_NOT_HERE = 'A Buddy runs only on its owner\'s own machine, signed in as them. It is not started here.'
 /** Why a Buddy saved before its start recorded its owner is not relaunched: its owner starts it again, and that start checks. */
 const BUDDY_START_AGAIN = 'This Buddy was started before Harness checked its machine at each launch. Start your Buddy again.'
-const isPlainFile = (path: string) => { try { const stat = lstatSync(path); return stat.isFile() && !stat.isSymbolicLink() } catch { return false } }
 
 /** Which built-in text a session's skill file holds and of which mode, how many times the file was rewritten, and the text,
  * mode and rewrite its agent was last confirmed told about (the launch prompt is rewrite 0). A file from before this record
