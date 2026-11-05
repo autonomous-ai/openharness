@@ -3,9 +3,10 @@
  * only in a Team account, never with the main account's rights, as install scripts, tests and project settings would
  * run there with no race and no bug. docs/plans/2026-11-02-team-written-branch-plan.md.
  *
- * The mark comes from the Swarm's own record of who worked on the task, or from GitHub's record of who pushed. It never
- * clears, and it is never read from a commit's author, which anyone can write. A step reads its task's mark. A Team agent
- * given only a step does not mark the task: it reads or tests, and a push of its own shows in GitHub's record.
+ * The mark follows the code (#3304): a Team agent assigned to build the task, or GitHub's record of a bot's push. Joining the
+ * task, being named into it, posting or opening it marks nothing: a push of the agent's own shows in GitHub's record. It is
+ * never read from a commit's author, which anyone can write. A step reads its task's mark, and a Team agent given only a
+ * step does not mark the task.
  */
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { fail, type Agent, type Conversation, type SuperTabState } from './model.js'
@@ -33,7 +34,7 @@ export function teamWrittenTask(state: SuperTabState, group: Conversation): bool
   return !!assignee && onTeamAccount(state, assignee)
 }
 
-/** Marks [group] when [worker], assigned to it or added to it, runs in a Team account. A step or the project's coordinator marks nothing. */
+/** Marks [group] when [worker], assigned to build it, runs in a Team account. A step or the project's coordinator marks nothing. */
 export function markTeamWritten(state: SuperTabState, group: Conversation, worker: Agent): void {
   if (group.reviewOf || coordinates(state, group, worker) || !onTeamAccount(state, worker)) return
   group.teamWritten = true
@@ -56,10 +57,6 @@ export function requireTeamWrittenMachine(state: SuperTabState, group: Conversat
 export function failTeamWritten(details?: Record<string, unknown>): never {
   return fail(TEAM_WRITTEN_WORK, TEAM_WRITTEN_REASON, 403, details)
 }
-
-/** Whether [worker] has a step of [group], assigned now or before: it reads or tests that task, and a push of its own shows in GitHub. */
-export const hasStep = (state: SuperTabState, group: Conversation, worker: Agent): boolean =>
-  state.conversations.some(c => c.reviewOf === group.id && (c.assignment?.agentId === worker.id || c.agentIds.includes(worker.id)))
 
 /** Whether [sender] may name [named] in a post: not a main-account member of Team-written work, how a re-test or re-check is
  *  asked for, unless [sender] coordinates. */

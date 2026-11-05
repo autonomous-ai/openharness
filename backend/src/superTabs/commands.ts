@@ -1,4 +1,4 @@
-import { applyPushOrigin, failPushUnknown, failTeamWritten, hasStep, mainAccountMembers, markTeamWritten, mayName, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
+import { applyPushOrigin, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, requireNameable, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { admitByRoom, admitMachineStart, noRepositoryStart, failOwnAccountTeamEntry, ownAccountTeamEntry, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, movedToTeamAccount, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
@@ -1019,11 +1019,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const member = agent(state, agentId)
     requireTeamWork(state, member.machineId, member.contributorId, project, context.now, context.teamMachines, context.otherWorkspaceMachines)
     // A named agent or a poster joins a task as an assignment would: Team-written code stays in a Team account (audit H2).
-    if (group) {
-      requireTeamWrittenAccount(state, group, member)
-      // Joining a chat is not working on the task: a Team Reviewer or Tester with a step on it does not mark it (review 1 of #2559).
-      if (!hasStep(state, group, member)) marking(group, () => markTeamWritten(state, group, member))
-    }
+    // Joining a chat is not writing its code, so it marks nothing: a Team agent's push shows in GitHub's record (#3304).
+    if (group) requireTeamWrittenAccount(state, group, member)
   }
   /** Runs [mark], and tells every main-account member when it just marked [group]'s task: nothing else reaches a session
    *  that already has the branch, or a member the workflow would ask again (teamWritten.ts, audit H2). */
@@ -1054,7 +1051,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (member.workDecision === 'stop') fail('STOP_REQUESTED', 'This agent is stopping. Wait for its execution host.')
     requireTeamWork(state, member.machineId, member.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
     requireTeamWrittenAccount(state, group, member)
-    marking(group, () => markTeamWritten(state, group, member))
   }
   /** The project chat is the people's and is never archived: its work, name and records are its coordinator's or a person's,
    *  as its members are (conversation.agent, joinsProject; security review L2). A task's are any agent's of its project. */
@@ -2286,8 +2282,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
         number, title: command.title, leadId, agentIds: [...leadId ? [leadId] : [], ...creator],
         archived: false, brief, ...(command.task ? { task: command.task } : {}), ...(command.reviewOf ? { reviewOf: command.reviewOf } : {}),
-        // A Team agent's own task is Team-written from its first line, and a step keeps its task's mark (teamWritten.ts, audit H2).
-        ...((command.reviewOf ? teamWrittenTask(state, conversation(state, command.reviewOf)) : creator.some(id => onTeamAccount(state, agent(state, id)))) ? { teamWritten: true as const } : {}),
+        // A step keeps its task's mark (teamWritten.ts, audit H2). Opening a task writes none of its code (#3304).
+        ...(command.reviewOf && teamWrittenTask(state, conversation(state, command.reviewOf)) ? { teamWritten: true as const } : {}),
         ...(command.step ? { step: command.step } : {}),
         ...(prioritized ? { priority: command.priority ?? (proposal ? proposalPriority(proposalNamed(context.proposal)?.source?.priority) : DEFAULT_PRIORITY) } : {}),
         assignment: null, lastMessageSequence: 0,
@@ -3267,7 +3263,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         requireTeamWork(state, member.machineId, member.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
         pushedRefusal(group, member)
         requireTeamWrittenAccount(state, group, member)
-        marking(group, () => markTeamWritten(state, group, member))
         if (!group.agentIds.includes(command.agentId)) group.agentIds.push(command.agentId)
         // Added to a task, it is reused, as an assignment reuses a worker: its finished-work mark goes.
         delete member.workDecision
