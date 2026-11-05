@@ -61,7 +61,7 @@ import { digestDue, digestMessageId, digestOf, digestRequest, digestSince } from
 import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
-import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
+import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
 import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
@@ -74,6 +74,7 @@ import { commitParts, indexesOf, machineContentChanged, numberMessages, type Tou
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
 import { pullRequestEvents, type PullRequestWatch } from './pullRequestEvents.js'
+import { reopenOnEvents } from './handed.js'
 import { guardedWrite, partId } from './parts/write.js'
 import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
@@ -4651,9 +4652,12 @@ export class SuperTabStore {
       if (!group || group.archived || group.reviewOf || !group.pullRequestUrls?.includes(watch.url)
         || ['done', 'cancelled'].includes(group.assignment?.status ?? '')) return 0
       const now = this.now(), seen = group.pullRequestEvents?.[watch.url] ?? []
-      const { events, keys } = pullRequestEvents(watch, seen, botLogin, now)
+      const { events: seenEvents, keys } = pullRequestEvents(watch, seen, botLogin, now)
       if (keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
       group.pullRequestEvents = { ...group.pullRequestEvents, [watch.url]: keys }
+      // CI failing or a conflict brings a handed task back to its Engineer, in the message that tells it (handed.ts, #3399).
+      const events = reopenOnEvents(group, seenEvents, now)
+      if (events !== seenEvents) recordTaskState(state, group, now)
       const ownerId = ownerOf(state, group), owner = ownerId ? state.agents.find(a => a.id === ownerId) : undefined
       // Written as its project's Lead, as the Swarm's own lines are (tidy.ts archiveLine); as the Engineer itself without one.
       const leadId = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId

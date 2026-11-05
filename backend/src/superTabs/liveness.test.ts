@@ -131,11 +131,17 @@ describe('a task waiting for review', () => {
     expect(handOff({ reviewFoundAt: handedOver })).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 45 minutes' } })
   })
 
-  it('is still lost at once when its session stops or its machine goes offline', () => {
+  // Task #3399: a handed task waits on its Reviewers and CI, not its Engineer, so neither loses it (handed.ts). An older skill's
+  // working hand-off is still the Engineer's own work.
+  it('is not lost when its session stops or its machine goes offline, while an older skill\'s working hand-off still is', () => {
     const stopped = quiet('review', 1)
     stopped.machines![0]!.observation!.stoppedHarnessIds = ['h']
-    expect(status(stopped, handedOver + MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its session on Mac stopped' } })
-    expect(status(quiet('review', 1), handedOver + 4 * MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its machine Mac has been offline for 2 minutes' } })
+    expect(status(stopped, handedOver + MINUTE)).toMatchObject({ status: 'review' })
+    expect(status(quiet('review', 1), handedOver + 4 * MINUTE)).toMatchObject({ status: 'review' })
+    const older = swarm(assignment({ status: 'working', result: 'Ready for review: abc1234', leaseUntil: handedOver + LEASE_MS, progressAt: handedOver }),
+      { receivedAt: handedOver + MINUTE, harnessProgress: { h: handedOver } })
+    older.machines![0]!.observation!.stoppedHarnessIds = ['h']
+    expect(status(older, handedOver + MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its session on Mac stopped' } })
   })
 })
 

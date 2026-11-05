@@ -116,7 +116,9 @@ describe('No, red CI or a conflict reopens the task pinned to its owner (#3399)'
     expect(after.assignment).toMatchObject({ id: f.before.assignment!.id, agentId: f.dev, status: 'working', reopened: { at: f.now } })
     expect(after.assignment!.reopened!.why).toContain('The offline path has no test.')
     // Built by: the attempt and its run stay the Engineer's.
-    expect(after.ledger?.runs).toEqual(f.before.ledger?.runs)
+    const builtBy = (runs: Array<{ assignmentId: string; agentId?: string }> | undefined) => runs?.map(r => [r.assignmentId, r.agentId])
+    expect(builtBy(after.ledger?.runs)).toEqual(builtBy(f.before.ledger?.runs))
+    expect(builtBy(after.ledger?.runs)).toEqual([[f.before.assignment!.id, f.dev]])
     expect(effects.messages).toContainEqual(expect.objectContaining({ conversationId: f.task, recipients: [f.dev], text: expect.stringContaining('back with you') }))
     // The hold is the same assignment's: none starts or ends.
     expect(workHolds(f.state)).toEqual([{ agentId: f.dev, assignmentId: f.before.assignment!.id }])

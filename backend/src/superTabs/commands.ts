@@ -25,6 +25,7 @@ import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
+import { BACK_WITH_YOU, pickUp, reopenHanded } from './handed.js'
 import { changesRequested, engineerAnswered, leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, revisionReady, toldEngineer, waitingForReview } from './liveness.js'
 import { DELETED_SWARM_COMMANDS, isPersonalSwarm, notThere, SWARM_DELETE_GRACE_MS } from './deletion.js'
 import { ABANDONED, askedModel, coordinatorCopy, failureNotice, failureRecipients, MACHINE_MOVED, MACHINE_REMOVED, publicReason } from './startFailure.js'
@@ -3756,6 +3757,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       assignment.result = command.result
       // A new status is a new hand-off, or the end of one: a review's earlier findings are answered (liveness.ts waitingForReview).
       delete assignment.reviewFoundAt
+      // And a task that came back to its Engineer is picked up, or handed over again (handed.ts).
+      pickUp(assignment)
       if (command.ask) assignment.askedOf = command.ask.personId
       else if (command.status !== 'needs_human') delete assignment.askedOf
       recordStatus(group, assignment, previous, context.now, changed ? operationId : null, asked)
@@ -3927,6 +3930,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         group.assignment.reviewFoundAt = context.now
         restartQuietTime(group.assignment, context.now)
       }
+      // A No from anyone but its Engineer brings a handed task back to it, in the same attempt (handed.ts, #3399): it is told why.
+      // Not a grid attempt whose review failed: its next attempt steps up to a stronger model (decision 8), so it is not pinned.
+      const reopen = (task: Conversation) => {
+        const taskRun = task.ledger?.runs?.find(r => r.assignmentId === task.assignment?.id)
+        if (taskRun?.grid && taskRun.firstReview === false) return
+        if (!reopenHanded(task, `${name}'s verdict on “${check.description}”: ${(command.evidence.split('\n')[0] ?? '').trim()}`, context.now)) return
+        message(task.id, `${task.assignment!.reopened!.why} ${BACK_WITH_YOU}`, [task.assignment!.agentId], null, SYSTEM_ROW)
+        recordTaskState(state, task, context.now)
+      }
+      if (!command.passed && !byAssignee) reopen(group)
       // Its Reviewer's verdict asking for changes: its own review task waits for the new revision (liveness.ts waitingForRevision).
       if (!command.passed && !byAssignee && actor.kind === 'agent') changesRequested(state, group, actor.agentId, context.now)
       // A step's own agent failing its step's check asks its Engineer for changes the same way: a Tester's verdict has no set
@@ -3935,6 +3948,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!command.passed && byAssignee && actor.kind === 'agent' && group.reviewOf) {
         const build = state.conversations.find(c => c.id === group.reviewOf)
         if (build) changesRequested(state, build, actor.agentId, context.now)
+        if (build) reopen(build)
       }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       break

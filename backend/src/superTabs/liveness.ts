@@ -14,6 +14,7 @@ import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
 import { isStep } from './steps.js'
 import { endedReply } from './taskLine.js'
+import { handed, pickUp, unclaimedAt, unclaimedReason } from './handed.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
@@ -231,7 +232,11 @@ function workerTasks(state: SuperTabState): Array<{ group: Conversation; assignm
 /** The worker's own status, check or message in its task's group renews its lease. A Reviewer or Tester checks and posts in
  *  the build's group, so there it renews its own linked task (reviewOf), never another agent's. */
 export function renewOwnTask(state: SuperTabState, group: Conversation, agentId: string, now: number): void {
-  if (activeWork(group) && group.assignment!.agentId === agentId) renewLease(group.assignment!, now)
+  if (activeWork(group) && group.assignment!.agentId === agentId) {
+    renewLease(group.assignment!, now)
+    // A task that came back to it (handed.ts, #3399) is picked up by its own progress there.
+    pickUp(group.assignment!)
+  }
   for (const linked of ownLinkedTasks(state, group, agentId)) renewLease(linked.assignment!, now)
 }
 
@@ -291,16 +296,21 @@ function limitReason(worker: Agent, now: number): string | null {
  *  or undefined when none can. Reports that keep its session running with progress no older can only move it later. */
 export function nextLossAt(state: SuperTabState, machineId: string): number | undefined {
   const steps = stepIndex(state)
-  const ends = workerTasks(state)
-    .filter(({ group, worker, assignment }) => worker.machineId === machineId && !waitingForReview(assignment) && !waitingForRevision(state, group)
+  const mine = workerTasks(state).filter(({ worker }) => worker.machineId === machineId)
+  const ends = [...mine
+    .filter(({ group, worker, assignment }) => !waitingForReview(assignment) && !waitingForRevision(state, group)
       && !waitingOnSteps(state, group, steps) && !waitingOnPerson(state, group, worker, assignment))
-    .map(({ group, assignment, worker }) => leaseEnd(group, assignment, reportRenewedAt(state, worker)))
+    .map(({ group, assignment, worker }) => leaseEnd(group, assignment, reportRenewedAt(state, worker))),
+  // A task back with its Engineer and not picked up leaves it then, whatever it waits on (handed.ts).
+  ...mine.map(({ assignment }) => unclaimedAt(assignment))]
     .filter((end): end is number => end !== undefined)
   return ends.length ? Math.min(...ends) : undefined
 }
 
 /** Why a worker has lost its task now, or null while it still holds it. Only a machine that has reported can be offline. */
 function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number, steps: StepIndex): string | null {
+  // A handed task waits on its Reviewers and CI, not on its Engineer, which may be down or at work elsewhere (task #3399).
+  if (handed(group)) return null
   const pool = state.machines?.find(m => m.machineId === worker.machineId)
   if (pool?.observation?.stoppedHarnessIds.includes(worker.harnessId)) return sessionStopped(pool.name)
   if (pool?.observation && now - pool.observation.receivedAt > OFFLINE_LOST_MS) return machineOffline(pool.name)
@@ -309,6 +319,9 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
   // Its host alerts only after ten minutes of retries without an answer (cli superTabs/terminal.ts MODEL_WAIT_MS), so a
   // short burst of failures that recovers never gets here.
   if (worker.alerting?.includes('model')) return 'its model keeps failing'
+  // Back with its Engineer and not picked up in time: anyone free in the lane takes it (handed.ts, #3399).
+  const unclaimed = unclaimedReason(assignment, now)
+  if (unclaimed) return unclaimed
   if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return null
   const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {

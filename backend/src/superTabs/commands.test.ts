@@ -4,6 +4,7 @@ import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, sw
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { readsRawReason } from './startFailure.js'
 import { sweepLiveness } from './liveness.js'
+import { REOPEN_OWNER_MS } from './handed.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
 import { defaultProfileId, hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
 import { activeWork, agentOnly, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration, type Author } from './model.js'
@@ -2963,14 +2964,16 @@ describe('Reviewer role', () => {
       return { ...setup, built, builderActor, verdict, task, swept }
     }
 
-    it('keeps work in review when a review finds problems: the findings are information, and its quiet time still does not count', () => {
+    // Task #3399: a review that finds problems brings the handed task back to its builder, which has 60 minutes to pick it up.
+    it('brings work in review back to its builder when a review finds problems, and its quiet time counts from then', () => {
       const { verdict, task, swept, builder } = handedOver('review')
       const foundAt = 2000 + 2 * HOUR
       expect(swept(foundAt)).toBe('review')
       const found = verdict(false, foundAt)
-      expect(task()).toMatchObject({ status: 'review', result: 'Ready for review: PR #42 at abc1234' })
-      expect(found.messages.filter(m => m.recipients.includes(builder))).toEqual([])
-      expect(swept(foundAt + 2 * HOUR)).toBe('review')
+      expect(task()).toMatchObject({ status: 'working', result: 'Ready for review: PR #42 at abc1234', reopened: { at: foundAt } })
+      expect(found.messages.filter(m => m.recipients.includes(builder)).map(m => m.text)).toEqual([expect.stringContaining('back with you')])
+      expect(swept(foundAt + REOPEN_OWNER_MS)).toBe('working')
+      expect(swept(foundAt + 2 * HOUR)).toBe('lost')
     })
 
     it('keeps work in review when the review passes', () => {
@@ -4929,14 +4932,15 @@ describe('checks are information', () => {
       .toBe('Look into the flaky test\n\nStart each pull request body with: Requested by owner through Harness.')
   })
 
-  it('keeps a failed check as a finding', () => {
+  it('keeps a failed check as a finding, and brings a handed task back to its Engineer', () => {
     const f = routed(), group = f.group(), reviewer = f.add('reviewer', 'owner', group)
     f.run({ type: 'conversation.agent', conversationId: group, agentId: f.worker, present: true, lead: false })
     const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker }).result.assignmentId as string
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Ready for review: PR #42 at abc1234' }, f.workerActor)
     const checkId = f.state.conversations.find(c => c.id === group)!.checks[0]!.id
     const found = f.run({ type: 'work.check', conversationId: group, assignmentId, checkId, passed: false, evidence: 'Two findings at abc1234' }, as(reviewer))
-    expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ status: 'review', result: 'Ready for review: PR #42 at abc1234' })
+    // The task comes back to its Engineer (#3399); its result stays as it wrote it.
+    expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ status: 'working', result: 'Ready for review: PR #42 at abc1234' })
     expect(f.state.conversations.find(c => c.id === group)!.checks[0]).toMatchObject({ passedBy: null, evidence: 'Two findings at abc1234' })
     expect(found.messages.filter(m => m.text.startsWith('Working'))).toEqual([])
   })
@@ -5110,7 +5114,8 @@ describe('notices of failed work', () => {
     const sonnet = other('sonnet', 'claude-sonnet-4-5')
     const attempt = give(sonnet)
     expect(failed(failIt(attempt, sonnet))).toEqual([])
-    expect(mine().assignment).toMatchObject({ id: attempt, status: 'review' })
+    // It comes back to its own agent, in the same attempt (#3399); the grid one above is not pinned, as its next attempt steps up.
+    expect(mine().assignment).toMatchObject({ id: attempt, status: 'working' })
     expect(mine().stepUp).toBeUndefined()
   })
 
