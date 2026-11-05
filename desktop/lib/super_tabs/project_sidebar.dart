@@ -654,7 +654,7 @@ class ProjectSidebar extends StatelessWidget {
   ) {
     final hidden = superTabHiddenProjects(controller, app: app);
     return [
-      for (final project in snapshot?.projects ?? const <SuperTabProject>[])
+      for (final project in ([...?snapshot?.projects]..sort(_compareProjects)))
         if (reading.of(project) case final read
             when read.lead != null &&
                 (!controller.unreadOnly || _hasUnread(read)) &&
@@ -667,7 +667,7 @@ class ProjectSidebar extends StatelessWidget {
               children: [_row(read.lead!, reading: read)],
             ),
           ),
-    ]..sort((a, b) => a.$1.toLowerCase().compareTo(b.$1.toLowerCase()));
+    ];
   }
 
   // The sidebar's ink scope (#3006): a theme's own sidebar ink reaches the
@@ -946,6 +946,14 @@ class _ProjectReading {
   };
 }
 
+String _projectSortName(String name) =>
+    (name.startsWith('#') ? name.substring(1).trimLeft() : name).toLowerCase();
+
+int _compareProjects(SuperTabProject a, SuperTabProject b) {
+  final byName = _projectSortName(a.name).compareTo(_projectSortName(b.name));
+  return byName != 0 ? byName : a.id.compareTo(b.id);
+}
+
 /// The chats in the order the sidebar lists them, for Option+Shift+Down and
 /// Up (Slack's next unread): the reader's one Buddy chat (`# buddy`, first
 /// under Projects), each project's chat from A to Z, then the reader's
@@ -959,8 +967,7 @@ List<String> superTabSidebarOrder(
 }) {
   final snapshot = controller.snapshot;
   if (snapshot == null) return const [];
-  final projects = [...snapshot.projects]
-    ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  final projects = [...snapshot.projects]..sort(_compareProjects);
   final hidden = superTabHiddenProjects(controller, app: app);
   return [
     if (controller.oneBuddy)
