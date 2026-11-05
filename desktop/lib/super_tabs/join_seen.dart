@@ -82,17 +82,21 @@ class SwarmJoinSeen {
     }
   }
 
-  /// One write at a time, each of the whole record as it is then.
-  Future<void> _save(String account, _Record record) => _writes = _writes.then(
-    (_) => store.write(
-      keyFor(account),
-      jsonEncode({
-        'baseline': record.baseline,
-        'seen': [...record.seen],
-      }),
-    ),
-    onError: (_) {},
-  );
+  /// One write at a time, each of the whole record as it is then. A write
+  /// that fails is dropped: the record stays right in memory for this run and
+  /// the next write carries it whole, and an add that runs again finds this
+  /// computer already in the Swarm (review of #3115).
+  Future<void> _save(String account, _Record record) => _writes = _writes
+      .then(
+        (_) => store.write(
+          keyFor(account),
+          jsonEncode({
+            'baseline': record.baseline,
+            'seen': [...record.seen],
+          }),
+        ),
+      )
+      .catchError((Object _) {});
 }
 
 class _Record {
