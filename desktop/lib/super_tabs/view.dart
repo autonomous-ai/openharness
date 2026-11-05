@@ -59,6 +59,7 @@ import 'dialog_scope.dart';
 import 'folder_zip.dart';
 import 'crew_panel.dart';
 import 'instructions_panel.dart';
+import 'project_rules.dart';
 import 'model.dart';
 import 'agent_details.dart';
 import 'identity.dart' show superTabMachineName;
@@ -1793,6 +1794,13 @@ class _SuperTabViewState extends State<SuperTabView>
       }
       return;
     }
+    if (action == 'rules') {
+      final project = c.snapshot?.projectFor(group.id);
+      if (project != null) {
+        await showSuperTabProjectRules(context, c, project.id);
+      }
+      return;
+    }
     if (action == 'crew') {
       final project = c.snapshot?.projectFor(group.id);
       if (project != null) await showSuperTabCrew(context, c, project.id);
@@ -2398,10 +2406,14 @@ class _SuperTabViewState extends State<SuperTabView>
     if (_page == null) return;
     _page = null;
     c.select(id);
-    // A tag in a thread opens the thread; one in a thread reply shown only
-    // there is not in the chat to scroll to.
-    if (message.thread case final root?) {
-      c.openThread(root, at: message.inMainStream ? null : message.id);
+    // A tag in a thread reply opens the thread; one shown only there is not in
+    // the chat to scroll to. A top-level message is its own thread's root, but
+    // it has no thread to open: it is in the chat.
+    if (message.threadReply) {
+      c.openThread(
+        message.thread!,
+        at: message.inMainStream ? null : message.id,
+      );
       if (!message.inMainStream) return;
     }
     setState(() {
@@ -3887,6 +3899,8 @@ class _SuperTabViewState extends State<SuperTabView>
             repository?['cwd'] as String? ??
             'Not set',
       ),
+      // The project's numbers, read only (task #3393): every member reads them; the PM changes them when asked.
+      row('Project rules', 'rules'),
       // While the PM has a switch under way, there is nothing to ask for.
       if (editable &&
           c.snapshot?.maySwitchLead(project.id, c.accountId) == true &&

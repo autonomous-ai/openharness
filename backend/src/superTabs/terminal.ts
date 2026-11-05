@@ -1,7 +1,7 @@
 import { isBuddy, isBuddyChat } from './buddies.js'
 import type { PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
-import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, SuperTabError, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
+import { activeWork, occupiesAgent, actorKey, agent, author, conversation, fail, isLeads, stableId, SuperTabError, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { downSince, productManagerOn } from './machines.js'
 import { agentProjectId, isConfidential, ledProject, onTeamAccount, ownSession, projectAgent, projectOf, readAgent, teamSessionAccess } from './projects.js'
@@ -97,7 +97,9 @@ export function currentGroup(state: SuperTabState, target: Agent): Conversation 
   // A Buddy's rows are its person's alone, in its own chat: it has no PM, and a Swarm-wide one no project (Dee, 10-31).
   const own = isBuddy(target) ? state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id)) : undefined
   if (own) return own
-  return state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id)
+  // The task in its hands first: an Engineer that handed a task over and took the next one is at work on that one (#3399).
+  return state.conversations.find(c => occupiesAgent(c) && c.assignment!.agentId === target.id)
+    ?? state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id)
     ?? state.conversations.findLast(c => !c.archived && !isLeads(c) && !c.audience && c.agentIds.includes(target.id) && c.leadId !== target.id)
     ?? conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId)
 }
