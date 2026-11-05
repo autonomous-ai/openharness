@@ -21,7 +21,7 @@ import { githubRepository } from '../github/repository.js'
 import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
-import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, notThere } from './deletion.js'
+import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } from './deletion.js'
 import type { ApprovalRow, DroppedLine } from './ruleGuard.js'
 import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, SWARM_INVITATION_MS, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
@@ -1126,7 +1126,9 @@ export class SuperTabStore {
     const heads = await this.heads(rows.slice(0, 100))
     return { tabs: rows.slice(0, 100).flatMap(row => {
       const head = heads.get(row.id)
-      return head ? [{ id: row.id, name: head.name, ownerId: row.ownerId, revision: row.revision, paused: head.paused }] : []
+      return head ? [{ id: row.id, name: head.name, ownerId: row.ownerId, revision: row.revision, paused: head.paused,
+        // Only on the reader's own Personal Swarm: another person's is not theirs to be told apart.
+        ...(isPersonalSwarm(head) && head.ownerId === user.sub ? { personal: true as const } : {}) }] : []
     }), next: rows.length > 100 ? rows[99]!.id : null }
   }
 
