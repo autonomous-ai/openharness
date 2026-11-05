@@ -12,15 +12,25 @@ import '../logging/app_log.dart';
 /// milliseconds and bytes — never a name, id, path or address — and nothing
 /// here can throw into the code it observes.
 class SpeedMarks {
-  SpeedMarks({void Function(String line)? sink, Duration Function()? elapsed})
-    : _sink = sink ?? _toAppLog,
-      _injected = elapsed;
+  SpeedMarks({
+    void Function(String line)? sink,
+    Duration Function()? elapsed,
+    AppLog Function()? log,
+  }) : // A private field cannot be a named parameter.
+       // ignore: prefer_initializing_formals
+       _sink = sink,
+       _log = log ?? _installedLog,
+       _injected = elapsed;
 
-  // DEBUG goes through the log's batched path (one write a second or 256
-  // lines), so a mark on the UI isolate is a buffer append, not a file write.
-  static void _toAppLog(String line) => appLog.debug('speed', line);
+  static AppLog _installedLog() => appLog;
 
-  final void Function(String line) _sink;
+  /// Most lines held while the real log is not installed yet: `main` starts
+  /// the marks before `installFileLogs()`, and a launch has a dozen.
+  static const _heldMost = 64;
+
+  final void Function(String line)? _sink;
+  final AppLog Function() _log;
+  final _held = <String>[];
   // A test reads its own clock; the app reads [_watch].
   final Duration Function()? _injected;
   final _watch = Stopwatch();
@@ -84,7 +94,24 @@ class SpeedMarks {
 
   void _write(String line) {
     try {
-      _sink(line);
+      final sink = _sink;
+      if (sink != null) {
+        sink(line);
+        return;
+      }
+      // DEBUG goes through the log's batched path (one write a second or 256
+      // lines), so a mark on the UI isolate is a buffer append, not a file
+      // write.
+      final log = _log();
+      if (log is NoopAppLog) {
+        if (_held.length < _heldMost) _held.add(line);
+        return;
+      }
+      for (final earlier in _held) {
+        log.debug('speed', earlier);
+      }
+      _held.clear();
+      log.debug('speed', line);
     } catch (_) {
       // Measurement never breaks what it measures.
     }
