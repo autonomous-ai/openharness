@@ -166,3 +166,25 @@ export function changeAccess(state: SuperTabState, actor: Actor, command: Access
 
 const teamEntry = (): never =>
   fail('TEAM_ACCOUNT_ENTRY', 'A Harness Team account always runs teammates\' work: only an entry in your own account is shared.', 400)
+
+/**
+ * What [actor] reads of a Mac's list (design section 4): everyone who sees the machine reads each entry's name, account and
+ * state; its `check` only the machine's owner, from their own session; its `note` the owner and agents running on that
+ * machine in that entry's account (the Mac for `own`, its Harness Team account's pool for `team`). An agent of the owner on
+ * another machine, or the Lead that recorded it, reads neither.
+ */
+export function visibleAccess(state: Pick<SuperTabState, 'machines' | 'agents'>, pool: ContributedMachine, actor: Actor): AccessEntry[] | undefined {
+  if (!pool.access) return undefined
+  if (actor.kind === 'person' && actor.userId === pool.contributorId) return pool.access
+  const agent = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId) : undefined
+  const runsIn = (entry: AccessEntry): boolean => {
+    if (!agent) return false
+    if (entry.account === 'own') return agent.machineId === pool.machineId
+    const team = state.machines?.find(m => m.machineId === agent.machineId)
+    return !!team && team.hostMachineId === pool.machineId && team.contributorId === pool.contributorId
+  }
+  return pool.access.map(entry => {
+    const { check: _check, note, ...rest } = entry
+    return note !== undefined && runsIn(entry) ? { ...rest, note } : rest
+  })
+}
