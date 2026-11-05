@@ -183,8 +183,23 @@ describe('every reason a report runs in full (DB 2.5 spec, Tests)', () => {
     ['its stopped sessions changed', async () => ({ extra: { stoppedHarnessIds: ['gone'] } })],
     ['it proves a session stopped', async () => ({ extra: { stoppedReservations: [{ harnessId: 'gone', generation: 'g1' }] } }), { stopped: true }],
     ['a running session lost its progress entry', async () => ({ extra: { harnessProgress: {} } }), { progress: true }],
-    ['the Swarm changed since its last full report', async f => {
-      await f.execute({ type: 'message.send', conversationId: 'lead', text: 'hi', replyTo: null, recipientIds: [] })
+    // What concerns this machine changed since its last full report (task #3119): what its host reads (commit.ts hostsToTell).
+    ['an agent was added on it', async f => {
+      await f.execute({ type: 'agent.add', conversationId: f.group, machineId: 'test-host', harnessId: randomUUID(), name: 'Helper', configuration: config, lead: false })
+    }],
+    ['a start was queued on it', async f => {
+      await f.execute({ type: 'agent.start', request: { conversationId: f.group, machineId: 'test-host', engine: 'codex', name: 'Builder', cwd: '/repo',
+        worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })
+    }],
+    ['a conversation an agent on it works in changed', async f => {
+      await f.execute({ type: 'message.send', conversationId: f.group, text: 'hi', replyTo: null, recipientIds: [] })
+    }],
+    ['the Swarm\'s people changed', async f => {
+      await f.execute({ type: 'invite.create', email: 'third@example.com', role: 'collaborator', conversationId: 'lead' })
+    }],
+    ['a server of the release before changed the Swarm', async f => {
+      // It moves the main stamp alone: it knows no host stamps.
+      await stamps.bump(f.tab, ['main'])
     }],
     ['its record is missing', async f => ({ by: f.store(never) })],
     ['the stamps cannot be read', async () => { stamps.down = true }],
@@ -432,5 +447,89 @@ describe('a full report reads only the parts that changed since this server last
     expect(first.SwarmGroup).toBeGreaterThan(0)
     expect(second.SwarmMachine).toBeLessThan(first.SwarmMachine / 2)
     expect(second.SwarmGroup).toBeLessThan(first.SwarmGroup / 2)
+  })
+})
+
+describe('a busy Swarm\'s readings (task #3119)', () => {
+  /** A store on [f]'s server whose every Prisma call is counted, by model and operation, as Ken's scan names them. */
+  function counted(f: Scene, reports: ReportMemory = f.reports) {
+    const ops: Record<string, number> = {}
+    const client = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
+      ops[`${model}.${operation}`] = (ops[`${model}.${operation}`] ?? 0) + 1
+      return query(args)
+    } } } }) as unknown as PrismaClient
+    const store = new SuperTabStore(client, () => f.clock.now, null, { reports, swarmChanged: change => f.pushes.push(change) })
+    /** The calls [run] made, and the path its one report took. */
+    const during = async (run: () => Promise<unknown>) => {
+      for (const key of Object.keys(ops)) delete ops[key]
+      const path = await pathOf(run)
+      return { path, ops: { ...ops }, calls: Object.values(ops).reduce((a, b) => a + b, 0) }
+    }
+    return { store, during }
+  }
+  const message = (f: Scene, text: string) => f.execute({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })
+
+  it('stores a reading fast, in four calls, after a change elsewhere in the Swarm', async () => {
+    const f = await swarm()
+    const { store, during } = counted(f)
+    expect((await settle(f)).at(-1)).toBe('fast')
+    // The Lead's chat moves: nothing the worker's machine hosts or decides from.
+    await message(f, 'the Lead talks')
+    const beat = await during(() => f.beat({}, store))
+    expect(beat.path).toBe('fast')
+    expect(beat.calls).toBeLessThanOrEqual(4)
+    expect(Object.keys(beat.ops).filter(op => /^Swarm(Head|Member|Agent|Start|Group)\./.test(op))).toEqual([])
+  })
+
+  it('reads the same number of times in full whatever the Swarm\'s agents, starts and machines, one read per kind', async () => {
+    const f = await swarm()
+    const { store, during } = counted(f, never)
+    // Its second full report: this server holds the Swarm's parts from its first, as in production.
+    await f.beat({}, store)
+    f.clock.now += BEAT
+    const small = await during(() => f.beat({}, store))
+    f.clock.now += BEAT
+    // Ten more agents and ten more starts, and four more machines that each read since this server last read the Swarm.
+    const spares: Array<[string, string]> = []
+    for (let i = 0; i < 4; i++) {
+      const machineId = `busy-${randomUUID()}`
+      await db.machine.create({ data: { machineId, userId: host.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+      await db.machineShare.create({ data: { machineId, ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email] } })
+      await f.execute({ type: 'machine.contribute', machineId, name: `Busy ${i}`, cwd: '/repo', engines: ['codex'], maxAgents: 40 }, host)
+      spares.push([machineId, (await poolRows(f.timed, host, machineId)).find(p => p.tabId === f.tab)!.machine.generation])
+    }
+    const [spare] = spares[0]!
+    for (const [machineId, generation] of spares) await f.timed.observeMachine(host, f.tab, machineId, { ...f.reading('test-host', []), generation })
+    for (let i = 0; i < 10; i++) {
+      await f.execute({ type: 'agent.add', conversationId: f.group, machineId: spare, harnessId: randomUUID(), name: `Helper ${i}`, configuration: config, lead: false })
+      await f.execute({ type: 'agent.start', request: { conversationId: f.group, machineId: spare, engine: 'codex', name: `Builder ${i}`, cwd: '/repo',
+        worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })
+    }
+    await f.beat({}, store)
+    f.clock.now += BEAT
+    // Then each of the four reads on another server: its part moves past what this server holds.
+    for (const [machineId] of spares) {
+      const row = await db.swarmMachine.findUniqueOrThrow({ where: { id: `${f.tab}:${machineId}` } })
+      await db.swarmMachine.update({ where: { id: row.id }, data: { version: row.version + 1, readAt: new Date(f.clock.now) } })
+    }
+    const big = await during(() => f.beat({}, store))
+    expect([small.path, big.path]).toEqual(['full', 'full'])
+    const reads = (ops: Record<string, number>) => Object.fromEntries(Object.entries(ops).filter(([op]) => !/\.(update|create|delete)/.test(op)))
+    expect(reads(big.ops)).toEqual(reads(small.ops))
+    expect(big.ops['SwarmMachine.findUnique']).toBeUndefined()
+  })
+
+  it('stores and pushes a changed quota and readiness at once, on the fast path', async () => {
+    const f = await swarm()
+    expect((await settle(f)).at(-1)).toBe('fast')
+    await message(f, 'the Lead talks')
+    f.pushes.length = 0
+    const quotas: MachineObservation['quotas'] = [{ engine: 'codex', known: true, windows: [{ name: 'week', usedPercent: 97, resetsAt: null }] }]
+    const tools: MachineObservation['tools'] = { git: true }
+    expect(await pathOf(() => f.beat({ quotas, tools }))).toBe('fast')
+    const stored = ((await f.part()).data as unknown as MachineData).contribution!.observation!
+    expect(stored.quotas).toEqual(quotas)
+    expect(stored.tools).toEqual(tools)
+    expect(f.pushes).toMatchObject([{ tabId: f.tab, parts: ['machine'] }])
   })
 })
