@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { countReport, localReportMemory, machineReportLine, RECORD_TTL_MS, redisReportMemory, type ReportRecord } from './machineReports.js'
+import { countReport, localReportMemory, machineReportLine, RECORD_TTL_MS, recordHolds, redisReportMemory, type ReportRecord } from './machineReports.js'
 import { SWEEP_EVERY_MS } from './liveness.js'
 
 /** The Redis commands the memory uses, with Redis' own expiry, on a clock the test moves; `down` fails every command. */
@@ -90,5 +90,37 @@ describe('what a full machine report leaves for the next one (DB 2.5)', () => {
     expect(machineReportLine(60_000)).toMatchObject({ windowMs: 60_000, fast: 2, full: 1, pod: expect.any(String) })
     expect(machineReportLine(60_000)).toMatchObject({ fast: 0, full: 0 })
     vi.restoreAllMocks()
+  })
+})
+
+describe('when a full report\'s record still holds (task #3119)', () => {
+  // Recorded at main 7 with this machine's host stamp 3 and every host's 2; `now` is what Redis says now.
+  const record = { ...recordAt(0), stamp: 7, hosts: { host: 3, all: 2 } }
+  const now = (moved: Partial<{ main: number; hosted: number; uncovered: number; host: number; all: number }> = {}) =>
+    ({ main: 7, hosted: 7, uncovered: 0, host: 3, all: 2, ...moved })
+
+  it('holds while the Swarm is unchanged, or changed only where this machine\'s host is not concerned', () => {
+    expect(recordHolds(record, now())).toBe(true)
+    expect(recordHolds(record, now({ main: 9, hosted: 9 }))).toBe(true)
+  })
+
+  it('ends with a change for this machine\'s host or for every host', () => {
+    expect(recordHolds(record, now({ main: 9, hosted: 9, host: 4 }))).toBe(false)
+    expect(recordHolds(record, now({ main: 9, hosted: 9, all: 3 }))).toBe(false)
+  })
+
+  it('ends with any change while a server of the release before writes, and with one it wrote since the record', () => {
+    // Its bump is the latest: nothing says whom it concerned.
+    expect(recordHolds(record, now({ main: 9, hosted: 8 }))).toBe(false)
+    // A newer server's bump came after it, and found it: it came after this record was read.
+    expect(recordHolds(record, now({ main: 10, hosted: 10, uncovered: 9 }))).toBe(false)
+    // One the record's own load saw is no reason.
+    expect(recordHolds(record, now({ main: 10, hosted: 10, uncovered: 7 }))).toBe(true)
+  })
+
+  it('holds a record of the release before only while the Swarm is unchanged', () => {
+    const { hosts: _hosts, ...older } = record
+    expect(recordHolds(older, now())).toBe(true)
+    expect(recordHolds(older, now({ main: 9, hosted: 9 }))).toBe(false)
   })
 })

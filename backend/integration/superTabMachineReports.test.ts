@@ -199,7 +199,7 @@ describe('every reason a report runs in full (DB 2.5 spec, Tests)', () => {
     }],
     ['a server of the release before changed the Swarm', async f => {
       // It moves the main stamp alone: it knows no host stamps.
-      await stamps.bump(f.tab, ['main'])
+      await stamps.bumpAsOlderRelease(f.tab, ['main'])
     }],
     ['its record is missing', async f => ({ by: f.store(never) })],
     ['the stamps cannot be read', async () => { stamps.down = true }],
