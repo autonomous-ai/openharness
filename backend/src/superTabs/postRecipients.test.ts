@@ -36,7 +36,7 @@ describe('an agent post that names no one', () => {
     const { f, post, to } = setup()
     const other = f.add('other', f.task)
     f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: 'Merged' } as Command, f.as(f.dev))
-    expect(to(post(other, f.task, 'Thanks.'))).toEqual([[]])
+    expect(to(post(other, f.task, 'Thanks, it merged.'))).toEqual([[]])
     expect(to(post(f.dev, f.task, 'Merged.'))).toEqual([[]])
   })
 
@@ -143,8 +143,8 @@ describe('the PM\'s deliveries in a fixture hour', () => {
     const rows = [
       ...['Plan pushed.', 'Task 1 red.', 'Task 1 green.', 'PR is ready.', 'CI green.', 'Merged main in.'].flatMap(t => post(f.dev, f.task, t)),
       ...['Reading the diff.', 'Ready to merge: With fixes', 'Ready to merge: Yes'].flatMap(t => post(reviewer, step, t)),
-      ...post(reviewer, f.task, 'Understood.'),
-      ...post(other, f.task, 'On it.'),
+      ...post(reviewer, f.task, 'Understood, re-reading the plan.'),
+      ...post(other, f.task, 'On it, starting with the fixtures.'),
       ...post(f.dev, f.task, '@owner here is the mockup.'),
       ...['Ken, I am on it.', 'Ken, it shipped.'].flatMap(t => post(f.dev, 'lead', t)),
       ...post(f.dev, step, 'Fixed in abc123.', [reviewer]),

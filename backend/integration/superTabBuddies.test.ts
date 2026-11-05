@@ -239,7 +239,7 @@ describe('a Buddy through the store', () => {
     // Past the seed's half hour, the read takes the kept proposals alone.
     await db.superTabOpenProposal.update({ where: { id: `seeded:${f.tab}:lead` }, data: { createdAt: new Date(Date.now() - SEED_SETTLE_MS - 1000) } })
     expect(await listed()).toEqual([sent])
-    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Taking it', replyTo: sent, recipientIds: [] }, owner, f.lead)
+    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Taking this as a task', replyTo: sent, recipientIds: [] }, owner, f.lead)
     expect(await listed()).toEqual([])
     expect(await db.superTabOpenProposal.count({ where: { id: sent } })).toBe(0)
   })
@@ -251,7 +251,7 @@ describe('a Buddy through the store', () => {
       checks: [] })).result.conversationId), [owner.sub])
     const { agentId } = await buddy(f)
     const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
-      checks: [{ description: 'Edits survive a restart', independent: false }] })).result.conversationId)
+      checks: [{ description: 'Edits survive a restart', independent: false }], priority: 'P2', requesterId: owner.sub })).result.conversationId)
     const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
       configuration: config, lead: false })).result.agentId)
     const assignmentId = String((await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })).result.assignmentId)
@@ -877,7 +877,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
       text: 'Goal: Offline sync\nScope: Desktop only\nPriority: normal', replyTo: proposal, thread: proposal, recipientIds: [f.lead], mentions: [] } })
     const open = (proposalMessageId: string) => f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
       checks: [{ description: 'Edits survive a restart', independent: false }], proposalMessageId }, owner, f.lead)
-    const answer = String((await pm('Taking it.', { replyTo: proposal })).result.messageId)
+    const answer = String((await pm('Taking this as a task.', { replyTo: proposal })).result.messageId)
     await expect(open(answer)).rejects.toMatchObject({ code: 'PROPOSAL_UNKNOWN' })
     const created = await open(details.id)
     const stored = (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === String(created.result.conversationId))!
@@ -904,7 +904,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
 
   it('stops hearing once its person stops reading the project: nothing new is sent, and what waits is refused at pickup', async () => {
     const { f, agentId, proposal, pm, heard } = await proposed()
-    const answer = String((await pm('Taking it.', { replyTo: proposal })).result.messageId)
+    const answer = String((await pm('Taking this as a task.', { replyTo: proposal })).result.messageId)
     const waiting = (await f.store.deliveries(peer, f.tab, agentId)).find(d => d.conversationId === 'lead')
     expect(waiting?.messageId).toBe(answer)
     await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
@@ -923,7 +923,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
       await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
     }), () => Date.now())
     const answer = String((await racing.execute(owner, f.tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead',
-      text: 'Taking it.', replyTo: proposal, recipientIds: [] } }, f.lead)).result.messageId)
+      text: 'Taking this as a task.', replyTo: proposal, recipientIds: [] } }, f.lead)).result.messageId)
     expect(raced).toBe(true)
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: answer, agentId } })).toBe(0)
   })
@@ -931,7 +931,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
   it('hears no assignment of a task its person cannot read', async () => {
     const { f, agentId } = await proposed()
     const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
-      checks: [{ description: 'Edits survive a restart', independent: false }], requesterId: peer.sub }, owner, f.lead)).result.conversationId)
+      checks: [{ description: 'Edits survive a restart', independent: false }], priority: 'P2', requesterId: peer.sub }, owner, f.lead)).result.conversationId)
     const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
       configuration: config, lead: false })).result.agentId)
     await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
@@ -959,7 +959,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
 
   it('keeps whose Buddy heard a line hidden after that Buddy is removed or replaced (security review 1 of #2178)', async () => {
     const { f, proposal, pm } = await proposed()
-    const answer = String((await pm('Taking it.', { replyTo: proposal })).result.messageId)
+    const answer = String((await pm('Taking this as a task.', { replyTo: proposal })).result.messageId)
     const read = async () => (await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.id === answer)!
     expect((await read()).deliveries).toEqual([])
     // Nor when an agent reads: the PM sees no Buddy among the line's deliveries.
@@ -976,7 +976,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
 
   it('never lets a person resolve a Buddy\'s news delivery: it reads as one that needs no checking (security review 2 of #2178)', async () => {
     const { f, agentId, proposal, pm } = await proposed()
-    const answer = String((await pm('Taking it.', { replyTo: proposal })).result.messageId)
+    const answer = String((await pm('Taking this as a task.', { replyTo: proposal })).result.messageId)
     const news = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, messageId: answer, agentId } })
     await db.superTabDelivery.update({ where: { id: news.id }, data: { status: 'uncertain' } })
     for (const resolution of ['received', 'resend', 'cancel'] as const) {
@@ -1005,7 +1005,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
 
   it('hands a Buddy a claimed row without the machine it names (security review 2 of #2178)', async () => {
     const { f, agentId, proposal, pm } = await proposed()
-    const answer = String((await pm('Taking it.', { replyTo: proposal })).result.messageId)
+    const answer = String((await pm('Taking this as a task.', { replyTo: proposal })).result.messageId)
     // A machine-removed row's shape (commands.ts removeMachine), as if it were news: what reaches the Buddy names no machine.
     await db.superTabMessage.update({ where: { id: answer }, data: { text: 'Studio Mac left the Swarm.', source: { kind: 'machine-removed', machine: 'Studio Mac' } } })
     const news = (await f.store.deliveries(peer, f.tab, agentId)).find(d => d.messageId === answer)!

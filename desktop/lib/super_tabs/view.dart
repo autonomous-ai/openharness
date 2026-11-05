@@ -57,6 +57,7 @@ import 'controller.dart';
 import 'file_links.dart';
 import 'dialog_scope.dart';
 import 'folder_zip.dart';
+import 'crew_panel.dart';
 import 'instructions_panel.dart';
 import 'model.dart';
 import 'agent_details.dart';
@@ -1790,6 +1791,11 @@ class _SuperTabViewState extends State<SuperTabView>
       if (project != null) {
         await showSuperTabInstructions(context, c, project.id);
       }
+      return;
+    }
+    if (action == 'crew') {
+      final project = c.snapshot?.projectFor(group.id);
+      if (project != null) await showSuperTabCrew(context, c, project.id);
       return;
     }
     if (action == 'switch-pm') {
@@ -3798,6 +3804,8 @@ class _SuperTabViewState extends State<SuperTabView>
         // them sends no coordinatorName.
         if (project.hasInstructions)
           item('Instructions', () => _groupAction('instructions', group)),
+        // The crew the Swarm keeps alive (task #3397): every member reads it.
+        item('Crew', () => _groupAction('crew', group)),
         if (editable && owner)
           item('Sharing', () => _groupAction('sharing', group)),
         _notifyMenu(group),
