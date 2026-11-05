@@ -24,17 +24,11 @@ describe('projectPullRequestFiles', () => {
     expect(app.revoke).toHaveBeenCalledWith('read-token')
   })
 
-  it('reads the files at the head the watch read', async () => {
+  it('reads the files nothing pushed over: a head that moved while they were listed reads as unreadable', async () => {
     const app = fakeApp({ 7: ['a.ts'] }, { 7: 'abc1234' })
-    await projectPullRequestFiles(app)(REPO, [`${REPO}/pull/7`])
-    expect(app.pullRequestFiles).toHaveBeenCalledWith(expect.anything(), 7, 'read-token', 'abc1234')
-  })
-
-  it('reads nothing from an app without the files read, so no step opens', async () => {
-    const app = fakeApp({ 7: ['a.ts'] }, { 7: 'abc1234' })
-    delete app.pullRequestFiles
-    expect(await projectPullRequestFiles(app)(REPO, [`${REPO}/pull/7`])).toBeNull()
-    expect(app.resolve).not.toHaveBeenCalled()
+    let reads = 0
+    app.watchPullRequest = vi.fn(async () => ({ head: ++reads === 1 ? 'abc1234' : 'def5678' }) as never)
+    expect((await projectPullRequestFiles(app)(REPO, [`${REPO}/pull/7`]))?.files).toBeNull()
   })
 
   it('has nothing to read with no pull request of the project\'s repository', async () => {
