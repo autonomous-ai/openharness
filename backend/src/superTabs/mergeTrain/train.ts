@@ -41,6 +41,9 @@ export interface TrainRules { enabled: boolean; reviews?: ReviewTable }
 export type TrainPassLine = { off: true } | { candidates: number; unreadable: number; built: number; merged: number; split: number; closed: number }
 
 const short = (sha: string) => sha.slice(0, 12)
+/** A batch's label: the day and time it was built, in UTC ("11-05 train-1510"). */
+const batchLabel = (at: number) => { const d = new Date(at), two = (n: number) => String(n).padStart(2, '0')
+  return `${two(d.getUTCMonth() + 1)}-${two(d.getUTCDate())} train-${two(d.getUTCHours())}${two(d.getUTCMinutes())}` }
 const PULL = /\/pull\/([1-9][0-9]*)$/
 
 interface Read { member: Member; verdict: { ok: true } | { ok: false; why: Ineligible }; reads: number | null; required: number; lane: 'fast' | 'code' }
@@ -119,8 +122,8 @@ export async function trainPass(input: { projectId: string; github: TrainGitHub;
         if (!current || !current.verdict.ok || current.member.head !== member.head) { still = false; break }
       }
       if (!still) { await closeBatch(batch.number, batch.branch, 'a pull request in it changed or is no longer approved at its head'); continue }
-      const title = batch.members.length === 1 ? `${batch.members[0]!.title} (#${batch.members[0]!.number}) (#${batch.number})`
-        : `Merge batch ${batch.members.map(m => `#${m.number}`).join(' ')} (#${batch.number})`
+      // The form main's batches use, which the release watch reads (task #3405): the originals before the batch's own number.
+      const title = `Merge batch ${batchLabel(batch.startedAt)}: ${batch.members.map(m => `#${m.number}`).join(' ')} (#${batch.number})`
       const { sha } = await github.squash(batch.number, batch.tip, title, batch.members.map(m => `* ${m.title} (#${m.number})`).join('\n'))
       memory.batches.delete(batch.number)
       main = sha
