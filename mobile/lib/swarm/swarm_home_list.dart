@@ -77,19 +77,30 @@ SwarmHomeLists swarmHomeLists(
     }
   }
   List<SwarmHomeProject> ordered(List<SwarmHomeProject> list) {
+    if (sort == SwarmHomeSort.sections) {
+      final named =
+          [
+            for (final p in list)
+              (
+                p,
+                (p.project.name.startsWith('#')
+                        ? p.project.name.substring(1).trimLeft()
+                        : p.project.name)
+                    .toLowerCase(),
+              ),
+          ]..sort((a, b) {
+            if (unreadsFirst && _hasNews(a.$1) != _hasNews(b.$1)) {
+              return _hasNews(a.$1) ? -1 : 1;
+            }
+            final byName = a.$2.compareTo(b.$2);
+            return byName != 0 ? byName : a.$1.key.compareTo(b.$1.key);
+          });
+      return [for (final entry in named) entry.$1];
+    }
     final order = {for (final (i, p) in list.indexed) p: i};
     return list..sort((a, b) {
       if (unreadsFirst && _hasNews(a) != _hasNews(b)) {
         return _hasNews(a) ? -1 : 1;
-      }
-      if (sort == SwarmHomeSort.sections) {
-        String name(SwarmHomeProject p) =>
-            (p.project.name.startsWith('#')
-                    ? p.project.name.substring(1).trimLeft()
-                    : p.project.name)
-                .toLowerCase();
-        final byName = name(a).compareTo(name(b));
-        return byName != 0 ? byName : a.key.compareTo(b.key);
       }
       final (x, y) = (a.active, b.active);
       if (x != null && y != null && x != y) return y.compareTo(x);
