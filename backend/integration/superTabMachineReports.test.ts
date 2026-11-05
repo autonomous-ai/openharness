@@ -161,6 +161,25 @@ describe('a reading-only heartbeat (DB 2.5)', () => {
     expect(viaFast.pushes).toMatchObject([{ parts: ['machine'] }])
   })
 
+  // Task #3222: a PM's share of its account's week is read from what the account and each session spent by day.
+  it('adds to the machine\'s spend ledger the same way on both paths: the week\'s used points and each session\'s spend', async () => {
+    const f = await swarm()
+    const spent = (weekly: number, input: number): Partial<MachineObservation> => ({
+      quotas: [{ engine: 'codex', known: true, windows: [{ name: 'weekly', usedPercent: weekly, resetsAt: '2026-12-01T00:00:00Z' }] }],
+      harnessTokens: { [f.harness.worker]: { 'gpt-6-astra': { input, output: 0, cacheRead: 0, cacheWrite: 0 } } } })
+    await settle(f, spent(40, 1_000_000))
+    const before = await f.part()
+    expect(await pathOf(() => f.beat(spent(43, 3_000_000)))).toBe('fast')
+    const viaFast = ((await f.part()).data as unknown as MachineData).contribution!.spendDays
+    await db.swarmMachine.update({ where: { id: before.id }, data: { version: before.version, data: before.data as never, readAt: before.readAt } })
+    expect(await pathOf(() => f.beat(spent(43, 3_000_000), f.store(never)))).toBe('full')
+    const viaFull = ((await f.part()).data as unknown as MachineData).contribution!.spendDays
+    expect(viaFast).toEqual(viaFull)
+    // gpt-6-astra: $10 a million input; 2M more since the reading before.
+    expect(viaFast).toEqual([expect.objectContaining({ engine: 'codex', weekly: { seen: 43, used: 3 },
+      sessions: { [f.harness.worker]: { seen: 30, spent: 20 } } })])
+  })
+
   it('reads only the machine part among the Swarm\'s parts, writes it once, and moves only the machine stamp', async () => {
     const f = await swarm()
     await settle(f)

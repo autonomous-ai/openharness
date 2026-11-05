@@ -1760,6 +1760,7 @@ describe('saving a machine again', () => {
     const kept = {
       lent: [{ week, busyMs: 18_000_000 }],
       lentDays: [{ day: week, projectId: 'lead', busyMs: 18_000_000 }],
+      spendDays: [{ day: week, engine: 'claude', weekly: { seen: 40, used: 6 }, resetsAt: null, sessions: { h1: { seen: 2, spent: 1 } } }],
       engineFailures: { codex: 1 },
       engineSuspensions: { claude: { at: NOW, fine: false } },
       observation: { receivedAt: NOW, runningHarnessIds: ['h1'], stoppedHarnessIds: [] } as never,
@@ -1775,7 +1776,7 @@ describe('saving a machine again', () => {
     const f = fixture()
     f.run(save(2), owner, owners)
     const record = f.state.machines![0]!
-    for (const key of ['lent', 'lentDays', 'engineFailures', 'engineSuspensions', 'observation']) expect(record).not.toHaveProperty(key)
+    for (const key of ['lent', 'lentDays', 'spendDays', 'engineFailures', 'engineSuspensions', 'observation']) expect(record).not.toHaveProperty(key)
   })
 })
 it('restricts recording a legacy project to the owner or controlling lead', () => {

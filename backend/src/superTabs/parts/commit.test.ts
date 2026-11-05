@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab } from '../model.js'
-import { capReleased, departedAgents, hostMarker, hostsToTell, membersToTell, sameData, visibilityChanged } from './commit.js'
+import { capReleased, departedAgents, hostMarker, hostsToTell, machineContentChanged, membersToTell, sameData, visibilityChanged } from './commit.js'
 import { plainHost } from './write.js'
 import type { PartWrite } from './write.js'
 
@@ -56,6 +56,11 @@ describe('what a write tells host reads (review round 1)', () => {
     // The daily rows move with every reading too.
     const days = (busyMs: number) => { const part = machine(); return { ...part, contribution: { ...part.contribution, lentDays: [{ day: 0, busyMs }] } } }
     expect(hostMarker('machine', days(1), days(2), none, 9)).toEqual({})
+    // So does the spend ledger a PM's share is read from (pmSpend.ts, #3222).
+    const spend = (used: number) => { const part = machine(); return { ...part, contribution: { ...part.contribution,
+      spendDays: [{ day: 0, engine: 'claude', weekly: { seen: used, used }, resetsAt: null, sessions: {} }] } } }
+    expect(hostMarker('machine', spend(1), spend(2), none, 9)).toEqual({})
+    expect(machineContentChanged(spend(1), spend(2))).toBe(false)
   })
 
   it('moves it for a change to the machine\'s settings or ledger, and when the part is added or removed', () => {
