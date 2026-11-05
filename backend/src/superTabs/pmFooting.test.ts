@@ -40,6 +40,21 @@ describe('the PM\'s footing line in every built-in wake', () => {
       expect(pmFooting(state, pm(state), NOW), JSON.stringify(quotas)).toBeNull()
     }
   })
+  it('names the other account a PM runs on by its label, with that account\'s own reading, and says nothing when that reading is missing', () => {
+    const profile = (leftPercent: number | null) => ({ engine: 'claude', id: 'a'.repeat(16), label: 'Work Max', leftPercent, resetsAt: new Date(NOW + 2 * DAY + 3_600_000).toISOString() })
+    const withProfile = (profiles: unknown[] | undefined, profileId: string | null = 'a'.repeat(16)) => {
+      const state = swarm(known)
+      ;(state.machines![0] as { observation: { profiles?: unknown[] } }).observation.profiles = profiles
+      state.agents[0]!.profileId = profileId ?? undefined
+      return state
+    }
+    let state = withProfile([profile(71)])
+    expect(pmFooting(state, pm(state), NOW)).toBe('You run on Mac Studio, Work Max: weekly 71% left, resets in 2d.')
+    // Its own account's reading, never the machine's default one.
+    for (const missing of [withProfile([profile(null)]), withProfile(undefined), withProfile([{ ...profile(50), id: 'b'.repeat(16) }])]) expect(pmFooting(missing, pm(missing), NOW)).toBeNull()
+    state = withProfile([profile(71)], null)
+    expect(pmFooting(state, pm(state), NOW)).toBe('You run on Mac Studio, ken\'s own account: weekly 62% left, resets in 3d.')
+  })
   it('says nothing for a machine the Swarm does not list, and never names an email', () => {
     const state = swarm(known, 'gone')
     expect(pmFooting(state, pm(state), NOW)).toBeNull()
