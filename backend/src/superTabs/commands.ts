@@ -18,6 +18,7 @@ import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
+import { accessRefusal, changeAccess, expireAccess, taskAccess } from './machineAccess.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
@@ -58,7 +59,6 @@ import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, 
 import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
-import { instructionsChange } from './instructionsDiff.js'
 import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 
@@ -144,12 +144,17 @@ const check = z.object({ description: z.string().trim().min(1).max(1000), indepe
 /** A task's checks as stored, none passed; `independent` false when a newer client leaves it out, as older readers expect it. */
 const storedChecks = (checks: ReadonlyArray<z.infer<typeof check>>, operationId: string): Check[] =>
   checks.map((c, i) => ({ description: c.description, independent: c.independent ?? false, id: stableId(operationId, String(i)), evidence: null, passedBy: null }))
+/** An access entry's name and its note or check (machineAccess.ts). */
+const accessName = z.string().trim().min(1).max(60).regex(/^[^\n\r\t]+$/)
+const accessText = z.string().trim().min(1).max(200).regex(/^[^\n\r\t]+$/)
+
 const task = z.object({
   goal: z.string().trim().min(1).max(8000), changes: z.string().trim().min(1).max(8000),
   constraints: z.string().trim().min(1).max(8000), owns: z.array(z.string().trim().min(1).max(4096)).min(1).max(40),
   /** model.ts TaskRequirement; `unseenMachines` is only ever read back, never set. */
-  requires: z.object({ machines: z.array(id).min(1).max(20).optional(), devices: z.array(path).min(1).max(20).optional() }).strict()
-    .refine(r => r.machines || r.devices, 'Require at least one machine or device.').optional(),
+  requires: z.object({ machines: z.array(id).min(1).max(20).optional(), devices: z.array(path).min(1).max(20).optional(),
+    access: z.array(accessName).min(1).max(20).optional() }).strict()
+    .refine(r => r.machines || r.devices || r.access, 'Require at least one machine, device or access.').optional(),
   /** model.ts ReviewPlan: what its reviews check first, and 2 for two independent reviews, said in its brief (#2382). */
   review: z.object({ focus: z.string().trim().min(1).max(2000).optional(), reviews: z.union([z.literal(1), z.literal(2)]).optional() }).strict()
     .refine(r => r.focus !== undefined || r.reviews !== undefined, 'Give the review a focus or a number of reviews.').optional(),
@@ -171,6 +176,12 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.projects'), machineId: id, projectIds: z.array(id).min(1).max(64).nullable(), askedIn: askedInSchema.optional() }).strict(),
   // Whether teammates' work may also run in the owner's own account on their machine (Scholes, 11-04): its owner's choice.
   z.object({ type: z.literal('machine.ownAccountWork'), machineId: id, allowed: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
+  // One entry of what a machine can reach (machineAccess.ts, task #3047): one at a time, so its owner and a Lead never
+  // overwrite each other's list.
+  z.object({ type: z.literal('machine.access'), machineId: id, action: z.enum(['add', 'change', 'confirm', 'remove']),
+    entryId: z.string().regex(/^[0-9a-f]{16}$/).optional(), name: accessName.optional(), account: z.enum(['own', 'team']).optional(),
+    teammates: z.boolean().optional(), production: z.boolean().optional(), note: accessText.nullable().optional(), check: accessText.nullable().optional(),
+    askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
   z.object({ type: z.literal('machine.cleaned'), machineId: id, removalId: id }).strict(),
   z.object({ type: z.literal('localModels.set'), enabled: z.boolean() }).strict(),
@@ -711,7 +722,8 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
   if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
-    || command.type === 'machine.engineResume' || command.type === 'machine.projects' || command.type === 'machine.ownAccountWork') && command.askedIn) {
+    || command.type === 'machine.engineResume' || command.type === 'machine.projects' || command.type === 'machine.ownAccountWork'
+    || command.type === 'machine.access') && command.askedIn) {
     readConversation(state, actor, command.askedIn.conversationId)
   }
   if ('startId' in command && command.type !== 'route.modelResult') {
@@ -866,6 +878,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   numberConversations(state)
   placeRules(state)
   expireRemovals(state, context.now)
+  expireAccess(state, context.now)
   const deleted = new Set(context.deletedMachineIds ?? [])
   if (deleted.size && state.machineCleanups) {
     state.machineCleanups = state.machineCleanups.filter(c => !deleted.has(c.machineId))
@@ -1118,22 +1131,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   }
   /** Accepted, kept nowhere: an older client's save of what each project's instructions say now (IGNORED_NOTE). */
   const ignored = () => Object.assign(result, { ignored: true, note: IGNORED_NOTE })
-  /** A new revision of [project]'s instructions from revision [current], whose text was [before] (null when the store could not
-   *  read it), with one line in its chat in the writer's name, for the member who asked when that is someone else: what
-   *  instructions.save and an older client's rule.set write. The line shows the lines really removed and added under the
-   *  writer's summary, so nobody takes the summary's word for what was saved (#3021). */
-  const saveInstructions = (project: SwarmProject, current: number, before: string | null, text: string, summary: string, askedBy: string,
-    dropped: DroppedLine[] = []) => {
+  /** A new revision of [project]'s instructions from revision [current]: what instructions.save and an older client's rule.set
+   *  write. It is kept in the revision history, who wrote it and for whom, and the lines it dropped (#3151), and posts nothing in
+   *  any chat (Dee and Ken, 2026-11-05, #3132): a change is read and undone in the Instructions history. */
+  const saveInstructions = (project: SwarmProject, current: number, text: string, summary: string, askedBy: string, dropped: DroppedLine[] = []) => {
     const hash = instructionsHash(text)
     mutableProjects(state)
     Object.assign(projectOf(state, project.id), { instructionsRevision: current + 1, instructionsHash: hash })
     effects.instructions = { projectId: project.id, revision: current + 1, hash, text, summary,
       writtenBy: { kind: sender.kind, id: sender.id }, askedBy, at: context.now, ...dropped.length ? { dropped } : {} }
-    // A save for someone else, a coordinator's or a person's, names the member it was for, so the record never names an asker
-    // the chat line did not (review of phase 2).
-    const asked = askedBy !== sender.id ? ` for ${person(state, askedBy).email.split('@')[0]}` : ''
-    message(project.leadConversationId, `${who} changed the instructions${asked}: ${summary}${/[.!?]$/.test(summary) ? '' : '.'}\n\n${instructionsChange(before, text)}`, [], null,
-      { kind: 'instructions', projectId: project.id, revision: current + 1 })
     Object.assign(result, { projectId: project.id, revision: current + 1, hash })
   }
   /** No private channel to the PM: Buddies replaced Chat with PM (Ken, 10-29). A closed one is nobody's to read or post in
@@ -1205,13 +1211,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // A new agent never starts on a Buddy-only machine; an agent its person added there runs as one on a machine outside the Swarm.
     if (!member && state.machines?.some(m => m.machineId === candidate.machineId && m.buddyOnly)) return { code: 'NOT_SWARM_MACHINE' as const, reason: NOT_SWARM_MACHINE }
     // A new agent on a Mac for a teammate's project runs in the Mac's Harness Team account (machines.ts teamStartRequest).
-    const group = conversation(state, conversationId), written = teamWrittenTask(state, group)
-    const machineId = member?.machineId ?? teamMachineFor(state, candidate.machineId, project, context.teamAccountsIdle, context.teamMachines, written)
+    const group = conversation(state, conversationId), written = teamWrittenTask(state, group), needed = taskAccess(group)
+    const machineId = member?.machineId ?? teamMachineFor(state, candidate.machineId, project, context.teamAccountsIdle, context.teamMachines, written, needed)
     // Team-written code takes a Team account only (audit H2). Its own check below says nothing for the owner's own account.
     if (written && !(member ? onTeamAccount(state, member) : teamAccountPool(state.machines?.find(m => m.machineId === machineId)))
       && !(member && ledProject(state, member.id)?.id === project.id)) return { code: 'TEAM_WRITTEN_WORK' as const, reason: TEAM_WRITTEN_REASON }
     const contributor = member?.contributorId ?? state.machines?.find(m => m.machineId === machineId)?.contributorId ?? starter
-    return teamWorkCheck(state, machineId, contributor, project, context.now, context.teamMachines, context.otherWorkspaceMachines)
+    // Then what the task needs to reach, in the account it would run in (machineAccess.ts, task #3047).
+    return teamWorkCheck(state, machineId, contributor, project, context.now, context.teamMachines, context.otherWorkspaceMachines, needed)
+      ?? accessRefusal(state, machineId, project, needed)
   }
   /**
    * Routes a `message.send` in Buddy chat [chat] (buddySessions.ts): whether it is in a session thread (`inSession`, its reply
@@ -1804,12 +1812,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         Object.assign(result, { projectId: project.id, revision: current, hash, unchanged: true })
         break
       }
-      // The text this save replaces, which the store read for the stale check above: what its chat line diffs against.
+      // The text this save replaces, which the store read for the stale check above: what the rule check compares with.
       const before = !current ? INSTRUCTIONS_TEMPLATE : context.instructions?.revision === current ? context.instructions.text : null
       // A person's rule, or who gave it, is dropped only by that person or with their own message approving it (#3151).
       const { told, rules } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [])
       // Every line it dropped, with its kind and who gave it, kept with the revision for the History (River, 11-05).
-      saveInstructions(project, current, before, command.text, command.summary, askedBy, droppedLines(before, command.text, command.dropped ?? [], rules))
+      saveInstructions(project, current, command.text, command.summary, askedBy, droppedLines(before, command.text, command.dropped ?? [], rules))
       // The coordinator's save after the daily tidy asked for one is that tidy done (pmSchedule.ts tidyRequest).
       if (actor.kind === 'agent') tidySaved(projectOf(state, project.id), current + 1)
       // Each approver is told in one line, privately, as person.tell does: in their one Buddy chat and their older one here.
@@ -1954,6 +1962,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // So is their choice of their own account for teammates' work (machine.ownAccountWork), Desktop's join re-save
       // included; not over a removal, so a Mac removed and added again starts Team-account-only.
       const ownAccountChoice = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly && !m.removal)?.ownAccountChoice
+      // And what it can reach (machine.access), the same way: a Mac removed and added again starts with none.
+      const access = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly && !m.removal)?.access
       // Its Agents setting: a client that does not send one (older than #2860) keeps the stored one while the count is the same.
       const previous = state.machines.find(m => m.machineId === command.machineId && !m.buddyOnly)
       const agents = command.agents ?? (previous?.agents && previous.maxAgents === command.maxAgents ? previous.agents : undefined)
@@ -1966,7 +1976,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         ...(command.scope ? { scope: command.scope } : {}),
         contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused,
         ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}), ...(projects && !host ? { projects } : {}),
-        ...(ownAccountChoice && !host ? { ownAccountChoice } : {}),
+        ...(ownAccountChoice && !host ? { ownAccountChoice } : {}), ...(access && !host ? { access } : {}),
         ...(othersToldWeek != null ? { othersToldWeek } : {}),
         // What its readings and starts recorded is not a setting: saving the settings keeps the Lent ledger, the engines'
         // failures and suspensions and the last reading (#3043). A machine not listed yet, or Buddy-only, starts clean.
@@ -2036,6 +2046,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A Lead's relay keeps the message it passed on, so an audit reads the words behind it (security review 1 of #2981).
       pool.ownAccountChoice = { allowed: command.allowed, by: pool.contributorId, at: new Date(context.now).toISOString(),
         ...(actor.kind === 'agent' && command.askedIn ? { askedIn: { conversationId: command.askedIn.conversationId, messageId: command.askedIn.messageId } } : {}) }
+      break
+    }
+    case 'machine.access': {
+      result.entryId = changeAccess(state, actor, command, context, machineOwnerWord, operationId)
       break
     }
     case 'machine.remove': {
@@ -2140,7 +2154,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Revision 0 runs on the template (design, Migration); otherwise the stored document of this revision, read by the store.
       const stored = !current ? INSTRUCTIONS_TEMPLATE : context.instructions?.revision === current ? context.instructions.text
         : fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
-      saveInstructions(project, current, stored, appendRouting(stored, command.text), routingSummary(command.text), askedBy)
+      saveInstructions(project, current, appendRouting(stored, command.text), routingSummary(command.text), askedBy)
       break
     }
     case 'rule.remove':
@@ -2448,7 +2462,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const startGroup = conversation(state, command.request.conversationId)
       marking(startGroup, () => applyPushOrigin(state, startGroup, context.pushOrigin))
       const written = teamWrittenTask(state, startGroup)
-      const moved = teamStartRequest(state, named, home, context.teamAccountsIdle, context.teamMachines, written)
+      const moved = teamStartRequest(state, named, home, context.teamAccountsIdle, context.teamMachines, written, taskAccess(startGroup))
       // Moved to the Mac's Team account: the starter is told why in one line (task #2806).
       if (moved.machineId !== named.machineId) {
         const mac = state.machines?.find(m => m.machineId === named.machineId)
@@ -2461,6 +2475,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
       if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
+      // Nor one that needs access: a machine off the list lists nothing it can reach (machineAccess.ts).
+      const unlisted = pool ? null : accessRefusal(state, request.machineId, home, taskAccess(startGroup))
+      if (unlisted) failTeamWork(unlisted)
       state.starts.push({ ...(pool ? { poolGeneration: pool.generation } : {}), ...(command.routeDecisionId ? { routeDecisionId: command.routeDecisionId } : {}), id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
         contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: grant.machineOwnerId,
         hostGrant: grant.hostGrant ?? null, request, harnessId: null, dispatched: false, error: null, requestedAt: context.now })
@@ -3297,7 +3314,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A Buddy chat has no Lead: its owner talks to its Buddy.
       const automatic = actor.kind === 'person' ? (isBuddyChat(group) ? (session?.inSession ? session.to : mainBuddyOf(state, group)?.id ?? null)
         : answered ?? (replyAgent && group.agentIds.includes(replyAgent) ? replyAgent : group.leadId)) : toAssignee
-      const recipients = [...new Set([...addressed, ...answeredAgent ? [answeredAgent] : [], ...(addressed.length ? [] : [below, automatic].filter((id): id is string => !!id))])]
+      // A person's reply to the agent whose assignment here is done reaches the coordinator too, and the agent still (Ken, #3114):
+      // his reply under Hawthorn3's "Done" in #3022 reached Hawthorn3 alone, whose work there was over.
+      const doneWith = actor.kind === 'person' && !isBuddyChat(group) && automatic && automatic === replyAgent && automatic !== answered
+        && group.assignment?.agentId === automatic && group.assignment.status === 'done' && group.leadId && group.leadId !== automatic
+        && group.agentIds.includes(group.leadId) ? group.leadId : null
+      const recipients = [...new Set([...addressed, ...answeredAgent ? [answeredAgent] : [], ...(addressed.length ? [] : [below, automatic, doneWith].filter((id): id is string => !!id))])]
       for (const id of recipients) {
         const target = agent(state, id)
         // Naming an agent asks it to act, and a re-test is asked this way: a post's default addressee is only told (audit H2).
@@ -3506,7 +3528,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       sameProject(state, group, worker)
       const home = groupProject(state, group)
       // A teammate's agent on a personal machine keeps what it has; it takes no new task for another person's project.
-      requireTeamWork(state, worker.machineId, worker.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
+      requireTeamWork(state, worker.machineId, worker.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines, taskAccess(group))
+      // And what the task needs to reach, where it runs (machineAccess.ts): an assignment is held to it as a start is.
+      const unreached = accessRefusal(state, worker.machineId, home, taskAccess(group))
+      if (unreached) failTeamWork(unreached)
       // Team-written code runs only in a Team account, and a Team agent's work marks the task (teamWritten.ts, audit H2).
       pushedRefusal(group, worker)
       requireTeamWrittenAccount(state, group, worker)

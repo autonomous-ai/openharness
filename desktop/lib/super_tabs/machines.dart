@@ -35,6 +35,7 @@ import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'local_models.dart';
+import 'machine_access.dart';
 import 'machine_projects.dart';
 import 'machine_allowance.dart';
 import '../models/swarm_models_target.dart' show swarmSharedWithYouShown;
@@ -758,12 +759,13 @@ Future<void> _machineSettingsDialog(
 
             final current = app.stateOf(existingId);
             final why = settingsUnavailable();
+            final title = superTabMachineName(
+              current?.machine.displayName ??
+                  existing['name'] as String? ??
+                  existingId,
+            );
             return SuperTabDetailDialog(
-              title: superTabMachineName(
-                current?.machine.displayName ??
-                    existing['name'] as String? ??
-                    existingId,
-              ),
+              title: title,
               body: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -778,6 +780,12 @@ Future<void> _machineSettingsDialog(
                       memoryEdited = false;
                       atMostEdited = next;
                     }),
+                  ),
+                  // What it can reach (#3047): sent at once, apart from Save; its owner's, on the Mac's own entry.
+                  SuperTabMachineAccessSetting(
+                    controller: c,
+                    machineId: existingId,
+                    machineName: title,
                   ),
                   // Why it cannot be removed, in words rather than a dimmed button alone.
                   if (view != null && canRemove(view.id))
@@ -1565,6 +1573,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       engines: allowed,
       allowances: subscriptions.allowances,
       subscriptionsAside: subscriptions.aside,
+      // What it can reach, from the Mac's own entry, which holds its Team account's too (#3047).
+      access: SuperTabAccessEntry.listOf(shared),
       // What the line leaves out, for hover, focus and a screen reader: whose machine it is and its hardware,
       // after its state when that is not online. Never an age. Only current readings are included.
       tip: [
@@ -2823,7 +2833,11 @@ class _MachineView {
     this.setUpTeamLabel = 'Set up',
     this.apiModels = const [],
     this.localModels = const [],
+    this.access = const [],
   });
+
+  /// What the machine can reach, by account (#3047): the row's last section, for every member who sees it.
+  final List<SuperTabAccessEntry> access;
 
   final String id, name, details, tip;
 
@@ -3446,6 +3460,17 @@ class _MachineReadings extends StatelessWidget {
               if (view.localModels.isNotEmpty)
                 _models(AppIcons.cpu, 'Local', view.localModels, 'local'),
             ],
+          ),
+        ),
+      // Last, by account (#3047, design section 6).
+      if (view.access.isNotEmpty)
+        (
+          'Access',
+          null,
+          (_) => SuperTabMachineAccessLines(
+            key: ValueKey('super-machine-access-${view.id}'),
+            entries: view.access,
+            ownerName: view.owner?.shownName,
           ),
         ),
     ];
