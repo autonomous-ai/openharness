@@ -92,7 +92,7 @@ class PushTokens {
         appLog.warn(
           'push',
           'push address not registered',
-          error: _describe(error),
+          error: _describe(error, address.token),
         );
         return;
       }
@@ -125,7 +125,7 @@ class PushTokens {
       appLog.warn(
         'push',
         'push address not forgotten',
-        error: _describe(error),
+        error: _describe(error, sent.address.token),
       );
     }
   }
@@ -174,10 +174,11 @@ class PushTokens {
 
 typedef _Sent = ({String account, PushAddress address, DateTime at});
 
-/// The failure, short. Neither an `ApiException` nor a `DioException` says the request's body, which
-/// is where the token is.
-String _describe(Object error) {
+/// The failure, short, and never with [token] in it: neither an `ApiException` nor a `DioException`
+/// says the request's body, but a server's message may echo it.
+String _describe(Object error, [String? token]) {
   if (error is TimeoutException) return 'timed out';
-  final text = '$error';
+  var text = '$error';
+  if (token != null && token.isNotEmpty) text = text.replaceAll(token, '…');
   return text.length > 160 ? '${text.substring(0, 160)}…' : text;
 }

@@ -140,12 +140,18 @@ void main() {
     appLog = log;
     addTearDown(() => appLog = before);
 
-    api.refuseRegister = ApiException('Request failed (400): token apns-1 is not valid', status: 400);
+    api.refuseRegister = ApiException(
+      'Request failed (400): token apns-1 is not valid',
+      status: 400,
+    );
     await sync();
     api.refuseRegister = null;
     now = now.add(const Duration(hours: 2));
     await sync();
-    api.refuseForget = ApiException('Request failed (503) for apns-1', status: 503);
+    api.refuseForget = ApiException(
+      'Request failed (503) for apns-1',
+      status: 503,
+    );
     await push.forget(api);
 
     expect(log.lines, isNotEmpty);
