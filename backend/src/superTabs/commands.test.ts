@@ -3076,16 +3076,15 @@ describe('the owner\'s rules', () => {
     expect(effects.instructions).toEqual({ projectId: 'lead', revision: 2, hash: instructionsHash(text), text, summary: 'Routing: No Haiku.',
       writtenBy: { kind: 'agent', id: f.lead }, askedBy: 'owner', at: 1000 })
     expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 2, instructionsHash: instructionsHash(text) })
-    // One line, as any save: in the writer's name, for the member who asked.
-    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', text: 'lead changed the instructions for owner: Routing: No Haiku.\n\nIn Routing:\nAdded: No Haiku.',
-      source: { kind: 'instructions', projectId: 'lead', revision: 2 } })])
+    // A save posts no line in any chat (#3132); the revision is in the history.
+    expect(effects.messages).toEqual([])
     expect(f.state).not.toHaveProperty('rules')
     // A project at revision 0 runs on the template: the rule lands in its copy, as revision 1. A person asks for themselves.
     delete f.state.projects![0]!.instructionsRevision
     const first = f.run(set({ kind: 'preferIdle' }, 'Idle agents first.'))
     expect(first.instructions).toMatchObject({ revision: 1, text: appendRouting(INSTRUCTIONS_TEMPLATE, 'Idle agents first.'), askedBy: 'owner',
       writtenBy: { kind: 'person', id: 'owner' } })
-    expect(first.messages.map(m => m.text)).toEqual(['owner changed the instructions: Routing: Idle agents first.\n\nIn Routing:\nAdded: Idle agents first.'])
+    expect(first.messages).toEqual([])
     // The stored document must be the revision the state names, or nothing is written.
     expect(() => f.run(set({ kind: 'preferIdle' }), owner, { instructions: { revision: 7, text: doc } }))
       .toThrow(expect.objectContaining({ code: 'INSTRUCTIONS_UNAVAILABLE' }))
@@ -3220,13 +3219,12 @@ describe('the owner\'s rules in a Swarm of projects', () => {
   const doc = (text = '# Doc\n\n## Routing\n\n- Opus.') => ({ instructions: { revision: 1, text } })
   const projectOfChat = (f: ReturnType<typeof projects>, chat: string) => f.state.projects!.find(p => p.leadConversationId === chat)!
 
-  it('lets a project\'s Lead write a rule into that project\'s instructions by quoting a person in its chat, and posts the line there', () => {
+  it('lets a project\'s Lead write a rule into that project\'s instructions by quoting a person in its chat, and posts no line', () => {
     const f = projects()
     const added = f.run(machines(f.app), f.lead, { ...said(), ...doc() })
     expect(added.instructions).toMatchObject({ projectId: projectOfChat(f, f.app).id, revision: 2, text: appendRouting('# Doc\n\n## Routing\n\n- Opus.', 'Only m1.'),
       askedBy: 'owner', summary: 'Routing: Only m1.' })
-    expect(added.messages).toEqual([expect.objectContaining({ conversationId: f.app, text: 'app-lead changed the instructions for owner: Routing: Only m1.\n\nIn Routing:\nAdded: Only m1.',
-      source: { kind: 'instructions', projectId: projectOfChat(f, f.app).id, revision: 2 } })])
+    expect(added.messages).toEqual([])
     expect(f.state).not.toHaveProperty('rules')
     expect(f.run({ type: 'rule.remove', ruleId: 'any', askedIn: { conversationId: f.app, messageId: 'm2' } }, f.lead, said()).result).toMatchObject({ ignored: true })
   })
@@ -3263,7 +3261,7 @@ describe('the owner\'s rules in a Swarm of projects', () => {
     const mine = f.run({ type: 'project.create', name: 'Peer', visibility: 'private', brief: '' }, peer).result as { projectId: string; conversationId: string }
     const added = f.run(forbid(mine.projectId, 'haiku'), peer, doc())
     expect(added.instructions).toMatchObject({ projectId: mine.projectId, askedBy: 'peer' })
-    expect(added.messages).toEqual([expect.objectContaining({ conversationId: mine.conversationId, text: 'peer changed the instructions: Routing: No haiku.\n\nIn Routing:\nAdded: No haiku.' })])
+    expect(added.messages).toEqual([])
     expect(() => f.run(forbid(mine.projectId, 'opus'), owner, doc())).toThrow('unavailable')
     // Public, any member who reads it writes its instructions, the Swarm owner too.
     f.run({ type: 'project.sharing', projectId: mine.projectId, visibility: 'public', memberIds: [] }, peer)
