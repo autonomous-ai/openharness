@@ -2638,7 +2638,10 @@ class AppNotifier extends ChangeNotifier {
   /// to set it up from here. With [signInAgain], an account already here is
   /// signed in again for this account: the Swarm found it serving another
   /// account of this computer (#3122).
-  Future<String> setUpTeamAccount({bool signInAgain = false}) async {
+  Future<String> setUpTeamAccount({
+    bool signInAgain = false,
+    bool restart = false,
+  }) async {
     final here = _teamAccountHere();
     if (here == null) return 'unsupported';
     try {
@@ -2646,6 +2649,7 @@ class AppNotifier extends ChangeNotifier {
         'action': 'teamSetup',
         'reason': 'manual',
         if (signInAgain) 'signInAgain': true,
+        if (restart) 'restart': true,
       });
       return answer['state']?.toString() ?? 'started';
     } on SuperTabFailure catch (failure) {

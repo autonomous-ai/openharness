@@ -118,15 +118,15 @@ export class TeamAutoSetup {
    * found it serving another account of this computer (#3122), which no part of it shows.
    */
   async offer(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean> = async () => false, check = false,
-    { signInAgain = false }: { signInAgain?: boolean } = {}): Promise<{ state: AutoSetupState }> {
-    const state = await this.decide(reason, sharedSwarm, check, signInAgain)
+    { signInAgain = false, restart = false }: { signInAgain?: boolean; restart?: boolean } = {}): Promise<{ state: AutoSetupState }> {
+    const state = await this.decide(reason, sharedSwarm, check, signInAgain, restart)
     // Every answer is said, not only a setup that starts: Macs in a Swarm went without the prompt and nothing on them said
     // why (2026-10-27). A check that finds it wanted starts nothing: that is Desktop's question, not an answer.
     if (state !== 'started' && state !== 'wanted') this.deps.log(`the Harness Team account was not offered (${reason}): ${state}`)
     return { state }
   }
 
-  private async decide(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean>, check: boolean, signInAgain: boolean): Promise<AutoSetupState> {
+  private async decide(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean>, check: boolean, signInAgain: boolean, restart: boolean): Promise<AutoSetupState> {
     const { deps } = this
     // A Mac, a Linux and a Windows computer (docs/superpowers/plans/2026-10-28-harness-team-account-windows.md).
     if (!teamLayout(deps.platform)) return 'unsupported'
@@ -137,7 +137,7 @@ export class TeamAutoSetup {
     if (deps.readConfig() || await deps.accountExists(TEAM_USER)) {
       // Done only when every part is there (#2765: an account with no daemon answered "already set up", and nothing
       // repaired it). A part missing is repaired only when the person asks (Set up): no password is asked for on its own.
-      const again = reason === 'manual' && signInAgain
+      const again = reason === 'manual' && (signInAgain || restart)
       if (!(await this.missing()).length && !again) return 'exists'
       if (reason !== 'manual') return 'incomplete'
     } else if (reason !== 'manual') {
