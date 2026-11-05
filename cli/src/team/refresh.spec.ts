@@ -19,7 +19,7 @@ afterEach(() => { for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: 
 function deps(over: Partial<TeamRefreshDeps> = {}) {
   let last: number | null = null
   const d: TeamRefreshDeps = {
-    config: () => config, status: () => signedOut(2_000), publishedAt: () => 1_000,
+    platform: 'darwin', config: () => config, status: () => signedOut(2_000), publishedAt: () => 1_000,
     machines: async () => [{ machineId: 'mac', sessionKind: 'computer' }, { machineId: 'team', sessionKind: 'team', hostMachineId: 'mac' },
       { machineId: 'other-team', sessionKind: 'team', hostMachineId: 'other' }],
     machineId: () => 'mac', run: vi.fn(async () => ({ ok: true })), lastTry: () => last, remember: vi.fn((at: number) => { last = at }),
@@ -46,7 +46,7 @@ describe('a Harness Team account on a build too old for its owner\'s subscriptio
   it('is updated by its owner\'s daemon, as itself, over the link to its own machine; once a day', async () => {
     const d = deps()
     await refreshTeamAccount(d)
-    expect(d.run).toHaveBeenCalledWith('team', [config.node, config.cli, 'update', '--force'], '/Users/harnessteam')
+    expect(d.run).toHaveBeenCalledWith('team', [config.node, config.cli, 'team', '__update'], '/Users/harnessteam')
     expect(d.remember).toHaveBeenCalledWith(5_000)
     expect(d.log).toHaveBeenCalledWith(expect.stringContaining('updating it'))
     await refreshTeamAccount(d)
