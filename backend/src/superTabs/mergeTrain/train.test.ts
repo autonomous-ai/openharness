@@ -349,6 +349,27 @@ describe('the merge train finishes batches', () => {
     expect(swarm.told).toEqual([])
   })
 
+  it('never builds on a train branch someone pushed to mid-build: no batch opened, the branch removed', async () => {
+    const { repo, swarm, pass } = setup()
+    swarm.approve(repo.addPull(7, ['backend/src/a.ts'])); swarm.approve(repo.addPull(8, ['backend/src/b.ts']))
+    let merges = 0
+    repo.state.beforeMerge = branch => { if (++merges === 2) repo.state.branches.set(branch, 'e'.repeat(40)) }
+    await pass()
+    expect(repo.batches()).toEqual([])
+    expect([...repo.state.branches.keys()].filter(b => b.startsWith('harness-train/'))).toEqual([])
+    expect(repo.state.squashes).toEqual([])
+  })
+
+  it('closes a batch whose pull request opened at another head than the tip it built', async () => {
+    const { repo, swarm, pass } = setup()
+    swarm.approve(repo.addPull(7, ['backend/src/a.ts']))
+    const openPull = repo.github.openPull
+    repo.github.openPull = async (branch, title, body) => { repo.state.branches.set(branch, 'e'.repeat(40)); return openPull(branch, title, body) }
+    await pass()
+    expect(repo.batches()).toEqual([])
+    expect(repo.state.squashes).toEqual([])
+  })
+
   it('stops with the kill switch: no read, no write, an open batch left as it is', async () => {
     const { repo, swarm, pass } = setup()
     swarm.approve(repo.addPull(7, ['backend/src/a.ts']))

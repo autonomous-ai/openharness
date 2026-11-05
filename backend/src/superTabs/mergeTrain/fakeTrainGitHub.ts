@@ -31,6 +31,8 @@ export function fakeTrainGitHub() {
     /** Heads already in main: merging one into a batch merges nothing. */
     inMain: new Set<string>(),
     nextNumber: 900,
+    /** Runs before each merge into a batch branch: a test pushes onto the branch here. */
+    beforeMerge: null as ((branch: string) => void) | null,
   }
   const read = (name: string) => {
     state.reads.push(name)
@@ -57,8 +59,11 @@ export function fakeTrainGitHub() {
     async files(number) { read('files'); return [...state.pulls.get(number)?.files ?? []] },
     async ciRequired(head) { read('ciRequired'); return state.ci.get(head) ?? (state.contents.has(head) ? 'pending' : null) },
     async createBranch(name, from) { write('createBranch'); state.branches.set(name, from); state.contents.set(from, state.contents.get(from) ?? []) },
-    async mergeInto(branch, head, message) {
+    async mergeInto(branch, head, message, expected) {
       write('mergeInto')
+      state.beforeMerge?.(branch)
+      // As github/train.ts checks GitHub's answer: the merge's first parent must be the tip the train expects.
+      if (state.branches.get(branch) !== expected) throw new TrainReadError('merge: unexpected parents', 201)
       if (state.conflicts.has(head)) return 'conflict'
       if (state.inMain.has(head)) return 'already'
       const tip = state.branches.get(branch)!

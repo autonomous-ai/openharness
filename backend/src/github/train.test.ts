@@ -64,7 +64,7 @@ describe('the merge train on GitHub', () => {
       'POST /repos/acme/app/pulls': { status: 201, body: pullBody(9, { head: { sha: MERGED, ref: 'harness-train/1' }, labels: [] }) },
     })
     await train.createBranch('harness-train/1', MAIN)
-    expect(await train.mergeInto('harness-train/1', SHA, 'Merge #7')).toEqual({ sha: MERGED })
+    expect(await train.mergeInto('harness-train/1', SHA, 'Merge #7', MAIN)).toEqual({ sha: MERGED })
     expect((await train.openPull('harness-train/1', 'Batch', 'body')).number).toBe(9)
     expect(calls.map(c => [c.method, c.path, c.body])).toEqual([
       ['POST', '/repos/acme/app/git/refs', { ref: 'refs/heads/harness-train/1', sha: MAIN }],
@@ -74,12 +74,18 @@ describe('the merge train on GitHub', () => {
   })
 
   it('reads a conflict as one, and never lets the branch point at a member\'s own commit', async () => {
-    expect(await stub({ 'POST /repos/acme/app/merges': { status: 409 } }).train.mergeInto('harness-train/1', SHA, 'm')).toBe('conflict')
+    expect(await stub({ 'POST /repos/acme/app/merges': { status: 409 } }).train.mergeInto('harness-train/1', SHA, 'm', MAIN)).toBe('conflict')
     // Nothing merged: the head is in the branch already, which starts at main, so it is in main.
-    expect(await stub({ 'POST /repos/acme/app/merges': { status: 204 } }).train.mergeInto('harness-train/1', SHA, 'm')).toBe('already')
+    expect(await stub({ 'POST /repos/acme/app/merges': { status: 204 } }).train.mergeInto('harness-train/1', SHA, 'm', MAIN)).toBe('already')
     // A fast-forward would leave the branch at the member's commit, which reads as the bot pushing it (pushOrigin.ts).
     await expect(stub({ 'POST /repos/acme/app/merges': { status: 201, body: { sha: SHA, parents: [{ sha: MAIN }] } } }).train
-      .mergeInto('harness-train/1', SHA, 'm')).rejects.toBeInstanceOf(TrainReadError)
+      .mergeInto('harness-train/1', SHA, 'm', MAIN)).rejects.toBeInstanceOf(TrainReadError)
+    // Someone pushed onto the train branch before this merge: its commit, not the tip, is the first parent (review 1 of #3226).
+    const FOREIGN = 'e'.repeat(40)
+    await expect(stub({ 'POST /repos/acme/app/merges': { status: 201, body: { sha: MERGED, parents: [{ sha: FOREIGN }, { sha: SHA }] } } }).train
+      .mergeInto('harness-train/1', SHA, 'm', MAIN)).rejects.toBeInstanceOf(TrainReadError)
+    await expect(stub({ 'POST /repos/acme/app/merges': { status: 201, body: { sha: MERGED, parents: [{ sha: MAIN }, { sha: FOREIGN }] } } }).train
+      .mergeInto('harness-train/1', SHA, 'm', MAIN)).rejects.toBeInstanceOf(TrainReadError)
   })
 
   it('squash-merges at the exact head, comments, closes and deletes', async () => {

@@ -66,6 +66,21 @@ describe('headReads', () => {
     const same = step([check([{ passed: true, head: HEAD }])], { step: 'Security review 2', title: 'Security review 2' })
     expect(headReads(task({ steps: [...task().steps, same] }), URL, HEAD)).toBe(1)
   })
+  it('never counts the task\'s own builders as reads: its assignee or an earlier attempt\'s agent', () => {
+    // review step passed by agent:r0 (the step helper's checker)
+    expect(headReads(task({ builders: ['agent:r0'] }), URL, HEAD)).toBe(0)
+    const two = step([check([{ passed: true, head: HEAD }])], { step: 'Security review 2', title: 'Security review 2' })
+    two.checks[0]!.verdicts![0]!.by = 'agent:other'
+    expect(headReads(task({ steps: [...task().steps, two], builders: ['agent:r0'] }), URL, HEAD)).toBe(1)
+  })
+  it('never counts a builder\'s pass of a test step, but keeps the builder\'s own task checks', () => {
+    const tested = step([check([{ passed: true, head: HEAD }])], { step: 'Test', title: 'Test' })
+    tested.checks[0]!.verdicts![0]!.by = 'agent:builder'
+    expect(headReads(task({ steps: [...task().steps, tested], builders: ['agent:builder'] }), URL, HEAD)).toBe(null)
+    const own = task({ builders: ['agent:r0'] })
+    own.steps[0]!.checks[0]!.verdicts![0]!.by = 'agent:reviewer'
+    expect(headReads(own, URL, HEAD)).toBe(1)
+  })
   it('ignores a cancelled step', () => {
     const t = task({ steps: [...task().steps, step([], { step: 'Test', assignment: { status: 'cancelled' } as Conversation['assignment'] })] })
     expect(headReads(t, URL, HEAD)).toBe(1)
