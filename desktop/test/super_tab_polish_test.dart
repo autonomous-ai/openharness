@@ -10,8 +10,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/core/open_in_browser.dart';
 import 'package:harness/super_tabs/message_text.dart';
-import 'package:harness/super_tabs/model.dart';
-import 'package:harness/super_tabs/recording_notice.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -249,40 +247,6 @@ void main() {
     },
   );
 
-  test('recording notices preserve authors, generations, chronology, replies and delivery records', () {
-    final server = ConversationServer();
-    gap(server);
-    gap(server);
-    gap(server);
-    server.append('A real update');
-    gap(server);
-    gap(server, author: 'builder');
-    gap(server, author: 'builder');
-    server.messages.last['author']['membershipGeneration'] = 2;
-    gap(server, author: 'builder');
-    server.messages.last['createdAt'] = '2026-10-19T00:00:00Z';
-    gap(server, author: 'builder');
-    server.messages.last['replyTo'] = 'message-4';
-    gap(server, author: 'builder');
-    server.messages.last['deliveries'] = [
-      {'id': 'receipt', 'status': 'uncertain'},
-    ];
-    final messages = server.messages.map(SuperTabMessage.fromJson).toList();
-    final entries = superTabTranscriptEntries(messages);
-    expect(entries.map((e) => e.interruptions), [3, 0, 1, 1, 1, 1, 0, 0]);
-    expect(entries.map((e) => e.message.id), [
-      'message-1',
-      'message-4',
-      'message-5',
-      'message-6',
-      'message-7',
-      'message-8',
-      'message-9',
-      'message-10',
-    ]);
-    expect(messages.length, 10);
-  });
-
   for (final profile in [
     (
       name: 'dark',
@@ -313,7 +277,6 @@ void main() {
         addTearDown(() => grid.AppTheme.brightness.value = previous);
         final server = polishFixture(), c = server.controller();
         await c.refresh();
-        var opened = '';
         final boundary = GlobalKey();
         await tester.pumpWidget(
           RepaintBoundary(
@@ -334,7 +297,7 @@ void main() {
                   onInvite: () {},
                   onAddAgent: (_) {},
                   onNewProject: () {},
-                  onOpenTerminal: (agent) => opened = agent.id,
+                  onOpenTerminal: (_) {},
                   machineName: (_) => 'M2',
                 ),
               ),
@@ -342,13 +305,9 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        expect(find.byType(SuperTabRecordingNotice), findsOneWidget);
-        await tester.ensureVisible(find.byType(SuperTabRecordingNotice));
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Open terminal'));
-        await tester.pumpAndSettle();
-        expect(opened, 'lead-agent');
-        expect(c.messages('lead').length, 11);
+        // The fixture's recording gap is no row (task #3127).
+        expect(find.textContaining('recording was interrupted'), findsNothing);
+        expect(c.messages('lead').length, 5);
         expect(tester.takeException(), isNull);
         Future<void> shot(String suffix) async {
           if (capture == null) return;
