@@ -166,8 +166,8 @@ describe('a reopened crew session', () => {
     t.show(`❯ ${CREW_CONTINUE}`)
     t.wait(CREW_LOOK_MS)
     await t.keeper.tick([row()])
-    // The text it typed already is not typed again: only the Enter.
-    expect(t.steps).toEqual([`type ${CREW_CONTINUE}`, 'Enter'])
+    // The screen after its typing was never seen without the prompt: it is typed again (at worst twice), never a bare Enter.
+    expect(t.steps).toEqual([`type ${CREW_CONTINUE}`, `type ${CREW_CONTINUE}`, 'Enter'])
   })
 
   // Review of #3222: a typing that failed for a moment is tried again, a few times, never dropped at once.
@@ -190,6 +190,31 @@ describe('a reopened crew session', () => {
     const t = setup({ working: () => false })
     t.show(`❯ ${CREW_CONTINUE}\n\n⏺ Picking the task up again.\n\n${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  ? for shortcuts`)
     t.keeper.reopened('h1')
+    await t.keeper.tick([row()])
+    expect(t.steps).toEqual([`type ${CREW_CONTINUE}`, 'Enter'])
+  })
+
+  // Review 3 of #3222: typed, then a prompt opened before the Enter; once it is answered the composer was cleared and only the
+  // history still shows an older continue. The Enter goes only on the exact screen its own typing left, so it types again.
+  it('types again when the screen its typing left is gone, though the history shows the continue', async () => {
+    const t = setup({ working: () => false })
+    t.keeper.reopened('h1')
+    vi.mocked(t.core.superTabs!.inputIfScreen).mockImplementationOnce(async () => { t.prompt(true); return { ok: false, error: 'SCREEN_CHANGED' } })
+    await t.keeper.tick([row()])
+    expect(t.steps).toEqual([`type ${CREW_CONTINUE}`])
+    t.prompt(false)
+    t.show(`❯ ${CREW_CONTINUE}\n\n⏺ Earlier answer.\n${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}`)
+    t.wait(CREW_LOOK_MS)
+    await t.keeper.tick([row()])
+    expect(t.steps).toEqual([`type ${CREW_CONTINUE}`, `type ${CREW_CONTINUE}`, 'Enter'])
+  })
+
+  it('sends only the Enter when the screen its typing left is back once a prompt is answered', async () => {
+    const t = setup({ working: () => false })
+    t.keeper.reopened('h1')
+    vi.mocked(t.core.superTabs!.inputIfScreen).mockImplementationOnce(async () => ({ ok: false, error: 'SCREEN_CHANGED' }))
+    await t.keeper.tick([row()])
+    t.wait(CREW_LOOK_MS)
     await t.keeper.tick([row()])
     expect(t.steps).toEqual([`type ${CREW_CONTINUE}`, 'Enter'])
   })
