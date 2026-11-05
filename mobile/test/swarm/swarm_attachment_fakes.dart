@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
+import 'dart:typed_data';
 
 import 'package:file/file.dart' hide FileSystem;
+import 'package:file/file.dart' as pkg show FileSystem;
 import 'package:file/local.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:harness_mobile/swarm/swarm_attachment_store.dart';
@@ -65,34 +67,86 @@ class _Answer implements FileServiceResponse {
   String get fileExtension => '.png';
 }
 
+/// The reads of kept files, as a picture's load makes them: how many were
+/// asked, and a way to hold each one open before it touches the disk, as a
+/// slow phone does. A test that deletes the files while one is held has the
+/// load meet a file that is gone (task #2883).
+class PictureReads {
+  /// Set to hold every read until it completes.
+  Completer<void>? hold;
+
+  /// The reads asked for so far, held or not.
+  int asked = 0;
+}
+
 /// Files under [folder], where the app keeps them under its temporary folder.
 class _Folder implements FileSystem {
-  _Folder(this.folder);
+  _Folder(this.folder, this.reads);
 
   final io.Directory folder;
+  final PictureReads? reads;
 
   @override
   Future<File> createFile(String name) async {
     final directory = const LocalFileSystem().directory(folder.path);
     await directory.create(recursive: true);
-    return directory.childFile(name);
+    final file = directory.childFile(name);
+    final reads = this.reads;
+    return reads == null ? file : _ReadFile(file, directory.fileSystem, reads);
+  }
+}
+
+/// A kept file whose reads go through [PictureReads].
+class _ReadFile extends ForwardingFileSystemEntity<File, io.File>
+    with ForwardingFile {
+  _ReadFile(this.delegate, this.fileSystem, this._reads);
+
+  @override
+  final io.File delegate;
+
+  @override
+  final pkg.FileSystem fileSystem;
+
+  final PictureReads _reads;
+
+  @override
+  ForwardingFile wrap(io.File delegate) =>
+      _ReadFile(delegate, fileSystem, _reads);
+
+  @override
+  Directory wrapDirectory(io.Directory delegate) =>
+      fileSystem.directory(delegate.path);
+
+  @override
+  File wrapFile(io.File delegate) => wrap(delegate);
+
+  @override
+  Link wrapLink(io.Link delegate) => fileSystem.link(delegate.path);
+
+  @override
+  Future<Uint8List> readAsBytes() async {
+    _reads.asked++;
+    await _reads.hold?.future;
+    return delegate.readAsBytes();
   }
 }
 
 /// A store over [root] and [storage], as the app's is over its temporary
 /// folder and the network. [reaching], when given, runs each time the store
-/// asks for [root], as the app's asks the platform for its folder.
+/// asks for [root], as the app's asks the platform for its folder. [reads],
+/// when given, sees every read of a kept file.
 SwarmAttachmentStore storeIn(
   io.Directory root,
   FileService storage, {
   Future<void> Function()? reaching,
+  PictureReads? reads,
 }) => SwarmAttachmentStore(
   root: () async {
     await reaching?.call();
     return root;
   },
   fileService: storage,
-  files: (folder) => _Folder(folder),
+  files: (folder) => _Folder(folder, reads),
 );
 
 /// The files kept under [root], by their path below it.

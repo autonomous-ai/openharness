@@ -235,7 +235,7 @@ describe('instructions.save', () => {
   const save = (baseRevision: number, text: string, extra: Partial<Extract<Command, { type: 'instructions.save' }>> = {}): Command =>
     ({ type: 'instructions.save', projectId: 'lead', baseRevision, text, summary: 'Reviews run on Opus', ...extra })
 
-  it('saves on the latest revision, announces it in the project chat and hands the text to the store', () => {
+  it('saves on the latest revision, posts nothing in any chat and hands the text to the store', () => {
     const f = fixture()
     expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 1, instructionsHash: instructionsHash(INSTRUCTIONS_TEMPLATE) })
     const effects = f.run(save(1, 'Reviews run on Opus.'))
@@ -243,9 +243,24 @@ describe('instructions.save', () => {
     expect(effects.instructions).toEqual({ projectId: 'lead', revision: 2, hash: instructionsHash('Reviews run on Opus.'), text: 'Reviews run on Opus.',
       summary: 'Reviews run on Opus', writtenBy: { kind: 'person', id: 'owner' }, askedBy: 'owner', at: 1000 })
     expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 2, instructionsHash: instructionsHash('Reviews run on Opus.') })
-    expect(effects.messages).toHaveLength(1)
-    expect(effects.messages[0]).toMatchObject({ conversationId: 'lead', author: { kind: 'person', id: 'owner' }, recipients: [],
-      text: 'owner changed the instructions: Reviews run on Opus.', source: { kind: 'instructions', projectId: 'lead', revision: 2 } })
+    // Dee and Ken, 11-05 (#3132): a save is read in the Instructions history, never posted in the project chat or any other.
+    expect(effects.messages).toEqual([])
+  })
+
+  // #3132: the chat line #3021 added is gone with the line; what the save changed stays readable as two kept revisions.
+  it('posts nothing for a save that changes lines, a long change or an unreadable earlier revision, and still records each revision', () => {
+    const f = fixture()
+    const stored = { instructions: { revision: 1, text: '# Rules\n\n- Opus builds.\n- Haiku reviews.' } }
+    const effects = f.run(save(1, '# Rules\n\n- Opus builds.\n- Sonnet reviews.\n- Tests run first.'), owner, stored)
+    expect(effects.messages).toEqual([])
+    expect(effects.instructions).toMatchObject({ projectId: 'lead', revision: 2, summary: 'Reviews run on Opus' })
+    const rules = Array.from({ length: 30 }, (_, i) => `- Rule ${i + 1}.`)
+    const long = f.run(save(2, ['# Rules', ...rules].join('\n')), owner, { instructions: { revision: 2, text: '# Rules' } })
+    expect(long.messages).toEqual([])
+    expect(long.instructions).toMatchObject({ revision: 3 })
+    const unreadable = f.run(save(3, 'Other.'), owner, { instructions: null })
+    expect(unreadable.messages).toEqual([])
+    expect(unreadable.instructions).toMatchObject({ revision: 4 })
   })
 
   it('refuses a save on an older revision with the current revision and text, so the caller can merge', () => {
@@ -271,7 +286,7 @@ describe('instructions.save', () => {
     expect(() => f.run(save(1, 'PM text.', { askedBy: 'stranger' }), as(lead))).toThrow(expect.objectContaining({ code: 'ASKED_BY_UNAVAILABLE' }))
     const effects = f.run(save(1, 'PM text.', { askedBy: 'peer' }), as(lead))
     expect(effects.instructions).toMatchObject({ writtenBy: { kind: 'agent', id: lead }, askedBy: 'peer' })
-    expect(effects.messages[0]).toMatchObject({ author: { kind: 'agent', id: lead }, text: 'lead changed the instructions for peer: Reviews run on Opus.' })
+    expect(effects.messages).toEqual([])
     expect(() => f.run(save(2, 'Engineer text.', { askedBy: 'owner' }), as(engineer))).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
     const buddy = f.add('buddy', group)
     f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
@@ -281,13 +296,15 @@ describe('instructions.save', () => {
     expect(() => viewer.run(save(1, 'Viewer text.'), peer)).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
   })
 
-  it('names in the chat line the member a person saved for, and no one when they saved for themselves (review of phase 2)', () => {
+  it('records the member a person saved for, and posts no line naming them (review of phase 2, #3132)', () => {
     const f = fixture()
     f.invite()
     const effects = f.run(save(1, 'Peer text.', { askedBy: 'peer' }))
     expect(effects.instructions).toMatchObject({ writtenBy: { kind: 'person', id: 'owner' }, askedBy: 'peer' })
-    expect(effects.messages[0]!.text).toBe('owner changed the instructions for peer: Reviews run on Opus.')
-    expect(f.run(save(2, 'Owner text.', { askedBy: 'owner' })).messages[0]!.text).toBe('owner changed the instructions: Reviews run on Opus.')
+    expect(effects.messages).toEqual([])
+    const own = f.run(save(2, 'Owner text.', { askedBy: 'owner' }))
+    expect(own.instructions).toMatchObject({ askedBy: 'owner' })
+    expect(own.messages).toEqual([])
   })
 
   it('keeps a document within 64 KB and a summary on one line, and saves nothing new for the same text', () => {

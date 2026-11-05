@@ -45,7 +45,7 @@ Every command starts \`harness super-tab --tab TAB\` (your tab id is in your lau
 ## Reactions
 - \`react GROUP MESSAGE_ID EMOJI OPERATION_ID [--off]\` acknowledges without a post, as Slack bots do. EMOJI: eyes (👀) when you start on a message addressed to you, check (✅) when you have done what it asked, rocket (🚀) when its work merged; also thumbs_up, tada, heart, laugh. \`--off\` takes yours back (take the 👀 back, then react ✅).
 - A reaction tells the people in the chat and wakes nobody; your work status still tells the Swarm.
-- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence. Never post an acknowledgement alone ("on it", "took it", "thanks", "done").
+- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence. Never post an acknowledgement ("on it", "took it", "confirmed", "thanks", "done"): react instead. Your status goes through work.status and your results to whoever asked for the work; name the PM with --to only when you need it to act.
 
 ## Commands (JSON)
 \`command OPERATION_ID JSON\` sends one command. The JSON is one argument; when it holds quotes, put - in its place and send it on stdin:
@@ -82,7 +82,7 @@ Swarm and machine settings (each refused unless you may change that setting; a p
 ### The project's instructions and notes
 - Save: \`{"type":"instructions.save","projectId":"PROJECT","baseRevision":N,"text":"the whole new document","summary":"one line, up to 200 characters","askedBy":"PERSON"}\`. \`baseRevision\` is the revision you read with \`instructions\`. \`text\` is the whole document, not a patch. A person who reads the project saves it; of the agents, only the project's coordinator does, and always with \`askedBy\` naming the member whose words the change carries. Any other agent asks the coordinator or a person. A save of unchanged text changes nothing.
 - A stale base is refused with INSTRUCTIONS_STALE, which names the current revision: read \`instructions\` again, merge your change into that text and save on the new revision. Never overwrite another writer's text.
-- A save posts one line in the project's chat, with your summary. Do not post another about it.
+- A save posts nothing in any chat; the change is read in the project's Instructions history.
 - Add a note: \`{"type":"note.add","projectId":"PROJECT","text":"up to 300 characters","askedBy":"PERSON","expiresAt":"optional ISO time"}\`. Only the project's coordinator adds one; anyone else tells the coordinator what to note. A note is a small thing a member told the coordinator, kept beside the instructions until it ends. A project keeps at most 100; remove one (or write what lasts into the instructions) when it is full.
 - Remove a note: \`{"type":"note.remove","projectId":"PROJECT","noteId":"NOTE"}\` (each note's id is in the \`instructions\` output): the coordinator, or a person who reads the project. An expired note is already gone.
 

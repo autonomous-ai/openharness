@@ -23,6 +23,7 @@ import { IGNORED_NOTE, type Command } from '../src/superTabs/commands.js'
 import { nextMachineShareGrants } from '../src/lib/machineSharePolicy.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
 import { stableId, type Agent, type SuperTabState } from '../src/superTabs/model.js'
+import { agentDisplayName } from '../src/superTabs/agentNames.js'
 import { roleVersion } from '../src/superTabs/projects.js'
 import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS } from '../src/superTabs/terminal.js'
 import { ensureMentionExpiry, MENTION_EXPIRY_MS, swarmsWithTags } from '../src/superTabs/mentions.js'
@@ -49,9 +50,19 @@ const host: AuthUser = { sub: '100000000000000000000003', email: 'host@example.c
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const run = (tab: string, command: Command, user = owner, asAgentId?: string, operationId = randomUUID()) =>
   store.execute(user, tab, { operationId, command }, asAgentId)
-async function fixture() {
+/** A harness id for the fixture's Lead whose member name is (or is not) `name`. A Lead called "Lead" is given a member name
+ *  from agentNames.ts by its id alone, so a random id gives it any of 32 names; a test that adds a harness by one of those
+ *  names fails about one run in 32 when the Lead drew it first (task #3078). */
+const leadHarness = (name: string, named = true) => {
+  for (;;) {
+    const harnessId = randomUUID()
+    const id = stableId('test-host', harnessId)
+    if ((agentDisplayName([{ id, name: 'Lead' }], id) === name) === named) return harnessId
+  }
+}
+async function fixture(leadHarnessId = randomUUID()) {
   const tab = (await store.create(owner, randomUUID(), 'Pilot')).id
-  const lead = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
+  const lead = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: leadHarnessId,
     name: 'Lead', configuration: config, lead: true })).result.agentId as string
   return { tab, lead }
 }
@@ -1809,9 +1820,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(revisions.map(r => [r.revision, r.askedBy, r.summary])).toEqual([[1, owner.sub, expect.any(String)],
       [2, owner.sub, 'Routing: Never use Haiku.'], [3, peer.sub, 'Routing: Haiku writes docs.']])
     expect((await store.read(owner, tab)).state).not.toHaveProperty('rules')
-    // The save's own row is the system's: quoting it names no one.
-    const row = (await store.messages(owner, tab, 'lead', {})).messages.find(m => m.text.includes('changed the instructions'))!
-    await expect(run(tab, rule(row.id), host, lead)).rejects.toMatchObject({ code: 'ASKED_BY_REQUIRED' })
+    // A save posts no row in the chat (#3132): the revisions above are where it is read.
+    expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => m.text.includes('changed the instructions'))).toEqual([])
   })
   it('lets a project\'s Lead write a rule from the owner\'s message into that project\'s instructions, and answers a removal', async () => {
     // Backend v1.3.14 refused it: a Swarm of projects has no 'lead' chat.
@@ -1828,8 +1838,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect((await run(tab, { type: 'rule.remove', ruleId: 'old', askedIn }, host, lead)).result).toMatchObject({ ignored: true })
     expect((await store.read(owner, tab)).state).not.toHaveProperty('rules')
     const rows = (await store.messages(owner, tab, chat, {})).messages.filter(m => m.source).map(m => m.text)
-    // After the row naming who added the Lead (#2207).
-    expect(rows).toEqual([expect.stringMatching(/^owner added [^.]+\.$/), 'Lead changed the instructions for owner: Routing: Only this Mac.'])
+    // Only the row naming who added the Lead (#2207): the save posts none (#3132).
+    expect(rows).toEqual([expect.stringMatching(/^owner added [^.]+\.$/)])
     expect((await store.read(owner, tab)).state.projects!.map(p => p.id)).toEqual([projectId])
   })
   it('keeps a new Swarm\'s folder from tab.project on its first project, so the repository can be shared and the host uses it', async () => {
@@ -2209,7 +2219,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
   // Tony, 2026-11-03 (#2458): New Harness from a project chat records the person's first message beside the row naming who
   // added the harness. Both took the operation id, so the join answered 500 and the harness never joined.
   it('joins a harness started from the project chat with a first message, through the HTTP API', async () => {
-    const { tab } = await fixture()
+    // Not a Lead whose member name is already "Kai": that one is taken, so the harness would join under another (task #3078).
+    const { tab } = await fixture(leadHarness('Kai', false))
     const headers = { authorization: `Bearer ${owner.sub}` }
     const operationId = randomUUID()
     const join = () => app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`, headers,
@@ -2232,6 +2243,26 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(again.json().data.result.agentId).toBe(agentId)
     const after = (await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages`, headers })).json().data.messages as Array<{ text: string }>
     expect(after.filter(m => m.text === 'Hi New PM Personal')).toHaveLength(1)
+  })
+
+  // Task #3078: the test above failed about one run in 32 (CI runs 41962752144 and 41966667786). The Lead's member name is
+  // drawn from 32 by its id, and a harness added under a name another member holds joins under a different one.
+  it('joins a harness under another member name when the Lead already holds the one it asked for', async () => {
+    const { tab, lead } = await fixture(leadHarness('Kai'))
+    const headers = { authorization: `Bearer ${owner.sub}` }
+    expect((await storedState(tab)).agents.find(a => a.id === lead)?.displayName).toBe('Kai')
+    const joined = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/commands`, headers,
+      payload: { operationId: randomUUID(), command: { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: 'new-pm-personal',
+        name: 'Kai', configuration: config, lead: false, initialMessage: 'Hi New PM Personal' } } })
+    expect(joined.statusCode, joined.body).toBe(200)
+    const agents = (await storedState(tab)).agents
+    const added = agents.find(a => a.id === joined.json().data.result.agentId)!
+    expect(added.displayName).not.toBe('Kai')
+    expect(agents.find(a => a.id === lead)?.displayName).toBe('Kai')
+    // The row names the harness as it is shown, not the name it asked for.
+    const rows = (await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/messages`, headers })).json().data.messages as Array<{ text: string }>
+    expect(rows.some(m => m.text.startsWith(`owner added "${added.displayName}" to the project.`))).toBe(true)
+    expect(rows.some(m => m.text.includes('added "Kai" to the project.'))).toBe(false)
   })
 
   it('joins a Product Manager with a first message and a launch-refused note, through the HTTP API', async () => {

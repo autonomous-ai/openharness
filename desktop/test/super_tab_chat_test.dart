@@ -788,14 +788,15 @@ void main() {
       await c.refresh();
       await tester.pumpAndSettle();
       expect(find.text('Builder needs you'), findsNothing);
-      // Stuck waits on a person as a decision does.
+      // Stuck is a wait on CI, a review or a machine, not a question to the
+      // reader: no bar (#3017).
       group['assignment']
         ..['status'] = 'blocked'
         ..['result'] = 'The staging key is missing.';
       server.revision++;
       await c.refresh();
       await tester.pumpAndSettle();
-      expect(find.text('Builder needs you'), findsOneWidget);
+      expect(find.text('Builder needs you'), findsNothing);
     },
   );
 

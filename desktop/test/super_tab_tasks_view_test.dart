@@ -164,6 +164,10 @@ Future<SuperTabController> _show(
   await tester.pumpWidget(
     MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.light),
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(disableAnimations: true),
+        child: child!,
+      ),
       home: Scaffold(
         body: SuperTabTasksView(
           controller: c,
@@ -428,7 +432,7 @@ void main() {
     expect(inCard('shipped-means', 'scholes'), findsOneWidget);
     expect(inCard('sender', 'scholes · Finch2 · PR #2870'), findsOneWidget);
     expect(
-      inCard('test-copy', 'ken15 · Finch2 · dee to decide'),
+      inCard('test-copy', 'ken15 · Finch2 · Needs you'),
       findsOneWidget,
     );
     // No task numbers, machines or models.
@@ -454,11 +458,17 @@ void main() {
     final c = await _show(tester, server);
     expect(_cardsIn(tester, 'waiting'), ['test-copy', 'later']);
     expect(
-      find.descendant(of: _card('test-copy'), matching: find.text('Needs you')),
+      find.descendant(
+        of: _card('test-copy'),
+        matching: find.textContaining('Needs you'),
+      ),
       findsOneWidget,
     );
     expect(
-      find.descendant(of: _card('later'), matching: find.text('Needs you')),
+      find.descendant(
+        of: _card('later'),
+        matching: find.textContaining('Needs you'),
+      ),
       findsNothing,
     );
     await _close(tester, c);

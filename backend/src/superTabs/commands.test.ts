@@ -14,6 +14,8 @@ import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
 import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fixture.test-support.js'
 import { groupView } from './read/views.js'
+import { weekStart } from './leaderboard/week.js'
+import { lentIn, weekSpan } from './leaderboard/rolling.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 /** What an older client's routing, policy, skill-set or role save answers (project instructions, phase 4). */
@@ -1748,6 +1750,34 @@ it('keeps a paused machine paused when its owner saves other settings, until the
   f.run(save(3), owner, owners)
   expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host', maxAgents: 3, paused: false })])
 })
+describe('saving a machine again', () => {
+  const owners = { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }
+  const save = (maxAgents: number): Command => ({ type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents })
+  it('keeps its Lent hours, engine health and last reading when its owner saves other settings', () => {
+    const f = fixture()
+    f.run(save(2), owner, owners)
+    const week = weekStart(NOW)
+    const kept = {
+      lent: [{ week, busyMs: 18_000_000 }],
+      lentDays: [{ day: week, projectId: 'lead', busyMs: 18_000_000 }],
+      engineFailures: { codex: 1 },
+      engineSuspensions: { claude: { at: NOW, fine: false } },
+      observation: { receivedAt: NOW, runningHarnessIds: ['h1'], stoppedHarnessIds: [] } as never,
+    }
+    Object.assign(f.state.machines![0]!, structuredClone(kept))
+    const lentThisWeek = () => lentIn(f.state.machines![0]!, weekSpan(week), NOW, { projects: new Set(['lead']), unsplit: true })
+    expect(lentThisWeek()).toBe(18_000_000)
+    f.run(save(3), owner, owners)
+    expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host', maxAgents: 3, ...kept })])
+    expect(lentThisWeek()).toBe(18_000_000)
+  })
+  it('gives a first-time contribution a clean record', () => {
+    const f = fixture()
+    f.run(save(2), owner, owners)
+    const record = f.state.machines![0]!
+    for (const key of ['lent', 'lentDays', 'engineFailures', 'engineSuspensions', 'observation']) expect(record).not.toHaveProperty(key)
+  })
+})
 it('restricts recording a legacy project to the owner or controlling lead', () => {
   const f = fixture(); f.invite()
   const command: Command = { type: 'tab.project', machineId: 'host', project: { cwd: '/repo', repositoryUrl: null } }
@@ -3046,16 +3076,15 @@ describe('the owner\'s rules', () => {
     expect(effects.instructions).toEqual({ projectId: 'lead', revision: 2, hash: instructionsHash(text), text, summary: 'Routing: No Haiku.',
       writtenBy: { kind: 'agent', id: f.lead }, askedBy: 'owner', at: 1000 })
     expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 2, instructionsHash: instructionsHash(text) })
-    // One line, as any save: in the writer's name, for the member who asked.
-    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', text: 'lead changed the instructions for owner: Routing: No Haiku.',
-      source: { kind: 'instructions', projectId: 'lead', revision: 2 } })])
+    // A save posts no line in any chat (#3132); the revision is in the history.
+    expect(effects.messages).toEqual([])
     expect(f.state).not.toHaveProperty('rules')
     // A project at revision 0 runs on the template: the rule lands in its copy, as revision 1. A person asks for themselves.
     delete f.state.projects![0]!.instructionsRevision
     const first = f.run(set({ kind: 'preferIdle' }, 'Idle agents first.'))
     expect(first.instructions).toMatchObject({ revision: 1, text: appendRouting(INSTRUCTIONS_TEMPLATE, 'Idle agents first.'), askedBy: 'owner',
       writtenBy: { kind: 'person', id: 'owner' } })
-    expect(first.messages.map(m => m.text)).toEqual(['owner changed the instructions: Routing: Idle agents first.'])
+    expect(first.messages).toEqual([])
     // The stored document must be the revision the state names, or nothing is written.
     expect(() => f.run(set({ kind: 'preferIdle' }), owner, { instructions: { revision: 7, text: doc } }))
       .toThrow(expect.objectContaining({ code: 'INSTRUCTIONS_UNAVAILABLE' }))
@@ -3190,13 +3219,12 @@ describe('the owner\'s rules in a Swarm of projects', () => {
   const doc = (text = '# Doc\n\n## Routing\n\n- Opus.') => ({ instructions: { revision: 1, text } })
   const projectOfChat = (f: ReturnType<typeof projects>, chat: string) => f.state.projects!.find(p => p.leadConversationId === chat)!
 
-  it('lets a project\'s Lead write a rule into that project\'s instructions by quoting a person in its chat, and posts the line there', () => {
+  it('lets a project\'s Lead write a rule into that project\'s instructions by quoting a person in its chat, and posts no line', () => {
     const f = projects()
     const added = f.run(machines(f.app), f.lead, { ...said(), ...doc() })
     expect(added.instructions).toMatchObject({ projectId: projectOfChat(f, f.app).id, revision: 2, text: appendRouting('# Doc\n\n## Routing\n\n- Opus.', 'Only m1.'),
       askedBy: 'owner', summary: 'Routing: Only m1.' })
-    expect(added.messages).toEqual([expect.objectContaining({ conversationId: f.app, text: 'app-lead changed the instructions for owner: Routing: Only m1.',
-      source: { kind: 'instructions', projectId: projectOfChat(f, f.app).id, revision: 2 } })])
+    expect(added.messages).toEqual([])
     expect(f.state).not.toHaveProperty('rules')
     expect(f.run({ type: 'rule.remove', ruleId: 'any', askedIn: { conversationId: f.app, messageId: 'm2' } }, f.lead, said()).result).toMatchObject({ ignored: true })
   })
@@ -3233,7 +3261,7 @@ describe('the owner\'s rules in a Swarm of projects', () => {
     const mine = f.run({ type: 'project.create', name: 'Peer', visibility: 'private', brief: '' }, peer).result as { projectId: string; conversationId: string }
     const added = f.run(forbid(mine.projectId, 'haiku'), peer, doc())
     expect(added.instructions).toMatchObject({ projectId: mine.projectId, askedBy: 'peer' })
-    expect(added.messages).toEqual([expect.objectContaining({ conversationId: mine.conversationId, text: 'peer changed the instructions: Routing: No haiku.' })])
+    expect(added.messages).toEqual([])
     expect(() => f.run(forbid(mine.projectId, 'opus'), owner, doc())).toThrow('unavailable')
     // Public, any member who reads it writes its instructions, the Swarm owner too.
     f.run({ type: 'project.sharing', projectId: mine.projectId, visibility: 'public', memberIds: [] }, peer)
@@ -5321,6 +5349,29 @@ describe('lead.switch', () => {
     const missing = setup()
     missing.f.state.machines![0]!.engines = ['claude']
     expect(code(() => missing.f.run(missing.request))).toBe('ENGINE_NOT_OFFERED')
+  })
+
+  // Task #3022 (Ken, 11-05): a PM runs at high effort or above, whoever moves it.
+  it('refuses an effort below high, and asks for high when a model is named with none', () => {
+    for (const effort of ['medium', 'low', 'minimal']) {
+      const s = setup()
+      expect(code(() => s.f.run({ ...s.request, model: 'gpt-6-astra', effort }))).toBe('EFFORT_TOO_LOW')
+      expect(s.agent().switchRequest).toBeUndefined()
+    }
+    const named = setup()
+    named.f.run({ ...named.request, model: 'gpt-6-astra' })
+    expect(named.agent().switchRequest).toMatchObject({ model: 'gpt-6-astra', effort: 'high' })
+    const xhigh = setup()
+    xhigh.f.run({ ...xhigh.request, model: 'gpt-6-astra', effort: 'xhigh' })
+    expect(xhigh.agent().switchRequest).toMatchObject({ effort: 'xhigh' })
+    // Review of #3066, 3: Claude Opus named with no effort keeps the coordinator's own default, as its start does.
+    const opus = setup()
+    opus.f.run({ ...opus.request, engine: 'claude', profileId: 'default', model: 'opus' })
+    expect(opus.agent().switchRequest).toMatchObject({ model: 'opus', effort: 'xhigh' })
+    // No model named: the engine's own model and effort, as before.
+    const own = setup()
+    own.f.run(own.request)
+    expect(own.agent().switchRequest).not.toHaveProperty('effort')
   })
 
   it('works while the Swarm is paused', () => {

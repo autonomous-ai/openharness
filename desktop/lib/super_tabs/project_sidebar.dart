@@ -85,8 +85,8 @@ class ProjectSidebar extends StatelessWidget {
   /// The page holding the main pane, if one does.
   final SwarmPage? page;
 
-  /// What the three rows count; without it Decisions and Mentions count what
-  /// the server says waits, and Threads nothing.
+  /// What the three rows read, to be bold or grey; without it Decisions and
+  /// Mentions read what the server says waits, and Threads nothing.
   final SuperTabActivity? activity;
 
   /// The reader's places, for the back and forward arrows at the top;
@@ -123,7 +123,7 @@ class ProjectSidebar extends StatelessWidget {
       ? null
       : SwarmType.sidebar(
           compact: false,
-          color: DesktopChrome.muted,
+          color: grid.SidebarInk.inkMuted,
           medium: true,
         );
 
@@ -133,13 +133,12 @@ class ProjectSidebar extends StatelessWidget {
     required IconData icon,
     required VoidCallback? onTap,
     bool selected = false,
-    int badge = 0,
     Widget? trailing,
     bool? unread,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 2),
     child: Material(
-      color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
+      color: selected ? grid.SidebarInk.selected : Colors.transparent,
       borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
       clipBehavior: Clip.antiAlias,
       child: Semantics(
@@ -148,8 +147,8 @@ class ProjectSidebar extends StatelessWidget {
         child: InkWell(
           key: ValueKey(key),
           onTap: onTap,
-          hoverColor: grid.AppSurface.hoverFill,
-          focusColor: grid.AppSurface.hoverFill,
+          hoverColor: grid.SidebarInk.hover,
+          focusColor: grid.SidebarInk.hover,
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
           child: Row(
             children: [
@@ -160,8 +159,8 @@ class ProjectSidebar extends StatelessWidget {
                   icon,
                   size: AppIcons.inlineSize,
                   color: onTap == null
-                      ? DesktopChrome.muted
-                      : DesktopChrome.foreground,
+                      ? grid.SidebarInk.inkMuted
+                      : grid.SidebarInk.ink,
                 ),
               ),
               Expanded(
@@ -189,8 +188,8 @@ class ProjectSidebar extends StatelessWidget {
                             medium: selected,
                             color:
                                 onTap == null || (unread == false && !selected)
-                                ? DesktopChrome.muted
-                                : DesktopChrome.foreground,
+                                ? grid.SidebarInk.inkMuted
+                                : grid.SidebarInk.ink,
                           ).copyWith(
                             fontWeight: unread == true
                                 ? grid.AppFont.semibold
@@ -200,8 +199,7 @@ class ProjectSidebar extends StatelessWidget {
                   ),
                 ),
               ),
-              if (trailing ?? (badge > 0 ? SuperTabCountBadge(badge) : null)
-                  case final mark?)
+              if (trailing case final mark?)
                 Padding(padding: const EdgeInsets.only(right: 10), child: mark),
             ],
           ),
@@ -210,28 +208,24 @@ class ProjectSidebar extends StatelessWidget {
     ),
   );
 
-  /// Threads: bold with a plain count while followed threads have unread
-  /// replies, never red (anh Dee, 11-05).
-  Widget _threadsRow(ValueChanged<SwarmPage> onPage) {
-    final count = activity?.threadsCount ?? 0;
-    return _navigationRow(
-      key: 'super-threads',
-      label: 'Threads',
-      icon: AppIcons.messagesSquare,
-      onTap: () => onPage(SwarmPage.threads),
-      selected: page == SwarmPage.threads,
-      unread: count > 0,
-      trailing: count > 0
-          ? Text(
-              '$count',
-              style: SwarmType.sidebar(
-                compact: compact,
-                color: DesktopChrome.foreground,
-              ).copyWith(fontWeight: grid.AppFont.semibold),
-            )
-          : null,
-    );
-  }
+  /// A page row of Decisions, Mentions or Threads: no number and no red,
+  /// bold at full strength while something waits, grey when nothing does
+  /// (anh Dee, 11-05, task #3128).
+  Widget _pageRow(
+    ValueChanged<SwarmPage> onPage, {
+    required SwarmPage target,
+    required String key,
+    required String label,
+    required IconData icon,
+    required int waiting,
+  }) => _navigationRow(
+    key: key,
+    label: label,
+    icon: icon,
+    onTap: () => onPage(target),
+    selected: page == target,
+    unread: waiting > 0,
+  );
 
   /// Back and forward over the reader's places (⌘[ and ⌘]), at the top.
   Widget _arrows(SuperTabPlaces places) => Row(
@@ -254,13 +248,13 @@ class ProjectSidebar extends StatelessWidget {
 
   /// A project reads as a channel; a private one keeps its lock in this mark slot.
   Widget _channelMark({required bool isPrivate}) => isPrivate
-      ? PrivateProjectLock(size: 14, color: DesktopChrome.muted)
+      ? PrivateProjectLock(size: 14, color: grid.SidebarInk.inkMuted)
       : Text(
           '#',
           textAlign: TextAlign.center,
           style: SwarmType.sidebar(
             compact: compact,
-            color: DesktopChrome.muted,
+            color: grid.SidebarInk.inkMuted,
             medium: true,
           ),
         );
@@ -341,8 +335,8 @@ class ProjectSidebar extends StatelessWidget {
     final style = SwarmType.sidebar(
       compact: compact,
       color: highlighted || (unread && !muted)
-          ? DesktopChrome.foreground
-          : DesktopChrome.muted,
+          ? grid.SidebarInk.ink
+          : grid.SidebarInk.inkMuted,
     ).copyWith(fontWeight: unread && !muted ? grid.AppFont.semibold : null);
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
@@ -359,7 +353,7 @@ class ProjectSidebar extends StatelessWidget {
                 key: ValueKey(key ?? 'super-group-${group.id}'),
                 onTap: !tappable ? null : onTap ?? () => onSelect(group.id),
                 hoverColor: Colors.transparent,
-                focusColor: grid.AppSurface.hoverFill,
+                focusColor: grid.SidebarInk.hover,
                 borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
                 child: Row(
                   children: [
@@ -372,7 +366,7 @@ class ProjectSidebar extends StatelessWidget {
                           ? Icon(
                               AppIcons.bot,
                               size: AppIcons.inlineSize,
-                              color: DesktopChrome.foreground,
+                              color: grid.SidebarInk.ink,
                             )
                           : null,
                     ),
@@ -468,7 +462,7 @@ class ProjectSidebar extends StatelessWidget {
                                           'super-muted-${group.id}',
                                         ),
                                         size: 14,
-                                        color: DesktopChrome.muted,
+                                        color: grid.SidebarInk.inkMuted,
                                       ),
                                     ),
                                   ],
@@ -658,26 +652,32 @@ class ProjectSidebar extends StatelessWidget {
         ),
   ]..sort((a, b) => a.$1.toLowerCase().compareTo(b.$1.toLowerCase()));
 
+  // The sidebar's ink scope (#3006): a theme's own sidebar ink reaches the
+  // shared rows drawn in it.
   @override
-  Widget build(BuildContext context) => switch ([
-    ?attention,
-    ?activity,
-    ?places,
-  ]) {
-    final List<Listenable> sources when sources.isNotEmpty => ListenableBuilder(
-      listenable: Listenable.merge(sources),
-      builder: (context, _) => _build(context),
-    ),
-    _ => _build(context),
-  };
+  Widget build(BuildContext context) => grid.SidebarInk.scope(
+    child: switch ([?attention, ?activity, ?places]) {
+      final List<Listenable> sources when sources.isNotEmpty =>
+        ListenableBuilder(
+          listenable: Listenable.merge(sources),
+          builder: (context, _) => _build(context),
+        ),
+      _ => Builder(builder: _build),
+    },
+  );
 
   Widget _build(BuildContext context) {
     final snapshot = controller.snapshot;
     final projects = snapshot?.projects ?? const <SuperTabProject>[];
     final reading = _SidebarReading(controller, attention);
+    final decisions = activity?.needsCount ?? snapshot?.decisionsWaiting ?? 0;
+    final mentions = activity?.mentionsCount ?? snapshot?.mentionsWaiting ?? 0;
+    final threads = activity?.threadsCount ?? 0;
     return Material(
-      // The page's color: the rule at its edge is what separates them.
-      color: grid.AppPalette.swarmWelcome,
+      // The page's color: the rule at its edge is what separates them. A
+      // theme may give the sidebar its own (Plum's plum).
+      color: grid.AppPalette.swarmSidebar,
+      textStyle: grid.SidebarInk.textStyle(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -706,29 +706,36 @@ class ProjectSidebar extends StatelessWidget {
                         ),
                   ),
                 // Three rows, each one thing, in anh Dee's order (11-05, task
-                // #2996): only Decisions and Mentions are ever red.
+                // #2996): bold when something waits, grey when not, and no
+                // numbers (task #3128). The Swarm switcher stands apart from
+                // them by a control gap.
                 if (onPage case final onPage?) ...[
-                  _navigationRow(
+                  if (app != null && onNewSwarm != null)
+                    const SizedBox(height: DesktopChrome.controlGap),
+                  _pageRow(
+                    onPage,
+                    target: SwarmPage.decisions,
                     key: 'super-decisions',
                     label: 'Decisions',
                     icon: AppIcons.flag,
-                    onTap: () => onPage(SwarmPage.decisions),
-                    selected: page == SwarmPage.decisions,
-                    badge:
-                        activity?.needsCount ?? snapshot?.decisionsWaiting ?? 0,
+                    waiting: decisions,
                   ),
-                  _navigationRow(
+                  _pageRow(
+                    onPage,
+                    target: SwarmPage.mentions,
                     key: 'super-mentions',
                     label: 'Mentions',
                     icon: AppIcons.atSign,
-                    onTap: () => onPage(SwarmPage.mentions),
-                    selected: page == SwarmPage.mentions,
-                    badge:
-                        activity?.mentionsCount ??
-                        snapshot?.mentionsWaiting ??
-                        0,
+                    waiting: mentions,
                   ),
-                  _threadsRow(onPage),
+                  _pageRow(
+                    onPage,
+                    target: SwarmPage.threads,
+                    key: 'super-threads',
+                    label: 'Threads',
+                    icon: AppIcons.messagesSquare,
+                    waiting: threads,
+                  ),
                 ],
                 const SizedBox(height: 20),
                 SuperTabSectionHeading(
@@ -829,9 +836,9 @@ class _RowSurfaceState extends State<_RowSurface> {
     onExit: (_) => setState(() => _hovered = false),
     child: Material(
       color: widget.selected
-          ? grid.AppSurface.selectedFill
+          ? grid.SidebarInk.selected
           : _hovered
-          ? grid.AppSurface.hoverFill
+          ? grid.SidebarInk.hover
           : Colors.transparent,
       borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
       clipBehavior: Clip.antiAlias,

@@ -1,3 +1,4 @@
+import { RELAY_REASONS } from './relayHealth.js'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -434,6 +435,68 @@ describe('contributed machine executor', () => {
       withEngines(f)
       await f.machine.tick()
       expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: null }])
+    })
+
+    // Task #3106: Kay's Mac read Claude as signed in for its Team account while the owner's relay refused every request, as
+    // the readiness looked only for the relay's file. Routing kept sending work there, and each start lost its task.
+    it('reads a Team account\'s relayed engine as signed out while the relay does not answer, says why, and ready again within a minute', async () => {
+      const f = fixture({}, () => null, () => true)
+      withEngines(f)
+      let health: { ok: true } | { ok: false; reason: string } = { ok: false, reason: RELAY_REASONS.down }
+      const relayHealth = vi.fn(async () => health)
+      const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never)
+      await machine.tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }])
+      health = { ok: true }
+      f.advance(); await machine.tick()
+      // Within the minute the relay's answer is kept for: still read as it was.
+      expect(readings(f)[1]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }])
+      f.step(60_000); await machine.tick()
+      expect(readings(f).at(-1)!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: null }])
+      // The engines themselves were probed once: only the relay is asked again.
+      expect(probes(f)).toHaveLength(1)
+      expect(relayHealth).toHaveBeenCalledTimes(2)
+    })
+
+    // Security review 2 of #3098: the probe asks Claude's path, so an owner sign-in it cannot read is Claude's alone. A Mac
+    // whose owner has only ChatGPT kept getting Codex work before, and must still.
+    it('reads only Claude signed out when the owner\'s Claude sign-in cannot be read, Codex still on the relay', async () => {
+      const f = fixture({}, () => null, () => true)
+      const usage = f.request.getMockImplementation()!
+      f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe'
+        ? { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: false }] } : usage(type, ...rest as []))
+      const relayHealth = vi.fn(async () => ({ ok: false as const, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true as const }))
+      await new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never).tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: true }])
+    })
+
+    // Each probe has the owner's daemon read the owner's Keychain item: while macOS refuses it, it may ask on the owner's screen.
+    it('asks again only five minutes after the owner\'s Claude sign-in could not be read', async () => {
+      const f = fixture({}, () => null, () => true)
+      withEngines(f)
+      const relayHealth = vi.fn(async () => ({ ok: false as const, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true as const }))
+      const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never)
+      await machine.tick()
+      f.step(4 * 60_000); await machine.tick()
+      expect(relayHealth).toHaveBeenCalledOnce()
+      f.step(60_000); await machine.tick()
+      expect(relayHealth).toHaveBeenCalledTimes(2)
+    })
+
+    it('reads a probe that failed outright as a relay that does not answer', async () => {
+      const f = fixture({}, () => null, () => true)
+      withEngines(f)
+      const relayHealth = vi.fn(async () => { throw new Error('unexpected') })
+      await new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never).tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }])
+    })
+
+    it('never asks the relay on a machine without one', async () => {
+      const f = fixture()
+      withEngines(f)
+      const relayHealth = vi.fn(async () => ({ ok: true as const }))
+      await new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never).tick()
+      expect(relayHealth).not.toHaveBeenCalled()
     })
 
     it('reads an engine the probe calls not installed as unknown, since a timed-out shell probe says the same (review of #1743)', async () => {
@@ -2603,6 +2666,22 @@ describe('the allowance a machine reports', () => {
     expect(last(f).quotaReasons).toEqual({ codex: "This account runs on its owner's subscription; its allowance is read on the owner's machine." })
   })
 
+  it("says why a Harness Team account cannot use its owner's subscription when the owner's relay does not answer", async () => {
+    const f = fixture({}, () => null, () => true)
+    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth: async () => ({ ok: false, reason: RELAY_REASONS.refused }) } as never)
+    await machine.tick()
+    expect(last(f).quotaReasons).toEqual({ codex: RELAY_REASONS.refused })
+  })
+
+  it("keeps Codex's reason when only the owner's Claude sign-in cannot be read", async () => {
+    const f = fixture({}, () => null, () => true)
+    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth: async () => ({ ok: false, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true }) } as never)
+    await machine.tick()
+    expect(last(f).quotaReasons).toEqual({ codex: "This account runs on its owner's subscription; its allowance is read on the owner's machine." })
+  })
+
   it('drops the reasons for a backend that refuses them, keeping the allowance, and offers them again ten minutes later', async () => {
     const f = fixture()
     f.request.mockImplementation(limited)
@@ -2802,5 +2881,115 @@ describe('the profiles a machine reports', () => {
     expect(has().at(-1)).toBe(false)
     f.step(600_000); await f.machine.tick()
     expect(has().slice(-2)).toEqual([true, false])
+  })
+})
+
+// Task #3009: an engine that stops on a screen before it has a session waits for a person nobody tells. Team-written Codex
+// starts stopped on Codex's trust question and every one timed out at 3 minutes (10 of 10, 2026-10-29..11-05); the start's
+// own check read it as needing a person, and the host did nothing with that.
+describe('a launched start whose engine stops on a screen', () => {
+  const screens = (name: string) => readFileSync(new URL(`./fixtures/screens/${name}.txt`, import.meta.url), 'utf8')
+  const RESTRICTED = screens('codex-0165-open-restricted'), TRUST = screens('codex-0165-trust-fresh-home')
+  const waiting = { error: 'START_PENDING', startId: 'start', creationId: 'creation', harnessId: 'launched',
+    detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
+  function launched(text: string, hold: string | null, request: Record<string, unknown> = { engine: 'codex', projectSettings: 'off' }, result: Record<string, unknown> = waiting) {
+    const f = fixture()
+    f.pool.starts = [{ id: 'start', dispatched: true, request } as never]
+    f.start.mockResolvedValue(result as never)
+    const screen = vi.fn(async (_agentId: string, _scrollback: number) => ({ ok: true as const, text, hold }))
+    const inputIfScreen = vi.fn(async (_agentId: string, _keys: string[], _screen: string) => ({ ok: true as const }))
+    ;(f.core as { superTabs?: unknown }).superTabs = { screen, inputIfScreen }
+    const failures = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).endsWith('/starts/tab/start'))
+      .map(c => (c[3] as { command: { type: string; error?: string } }).command).filter(command => command.type === 'agent.startFailed')
+    return { f, screen, inputIfScreen, failures }
+  }
+  /** Two passes, 16 s apart: a screen fails a start only when two reads in a row show it the same (security review 1 of #3063). */
+  const twice = async (f: ReturnType<typeof fixture>) => { await f.machine.tick(); f.advance(); await f.machine.tick() }
+
+  it('opens a Team-written Codex start\'s untrusted checkout restricted, with Enter on that exact screen alone', async () => {
+    const { f, screen, inputIfScreen, failures } = launched(RESTRICTED, 'trust_open')
+    await f.machine.tick()
+    expect(screen).toHaveBeenCalledWith('launched', 0)
+    expect(inputIfScreen).toHaveBeenCalledWith('launched', ['Enter'], RESTRICTED)
+    expect(failures()).toEqual([])
+  })
+
+  it('fails it at once on the trust question, naming it, and types nothing', async () => {
+    const { f, inputIfScreen, failures } = launched(TRUST, 'trust_open')
+    await twice(f)
+    expect(inputIfScreen).not.toHaveBeenCalled()
+    const [failure] = failures()
+    expect(failure?.error).toBe('Its engine stopped on a folder trust question ("Trust this folder?") that nobody here can answer.')
+  })
+
+  it('also when its own check already read the screen as needing a person', async () => {
+    const { f, failures } = launched(TRUST, 'trust_open', { engine: 'codex', projectSettings: 'off' }, { ...waiting, needsPerson: true })
+    await twice(f)
+    expect(failures()[0]?.error).toContain('folder trust question')
+  })
+
+  it('fails, never answers, the restricted screen of a start that is not Team-written', async () => {
+    const { f, inputIfScreen, failures } = launched(RESTRICTED, 'trust_open', { engine: 'codex' })
+    await twice(f)
+    expect(inputIfScreen).not.toHaveBeenCalled()
+    expect(failures()[0]?.error).toBe('Its engine stopped on a folder trust question ("Trust this folder?") that nobody here can answer.')
+  })
+
+  // Security review 2 of #3063: the whole screen in a reason carried what a terminal shows only its own session (a sign-in
+  // link's state, wrapped onto the next line; a device code; an account's email), and a malformed link threw before the
+  // failure was sent. Its second read: option labels are terminal content too ("Use code 123456", a file path, a name), so
+  // only a fixed summary of the kind of screen is told, none of the screen's words.
+  it('fails a Claude Code start held at its sign-in at once, telling only the kind of screen', async () => {
+    const text = [
+      '  Select login method:', '',
+      '  ❯ 1. Claude account with subscription', '    2. Anthropic Console account', '    3. Use person@example.com',
+      '    4. Code ABCD-1234-EFGH', '    5. https://claude.ai/oauth/authorize?client_id=demo&', '',
+      '  https://auth.example/authorize?client_id=demo&', '  state=FAKE_STATE_123456', '  Paste code here: WXYZ-9876', '  https://[invalid',
+    ].join('\n')
+    const { f, failures } = launched(`${text}\n    6. Use code 123456\n    7. Use account Jane Smith\n    8. Read /Users/jane/private/client-contract.txt\n    ${'9'.repeat(1000)}. Quit`, 'sign_in_open', { engine: 'claude' })
+    await twice(f)
+    const [failure] = failures()
+    expect(failure?.error).toBe('Its engine stopped on a sign-in screen that nobody here can answer.')
+  })
+
+  it('still fails it at once on a screen with no options, and on one whose words cannot be read as links', async () => {
+    const { f, failures } = launched('  https://[invalid\n  Waiting for you to sign in', 'sign_in_open', { engine: 'codex' })
+    await twice(f)
+    expect(failures()[0]?.error).toBe('Its engine stopped on a sign-in screen that nobody here can answer.')
+  })
+
+  it.each([
+    ['nothing on screen that waits for a person', '› Ask Codex to do anything\n  gpt-6-astra high · ~/project', null],
+    ['a popup, which is no question', '› /mo\n  /model  choose what model to use', 'popup_open'],
+  ])('leaves it waiting on %s', async (_name, text, hold) => {
+    const { f, inputIfScreen, failures } = launched(text, hold)
+    await f.machine.tick()
+    expect(inputIfScreen).not.toHaveBeenCalled()
+    expect(failures()).toEqual([])
+  })
+
+  it('leaves it waiting while its creation is still preparing, with no agent to read', async () => {
+    const { f, screen, failures } = launched(TRUST, 'trust_open', { engine: 'codex', projectSettings: 'off' },
+      { error: 'START_PENDING', startId: 'start', creationId: 'creation', state: 'pending', detail: 'Preparing.' })
+    await f.machine.tick()
+    expect(screen).not.toHaveBeenCalled()
+    expect(failures()).toEqual([])
+  })
+
+  // Security review 1 of #3063: one read of a screen still drawing, or of a Codex that words its restricted screen otherwise,
+  // failed a start that would have gone on, and two failures in a row suspend its engine on that machine.
+  it('fails it only once two passes in a row read the same waiting screen', async () => {
+    const { f, failures } = launched(TRUST, 'trust_open')
+    await f.machine.tick()
+    expect(failures()).toEqual([])
+    f.advance(); await f.machine.tick()
+    expect(failures()).toHaveLength(1)
+  })
+
+  it('does not fail it while the waiting screen changes between passes', async () => {
+    const { f, screen, failures } = launched(TRUST, 'trust_open')
+    screen.mockResolvedValueOnce({ ok: true, text: `${TRUST}\n  drawing…`, hold: 'trust_open' })
+    await twice(f)
+    expect(failures()).toEqual([])
   })
 })

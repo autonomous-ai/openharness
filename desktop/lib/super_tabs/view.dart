@@ -30,7 +30,6 @@ import 'leaderboard/reader.dart';
 import 'jump_to_latest.dart';
 import 'unread_line.dart';
 import 'roster.dart';
-import 'recording_notice.dart';
 import 'profile_actions.dart';
 import 'live_card.dart';
 import 'personal_lead.dart';
@@ -844,11 +843,10 @@ class _SuperTabViewState extends State<SuperTabView>
   /// Whether [messageId]'s row in [id]'s list is below [position]'s view, by
   /// its place in the list.
   bool _below(String id, String messageId, ScrollPosition position) {
-    final entries = superTabTranscriptEntries(_shownMessages(id));
-    final row = _rowShowing(id, messageId);
-    final index = entries.indexWhere((e) => e.message.id == row);
+    final shown = _shownMessages(id);
+    final index = shown.indexWhere((m) => m.id == messageId);
     return index >= 0 &&
-        _estimate(position, index, entries.length) > position.pixels;
+        _estimate(position, index, shown.length) > position.pixels;
   }
 
   /// Esc: everything loaded in the open conversation is read, line and all.
@@ -1632,23 +1630,23 @@ class _SuperTabViewState extends State<SuperTabView>
       final row = _built[anchor.messageId];
       final top = row != null && row.mounted ? _topInList(row) : null;
       if (top == null) {
-        final entries = superTabTranscriptEntries(_shownMessages(id));
-        final index = entries.indexWhere(
-          (e) => e.message.id == anchor.messageId,
-        );
+        final shown = _shownMessages(id);
+        final index = shown.indexWhere((m) => m.id == anchor.messageId);
         if (index < 0) return;
-        scroll.jumpTo(_estimate(position, index, entries.length));
+        scroll.jumpTo(_estimate(position, index, shown.length));
         continue;
       }
       if ((top - anchor.top).abs() < .5) return;
-      // The list's extent is an estimate until laid out there: only the
-      // start bounds the jump, and the next frame measures the row again.
-      scroll.jumpTo(
-        (position.pixels + top - anchor.top).clamp(
-          position.minScrollExtent,
-          double.infinity,
-        ),
+      // The list's extent is an estimate until laid out there, and the next
+      // frame measures the row again. Never past the end: a jump there only
+      // ends in a bounce back (#3124), and its scroll ending near the top
+      // read the page before again, with no input.
+      final to = (position.pixels + top - anchor.top).clamp(
+        position.minScrollExtent,
+        position.maxScrollExtent,
       );
+      if ((to - position.pixels).abs() < .5) return;
+      scroll.jumpTo(to);
     }
   }
 
@@ -2109,13 +2107,12 @@ class _SuperTabViewState extends State<SuperTabView>
       c.openThread(message.thread!, at: message.id);
       if (!message.inMainStream) return;
     }
-    final shownBy = _rowShowing(id, messageId) ?? messageId;
     setState(() {
       _page = null;
       _showManage = false;
       _showPullRequests = _showTasks = false;
       _back = null;
-      _target = shownBy;
+      _target = messageId;
       _openedAtMessage = id;
       // Stop following the end: the linked message is what to see.
       _scrollRequest++;
@@ -2308,12 +2305,12 @@ class _SuperTabViewState extends State<SuperTabView>
         return _landed(landing!);
       }
       final scroll = _scroll[id];
-      final entries = superTabTranscriptEntries(_shownMessages(id));
-      final index = entries.indexWhere((e) => e.message.id == _target);
+      final shown = _shownMessages(id);
+      final index = shown.indexWhere((m) => m.id == _target);
       if (scroll == null || !scroll.hasClients || index < 0 || attempt > 20) {
         return _landed(landing!);
       }
-      scroll.jumpTo(_estimate(scroll.position, index, entries.length));
+      scroll.jumpTo(_estimate(scroll.position, index, shown.length));
       _revealTarget(id, attempt + 1, arrived: arrived, landing: landing);
     });
     WidgetsBinding.instance.scheduleFrame();
@@ -2376,24 +2373,10 @@ class _SuperTabViewState extends State<SuperTabView>
   static bool _shown(SuperTabMessage m) =>
       !_neverShown.contains(m.source['kind']);
 
-  /// The row of [id]'s list that shows [messageId]: its own, or the notice
-  /// that folds it in. Null while the message is not loaded.
-  String? _rowShowing(String id, String messageId) {
-    final message = _shownMessages(id)
-        .where((m) => m.id == messageId)
-        .firstOrNull;
-    if (message == null) return null;
-    // A step's row is a row of its own: no notice of the task folds it in.
-    if (message.conversationId != id) return message.id;
-    final shown = _ownShown(id);
-    return superTabTranscriptEntries(shown)
-        .lastWhere(
-          (e) => superTabMessageOrder(e.message, message) <= 0,
-          orElse: () => (message: message, interruptions: 0),
-        )
-        .message
-        .id;
-  }
+  /// The row of [id]'s list that shows [messageId], its own. Null while the
+  /// message is not loaded.
+  String? _rowShowing(String id, String messageId) =>
+      _shownMessages(id).any((m) => m.id == messageId) ? messageId : null;
 
   /// The top of [row] within the message list.
   double? _topInList(BuildContext row) {
@@ -2507,10 +2490,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (_find != null && _findIn == id) return _findFocus.requestFocus();
     _closeFind(refocus: false);
     final find = SuperTabChatFind(
-      rows: () => [
-        for (final entry in superTabTranscriptEntries(_shownMessages(id)))
-          if (entry.interruptions == 0) entry.message,
-      ],
+      rows: () => _shownMessages(id),
       hasOlder: () => c.hasOlder(id),
       readOlder: () async {
         final loaded = c.messages(id).length;
@@ -2567,6 +2547,10 @@ class _SuperTabViewState extends State<SuperTabView>
     });
   }
 
+  /// The agents of [group] waiting on the reader: one with a question in its
+  /// terminal, or one the task's work waits on for an answer from them
+  /// ([_asksReader]). A task blocked on CI, a review or another person is not
+  /// here; its status line already says why (Leo, #3017).
   List<SuperTabAgent> _needsHuman(SuperTabConversation group) =>
       c.snapshot?.agents
           .where(
@@ -2574,11 +2558,101 @@ class _SuperTabViewState extends State<SuperTabView>
                 group.agentIds.contains(agent.id) &&
                 (widget.app?.questionFor(agent.machineId, agent.harnessId) !=
                         null ||
-                    (superTabWorkWaits(group.assignment?['status']) &&
-                        group.assignment?['agentId'] == agent.id)),
+                    _asksReader(group, agent)),
           )
           .toList() ??
       const [];
+
+  /// The open decisions of the reader that [group]'s work asked.
+  List<SuperTabDecision> _decisionsOf(SuperTabConversation group) => [
+    for (final d in SuperTabDecisions.of(c).open)
+      if (d.conversationId == group.id) d,
+  ];
+
+  /// Whether [group]'s work, done by [agent], waits on the reader's answer: a
+  /// decision asked of them, or `needs_human` asked of them by name, else of
+  /// whom the server says it waits on, else (a backend that names nobody)
+  /// of whoever reads. `blocked` is never a question.
+  bool _asksReader(SuperTabConversation group, SuperTabAgent agent) {
+    final work = group.assignment;
+    if (work == null || work['agentId'] != agent.id) return false;
+    if (_decisionsOf(group).isNotEmpty) return true;
+    if (work['status'] != 'needs_human') return false;
+    final liveness = group.liveness;
+    final waited = liveness != null && liveness['why'] == 'person';
+    final Object? person =
+        work['askedOf'] ?? (waited ? liveness['personId'] : null);
+    return person == null || person == c.accountId;
+  }
+
+  /// The bar's click: the question where it is, so it visibly does something
+  /// (Leo, #3017). A decision opens where decisions are answered; a question
+  /// in the chat comes into view, lit; a prompt in the terminal opens it, or
+  /// says it is already open.
+  void _openQuestion(SuperTabConversation group, SuperTabAgent agent) {
+    final asks = widget.app?.questionFor(agent.machineId, agent.harnessId);
+    if (_decisionsOf(group).isNotEmpty) {
+      _openPage(SwarmPage.decisions);
+      return;
+    }
+    final message = asks != null ? null : _askedIn(group, agent);
+    if (message != null) {
+      _showMessage(group.id, message);
+      return;
+    }
+    if (_terminalsVisible) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text(
+            "${_agentName(agent)}'s question is in its terminal, open beside this chat.",
+          ),
+        ),
+      );
+      return;
+    }
+    _openAgent(agent);
+  }
+
+  /// The message where [agent] asked [group]'s question: the one that says
+  /// what the assignment's result says, else the agent's latest in the chat
+  /// (a line of the task itself is never it).
+  SuperTabMessage? _askedIn(SuperTabConversation group, SuperTabAgent agent) {
+    final said = [
+      for (final m in _ownShown(group.id))
+        if (m.author['kind'] == 'agent' &&
+            m.author['id'] == agent.id &&
+            !m.isTaskLine)
+          m,
+    ];
+    final ask = (group.assignment?['result'] as String?)?.trim();
+    if (ask != null && ask.isNotEmpty) {
+      for (final m in said.reversed) {
+        if (m.text.contains(ask)) return m;
+      }
+    }
+    return said.lastOrNull;
+  }
+
+  /// Brings [message] of chat [id] into view, lit, from the chat's own view.
+  void _showMessage(String id, SuperTabMessage message) {
+    widget.onCloseTerminal?.call();
+    setState(() {
+      _showPullRequests = _showTasks = false;
+      _target = message.id;
+      // Stop following the end: the question is what to see.
+      _scrollRequest++;
+      _jumpingToEnd = false;
+      _follow(id, false);
+    });
+    _revealTarget(
+      id,
+      0,
+      arrived: (row) {
+        unawaited(Scrollable.ensureVisible(row, alignment: .3));
+        _light(message.id);
+      },
+    );
+  }
 
   /// What the card over [message]'s name or avatar shows, worked out as it
   /// opens (Huy, 11-04): a person's status and zone; an agent's engine and
@@ -3119,27 +3193,49 @@ class _SuperTabViewState extends State<SuperTabView>
     final project = c.snapshot!.projectById(group.projectId)!;
     final selected = task || (_showTasks && !_terminalsVisible);
     final count = _tasksNeedingYou(project);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
+    return _withCountBadge(
+      fingerTarget(
+        enabled: _phone,
+        AppIconButton(
+          key: const ValueKey('super-tasks'),
+          icon: AppIcons.squareKanban,
+          size: AppIcons.inlineSize,
+          tooltip: 'Tasks',
+          selected: selected,
+          color: selected ? DesktopChrome.foreground : DesktopChrome.muted,
+          onPressed: () => _openTasks(group),
+        ),
+      ),
+      count,
+      key: const ValueKey('super-tasks-badge'),
+      tooltip: count == 1 ? '1 task needs you' : '$count tasks need you',
+      onTap: () => _openTasks(group),
+    );
+  }
+
+  /// A header icon's count, the one badge style (Dee, #3017): the red number
+  /// on the icon's top-right corner, like a notification badge, none at 0.
+  Widget _withCountBadge(
+    Widget icon,
+    int count, {
+    required Key key,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    if (count <= 0) return icon;
+    return Stack(
+      clipBehavior: Clip.none,
       children: [
-        fingerTarget(
-          enabled: _phone,
-          AppIconButton(
-            key: const ValueKey('super-tasks'),
-            icon: AppIcons.squareKanban,
-            size: AppIcons.inlineSize,
-            tooltip: 'Tasks',
-            selected: selected,
-            color: selected ? DesktopChrome.foreground : DesktopChrome.muted,
-            onPressed: () => _openTasks(group),
+        icon,
+        Positioned(
+          top: -2,
+          right: -2,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: SuperTabCountBadge(count, key: key, tooltip: tooltip),
           ),
         ),
-        if (count > 0)
-          SuperTabCountBadge(
-            count,
-            key: const ValueKey('super-tasks-badge'),
-            tooltip: count == 1 ? '1 task needs you' : '$count tasks need you',
-          ),
       ],
     );
   }
@@ -3893,6 +3989,14 @@ class _SuperTabViewState extends State<SuperTabView>
             username: name,
       },
       references: _references,
+      onOpenInstructions: (saved) => unawaited(
+        showSuperTabInstructions(
+          context,
+          c,
+          saved.projectId,
+          revision: saved.revision,
+        ),
+      ),
       onOpenGroup: (id) {
         setState(() => _showPullRequests = _showTasks = false);
         c.select(id);
@@ -4081,20 +4185,15 @@ class _SuperTabViewState extends State<SuperTabView>
   /// Where [id]'s list divides: the first row drawn when it opened. Older
   /// pages go above it and newer messages below, so neither moves the rows
   /// already there.
-  int _splitAt(
-    String id,
-    List<({SuperTabMessage message, int interruptions})> entries,
-  ) {
-    if (entries.isEmpty) return 0;
+  int _splitAt(String id, List<SuperTabMessage> messages) {
+    if (messages.isEmpty) return 0;
     final split = _split[id];
     final at = split == null
         ? -1
-        : entries.indexWhere(
-            (e) => superTabMessageOrder(e.message, split) >= 0,
-          );
+        : messages.indexWhere((m) => superTabMessageOrder(m, split) >= 0);
     if (at >= 0) return at;
-    _split[id] = entries.first.message;
-    c.keepFrom(id, entries.first.message);
+    _split[id] = messages.first;
+    c.keepFrom(id, messages.first);
     return 0;
   }
 
@@ -4314,18 +4413,14 @@ class _SuperTabViewState extends State<SuperTabView>
         if (m.conversationId == c.selectedId) m,
     ];
     final ownWithOutgoing = [...ownMessages, ...outgoing.map(_outgoingMessage)];
-    final entries = superTabTranscriptEntries(messages);
     final byId = {for (final message in messages) message.id: message};
     final rowIndex = {
-      for (final (index, entry) in entries.indexed)
-        _rowKey(c.messageIdentity(entry.message.id)): index,
+      for (final (index, message) in messages.indexed)
+        _rowKey(c.messageIdentity(message.id)): index,
     };
     // A row stays the same row as pages arrive above it, state and all.
     int? rowOf(Key key) => key is ValueKey<String> ? rowIndex[key.value] : null;
-    final split = _splitAt(
-      c.selectedId,
-      superTabTranscriptEntries(ownMessages),
-    );
+    final split = _splitAt(c.selectedId, ownMessages);
     // Rows on their way group by the same rule, so a quick line keeps the
     // shape it will have once confirmed; one Not sent keeps its name and
     // actions.
@@ -4340,12 +4435,8 @@ class _SuperTabViewState extends State<SuperTabView>
     // Find matches the rows as they are drawn now.
     final search = _findIn == c.selectedId ? (_find?..refresh()) : null;
     Widget row(int index) {
-      final entry = entries[index];
-      final message = entry.message;
-      final agent = message.fromAgent
-          ? c.snapshot?.agent(message.authorId)
-          : null;
-      final previous = index > 0 ? entries[index - 1].message : null;
+      final message = messages[index];
+      final previous = index > 0 ? messages[index - 1] : null;
       // Grouping is decided on the task's own rows; a step's row drawn between
       // two of them still ends the group, or the next would read as its agent's.
       final joined =
@@ -4381,15 +4472,6 @@ class _SuperTabViewState extends State<SuperTabView>
                           pendingById[message.id]!,
                           byId,
                           grouped: joined,
-                        )
-                      : entry.interruptions > 0
-                      ? SuperTabRecordingNotice(
-                          key: ValueKey('super-message-${message.id}'),
-                          author: _shownAuthor(c, message),
-                          count: entry.interruptions,
-                          onOpenTerminal: agent == null
-                              ? null
-                              : () => _openAgent(agent),
                         )
                       : _message(
                           message,
@@ -4668,7 +4750,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                           // Messages on their way end the list.
                                           (context, index) =>
                                               row(split + index),
-                                          childCount: entries.length - split,
+                                          childCount: messages.length - split,
                                           findChildIndexCallback: (key) =>
                                               switch (rowOf(key)) {
                                                 final i? when i >= split =>
@@ -4818,29 +4900,36 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ),
         if (group != null)
-          for (final agent in _needsHuman(group))
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
-              child: ListTile(
-                key: ValueKey('super-needs-human-${agent.id}'),
-                dense: true,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                tileColor: grid.AppPalette.warn.withValues(alpha: .08),
-                leading: Icon(
-                  AppIcons.messageCircleQuestionMark,
-                  color: grid.AppPalette.warn,
-                  size: 18,
-                ),
-                title: Text(
-                  '${_agentName(agent)} needs you',
-                  style: DesktopChrome.control(medium: true),
-                ),
-                trailing: const Icon(AppIcons.arrowRight, size: 16),
-                onTap: () => _openAgent(agent),
-              ),
+          ListenableBuilder(
+            listenable: SuperTabDecisions.of(c),
+            builder: (context, _) => Column(
+              children: [
+                for (final agent in _needsHuman(group))
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
+                    child: ListTile(
+                      key: ValueKey('super-needs-human-${agent.id}'),
+                      dense: true,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      tileColor: grid.AppPalette.warn.withValues(alpha: .08),
+                      leading: Icon(
+                        AppIcons.messageCircleQuestionMark,
+                        color: grid.AppPalette.warn,
+                        size: 18,
+                      ),
+                      title: Text(
+                        '${_agentName(agent)} needs you',
+                        style: DesktopChrome.control(medium: true),
+                      ),
+                      trailing: const Icon(AppIcons.arrowRight, size: 16),
+                      onTap: () => _openQuestion(group, agent),
+                    ),
+                  ),
+              ],
             ),
+          ),
         ListenableBuilder(
           listenable: completing,
           builder: (context, _) {
@@ -5506,7 +5595,7 @@ class _SuperTabViewState extends State<SuperTabView>
                           child: SizedBox(
                             width: 240,
                             child: Material(
-                              color: grid.AppPalette.swarmWelcome,
+                              color: grid.AppPalette.swarmSidebar,
                               elevation: 8,
                               child: _sidebar(),
                             ),
