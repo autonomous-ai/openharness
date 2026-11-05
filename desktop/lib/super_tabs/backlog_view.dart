@@ -12,6 +12,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import '../widgets/swarm_search_field.dart';
 import 'backlog.dart';
+import 'chip.dart';
 import 'controller.dart';
 import 'machine_status.dart';
 import 'model.dart';
@@ -232,6 +233,16 @@ class _SuperTabBacklogViewState extends State<SuperTabBacklogView>
       compare: (a, b) =>
           (b.shippedAt ?? DateTime(0)).compareTo(a.shippedAt ?? DateTime(0)),
     );
+    // P0 first in every group (task #3117); a stable sort keeps the order
+    // above within a priority.
+    for (final tasks in byGroup.values) {
+      mergeSort(
+        tasks,
+        compare: (a, b) =>
+            superTabTaskPriority(a).index
+                .compareTo(superTabTaskPriority(b).index),
+      );
+    }
     final entries = <Object>[];
     for (final MapEntry(key: group, value: tasks) in byGroup.entries) {
       if (tasks.isEmpty) continue;
@@ -579,7 +590,7 @@ class _HeadingRow extends StatelessWidget {
                 style: _label(color: DesktopChrome.foreground),
               ),
               const SizedBox(width: grid.AppDesktop.controlGap),
-              _Chip(text: '${heading.count}'),
+              SuperTabChip(text: '${heading.count}'),
               const SizedBox(width: grid.AppDesktop.controlGap),
               Expanded(
                 child: Text(
@@ -597,64 +608,6 @@ class _HeadingRow extends StatelessWidget {
     );
   }
 }
-
-/// A small rounded label: a count, a project, a badge or a pull request.
-class _Chip extends StatelessWidget {
-  const _Chip({
-    required this.text,
-    this.color,
-    this.fill,
-    this.outlined = false,
-    this.leading,
-    this.bold = false,
-  });
-  final String text;
-  final Color? color, fill;
-  final bool outlined, bold;
-  final Widget? leading;
-
-  @override
-  Widget build(BuildContext context) {
-    final ink = color ?? DesktopChrome.muted;
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: grid.AppDesktop.menuInset,
-        vertical: grid.AppDesktop.listRowGap,
-      ),
-      decoration: BoxDecoration(
-        color: fill ?? (outlined ? null : grid.AppSurface.wellFill),
-        border: outlined ? Border.all(color: grid.AppPalette.divider) : null,
-        borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (leading case final leading?) ...[
-            leading,
-            const SizedBox(width: grid.AppDesktop.badgeInset),
-          ],
-          Text(
-            text,
-            style: DesktopChrome.metadata(color: ink).copyWith(
-              fontWeight: bold ? FontWeight.w600 : null,
-              letterSpacing: bold ? .6 : null,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// A tinted chip: [color] ink on a wash of it.
-_Chip _tinted(String text, Color color, {Widget? leading, bool bold = false}) =>
-    _Chip(
-      text: text,
-      color: color,
-      fill: color.withValues(alpha: .14),
-      leading: leading,
-      bold: bold,
-    );
 
 /// One task as a card row (Scholes's mockup): its group's mark; its number,
 /// priority and title; then agent, machine, state and project; at the right
@@ -708,7 +661,7 @@ class _Row extends StatelessWidget {
     };
     return KeyedSubtree(
       key: ValueKey('super-backlog-pr-${task.id}'),
-      child: _tinted(
+      child: superTabTintedChip(
         ['PR $number', if (words.isNotEmpty) words].join(' · '),
         color,
         leading: SvgPicture.asset(
@@ -742,7 +695,7 @@ class _Row extends StatelessWidget {
       if (status != null) status.reason,
     ].join(' · ');
     final project = snapshot.projectById(task.projectId)?.name;
-    final (:priority, :title) = superTabTitlePriority(task.title);
+    final title = superTabTitlePriority(task.title).title;
     final url = _pullRequest(task);
     final approved = url != null && facts?.of(url)?.review == 'APPROVED';
     final pullRequest = _pullRequestChip();
@@ -804,14 +757,7 @@ class _Row extends StatelessWidget {
                         children: [
                           if (task.number case final number?)
                             Text('#$number', style: muted),
-                          if (priority != null)
-                            _tinted(
-                              priority.badge,
-                              priority == SuperTabTaskPriority.urgent
-                                  ? grid.AppPalette.usageCritical
-                                  : grid.AppPalette.warn,
-                              bold: true,
-                            ),
+                          SuperTabPriorityBadge(superTabTaskPriority(task)),
                           Text(
                             title,
                             style: DesktopChrome.control(medium: true),
@@ -826,9 +772,12 @@ class _Row extends StatelessWidget {
                         children: [
                           Text(details, style: muted),
                           if (project != null)
-                            _Chip(text: project, outlined: true),
+                            SuperTabChip(text: project, outlined: true),
                           if (approved)
-                            _tinted('Approved', grid.AppPalette.online),
+                            superTabTintedChip(
+                              'Approved',
+                              grid.AppPalette.online,
+                            ),
                         ],
                       ),
                     ],

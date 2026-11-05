@@ -9,6 +9,8 @@ import 'package:harness/bootstrap/environment_provisioner.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/logging/app_log.dart';
+import 'package:harness/measurement/speed_marks.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
@@ -245,6 +247,33 @@ void main() {
     expect(app.lastError, contains('no daemon'));
   });
 
+  test(
+    'every startup step also reaches the speed marks, since launch',
+    () async {
+      final before = appLog;
+      final seen = <String>[];
+      appLog = _Speed(seen);
+      addTearDown(() => appLog = before);
+      speedMarks.restart();
+
+      await make(_Cli([() async => _in]), _Environment()).bootstrap();
+
+      for (final step in [
+        'signed-in_check',
+        'tools',
+        'saved_tabs',
+        'daemon',
+        'window',
+      ]) {
+        expect(
+          seen,
+          contains(matches('^launch step=$step ms=\\d+\$')),
+          reason: step,
+        );
+      }
+    },
+  );
+
   test('keeps a stopwatch of the startup steps', () async {
     final app = make(_Cli([() async => _in]), _Environment());
     await app.bootstrap();
@@ -270,5 +299,20 @@ extension on List<_App> {
     final out = [...this];
     clear();
     return out;
+  }
+}
+
+class _Speed implements AppLog {
+  _Speed(this.lines);
+  final List<String> lines;
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) {
+    if (category == 'speed') lines.add(message);
   }
 }

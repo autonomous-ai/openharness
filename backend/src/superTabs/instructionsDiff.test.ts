@@ -1,77 +1,162 @@
 import { describe, expect, it } from 'vitest'
-import { instructionsChange, CHANGE_ITEMS, ITEM_CHARS } from './instructionsDiff.js'
+import { attributedRules, droppedRules, personKey, repeatedRules } from './instructionsDiff.js'
 
-/** The words every line of a change starts with: none can open a Markdown block (a heading, list, quote, code or table). */
-const LINE_START = /^(?:In .+:|Added: |Removed: |Added section: |Removed section: |and \d+ more changes?\.$|$)/
+// Task #3151 (Ken, 11-05, from lamp): a PM's tidy from revision 70 to 71 dropped Leo's rule and the "(0xken15, 4 Nov)" of a
+// rule it kept, and nothing checked the save.
+describe('attributedRules', () => {
+  const people = (text: string) => attributedRules(text).map(r => r.people)
 
-describe('instructionsChange', () => {
-  // Ken, 11-05 (#3021): instructions wrap at about 120 characters, so one bullet spans several lines; a one-word edit rewraps
-  // it. Compared by line, it showed fragments, none of them the bullet's start. Compared by item, it shows the whole rule.
-  it('shows a rewrapped bullet\'s whole old and new words, under the section it sits in', () => {
-    const before = '# Project instructions\n\n## Routing\n\n### Models\n\n- No agent runs below high effort,\n  and none on Haiku.\n- Reviewers run on Opus.'
-    const after = '# Project instructions\n\n## Routing\n\n### Models\n\n- No agent runs below high\n  effort, and none on Claude Haiku.\n- Reviewers run on Opus.'
-    expect(instructionsChange(before, after)).toBe('In Routing › Models:\nRemoved: No agent runs below high effort, and none on Haiku.\n'
-      + 'Added: No agent runs below high effort, and none on Claude Haiku.')
+  it('finds a person and a date in parentheses, however the date is written', () => {
+    expect(people('- Reviews run on Opus (Ken, 2026-11-02).')).toEqual([['Ken']])
+    expect(people('- Phone tasks run on Tony\'s Mac (0xken15, 4 Nov).')).toEqual([['0xken15']])
+    expect(people('- Batches every 30 minutes (Scholes, 11-04).')).toEqual([['Scholes']])
+    expect(people('- Ship on Fridays (Diego, Nov 4).')).toEqual([['Diego']])
+    expect(people('- Ship on Fridays (Diego, 4/11/2026).')).toEqual([['Diego']])
+    expect(people('- Never scan a collection (Ken, 2026-11-04: ad hoc reads doubled Atlas CPU).')).toEqual([['Ken']])
   })
 
-  it('shows nothing for a rewrap or spacing alone, and says so', () => {
-    const before = '## Workflow\n\nThe PM opens each task with its goal and\n"Done when".\n\n- One request is one task.'
-    expect(instructionsChange(before, '## Workflow\n\n\nThe PM opens each task\nwith its goal and "Done when".\n- One request is one task.\n'))
-      .toBe('Only spacing and line breaks changed.')
+  it('reads several people, an honorific and a heading', () => {
+    expect(people('- Two reviews (Ken and Dee, 2026-11-03).')).toEqual([['Ken', 'Dee']])
+    expect(people('- Two reviews (Ken, Dee, 2026-11-03).')).toEqual([['Ken', 'Dee']])
+    expect(people('- Two reviews (Ken, 11-02; Dee, 11-03).')).toEqual([['Ken', 'Dee']])
+    expect(people('## Talking in the project chat (anh Dee, 2026-11-04)')).toEqual([['anh Dee']])
+    expect(['anh Dee', '@Dee', "Dee's daily check", 'DEE'].map(personKey)).toEqual(['dee', 'dee', 'dee', 'dee'])
   })
 
-  it('joins a paragraph\'s wrapped lines into one item', () => {
-    expect(instructionsChange('Intro.\n\nEvery agent works by these\ninstructions.', 'Intro.\n\nEvery agent works by these\ninstructions, always.'))
-      .toBe('Removed: Every agent works by these instructions.\nAdded: Every agent works by these instructions, always.')
+  it('takes a bullet with one attribution as one rule, and splits one with several at each', () => {
+    expect(attributedRules('- Decides, doesn\'t ask (Ken, 2026-11-04): it decides and reports the result.').map(r => r.text))
+      .toEqual(['Decides, doesn\'t ask (Ken, 2026-11-04): it decides and reports the result.'])
+    expect(attributedRules('- Opus builds (Ken, 11-02). Sonnet reviews (Dee, 11-03). Tests run first.').map(r => [r.text, r.people]))
+      .toEqual([['Opus builds (Ken, 11-02).', ['Ken']], ['Sonnet reviews (Dee, 11-03). Tests run first.', ['Dee']]])
   })
 
-  it('shows 12 items of a long change, then how many more changes there are', () => {
-    const rules = Array.from({ length: 20 }, (_, i) => `- Rule ${i + 1}.`)
-    const change = (n: number) => instructionsChange('## Rules\n\n- Rule 0.', ['## Rules', '', '- Rule 0.', ...rules.slice(0, n)].join('\n'))
-    expect(CHANGE_ITEMS).toBe(12)
-    expect(change(20)).toBe(['In Rules:', ...rules.slice(0, 12).map(r => `Added: ${r.slice(2)}`), '', 'and 8 more changes.'].join('\n'))
-    expect(change(13).endsWith('\n\nand 1 more change.')).toBe(true)
-    expect(change(12)).not.toContain('more change')
+  it('ignores parentheses with no person and date', () => {
+    expect(attributedRules([
+      '- Nothing stored (design, Identity).',
+      '- A task takes 1% (measured 2026-11-02 on the Mac Studio).',
+      '- Optimizations ship on (Ken).',
+      '- Words (Ken\'s review; River chose words).',
+    ].join('\n'))).toEqual([])
+  })
+})
+
+describe('droppedRules', () => {
+  const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
+  const leo = 'A bug that reaches stable: the previous build is promoted back within the hour and the fix ships the same day (Leo, 2026-11-04).'
+  const tony = 'Every phone app task runs on Tony\'s Mac first, its Engineer and its Tester both (0xken15, 4 Nov).'
+  const quiet = 'No releases between 18:00 and 09:00 Vietnam time (Ken, 2026-11-02).'
+  const why = (before: string, after: string) => droppedRules(before, after).map(d => [d.people, d.why])
+
+  it('lists a removed rule with its person', () => {
+    expect(droppedRules(doc(leo, tony), doc(tony))).toEqual([expect.objectContaining({ text: leo, people: ['Leo'], why: 'removed' })])
   })
 
-  it('drops list markers, so a numbered step inserted shows alone and the steps renumbered after it do not', () => {
-    expect(instructionsChange('## Workflow\n\n1. Plan.\n2. Build.\n3. Ship.', '## Workflow\n\n1. Plan.\n2. Test first.\n3. Build.\n4. Ship.'))
-      .toBe('In Workflow:\nAdded: Test first.')
+  it('lists a rule kept without who gave it', () => {
+    expect(why(doc(leo, tony), doc(leo, 'Every phone app task runs on Tony\'s Mac first, its Engineer and its Tester both.')))
+      .toEqual([[['0xken15'], 'unattributed']])
   })
 
-  it('names each change\'s own section, a section added too', () => {
-    const before = '# Doc\n\n## Roles\n\n### PM\n\n- Talks with people.\n\n## Routing\n\n- Opus builds.'
-    const after = '# Doc\n\n## Roles\n\n### PM\n\n- Talks with people.\n- Merges work.\n\n## Routing\n\n- Opus builds.\n\n### Testers\n\n- A Mac for Desktop.'
-    expect(instructionsChange(before, after)).toBe('In Roles › PM:\nAdded: Merges work.\n\nIn Routing:\nAdded section: Testers\n\n'
-      + 'In Routing › Testers:\nAdded: A Mac for Desktop.')
+  it('accepts two rules merged into one that keeps both attributions', () => {
+    const merged = 'No releases between 18:00 and 09:00 Vietnam time, and every phone app task runs on Tony\'s Mac first, its Engineer and its '
+      + 'Tester both (Ken, 2026-11-02; 0xken15, 4 Nov).'
+    expect(droppedRules(doc(leo, tony, quiet), doc(leo, merged))).toEqual([])
+    expect(droppedRules(doc(leo, tony, quiet), doc(leo, `${quiet.replace('.', ',')} and ${tony[0]!.toLowerCase()}${tony.slice(1)}`))).toEqual([])
   })
 
-  it('keeps a saved item\'s Markdown from opening a block in the chat', () => {
-    const change = instructionsChange('A.', 'A.\n\n```\ncode\n```\n\n> quote\n\n| a | b |\n|---|---|\n\n---\n\n<details>')
-    for (const line of change.split('\n')) expect(line).toMatch(LINE_START)
+  it('accepts rewrapping, renumbering, moving to another section and a light reword by the same person', () => {
+    const moved = ['# Project instructions', '', '## Releases', '', `1. ${leo}`, '', '## Rules', '', `- ${tony}`].join('\n')
+    expect(droppedRules(doc(leo, tony), moved)).toEqual([])
+    expect(droppedRules(doc(leo), doc(leo.replace('the fix ships', 'the fix\n  ships')))).toEqual([])
+    // Case, punctuation, plurals, stop words and the attribution's format are no change.
+    expect(droppedRules(doc(tony), doc('every phone-app task runs on Tony\'s Mac first; its Engineers and the Testers both (0xken15, 2026-11-04)'))).toEqual([])
   })
 
-  it('cuts a very long item, never the count', () => {
-    const long = 'x'.repeat(ITEM_CHARS + 50)
-    expect(instructionsChange('A.', `A.\n\n${long}`)).toBe(`Added: ${'x'.repeat(ITEM_CHARS - 1)}…`)
+  // Review of #3112 (Heron21): words compared as a set let a rule lose one word in ten, and negations and numbers be moved.
+  it('refuses any change of a rule\'s words, negations, numbers or their order', () => {
+    const changed = (rule: string, to: string) => why(doc(rule), doc(to))
+    expect(changed(leo, leo.replace('within the hour', 'within the week'))).toEqual([[['Leo'], 'changed']])
+    const two = 'Every change gets two reviewers before merge (Ken, 2026-11-03).'
+    expect(changed(two, two.replace('two', 'one'))).toEqual([[['Ken'], 'changed']])
+    expect(changed(two, two.replace('before', 'after'))).toEqual([[['Ken'], 'changed']])
+    expect(changed(quiet, quiet.replace('18:00 and 09:00', '09:00 and 18:00'))).toEqual([[['Ken'], 'changed']])
+    const merges = 'The PM merges on review. It does not release without a test (Ken, 2026-11-03).'
+    expect(changed(merges, 'The PM does not merge on review. It releases without a test (Ken, 2026-11-03).')).toEqual([[['Ken'], 'changed']])
+    // A rewording that keeps the meaning is still a change of words: refused, so its person is asked.
+    const read = 'It gives its verdict once it has read the code (Ken, 2026-11-04).'
+    expect(changed(read, 'It gives its verdict after reading the code (Ken, 2026-11-04).')).toEqual([[['Ken'], 'changed']])
   })
 
-  it('says when the earlier revision could not be read, rather than showing no change', () => {
-    expect(instructionsChange(null, 'Anything.')).toBe('The earlier revision could not be read, so the change is not shown.')
+  it('takes a merge only when every word in it comes from the rules it names', () => {
+    const merged = `${quiet.replace(' (Ken, 2026-11-02).', '')}, unless the PM judges it urgent, and ${tony[0]!.toLowerCase()}${tony.slice(1).replace(' (0xken15, 4 Nov).', '')} (Ken, 2026-11-02; 0xken15, 4 Nov).`
+    expect(why(doc(tony, quiet), doc(merged)).map(([, w]) => w)).toEqual(['changed', 'changed'])
   })
 
-  it('shows a rewrite too big to compare item by item as its real removed and added items, quickly', () => {
-    const before = Array.from({ length: 2000 }, (_, i) => `- Old ${i}`).join('\n')
-    const after = Array.from({ length: 2000 }, (_, i) => `- New ${i}`).join('\n')
-    const started = performance.now()
-    const change = instructionsChange(before, after)
-    expect(performance.now() - started).toBeLessThan(500)
-    expect(change).toBe([...Array.from({ length: 12 }, (_, i) => `Removed: Old ${i}`), '', 'and 3988 more changes.'].join('\n'))
+  it('lists a rule whose meaning may have changed: a negation, a number or a new condition', () => {
+    expect(why(doc(quiet), doc('No releases between 20:00 and 09:00 Vietnam time (Ken, 2026-11-02).'))).toEqual([[['Ken'], 'changed']])
+    expect(why(doc(tony), doc('Every phone app task never runs on Tony\'s Mac first, its Engineer and its Tester both (0xken15, 4 Nov).')))
+      .toEqual([[['0xken15'], 'changed']])
+    expect(why(doc(leo), doc('A bug that reaches stable: the previous build is promoted back within the hour and the fix ships the same day, '
+      + 'unless the PM judges it impossible (Leo, 2026-11-04).'))).toEqual([[['Leo'], 'changed']])
   })
 
-  it('compares a large document\'s small change item by item', () => {
-    const items = Array.from({ length: 2000 }, (_, i) => `- Item ${i}`)
-    const after = [...items.slice(0, 500), '- Inserted', ...items.slice(500, 1500), ...items.slice(1501)]
-    expect(instructionsChange(items.join('\n'), after.join('\n'))).toBe('Added: Inserted\nRemoved: Item 1500')
+  it('compares people by who they are, when told', () => {
+    const same = (a: string, b: string) => [a, b].every(n => ['ken', '0xken15'].includes(n.toLowerCase()))
+    expect(droppedRules(doc(tony), doc(tony.replace('0xken15', 'Ken')), name => same(name, 'ken') ? 'ken' : name)).toEqual([])
+    expect(why(doc(tony), doc(tony.replace('0xken15', 'Dee')))).toEqual([[['0xken15'], 'unattributed']])
+  })
+})
+
+// Task #3283 (Leo, 11-05, from lamp): Faye saved a rule the document already had as if it were new, which hid that it had
+// skipped it. A repeat is the same words in the same order, whatever its case, punctuation, list marker or attribution.
+describe('repeatedRules', () => {
+  const rule = 'Every phone app task runs on Tony\'s Mac first, its Engineer and its Tester both (owner, 4 Nov).'
+  const doc = (...lines: string[]) => ['# Project instructions', '', '## Rules', '', ...lines.map(l => `- ${l}`)].join('\n')
+  const before = doc(rule, 'No releases between 18:00 and 09:00 Vietnam time (owner, 2026-11-02).')
+  const repeats = (...added: string[]) => repeatedRules(before, [before, ...added.map(l => `- ${l}`)].join('\n'))
+
+  it('finds a line added word for word, and quotes the existing line', () => {
+    expect(repeats(rule)).toEqual([{ added: rule, existing: rule }])
+  })
+
+  it('finds it through case, punctuation, a new attribution, plurals and filler words', () => {
+    const reworded = 'every phone-app task runs on Tony\'s Mac first: its engineer and its tester both! (Faye, 11-05)'
+    expect(repeats(reworded)).toEqual([{ added: reworded, existing: rule }])
+    expect(repeats('Every phone app tasks run on Tony\'s Mac first, the Engineer and the Tester both.')).toHaveLength(1)
+  })
+
+  it('finds a rewrapped or renumbered copy', () => {
+    const wrapped = before + '\n1. Every phone app task runs on\n   Tony\'s Mac first, its Engineer and\n   its Tester both.'
+    expect(repeatedRules(before, wrapped)).toHaveLength(1)
+  })
+
+  it('does not find a rule changed in substance', () => {
+    expect(repeats('Every phone app task runs on Tony\'s Mac first, its Engineer but not its Tester.')).toEqual([])
+    expect(repeats('No releases between 18:00 and 10:00 Vietnam time (owner, 2026-11-02).')).toEqual([])
+    expect(repeats('Releases between 18:00 and 09:00 Vietnam time are fine (owner, 2026-11-02).')).toEqual([])
+    expect(repeats('Never run a phone app task on Tony\'s Mac first, its Engineer and its Tester both.')).toEqual([])
+    expect(repeats('Every phone app task runs on Tony\'s Mac first, its Engineer and its Tester both, unless urgent.')).toEqual([])
+  })
+
+  it('does not treat unchanged, moved, reworded-in-place or removed lines as repeats', () => {
+    expect(repeatedRules(before, before)).toEqual([])
+    const [first, second] = before.split('\n').slice(4)
+    expect(repeatedRules(before, [...before.split('\n').slice(0, 4), second, first].join('\n'))).toEqual([])
+    // Rewording a line in place leaves one copy; so does replacing a line with the same words under a new attribution.
+    expect(repeatedRules(before, before.replace('(owner, 4 Nov)', '(owner, 5 Nov)'))).toEqual([])
+    expect(repeatedRules(before, before.replace('Tony\'s Mac first', 'TONY\'S MAC FIRST'))).toEqual([])
+    expect(repeatedRules(before, doc('every phone app task runs on tony\'s mac first, its engineer and its tester both (Faye, 11-05).'))).toEqual([])
+  })
+
+  it('does not hold short lines, headings, or a plain line repeated under another section', () => {
+    const base = '# Project\n\n## Engineer\n\n- Pushes its branch as it goes and opens a draft pull request.\n- Tests pass.\n'
+    expect(repeatedRules(base, base + '- Tests pass.\n\n## Engineer notes\n\n## Engineer\n')).toEqual([])
+    expect(repeatedRules(base, base + '\n## Reviewer\n\n- Pushes its branch as it goes and opens a draft pull request.\n')).toEqual([])
+    expect(repeatedRules(base, base + '- Pushes its branch as it goes and opens a draft pull request.\n')).toHaveLength(1)
+  })
+
+  it('finds an attributed rule repeated in another section', () => {
+    const base = '# Project\n\n## PM\n\n- Decides, never asks the owner to choose (Ken, 2026-11-04).\n'
+    const added = '- Decides, never asks the owner to choose (Faye, 11-05).'
+    expect(repeatedRules(base, `${base}\n## Reviewer\n\n${added}\n`)).toEqual([{ added: added.slice(2), existing: 'Decides, never asks the owner to choose (Ken, 2026-11-04).' }])
   })
 })

@@ -68,6 +68,23 @@ export function openRestrictedKeys(capture: string): string[] | null {
 }
 const RESTRICTED_SENTENCE = 'Config, hooks, and exec policies from untrusted folders stay disabled.'
 
+/**
+ * The key that goes past Codex's review of hooks it has not seen, or null unless the capture is exactly that screen. Only for a
+ * Swarm agent's own pane, which nobody sits at (superTabs/startScreen.ts): another program's new hook stopped every such start on
+ * a computer that has one (Orca's, on DESKTOP-0TFH0OJ, 2026-11-04). Harness's own hooks are already recorded as reviewed
+ * (kit/hookReview.ts). It is Esc, which the footer says skips, never a row: "Trust all" is a person's to press, and skipping
+ * records nothing, so the same question waits for them in the next pane they open.
+ */
+export function hooksReviewSkipKeys(capture: string): string[] | null {
+  const lines = stripAnsi(capture).replace(/ /g, ' ').split('\n').map(line => line.trim()).filter(Boolean)
+  if (lines.filter(line => line === 'Hooks need review').length !== 1) return null
+  const rows = lines.filter(line => /^[›>]?\s*\d+\./.test(line)).map(line => line.replace(/^[›>]\s*/, ''))
+  const menu = rows.length === 3 && rows[0] === '1. Review hooks' && rows[1] === '2. Trust all and continue'
+    && rows[2] === "3. Continue without trusting (hooks won't run)"
+  const firstRowHighlighted = lines.some(line => /^[›>]\s*1\. Review hooks$/.test(line))
+  return menu && firstRowHighlighted && /^enter\s+confirm\s+·\s+esc\s+skip$/.test(lines[lines.length - 1]) ? ['Escape'] : null
+}
+
 function takeover(capture: string, currentUi: string): PaneTakeover | null {
   const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n')
   const bottom = lines.filter(line => line.trim()).slice(-3)

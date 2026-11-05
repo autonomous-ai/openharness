@@ -8,6 +8,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import { createMetrics } from '../src/lib/metrics.js'
 import { withQueryStats } from '../src/lib/queryStats.js'
+import { createEngineCpu } from '../src/lib/engineCpu.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -61,5 +62,21 @@ describe('Prisma query timing against a real database', () => {
     await prisma.user.count()
     expect(await queryCounts(metrics)).toEqual(['prisma_query_duration_seconds_count{model="User",operation="count"} 1'])
     await prisma.$disconnect()
+  })
+
+  // Linux only, as in production: the sampler reads the engine's own threads from /proc (task #3041). If Prisma renamed
+  // its tokio threads, nothing would be attributed and `prisma by query` would read zero.
+  it.skipIf(process.platform !== 'linux')('measures the real engine\'s CPU for queries that run alone', async () => {
+    const infos: Array<Record<string, unknown>> = []
+    const engine = createEngineCpu({ gapMs: 0, log: (_message, context) => { infos.push(context) } })
+    const db = withQueryStats(base, () => undefined, undefined, undefined, undefined, () => engine)
+    for (let i = 0; i < 50; i++) await db.user.findMany({ take: 20 })
+    engine.flush()
+    const line = infos[0]!
+    expect(line.threads).toBeUndefined()
+    expect(line).toMatchObject({ queries: 50, discarded: 0 })
+    expect(line.sampled).toBeGreaterThanOrEqual(45)
+    expect(line.engineMs as number).toBeGreaterThan(0)
+    expect((line.top as Array<{ op: string }>)[0]).toMatchObject({ op: 'User.findMany', n: 50 })
   })
 })

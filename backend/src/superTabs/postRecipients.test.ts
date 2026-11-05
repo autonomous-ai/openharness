@@ -36,7 +36,7 @@ describe('an agent post that names no one', () => {
     const { f, post, to } = setup()
     const other = f.add('other', f.task)
     f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: 'Merged' } as Command, f.as(f.dev))
-    expect(to(post(other, f.task, 'Thanks.'))).toEqual([[]])
+    expect(to(post(other, f.task, 'Thanks, it merged.'))).toEqual([[]])
     expect(to(post(f.dev, f.task, 'Merged.'))).toEqual([[]])
   })
 
@@ -143,8 +143,8 @@ describe('the PM\'s deliveries in a fixture hour', () => {
     const rows = [
       ...['Plan pushed.', 'Task 1 red.', 'Task 1 green.', 'PR is ready.', 'CI green.', 'Merged main in.'].flatMap(t => post(f.dev, f.task, t)),
       ...['Reading the diff.', 'Ready to merge: With fixes', 'Ready to merge: Yes'].flatMap(t => post(reviewer, step, t)),
-      ...post(reviewer, f.task, 'Understood.'),
-      ...post(other, f.task, 'On it.'),
+      ...post(reviewer, f.task, 'Understood, re-reading the plan.'),
+      ...post(other, f.task, 'On it, starting with the fixtures.'),
       ...post(f.dev, f.task, '@owner here is the mockup.'),
       ...['Ken, I am on it.', 'Ken, it shipped.'].flatMap(t => post(f.dev, 'lead', t)),
       ...post(f.dev, step, 'Fixed in abc123.', [reviewer]),
@@ -156,5 +156,29 @@ describe('the PM\'s deliveries in a fixture hour', () => {
     const agentPosts = rows.filter(m => m.author.kind === 'agent' && m.source?.kind !== 'system')
     expect(agentPosts).toHaveLength(18)
     expect(agentPosts.filter(m => m.recipients.includes(f.lead))).toHaveLength(3)
+  })
+})
+
+// Task #3114 (Ken, 11-05): his reply under Hawthorn3's "Done" in #3022 reached Hawthorn3 alone, whose work there was over, and
+// no one who could act on it. A person's reply to the agent whose assignment there is done reaches the PM too.
+describe('a person\'s reply to an agent', () => {
+  const reply = (f: ReturnType<typeof stepsFixture>, on: string, author: string, text: string) =>
+    f.run({ type: 'message.send', conversationId: on, text, replyTo: 'm-agent', recipientIds: [] } as Command, owner,
+      { reply: { id: 'm-agent', conversationId: on, author: { kind: 'agent', id: author } as never, createdAt: 0, thread: 'm-agent' } }).messages
+      .filter(m => m.source?.kind !== 'system').map(m => m.recipients)
+  it('reaches that agent alone while its work in the task is open', () => {
+    const f = stepsFixture()
+    expect(reply(f, f.task, f.dev, 'Release it now?')).toEqual([[f.dev]])
+  })
+  it('reaches that agent and the PM once its work in the task is done', () => {
+    const f = stepsFixture()
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: 'Done, PR #12' } as Command, f.as(f.dev))
+    expect(reply(f, f.task, f.dev, 'Release it now?')).toEqual([[f.dev, f.lead]])
+  })
+  it('reaches the agent alone when the done work is another agent\'s', () => {
+    const f = stepsFixture()
+    const other = f.add('other', f.task)
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: 'Done' } as Command, f.as(f.dev))
+    expect(reply(f, f.task, other, 'Thanks, and the fixture?')).toEqual([[other]])
   })
 })

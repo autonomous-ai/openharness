@@ -70,8 +70,8 @@ class _AgentComputers extends FakeComputers implements SwarmAgentsSource {
   final _Agents agents = _Agents();
 }
 
-/// Search (Slack's, Tony 2026-11-03), from Home's search field or a pull at
-/// its top: Recent · Projects · Chats · Agents. Over a scripted backend: one
+/// Search (Slack's, Tony 2026-11-03), from the Search button on Home's top
+/// bar: Recent · Projects · Chats · Agents. Over a scripted backend: one
 /// Swarm whose person reads Mobile, Web, Team (private, theirs) and Điện
 /// thoại, not Secret (private, another's); Mobile has their Buddy chat with
 /// Wren and another person's; Web their archived Buddy chat. A second Swarm,
@@ -317,19 +317,25 @@ void main() {
       expectOpen(tester, SwarmSearchKind.recent);
     });
 
-    testWidgets('a pull down at the top of Home opens it', (tester) async {
-      await pump(tester, backend());
+    testWidgets('a pull down at the top of Home opens nothing: it reads the '
+        'Swarms again (2026-11-05)', (tester) async {
+      final fake = backend();
+      await pump(tester, fake);
+      int lists() =>
+          fake.paths.where((p) => p == '/api/super-tabs/list').length;
+      final before = lists();
       final gesture = await tester.startGesture(
         tester.getTopLeft(key('swarm-home-list')) + const Offset(195, 40),
       );
-      for (var i = 0; i < 15; i++) {
+      for (var i = 0; i < 30; i++) {
         await gesture.moveBy(const Offset(0, 10));
         await tester.pump();
       }
       await gesture.up();
       await tester.pumpAndSettle();
 
-      expect(find.byType(SwarmSearchPage), findsOneWidget);
+      expect(find.byType(SwarmSearchPage), findsNothing);
+      expect(lists(), greaterThan(before));
     });
 
     testWidgets('back comes back to Home', (tester) async {

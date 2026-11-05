@@ -9,7 +9,7 @@ import { engineAccount } from '../lib/engineAccount.js'
 import type { TeamConfig } from './config.js'
 import {
   publishTeamRelay, publishWindowsTeamRelay, readRememberedGrant, readTeamRelay, writeRememberedGrant, readWindowsTeamRelay, setfaclGrant, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile,
-  teamRelayLaunch, teamRelayPublished, NO_PM_RELAY, type OwnerRelayLaunch, TeamRelayPublisher, prepareCodexHome, installedCodexVersion,
+  teamRelayLaunch, teamRelayPublished, NO_PM_RELAY, NO_CLAUDE_RELAY, NO_CODEX_RELAY, type OwnerRelayLaunch, TeamRelayPublisher, prepareCodexHome, installedCodexVersion,
   CODEX_CLIENT_VERSION_FALLBACK, settleCodexModel, offeredCodexModels, codexModelNotOffered,
   type TeamRelayGrant, type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps, type WindowsRelayFs,
 } from './relay.js'
@@ -455,7 +455,6 @@ describe('a launch in the team account', () => {
     // Signed in in that home, or not a Team daemon, or no home of its own: nothing to refuse.
     expect(await teamRelayLaunch('codex', launchDeps({ read: () => null, signedIn: async () => true }), home)).toBeNull()
     expect(await teamRelayLaunch('codex', launchDeps({ read: () => null, team: () => false }), home)).toBeNull()
-    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null }))).toBeNull()
   })
 
   it('readies a Product Manager\'s own Codex home with the owner\'s models, and leaves the daemon\'s alone', async () => {
@@ -473,7 +472,35 @@ describe('a launch in the team account', () => {
     expect(await teamRelayLaunch('claude', launchDeps({ team: () => false }))).toBeNull()
     expect(await teamRelayLaunch('claude', launchDeps({ config: () => null }))).toBeNull()
     expect(await teamRelayLaunch('claude', launchDeps({ signedIn: async () => true }))).toBeNull()
-    expect(await teamRelayLaunch('claude', launchDeps({ read: () => null }))).toBeNull()
+    expect(await teamRelayLaunch('claude', launchDeps({ signedIn: async () => true, read: () => null }))).toBeNull()
+  })
+
+  // Task #3301: each CLI release restarts the owner's daemon and its relay, and a Team Claude launched before the grant read
+  // again started with no credentials ("Not logged in · Please run /login", Quince, 2026-11-05). It is refused with why, as
+  // a Codex Product Manager's home is: a relaunch is held until the grant reads (lib/launchOverrides.ts), a new agent is
+  // refused (core/agents/create.ts), never started signed out.
+  it('refuses a Claude that neither the owner\'s relay nor a sign-in of its own can sign in', async () => {
+    expect(await teamRelayLaunch('claude', launchDeps({ read: () => null }))).toEqual({ refused: NO_CLAUDE_RELAY })
+    // A sign-in that cannot be read is no sign-in: with no grant either, nothing would sign it in.
+    expect(await teamRelayLaunch('claude', launchDeps({ read: () => null, signedIn: async () => { throw new Error('keychain') } }))).toEqual({ refused: NO_CLAUDE_RELAY })
+    expect(NO_CLAUDE_RELAY).toBe('Waiting for the owner\'s subscription relay on this machine: Claude Code cannot sign in here without it.')
+    // Its first-run screens are recorded only for a launch on the relay.
+    const deps = launchDeps({ read: () => null })
+    await teamRelayLaunch('claude', deps)
+    expect(deps.onboarded).not.toHaveBeenCalled()
+  })
+
+  // Task #3301, the same bug for a Team Codex in the daemon's own home (a Builder's): it started signed out too.
+  it('refuses a Codex in the team account\'s own home that neither the owner\'s relay nor its own sign-in can sign in', async () => {
+    const deps = launchDeps({ read: () => null })
+    expect(await teamRelayLaunch('codex', deps)).toEqual({ refused: NO_CODEX_RELAY })
+    expect(deps.codexHome).not.toHaveBeenCalled()
+    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null, signedIn: async () => { throw new Error('keychain') } }))).toEqual({ refused: NO_CODEX_RELAY })
+    expect(NO_CODEX_RELAY).toBe('Waiting for the owner\'s subscription relay on this machine: Codex cannot sign in here without it.')
+    // Signed in itself, not a Team daemon, or no team config: launched as before.
+    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null, signedIn: async () => true }))).toBeNull()
+    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null, team: () => false }))).toBeNull()
+    expect(await teamRelayLaunch('codex', launchDeps({ config: () => null }))).toBeNull()
   })
 })
 

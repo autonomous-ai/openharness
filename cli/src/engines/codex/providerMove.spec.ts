@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import gridInstructions from './gridInstructions.json' with { type: 'json' }
-import { appServerArgs, moveCodexConversation } from './providerMove.js'
+import { appServerArgs, GRID_SHELL_INSTRUCTION, moveCodexConversation } from './providerMove.js'
 
 /** A stand-in `codex` that speaks app-server's JSONL, records what it is asked, and refuses the fork when told to. */
 function fakeCodex(fork: 'works' | 'refused' = 'works') {
@@ -38,7 +38,7 @@ describe.skipIf(process.platform === 'win32')('moveCodexConversation', () => {
     const asked = codex.requests()
     expect(asked[0].argv).toEqual(['app-server', '-c', 'model_provider="grid"'])
     expect(asked.find((r) => r.method === 'thread/fork').params).toEqual({
-      threadId: 'source', model: 'grid/model', cwd: '/work', baseInstructions: gridInstructions.instructions,
+      threadId: 'source', model: 'grid/model', cwd: '/work', baseInstructions: gridInstructions.instructions + GRID_SHELL_INSTRUCTION,
     })
     expect(asked.filter((r) => r.method).map((r) => r.method)).toEqual(['initialize', 'initialized', 'thread/fork'])
   })
@@ -77,5 +77,11 @@ describe('the instructions a move to a grid starts with', () => {
   it('never name the tool a grid model does not have', () => {
     expect(gridInstructions.instructions.length).toBeGreaterThan(1000)
     expect(gridInstructions.instructions).not.toContain('functions.exec')
+  })
+
+  it('names exec_command and warns off the exec the resumed conversation used', () => {
+    expect(GRID_SHELL_INSTRUCTION).toContain('exec_command')
+    expect(GRID_SHELL_INSTRUCTION).toContain('Do not call `exec`')
+    expect(GRID_SHELL_INSTRUCTION).not.toContain('functions.exec')
   })
 })

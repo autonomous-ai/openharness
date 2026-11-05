@@ -204,6 +204,14 @@ void main() {
     },
   );
 
+  test('restarts Team through manual setup without replacing its sign-in', () async {
+    daemon.answer = {'ok': true, 'state': 'started'};
+    expect(await app.setUpTeamAccount(restart: true), 'started');
+    expect(daemon.asked, [
+      {'action': 'teamSetup', 'reason': 'manual', 'restart': true},
+    ]);
+  });
+
   test('sets it up when the person asks, and remembers "Not now"', () async {
     daemon.answer = {'ok': true, 'state': 'started'};
     expect(await app.setUpTeamAccount(), 'started');
@@ -559,7 +567,8 @@ void main() {
     expect(
       await outcome(tester, 'macos', {'ok': true, 'state': 'started'}),
       'macOS is asking for your password in a window titled “osascript”. '
-      'Setup then takes a minute or two. This Mac\'s row updates when it is ready.',
+      'After that, setup goes on in the background: this Mac\'s row in '
+      'Machines shows how far it is, and Harness tells you when it is ready.',
     );
     expect(
       await outcome(tester, 'macos', {'ok': true, 'state': 'exists'}),
@@ -592,8 +601,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         await outcome(tester, 'linux', {'ok': true, 'state': 'started'}),
-        'Your system is asking for your password. Setup then takes a minute or two. '
-        'This computer\'s row updates when it is ready.',
+        'Your system is asking for your password. After that, setup goes on '
+        'in the background: this computer\'s row in Machines shows how far it is, '
+        'and Harness tells you when it is ready.',
       );
       // No desktop session to ask in (the owner's daemon under systemd --user, or SSH): the daemon answers `no-prompt` up
       // front (cli/src/team/autoSetup.ts) and nothing runs, so the terminal is the way.
@@ -633,8 +643,9 @@ void main() {
       daemon.asked.clear();
       expect(
         await outcome(tester, 'windows', {'ok': true, 'state': 'started'}),
-        'Windows is asking for permission. Setup then takes a minute or two. '
-        'This computer\'s row updates when it is ready.',
+        'Windows is asking for permission. After that, setup goes on '
+        'in the background: this computer\'s row in Machines shows how far it is, '
+        'and Harness tells you when it is ready.',
       );
       expect(
         await outcome(tester, 'windows', {'ok': true, 'state': 'exists'}),

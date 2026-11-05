@@ -1019,10 +1019,14 @@ describe('reading many thread ranges at once', () => {
 })
 
 // anh Dee, 11-04 (#2742): "remove these messages", the "<machine> left the Swarm: ..." lines in every project chat. Those already
-// stored are read by nobody, and a project chat whose newest row is one does not stay unread.
-describe('a machine-left line stored before #2742', () => {
-  const left = { text: 'Studio left the Swarm: its host confirmed its cleanup.', author: personAuthor(owner),
-    source: { kind: 'machine-left', machine: 'Studio' } }
+// stored are read by nobody, and a project chat whose newest row is one does not stay unread. The same for the "<who> changed the
+// instructions" lines already stored (Dee and Ken, 11-05, #3165): read by nobody, in every app, whatever its version.
+describe.each([
+  ['a machine-left line stored before #2742', 'left the Swarm', { text: 'Studio left the Swarm: its host confirmed its cleanup.', author: personAuthor(owner),
+    source: { kind: 'machine-left', machine: 'Studio' } }],
+  ['an instructions line stored before #3132', 'changed the instructions', { text: 'Lead changed the instructions for owner: Routing: No Haiku.\n\nIn Routing:\nAdded: No Haiku.', author: personAuthor(owner),
+    source: { kind: 'instructions', projectId: 'lead', revision: 2 } }],
+])('%s', (_name, hidden, left) => {
   /** The project chat as a person's first load serves it, with their read mark there. */
   const served = async (tabId: string, as: AuthUser) => {
     const data = (await get(`/api/super-tabs/${tabId}/parts`, as)).body.data
@@ -1037,7 +1041,7 @@ describe('a machine-left line stored before #2742', () => {
     for (const as of [owner, peer]) {
       const page = (await get(`/api/super-tabs/${s.tabId}/conversations/lead/messages`, as)).body.data.messages as any[]
       expect(page.map(m => m.text)).toContain('Project latest')
-      expect(JSON.stringify(page)).not.toContain('left the Swarm')
+      expect(JSON.stringify(page)).not.toContain(hidden)
       expect(latestOf((await inbox(s.tabId, as)).body.data).lead).toBe('Project latest')
     }
   })

@@ -3,13 +3,15 @@ import { describe, expect, it, vi } from 'vitest'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { CODEX_MODEL_MIGRATION, CODEX_SIGN_IN, CODEX_TRUST_PROMPT, CODEX_UPDATE_PROMPT } from '../lib/__fixtures__/takeoverScreens.js'
-import { capScreen, limitOf, modelFailing, TerminalHost, typedKeys } from './terminal.js'
+import { RECOVER_AFTER_MS, RELAY_RESTORED, RelayRecovery, type RelaySeen } from './relayRecovery.js'
+import { capScreen, limitOf, modelFailing, signedOut, TerminalHost, typedKeys } from './terminal.js'
 
 const row = (agentId = 'a1', harnessId = 'h1', over: Record<string, unknown> = {}) => ({ tabId: 'tab', agent: { id: agentId, harnessId, machineId: 'm1' }, ...over })
 type Sent = { path: string; body: Record<string, any> }
 
 function setup(options: { live?: string[]; screen?: (harnessId: string) => SuperTabScreen; requests?: unknown[];
-  refuse?: (command: Record<string, any>) => { status: number; code: string } | null } = {}) {
+  refuse?: (command: Record<string, any>) => { status: number; code: string } | null; engine?: string;
+  relay?: { seen: (harnessId: string, engine: string | undefined, read: RelaySeen) => Promise<void>; keep: (ids: ReadonlySet<string>) => void } } = {}) {
   let clock = 1_000_000
   const sent: Sent[] = []
   let pending = options.requests ?? []
@@ -23,11 +25,11 @@ function setup(options: { live?: string[]; screen?: (harnessId: string) => Super
   let screen = options.screen ?? (() => ({ ok: true as const, text: '> ', hold: null }))
   const core = fakeCore({
     account: { backend },
-    agents: { byAgent: vi.fn((id: string) => (options.live ?? ['h1']).includes(id) ? { agentId: id } as never : undefined) },
+    agents: { byAgent: vi.fn((id: string) => (options.live ?? ['h1']).includes(id) ? { agentId: id, engine: options.engine ?? 'claude' } as never : undefined) },
     superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
       screen: vi.fn(async (harnessId: string) => screen(harnessId)), input: vi.fn(async () => ({ ok: true as const })), inputIfScreen: vi.fn(async () => ({ ok: true as const })) },
   })
-  const host = new TerminalHost(core, 'm1', { now: () => clock, log: vi.fn() })
+  const host = new TerminalHost(core, 'm1', { now: () => clock, log: vi.fn(), ...(options.relay ? { relay: options.relay } : {}) })
   return { core, backend, sent, host,
     now: () => clock,
     wait: (ms: number) => { clock += ms },
@@ -320,6 +322,92 @@ describe('the stuck and usage-limit alerts', () => {
   })
 })
 
+describe('a Team agent stranded on its owner\'s relay (task #3106)', () => {
+  const failing = (): SuperTabScreen => ({ ok: true, text: '⎿  Unable to connect to API (ECONNREFUSED) · Retrying in 8 seconds… (attempt 4/10)\n❯ ', hold: null })
+  const prompt = (): SuperTabScreen => ({ ok: true, text: 'Allow edit? 1. Yes 2. No', hold: 'permission_open' })
+
+  it('tells the relay recovery on every read when the agent\'s model began failing, its engine, and whether a prompt is open', async () => {
+    const relay = { seen: vi.fn(async () => {}), keep: vi.fn() }
+    const t = setup({ screen: failing, relay, engine: 'codex' })
+    const began = t.now()
+    await t.host.tick([row()])
+    t.wait(60_000); await t.host.tick([row()])
+    expect(relay.seen.mock.calls).toEqual([['h1', 'codex', { failingSince: began, waiting: false }], ['h1', 'codex', { failingSince: began, waiting: false }]])
+    // Answers came again: not failing now, though the model alert's episode lasts ten more minutes.
+    t.showing(prompt); t.wait(15_000); await t.host.tick([row()])
+    expect(relay.seen.mock.calls[2]).toEqual(['h1', 'codex', { failingSince: null, waiting: true }])
+    expect(relay.keep).toHaveBeenLastCalledWith(new Set(['h1']))
+  })
+
+  it('reads nothing for the recovery from a screen it could not read', async () => {
+    const relay = { seen: vi.fn(async () => {}), keep: vi.fn() }
+    const t = setup({ screen: () => ({ ok: false, error: 'gone' }), relay })
+    await t.host.tick([row()])
+    expect(relay.seen).not.toHaveBeenCalled()
+  })
+})
+
+// Task #3301: a CLI release restarted the owner's daemon and its relay, and Team Claude agents launched in the gap, or still
+// holding a token the relay no longer took, showed Claude Code's signed-out notice and sat there until a person came (Quince,
+// 2026-11-05: "Not logged in · Please run /login"). The watch knew only a relay that does not answer at all.
+describe('a Team agent signed out of its owner\'s relay (task #3301)', () => {
+  const GRANT = { url: 'http://127.0.0.1:41002', token: 'c'.repeat(43) }
+  const NOT_LOGGED_IN = '⏺ I will run the tests.\n\n  ⎿  Not logged in · Please run /login\n\n❯ \n  ? for shortcuts'
+  const UNAUTHORIZED = '⏺ Reading the brief.\n  ⎿  API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid bearer token"}} · Please run /login\n❯ '
+  const BACK = '⏺ Carrying on with the task.\n❯ '
+
+  function recovering(screen: string, over: { grant?: () => typeof GRANT | null } = {}) {
+    let text = screen
+    const restart = vi.fn(async (_h: string) => { text = BACK; return { ok: true as const } })
+    let t!: ReturnType<typeof setup>
+    const recovery = new RelayRecovery({ grant: over.grant ?? (() => GRANT), answers: async () => true, restart,
+      input: (h, typed) => t.core.superTabs!.input(h, typed, ['Enter']), now: () => t.now(), log: vi.fn() })
+    t = setup({ screen: () => ({ ok: true, text, hold: null }), relay: recovery })
+    return { t, restart }
+  }
+  // The relay recovery is not awaited by the watch (a restart takes up to a minute): let it settle.
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+
+  for (const [name, screen] of [['Not logged in', NOT_LOGGED_IN], ['API Error: 401', UNAUTHORIZED]] as const) {
+    it(`relaunches an agent showing "${name}" onto the current grant, then tells it to carry on`, async () => {
+      // The Team daemon restarted mid-session too: a new watch and recovery, which never restarted this agent.
+      const { t, restart } = recovering(screen)
+      await t.host.tick([row()]); await settle()
+      expect(restart).not.toHaveBeenCalled()
+      t.wait(RECOVER_AFTER_MS); await t.host.tick([row()]); await settle()
+      expect(restart).toHaveBeenCalledExactlyOnceWith('h1')
+      t.wait(15_000); await t.host.tick([row()]); await settle()
+      expect(t.core.superTabs!.input).toHaveBeenCalledExactlyOnceWith('h1', RELAY_RESTORED, ['Enter'])
+    })
+  }
+
+  it('relaunches nothing while no grant reads: the held relaunch waits for it (team/relay.ts NO_CLAUDE_RELAY)', async () => {
+    const { t, restart } = recovering(NOT_LOGGED_IN, { grant: () => null })
+    await t.host.tick([row()]); t.wait(RECOVER_AFTER_MS); await t.host.tick([row()]); await settle()
+    expect(restart).not.toHaveBeenCalled()
+  })
+
+  it('knows Claude Code\'s and Codex\'s own signed-out notices near the prompt', () => {
+    for (const line of ['  ⎿  Not logged in · Please run /login', '⎿  API Error: 401 {"type":"error","error":{"type":"authentication_error"}} · Please run /login',
+      '  ⎿  Invalid API key · Please run /login', '  ⎿  OAuth token has expired · Please run /login', '■ unexpected status 401 Unauthorized: Missing bearer authentication']) {
+      expect(signedOut(`⏺ work\n\n${line}\n❯ `), line).toBe(true)
+    }
+    expect(modelFailing(NOT_LOGGED_IN)).toBe(false)
+  })
+
+  it('never reads the agent\'s own words, a tool\'s output or an old notice far up the screen as signed out', () => {
+    // An agent working on this very bug writes and prints these lines: restarting it would cost its turn.
+    expect(signedOut('⏺ Quince showed "Not logged in · Please run /login" after the update.\n❯ ')).toBe(false)
+    expect(signedOut('  The brief says API Error: 401 is not recovered.\n❯ ')).toBe(false)
+    expect(signedOut('⏺ Bash(echo "Not logged in · Please run /login")\n  ⎿  Not logged in · Please run /login\n❯ ')).toBe(false)
+    expect(signedOut(`  ⎿  Not logged in · Please run /login\n${'line\n'.repeat(30)}❯ `)).toBe(false)
+    // A reply that starts with the phrase is still the agent's own words, Claude Code's "⏺" or Codex's "•" (security review 2).
+    expect(signedOut('⏺ Not logged in users are sent to /login, so the relay never sees them.\n❯ ')).toBe(false)
+    expect(signedOut('⏺ API Error: 401 comes from the relay when its token is stale.\n❯ ')).toBe(false)
+    expect(signedOut('• Invalid API key is what Codex prints for a stale relay token.\n› ')).toBe(false)
+  })
+})
+
 describe('dismissing Codex\'s update screen for a Swarm agent', () => {
   const update = (): SuperTabScreen => ({ ok: true, text: CODEX_UPDATE_PROMPT, hold: 'update_prompt_open' })
   const idle = (): SuperTabScreen => ({ ok: true, text: '> ', hold: null })
@@ -412,6 +500,21 @@ describe('progress for the machine report', () => {
     expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_000_000 })
     t.showing(showing('✻ Editing host.ts…\n❯ ')); t.wait(15_000); await t.host.tick([row()])
     expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_030_000 })
+    expect(t.core.superTabs!.screen).toHaveBeenCalledTimes(3)
+  })
+
+  // Task #3397: a crew session whose whole screen, status line and timer too, never changes while its engine works is frozen
+  // (crew.ts). The watch's own reads tell it, so the crew keeper reads no screen of its own.
+  it('records when the whole screen last changed, its status line included, from the same reads', async () => {
+    const t = setup({ screen: showing('✻ Working… (3s · esc to interrupt)\n❯ ') })
+    await t.host.tick([row()])
+    expect(t.host.stillSince('h1')).toBe(1_000_000)
+    t.showing(showing('✻ Working… (18s · esc to interrupt)\n❯ ')); t.wait(15_000); await t.host.tick([row()])
+    expect(t.host.progressOf(['h1'])).toEqual({ h1: 1_000_000 })
+    expect(t.host.stillSince('h1')).toBe(1_015_000)
+    t.wait(15_000); await t.host.tick([row()])
+    expect(t.host.stillSince('h1')).toBe(1_015_000)
+    expect(t.host.stillSince('h2')).toBeUndefined()
     expect(t.core.superTabs!.screen).toHaveBeenCalledTimes(3)
   })
 

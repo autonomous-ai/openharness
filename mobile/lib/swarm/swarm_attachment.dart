@@ -28,11 +28,17 @@ class SwarmAttachment extends StatelessWidget {
     required this.file,
     required this.link,
     required this.chip,
+    this.thumb,
     this.store,
     this.fileRef,
   });
 
   final SuperTabAttachment file;
+
+  /// [file]'s thumbnail link, when it has one that opens now
+  /// ([SwarmFileRef.currentThumb]): the chat draws that, and the original
+  /// only when the picture is opened full screen.
+  final Uri? thumb;
 
   /// [file]'s link, when it is on Harness's file storage — the only place a
   /// picture is fetched from, as the chip only opens a link from there.
@@ -58,6 +64,7 @@ class SwarmAttachment extends StatelessWidget {
     return _Preview(
       file: file,
       url: link,
+      thumb: thumb,
       fileRef: ref,
       chip: chip,
       store: store ?? swarmAttachments,
@@ -100,6 +107,7 @@ class _Preview extends StatefulWidget {
   const _Preview({
     required this.file,
     required this.url,
+    required this.thumb,
     required this.fileRef,
     required this.chip,
     required this.store,
@@ -109,6 +117,9 @@ class _Preview extends StatefulWidget {
 
   /// The link at hand; null when a fresh one is asked of [fileRef] first.
   final Uri? url;
+
+  /// The thumbnail's link at hand, drawn in the chat in place of [url].
+  final Uri? thumb;
   final SwarmFileRef? fileRef;
   final Widget chip;
   final SwarmAttachmentStore store;
@@ -128,6 +139,10 @@ class _PreviewState extends State<_Preview> {
   /// The picture could not be fetched or decoded: the chip, which still opens it.
   bool _failed = false;
 
+  /// What [_local] holds is the thumbnail, not the original: the viewer then
+  /// fetches the original when the picture is opened.
+  bool _thumbShown = false;
+
   @override
   void initState() {
     super.initState();
@@ -139,6 +154,7 @@ class _PreviewState extends State<_Preview> {
   void didUpdateWidget(_Preview old) {
     super.didUpdateWidget(old);
     if (old.url == widget.url &&
+        old.thumb == widget.thumb &&
         identical(old.store, widget.store) &&
         identical(old.fileRef?.reader, widget.fileRef?.reader)) {
       return;
@@ -156,13 +172,33 @@ class _PreviewState extends State<_Preview> {
 
   void _ask() {
     _turn = widget.store.turns.value;
-    _local = swarmKeptFile(
-      widget.store,
-      widget.file,
-      at: widget.url,
-      ref: widget.fileRef,
-    );
+    _thumbShown = false;
+    final thumb = widget.thumb;
+    _local = thumb == null ? _original() : _thumbnailOrOriginal(thumb);
     _failed = false;
+  }
+
+  Future<File> _original() => swarmKeptFile(
+    widget.store,
+    widget.file,
+    at: widget.url,
+    ref: widget.fileRef,
+  );
+
+  /// The thumbnail, kept apart from the original (their addresses and so their
+  /// links differ); the original when the thumbnail cannot be had.
+  Future<File> _thumbnailOrOriginal(Uri thumb) async {
+    try {
+      final file = await widget.store.file(
+        thumb,
+        key: 'swarm-file:${widget.file.id}:thumb',
+      );
+      _thumbShown = true;
+      return file;
+    } catch (_) {
+      _thumbShown = false;
+      return _original();
+    }
   }
 
   /// The files kept changed hands: the picture is asked for again, for
@@ -260,6 +296,22 @@ class _PreviewState extends State<_Preview> {
   void _open(BuildContext context, File file) {
     final turn = _turn;
     if (turn != widget.store.turns.value) return;
+    if (!_thumbShown) return _push(context, file, turn);
+    unawaited(_openOriginal(context, file, turn));
+  }
+
+  /// The viewer shows the original: fetched now, as the thumbnail in the chat is
+  /// not what a pinch should zoom into. If it cannot be had, the thumbnail opens.
+  Future<void> _openOriginal(BuildContext context, File thumb, int turn) async {
+    File shown = thumb;
+    try {
+      shown = await _original();
+    } catch (_) {}
+    if (!context.mounted || turn != widget.store.turns.value) return;
+    _push(context, shown, turn);
+  }
+
+  void _push(BuildContext context, File file, int turn) {
     final name = widget.file.name;
     final store = widget.store;
     unawaited(

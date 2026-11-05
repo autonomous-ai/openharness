@@ -199,6 +199,36 @@ void main() {
     expect(_create(f)['cwd'], '/Users/huy/games');
   });
 
+  // Task #3449 (anh Dee, 11-05): a PM was seen on Sonnet medium. A Personal
+  // project's Lead, started on this Mac, runs Claude on Opus at xhigh as flags
+  // of its launch; a Codex Lead takes no Claude flags.
+  test(
+    'a Claude Lead starts on Opus at xhigh, a Codex Lead with no model flags',
+    () async {
+      final f = SuperTabLaunchFixture();
+      _desk(f, remote: 'https://github.com/huy/games', cwd: '/Users/huy/games');
+      final c = await _swarm(f);
+      final games = _games(c);
+      await PersonalLeadStarter.of(f.app).start(c, games);
+      expect(_create(f)['engine'], 'claude');
+      expect(_create(f)['model'], 'opus');
+      expect(_create(f)['effort'], 'xhigh');
+
+      final codex = SuperTabLaunchFixture();
+      _desk(
+        codex,
+        remote: 'https://github.com/huy/games',
+        cwd: '/Users/huy/games',
+      );
+      final other = await _swarm(codex);
+      await PersonalLeadStarter.of(codex.app)
+          .start(other, _games(other), machineId: 'm', engine: 'codex');
+      expect(_create(codex)['engine'], 'codex');
+      expect(_create(codex).containsKey('model'), isFalse);
+      expect(_create(codex).containsKey('effort'), isFalse);
+    },
+  );
+
   test('a Team Swarm starts no Lead', () async {
     final f = SuperTabLaunchFixture();
     _desk(f, remote: 'https://github.com/huy/games', cwd: '/Users/huy/games');

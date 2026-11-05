@@ -79,10 +79,18 @@ describe('a project\'s open proposals', () => {
       // A proposal from before #2867 with no reply at all has no thread summary: nobody answered it.
     ])
     expect(await openProposals(s.state, s.chat(), reads, NOW)).toEqual([
-      { messageId: 'old', title: 'Old proposal', personId: 'peer', at: 5 },
-      { messageId: 'open', title: 'Sync edits', personId: 'peer', at: 10 },
-      { messageId: 'personal', title: 'Offline drafts', personId: 'peer', at: 50 },
+      { messageId: 'old', title: 'Old proposal', personId: 'peer', priority: 'P2', at: 5 },
+      { messageId: 'open', title: 'Sync edits', personId: 'peer', priority: 'P2', at: 10 },
+      { messageId: 'personal', title: 'Offline drafts', personId: 'peer', priority: 'P2', at: 50 },
     ])
+  })
+
+  it('carries each proposal\'s priority on the one P0-P3 scale: high is P1, low P3, anything else P2 (task #3117)', async () => {
+    const s = swarm()
+    const said = (id: string, at: number, priority?: string): ProposalRoot => ({ ...root(id, at), source: { ...root(id, at).source, ...priority ? { priority } : {} } })
+    const { reads } = chatReads([said('high', 10, 'high'), said('low', 20, 'low'), said('normal', 30, 'normal'), said('none', 40)], [])
+    expect((await openProposals(s.state, s.chat(), reads, NOW)).map(p => [p.messageId, p.priority]))
+      .toEqual([['high', 'P1'], ['low', 'P3'], ['normal', 'P2'], ['none', 'P2']])
   })
 
   it('reads a proposal as its owner\'s words in full, and one from before task #2926 without its "Let\'s build: "', async () => {
@@ -92,8 +100,8 @@ describe('a project\'s open proposals', () => {
     const owned: ProposalRoot = { ...root('owned', 20), text: words }
     const { reads } = chatReads([root('old', 10, 'Offline drafts'), owned], [...rows(root('old', 10, 'Offline drafts'), { author: agent('buddy') })])
     expect(await openProposals(s.state, s.chat(), reads, NOW)).toEqual([
-      { messageId: 'old', title: 'Offline drafts', personId: 'peer', at: 10 },
-      { messageId: 'owned', title: words, personId: 'peer', at: 20 },
+      { messageId: 'old', title: 'Offline drafts', personId: 'peer', priority: 'P2', at: 10 },
+      { messageId: 'owned', title: words, personId: 'peer', priority: 'P2', at: 20 },
     ])
   })
 
@@ -139,7 +147,7 @@ describe('a project\'s open proposals', () => {
     const [fresh, answered, onIt, gone] = [root('fresh', 60, 'New idea'), root('answered', 20), root('on-it', 30), root('gone', 40)]
     const chat = chatReads([fresh, answered, onIt], [...rows(fresh, { author: agent('buddy') }), ...rows(answered, { author: agent('buddy') }, { author: agent(s.pm) }),
       ...rows(onIt, { author: agent('buddy') }, { author: person('owner'), ask: 'on-it' })], { seededAt: NOW - SEED_SETTLE_MS - 1, open: [fresh, answered, onIt, gone] })
-    expect(await openProposals(s.state, s.chat(), chat.reads, NOW)).toEqual([{ messageId: 'fresh', title: 'New idea', personId: 'peer', at: 60 }])
+    expect(await openProposals(s.state, s.chat(), chat.reads, NOW)).toEqual([{ messageId: 'fresh', title: 'New idea', personId: 'peer', priority: 'P2', at: 60 }])
     expect(chat.forgotten.sort()).toEqual(['answered', 'gone', 'on-it'])
     expect([...chat.set.keys()]).toEqual(['fresh'])
     expect(chat.counts.scan).toBe(0)

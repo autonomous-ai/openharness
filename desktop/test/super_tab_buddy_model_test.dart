@@ -485,4 +485,316 @@ void main() {
       await close(tester, c);
     });
   });
+
+  // Task #3256: a switch the Buddy guard holds (a Buddy started before its
+  // owner was recorded) comes back as this line from the Buddy's machine
+  // (cli superTabs/buddyModel.ts refusal(), backend buddyModel.ts). Until the
+  // Buddy is started again, the bar offers that in one click.
+  group('after a switch its Buddy must be started again for', () {
+    const held =
+        "Couldn't switch your Buddy: Start your Buddy again to switch its "
+        'model. It is still on your subscription.';
+    const offer = 'Start your Buddy again to switch its model.';
+    final startAgain = find.widgetWithText(TextButton, 'Start again');
+
+    /// The Buddy's machine's line in its chat, as the backend writes a
+    /// switch's result: a system line by the Buddy agent [by].
+    void line(ConversationServer server, String text, {String by = 'wren'}) {
+      server.append(text, conversationId: 'swarm-buddy-peer');
+      server.messages.last
+        ..['author'] = {'kind': 'agent', 'id': by, 'name': 'Wren'}
+        ..['source'] = {'kind': 'system'};
+    }
+
+    testWidgets('the bar offers Start again, which starts a fresh Buddy on '
+        'the same machine and engine', (tester) async {
+      final server = swarm();
+      line(server, held);
+      final c = await show(tester, server);
+      expect(find.text(offer), findsOneWidget);
+      // The picker stays: the line is what was learnt, not a lock.
+      expect(picker, findsOneWidget);
+
+      await tester.tap(startAgain);
+      await tester.pumpAndSettle();
+      // A running Buddy refuses a second start (backend BUDDY_EXISTS): it is
+      // removed, then started, as a down one is replaced.
+      expect(commands(server, 'buddy.remove').single, {'type': 'buddy.remove'});
+      expect(commands(server, 'buddy.create').single, {
+        'type': 'buddy.create',
+        'machineId': 'ken-mac',
+        'engine': 'claude',
+      });
+      expect(c.operationError, isNull);
+      // The new Buddy did not write that line: the offer is gone.
+      expect(c.buddy(SuperTabController.kSwarmBuddyKey)!.id, isNot('wren'));
+      expect(find.text(offer), findsNothing);
+      await close(tester, c);
+    });
+
+    testWidgets('it is not offered for another reason, once a later line '
+        'settles it, while a switch is under way, or for an earlier Buddy', (
+      tester,
+    ) async {
+      Future<void> none(ConversationServer server) async {
+        final c = await show(tester, server);
+        expect(find.text(offer), findsNothing);
+        expect(startAgain, findsNothing);
+        await close(tester, c);
+      }
+
+      await none(
+        swarm()..append('Start your Buddy again', conversationId: 'lead'),
+      );
+      final other = swarm();
+      line(
+        other,
+        "Couldn't switch your Buddy: Your Buddy is answering. Try again when "
+        'it has finished. It is still on your subscription.',
+      );
+      await none(other);
+      final later = swarm();
+      line(later, held);
+      line(
+        later,
+        "Peer's Buddy now runs on Kimi K3, which your machine serves.",
+      );
+      await none(later);
+      final moving = swarm(
+        modelRequest: {'id': 'req2', 'gridModel': 'kimi-k3', 'name': 'Kimi K3'},
+      );
+      line(moving, held);
+      await none(moving);
+      final earlier = swarm();
+      line(earlier, held, by: 'old-wren');
+      await none(earlier);
+    });
+
+    // Review of #3171 (Guide): the messages held can be an older page, read
+    // back to the reader's mark, with the result that settled the switch
+    // among the newer ones not read yet.
+    testWidgets('it is not offered while the chat holds an older page than '
+        'its newest message', (tester) async {
+      final server = swarm();
+      line(server, held);
+      // Newer messages are in the chat that this window has not read.
+      final chat = (server.state['conversations'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((g) => g['id'] == 'swarm-buddy-peer');
+      chat['lastMessageSequence'] = (chat['lastMessageSequence'] as int) + 5;
+      chat['lastMainSequence'] = chat['lastMessageSequence'];
+      final c = await show(tester, server);
+      expect(find.text(offer), findsNothing);
+      await close(tester, c);
+    });
+
+    // Review of #3171: the bar reads its chat on every build, so the read is
+    // bounded: a refusal under more than a page of newer messages is not
+    // offered (its person has moved on), and nothing is removed for it.
+    testWidgets('a refusal more than a page back is not offered', (
+      tester,
+    ) async {
+      final server = swarm();
+      line(server, held);
+      for (var i = 0; i < 100; i++) {
+        server.append('later $i', conversationId: 'swarm-buddy-peer');
+        server.messages.last['author'] = {
+          'kind': 'person',
+          'id': 'peer',
+          'name': 'peer@example.com',
+        };
+      }
+      final c = await show(tester, server);
+      while (c.hasOlder('swarm-buddy-peer')) {
+        await c.loadMessages('swarm-buddy-peer', older: true);
+      }
+      await tester.pumpAndSettle();
+      expect(c.messages('swarm-buddy-peer'), hasLength(101));
+      expect(find.text(offer), findsNothing);
+      await close(tester, c);
+    });
+
+    // Review of #3171: a Buddy is removed before it starts again, so nothing
+    // that would refuse the start may be known when it is removed.
+    testWidgets('while new work is paused, Start again removes nothing', (
+      tester,
+    ) async {
+      final server = swarm();
+      server.state['paused'] = true;
+      line(server, held);
+      final c = await show(tester, server);
+      // Words say why, not the disabled button alone (UI checklist).
+      expect(
+        find.text(
+          'New work is paused. Start your Buddy again once it resumes.',
+        ),
+        findsOneWidget,
+      );
+      expect(tester.widget<TextButton>(startAgain).onPressed, isNull);
+      expect(commands(server, 'buddy.remove'), isEmpty);
+      await close(tester, c);
+    });
+
+    // Review of #3171: a start refused once its Buddy is removed leaves the
+    // Start bar on the machine and engine it ran on, one click from them.
+    testWidgets('a start refused after the removal keeps its machine and '
+        'engine in the Start bar', (tester) async {
+      final server = swarm();
+      final wren = (server.state['agents'] as List).cast<Map>().firstWhere(
+        (a) => a['id'] == 'wren',
+      );
+      wren['configuration'] = {'engine': 'codex', 'model': 'default'};
+      line(server, held);
+      server.unknownCommand = (command) => command['type'] == 'buddy.create';
+      final c = await show(tester, server);
+      await tester.tap(startAgain);
+      await tester.pumpAndSettle();
+      expect(commands(server, 'buddy.remove'), hasLength(1));
+      expect(c.buddy(SuperTabController.kSwarmBuddyKey), isNull);
+      final engine = find.byKey(const ValueKey('super-buddy-start-engine'));
+      expect(
+        find.descendant(of: engine, matching: find.text('Codex')),
+        findsOneWidget,
+      );
+
+      server.unknownCommand = null;
+      await tester.tap(find.widgetWithText(FilledButton, 'Start'));
+      await tester.pumpAndSettle();
+      expect(commands(server, 'buddy.create').last, {
+        'type': 'buddy.create',
+        'machineId': 'ken-mac',
+        'engine': 'codex',
+      });
+      await close(tester, c);
+    });
+
+    // Second review of #3171 (Guide): the reader's two machines, with Ken's
+    // other Mac listed first, so a Start bar that lost the Buddy's machine
+    // would pick it.
+    ConversationServer twoMachines({String engine = 'codex'}) {
+      final server = swarm();
+      final machines = server.state['machines'] as List;
+      machines.insert(
+        0,
+        machine('peer-mini', 'Kens-Mac-mini.local', 'peer', []),
+      );
+      (server.state['agents'] as List).cast<Map>().firstWhere(
+        (a) => a['id'] == 'wren',
+      )['configuration'] = {
+        'engine': engine,
+        'model': 'default',
+      };
+      line(server, held);
+      return server;
+    }
+
+    void pause(ConversationServer server, String machineId) =>
+        (server.state['machines'] as List).cast<Map>().firstWhere(
+          (m) => m['machineId'] == machineId,
+        )['paused'] = true;
+
+    final startMachine = find.byKey(
+      const ValueKey('super-buddy-start-machine'),
+    );
+    Finder inStart(Finder f) => find.descendant(
+      of: find.byKey(const ValueKey('super-buddy-start')),
+      matching: f,
+    );
+
+    testWidgets('on a paused machine, Start again removes nothing and says '
+        'why', (tester) async {
+      final server = twoMachines();
+      pause(server, 'ken-mac');
+      final c = await show(tester, server);
+      expect(
+        find.text(
+          "Kens-MacBook is paused. Start your Buddy again once it's "
+          'back.',
+        ),
+        findsOneWidget,
+      );
+      expect(tester.widget<TextButton>(startAgain).onPressed, isNull);
+      expect(commands(server, 'buddy.remove'), isEmpty);
+      await close(tester, c);
+    });
+
+    testWidgets('a Start bar left by a refused start keeps its machine while '
+        'it cannot be used, until another is chosen', (tester) async {
+      final server = twoMachines();
+      server.unknownCommand = (command) => command['type'] == 'buddy.create';
+      final c = await show(tester, server);
+      await tester.tap(startAgain);
+      await tester.pumpAndSettle();
+      expect(c.buddy(SuperTabController.kSwarmBuddyKey), isNull);
+      // Its machine is paused since: it stays chosen, and says so.
+      server.unknownCommand = null;
+      pause(server, 'ken-mac');
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(of: startMachine, matching: find.text('Kens-MacBook')),
+        findsOneWidget,
+      );
+      expect(
+        inStart(
+          find.text(
+            "Kens-MacBook is paused. Your Buddy starts there "
+            'once it\'s back, or choose another machine.',
+          ),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              inStart(find.widgetWithText(FilledButton, 'Start')),
+            )
+            .onPressed,
+        isNull,
+      );
+      // Another machine, chosen by hand, starts it there.
+      await tester.tap(startMachine);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('super-buddy-machine-option-peer-mini')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(inStart(find.widgetWithText(FilledButton, 'Start')));
+      await tester.pumpAndSettle();
+      expect(commands(server, 'buddy.create').last, {
+        'type': 'buddy.create',
+        'machineId': 'peer-mini',
+        'engine': 'codex',
+      });
+      await close(tester, c);
+    });
+
+    testWidgets('a removal whose answer was lost leaves the Start bar on its '
+        'machine and engine', (tester) async {
+      final server = twoMachines();
+      server.loseReply = true;
+      final c = await show(tester, server);
+      await tester.tap(startAgain);
+      await tester.pumpAndSettle();
+      // The removal went through; its answer did not come back, so no start
+      // was sent after it.
+      expect(commands(server, 'buddy.remove'), hasLength(1));
+      expect(commands(server, 'buddy.create'), isEmpty);
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(c.buddy(SuperTabController.kSwarmBuddyKey), isNull);
+      expect(
+        find.descendant(of: startMachine, matching: find.text('Kens-MacBook')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('super-buddy-start-engine')),
+          matching: find.text('Codex'),
+        ),
+        findsOneWidget,
+      );
+      await close(tester, c);
+    });
+  });
 }

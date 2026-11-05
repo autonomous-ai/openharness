@@ -63,6 +63,9 @@ class ModelManagerController extends ChangeNotifier {
   DateTime? _lastInventoryAttempt;
   bool _panelVisible = false;
   int _actionRevision = 0;
+  /// The daemon refused this machine's models for good (a computer shared with
+  /// this account): polling again every four seconds only grows the log.
+  bool _guestRefused = false;
   String? _dismissedReadyId;
   GridModels? models;
   List<LocalModel> localModels = const [];
@@ -178,6 +181,7 @@ class ModelManagerController extends ChangeNotifier {
         // A minimised or background app reads nothing, busy or not: the daemon owns the operation
         // either way, and the one refresh on return ([_foregroundChanged]) catches up.
         if (!app.inForeground) return;
+        if (_guestRefused) return;
         if (backgroundInventory && !_panelVisible && !busy) {
           if (machine?.connectionStatus != ConnectionStatus.connected ||
               machine?.isOffline == true) {
@@ -247,6 +251,7 @@ class ModelManagerController extends ChangeNotifier {
       pendingOperation = null;
       pendingId = null;
       _dismissedReadyId = null;
+      _guestRefused = false;
       models = null;
       localModels = const [];
       memoryBytes = null;
@@ -542,6 +547,9 @@ class ModelManagerController extends ChangeNotifier {
     bool setup = false,
     bool local = true,
   }) async {
+    // Refused for good on a computer shared with this account: nothing but a forced read (Try again)
+    // asks again, so a four-second poll cannot grow the log with the same refusal.
+    if (_guestRefused && !force) return;
     final owner = machine;
     if (owner == null ||
         owner.connectionStatus != ConnectionStatus.connected ||
@@ -638,6 +646,18 @@ class ModelManagerController extends ChangeNotifier {
                     (m) => m.operation?.id == pendingOperation?.id,
                   ))) {
             pendingOperation = null;
+          }
+        } on WsRequestFailure catch (failure) {
+          if (_current(owner) && revision == _actionRevision) {
+            inventoryAvailable = false;
+            // A computer shared with this account never offers its models, and asking again will
+            // not change that: say so once and stop the four-second poll.
+            if (failure.code == 'GUEST_NOT_ALLOWED') {
+              _guestRefused = true;
+              error = 'Models are not available on a computer shared with you.';
+            } else {
+              error = 'Models are unavailable. Try again.';
+            }
           }
         } catch (_) {
           if (_current(owner) && revision == _actionRevision) {

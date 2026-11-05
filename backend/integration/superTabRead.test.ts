@@ -18,7 +18,7 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { decisionsWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION } from '../src/superTabs/decisions.js'
-import { waitingTagConversations } from '../src/superTabs/mentions.js'
+import { waitingMentions, waitingTagConversations } from '../src/superTabs/mentions.js'
 import { writeReadMark } from '../src/superTabs/readMarks.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
 import { HostReads } from '../src/superTabs/read/host.js'
@@ -27,6 +27,7 @@ import { sendsEmptyIn, watched, type Query } from '../src/lib/queryRecorder.test
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
+import { profiledReads } from './profiledReads.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -122,6 +123,61 @@ async function writeGroup(tabId: string, key: string, at: number, change: (group
 }
 
 describe('first load (design 4.3)', () => {
+  it('counts waiting tags from quiet groups without fetching unrelated group payloads', async () => {
+    const quiet: string[] = []
+    const s = await scene(state => {
+      for (let i = 0; i < 21; i++) {
+        const id = state.group(`Quiet ${i}`)
+        state.edit(current => {
+          const group = current.conversations.find(each => each.id === id)!
+          group.dormant = true
+          group.brief = 'unused task detail '.repeat(220)
+        })
+        quiet.push(id)
+      }
+      return quiet
+    })
+    await db.superTabMention.createMany({ data: quiet.map((conversationId, i) => ({
+      id: `${s.tabId}-quiet-tag-${i}`, tabId: s.tabId, personId: peer.sub, projectId: 'lead', conversationId,
+      messageId: `${s.tabId}-quiet-message-${i}`, authorAgentId: s.lead, createdAt: new Date(NOW - 1_000), resolvedAt: null, resolvedBy: null,
+    })) })
+
+    const { state } = await new SuperTabStore(db, () => NOW).read(peer, s.tabId)
+    const stateWithoutQuietGroups = { ...state, conversations: state.conversations.filter(group => !quiet.includes(group.id)) }
+    const match = { tabId: s.tabId, deleted: false, key: { $in: quiet } }
+    const fullPipeline = [{ $match: match }, { $project: { _id: 0, key: 1, data: 1 } }]
+    await db.$runCommandRaw({ profile: 2 })
+    try {
+      await db.swarmGroup.aggregateRaw({ pipeline: fullPipeline, options: { batchSize: 200, hint: { tabId: 1, key: 1 } } })
+      const count = await waitingMentions(db as never, s.tabId, stateWithoutQuietGroups, { kind: 'person', userId: peer.sub, email: peer.email }, NOW)
+      expect(count.count).toBe(quiet.length)
+    } finally { await db.$runCommandRaw({ profile: 0 }) }
+
+    const profile = await db.$runCommandRaw({ find: 'system.profile', filter: { ns: { $regex: '\\.SwarmGroup$' } },
+      projection: { _id: 0, command: 1, responseLength: 1, nreturned: 1, docsExamined: 1, planSummary: 1 }, batchSize: 10_000 }) as unknown as
+      { cursor: { firstBatch: Array<{ command?: { pipeline?: Array<Record<string, any>>; hint?: Record<string, number> }; responseLength?: number;
+        nreturned?: number; docsExamined?: number; planSummary?: string }> } }
+    const rows = profile.cursor.firstBatch.filter(row => row.command?.pipeline?.some(stage =>
+      (stage.$match as { key?: { $in?: string[] } } | undefined)?.key?.$in?.includes(quiet[0]!)))
+    expect(rows).toHaveLength(2)
+    const baseline = rows.find(row => row.command!.pipeline!.some(stage => (stage.$project as { data?: unknown } | undefined)?.data === 1))!
+    const projected = rows.find(row => row.command!.pipeline!.some(stage => (stage.$project as { data?: { kind?: number } } | undefined)?.data?.kind === 1))!
+    expect(baseline.nreturned).toBe(quiet.length)
+    expect(projected.nreturned).toBe(quiet.length)
+    expect(baseline.planSummary).toMatch(/IXSCAN/)
+    expect(projected.planSummary).toMatch(/IXSCAN/)
+    expect(baseline.docsExamined).toBeLessThanOrEqual(baseline.nreturned!)
+    expect(projected.docsExamined).toBeLessThanOrEqual(projected.nreturned!)
+    expect(projected.responseLength, `full=${baseline.responseLength} bytes; projected=${projected.responseLength} bytes for ${projected.nreturned} groups`)
+      .toBeLessThan(baseline.responseLength! / 10)
+    for (const pipeline of [fullPipeline, projected.command!.pipeline!]) {
+      const explain = await db.$runCommandRaw({ explain: { aggregate: 'SwarmGroup', pipeline, cursor: {}, hint: { tabId: 1, key: 1 } },
+        verbosity: 'executionStats' }) as unknown as { executionStats: { totalDocsExamined: number; nReturned: number; executionStages: unknown } }
+      expect(JSON.stringify(explain.executionStats.executionStages)).toContain('IXSCAN')
+      expect(explain.executionStats.totalDocsExamined).toBeLessThanOrEqual(explain.executionStats.nReturned)
+    }
+  })
+
   it('answers the design\'s shape: cursor 30 s before the read, epoch, newest change, the reader\'s parts and derived values', async () => {
     const s = await scene()
     clock = NOW
@@ -1072,6 +1128,35 @@ describe('decisions asked of one person (v2)', () => {
     expect((await derived(owner)).derived.mentionsDigest).toBe(expired.mentionsDigest)
   })
 
+  it('keeps quiet conversation titles in waiting and earlier tag lists', async () => {
+    const s = await scene()
+    const tag = await post(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Please look.', replyTo: null,
+      recipientIds: [], mentions: [peer.sub] }, owner, s.lead)
+    expect(tag.status).toBe(200)
+    await writeGroup(s.tabId, s.web, Date.now(), group => { group.dormant = true })
+
+    const waiting = (await get(`/api/super-tabs/${s.tabId}/mentions?state=waiting`, peer)).body.data.mentions as Array<{ conversationTitle: string }>
+    expect(waiting.map(row => row.conversationTitle)).toContain('Web')
+
+    expect((await post(s.tabId, { type: 'message.send', conversationId: s.web, text: 'Looked.', replyTo: null, recipientIds: [] }, peer)).status).toBe(200)
+    const earlier = (await get(`/api/super-tabs/${s.tabId}/mentions?state=earlier`, peer)).body.data.mentions as Array<{ conversationTitle: string }>
+    expect(earlier.map(row => row.conversationTitle)).toContain('Web')
+  })
+
+  it('reads waiting tags once in a changes poll while keeping its count and digest', async () => {
+    const s = await scene()
+    clock = NOW
+    await db.superTabMention.create({ data: { id: `${s.tabId}-quiet-tag`, tabId: s.tabId, personId: peer.sub, projectId: 'lead',
+      conversationId: s.done, messageId: `${s.tabId}-quiet-message`, authorAgentId: s.lead, createdAt: new Date(NOW - 1_000), resolvedAt: null, resolvedBy: null } })
+    const before = await get(`/api/super-tabs/${s.tabId}/parts`, peer)
+    expect(before.body.data.derived).toMatchObject({ mentionsWaiting: 1 })
+
+    const measured = await profiledReads(db, /\.SuperTabMention$/, () => get(`/api/super-tabs/${s.tabId}/changes?cursor=${before.body.data.cursor}`, peer))
+    expect(measured.value.status).toBe(200)
+    expect(measured.value.body.data.derived).toMatchObject({ mentionsWaiting: 1, mentionsDigest: before.body.data.derived.mentionsDigest })
+    expect(measured.reads).toBe(1)
+  })
+
   it('counts every open decision the reader can open, past 200, reading only which ones and where', async () => {
     const s = await scene()
     clock = Date.now()
@@ -1335,16 +1420,36 @@ describe('what a read costs the database (group 3b)', () => {
     const out = ((await db.$runCommandRaw({ serverStatus: 1 })) as { network: { bytesOut: unknown } }).network.bytesOut
     return typeof out === 'number' ? out : Number((out as { $numberLong?: string; $numberInt?: string }).$numberLong ?? (out as { $numberInt?: string }).$numberInt)
   }
-  /** Waits until nothing else is reading or writing: what MongoDB sends in a tenth of a second (the first read's own answer
-   *  and whatever else lands meanwhile) is the same four times running. Earlier tests' background work (a command's notices
-   *  and wakes, a read a timed-out test left going) would otherwise land in the next test's count. */
+  /** The model calls this client has begun and not finished, and when it last began or finished one. A read that load holds
+   *  back sends nothing yet, so the byte count alone cannot tell it from quiet; the call itself can. Raw commands (the byte
+   *  count's own) carry no model and are left out. */
+  let running = 0, lastBusy = 0
+  /** A model call held back before it goes out, as CPU load holds one back: a test stalls a read with it and lets it go. */
+  let hold: Promise<void> | null = null
+  beforeAll(() => {
+    db.$use(async (params, next) => {
+      if (!params.model) return next(params)
+      running++
+      lastBusy = Date.now()
+      try {
+        if (hold) await hold
+        return await next(params)
+      } finally { running--; lastBusy = Date.now() }
+    })
+  })
+  /** Waits until nothing else is reading or writing: for four tenths of a second no model call began, ended or was running,
+   *  and what MongoDB sends in a tenth of a second (the first read's own answer and whatever else lands meanwhile) is the
+   *  same four times running. Earlier tests' background work (a command's notices and wakes, a read a timed-out test left
+   *  going, one that load has not let out yet) would otherwise land in the next test's count. */
   const quiet = async () => {
     let last = -1, steady = 0
     for (let tries = 0; tries < 300 && steady < 4; tries++) {
+      const windowStart = Date.now()
       const before = await sent()
       await new Promise(done => setTimeout(done, 100))
       const sentSince = await sent() - before
-      steady = sentSince === last ? steady + 1 : 0
+      const still = running === 0 && lastBusy < windowStart
+      steady = still && sentSince === last ? steady + 1 : 0
       last = sentSince
     }
     if (steady < 4) throw new Error('The database never went quiet: something keeps reading or writing.')
@@ -1369,8 +1474,27 @@ describe('what a read costs the database (group 3b)', () => {
   it('counts none of the reads an earlier test left running', async () => {
     const s = await scene(f => bulky(f))
     // What a test that ends before its own background work does: reads of the whole Swarm, still going into the next one.
-    const leftover = (async () => { for (let i = 0; i < 40; i++) await db.$transaction(tx => parts.loadAll(tx, s.tabId)) })()
+    let underway = () => {}
+    const begun = new Promise<void>(done => { underway = done })
+    const leftover = (async () => { for (let i = 0; i < 40; i++) { await db.$transaction(tx => parts.loadAll(tx, s.tabId)); underway() } })()
+    // A transaction that load has not started yet is no model call to see: wait until the reads are going, then for them to end.
+    await begun
     expect(await databaseBytes(() => new Promise(done => setTimeout(done, 200)))).toBeLessThan(1_000)
+    await leftover
+  })
+
+  it('counts none of the reads an earlier test left that had not reached the database yet', async () => {
+    const s = await scene(f => bulky(f))
+    // A read held back by load: it sends nothing until it is let go, so the database looks quiet while it is still coming.
+    let release = () => {}
+    hold = new Promise<void>(done => { release = done })
+    const letGo = () => { hold = null; release() }
+    const timer = setTimeout(letGo, 1_500)
+    const leftover = (async () => { for (let i = 0; i < 40; i++) await db.$transaction(tx => parts.loadAll(tx, s.tabId)) })()
+    try {
+      // The test's own call lets the held read go, the moment counting starts: a count that began while it was still held counts it.
+      expect(await databaseBytes(() => { letGo(); return new Promise(done => setTimeout(done, 200)) })).toBeLessThan(1_000)
+    } finally { clearTimeout(timer); letGo() }
     await leftover
   })
 

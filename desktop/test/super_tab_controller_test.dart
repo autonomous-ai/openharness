@@ -479,4 +479,21 @@ void main() {
     expect(controller.messages('lead'), isEmpty);
     expect(controller.canWrite, isFalse);
   });
+
+  // Task #3256 (review of #3171): the Buddy bar reads its chat from the end
+  // on every build; [newestFirst] does so without copying what is held.
+  test('newestFirst reads what messages lists, newest first', () async {
+    final server = ConversationServer()
+      ..append('first')
+      ..append('a notice nobody reads')
+      ..append('last');
+    server.messages[1]['source'] = {'kind': 'update-request'};
+    final c = server.controller();
+    await c.refresh();
+    await c.select('lead');
+    expect(c.newestFirst('lead').map((m) => m.text), ['last', 'first']);
+    expect(c.newestFirst('lead'), c.messages('lead').reversed);
+    expect(c.newestFirst('nothing held'), isEmpty);
+    c.dispose();
+  });
 }

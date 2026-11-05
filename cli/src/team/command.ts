@@ -22,7 +22,7 @@ import { teamConfigJson, type TeamConfig } from './config.js'
 import { engineLines, type TeamEngines } from './engines.js'
 import { teamModelSet } from './model.js'
 import type { TeamModelHandoff } from './modelHandoff.js'
-import { mintTeamConversion, mintTeamHandoff, redeemTeamHandoff, revokeHarnessRefresh, teamSession, TeamSignInError, type Delete, type Get, type Post } from './handoff.js'
+import { handedTeamSignInEpoch, mintTeamConversion, mintTeamHandoff, redeemTeamHandoff, revokeHarnessRefresh, teamSession, TeamSignInError, type Delete, type Get, type Post } from './handoff.js'
 import {
   SENTINEL_NAME, TEAM_PORT, TEAM_REAL_NAME, TEAM_STATUS_FILE,
   TEAM_USER, TeamInputError, carriedBackendEnv, checkSid, pathCheck, teamLayout, teamPaths, userCheck, type TeamLayout, type TeamPlatform,
@@ -30,7 +30,7 @@ import {
 import type { PrivacyResult, TeamStatus } from './privacy.js'
 import {
   LINUX_NO_SYSTEMD, LINUX_NO_TMUX, REMOVE_REFUSED, buildLinuxRemoveScript, buildLinuxSetupScript, buildRemoveScript,
-  buildSetupScript, teamLaunchdPlist, teamSystemdUnit, type RemoveScriptInput, type SetupScriptInput, type TeamPlistInput,
+  buildSetupScript, teamLaunchdPlist, teamSystemdUnit, type EngineCopy, type RemoveScriptInput, type SetupScriptInput, type TeamPlistInput,
 } from './script.js'
 import { windowsTeamPaths } from './windowsLayout.js'
 import { WINDOWS_STAGED, buildWindowsRemoveScript, buildWindowsSetupScript, teamTaskXml } from './windowsScript.js'
@@ -115,6 +115,9 @@ export interface Installed {
   /** Windows: the owner's terminal host payload in use (`runtime\pty\<version>`), copied for the team account, which has no
    *  installer of its own to lay one down; null without one. */
   ptyDir?: string | null
+  /** A Mac: the owner's own installed Claude Code and Codex (./engines.ts `ownerEngineCopies`), copied for the team account
+   *  instead of downloaded again (#3169). */
+  engineCopies?: EngineCopy[]
 }
 
 export interface JobState { loaded: boolean; pid: number | null; state: string | null }
@@ -410,6 +413,7 @@ async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean)
       user: TEAM_USER, realName: TEAM_REAL_NAME, home: layout.home, owner, ownerHome, stageDir,
       nodeRuntimeDir: installed.nodeRuntimeDir!, tmuxRuntimeDir: installed.tmuxRuntimeDir, cliDir: installed.cliDir,
       ownerNode: installed.node, ownerCli: installed.cliJs, mintEnv, signIn: signInAgain ? 'always' : 'missing',
+      ...mac && installed.engineCopies?.length ? { engineCopies: installed.engineCopies } : {},
       ...windows ? { ownerSid, ptyDir: installed.ptyDir ?? null } : {},
     }),
     files: { 'team.json': teamConfigJson(config), [scripts.serviceFile]: service },
@@ -792,6 +796,9 @@ async function jobStart(deps: TeamCommandDeps, file: string | undefined): Promis
     try { deps.writeStatus(statusFile, update) } catch (error) { log(`could not write ${statusFile}: ${(error as Error).message}`) }
   }
   const label = `${deps.hostname().slice(0, 60)} · Team`
+  if (mine && deps.session()?.kind !== 'team') {
+    report({ signIn: { state: 'signed-out', at: deps.now(), detail: 'The Team sign-in is no longer available. Run harness team setup --sign-in-again.' } })
+  }
   if (file) {
     let code: string | null = null
     try {
@@ -808,7 +815,21 @@ async function jobStart(deps: TeamCommandDeps, file: string | undefined): Promis
       try {
         const computerId = deps.computerId()
         const tokens = await redeemTeamHandoff(code, label, computerId, { post: deps.post, sleep: deps.sleep, now: deps.now })
-        deps.writeSession(teamSession(tokens, computerId, deps.autonomousEnv, deps.now()))
+        // The owner's setup run handed it over: a sign-in by hand, so the device key log may start over for its account (#3262).
+        const handed = teamSession(tokens, computerId, deps.autonomousEnv, deps.now(), { signInEpoch: handedTeamSignInEpoch(deps.now()) })
+        deps.writeSession(handed)
+        // Pin the account while this is still the handed sign-in. The first device-log read may happen much later.
+        try {
+          const me = await deps.get<{ user?: { id?: unknown } }>('/api/auth/me', {
+            authorization: `Bearer ${handed.accessToken}`, 'x-autonomous-env': handed.autonomousEnv,
+          })
+          const acct = me?.user?.id
+          if (typeof acct !== 'string' || !acct) throw new Error('no account')
+          await deps.updateSession((latest) => latest.signInEpoch === handed.signInEpoch
+            ? { ...latest, signInAcct: acct } : null)
+        } catch {
+          log('could not record the signed-in account; trust recovery requires a connection within ten minutes')
+        }
         if (previous) await revokeHarnessRefresh(deps.post, previous.refreshToken)
         log(previous ? 'signed in for team work again; the previous sign-in was ended' : 'signed in for team work')
         report({ signIn: { state: 'signed-in', at: deps.now() } })

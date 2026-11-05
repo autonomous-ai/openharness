@@ -3,6 +3,7 @@ import 'core/app_version.dart';
 import 'dart:async';
 
 import 'measurement/product_runtime_health.dart';
+import 'measurement/speed_marks.dart';
 
 import 'dart:ui' show AppExitResponse;
 
@@ -85,6 +86,7 @@ Future<void> startHarness({
   /// [TerminalTransportPlugin]); the desktop passes none.
   TerminalTransportPluginFactory? transportPlugins,
 }) async {
+  speedMarks.start();
   if (!kIsWeb) ProductRuntimeHealth.launched();
   // Share links and OAuth own the browser URL. Flutter's default hash routing would
   // erase the share's pinned identity on the first navigation or window resize.
@@ -101,10 +103,12 @@ Future<void> startHarness({
   // Keyboard configuration has its own file and watchers. It can load beside
   // the appearance, but both must be ready before the window becomes usable.
   await Future.wait([loadPersistedSettings(), keymap.start()]);
+  speedMarks.launch('settings loaded');
   // Match macOS repaints the app when the computer's own setting flips.
   appearancePrefsStore.followSystemBrightness();
   // Apply the saved palette to native chrome as well as the Flutter theme.
   await configureDesktopWindow(palette: appearancePrefsStore.value.palette);
+  speedMarks.launch('window configured');
   runApp(
     ProviderScope(
       child: HarnessApp(

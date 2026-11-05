@@ -24,7 +24,7 @@ import {
 } from '../lib/sso.js'
 import { parseAutonomousEnvironment, type AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import { isHarnessRefreshToken } from '../lib/harnessTokenFormat.js'
-import { createSsoSession, redeemHandoff, refreshHarnessSession, revokeHarnessSession, startHandoff, type HarnessTokens } from '../lib/harnessSession.js'
+import { createSsoSession, redeemHandoff, refreshHarnessSession, revokeHarnessSession, startHandoff, TeamCleanupPending, type HarnessTokens } from '../lib/harnessSession.js'
 import { parseSsoSessionRequest, type SsoGrant, type SsoSessionRequest } from '../lib/ssoSession.js'
 import { normalizeSignInAttribution, type SignInAttribution } from '../lib/signInAttribution.js'
 import { createHash } from 'node:crypto'
@@ -409,6 +409,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       logger.info('handoff redeemed', { label })
       return sendSuccess(reply, tokens)
     } catch (e) {
+      if (e instanceof TeamCleanupPending) return sendError(reply, e.message, e.code, 409)
       logger.error('handoff redeem failed', e)
       return sendError(reply, 'Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
     }

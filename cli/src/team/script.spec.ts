@@ -4,12 +4,12 @@
  * osascript, launchctl, dscl or sudo: the whole scripts are only parsed (`sh -n`), never run.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  REMOVE_REFUSED, SENTINEL_TEXT, TEAM_COPY, TEAM_ENGINES_INSTALL, TEAM_JOB_WRAPPER, TEAM_PASSWORD, WRITE_PRIVATE, WRITE_PUBLIC,
+  REMOVE_REFUSED, SENTINEL_TEXT, TEAM_COPY, TEAM_ENGINE_COPY, TEAM_ENGINE_COPY_FN, TEAM_ENGINES_INSTALL, TEAM_JOB_WRAPPER, TEAM_PASSWORD, WRITE_PRIVATE, WRITE_PUBLIC,
   LINUX_NO_SYSTEMD, LINUX_NO_TMUX, LINUX_ROOT_CHECKS, TEAM_SYSTEM_PATH, buildLinuxRemoveScript, buildLinuxSetupScript, buildRemoveScript, buildSetupScript, sh, teamLaunchdPlist,
   teamSystemdUnit, type SetupScriptInput,
 } from './script.js'
@@ -162,7 +162,7 @@ describe('setup script', () => {
 describe('the team account\'s own engines', () => {
   it('are installed by the team account itself, never by root, from the vendors\' packages, and never fail setup', () => {
     const script = buildSetupScript(input())
-    expect(script).toContain(`\nas_team /bin/sh -c ${sh(TEAM_ENGINES_INSTALL)} sh "$TEAM_HOME" "$NODE_NAME" '@anthropic-ai/claude-code' '@openai/codex' || true\n`)
+    expect(script).toContain(`\n  as_team /bin/sh -c ${sh(TEAM_ENGINES_INSTALL)} sh "$TEAM_HOME" "$NODE_NAME" "$@" || true\n`)
     parses(script)
   })
 
@@ -190,6 +190,119 @@ describe('the team account\'s own engines', () => {
     const bare = spawnSync('/bin/sh', ['-c', TEAM_ENGINES_INSTALL, 'sh', join(root, 'nobody'), 'node-v1', '@openai/codex'], { encoding: 'utf8' })
     expect(bare.status).toBe(0)
     expect(bare.stderr).toContain('has no npm')
+  })
+})
+
+describe('the team account\'s engines, copied from the owner\'s', () => {
+  // #3169 (this Mac, 2026-11-04): npm took 4 min 18 s of a 4 min 35 s setup; copying the two installed packages took 2.3 s.
+  const copies = [
+    { packageName: '@anthropic-ai/claude-code', dir: `${OWNER_HOME}/.local/lib/node_modules/@anthropic-ai/claude-code`, bin: 'claude', binPath: 'bin/claude.exe' },
+    { packageName: '@openai/codex', dir: `${OWNER_HOME}/.local/lib/node_modules/@openai/codex`, bin: 'codex', binPath: 'bin/codex.js' },
+  ]
+
+  it('copies what the owner has, as the owner reading and the team account writing, and asks npm only for the rest', () => {
+    const script = buildSetupScript(input({ engineCopies: [copies[1]!] }))
+    parses(script)
+    expect(script).toContain(TEAM_ENGINE_COPY_FN)
+    expect(script).toContain(`copy_engine '@openai/codex' '${OWNER_HOME}/.local/lib/node_modules/@openai/codex' 'codex' 'bin/codex.js'`)
+    expect(script).not.toContain("copy_engine '@anthropic-ai/claude-code'")
+    // Said before it runs, and the npm step only when something is left for it.
+    expect(at(script, '\nstep copy-engines\n')).toBeLessThan(at(script, "copy_engine '@openai/codex'"))
+    expect(at(script, "copy_engine '@openai/codex'")).toBeLessThan(at(script, '\n  step engines\n'))
+    expect(at(script, '\n  step engines\n')).toBeLessThan(at(script, `as_team /bin/sh -c ${sh(TEAM_ENGINES_INSTALL)} sh "$TEAM_HOME" "$NODE_NAME" "$@"`))
+    // Root reads nothing of the owner's and writes nothing of the team account's: the owner's tar into the team account's.
+    expect(TEAM_ENGINE_COPY_FN).toContain('as_owner /usr/bin/tar -C "$2" -cf - .')
+    expect(TEAM_ENGINE_COPY_FN).toContain(`| as_team /bin/sh -c ${sh(TEAM_ENGINE_COPY)} sh unpack "$TEAM_HOME" "$1" "$3" "$4"`)
+  })
+
+  it('installs both from npm, as before, on a Mac that has neither', () => {
+    const script = buildSetupScript(input())
+    parses(script)
+    expect(script).not.toContain('\nstep copy-engines\n')
+    expect(script).not.toMatch(/\ncopy_engine '/)
+    expect(script).toContain("[ -n \"$copied_claude\" ] || set -- \"$@\" '@anthropic-ai/claude-code'")
+    expect(script).toContain("[ -n \"$copied_codex\" ] || set -- \"$@\" '@openai/codex'")
+  })
+
+  it('refuses a copy it cannot name plainly, before anything is written', () => {
+    for (const bad of [
+      { ...copies[0]!, packageName: 'left-pad' },
+      { ...copies[0]!, bin: 'claude; id' },
+      { ...copies[0]!, binPath: '../../../etc/passwd' },
+      { ...copies[0]!, binPath: '/bin/sh' },
+      { ...copies[0]!, dir: 'relative/claude-code' },
+      { ...copies[0]!, dir: `${OWNER_HOME}/x'y` },
+    ]) expect(() => buildSetupScript(input({ engineCopies: [bad] })), JSON.stringify(bad)).toThrow()
+  })
+
+  /** A package as npm leaves one: package.json, its bin executable, a nested dependency and a relative link. */
+  function ownerPackage(root: string, name = '@openai/codex', binPath = 'bin/codex.js'): string {
+    const dir = join(root, 'owner', 'lib', 'node_modules', name)
+    mkdirSync(join(dir, 'bin'), { recursive: true })
+    mkdirSync(join(dir, 'node_modules', 'dep'), { recursive: true })
+    writeFileSync(join(dir, 'package.json'), `{\n  "name": "${name}",\n  "version": "1.2.3"\n}\n`)
+    writeFileSync(join(dir, binPath), '#!/bin/sh\necho engine\n', { mode: 0o755 })
+    writeFileSync(join(dir, 'node_modules', 'dep', 'index.js'), '// dep')
+    return dir
+  }
+  /** TEAM_ENGINE_COPY_FN with as_owner and as_team as this account, so it runs here without sudo. */
+  const runCopy = (root: string, home: string, args: string[], owner = '"$@"') => spawnSync('/bin/sh', ['-c', [
+    'set -eu', `RT=${sh(join(root, 'rt'))}`, `TEAM_HOME=${sh(home)}`, 'mkdir -p "$RT"',
+    `as_owner() { ${owner}; }`, 'as_team() { "$@"; }', `say() { printf 'harness: %s\\n' "$1"; }`,
+    TEAM_ENGINE_COPY_FN, `if copy_engine ${args.map(sh).join(' ')}; then echo copied; else echo not-copied; fi`,
+  ].join('\n')], { encoding: 'utf8' })
+
+  it('lays the package into the team account\'s npm prefix and links its command as npm does', () => {
+    const root = temp(), home = join(root, 'home')
+    mkdirSync(home)
+    const dir = ownerPackage(root)
+    // Twice: a repair run replaces the copy the first one laid down.
+    for (let i = 0; i < 2; i++) {
+      const run = runCopy(root, home, ['@openai/codex', dir, 'codex', 'bin/codex.js'])
+      expect(run.stdout).toContain('copied\n')
+      expect(run.stdout).not.toContain('not-copied')
+    }
+    const dest = join(home, '.local', 'lib', 'node_modules', '@openai', 'codex')
+    expect(readFileSync(join(dest, 'node_modules', 'dep', 'index.js'), 'utf8')).toBe('// dep')
+    expect(existsSync(`${dest}.next`)).toBe(false)
+    const link = join(home, '.local', 'bin', 'codex')
+    expect(readlinkSync(link)).toBe('../lib/node_modules/@openai/codex/bin/codex.js')
+    expect(execFileSync(link, { encoding: 'utf8' })).toBe('engine\n')
+  })
+
+  it('keeps nothing of a copy that is not the package, has no command, or whose reading failed, so npm installs it', () => {
+    const cases: [string, (root: string) => string[], string?][] = [
+      ['another package', (root) => ['@openai/codex', ownerPackage(root, '@anthropic-ai/claude-code', 'bin/codex.js'), 'codex', 'bin/codex.js']],
+      ['no command', (root) => ['@openai/codex', ownerPackage(root), 'codex', 'bin/missing.js']],
+      // Security review 1 of #3124: a command that is a link points wherever it was made to, outside the package too.
+      ['a command that is a link', (root) => {
+        const dir = ownerPackage(root)
+        rmSync(join(dir, 'bin', 'codex.js'))
+        symlinkSync('/bin/sh', join(dir, 'bin', 'codex.js'))
+        return ['@openai/codex', dir, 'codex', 'bin/codex.js']
+      }],
+      ['no folder', (root) => ['@openai/codex', join(root, 'nothing-here'), 'codex', 'bin/codex.js']],
+      // The owner's tar sends a whole package, then fails (a file it could not read): the copy is not kept.
+      ['reading failed', (root) => ['@openai/codex', ownerPackage(root), 'codex', 'bin/codex.js'], '"$@"; return 1'],
+    ]
+    for (const [what, args, owner] of cases) {
+      const root = temp(), home = join(root, 'home')
+      mkdirSync(home)
+      const run = runCopy(root, home, args(root), owner)
+      expect(run.stdout, what).toContain('not-copied')
+      expect(existsSync(join(home, '.local', 'lib', 'node_modules', '@openai', 'codex')), what).toBe(false)
+      expect(existsSync(join(home, '.local', 'lib', 'node_modules', '@openai', 'codex.next')), what).toBe(false)
+      expect(existsSync(join(home, '.local', 'bin', 'codex')), what).toBe(false)
+    }
+  })
+
+  it('leaves an engine the team account already has in place when a new copy is refused', () => {
+    const root = temp(), home = join(root, 'home')
+    mkdirSync(home)
+    expect(runCopy(root, home, ['@openai/codex', ownerPackage(root), 'codex', 'bin/codex.js']).stdout).toContain('copied\n')
+    const broken = temp()
+    expect(runCopy(root, home, ['@openai/codex', ownerPackage(broken), 'codex', 'bin/gone.js']).stdout).toContain('not-copied')
+    expect(execFileSync(join(home, '.local', 'bin', 'codex'), { encoding: 'utf8' })).toBe('engine\n')
   })
 })
 
@@ -231,7 +344,8 @@ describe('the team account\'s engines, on a slow network', () => {
   it('says each step, as the owner, in the stage the owner\'s Harness reads, before the step runs', () => {
     const script = buildSetupScript(input())
     expect(script).toContain(`step() { printf '%s\\n' "$1" | as_owner /bin/sh -c ${sh(WRITE_PRIVATE)} sh "$STAGE/progress" >/dev/null 2>&1 || true; }`)
-    const order = ['account', 'home', 'privacy', 'runtime', 'engines', 'sign-in', 'daemon'].map((name) => script.indexOf(`\nstep ${name}\n`))
+    // The npm step is said only when an engine is left for it, inside its own `if`.
+    const order = ['account', 'home', 'privacy', 'runtime', '  engines', 'sign-in', 'daemon'].map((name) => script.indexOf(`\nstep ${name.trim()}\n`.replace('\nstep', name.startsWith(' ') ? '\n  step' : '\nstep')))
     for (const at of order) expect(at).toBeGreaterThan(0)
     expect([...order].sort((a, b) => a - b)).toEqual(order)
     expect(order[4]).toBeLessThan(script.indexOf(`as_team /bin/sh -c ${sh(TEAM_ENGINES_INSTALL)}`))

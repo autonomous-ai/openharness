@@ -9,6 +9,7 @@ import { call, CallFailure, OFFICIAL_HOSTS, type Output } from './call.js'
 import * as gateway from './gateway.js'
 import { forgetPage, PageServer, rememberPage, runningPage } from './page.js'
 import { refresh, refreshDue } from './renew.js'
+import { ownProcessGroup } from '../windows/noWindow.js'
 import { ConnectorError, locked, RENAMED, Store, validateCode } from './store.js'
 
 export const connectionsUsage = `Connected services (Linear, Notion, GitHub, Google…), shared by every local agent:
@@ -31,7 +32,7 @@ export function openInBrowser(url: string, env: NodeJS.ProcessEnv = process.env)
   const harnessBrowser = ['/usr/bin/hn-browser'].find(existsSync)
   const command = harnessBrowser ?? (process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open')
   try {
-    const child = spawn(command, [url], { stdio: 'ignore', detached: true, shell: process.platform === 'win32', env })
+    const child = spawn(command, [url], { stdio: 'ignore', ...ownProcessGroup(), shell: process.platform === 'win32', env })
     child.on('error', () => { /* No browser here (headless, ssh): the printed address is the way. */ })
     child.unref()
     return true
@@ -45,7 +46,7 @@ async function openPage(vault: Store, io: Output): Promise<number> {
   let url = await runningPage(vault)
   if (!url) {
     const child = spawn(process.execPath, [...process.execArgv, process.argv[1], 'connections', 'serve', '--background'],
-      { stdio: 'ignore', detached: true, env: process.env })
+      { stdio: 'ignore', detached: true, windowsHide: true, env: process.env })
     child.unref()
     for (let tries = 0; tries < 40 && !url; tries++) { await sleep(100); url = await runningPage(vault) }
     if (!url) { io.err('Could not open Connections.'); return 1 }

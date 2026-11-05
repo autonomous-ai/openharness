@@ -9,7 +9,7 @@ const m = vi.hoisted(() => ({
   machineService: { resolveOrCreateForComputer: vi.fn(), resolveForTeamComputer: vi.fn() },
   machineUpdate: vi.fn(), machineFindUnique: vi.fn(), userFindUnique: vi.fn(),
   claim: vi.fn(), release: vi.fn(), publishUp: vi.fn(), publishPair: vi.fn(), terminalDown: vi.fn(),
-  pushes: vi.fn(), appendKey: vi.fn(), nodeRole: vi.fn(), recordTurn: vi.fn(),
+  pushes: vi.fn(), appendKey: vi.fn(), nodeRole: vi.fn(), recordTurn: vi.fn(), computerSignedIn: vi.fn(),
 }))
 vi.mock('./ssoAuth.js', async original => ({ ...await original<typeof import('./ssoAuth.js')>(), authenticateAccessToken: m.auth }))
 vi.mock('./wsServer.js', async original => ({ ...await original<typeof import('./wsServer.js')>(), createWss: () => ({ handleUpgrade: m.upgrade }) }))
@@ -23,6 +23,7 @@ vi.mock('./bus.js', () => ({
   publishTerminalUp: vi.fn(), subscribeTerminalDown: m.terminalDown, setMachineAppState: vi.fn(), clearMachineAppState: vi.fn(),
 }))
 vi.mock('./adapterAccountPushes.js', () => ({ relayAccountPushes: m.pushes }))
+vi.mock('../superTabs/computerMoves.js', () => ({ computerSignedIn: m.computerSignedIn }))
 vi.mock('./deviceKeyLog.js', () => ({ appendDeviceKey: m.appendKey, touchDeviceKey: vi.fn() }))
 vi.mock('./nodeRole.js', () => ({ attachNodeRole: m.nodeRole, PRESENCE_TTL_SEC: 30 }))
 // The real hub starts its heartbeat timers on import; these tests never attach a hub client, so it is a stub with none.
@@ -77,6 +78,7 @@ beforeEach(() => {
   m.appendKey.mockResolvedValue({ ok: true, head: { seq: 1, hash: 'h' } })
   m.nodeRole.mockResolvedValue({ touch: vi.fn(), detach: vi.fn(async () => {}) })
   m.recordTurn.mockResolvedValue(undefined)
+  m.computerSignedIn.mockResolvedValue(undefined)
   m.machineService.resolveForTeamComputer.mockResolvedValue({ machine: teamMac, created: false })
   m.upgrade.mockReset()
   m.machineService.resolveOrCreateForComputer.mockResolvedValue({ machine: ownerMac, created: false })
@@ -108,6 +110,16 @@ describe('the machine socket and a team session', () => {
     expect(m.machineService.resolveOrCreateForComputer).not.toHaveBeenCalled()
     expect(m.claim).toHaveBeenCalledWith('team-mac', TEAM_COMPUTER, 30)
     expect(m.upgrade).toHaveBeenCalledTimes(1)
+  })
+
+  it("tells the Swarms of a normal sign-in on its computer, which moves the computer's entries there, never of a team session's (#3122)", async () => {
+    m.auth.mockResolvedValue(owner)
+    handleAdapterUpgrade(adapter(OWNER_COMPUTER) as never, raw() as never, Buffer.alloc(0)); await flush()
+    expect(m.computerSignedIn).toHaveBeenCalledWith({ machineId: 'owner-mac', ownerId: 'owner', computerId: OWNER_COMPUTER, autonomousEnv: 'prod' })
+    m.computerSignedIn.mockClear()
+    m.auth.mockResolvedValue(team)
+    handleAdapterUpgrade(adapter(TEAM_COMPUTER) as never, raw() as never, Buffer.alloc(0)); await flush()
+    expect(m.computerSignedIn).not.toHaveBeenCalled()
   })
 
   it('tells the turn tracking a team session\'s turn from a normal sign-in\'s', async () => {

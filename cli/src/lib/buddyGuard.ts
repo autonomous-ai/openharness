@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { buddyAccountFile } from './buddyAccount.js'
+import { PASTE_DROPS_DIR } from './pasteDropFiles.js'
 import { env } from '../config/env.js'
 
 /**
@@ -25,6 +26,11 @@ const listsDir = () => join(env.ADAPTER_DATA_DIR, 'buddy-reads')
 
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
 
+/** Lists that nothing has written to for a day, of sessions ended or quiet, hold no grant still live: best-effort, at each
+ *  write. A mark goes once its list has, and not before: its session's end still finds the list by it. A listed file lasts
+ *  as long, as Harness keeps a download a day (lib/pasteDropFiles.ts). */
+const KEPT_MS = 24 * 60 * 60 * 1000
+
 /** The list for one Buddy session, by its Swarm skill's key. */
 export function buddyReadsOf(key: string): BuddyReads {
   return { file: join(listsDir(), `${sha256(key)}.json`) }
@@ -40,24 +46,32 @@ const MARK = /\.[0-9a-f]{64}\.owner$/
 
 /** The grant: to this session, at this launch, for this account, at this time (delta reviews of #2310). */
 interface Grant { session: string; account: string; launch: string; at: number }
-/** `session`: the native session the host delivered to, whose list goes when the Swarm ends it (`forgetBuddyReads`). A list an
- *  older release wrote also holds the files, links and approvals of the guard; nothing reads them, and they are not kept. */
-interface List { version: 1; session: string; wide?: Grant | false }
+/** `session`: the native session the host delivered to, whose list goes when the Swarm ends it (`forgetBuddyReads`). `files`
+ *  and `links`: what its person sent it, for a Buddy still running the guard of a release before #2832 (`listSentToOldGuard`);
+ *  kept through every write, as that guard reads them. An older list's approvals are not kept: nothing records them now. */
+interface List { version: 1; session: string; wide?: Grant | false; files?: ListedFile[]; links?: ListedLink[] }
+interface ListedFile { path: string; dev: string; ino: string; size: string; sha256: string; at: number }
+interface ListedLink { url: string; at: number }
 
-/** What [file] holds for [session]: nothing another session listed under the same key, nor anything unreadable. */
-function heldList(file: string, session: string): List {
+/** What [file] holds for [session]: nothing another session listed under the same key, nor anything unreadable. Listed files
+ *  and links from the last day only, as long as Harness keeps a download. */
+function heldList(file: string, session: string, now = Date.now()): List {
   const none: List = { version: 1, session }
   try {
-    const held = JSON.parse(readFileSync(file, 'utf8')) as { session?: unknown; wide?: unknown }
+    const held = JSON.parse(readFileSync(file, 'utf8')) as { session?: unknown; wide?: unknown; files?: unknown; links?: unknown }
     if (held.session !== session) return none
     const grant = held.wide === false ? false : held.wide && typeof held.wide === 'object' ? held.wide as Grant : undefined
-    return { version: 1, session, ...(grant !== undefined ? { wide: grant } : {}) }
+    const fresh = (value: unknown) => (Array.isArray(value) ? value : []).filter((entry): entry is Record<string, unknown> => !!entry
+      && typeof entry === 'object' && Number.isFinite(entry.at) && now - (entry.at as number) < KEPT_MS)
+    const files = fresh(held.files).filter((entry): entry is Record<string, unknown> & ListedFile => ['path', 'dev', 'ino', 'size', 'sha256']
+      .every(field => typeof entry[field] === 'string'))
+    const links = fresh(held.links).filter((entry): entry is Record<string, unknown> & ListedLink => typeof entry.url === 'string')
+    return { version: 1, session, ...(grant !== undefined ? { wide: grant } : {}),
+      ...(files.length ? { files: files.map(({ path, dev, ino, size, sha256, at }) => ({ path, dev, ino, size, sha256, at })) } : {}),
+      ...(links.length ? { links: links.map(({ url, at }) => ({ url, at })) } : {}) }
   } catch { return none }
 }
 
-/** Lists that nothing has written to for a day, of sessions ended or quiet, hold no grant still live: best-effort, at each
- *  write. A mark goes once its list has, and not before: its session's end still finds the list by it. */
-const KEPT_MS = 24 * 60 * 60 * 1000
 function sweep(dir: string, now: number): void {
   try {
     const names = readdirSync(dir), present = new Set(names)
@@ -128,6 +142,71 @@ function writeWhole(file: string, value: unknown): void {
 }
 
 /**
+ * Whether the Buddy folder [root] is still locked by the guard of a release before #2832: its guard script, and the local
+ * settings that run it, naming it by this folder's own path, which no commit can know (security review 2 of #2832). A Buddy
+ * launched then keeps running that guard until it starts again (lib/swarmSkills.ts removes the lock at its next launch).
+ */
+export function heldByOldGuard(root: string): boolean {
+  const guard = join(root, '.claude', 'buddy-guard.mjs'), settings = join(root, '.claude', 'settings.local.json')
+  try {
+    const plain = (path: string) => { const stat = lstatSync(path); return stat.isFile() && !stat.isSymbolicLink() }
+    return plain(guard) && plain(settings) && readFileSync(settings, 'utf8').includes(guard)
+  } catch { return false }
+}
+
+/** At most as many entries as the guard before #2832 kept: ten messages' worth of files, and as many links. */
+const MAX_FILES = 100, MAX_LINKS = 50
+/** A download's limit (superTabs/attachments.ts): no larger file is listed. */
+const MAX_BYTES = 256 * 1024 * 1024
+
+/** [path] as a listed file: one regular file with no other name, at most a download's size, by its device, inode, size and
+ *  the SHA-256 of its bytes, all read from the one file opened (never through a link); null for anything else. What the
+ *  guard before #2832 checks again when the Buddy opens it (security reviews 1 and 2 of #2248). */
+function listedFile(path: string, at: number): ListedFile | null {
+  let fd: number | undefined
+  try {
+    const named = lstatSync(path, { bigint: true })
+    if (!named.isFile() || named.nlink !== 1n || named.size > MAX_BYTES) return null
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const stat = fstatSync(fd, { bigint: true })
+    if (!stat.isFile() || stat.nlink !== 1n || stat.dev !== named.dev || stat.ino !== named.ino || stat.size > MAX_BYTES) return null
+    // No more than the size it opened at: a file still being written to is not read on.
+    const hash = createHash('sha256'), chunk = Buffer.alloc(64 * 1024)
+    let total = 0n
+    for (let read; (read = readSync(fd, chunk, 0, chunk.length, null)) > 0;) {
+      total += BigInt(read)
+      if (total > stat.size) return null
+      hash.update(chunk.subarray(0, read))
+    }
+    return { path, dev: String(stat.dev), ino: String(stat.ino), size: String(stat.size), sha256: hash.digest('hex'), at }
+  } catch { return null } finally { if (fd !== undefined) closeSync(fd) }
+}
+
+/**
+ * Lists for a Buddy session still running the guard of a release before #2832 (`heldByOldGuard`) the files and Artifact
+ * links its own person sent it in their own Buddy chat, as that release's host did (task #3159: once #2832 stopped listing,
+ * that guard refused every screenshot Scholes sent his Buddy). The host decides whose a message is (superTabs/host.ts); this
+ * lists only files Harness downloaded into paste-drops, each by its exact path, device, inode, size and SHA-256, which the
+ * guard checks again when the Buddy opens it. Throws when it cannot write, so the host tries the delivery again.
+ * Remove after 2026-12-04, with the older saved mode in engines/claude/launch.ts, once every such Buddy has started again.
+ */
+export function listSentToOldGuard(reads: BuddyReads, sent: { session: string; files: readonly string[]; links: readonly string[] },
+  now = Date.now(), drops: string = PASTE_DROPS_DIR): void {
+  const files = sent.files.flatMap(path => {
+    const file = dirname(path) === drops ? listedFile(path, now) : null
+    return file ? [file] : []
+  })
+  const links = sent.links.flatMap((url): ListedLink[] => artifactLink(url) === url ? [{ url, at: now }] : [])
+  if (!files.length && !links.length) return
+  mkdirSync(dirname(reads.file), { recursive: true, mode: 0o700 })
+  sweep(dirname(reads.file), now)
+  const held = heldList(reads.file, sent.session, now)
+  writeList(reads.file, sent.session, { ...held,
+    files: [...(held.files ?? []).filter(entry => !files.some(file => file.path === entry.path)), ...files].slice(-MAX_FILES),
+    links: [...(held.links ?? []).filter(entry => !links.some(link => link.url === entry.url)), ...links].slice(-MAX_LINKS) })
+}
+
+/**
  * Grants a Buddy session its owner's presence, or takes it back ([wide]), in its list ([reads]). The
  * host decides at each of its person's own messages: theirs, in their own Buddy chat, on their own machine, and the account
  * signed in on this machine (superTabs/host.ts). Throws when it cannot write, so the host tries the delivery again.
@@ -137,7 +216,7 @@ export function grantBuddyWide(reads: BuddyReads, input: { session: string; wide
   const wide: Grant | false = input.wide ? { session: input.session, account: input.account, launch: input.launch, at: now } : false
   mkdirSync(dirname(reads.file), { recursive: true, mode: 0o700 })
   sweep(dirname(reads.file), now)
-  writeList(reads.file, input.session, { ...heldList(reads.file, input.session), wide })
+  writeList(reads.file, input.session, { ...heldList(reads.file, input.session, now), wide })
 }
 
 /** How long a grant holds after its person's last message. */

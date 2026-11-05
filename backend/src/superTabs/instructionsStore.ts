@@ -19,8 +19,9 @@ export async function writeInstructions(tx: Transaction, tabId: string, write: I
   const id = instructionsId(tabId, projectId)
   await tx.superTabInstructions.upsert({ where: { id }, create: { id, tabId, projectId, revision, hash, text, updatedAt: at },
     update: { revision, hash, text, updatedAt: at } })
+  // The lines it dropped ride on the revision they belong to, read with it (ruleGuard.ts droppedLines; at most 500).
   const record = { revision, hash, text, summary: write.summary, writtenByKind: write.writtenBy.kind, writtenBy: write.writtenBy.id,
-    askedBy: write.askedBy, at }
+    askedBy: write.askedBy, at, dropped: write.dropped?.length ? write.dropped as unknown as Prisma.InputJsonValue : null }
   const rid = revisionId(tabId, projectId, revision)
   await tx.superTabInstructionsRevision.upsert({ where: { id: rid }, create: { id: rid, tabId, projectId, ...record }, update: record })
   // Growth: the 51st revision deletes the oldest (design, Growth). Later ones than this (left by a rollback) go too: they

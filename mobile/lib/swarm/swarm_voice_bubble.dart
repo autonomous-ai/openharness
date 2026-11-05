@@ -20,10 +20,6 @@ import 'swarm_attachment_store.dart';
 import 'swarm_file_links.dart';
 import 'voice_length.dart';
 
-/// What →A says for a voice message with no words.
-const swarmVoiceNoWords = 'Not transcribed';
-const swarmVoiceNoWordsLimit = "Not transcribed: today's voice limit was used";
-
 /// A copy of [ref]'s file on the phone, kept in the account's file cache
 /// (swarm_attachment_store.dart); null when none could be had. Replaced by
 /// tests.
@@ -58,24 +54,22 @@ Future<File?> _cachedCopy(BuildContext context, SwarmFileRef ref) async {
 
 /// A voice message (task #2584), on the phone as on Desktop:
 ///
-///     ( ▶ )  ıllıllııılllıı.ılıı.ıll   1:21        →A
+///     ( ▶ )  ıllıllııılllıı.ılıı.ıll   1:21
 ///
 /// Play hears it, and the bars it has played fill in; the time counts what
-/// was played, its length at rest. →A shows its [words] under it, the
-/// message's text, and a second tap hides them. With no [fileRef] — a post
-/// still on its way — nothing plays yet.
+/// was played, its length at rest. It plays only, as Telegram draws it: no
+/// words and no option to show them (anh Dee, 2026-11-04). With no
+/// [fileRef] — a post still on its way — nothing plays yet.
 class SwarmVoiceBubble extends StatefulWidget {
   const SwarmVoiceBubble({
     super.key,
     required this.file,
     required this.voice,
-    required this.words,
     this.fileRef,
   });
 
   final SuperTabAttachment file;
   final SuperTabVoice voice;
-  final String words;
   final SwarmFileRef? fileRef;
 
   @override
@@ -84,7 +78,7 @@ class SwarmVoiceBubble extends StatefulWidget {
 
 class _SwarmVoiceBubbleState extends State<SwarmVoiceBubble> {
   VideoPlayerController? _player;
-  bool _opening = false, _words = false;
+  bool _opening = false;
   String? _problem;
 
   bool get _playing => _player?.value.isPlaying ?? false;
@@ -166,7 +160,6 @@ class _SwarmVoiceBubbleState extends State<SwarmVoiceBubble> {
     final shown = value != null && (playing || position > Duration.zero)
         ? position
         : length;
-    final words = widget.words.trim();
     return Padding(
       key: ValueKey('swarm-voice-bubble-${widget.file.id}'),
       padding: const EdgeInsets.only(top: AppSpace.s),
@@ -252,50 +245,9 @@ class _SwarmVoiceBubbleState extends State<SwarmVoiceBubble> {
                         fontFeatures: const [FontFeature.tabularFigures()],
                       ),
                 ),
-                const SizedBox(width: AppSpace.s),
-                Semantics(
-                  button: true,
-                  label: _words ? 'Hide words' : 'Show words',
-                  excludeSemantics: true,
-                  child: GestureDetector(
-                    key: const ValueKey('swarm-voice-words-toggle'),
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => setState(() => _words = !_words),
-                    child: SizedBox(
-                      height: 44,
-                      child: Center(
-                        child: Text(
-                          '→A',
-                          style: AppType.label(
-                            color: _words
-                                ? AppPalette.accent
-                                : AppPalette.textSecondary,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
               ],
             ),
           ),
-          if (_words)
-            Padding(
-              padding: const EdgeInsets.only(
-                top: AppSpace.s,
-                left: AppSpace.xs,
-              ),
-              child: Text(
-                words.isNotEmpty
-                    ? words
-                    : widget.voice.overLimit
-                    ? swarmVoiceNoWordsLimit
-                    : swarmVoiceNoWords,
-                style: words.isNotEmpty
-                    ? AppType.body(color: AppPalette.textPrimary)
-                    : AppType.caption(color: AppPalette.textSecondary),
-              ),
-            ),
           if (_problem case final problem?)
             Padding(
               padding: const EdgeInsets.only(

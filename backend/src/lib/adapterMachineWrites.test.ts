@@ -102,6 +102,24 @@ describe('an adapter socket\'s writes to its machine row', () => {
     expect(writes()[2]).toEqual({ lastSeenAt: new Date(t0.getTime() + 10 * MIN) })
   })
 
+  it('writes nothing when a socket closes within a minute of the row\'s last stamp, as each turn of a reconnect loop does (#3119)', async () => {
+    m.machineService.resolveOrCreateForComputer.mockResolvedValue({ machine: { ...row, lastSeenAt: new Date(t0.getTime() - 30_000) }, created: false })
+    for (let turn = 0; turn < 3; turn++) {
+      await connect()
+      vi.setSystemTime(t0.getTime() + 10_000 * turn + 5_000)
+      ws.close(); await flush()
+    }
+    expect(writes()).toEqual([])
+  })
+
+  it('stamps once at close when the row\'s last stamp is a minute old', async () => {
+    m.machineService.resolveOrCreateForComputer.mockResolvedValue({ machine: { ...row, lastSeenAt: new Date(t0.getTime() - 30_000) }, created: false })
+    await connect()
+    vi.setSystemTime(t0.getTime() + 30_000)
+    ws.close(); await flush()
+    expect(writes()).toEqual([{ lastSeenAt: new Date(t0.getTime() + 30_000) }])
+  })
+
   it('writes one update on a connect after 5 minutes away, with a changed fact riding in it', async () => {
     m.machineService.resolveOrCreateForComputer.mockResolvedValue({ machine: { ...row, lastSeenAt: new Date(t0.getTime() - 10 * MIN) }, created: false })
     await connect('0.5.14')

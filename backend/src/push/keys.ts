@@ -1,11 +1,15 @@
 import { createPrivateKey, type KeyObject } from 'node:crypto'
 
-/** Apple's push key (a .p8 from the developer account), the ids it is signed with, and the app it sends to. */
-export interface ApnsKeys { keyId: string; teamId: string; privateKey: KeyObject; topic: string }
+/** One of Apple's push keys (a .p8 from the developer account) and its Key ID. */
+export interface ApnsKey { keyId: string; privateKey: KeyObject }
+/** Apple's push keys are per environment: the production key signs for the production host alone, the sandbox key (an Xcode
+ *  build's tokens) for the sandbox host alone; each is refused on the other host (Ken, 11-05). The team, and the app they send to. */
+export interface ApnsKeys { teamId: string; topic: string; production: ApnsKey; sandbox: ApnsKey | null }
 /** The Firebase service account that sends to Android phones. */
 export interface FcmAccount { projectId: string; clientEmail: string; privateKey: KeyObject; tokenUri: string }
 
-export interface PushEnv { APNS_KEY_ID: string; APNS_TEAM_ID: string; APNS_PRIVATE_KEY: string; APNS_TOPIC: string; FCM_SERVICE_ACCOUNT: string }
+export interface PushEnv { APNS_KEY_ID: string; APNS_TEAM_ID: string; APNS_PRIVATE_KEY: string; APNS_SANDBOX_KEY_ID: string; APNS_SANDBOX_PRIVATE_KEY: string
+  APNS_TOPIC: string; FCM_SERVICE_ACCOUNT: string }
 
 /** A PEM private key with its line breaks as `\n`, or base64 of the file. Errors name the variable, never the value. */
 function readKey(name: string, value: string, type: 'ec' | 'rsa'): KeyObject {
@@ -39,11 +43,16 @@ function readAccount(value: string): FcmAccount {
  */
 export function pushKeysFromEnv(env: PushEnv): { apns: ApnsKeys | null; fcm: FcmAccount | null } {
   const keyId = env.APNS_KEY_ID.trim(), teamId = env.APNS_TEAM_ID.trim(), key = env.APNS_PRIVATE_KEY.trim()
+  const sandboxId = env.APNS_SANDBOX_KEY_ID.trim(), sandboxKey = env.APNS_SANDBOX_PRIVATE_KEY.trim()
+  const missing = (pairs: string[][]) => pairs.filter(([, v]) => !v).map(([n]) => n).join(', ')
   let apns: ApnsKeys | null = null
-  if (keyId || teamId || key) {
-    const missing = [['APNS_KEY_ID', keyId], ['APNS_TEAM_ID', teamId], ['APNS_PRIVATE_KEY', key]].filter(([, v]) => !v).map(([n]) => n)
-    if (missing.length) throw new Error(`Set APNS_KEY_ID, APNS_TEAM_ID and APNS_PRIVATE_KEY for phone push, or none: ${missing.join(', ')} missing.`)
-    apns = { keyId, teamId, privateKey: readKey('APNS_PRIVATE_KEY', key, 'ec'), topic: env.APNS_TOPIC.trim() }
+  if (keyId || teamId || key || sandboxId || sandboxKey) {
+    const production = missing([['APNS_KEY_ID', keyId], ['APNS_TEAM_ID', teamId], ['APNS_PRIVATE_KEY', key]])
+    if (production) throw new Error(`Set APNS_KEY_ID, APNS_TEAM_ID and APNS_PRIVATE_KEY for phone push, or none: ${production} missing.`)
+    const sandbox = sandboxId || sandboxKey ? missing([['APNS_SANDBOX_KEY_ID', sandboxId], ['APNS_SANDBOX_PRIVATE_KEY', sandboxKey]]) : ''
+    if (sandbox) throw new Error(`Set APNS_SANDBOX_KEY_ID and APNS_SANDBOX_PRIVATE_KEY together, or neither: ${sandbox} missing.`)
+    apns = { teamId, topic: env.APNS_TOPIC.trim(), production: { keyId, privateKey: readKey('APNS_PRIVATE_KEY', key, 'ec') },
+      sandbox: sandboxId ? { keyId: sandboxId, privateKey: readKey('APNS_SANDBOX_PRIVATE_KEY', sandboxKey, 'ec') } : null }
   }
   return { apns, fcm: env.FCM_SERVICE_ACCOUNT.trim() ? readAccount(env.FCM_SERVICE_ACCOUNT) : null }
 }

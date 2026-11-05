@@ -12,6 +12,7 @@ import 'package:harness_mobile/swarm/swarm_message_row.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 
+import 'picture_loads.dart';
 import 'swarm_attachment_fakes.dart';
 
 /// Chat files open through short-lived signed links (backend fileLinks.ts):
@@ -411,6 +412,8 @@ void main() {
         .isNotEmpty;
 
     Future<void> closed(WidgetTester tester) async {
+      // [shown] is a load asked for, not read: the folder goes after it.
+      await picturesLoaded(tester);
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(minutes: 1));
     }

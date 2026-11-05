@@ -22,7 +22,7 @@ import { SESSION_ENDED_KIND } from './buddySessions.js'
 import { canReadGroup, projectOf } from './projects.js'
 import { groupsBy, readBy } from './parts/indexed.js'
 import type { ThreadFacet } from './pageReads.js'
-import type { ReplyRow } from '../push/notices.js'
+import type { ReplyReason, ReplyRow } from '../push/notices.js'
 import { shownNameOf } from './personNames.js'
 import { FIELDS, readable, row as messageRow, type Row } from './read/inbox.js'
 
@@ -104,6 +104,9 @@ export async function writeReplyActivity(tx: Tx, tabId: string, messages: Messag
     const group = fanout?.state.conversations.find(c => c.id === m.conversationId)
     const spread = fanout && group && !m.source ? threadPeople(fanout.threads.get(m.thread!), m.thread!) : { tagged: [], repliers: [] }
     const tagsHere = new Set(m.mentions ?? [])
+    // Why each person is told, for the phone's push (push/notices.ts): the first that holds, in replyAudience's order.
+    const why = (personId: string): ReplyReason => personId === starter ? 'starter' : personId === quoted ? 'quoted'
+      : spread.tagged.includes(personId) ? 'tagged' : 'replier'
     const told = replyAudience({ starter, quoted, ...spread }).filter(personId => {
       if (own(m.author, personId) || tagsHere.has(personId)) return false
       // A chat the command's state does not hold (a quiet one) tells the starter and the quoted author, as without `fanout`.
@@ -111,7 +114,7 @@ export async function writeReplyActivity(tx: Tx, tabId: string, messages: Messag
       const person = people.get(personId)
       return !!person && canReadGroup(fanout!.state, { kind: 'person', userId: person.id, email: person.email }, group)
     })
-    return { message: m, people: told }
+    return { message: m, people: told, why }
   })
   const markIds = [...new Set(recipients.flatMap(({ message, people }) => people.map(personId =>
     stableId(tabId, message.conversationId, message.thread!, personId))))]
@@ -126,14 +129,14 @@ export async function writeReplyActivity(tx: Tx, tabId: string, messages: Messag
     { $match: { _id: { $in: settingIds } } }, { $project: { _id: 1, notify: 1 } },
   ] }) as unknown as Array<{ _id: string; notify?: string }>
   const muted = new Set(settings.filter(row => row.notify === 'muted').map(row => row._id))
-  const data = recipients.flatMap(({ message: m, people }) => {
+  const data = recipients.flatMap(({ message: m, people, why }) => {
     return people.filter(personId => !unfollowed.has(stableId(tabId, m.conversationId, m.thread!, personId))
-      && !muted.has(stableId(tabId, m.conversationId, personId, 'notify'))).map(personId => ({ id: stableId(tabId, 'reply', m.id, personId), tabId, personId, kind: 'reply', conversationId: m.conversationId,
+      && !muted.has(stableId(tabId, m.conversationId, personId, 'notify'))).map(personId => ({ why: why(personId), row: { id: stableId(tabId, 'reply', m.id, personId), tabId, personId, kind: 'reply', conversationId: m.conversationId,
       messageId: m.id, threadId: m.thread!, actorKind: m.author.kind, actorId: m.author.id, emoji: null, createdAt: new Date(now), readAt: null,
-      ...sequences.has(m.id) ? { sequence: sequences.get(m.id)! } : {}, ...m.alsoInChat ? { alsoInChat: true } : {} }))
+      ...sequences.has(m.id) ? { sequence: sequences.get(m.id)! } : {}, ...m.alsoInChat ? { alsoInChat: true } : {} } }))
   })
-  if (data.length) await tx.superTabActivity.createMany({ data })
-  return data
+  if (data.length) await tx.superTabActivity.createMany({ data: data.map(({ row }) => row) })
+  return data.map(({ row, why }) => ({ ...row, why }))
 }
 
 /** The row of the reaction `reactionId`, for the person who wrote the message, unless they reacted themselves: written when the
@@ -153,9 +156,12 @@ export async function writeReactionActivity(tx: Tx, write: { tabId: string; reac
 /** A digest of which of the person's rows are unread, moving when one is written, read or removed: a client reads its list
  *  again when it moves, never on a timer. It carries no count and no chat: only that something changed. */
 export async function activityDigest(tx: Tx, tabId: string, personId: string, now: number): Promise<string> {
-  const rows = await tx.superTabActivity.findMany({ where: { tabId, personId, createdAt: { gt: new Date(now - ACTIVITY_EXPIRY_MS) }, ...unread },
-    orderBy: { createdAt: 'desc' }, take: ACTIVITY_DIGEST_ROWS, select: { id: true } })
-  return createHash('sha256').update(rows.map(r => r.id).sort().join('\n')).digest('base64url').slice(0, 16)
+  // A plain `$match` through the unread index: `readAt: null` matches a row with no readAt too. Prisma's read sent an `$expr`
+  // the index could bound only by person, and examined every row of theirs of 30 days (task #3146).
+  const rows = await readBy(tx, 'SuperTabActivity', 'unread', [
+    { $match: { tabId, personId, readAt: null, createdAt: { $gt: { $date: new Date(now - ACTIVITY_EXPIRY_MS).toISOString() } } } },
+    { $sort: { createdAt: -1 } }, { $limit: ACTIVITY_DIGEST_ROWS }, { $project: { _id: 1 } }])
+  return createHash('sha256').update(rows.map(r => r._id as string).sort().join('\n')).digest('base64url').slice(0, 16)
 }
 
 export interface ActivityItem {

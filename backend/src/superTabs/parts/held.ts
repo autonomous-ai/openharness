@@ -10,7 +10,7 @@
 import type { Prisma } from '@prisma/client'
 import { sizeOf } from '../cache.js'
 import { recordCache } from '../cacheStats.js'
-import { ms } from './light.js'
+import { ms, rawPartRow } from './light.js'
 import { groupsBy, type GroupIndex } from './indexed.js'
 import { partId, type PartRow } from './write.js'
 
@@ -19,8 +19,6 @@ type Where = Record<string, unknown>
 
 /** What every process may hold, all Swarms together, measured as the read cache measures (cache.ts sizeOf). */
 export const HELD_MAX_BYTES = 32 * 1024 * 1024
-/** More changed machine parts than this are read in one query of them all, not one by id each. */
-const FEW = 4
 
 interface Held { columns: string; value: unknown; bytes: number; read: number }
 interface Tab { tabId: string; parts: Map<string, Held>; reads: number; bytes: number }
@@ -32,6 +30,9 @@ function columnsOf(row: Record<string, unknown>): string {
 }
 const byKey = (rows: PartRow[]) => rows.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
 const COLUMNS = { _id: 0, key: 1, version: 1, changedAt: 1, readAt: 1, dormant: 1 }
+/** A group's columns: it has no readAt, and every other one is in the held index (parts/indexed.ts `held`), so a listing of the
+ *  awake ones through it reads no document. */
+const GROUP_COLUMNS = { _id: 0, key: 1, version: 1, changedAt: 1, dormant: 1 }
 
 export class HeldParts {
   private readonly tabs = new Map<string, Tab>()
@@ -90,8 +91,11 @@ export class HeldParts {
   }
 }
 
-/** The process's held parts. */
+/** The process's held parts: machine reports'. */
 export const HELD = new HeldParts()
+/** Commands' (parts/load.ts loadActive), apart from the reports': each read lets go of what it did not select, and a report
+ *  selects only running work and Lead conversations, where a command selects every awake conversation. */
+export const COMMAND_HELD = new HeldParts()
 
 export class HeldRead {
   constructor(private readonly owner: HeldParts, private readonly tab: Tab, private readonly at: number) {}
@@ -113,8 +117,10 @@ export class HeldRead {
     }
     if (!changed.length) recordCache('held-machines', 'hit')
     else {
-      const read = changed.length > FEW ? (await all()).filter(row => !rows.has(row.key))
-        : (await Promise.all(changed.map(key => tx.swarmMachine.findUnique({ where: { id: partId(tabId, key) } })))).filter(row => !!row && !row.deleted) as unknown as PartRow[]
+      // However many changed, one read by id: one `findUnique` each was a top slow shape on prod (task #3119). Raw, so the ids
+      // are a plain `$in` on `_id`.
+      const read = (await tx.swarmMachine.aggregateRaw({ pipeline: [{ $match: { _id: { $in: changed.map(key => partId(tabId, key)) }, deleted: false } }] }) as
+        unknown as Array<Record<string, unknown>>).map(rawPartRow)
       for (const row of this.kept('machine', read, 'parts')) rows.set(row.key, row)
     }
     return byKey([...rows.values()])
@@ -124,7 +130,7 @@ export class HeldRead {
   async groups(tx: Transaction, reads: ReadonlyArray<readonly [GroupIndex, Where]>): Promise<Array<Record<string, unknown>>> {
     const { tabId } = this.tab
     const read = (columns: boolean) => Promise.all(reads.map(([index, match]) => groupsBy(tx, index, [
-      { $match: { tabId, deleted: false, ...match } as Prisma.InputJsonValue }, ...columns ? [{ $project: COLUMNS }] : []])))
+      { $match: { tabId, deleted: false, ...match } as Prisma.InputJsonValue }, ...columns ? [{ $project: GROUP_COLUMNS }] : []])))
     const once = (rows: Array<Record<string, unknown>>) => [...new Map(rows.map(row => [row.key as string, row])).values()]
     // Holding none of them, the whole reads alone, as before.
     if (!this.owner.holds(this.tab, 'group')) return this.kept('group', once((await read(false)).flat()), 'cold')

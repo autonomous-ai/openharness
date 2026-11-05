@@ -5318,6 +5318,56 @@ describe('swarm cards', () => {
       }
     })
 
+    it('supertab frame says personal', async () => {
+      const state = { cards: [card('st1', [withBuddy()], { personal: true }), card('st2', [withBuddy()])] }
+      const { session, port } = await connect(cardHost(state))
+      try {
+        port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(2))
+        const frames = ofType(port, 'supertab')
+        expect(frames.find((f) => f.id === 'st1')?.personal).toBe(true)
+        expect(frames.find((f) => f.id === 'st2')).not.toHaveProperty('personal')
+      } finally { await session.stop() }
+    })
+
+    it('a swarmNeedsYou dial gets no Buddy quiet notice', async () => {
+      for (const hello of [{ ...BUDDY, swarmNeedsYou: 'v1' }, BUDDY]) {
+        const state = { cards: [card('st1', [withBuddy()])] }
+        const { session, port } = await connect(cardHost(state))
+        try {
+          port.say(hello)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          await settle(); await settle()
+          state.cards = [card('st1', [withBuddy({ notice: pmNotice('n1'), buddyNotice: buddyNotice('b1') })])]
+          await session.syncSwarmCards()
+          await vi.waitFor(() => expect(ofType(port, 'supertab.notice').length).toBeGreaterThan(0))
+          await new Promise((r) => setTimeout(r, 350))
+          expect(ofType(port, 'supertab.notice').map((n) => n.id)).toEqual(hello === BUDDY ? ['n1', 'b1'] : ['n1'])
+        } finally { await session.stop() }
+      }
+    })
+
+    it('a decision notice goes only to a swarmNeedsYou dial; any other dial keeps the tag notice it covers, or none', async () => {
+      const tagOne = { chat: 'group' as const, chatId: 'g1', id: 'tag1', text: 'Sam: look', at: 1792560000 }
+      const decided = { chat: 'lead' as const, chatId: 'lead1', id: 'dec1', text: 'Dee asks you: Ship it?', at: 1792560100, decision: true as const }
+      for (const [hello, covered] of [[{ ...BUDDY, swarmNeedsYou: 'v1' }, true], [BUDDY, true], [BUDDY, false]] as const) {
+        const state = { cards: [card('st1', [withBuddy()])] }
+        const { session, port } = await connect(cardHost(state))
+        try {
+          port.say(hello)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          await settle(); await settle()
+          state.cards = [card('st1', [withBuddy({ notice: covered ? { ...decided, tag: tagOne } : decided })])]
+          await session.syncSwarmCards()
+          await new Promise((r) => setTimeout(r, 350))
+          const ids = ofType(port, 'supertab.notice').map((n) => n.id)
+          expect(ids).toEqual('swarmNeedsYou' in hello ? ['dec1'] : covered ? ['tag1'] : [])
+          // Nothing a dial is sent names the daemon's own fields.
+          for (const n of ofType(port, 'supertab.notice')) { expect(n).not.toHaveProperty('decision'); expect(n).not.toHaveProperty('tag') }
+        } finally { await session.stop() }
+      }
+    })
+
     // Review of #2500: with one Swarm Buddy, its one word badges every card; seeing the Buddy side clears them all.
     it('showing the Buddy side reads the Swarm Buddy\'s notice on every card that shares it, and no other chat\'s', async () => {
       const own = { ...buddyNotice('o1'), chatId: 'own-chat' }
@@ -5509,36 +5559,22 @@ describe('swarm cards', () => {
         } finally { await session.stop() }
       })
 
-      it('a voice post that starts a thread opens it in the window, for a swarmThread dial only', async () => {
-        const started = { said: true as const, thread: { tabId: 'st1', conversationId: 'lead-c1', root: 'm9' } }
-        for (const [hello, calls] of [[THREAD, [['st1', 'lead-c1', 'm9']]], [BUDDY, []]] as const) {
-          const swarmSay = vi.fn(async () => started)
-          const host = cardHost({ cards: [card('st1', [withBuddy({ local: 'h1', sideChat: { kind: 'lead', id: 'lead-c1', name: 'Lead', working: false } })])] },
+      it('words said on the face stay there: they start no thread and open nothing in the window (Diego, 2026-11-05)', async () => {
+        for (const sideChat of [{ kind: 'lead' as const, id: 'lead-c1', name: 'Lead', working: false }, { kind: 'group' as const, id: 'g1', name: 'Fix login', working: false }]) {
+          const swarmSay = vi.fn(async (..._args: unknown[]) => ({ said: true as const }))
+          const host = cardHost({ cards: [card('st1', [withBuddy({ local: 'h1', sideChat })])] },
             { transcribe: vi.fn(async () => 'build it'), route: vi.fn(), swarmSay })
           const { session, port } = await connect(host)
           try {
-            port.say(hello); await settle()
+            port.say(THREAD); await settle()
             voice(port, 'h1')
             await vi.waitFor(() => expect(swarmSay).toHaveBeenCalled())
             await settle(); await settle()
-            // A thread start is no project pick: nothing but the thread frame reaches the window.
-            expect(vi.mocked(host.superTabThread!).mock.calls).toEqual(calls)
+            expect(swarmSay.mock.calls[0][5]).toEqual({ thread: null })
+            expect(host.superTabThread).not.toHaveBeenCalled()
             expect(host.superTabSelected).not.toHaveBeenCalled()
           } finally { await session.stop() }
         }
-      })
-
-      it('a group face\'s thread is opened in the window the same way', async () => {
-        const swarmSay = vi.fn(async () => ({ said: true as const, thread: { tabId: 'st1', conversationId: 'g1', root: 'm9' } }))
-        const host = cardHost({ cards: [card('st1', [withBuddy({ local: 'h1', sideChat: { kind: 'group', id: 'g1', name: 'Fix login', working: false } })])] },
-          { transcribe: vi.fn(async () => 'status'), route: vi.fn(), swarmSay })
-        const { session, port } = await connect(host)
-        try {
-          port.say(THREAD); await settle()
-          voice(port, 'h1')
-          await vi.waitFor(() => expect(host.superTabThread).toHaveBeenCalled())
-          expect(vi.mocked(host.superTabThread!).mock.calls).toEqual([['st1', 'g1', 'm9']])
-        } finally { await session.stop() }
       })
 
       it('words to a Lead\'s terminal tile start no thread, but are held to the face\'s thread', async () => {
@@ -5554,7 +5590,7 @@ describe('swarm cards', () => {
           expect(swarmSay.mock.calls[0][5]).toEqual({ thread: 'm9' })
           voice(port, 'h1')
           await vi.waitFor(() => expect(swarmSay).toHaveBeenCalledTimes(2))
-          expect(swarmSay.mock.calls[1][5]).toEqual({ thread: 'm9', threaded: true })
+          expect(swarmSay.mock.calls[1][5]).toEqual({ thread: 'm9' })
         } finally { await session.stop() }
       })
 
@@ -5583,11 +5619,6 @@ describe('swarm cards', () => {
           port.say({ t: 'supertab.thread.leave', tab: 'st1', lead: 'lead1' }); await settle(); await settle()
           await get()
           expect(swarmCardRecap).toHaveBeenCalledTimes(3)
-          // Its words starting one.
-          voice(port, 'h1')
-          await vi.waitFor(() => expect(host.superTabThread).toHaveBeenCalledTimes(2))
-          await get()
-          expect(swarmCardRecap).toHaveBeenCalledTimes(4)
         } finally { now.mockRestore(); await session.stop() }
       })
     })
@@ -5602,7 +5633,7 @@ describe('swarm cards', () => {
           port.say(hello); await settle()
           voice(port, 'h1')
           await vi.waitFor(() => expect(swarmSay).toHaveBeenCalled())
-          expect(swarmSay.mock.calls[0].slice(5)).toEqual(threaded ? [{ thread: null, threaded: true }] : [])
+          expect(swarmSay.mock.calls[0].slice(5)).toEqual(threaded ? [{ thread: null }] : [])
         } finally { await session.stop() }
       }
     })

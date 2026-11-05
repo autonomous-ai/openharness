@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { PrismaClient } from '@prisma/client'
+import type { EngineCpu } from './engineCpu.js'
 import { createQueryStats, enterWork, estimateBytes, filterShape, registerWorkContext, runWork, withQueryStats, workKind, type QueryStatsOptions } from './queryStats.js'
 
 type Logged = { message: string; context: Record<string, unknown> }
@@ -277,6 +278,34 @@ describe('the query hook', () => {
 
   it('keeps a query\'s result when the histogram throws', async () => {
     const run = hooked(() => { throw new Error('registry broke') })
+    await expect(run({ model: 'User', operation: 'count', args: {}, query: async () => 3 })).resolves.toBe(3)
+  })
+})
+
+describe('the query hook feeds the engine CPU sampler (#3041)', () => {
+  type Call = { model?: string; operation: string; args: unknown; query: (args: unknown) => Promise<unknown> }
+  function hookedEngine(engine: Partial<EngineCpu>) {
+    let hook: ((call: Call) => Promise<unknown>) | undefined
+    const client = { $extends: (extension: { query: { $allOperations: (call: Call) => Promise<unknown> } }) => { hook = extension.query.$allOperations; return client } }
+    withQueryStats(client as unknown as PrismaClient, () => undefined, () => {}, undefined, undefined, () => engine as EngineCpu)
+    return (call: Call) => hook!(call)
+  }
+
+  it('starts and ends one slot for every query, a failed one too, with what its start answered', async () => {
+    const calls: unknown[][] = []
+    const sample = { ns: 5, seq: 1 }
+    const run = hookedEngine({ start: () => { calls.push(['start']); return sample }, end: (...args) => { calls.push(['end', ...args]) } })
+    await run({ model: 'User', operation: 'findFirst', args: {}, query: async () => ({ id: 'u1' }) })
+    const failure = new Error('write conflict')
+    await expect(run({ model: 'User', operation: 'update', args: {}, query: async () => { throw failure } })).rejects.toBe(failure)
+    expect(calls).toEqual([
+      ['start'], ['end', sample, 'User', 'findFirst', {}, { id: 'u1' }],
+      ['start'], ['end', sample, 'User', 'update', {}, undefined],
+    ])
+  })
+
+  it('keeps a query\'s result when the sampler throws at its start or its end', async () => {
+    const run = hookedEngine({ start: () => { throw new Error('start broke') }, end: () => { throw new Error('end broke') } })
     await expect(run({ model: 'User', operation: 'count', args: {}, query: async () => 3 })).resolves.toBe(3)
   })
 })

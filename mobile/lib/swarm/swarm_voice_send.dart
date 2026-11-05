@@ -7,10 +7,6 @@ import 'swarm_request.dart';
 /// for it, as a file.
 const swarmVoiceFileName = 'Voice message.wav';
 
-/// What the chat says when a voice message went without its words.
-const swarmVoiceOverLimit = "Sent without words: today's voice limit is used";
-const swarmVoiceNotTranscribed = "Sent without words: they couldn't be heard";
-
 /// What the chat says when the read of a clip got no answer, from the
 /// backend or the computer it goes through; the take is kept.
 const swarmVoiceNoAnswer = "Not sent · couldn't reach the server";
@@ -67,10 +63,3 @@ Future<({SuperTabVoice? voice, String? refused})> swarmReadVoice(
     }
   }
 }
-
-/// What a sent voice message says, when it went without words.
-String? swarmVoiceSentNote(SuperTabVoice voice) => voice.transcribed
-    ? null
-    : voice.overLimit
-    ? swarmVoiceOverLimit
-    : swarmVoiceNotTranscribed;

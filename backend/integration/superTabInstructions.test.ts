@@ -100,7 +100,7 @@ describe('project instructions storage', () => {
     expect(head.map(p => p.instructionsRevision)).toEqual([1, 1])
   })
 
-  it('refuses the second of two saves on the same revision with the first one\'s text, and posts one line per save', async () => {
+  it('refuses the second of two saves on the same revision with the first one\'s text, and posts no line for either save', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Pilot')).id
     await invite(tab)
     const first = await post(owner, tab, save(1, 'Reviews run on Opus.', 'Reviews run on Opus'))
@@ -109,11 +109,11 @@ describe('project instructions storage', () => {
     expect(second.statusCode).toBe(409)
     expect(second.json().error).toMatchObject({ code: 'INSTRUCTIONS_STALE', revision: 2, text: 'Reviews run on Opus.' })
     expect((await post(peer, tab, save(2, 'Reviews run on Opus.\nTests run on the Mac.', 'Tests run on the Mac'))).statusCode).toBe(200)
+    // No chat line for a save (#3132); each stays a kept revision.
     const lines = (await store.messages(owner, tab, 'lead', {})).messages.filter(m => (m.source as { kind?: string } | null)?.kind === 'instructions')
-    // Each line shows what its save really changed against the stored revision before it (#3021): the first replaced the template.
-    expect(lines.map(m => m.text)).toEqual([expect.stringMatching(/^owner changed the instructions: Reviews run on Opus\.\n\nRemoved section: Project instructions\n[^]*\n\nand \d+ more changes\.$/),
-      // Its text adds a line to the same paragraph (no blank line), so the paragraph shows whole, as it was and as it is.
-      'peer changed the instructions: Tests run on the Mac.\n\nRemoved: Reviews run on Opus.\nAdded: Reviews run on Opus. Tests run on the Mac.'])
+    expect(lines).toEqual([])
+    expect((await db.superTabInstructionsRevision.findMany({ where: { tabId: tab, projectId: 'lead' }, orderBy: { revision: 'asc' } })).map(r => [r.revision, r.summary]))
+      .toEqual([[1, expect.any(String)], [2, 'Reviews run on Opus'], [3, 'Tests run on the Mac']])
     expect((await db.superTabInstructions.findFirstOrThrow({ where: { tabId: tab, projectId: 'lead' } })).revision).toBe(3)
   })
 
@@ -129,6 +129,45 @@ describe('project instructions storage', () => {
     expect(await db.superTabInstructions.count({ where: { tabId: tab, projectId: project } })).toBe(0)
     expect(await db.superTabInstructionsRevision.count({ where: { tabId: tab, projectId: project } })).toBe(0)
     expect(await db.superTabInstructions.count({ where: { tabId: tab, projectId: 'lead' } })).toBe(1)
+  })
+})
+
+// Task #3151: a save that drops a person's rule is refused, and goes through on that person's own message, read by the store,
+// which tells them in their Buddy chats.
+describe('a person\'s rules in a save', () => {
+  it('refuses the PM\'s drop, then saves it on the person\'s own approval and tells them privately', async () => {
+    const { tab, lead } = await withLead()
+    await invite(tab)
+    const rule = 'A bug that reaches stable is promoted back within the hour (peer, 2026-11-04).'
+    expect((await run(tab, save(1, `# Rules\n\n- ${rule}\n- Tests run first (owner, 4 Nov).`), peer)).result.revision).toBe(2)
+    const asLead = (approvals?: string[]) => store.execute(host, tab, { operationId: randomUUID(), command: { ...save(2, '# Rules\n\n- Tests run first (owner, 4 Nov).',
+      'Dropped the promote-back'), askedBy: owner.sub, ...(approvals ? { approvals } : {}) } }, lead)
+    await expect(asLead()).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED', details: { dropped: [{ rule, people: ['peer'], why: 'removed' }] } })
+    // The owner's message is not the peer's approval.
+    const ownerSaid = (await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Drop it.', replyTo: null, recipientIds: [] })).result.messageId as string
+    await expect(asLead([ownerSaid])).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    const peerSaid = (await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Yes, drop my promote-back rule.', replyTo: null, recipientIds: [] }, peer))
+      .result.messageId as string
+    expect((await asLead([peerSaid])).result.revision).toBe(3)
+    // The History keeps what the save dropped, with its kind and who gave it (River, 11-05).
+    expect((await store.instructionRevision(owner, tab, 'lead', 3)).dropped).toEqual([{ text: rule, kind: 'rule', people: ['peer'] }])
+    // Revision 2 replaced the template: every template line it dropped is listed. One stored before the list was kept reads none.
+    expect((await store.instructionRevision(owner, tab, 'lead', 2)).dropped.length).toBeGreaterThan(10)
+    await db.superTabInstructionsRevision.updateMany({ where: { tabId: tab, projectId: 'lead', revision: 2 }, data: { dropped: null } })
+    expect((await store.instructionRevision(owner, tab, 'lead', 2)).dropped).toEqual([])
+    const notices = await db.superTabMessage.findMany({ where: { tabId: tab, text: { contains: 'as you approved' } } })
+    expect(notices.length).toBe(2)
+    for (const notice of notices) {
+      expect(notice.conversationId).not.toBe('lead')
+      expect(notice.text).toContain('A bug that reaches stable')
+      expect(notice.recipientIds).toEqual([])
+    }
+    // Only the peer reads them.
+    const chats = new Set(notices.map(n => n.conversationId))
+    for (const chat of chats) {
+      expect((await store.messages(peer, tab, chat, {})).messages.some(m => m.text.includes('as you approved'))).toBe(true)
+      await expect(store.messages(owner, tab, chat, {})).rejects.toBeTruthy()
+    }
   })
 })
 

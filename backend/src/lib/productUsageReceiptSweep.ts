@@ -26,10 +26,11 @@ import { removeChunk, startChunkSweep } from './chunkSweep.js'
 const COLLECTION = 'product_usage_receipts'
 const DAY = 86_400_000
 const OLD_EXPIRY_DAYS = 36
-/** One delete of 500 every 30 s, about 1,000 a minute. On production's M20 a delete of 500 old receipts took 12–17 s (cold
- *  index pages, read from disk; 2026-11-04), so the database spends about half its time on them at most, and a pass still
- *  running when the next is due skips it. The ~4M old receipts take about 3 days, against 2026-12-04 by expiry alone. */
-export const RECEIPT_SWEEP = { chunk: 500, chunks: 1, pauseMs: 0, everyMs: 30_000 } as const
+/** Ten deletes of 50 every 30 s, 2 s apart: about 1,000 a minute. One delete of 500 held production's primary up to 5.8 s at
+ *  peak (Atlas slow log, 2026-11-05 13:20 VN: 112 deletes, 94 s in an hour, task #3146), with commands queueing behind it;
+ *  a tenth of that is a short write, and the pauses leave the database to the app between them. A pass still running when
+ *  the next is due skips it. The ~4M old receipts take about 3 days, against 2026-12-04 by expiry alone. */
+export const RECEIPT_SWEEP = { chunk: 50, chunks: 10, pauseMs: 2_000, everyMs: 30_000 } as const
 
 /** Every receipt write must carry its life; old receipts, never written again, are not checked. */
 export const RECEIPT_RULE = { validator: { $jsonSchema: { required: ['life'] } }, validationLevel: 'strict', validationAction: 'error' } as const

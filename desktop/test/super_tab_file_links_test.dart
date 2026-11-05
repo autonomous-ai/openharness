@@ -65,7 +65,7 @@ void main() {
   late List<Uri> drawn;
   late Map<String, Uint8List> pictures;
   late Future<bool> Function(Uri) browser;
-  late ImageProvider Function(Uri) image;
+  late ImageProvider Function(AttachmentImage) image;
 
   setUp(() {
     opened = [];
@@ -78,7 +78,8 @@ void main() {
       opened.add(url);
       return true;
     };
-    attachmentImage = (url) {
+    attachmentImage = (picture) {
+      final url = picture.url;
       drawn.add(url);
       return MemoryImage(pictures[url.toString()] ?? Uint8List(3));
     };

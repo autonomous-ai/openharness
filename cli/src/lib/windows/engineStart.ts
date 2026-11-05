@@ -22,12 +22,15 @@
  *
  * Every value the shells are given travels in their environment, never in their command text.
  */
+import { win32 } from 'node:path'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { startupOwnedFlag } from '../../engines/kit/launchStartup.js'
 import { launchContract } from '../../engines/launches.js'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { baseNode } from '../../harnessd/baseNode.js'
 import { engineBin } from '../engineBin.js'
+import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath } from '../gridBinary.js'
+import { managedNodePath } from '../nodeRuntime.js'
 import type { TerminalAfterExit } from '../terminalTypes.js'
 import { WindowsLaunchRefused } from './launch.js'
 import { defaultWindowsShell } from './shell.js'
@@ -118,6 +121,12 @@ export interface WindowsPaneLaunch {
    * the person's ANTHROPIC_API_KEY. Per launch, as the script's unset is: an agent moved home gets them back.
    */
   clearInherited?: string[]
+  /**
+   * What the Unix launch script adds to an engine's pane and Windows had no counterpart of: grid's folder at the
+   * front of PATH and Harness's Node at the end, so an agent's own tool calls find both, and grid's update check off
+   * (GRID_NO_UPDATE_CHECK_VAR) so an agent never replaces the grid this daemon pinned.
+   */
+  env?: Record<string, string>
 }
 
 /** The launch facts `windowsPaneLaunch` reads: its options (lib/engineLaunch.ts `LaunchCommandOptions`). */
@@ -127,6 +136,11 @@ export interface WindowsPaneLaunchOptions {
   native?: Pick<NativeLaunch, 'clearEnvironment'>
   /** The argv is a held pane's (`isWindowsHeldPane`), which hands off to nothing. */
   held?: boolean
+  /** The environment the pane's PATH is built from. `process.env` unless a test hands in one. */
+  environment?: NodeJS.ProcessEnv
+  /** The grid and Node the pane's PATH names. Resolved here unless a test hands them in. */
+  gridBinary?: string
+  nodeRuntime?: string
 }
 
 /**
@@ -139,9 +153,42 @@ export function windowsPaneLaunch(engine: AgentEngine, launch: WindowsPaneLaunch
   platform: NodeJS.Platform = process.platform): WindowsPaneLaunch {
   if (platform !== 'win32') return {}
   const clearInherited = [...new Set([...(launch.clearEnv ?? []), ...(launch.native?.clearEnvironment ?? [])])]
+  const enginePane = !isTerminalEngine(engine) && !launch.held
   return {
     ...(launch.cwd ? { cwd: launch.cwd } : {}),
     ...(clearInherited.length ? { clearInherited } : {}),
-    ...(isTerminalEngine(engine) || launch.held ? {} : { afterExit: windowsAfterExit(engineBin(engine, platform).split(/[\\/]/).pop() || engine) }),
+    ...(enginePane ? { env: windowsPaneEnv(launch) } : {}),
+    ...(enginePane ? { afterExit: windowsAfterExit(engineBin(engine, platform).split(/[\\/]/).pop() || engine) } : {}),
   }
+}
+
+/** The first and last PATH entries an engine's Windows pane needs, and grid's update check off. */
+function windowsPaneEnv(launch: WindowsPaneLaunchOptions): Record<string, string> {
+  // A test that fakes the platform has no Windows environment to read; it passes one, or gets only
+  // the update switch. On Windows itself the daemon's own environment is the pane's base.
+  const real = process.platform === 'win32'
+  const environment = launch.environment ?? (real ? process.env : {})
+  const grid = launch.gridBinary ?? (real ? gridBinaryPath(environment) : '')
+  const node = launch.nodeRuntime ?? (real ? managedNodePath() : '')
+  // Windows names it `Path` as often as `PATH`, and a second spelling would be a duplicate the OS
+  // may resolve to the inherited one: measured on DESKTOP-0TFH0OJ, 2026-11-05, the new `PATH` was
+  // ignored and the agent's shell did not see Harness's Node.
+  const pathName = Object.keys(environment).find((key) => key.toLowerCase() === 'path') ?? 'PATH'
+  const parts = (environment[pathName] ?? '').split(';').filter((part) => part.length > 0)
+  // grid's own folder first, so a managed grid a shell's PATH cannot see is the one the agent runs;
+  // Harness's Node last, because a `node` the person installed still comes first, as on Unix.
+  if (/[\\/]/.test(grid)) prependOnce(parts, win32.dirname(grid))
+  if (node) appendOnce(parts, win32.dirname(node))
+  return {
+    ...(parts.length ? { [pathName]: parts.join(';') } : {}),
+    [GRID_NO_UPDATE_CHECK_VAR]: '1',
+  }
+}
+
+function prependOnce(parts: string[], dir: string): void {
+  if (!parts.some((part) => part.toLowerCase() === dir.toLowerCase())) parts.unshift(dir)
+}
+
+function appendOnce(parts: string[], dir: string): void {
+  if (!parts.some((part) => part.toLowerCase() === dir.toLowerCase())) parts.push(dir)
 }

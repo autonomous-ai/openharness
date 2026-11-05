@@ -199,6 +199,15 @@ class SuperTabAgent {
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
       workDecision = row['workDecision'] as String?,
+      crewRole = switch (row['crew']) {
+        {'role': final String role} when role.isNotEmpty => role,
+        _ => null,
+      },
+      crewLane = switch (row['crew']) {
+        {'lane': final String lane} => lane,
+        _ => null,
+      },
+      crewAsleep = row['asleep'] != null,
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
@@ -237,6 +246,15 @@ class SuperTabAgent {
 
   /// What its coordinator or a person chose for it once its work ended: `keep` or `stop`; `awaiting` while nobody has.
   final String? workDecision;
+
+  /// Its role in its project's crew, the agents the Swarm keeps alive (backend crew.ts, task #3397); null when not crew.
+  final String? crewRole;
+
+  /// The lane a crew member works in (backend, cli, desktop, mobile or docs); null for none.
+  final String? crewLane;
+
+  /// A crew member put to sleep on purpose (task #3398): its session is closed and nothing reopens it.
+  final bool crewAsleep;
 
   /// Its session is closed on its machine and someone chose to keep the agent: the backend removes every other closed
   /// agent from the list (backend closedAgents.ts), so this one is shown as closed, never as Idle.
@@ -394,6 +412,7 @@ class SuperTabConversation {
             )
           : null,
       queueRank = (row['queueRank'] as num?)?.toDouble(),
+      priority = row['priority'] as String?,
       notBefore = DateTime.tryParse(row['notBefore'] as String? ?? ''),
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
@@ -497,6 +516,11 @@ class SuperTabConversation {
   /// places it (task_groups.dart).
   final double? queueRank;
 
+  /// A task's priority as the server keeps it, `P0` to `P3` (backend
+  /// taskPriority.ts); null on a step, a chat, and a task from before it,
+  /// whose title may still mark one (`superTabTaskPriority`, backlog.dart).
+  final String? priority;
+
   /// The day before which its work may not start, a promise the PM keeps
   /// ("remove the preview route after Dec 4"); null when there is none.
   final DateTime? notBefore;
@@ -537,7 +561,10 @@ class SuperTabProject {
       status = SuperTabProjectStatus.read(row['status']),
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
-          : null;
+          : null,
+      repositoryCreation = SuperTabRepositoryCreation.read(
+        row['repositoryCreation'],
+      );
   final String id, name, ownerId, leadConversationId;
 
   /// Sent to the daemon unchanged as `swarmSkillMode` when an agent starts (an older CLI refuses other values).
@@ -566,6 +593,73 @@ class SuperTabProject {
   /// before the first report.
   final SuperTabProjectStatus? status;
   final Map<String, dynamic>? repository;
+
+  /// Its owner's last New Repository from New Project and what GitHub's
+  /// sign-in made of it (task #3374); null when none was asked, and from a
+  /// backend before it.
+  final SuperTabRepositoryCreation? repositoryCreation;
+}
+
+/// A new repository asked for a project (backend projects.ts
+/// `RepositoryCreation`, task #1788): [at] names the ask an outcome answers.
+class SuperTabRepositoryCreation {
+  const SuperTabRepositoryCreation({
+    required this.owner,
+    required this.name,
+    required this.private,
+    required this.at,
+    required this.state,
+    this.repositoryUrl,
+    this.reachable,
+    this.reason,
+  });
+
+  /// Null for anything but a whole ask: the apps then show no outcome.
+  static SuperTabRepositoryCreation? read(Object? value) {
+    if (value is! Map) return null;
+    final owner = value['owner'], name = value['name'];
+    final at = value['at'], state = value['state'];
+    if (owner is! String || name is! String || at is! num || state is! String) {
+      return null;
+    }
+    return SuperTabRepositoryCreation(
+      owner: owner,
+      name: name,
+      private: value['private'] != false,
+      at: at.toInt(),
+      state: state,
+      repositoryUrl: switch (value['repositoryUrl']) {
+        final String url => url,
+        _ => null,
+      },
+      reachable: switch (value['reachable']) {
+        final bool reachable => reachable,
+        _ => null,
+      },
+      reason: switch (value['reason']) {
+        final String reason => reason,
+        _ => null,
+      },
+    );
+  }
+
+  final String owner, name;
+  final bool private;
+
+  /// When it was asked (ms since the epoch, the server's clock).
+  final int at;
+
+  /// `waiting`, `creating`, `created`, `taken`, `refused`, `failed` or
+  /// `cancelled`.
+  final String state;
+  final String? repositoryUrl;
+
+  /// Whether teammates' agents can reach it through the Harness GitHub App,
+  /// once `created`.
+  final bool? reachable;
+
+  /// GitHub's reason, once `refused`.
+  final String? reason;
 }
 
 /// A project's status card text: one per project, replaced by each report
@@ -1245,7 +1339,10 @@ class SuperTabAttachment {
       expiresAt = row['expiresAt'] is num
           ? (row['expiresAt'] as num).toInt()
           : null,
-      voice = SuperTabVoice.read(row['voice']);
+      voice = SuperTabVoice.read(row['voice']),
+      width = _positive(row['width']),
+      height = _positive(row['height']),
+      thumb = SuperTabThumb.read(row['thumb']);
 
   /// [url] is the address the file was stored with, on the attachments CDN:
   /// what an older server hands out, and what stops opening once the bucket
@@ -1270,6 +1367,13 @@ class SuperTabAttachment {
   /// server.
   final SuperTabVoice? voice;
 
+  /// A picture's size as it is shown, and the small copy the server made of
+  /// it at upload (backend superTabs/thumbnails.ts): a chat draws [thumb] and
+  /// the full-screen viewer opens the original. Null for any other file, a
+  /// picture sent before thumbnails, and from an older server.
+  final int? width, height;
+  final SuperTabThumb? thumb;
+
   /// The kinds the backend serves to be seen in place; every other kind is
   /// served as a download.
   bool get isImage => const {
@@ -1278,6 +1382,59 @@ class SuperTabAttachment {
     'image/gif',
     'image/webp',
   }.contains(mime);
+}
+
+int? _positive(Object? value) =>
+    value is num && value == value.toInt() && value > 0 ? value.toInt() : null;
+
+/// The thumbnail of a picture: linked in the same read as the original, so
+/// whoever may open the original may open it and nobody else.
+class SuperTabThumb {
+  const SuperTabThumb({
+    required this.url,
+    required this.width,
+    required this.height,
+    required this.size,
+    this.link,
+    this.expiresAt,
+    this.unlinked = false,
+  });
+
+  /// [row] as a thumbnail, or null when any part of it does not read: the
+  /// picture is then drawn from the original.
+  static SuperTabThumb? read(Object? row) {
+    if (row is! Map) return null;
+    final width = _positive(row['width']),
+        height = _positive(row['height']),
+        size = _positive(row['size']);
+    if (row['url'] is! String ||
+        width == null ||
+        height == null ||
+        size == null) {
+      return null;
+    }
+    return SuperTabThumb(
+      url: row['url'] as String,
+      width: width,
+      height: height,
+      size: size,
+      link: row['link'] is String ? row['link'] as String : null,
+      expiresAt: row['expiresAt'] is num
+          ? (row['expiresAt'] as num).toInt()
+          : null,
+      unlinked: row['unlinked'] == true,
+    );
+  }
+
+  final String url;
+  final int width, height, size;
+
+  /// Its short-lived signed link, as [SuperTabAttachment.link] is the original's.
+  final String? link;
+  final int? expiresAt;
+
+  /// The server could not sign it this time: the original is drawn.
+  final bool unlinked;
 }
 
 /// A voice message's clip, as the server read it once before it was sent:
@@ -1567,6 +1724,11 @@ class SuperTabMessage {
   /// What was typed into an agent's terminal, a scheduled prompt too: no chat
   /// row and nothing unread (Ken 11-04, task #2849). Its answer still is one.
   bool get terminalPrompt => fromTerminal && source['phase'] == 'prompt';
+
+  /// A terminal's recording gap: no chat row and nothing unread, since it gives
+  /// a person nothing to do (Dee 11-05, task #3127). The server keeps it for
+  /// diagnosis, and a required recovery still reaches the coordinator.
+  bool get terminalGap => fromTerminal && source['phase'] == 'gap';
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
 
@@ -1596,16 +1758,11 @@ class SuperTabMessage {
   /// The project chat's line when linked work is Done (ship_row.dart).
   bool get shipLine => source['kind'] == 'ship';
 
-  /// The project and revision an instructions save's chat line names, which
-  /// its "See revision" link opens (#3021); null for any other row.
-  ({String projectId, int revision})? get instructionsSave =>
-      switch ((source['kind'], source['projectId'], source['revision'])) {
-        ('instructions', final String projectId, final num revision) => (
-          projectId: projectId,
-          revision: revision.toInt(),
-        ),
-        _ => null,
-      };
+  /// A line the backend posted for an instructions save: no chat row and
+  /// nothing unread, since it gives a person nothing to do (Dee 11-05, task
+  /// #3165). The backend posts none since #3132; the History keeps every
+  /// revision.
+  bool get instructionsSave => source['kind'] == 'instructions';
 
   /// A line the chat draws as its own row, with no sender's header (view.dart):
   /// a message after it has no header to join (Diego, #2547).

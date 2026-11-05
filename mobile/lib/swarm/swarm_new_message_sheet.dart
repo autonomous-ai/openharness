@@ -511,6 +511,11 @@ class _SwarmNewMessageSheetState extends State<SwarmNewMessageSheet>
     }
     final chat = _chat ??= SwarmConversation(reader, pick.chatId, shown: false)
       ..composer.addListener(_redraw);
+    if (!listEquals(chat.files.files, files.files)) {
+      chat.files
+        ..clear()
+        ..add(files.files);
+    }
     setState(() => _error = _note = null);
     final posted = await chat.sendVoice(take, voiceLanguageStore.value);
     if (!mounted || _closing || _chat != chat) return posted;

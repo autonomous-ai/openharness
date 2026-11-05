@@ -30,8 +30,8 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1300, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final server = swarm();
-    server.ask(['Ship it?']);
     server.append('A root to thread on');
+    server.ask(['Ship it?']);
     final c = server.controller(
       account: 'owner',
       initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},

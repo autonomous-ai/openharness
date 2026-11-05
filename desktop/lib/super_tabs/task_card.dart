@@ -7,9 +7,12 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/harness_activity_mark.dart';
+import 'backlog.dart';
+import 'chip.dart';
 
 /// One card of a project's Tasks view, on the Board and as a List row alike:
-/// its title (up to [titleLines]), caption and shared activity mark.
+/// its title (up to [titleLines]), its caption led by its [priority] badge
+/// (task #3117), and its shared activity mark.
 ///
 /// On the Board it is a [tile] (task #2948): an inset tile set into its
 /// column's panel, one step less rounded than the panel, with no shadow.
@@ -24,6 +27,7 @@ class SuperTabTaskCard extends StatelessWidget {
     required this.unread,
     required this.activity,
     required this.onOpen,
+    this.priority,
     this.titleLines = 2,
     this.tile = false,
     this.selected = false,
@@ -34,6 +38,7 @@ class SuperTabTaskCard extends StatelessWidget {
   final bool needsYou, unread;
   final HarnessActivity activity;
   final VoidCallback onOpen;
+  final SuperTabTaskPriority? priority;
   final int titleLines;
   final bool tile, selected;
   final Widget? trailing;
@@ -47,6 +52,7 @@ class SuperTabTaskCard extends StatelessWidget {
       selected: selected ? true : null,
       label: [
         title,
+        if (priority case final priority?) 'Priority ${priority.badge}',
         caption,
         if (!needsYou)
           switch (activity) {
@@ -86,12 +92,29 @@ class SuperTabTaskCard extends StatelessWidget {
                                     : FontWeight.w400,
                               ),
                     ),
-                    if (caption.isNotEmpty)
-                      Text(
-                        caption,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: muted,
+                    if (priority != null || caption.isNotEmpty)
+                      Padding(
+                        padding: EdgeInsets.only(
+                          top: priority == null
+                              ? 0
+                              : grid.AppDesktop.listRowGap,
+                        ),
+                        child: Row(
+                          children: [
+                            if (priority case final priority?) ...[
+                              SuperTabPriorityBadge(priority),
+                              const SizedBox(width: grid.AppDesktop.menuInset),
+                            ],
+                            Flexible(
+                              child: Text(
+                                caption,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: muted,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                   ],
                 ),

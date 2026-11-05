@@ -121,6 +121,19 @@ class SwarmFileRef {
     return swarmAttachmentLink(_latest.url);
   }
 
+  /// The picture's thumbnail link while it opens for more than
+  /// [swarmLinkMargin], else null: the chat then draws the original. Only ever
+  /// a signed link, and never for a file the backend could not link.
+  Uri? get currentThumb {
+    final thumb = _latest.thumb;
+    if (thumb == null || thumb.unlinked || _latest.unlinked) return null;
+    final signed = thumb.link, ends = thumb.expiresAt;
+    final link = signed == null ? null : swarmSignedLink(signed);
+    if (link == null || ends == null) return null;
+    final left = ends - swarmFileClock().millisecondsSinceEpoch;
+    return left > swarmLinkMargin.inMilliseconds ? link : null;
+  }
+
   /// Whether the message names the file only by addresses this app refuses.
   bool get refused => file.link != null
       ? swarmSignedLink(file.link) == null

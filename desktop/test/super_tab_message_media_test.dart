@@ -4,6 +4,7 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,6 +12,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/attachment_viewer.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/image_cache.dart';
 import 'package:harness/super_tabs/thread_panel.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -29,6 +31,17 @@ Future<Uint8List> _png(WidgetTester tester, int width, int height) async =>
       return data!.buffer.asUint8List();
     }))!;
 
+/// A picture that never arrives: what is shown is its placeholder.
+class _Pending extends ImageProvider<_Pending> {
+  @override
+  Future<_Pending> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture(this);
+
+  @override
+  ImageStreamCompleter loadImage(_Pending key, ImageDecoderCallback decode) =>
+      OneFrameImageStreamCompleter(Completer<ImageInfo>().future);
+}
+
 Map<String, dynamic> _file(
   String id,
   String name,
@@ -45,27 +58,40 @@ Map<String, dynamic> _file(
 
 void main() {
   late List<Uri> loaded;
+  late List<AttachmentImage> asked;
   late Map<String, Uint8List> pictures;
-  late ImageProvider Function(Uri) original;
+  late SuperTabImageCache cache;
+  late ImageProvider Function(AttachmentImage) original;
 
   setUp(() {
     loaded = [];
+    asked = [];
     pictures = {};
+    cache = superTabImageCache;
+    superTabImageCache = SuperTabImageCache(MemoryImageShelf());
     original = attachmentImage;
-    attachmentImage = (url) {
+    attachmentImage = (picture) {
+      final url = picture.url;
+      asked.add(picture);
       loaded.add(url);
       return MemoryImage(pictures[url.pathSegments.last]!);
     };
   });
-  tearDown(() => attachmentImage = original);
+  tearDown(() {
+    attachmentImage = original;
+    superTabImageCache = cache;
+  });
 
   /// A conversation whose one message says [text] and carries [files].
   Future<SuperTabController> show(
     WidgetTester tester, {
     String text = 'Here',
     List<Map<String, dynamic>> files = const [],
+    FutureOr<Map<String, dynamic>> Function(String id)? fileLink,
   }) async {
-    final server = ConversationServer()..append(text, attachments: files);
+    final server = ConversationServer()
+      ..append(text, attachments: files)
+      ..fileLink = fileLink;
     final controller = server.controller();
     await controller.refresh();
     await tester.binding.setSurfaceSize(const Size(1100, 800));
@@ -181,6 +207,7 @@ void main() {
       final failed = Completer<Object>();
       AttachmentImage(
             Uri.parse('https://cdn.harness.autonomous.ai/a1/lies.png'),
+            fileId: 'a1',
           )
           .resolve(ImageConfiguration.empty)
           .addListener(
@@ -275,6 +302,102 @@ void main() {
       expect(find.text('shot.png can’t be shown here.'), findsOneWidget);
       await close(tester, c);
     });
+
+    Finder placeholder(String id) =>
+        find.byKey(ValueKey('super-attachment-placeholder:$id'));
+
+    testWidgets('a picture whose shape is known holds its place at that shape', (
+      tester,
+    ) async {
+      await tester.runAsync(
+        () =>
+            superTabImageCache.keep('a1', Uint8List(8), const Size(1600, 900)),
+      );
+      attachmentImage = (_) => _Pending();
+      final c = await show(
+        tester,
+        files: [_file('a1', 'shot.png', 'image/png')],
+      );
+
+      // Fitted in 360×360 as the picture will be: nothing moves when it comes.
+      expect(tester.getSize(placeholder('a1')), const Size(360, 202.5));
+      await close(tester, c);
+    });
+
+    testWidgets('a shape an earlier launch kept is read before it is shown', (
+      tester,
+    ) async {
+      final shelf = MemoryImageShelf();
+      await tester.runAsync(
+        () =>
+            SuperTabImageCache(shelf)
+                .keep('a1', Uint8List(8), const Size(200, 800)),
+      );
+      superTabImageCache = SuperTabImageCache(shelf);
+      attachmentImage = (_) => _Pending();
+      final c = await show(
+        tester,
+        files: [_file('a1', 'shot.png', 'image/png')],
+      );
+
+      expect(tester.getSize(placeholder('a1')), const Size(90, 360));
+      await close(tester, c);
+    });
+
+    testWidgets('an unknown shape keeps the plain placeholder', (tester) async {
+      attachmentImage = (_) => _Pending();
+      final c = await show(
+        tester,
+        files: [_file('a1', 'shot.png', 'image/png')],
+      );
+
+      expect(tester.getSize(placeholder('a1')), const Size(240, 180));
+      await close(tester, c);
+    });
+
+    testWidgets('no link, no picture, even when it is cached', (tester) async {
+      await tester.runAsync(
+        () => superTabImageCache.keep('a1', Uint8List(8), const Size(10, 10)),
+      );
+      final c = await show(
+        tester,
+        files: [
+          {..._file('a1', 'shot.png', 'image/png'), 'unlinked': true},
+        ],
+        // The server's answer for a reader who may no longer read it; an
+        // error of the ask itself is asked again (file_links.dart).
+        fileLink: (_) => throw const SuperTabFailure(
+          'FORBIDDEN',
+          'no longer yours',
+          statusCode: 403,
+        ),
+      );
+
+      expect(find.text('shot.png can’t be shown here.'), findsOneWidget);
+      expect(asked, isEmpty);
+      await close(tester, c);
+    });
+
+    testWidgets(
+      'the chat asks for it at its size, the viewer for the original',
+      (tester) async {
+        pictures['shot.png'] = await _png(tester, 720, 360);
+        final c = await show(
+          tester,
+          files: [_file('a1', 'shot.png', 'image/png')],
+        );
+        expect(asked.map((p) => (p.fileId, p.side)).toSet(), {('a1', 360.0)});
+
+        await tester.tap(
+          find.byKey(const ValueKey('super-attachment-inline:a1')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(asked.last.fileId, 'a1');
+        expect(asked.last.side, isNull);
+        await close(tester, c);
+      },
+    );
   });
 
   group('the viewer over the chat', () {

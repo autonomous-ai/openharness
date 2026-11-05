@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
+import { readsRawReason } from './startFailure.js'
 import { sweepLiveness } from './liveness.js'
+import { REOPEN_OWNER_MS } from './handed.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
 import { defaultProfileId, hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
 import { activeWork, agentOnly, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration, type Author } from './model.js'
@@ -12,6 +14,7 @@ import { modelMatches } from './rules.js'
 import { appendRouting, instructionsHash } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
+import { LEAD_CAPABILITY, leadHost } from './leadStart.js'
 import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fixture.test-support.js'
 import { groupView } from './read/views.js'
 import { weekStart } from './leaderboard/week.js'
@@ -1761,6 +1764,8 @@ describe('saving a machine again', () => {
       lent: [{ week, busyMs: 18_000_000 }],
       lentDays: [{ day: week, projectId: 'lead', busyMs: 18_000_000 }],
       engineFailures: { codex: 1 },
+      engineBackoff: { codex: { level: 3, cause: 'engine' } },
+      machineFailures: 1, machineBackoff: 2, machineSuspension: { at: NOW, durationMs: 3_600_000 },
       engineSuspensions: { claude: { at: NOW, fine: false } },
       observation: { receivedAt: NOW, runningHarnessIds: ['h1'], stoppedHarnessIds: [] } as never,
     }
@@ -1957,7 +1962,7 @@ describe('any agent of the project', () => {
   it('lets any agent of the project run the task commands', () => {
     const { f, engineer, E } = project(), A = f.worker
     const group = f.run({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits while offline.',
-      checks: [{ description: 'Reconnect preserves the edits.', independent: false }] }, E).result.conversationId as string
+      checks: [{ description: 'Reconnect preserves the edits.', independent: false }], priority: 'P2', requesterId: 'owner' }, E).result.conversationId as string
     const task = () => f.state.conversations.find(c => c.id === group)!
     f.run({ type: 'work.define', conversationId: group, brief: 'Build it.', checks: [{ description: 'Tests pass.', independent: false }] }, E)
     expect(f.run({ type: 'route.record', conversationId: group, decision: record() } as Command, E).result.routeDecisionId).toEqual(expect.any(String))
@@ -2621,7 +2626,7 @@ describe('an agent joining a task by a post or by opening it', () => {
 
   it('checks the team access of an agent that opens a task, which it would be in', () => {
     const { f, mate, mine } = teammate()
-    const create = { type: 'conversation.create', title: 'Fix it', brief: 'Fix it.', checks: [] } as Command
+    const create = { type: 'conversation.create', title: 'Fix it', brief: 'Fix it.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'owner' } as Command
     const groups = f.state.conversations.length
     expect(() => f.run(create, as(mate))).toThrow(refused)
     expect(f.state.conversations).toHaveLength(groups)
@@ -2668,6 +2673,16 @@ describe('cancelling work', () => {
     expect(() => f.run(cancel, { kind: 'agent', agentId: otherLead, machineOwnerId: 'host-owner' })).toThrow()
     f.run(cancel, workerActor)
     expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('cancelled')
+  })
+  it('marks its cancel row with the status, so the scorecard sees the task close (#3386)', () => {
+    const { f, group, leadActor, cancel } = active()
+    const row = f.run(cancel, leadActor).messages.find(m => m.conversationId === group)!
+    expect(row.source).toMatchObject({ kind: 'system', status: 'cancelled' })
+  })
+  it('marks an unassigned task\'s cancel row with the status too', () => {
+    const f = fixture(), group = f.group()
+    const row = f.run({ type: 'work.cancel', conversationId: group, assignmentId: 'current', reason: 'Not needed' }).messages.find(m => m.conversationId === group)!
+    expect(row.source).toMatchObject({ kind: 'system', status: 'cancelled' })
   })
   it('names the owner when the owner cancels and drops a trailing full stop from the reason', () => {
     const { f, cancel } = active()
@@ -2959,14 +2974,16 @@ describe('Reviewer role', () => {
       return { ...setup, built, builderActor, verdict, task, swept }
     }
 
-    it('keeps work in review when a review finds problems: the findings are information, and its quiet time still does not count', () => {
+    // Task #3399: a review that finds problems brings the handed task back to its builder, which has 60 minutes to pick it up.
+    it('brings work in review back to its builder when a review finds problems, and its quiet time counts from then', () => {
       const { verdict, task, swept, builder } = handedOver('review')
       const foundAt = 2000 + 2 * HOUR
       expect(swept(foundAt)).toBe('review')
       const found = verdict(false, foundAt)
-      expect(task()).toMatchObject({ status: 'review', result: 'Ready for review: PR #42 at abc1234' })
-      expect(found.messages.filter(m => m.recipients.includes(builder))).toEqual([])
-      expect(swept(foundAt + 2 * HOUR)).toBe('review')
+      expect(task()).toMatchObject({ status: 'working', result: 'Ready for review: PR #42 at abc1234', reopened: { at: foundAt } })
+      expect(found.messages.filter(m => m.recipients.includes(builder)).map(m => m.text)).toEqual([expect.stringContaining('back with you')])
+      expect(swept(foundAt + REOPEN_OWNER_MS)).toBe('working')
+      expect(swept(foundAt + 2 * HOUR)).toBe('lost')
     })
 
     it('keeps work in review when the review passes', () => {
@@ -3076,16 +3093,15 @@ describe('the owner\'s rules', () => {
     expect(effects.instructions).toEqual({ projectId: 'lead', revision: 2, hash: instructionsHash(text), text, summary: 'Routing: No Haiku.',
       writtenBy: { kind: 'agent', id: f.lead }, askedBy: 'owner', at: 1000 })
     expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 2, instructionsHash: instructionsHash(text) })
-    // One line, as any save: in the writer's name, for the member who asked.
-    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', text: 'lead changed the instructions for owner: Routing: No Haiku.\n\nIn Routing:\nAdded: No Haiku.',
-      source: { kind: 'instructions', projectId: 'lead', revision: 2 } })])
+    // A save posts no line in any chat (#3132); the revision is in the history.
+    expect(effects.messages).toEqual([])
     expect(f.state).not.toHaveProperty('rules')
     // A project at revision 0 runs on the template: the rule lands in its copy, as revision 1. A person asks for themselves.
     delete f.state.projects![0]!.instructionsRevision
     const first = f.run(set({ kind: 'preferIdle' }, 'Idle agents first.'))
     expect(first.instructions).toMatchObject({ revision: 1, text: appendRouting(INSTRUCTIONS_TEMPLATE, 'Idle agents first.'), askedBy: 'owner',
       writtenBy: { kind: 'person', id: 'owner' } })
-    expect(first.messages.map(m => m.text)).toEqual(['owner changed the instructions: Routing: Idle agents first.\n\nIn Routing:\nAdded: Idle agents first.'])
+    expect(first.messages).toEqual([])
     // The stored document must be the revision the state names, or nothing is written.
     expect(() => f.run(set({ kind: 'preferIdle' }), owner, { instructions: { revision: 7, text: doc } }))
       .toThrow(expect.objectContaining({ code: 'INSTRUCTIONS_UNAVAILABLE' }))
@@ -3220,13 +3236,12 @@ describe('the owner\'s rules in a Swarm of projects', () => {
   const doc = (text = '# Doc\n\n## Routing\n\n- Opus.') => ({ instructions: { revision: 1, text } })
   const projectOfChat = (f: ReturnType<typeof projects>, chat: string) => f.state.projects!.find(p => p.leadConversationId === chat)!
 
-  it('lets a project\'s Lead write a rule into that project\'s instructions by quoting a person in its chat, and posts the line there', () => {
+  it('lets a project\'s Lead write a rule into that project\'s instructions by quoting a person in its chat, and posts no line', () => {
     const f = projects()
     const added = f.run(machines(f.app), f.lead, { ...said(), ...doc() })
     expect(added.instructions).toMatchObject({ projectId: projectOfChat(f, f.app).id, revision: 2, text: appendRouting('# Doc\n\n## Routing\n\n- Opus.', 'Only m1.'),
       askedBy: 'owner', summary: 'Routing: Only m1.' })
-    expect(added.messages).toEqual([expect.objectContaining({ conversationId: f.app, text: 'app-lead changed the instructions for owner: Routing: Only m1.\n\nIn Routing:\nAdded: Only m1.',
-      source: { kind: 'instructions', projectId: projectOfChat(f, f.app).id, revision: 2 } })])
+    expect(added.messages).toEqual([])
     expect(f.state).not.toHaveProperty('rules')
     expect(f.run({ type: 'rule.remove', ruleId: 'any', askedIn: { conversationId: f.app, messageId: 'm2' } }, f.lead, said()).result).toMatchObject({ ignored: true })
   })
@@ -3263,7 +3278,7 @@ describe('the owner\'s rules in a Swarm of projects', () => {
     const mine = f.run({ type: 'project.create', name: 'Peer', visibility: 'private', brief: '' }, peer).result as { projectId: string; conversationId: string }
     const added = f.run(forbid(mine.projectId, 'haiku'), peer, doc())
     expect(added.instructions).toMatchObject({ projectId: mine.projectId, askedBy: 'peer' })
-    expect(added.messages).toEqual([expect.objectContaining({ conversationId: mine.conversationId, text: 'peer changed the instructions: Routing: No haiku.\n\nIn Routing:\nAdded: No haiku.' })])
+    expect(added.messages).toEqual([])
     expect(() => f.run(forbid(mine.projectId, 'opus'), owner, doc())).toThrow('unavailable')
     // Public, any member who reads it writes its instructions, the Swarm owner too.
     f.run({ type: 'project.sharing', projectId: mine.projectId, visibility: 'public', memberIds: [] }, peer)
@@ -3393,6 +3408,39 @@ describe('a failed start\'s reason', () => {
     f.state.starts![0]!.error = 'Its machine was removed from the Swarm.'
     expect(read(owner)).toBe('Its machine was removed from the Swarm.')
   })
+
+  // The reported dead end: a Buddy's owner read only "its machine could not prepare or launch it", while the chat told them
+  // the starter and the PM could read why. A Buddy chat is private to its owner, so the reason belongs there whole.
+  it('writes a Buddy start\'s reason whole in its owner\'s chat, never the group line', () => {
+    const f = fixture(); f.invite()
+    const generation = f.state.people[0]!.generation
+    const chat = { id: 'buddy-chat', kind: 'buddy', number: 1, title: "owner's Buddy", leadId: null, agentIds: [],
+      archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
+      audience: { people: [{ id: 'owner', generation }] } }
+    f.state.conversations.push(chat as never)
+    f.state.starts = [{ id: 's1', actorKey: 'person:owner', contributorId: 'owner', membershipGeneration: generation,
+      machineOwnerId: 'owner', request: { conversationId: chat.id, machineId: 'mac', name: "nsonha777's Buddy",
+        buddyOf: { personId: 'owner', generation } }, harnessId: null, dispatched: true, error: null }] as never
+    const [notice] = f.run({ type: 'agent.startFailed', startId: 's1', error: RAW }, owner).messages
+    expect(notice!.conversationId).toBe(chat.id)
+    expect(notice!.text).toBe(`Could not start nsonha777's Buddy: ${RAW}`)
+    expect(notice!.text).not.toContain('Whoever started it')
+  })
+
+  it('lets a Buddy chat\'s owner read the raw reason even when an agent made the start on another machine', () => {
+    const f = fixture(); f.invite()
+    const generation = f.state.people[0]!.generation
+    const chat = { id: 'buddy-chat', kind: 'buddy', number: 1, title: "owner's Buddy", leadId: null, agentIds: [],
+      archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
+      audience: { people: [{ id: 'owner', generation }] } }
+    f.state.conversations.push(chat as never)
+    f.state.starts = [{ id: 's1', actorKey: 'agent:someone', contributorId: 'owner', membershipGeneration: generation,
+      machineOwnerId: 'someone-else', request: { conversationId: chat.id, machineId: 'host-mac', name: "nsonha777's Buddy",
+        buddyOf: { personId: 'owner', generation } }, harnessId: null, dispatched: true, error: RAW }] as never
+    expect(visibleState(f.state, owner).starts![0]!.error).toBe(RAW)
+    // A Swarm member who is not that chat's owner still reads only what the reason means.
+    expect(readsRawReason(peer, f.state.starts![0]!, chat as never)).toBe(false)
+  })
 })
 
 describe('the owner\'s rules, after review', () => {
@@ -3461,6 +3509,25 @@ describe('machine.remove', () => {
       request: { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
         requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as never]
   }
+
+  // Task #3212: Desktop's join add leaves out a computer its person took out of the Swarm, reading this record; Add machine
+  // brings it back. The record is per Swarm, person and computer, and only that person reads it.
+  it('remembers a machine its person took out, only for them, until they add it again', () => {
+    const f = fixture()
+    f.invite()
+    contribute(f, 'peer', 'peer-mac', null)
+    f.run({ type: 'machine.remove', machineId: 'peer-mac' }, peer)
+    expect(f.state.removedMachines).toEqual([{ machineId: 'peer-mac', contributorId: 'peer' }])
+    expect(visibleState(f.state, peer).removedMachines).toEqual(['peer-mac'])
+    expect(visibleState(f.state, owner).removedMachines).toBeUndefined()
+
+    for (const cleanup of f.state.machineCleanups ?? []) cleanup.requestedAt = new Date(-60 * 60_000).toISOString()
+    f.run({ type: 'machine.contribute', machineId: 'peer-mac', name: 'Peer Mac', cwd: '/repo', scope: 'swarm', engines: ['claude'], maxAgents: 2,
+      teamAccountOnly: true }, peer, { contribution: { machineOwnerId: 'peer', contributorId: 'peer', hostGrant: null } })
+    expect(f.state.machines!.some(m => m.machineId === 'peer-mac' && !m.removal)).toBe(true)
+    expect(f.state.removedMachines).toBeUndefined()
+    expect(visibleState(f.state, peer).removedMachines).toBeUndefined()
+  })
 
   // The phone and the web offer Pause/Resume only to the person who lent the machine; the server holds the same line.
   it('lets only the contributor pause or resume a machine', () => {
@@ -4061,7 +4128,7 @@ describe('other projects\' work for Leads', () => {
     const roster = work(docs.projectId, 'Roster', ['desktop/lib/super_tabs'])
     const name = (id: string) => f.state.agents.find(a => a.id === id)!.displayName
     const overlaps = (effects: ReturnType<typeof f.run>) => effects.messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'overlap')
-    const created = f.run({ type: 'conversation.create', title: 'Agents filter', task: task([' ./desktop/lib/super_tabs/roster.dart ', 'cli']), checks }, as(lead))
+    const created = f.run({ type: 'conversation.create', title: 'Agents filter', task: task([' ./desktop/lib/super_tabs/roster.dart ', 'cli']), checks, priority: 'P2', requesterId: 'owner' }, as(lead))
     const group = created.result.conversationId as string
     const text = `"Agents filter" (Pilot, ${name(lead)}) and "Roster" (Docs, ${name(docs.lead)}) both change desktop/lib/super_tabs/roster.dart.`
     // The acting Lead created the overlap and is not told again; the other project's Lead hears it in its own project chat.
@@ -4862,27 +4929,28 @@ describe('checks are information', () => {
 
   it('creates, defines and assigns a task with no checks', () => {
     const f = routed()
-    const group = f.run({ type: 'conversation.create', title: 'Docs', brief: 'Fix the docs.', checks: [] }, f.leadActor).result.conversationId as string
+    const group = f.run({ type: 'conversation.create', title: 'Docs', brief: 'Fix the docs.', checks: [] }, owner).result.conversationId as string
     expect(f.state.conversations.find(c => c.id === group)!.checks).toEqual([])
     f.run(commandSchema.parse({ type: 'work.define', conversationId: group, brief: 'Fix the install docs.', checks: [] }), f.leadActor)
     f.run({ type: 'conversation.agent', conversationId: group, agentId: f.worker, present: true, lead: false }, f.leadActor)
     const assigned = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker })
     expect(assigned.messages.find(m => m.recipients.includes(f.worker))!.text).toBe('Fix the install docs.\n\nStart each pull request body with: Requested by owner through Harness.')
     // A task with no brief at all is assigned too: its title is what its agent reads.
-    const bare = f.run({ type: 'conversation.create', title: 'Look into the flaky test', brief: '', checks: [] }, f.leadActor).result.conversationId as string
+    const bare = f.run({ type: 'conversation.create', title: 'Look into the flaky test', brief: '', checks: [] }, owner).result.conversationId as string
     const other = f.add('other', 'owner', bare)
     expect(f.run({ type: 'work.assign', conversationId: bare, agentId: other }).messages.find(m => m.recipients.includes(other))!.text)
       .toBe('Look into the flaky test\n\nStart each pull request body with: Requested by owner through Harness.')
   })
 
-  it('keeps a failed check as a finding', () => {
+  it('keeps a failed check as a finding, and brings a handed task back to its Engineer', () => {
     const f = routed(), group = f.group(), reviewer = f.add('reviewer', 'owner', group)
     f.run({ type: 'conversation.agent', conversationId: group, agentId: f.worker, present: true, lead: false })
     const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker }).result.assignmentId as string
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Ready for review: PR #42 at abc1234' }, f.workerActor)
     const checkId = f.state.conversations.find(c => c.id === group)!.checks[0]!.id
     const found = f.run({ type: 'work.check', conversationId: group, assignmentId, checkId, passed: false, evidence: 'Two findings at abc1234' }, as(reviewer))
-    expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ status: 'review', result: 'Ready for review: PR #42 at abc1234' })
+    // The task comes back to its Engineer (#3399); its result stays as it wrote it.
+    expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ status: 'working', result: 'Ready for review: PR #42 at abc1234' })
     expect(f.state.conversations.find(c => c.id === group)!.checks[0]).toMatchObject({ passedBy: null, evidence: 'Two findings at abc1234' })
     expect(found.messages.filter(m => m.text.startsWith('Working'))).toEqual([])
   })
@@ -5056,7 +5124,8 @@ describe('notices of failed work', () => {
     const sonnet = other('sonnet', 'claude-sonnet-4-5')
     const attempt = give(sonnet)
     expect(failed(failIt(attempt, sonnet))).toEqual([])
-    expect(mine().assignment).toMatchObject({ id: attempt, status: 'review' })
+    // It comes back to its own agent, in the same attempt (#3399); the grid one above is not pinned, as its next attempt steps up.
+    expect(mine().assignment).toMatchObject({ id: attempt, status: 'working' })
     expect(mine().stepUp).toBeUndefined()
   })
 
@@ -5178,8 +5247,9 @@ describe('an engine that cannot run on a contributed machine', () => {
     expect(late.mentions).toBeUndefined()
     expect(late.text).not.toContain('suspended')
     expect(f.state.machines![0]!.engineSuspensions ?? {}).toEqual({})
-    // A different start that fails next is the second in a row.
-    expect(fail('s2').mentions).toEqual(['owner'])
+    // A different engine failure is only its first; the timeout counted against the machine.
+    expect(fail('s2').mentions).toBeUndefined()
+    expect(fail('s3').mentions).toEqual(['owner'])
   })
 
   // Quota is information, not a gate (project instructions, phase 4).
@@ -5195,6 +5265,33 @@ describe('an engine that cannot run on a contributed machine', () => {
     expect(exhausted.begin().result.startId).toBeTruthy()
     // A reading that says nothing of the engine keeps today's behaviour.
     expect(setup().begin().result.startId).toBeTruthy()
+  })
+
+  it('refuses every engine and grid starts while the machine is suspended', () => {
+    const { f, begin } = setup({ localModels: [{ grid, model: 'qwen3', kind: 'local' }] })
+    f.state.localModels = { grid, enabled: true }
+    f.state.machines![0]!.engines = ['codex', 'claude']
+    for (const startId of ['s1', 's2']) f.run({ type: 'agent.startFailed', startId,
+      error: 'Mac did not start it within 3 minutes' }, owner)
+    for (const extra of [{}, { engine: 'claude' }, { gridModel: 'qwen3', gridName: grid }]) {
+      expect(() => begin(extra)).toThrow('This machine is suspended')
+    }
+  })
+
+  it.each(['owner', 'lead'])('admits starts after the %s resumes a machine cooldown with the owner\'s authority', (who) => {
+    const { f, lead, begin } = setup()
+    for (const startId of ['s1', 's2']) f.run({ type: 'agent.startFailed', startId,
+      error: 'Mac did not start it within 3 minutes' }, owner)
+    const resume = { type: 'machine.engineResume', machineId: 'mac', engine: 'codex' } as Command
+    const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    f.invite()
+    expect(() => f.run(resume, peer)).toThrow('Only the machine\'s owner')
+    expect(() => f.run(resume, leadActor)).toThrow('Only the machine\'s owner')
+    expect(() => begin()).toThrow('This machine is suspended')
+    if (who === 'owner') f.run(resume, owner)
+    else f.run({ ...resume, askedIn: { conversationId: 'lead', messageId: 'm-owner' } } as Command, leadActor,
+      { askedIn: { author: { kind: 'person', id: 'owner' } as never, source: false, createdAt: 1000 } })
+    expect(begin().result.startId).toBeTruthy()
   })
 
   it('is resumed by the machine owner, or by a Lead passing on the owner\'s message, and by nobody else', () => {
@@ -5374,6 +5471,33 @@ describe('lead.switch', () => {
     const own = setup()
     own.f.run(own.request)
     expect(own.agent().switchRequest).not.toHaveProperty('effort')
+  })
+
+  // Task #3395 (anh Dee, 11-05): Switch PM's "Default" sent no model, and the new PM started on its engine's own
+  // default (the machine's last-used Claude Code model, Sonnet medium). Claude with no model gets the coordinator's
+  // built-in default, as lead.start does; a person's named model is kept.
+  it('gives a Claude switch with no model the PM default, on the same machine and on another, and keeps a named one', () => {
+    const here = setup()
+    here.f.run({ ...here.request, engine: 'claude', profileId: 'default' })
+    expect(here.agent().switchRequest).toMatchObject({ engine: 'claude', model: 'opus', effort: 'xhigh' })
+
+    const moved = setup()
+    const destination = structuredClone(moved.f.state.machines![0]!)
+    Object.assign(destination, { machineId: 'destination', name: 'Destination Mac', generation: 'g2' })
+    destination.observation!.generation = 'g2'
+    destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+    moved.f.state.machines!.push(destination)
+    moved.f.run({ ...moved.request, engine: 'claude', profileId: 'default', machineId: 'destination' })
+    expect(moved.agent().switchRequest).toMatchObject({ targetMachineId: 'destination', model: 'opus', effort: 'xhigh' })
+    expect(moved.f.state.starts).toContainEqual(expect.objectContaining({ request: expect.objectContaining({
+      machineId: 'destination', engine: 'claude', model: 'opus', effort: 'xhigh' }) }))
+
+    const picked = setup()
+    picked.f.run({ ...picked.request, engine: 'claude', profileId: 'default', model: 'sonnet' })
+    expect(picked.agent().switchRequest).toMatchObject({ model: 'sonnet', effort: 'high' })
+    const effort = setup()
+    effort.f.run({ ...effort.request, engine: 'claude', profileId: 'default', effort: 'max' })
+    expect(effort.agent().switchRequest).toMatchObject({ model: 'opus', effort: 'max' })
   })
 
   it('works while the Swarm is paused', () => {
@@ -5817,6 +5941,108 @@ describe('the Next-up queue (work.queue)', () => {
   })
 })
 
+// A task's priority, P0-P3 (task #3117): a hotfix for a broken release must not wait behind ordinary work.
+describe('a task\'s priority (conversation.create and work.priority)', () => {
+  function prioritized() {
+    const f = routed()
+    const task = (id: string) => f.state.conversations.find(g => g.id === id)!
+    // An agent's task says its check, priority and who asked (taskContract.ts); a step carries no priority, a person's defaults.
+    const create = (fields: Record<string, unknown> = {}, actor: Actor = f.leadActor) =>
+      f.run(commandSchema.parse({ type: 'conversation.create', title: 'Sign-in broken', brief: 'Fix it.',
+        checks: [{ description: 'Done', independent: false }], ...actor.kind === 'agent' && !fields.reviewOf ? { priority: 'P2', requesterId: 'owner' } : {}, ...fields }), actor)
+    const set = (conversationId: string, priority: string) => commandSchema.parse({ type: 'work.priority', conversationId, priority })
+    return { f, task, create, set }
+  }
+
+  it('takes the PM\'s priority when it creates a task', () => {
+    const { task, create } = prioritized()
+    const created = create({ priority: 'P0' })
+    expect(created.result).toMatchObject({ priority: 'P0' })
+    expect(created.result.warnings ?? []).not.toContainEqual(expect.stringContaining('No priority given'))
+    expect(task(created.result.conversationId as string).priority).toBe('P0')
+    expect(groupView(task(created.result.conversationId as string), new Set())).toMatchObject({ priority: 'P0' })
+  })
+
+  it('gives a task created without one P2, and the reply says so', () => {
+    const { task, create } = prioritized()
+    const created = create({}, owner)
+    expect(task(created.result.conversationId as string).priority).toBe('P2')
+    expect(created.result).toMatchObject({ priority: 'P2',
+      warnings: expect.arrayContaining(['No priority given: this task is P2. Set P0-P3 with work.priority.']) })
+  })
+
+  it('gives no priority to a step, and refuses one there', () => {
+    const { f, task, create } = prioritized()
+    const parent = create().result.conversationId as string
+    const step = create({ title: 'Review', reviewOf: parent, step: 'Review' }).result.conversationId as string
+    expect(task(step)).not.toHaveProperty('priority')
+    expect(() => create({ title: 'Test', reviewOf: parent, step: 'Test', priority: 'P1' }))
+      .toThrow(expect.objectContaining({ code: 'PRIORITY_TASK_ONLY', status: 400 }))
+    expect(f.state.conversations.filter(c => c.step === 'Test')).toEqual([])
+  })
+
+  it('lets only the PM or a person create a P0, while any agent may open a P1-P3 task', () => {
+    const { f, task, create } = prioritized()
+    expect(() => create({ priority: 'P0' }, f.workerActor)).toThrow(expect.objectContaining({ code: 'PRIORITY_P0', status: 403 }))
+    expect(task(create({ priority: 'P1' }, f.workerActor).result.conversationId as string).priority).toBe('P1')
+    expect(task(create({ priority: 'P0' }, owner).result.conversationId as string).priority).toBe('P0')
+  })
+
+  it('changes it for a person or the PM, and records each change in the task as a line', () => {
+    const { f, task, create, set } = prioritized()
+    const id = create().result.conversationId as string
+    const changed = f.run(set(id, 'P0'), owner)
+    expect(task(id).priority).toBe('P0')
+    expect(changed.messages).toEqual([expect.objectContaining({ conversationId: id, recipients: [], source: { kind: 'system' },
+      text: 'owner changed the priority to P0, hotfix: something shipped is broken (was P2).' })])
+    const byPm = f.run(set(id, 'P1'), f.leadActor)
+    expect(task(id).priority).toBe('P1')
+    // The PM by the name the Swarm shows for it.
+    const pm = f.state.agents.find(a => a.id === f.lead)!
+    expect(byPm.messages[0]!.text).toBe(`${pm.displayName ?? pm.name} changed the priority to P1, needed by users soon (was P0).`)
+  })
+
+  it('reads a task from before priorities as P2 when it changes', () => {
+    const { f, task, create, set } = prioritized()
+    const id = create().result.conversationId as string
+    delete task(id).priority
+    expect(f.run(set(id, 'P3'), owner).messages[0]!.text).toBe('owner changed the priority to P3, tools, docs or process (was P2).')
+  })
+
+  it('reads a task from before priorities by its title\'s urgent or high marker, as every client shows it', () => {
+    const { f, task, create, set } = prioritized()
+    const urgent = create({ title: 'Sign-in broken (urgent)' }).result.conversationId as string
+    const high = create({ title: 'Faster sync (Ken, high)' }).result.conversationId as string
+    for (const id of [urgent, high]) delete task(id).priority
+    expect(f.run(set(urgent, 'P2'), owner).messages[0]!.text).toBe('owner changed the priority to P2, planned goal (was P0).')
+    expect(f.run(set(high, 'P2'), owner).messages[0]!.text).toBe('owner changed the priority to P2, planned goal (was P1).')
+  })
+
+  it('posts nothing when the priority is already that one', () => {
+    const { f, task, create, set } = prioritized()
+    const id = create({ priority: 'P1' }).result.conversationId as string
+    expect(f.run(set(id, 'P1'), owner).messages).toEqual([])
+    expect(task(id).priority).toBe('P1')
+  })
+
+  it('is refused to any other agent of the project, and on what is not an open task', () => {
+    const { f, create, set } = prioritized()
+    const id = create().result.conversationId as string
+    const step = create({ title: 'Review', reviewOf: id, step: 'Review' }).result.conversationId as string
+    const before = structuredClone(f.state)
+    expect(() => f.run(set(id, 'P0'), f.workerActor)).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
+    for (const other of ['lead', step]) expect(() => f.run(set(other, 'P0'), owner), other).toThrow(expect.objectContaining({ code: 'PRIORITY_TASK_ONLY', status: 400 }))
+    expect(f.state).toEqual(before)
+  })
+
+  it('takes only P0 to P3', () => {
+    const parse = (priority: unknown) => commandSchema.safeParse({ type: 'work.priority', conversationId: 'task', priority }).success
+    for (const priority of ['P0', 'P1', 'P2', 'P3']) expect(parse(priority)).toBe(true)
+    for (const priority of ['P4', 'p0', 'high', 0, null, undefined]) expect(parse(priority), String(priority)).toBe(false)
+    expect(commandSchema.safeParse({ type: 'conversation.create', title: 'T', brief: 'B', checks: [], priority: 'urgent' }).success).toBe(false)
+  })
+})
+
 // 11-04 13:57 VN on the Mac Studio: the CLI's idle cleanup closed Tern, its machine's next reading listed the session
 // stopped, and six seconds after the close the PM assigned Tern a task, which was lost at once (task #2744).
 describe('assigning an agent whose session was closed', () => {
@@ -5998,5 +6224,49 @@ describe('agent.rename (renaming a harness renames its agent, task #2912)', () =
     const github = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_'), removed: CredentialKind[] = []
     expect(withoutCredentials(rename('a', github), removed)).toMatchObject({ name: CREDENTIAL_MARKER })
     expect(removed).toEqual(['github'])
+  })
+})
+
+// Task #3211 (vie, 11-05): a project whose lead started in a folder with no GitHub origin has nothing to clone, so its work
+// starts on other machines in an empty folder of its own, without a worktree; a project with a repository keeps today's rule.
+describe('a start for a project with no repository', () => {
+  const pool = (machineId: string) => ({ machineId, name: machineId, contributorId: 'owner', membershipGeneration: 'pilot', generation: 'g1',
+    cwd: '/data/swarm-projects/tab', scope: 'swarm' as const, engines: ['claude'], maxAgents: 4, paused: false,
+    observation: { generation: 'g1', receivedAt: 1000, capabilities: [LEAD_CAPABILITY], resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null,
+      diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null, deviceType: null, chip: null, os: null, gpuPercent: null },
+      tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] } })
+  const setUp = (repositoryUrl: string | null) => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    f.state.machines = [{ ...pool('source'), membershipGeneration: f.state.people[0]!.generation }, { ...pool('other'), membershipGeneration: f.state.people[0]!.generation }]
+    f.state.projects![0]!.repository = { machineId: 'source', cwd: '/Users/vie/outreach', repositoryUrl }
+    return { f, lead, group }
+  }
+  const start = (repositoryUrl: string | null, machineId: string, cwd: string) => {
+    const { f, lead, group } = setUp(repositoryUrl)
+    const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const request = { conversationId: group, machineId, engine: 'claude', name: 'Writer', cwd, worktree: true, branchRef: 'refs/remotes/origin/main',
+      requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } }
+    f.run({ type: 'agent.start', request, ...via } as Command, actor, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, ...decisionIn(group) })
+    return f.state.starts!.at(-1)!.request
+  }
+
+  it('starts on another machine in the project\'s own folder there, without a worktree', () => {
+    const request = start(null, 'other', '/data/swarm-projects/tab/lead')
+    expect(request).toMatchObject({ machineId: 'other', cwd: '/data/swarm-projects/tab/lead', worktree: false })
+    expect(request.branchRef).toBeUndefined()
+  })
+
+  it('keeps a worktree on the machine whose folder it started in, and wherever it has a repository', () => {
+    expect(start(null, 'source', '/Users/vie/outreach')).toMatchObject({ worktree: true, branchRef: 'refs/remotes/origin/main' })
+    expect(start('https://github.com/vie/outreach', 'other', '/data/swarm-projects/tab/lead')).toMatchObject({ worktree: true, branchRef: 'refs/remotes/origin/main' })
+  })
+
+  it('starts its Product Manager on another machine without a worktree too', () => {
+    const { f } = setUp(null)
+    const project = f.state.projects![0]!
+    const leadFor = { projectId: project.id, personId: 'owner', generation: f.state.people[0]!.generation }
+    expect(leadHost(f.state, project, 'other', { engine: 'claude' }, leadFor, { now: 1000 })).toMatchObject({ cwd: '/data/swarm-projects/tab/lead', worktree: false })
+    f.state.projects![0]!.repository!.repositoryUrl = 'https://github.com/vie/outreach'
+    expect(leadHost(f.state, project, 'other', { engine: 'claude' }, leadFor, { now: 1000 })).toMatchObject({ worktree: true })
   })
 })

@@ -92,7 +92,8 @@ typedef enum {
     STOP,
     MODELS,
     MESSAGE,
-    OTA
+    OTA,
+    SWARM_PICK
 } view_t;
 typedef enum {
     A_NONE,
@@ -106,6 +107,9 @@ typedef enum {
     A_ANSWER, A_QUESTION_READ, A_QUESTION_CHOICES, A_QUESTION_REVIEW, A_QUESTION_BACK, A_QUESTION_SAY,
     A_TAB_LIST,
     A_INBOX,
+    A_PET_INBOX,   // a tap on a companion that wears the notice badge: the inbox, while a swipe from it still swipes
+    A_SIDE_PM, A_SIDE_BUDDY,
+    A_PICK_PERSONAL, A_PICK_TEAM,
     A_NOTICE,
     A_TABS,
     A_TAB, A_TAB_REFRESH, A_TAB_DONE,
@@ -248,6 +252,7 @@ static EXT_RAM_BSS_ATTR struct {
     unsigned bell_unread;     // the bell's count at the last home render, to see a notice arrive
     uint32_t notice_ms;       // the face clock when it last went up, 0 = none since boot (the pet's alert bubble)
     ht_focus_working_pick_t working_pick;   // which working scene the shown agent's pet plays (Claude: chef or builder)
+    uint32_t pick_until;    // when the Personal | Team picker (SWARM_PICK) returns to the face for want of a touch (clock_ms), 0 = never
     uint32_t timer_at;      // when the working line's elapsed text next changes (ms() clock), 0 = never (elapsed.h)
     uint32_t pet_next_ms;   // when the pet's (or the voice screen's listening scene's) drawn frame next changes (clock_ms), 0 = never
     int start_x, start_y, last_x, last_y;
@@ -595,6 +600,7 @@ enum { SUPERTAB_RECAP_GET, SUPERTAB_OPEN, SUPERTAB_SELECT, SUPERTAB_SIDE, SUPERT
 static EXT_RAM_BSS_ATTR ht_supertabs_t swarm;
 static EXT_RAM_BSS_ATTR struct {
     char tab[ID_MAX], lead[ID_MAX];   // the Swarm the dial is in ("" in a desk tab) and the Lead on its face
+    char last_team[ID_MAX];           // the last non-Personal card on the face: where Team goes (spec 2026-11-05)
     char desk[ID_MAX];                // the desk tab that Swarm is listed at, "" when none (entered from the inbox)
     int at;                           // that Lead's place, where the face lands when the Lead goes
     bool retried;                     // its recap was asked for a second time
@@ -712,21 +718,16 @@ static void swarm_buddy_seen(void)
     int i = swarm_on_buddy(l) ? swarm_heard_of(l->id) : -1;
     if (i >= 0) sw.heard[i].lead[0] = 0;
 }
-// Swipe up opens the Buddy side, down the PM side again (spec 2026-10-29 Switching); true when the swipe was the side's.
-// Down on the PM side is not: it still pulls the inbox. Without Buddies neither is.
-static bool swarm_side_swipe(int dy)
+// Tapping the other half of the pair shows that side (spec 2026-11-05 PM | Buddy pair): the side kept, told to the daemon,
+// its quiet badge read. The current half, a Lead without Buddies, or no link: nothing.
+static void swarm_side_set(bool buddy)
 {
     const ht_lead_t *l = swarm_lead();
-    if (!l || !l->buddies || !s.connected) return false;
-    bool buddy = swarm_side_buddy(sw.tab), up = dy < 0;
-    if (!up && !buddy) return false;
-    if (up != buddy) {
-        swarm_side_put(sw.tab, up);
-        swarm_side_send(sw.tab);
-        swarm_buddy_seen();
-        change();
-    }
-    return true;
+    if (!l || !l->buddies || !s.connected || swarm_side_buddy(sw.tab) == buddy) return;
+    swarm_side_put(sw.tab, buddy);
+    swarm_side_send(sw.tab);
+    swarm_buddy_seen();
+    change();
 }
 // The Lead at `i` comes onto the face: its recap is asked for afresh. `select` moves the desktop there too; a
 // supertab.focus does not need it, the desktop is already there.
@@ -738,6 +739,7 @@ static void swarm_show(const ht_supertab_t *t, int i, bool select)
         return;
     }
     COPY(sw.lead, t->leads[i].id); sw.at = i; sw.retried = false;
+    if (!t->personal) COPY(sw.last_team, t->id);
     ht_supertabs_recap_open(&swarm, t->id, sw.lead, ms());
     if (select) {
         swarm_send(SUPERTAB_SELECT, t->id, sw.lead);
@@ -798,6 +800,46 @@ static void swarm_enter(const ht_supertab_t *t, const char *lead, bool select)
     if (i < 0) i = swarm_lead_index(t, swarm_remembered(t->id));
     swarm_show(t, i < 0 ? 0 : i, select);
     view(HOME);
+}
+/*
+ * PERSONAL | TEAM (spec 2026-11-05): the picker opens from the project name only when the dial holds the reader's Personal
+ * card and at least one other. Team is the last non-Personal card on the face, else the first in list order.
+ */
+static bool swarm_pick_ok(void)
+{
+    bool personal = false, team = false;
+    if (!swarm_mode()) return false;
+    for (int i = 0; ht_supertabs_at(&swarm, i); i++) {
+        if (ht_supertabs_at(&swarm, i)->personal) personal = true; else team = true;
+    }
+    return personal && team;
+}
+static bool swarm_pick_open(void)
+{
+    if (s.view != HOME || !swarm_pick_ok()) return false;
+    s.pick_until = ms() + 5000; if (!s.pick_until) s.pick_until = 1;
+    view(SWARM_PICK);
+    return true;
+}
+static const ht_supertab_t *swarm_pick_target(bool team)
+{
+    const ht_supertab_t *first = NULL;
+    for (int i = 0; ht_supertabs_at(&swarm, i); i++) {
+        const ht_supertab_t *t = ht_supertabs_at(&swarm, i);
+        if (t->personal != !team) continue;
+        if (!team) return t;
+        if (!first) first = t;
+        if (!strcmp(t->id, sw.last_team)) return t;
+    }
+    return first;
+}
+// A half tapped: the other Swarm opens as a tab pick does (swarm_enter, the desktop follows); the filled half only returns.
+static void swarm_pick(bool team)
+{
+    const ht_supertab_t *t = swarm_pick_target(team), *here = swarm_here();
+    s.pick_until = 0;
+    if (!t || t == here) { view(HOME); return; }
+    swarm_enter(t, NULL, true);
 }
 /*
  * TABS lists exactly the desk tabs, as the desktop shows them (Diego, 2026-10-27). A desk tab linked to a Swarm keeps
@@ -1147,8 +1189,11 @@ static bool home_footer(action_kind_t action)
     // A_VOICE is the Focus face's [ say ]. It belongs here rather than on the A_PET path because a
     // bracket control is pressed and released like every other one, while A_PET reads a TAP as a boop
     // and only starts speech on a 650 ms hold — which is the creature's gesture, not a button's.
+    // The PM | Buddy and Personal | Team halves too (Diego's dial, 2026-11-05: a thumb's press on the pair drifted out of a
+    // tap and fell to the face, which started voice).
     return action == A_TABS || action == A_INBOX || action == A_AGENTS || action == A_RETURN ||
-           action == A_CARRY_DROP || action == A_VOICE || action == A_TAB_LIST;
+           action == A_CARRY_DROP || action == A_VOICE || action == A_TAB_LIST ||
+           action == A_SIDE_PM || action == A_SIDE_BUDDY || action == A_PICK_PERSONAL || action == A_PICK_TEAM;
 }
 static bool hit_contains(const hit_t *hit, int x, int y, bool surface)
 {
@@ -1281,6 +1326,7 @@ static void surface_tick(uint32_t now)
     if (s.pet_next_ms && (((s.view == HOME || s.view == AGENT) && !s.touch_down) || s.view == VOICE) &&
         (int32_t)(now - s.pet_next_ms) >= 0) { s.pet_next_ms = 0; change(); }
     if (s.timer_at && (s.view == HOME || s.view == AGENT) && (int32_t)(now - s.timer_at) >= 0) { s.timer_at = 0; change(); }
+    if (s.view == SWARM_PICK && s.pick_until && !s.touch_down && (int32_t)(now - s.pick_until) >= 0) { s.pick_until = 0; view(HOME); }
     bool main = s.view == HOME || s.view == AGENT;
     bool visible = !display_is_asleep() &&
         ((main && s.connected && !s.loading) || s.view == VOICE);
@@ -1409,12 +1455,78 @@ static void face_buddy_ring(ht_scene_t *f)
 {
     ht_ring_arc(f, 233 * 16, 233 * 16, 230 * 16, 3 * 16, 90, 180, color(mix_black(BUDDY_LILAC, 32)));
 }
-// The upper dot lit on the PM side, the lower one (lilac) on the Buddy side. [replied]: on the PM side, the Buddy has a word
-// not yet heard, so the lower dot takes its colour, at its own place and size.
-static void face_buddy_dots(ht_scene_t *f, bool buddy, bool replied)
+/*
+ * THE NOTICE BADGE (Diego's dial, 2026-11-05, option B): the bell pill at y 346 sat on a long recap's last line, while the
+ * space around the pet stood empty. So a face with a companion shows its unread count as a small blue badge on the
+ * companion's top-right shoulder, and a tap on the companion opens the notices. A face with none (a thread) keeps the pill.
+ */
+// The face's companion as drawn: the largest sprite or round disc centred in the upper middle of the glass (the Focus pet,
+// a creature, the Buddy's disc). False when there is none.
+static bool companion_box(const ht_scene_t *f, ht_rect_t *out)
 {
-    face_buddy_disc(f, 442, 218, buddy ? 9 : 12, buddy ? 0x55565fu : 0xeaeaf0u);
-    face_buddy_disc(f, 442, 248, buddy ? 12 : 9, buddy || replied ? BUDDY_LILAC : 0x55565fu);
+    long best = 0;
+    for (int i = 0; i < f->count; i++) {
+        const ht_run_t *r = &f->runs[i];
+        bool disc = r->box.h && r->w == r->box.h && r->box.radius * 2 >= r->box.h;
+        if (!r->sprite.width && !disc) continue;
+        ht_rect_t b = ht_run_bounds(r);
+        int cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+        long area = (long)b.w * b.h;
+        if (cx < 153 || cx > 313 || cy < 60 || cy > 260 || area < 900 || area <= best) continue;
+        best = area; *out = b;
+    }
+    return best > 0;
+}
+static void notice_badge(ht_scene_t *f, const ht_rect_t *pet, unsigned count)
+{
+    enum { BADGE_D = 30, BADGE_RING = 3 };   // a 30 px disc in a 3 px black ring
+    int cx = pet->x + pet->w - 4, cy = pet->y + 4;
+    char text[4];
+    if (count > 9) snprintf(text, sizeof text, "9+"); else snprintf(text, sizeof text, "%u", count);
+    const ht_font_t *font = &ht_lv_inter_20.base;
+    int r = BADGE_D / 2 + BADGE_RING, tw = ht_measure(font, text);
+    uint16_t blue = color(0x006fff);
+    ht_box(f, cx - r, cy - r, 2 * r, 2 * r, r, BG, BG);   // a black ring, so it reads apart from the art under it
+    ht_box(f, cx - BADGE_D / 2, cy - BADGE_D / 2, BADGE_D, BADGE_D, BADGE_D / 2, blue, blue);
+    ht_text(f, cx - tw / 2, cy - font->height / 2, tw, font, color(0xffffff), blue, text);
+}
+/*
+ * THE PM | BUDDY PAIR (spec 2026-11-05): a dark pill 180 x 44 px at y 388 with two equal halves, the current side's filled.
+ * A tap on the other half shows that side. Four runs always (pill, current half, two labels), and the two hits.
+ */
+// One dark pill of two equal halves, the `right_on` one filled: a pill, the filled half, two labels (four runs).
+static void pill2(ht_scene_t *f, int x, int y, int w, int h, const char *left, const char *right, bool right_on)
+{
+    enum { INSET = 3 };
+    const ht_font_t *font = &ht_lv_inter_20.base;
+    uint16_t pill = color(0x141518), edge = color(0x2e3035), on = color(0x2b2d33), white = color(0xffffff), grey = color(0x9a9ca3);
+    int half = w / 2;
+    ht_box(f, x, y, w, h, h / 2, pill, edge);
+    ht_box(f, x + (right_on ? half : 0) + INSET, y + INSET, half - 2 * INSET, h - 2 * INSET, (h - 2 * INSET) / 2, on, on);
+    const char *names[2] = {left, right};
+    for (int k = 0; k < 2; k++) {
+        int tw = ht_measure(font, names[k]), cur = (k == 1) == right_on;
+        ht_text(f, x + k * half + (half - tw) / 2, y + (h - font->height) / 2, tw, font, cur ? white : grey, cur ? on : pill, names[k]);
+    }
+}
+static void swarm_pair(ht_scene_t *f, bool buddy)
+{
+    enum { X = 143, Y = 388, W = 180, H = 44, HALF = W / 2 };
+    pill2(f, X, Y, W, H, "PM", "Buddy", buddy);
+    // A thumb's targets, wider than the pill: 40 px each side, from just under the bell (its pill ends at y 378) to the edge.
+    s.hits[s.hit_count++] = (hit_t){{X - 40, 382, HALF + 40, HT_HEIGHT - 382}, A_SIDE_PM, 0, true};
+    s.hits[s.hit_count++] = (hit_t){{X + HALF, 382, HALF + 40, HT_HEIGHT - 382}, A_SIDE_BUDDY, 0, true};
+}
+// The Personal | Team picker: "Swarm" on the top arc and one 200 x 44 pill at y 211, the half of the Swarm on the face filled.
+static void render_swarm_pick(ht_scene_t *f)
+{
+    enum { X = 133, Y = 211, W = 200, H = 44, HALF = W / 2 };
+    const ht_supertab_t *t = swarm_here();
+    ht_arc_title_face(f, FG, "Swarm", &ht_arc_inter_prop);
+    pill2(f, X, Y, W, H, "Personal", "Team", !(t && t->personal));
+    // A thumb's targets: each half 30 px wider and 40 px taller each way than it is drawn.
+    s.hits[s.hit_count++] = (hit_t){{X - 30, Y - 40, HALF + 30, H + 80}, A_PICK_PERSONAL, 0, true};
+    s.hits[s.hit_count++] = (hit_t){{X + HALF, Y - 40, HALF + 30, H + 80}, A_PICK_TEAM, 0, true};
 }
 /*
  * Desktop's agent pattern (avatar_art.dart superTabAgentPattern; the daemon sends its 15 half bits and colour): mirrored on
@@ -1450,7 +1562,7 @@ static void render_buddy_empty(ht_scene_t *f, const ht_lead_t *l)
     focus_put(f, 63, 238, 340, &ht_lv_inter_28.base, color(0x8a8a99), BG, "No Buddy here yet", true);
     focus_put(f, 63, 280, 340, &ht_lv_inter_20.base, color(0x6b6d78), BG, "Add one in the Harness app.", true);
     face_buddy_ring(f);
-    face_buddy_dots(f, true, false);
+    swarm_pair(f, true);
     s.hits[s.hit_count++] = (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
 }
 /*
@@ -1482,7 +1594,7 @@ static void thread_rest(const char *cursor, char out[HT_TEXT_BYTES])
     for (size_t i = 0; i < n; i++) out[i] = cursor[i] == '\n' ? ' ' : cursor[i];
     out[n] = 0;
 }
-static void face_thread(ht_scene_t *f, const ht_lead_t *l, bool buddy, const char *recap, const char *wait)
+static void face_thread(ht_scene_t *f, const ht_lead_t *l, bool buddy, const char *recap, const char *wait, bool bell_above)
 {
     // A Lead waiting on the person stays visible: the wait's text in the card, in the accent the main face writes it in.
     if (wait) recap = wait;
@@ -1510,10 +1622,11 @@ static void face_thread(ht_scene_t *f, const ht_lead_t *l, bool buddy, const cha
     char meta[40] = "";
     if (recap && !wait && l->thread_replies >= 0)
         snprintf(meta, sizeof meta, "%s · %ld repl%s", buddy ? "Buddy" : "PM", (long)l->thread_replies, l->thread_replies == 1 ? "y" : "ies");
-    int rows = recap ? 0 : 1;
+    // The bell at y 346 (pair and bell both showing) leaves the card two lines: it would end at y 369 with three.
+    int rows = recap ? 0 : 1, max_rows = bell_above ? 2 : 3;
     char text[3][HT_TEXT_BYTES] = {{0}};
-    for (const char *p = recap; p && *p && rows < 3; rows++) {
-        if (rows == 2) { thread_rest(p, text[rows++]); break; }
+    for (const char *p = recap; p && *p && rows < max_rows; rows++) {
+        if (rows == max_rows - 1) { thread_rest(p, text[rows++]); break; }
         thread_line(&p, body, 304, text[rows]);
     }
     if (rows == 0) rows = 1;
@@ -1564,7 +1677,7 @@ static void render_swarm_face(ht_scene_t *f)
     const ht_supertab_t *t = swarm_here();
     ht_character_face_t f_ = {.recipient = l->project[0] ? l->project : "Untitled", .status = "", .hint = "",
         .tab = t ? t->name : "", .engine = buddy ? "" : l->engine, .activity = working && !s.nap ? "Working" : "",
-        .chat = !buddy && l->chat != HT_CHAT_LEAD && l->chat != HT_CHAT_BUDDY ? l->chat_name : NULL,
+        .chat = !buddy && l->chat != HT_CHAT_LEAD && l->chat != HT_CHAT_PM && l->chat != HT_CHAT_BUDDY ? l->chat_name : NULL,
         .elapsed = since, .detail = "", .mood = character_mood(), .pose = character.motion.reaction.pose,
         .asking = asking,
         .clock_ms = (s.quiet || display_is_asleep()) ? 0 : clock,
@@ -1577,16 +1690,12 @@ static void render_swarm_face(ht_scene_t *f)
         s.notice_ms = (clock - ht_focus_alert_pop_ms(&f_)) | 1;
         f_.notice_ms = bell ? s.notice_ms : 0;
     }
-    if (thread) face_thread(f, l, buddy, recap, wait);
+    if (thread) face_thread(f, l, buddy, recap, wait, bell && l->buddies);
     else ht_character_face(f, &character, &f_, ACCENT, recap);
     s.pet_next_ms = focus_face && !thread ? ht_focus_pet_next_ms(&f_, recap) : 0;
     ht_rect_t bubble = {0};
     bool told = bell && focus_face && !thread && ht_focus_alert_shown(&f_, recap, &bubble);
-    int bell_y = 400;
-    if (bell && !told) {
-        if (focus_face) focus_bell(f, unread, bell_y);
-        else ht_notification_bell(f, unread, f_.ink);
-    }
+    int bell_y = l->buddies ? 346 : 400;   // clear of the pair
     if (buddy && !thread) {
         // The avatar stands where the pet does on Focus, at 233, 158 or higher: 8 px clear of the recap's card, which keeps
         // today's place (it rises with its lines). A creature skin keeps its creature.
@@ -1610,15 +1719,34 @@ static void render_swarm_face(ht_scene_t *f)
         }
         face_buddy_ring(f);
     }
+    // The count on the companion's shoulder; the pill only on a face with no companion (a thread).
+    ht_rect_t pet = {0};
+    bool badge = bell && !told && !thread && companion_box(f, &pet);
+    if (badge) notice_badge(f, &pet, unread);
+    else if (bell && !told) {
+        if (focus_face) focus_bell(f, unread, bell_y);
+        else ht_notification_bell_at(f, unread, f_.ink, l->buddies ? bell_y : HT_NOTIFICATION_Y);   // above the pair, else its own row
+    }
     if (l->buddies) {
-        // The PM side's quiet sign of the Buddy's word: the lower dot's colour, and a line on the lower arc unless the bell or
-        // the face has it. Empty runs in their place, so the count never moves.
-        bool heard = !buddy && swarm_heard_of(l->id) >= 0, lower = bell && !told;
-        face_buddy_dots(f, buddy, heard);
-        for (int i = 0; i < f->count; i++) lower |= f->runs[i].arc == 2 && f->runs[i].text[0];
-        ht_box(f, 0, 0, 1, 1, 0, BG, BG); ht_box(f, 0, 0, 1, 1, 0, BG, BG);
-        if (heard && !lower && !thread) ht_arc_status_face(f, color(BUDDY_LILAC), "Your Buddy replied", &ht_arc_inter_lower);
-        else ht_text(f, 0, 0, 1, &ht_lv_inter_20.base, BG, BG, "");
+        // The pair stands at the bottom, so the lower arc is bare: the face's hint goes, and its working line (and the PM side's
+        // "Your Buddy replied") is one centred line at y 318 in its place. Empty runs where nothing is said, so the count holds.
+        char say[HT_TEXT_BYTES] = "";
+        uint16_t say_fg = color(BUDDY_LILAC);
+        for (int i = 0; i < f->count; i++) {
+            ht_run_t *r = &f->runs[i];
+            if (r->arc != 2 || !r->text[0]) continue;
+            if (working) { snprintf(say, sizeof say, "%s", r->text); say_fg = r->fg; }
+            uint8_t at = f->count;
+            f->count = (uint8_t)i;
+            ht_text(f, 0, 0, 1, &ht_lv_inter_20.base, BG, BG, "");
+            f->count = at;
+        }
+        if (!say[0] && !buddy && !thread && swarm_heard_of(l->id) >= 0) snprintf(say, sizeof say, "Your Buddy replied");
+        const ht_font_t *lf = &ht_lv_inter_20.base;
+        int w = say[0] ? ht_measure(lf, say) : 1;
+        if (w > 360) w = 360;
+        ht_text(f, 233 - w / 2, 318, w, lf, say_fg, BG, say);
+        swarm_pair(f, buddy);
     }
     // The same targets as a pane's face: the name opens PANES, the bell the inbox, the rest talks (to a local Lead).
     s.hits[s.hit_count++] = (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
@@ -1627,7 +1755,9 @@ static void render_swarm_face(ht_scene_t *f)
         s.caption_arc = (ht_rect_t){r.x - 14, r.y - 14, r.w + 28, r.h + 28};
         break;
     }
-    if (bell && !told) s.hits[s.hit_count++] = (hit_t){{83, bell_y - 18, 300, 84}, A_INBOX, 0, true};
+    // With the badge, the companion and its badge are the inbox's target; the rest of the face still talks.
+    if (badge) s.hits[s.hit_count++] = (hit_t){{pet.x - 16, pet.y - 24, pet.w + 48, pet.h + 40}, A_PET_INBOX, 0, true};
+    else if (bell && !told) s.hits[s.hit_count++] = (hit_t){{83, bell_y - 18, 300, 84}, A_INBOX, 0, true};
     if (told && bubble.w) s.hits[s.hit_count++] = (hit_t){{bubble.x - 14, bubble.y - 14, bubble.w + 28, bubble.h + 28}, A_INBOX, 0, true};
     s.hits[s.hit_count++] = focus_face ? (hit_t){{0, 66, HT_WIDTH, HT_HEIGHT - 66}, A_PET, 0, true}
                                        : (hit_t){{33, 66, 400, 316}, A_PET, 0, true};
@@ -2678,6 +2808,9 @@ bool habitat_scene_take(ht_scene_t *f)
     case HOME:
         render_home(f);
         break;
+    case SWARM_PICK:
+        render_swarm_pick(f);
+        break;
     case AGENTS:
         render_agents(f);
         break;
@@ -3000,6 +3133,7 @@ static void dispatch(action_t a)
         view(HOME);
         break;
     case A_AGENTS: {
+        if (swarm_pick_open()) break;   // a Swarm face with a Personal and a Team card: the picker, else PANES
         view(AGENTS);
         if (swarm_here()) { ht_tab_carousel_reset(&pane_carousel, swarm_here()->lead_n, sw.at); break; }
         ht_tab_carousel_reset(&pane_carousel, s.count, s.active >= 0 && s.active < s.count ? s.active : 0);
@@ -3059,7 +3193,17 @@ static void dispatch(action_t a)
         else if (a.kind==A_ANSWER) send_answer();
         break;
     case A_INBOX:
+    case A_PET_INBOX:   // released on the badged companion (the touch path dispatches A_INBOX itself)
         notice_open();
+        break;
+    case A_PICK_PERSONAL:
+    case A_PICK_TEAM:
+        if (s.view == SWARM_PICK) swarm_pick(a.kind == A_PICK_TEAM);
+        break;
+    case A_SIDE_PM:
+    case A_SIDE_BUDDY:
+        ESP_LOGI("habitat", "pair: %s", a.kind == A_SIDE_BUDDY ? "Buddy" : "PM");
+        swarm_side_set(a.kind == A_SIDE_BUDDY);
         break;
     case A_NOTICE: {
         if (s.connected && a.id[0] && swarm_notice(a.id) >= 0) {
@@ -3629,6 +3773,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         s.start_x = x;
         s.start_y = y;
         s.touch_started = now;
+        if (s.view == SWARM_PICK) { s.pick_until = now + 5000; if (!s.pick_until) s.pick_until = 1; }
         if (question_view(s.view)) s.q.drag=0;
         s.draft_drag = 0;
         s.tab_drag = 0;
@@ -3695,7 +3840,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             change();
         } else {
             // A Swarm's face scrolls the Swarm chat the desktop has open (the daemon names its tab), once a vertical drag
-            // has outlasted a flick: a quick flick up or down is still the side's (swarm_side_swipe) and sends nothing.
+            // has outlasted a flick: a quick flick up or down is still the side's (the pair's taps now) and sends nothing.
             if (gesture.axis == 1 && !sw.drag_at) sw.drag_at = now | 1;   // | 1: 0 is "not yet", so it may be now + 1
             uint32_t dragged = sw.drag_at && (int32_t)(now - sw.drag_at) > 0 ? now - sw.drag_at : 0;
             if (!scroll.live && surface && gesture.axis == 1 && swarm_scroll_reportable(dragged))
@@ -3767,7 +3912,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 } else if (result==HT_TOUCH_TAP || result==HT_TOUCH_HOLD) dispatch((action_t){.kind=A_TABS});
             }
             change();
-        } else if (surface && home_footer(pressed_action.kind)) {
+        } else if ((surface || s.view == SWARM_PICK) && home_footer(pressed_action.kind)) {
             /*
              * A BUTTON IS PRESSED AND RELEASED, not tapped within a tolerance.
              *
@@ -3789,6 +3934,10 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             if (result == HT_TOUCH_TAP || (on_target && now - s.touch_started < 1800))
                 dispatch(pressed_action);
             change();
+        } else if (surface && pressed_action.kind == A_PET_INBOX && dx * dx + dy * dy < 24 * 24 && now - s.touch_started < 650) {
+            // The companion wears the notice badge: a touch on it, read as a thumb's (the face's talk rule below), opens the
+            // inbox. It is no footer button, so a swipe that starts on it still moves to the next project.
+            dispatch((action_t){.kind = A_INBOX});
         } else if (surface && character.id == HT_CHARACTER_FOCUS && pressed_action.kind == A_PET &&
                    !gesture.guarded && dx * dx + dy * dy < 24 * 24 && now - s.touch_started < 650) {
             /*
@@ -3825,7 +3974,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 dispatch((action_t){.kind = A_VOICE_STOP, .value = 1});
             } else if (s.view == DRAFT && pressed_action.kind == A_DRAFT_EDIT) {
                 pressed_action.kind = A_DRAFT_OPTIONS; dispatch(pressed_action);
-            } else if (surface && pressed_action.kind == A_PET)
+            } else if (surface && (pressed_action.kind == A_PET || pressed_action.kind == A_PET_INBOX))
                 tabs_open();
         } else if (result == HT_TOUCH_TAP) {
             if (pressed_action.kind == A_PET) {
@@ -3845,8 +3994,8 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 // Reading/choosing consumed this contact; motion cannot submit an answer.
             } else if (s.view == SELECTION) {
                 // Its bounded reading cursor already consumed this vertical drag.
-            } else if (surface && swarm_mode() && swarm_side_swipe(dy)) {
-                // A Swarm project's PM side and Buddy side (spec 2026-10-29-round-dial-pm-buddy): up and back down.
+            } else if (surface && swarm_mode()) {
+                // A Swarm face's vertical swipe does nothing (spec 2026-11-05): the pair switches sides, the bell opens the inbox.
             } else if (surface && character.id == HT_CHARACTER_FOCUS && dy > 0 && notice_unread(face_id())) {
                 // Pull down from the badge. The creature skins keep this drag inert — their footer
                 // badge is a target you tap — but on Focus the badge sits at the top edge and a pull
@@ -3966,8 +4115,8 @@ uint32_t habitat_next_wake_ms(void)
         uint32_t left = elapsed >= due ? 1 : due - elapsed;
         if (left < delay) delay = left;
     }
-    uint32_t deadlines[] = {s.pet_pose ? s.pet_until : 0, s.nap ? s.nap_until : 0,
-                            s.voice_retry_until};
+    uint32_t deadlines[] = {s.pet_pose ? s.pet_until : 0, s.nap ? s.nap_until : 0, s.view == SWARM_PICK && !s.touch_down ? s.pick_until : 0,
+                            s.voice_retry_until};   // (the picker's idle waits for the lift: a held finger past it woke every pass)
     for (unsigned i = 0; i < sizeof(deadlines) / sizeof(deadlines[0]); i++)
         if (deadlines[i]) {
             int32_t left = (int32_t)(deadlines[i] - now);

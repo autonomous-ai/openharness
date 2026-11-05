@@ -52,11 +52,11 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
     });
 
-    testWidgets("a project's red number ends where Activity's does", (
+    testWidgets("a project's red number stays while Decisions shows none", (
       tester,
     ) async {
-      // Activity's number is what was asked of the reader: a decision. The
-      // project row counts it with the tag, and both numbers end at one edge.
+      // What was asked of the reader is a decision: the project row counts it
+      // with the tag, and the Decisions row carries no number (task #3128).
       final server = swarm()..followedThreads = null;
       server.tag('message-1');
       server.ask(['Ship it?'], conversationId: 'lead');
@@ -65,10 +65,8 @@ void main() {
         of: _key('super-decisions'),
         matching: find.byType(SuperTabCountBadge),
       );
-      expect(
-        tester.getTopRight(_key('super-mentions-lead')).dx,
-        tester.getTopRight(activity).dx,
-      );
+      expect(activity, findsNothing);
+      expect(_key('super-mentions-lead'), findsOneWidget);
     });
 
     testWidgets('a private project keeps its leading lock and mention number '

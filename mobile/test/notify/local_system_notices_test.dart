@@ -1,7 +1,12 @@
+import 'dart:async';
+
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/core/last_opened_agent.dart' show AgentRef;
+import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/notify/agent_notice.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 
@@ -16,12 +21,17 @@ import 'package:harness_mobile/notify/system_notices.dart';
 void main() {
   const ref = (machineId: 'machine-1', agentId: 'agent-7');
 
-  AgentNoticeMessage message(NoticeKind kind, {String body = 'Fixed it.'}) => (
+  AgentNoticeMessage message(
+    NoticeKind kind, {
+    String body = 'Fixed it.',
+    bool quiet = false,
+  }) => (
     agent: ref,
     kind: kind,
     title: 'Fix login',
     machine: 'MacBook',
     body: body,
+    quiet: quiet,
   );
 
   late _FakePlugin plugin;
@@ -78,13 +88,15 @@ void main() {
       subtitle: 'Mobile',
       body: 'Open Harness to answer.',
       target: target,
+      quiet: false,
     );
+    tearDown(() => debugDefaultTargetPlatformOverride = null);
 
     test('its own channel, where it is on the second line, replaced by its own key', () async {
       await notices.showSwarm(swarm);
       await notices.showSwarm(swarm);
 
-      expect(plugin.shown.map((n) => n.id).toSet(), {swarmNoticeIdFor('decision:d1')});
+      expect(plugin.shown.map((n) => n.details!.android!.tag).toSet(), {'decision:d1'});
       final shown = plugin.shown.first;
       expect(shown.title, 'River asks you');
       expect(shown.body, 'Open Harness to answer.');
@@ -142,10 +154,154 @@ void main() {
       expect(decodeSwarmPayload(encodeSwarmPayload(inThread)), inThread);
     });
 
-    test('taking it down cancels its own id', () async {
+    // The server's push for the same thing shows in the same notification (task #3248): Android draws an FCM push under its
+    // tag with id 0, iOS keys a push by its `apns-collapse-id`, this id in decimal. So the app's notice replaces the push.
+    test('iOS: posted and taken down under the id the push collapses on', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      await notices.showSwarm(swarm);
       await notices.cancelSwarm('decision:d1');
-      expect(plugin.cancelled, [swarmNoticeIdFor('decision:d1')]);
+      expect(plugin.shown.single.id, swarmNoticeIdFor('decision:d1'));
+      expect(plugin.shown.single.details!.android!.tag, isNull);
+      expect(plugin.cancelled, [(id: swarmNoticeIdFor('decision:d1'), tag: null)]);
     });
+
+    test('Android: posted and taken down under its key as the tag, id 0, as FCM draws the push', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      await notices.showSwarm(swarm);
+      await notices.cancelSwarm('decision:d1');
+      expect(plugin.shown.single.id, 0);
+      expect(plugin.shown.single.details!.android!.tag, 'decision:d1');
+      expect(plugin.cancelled, [(id: 0, tag: 'decision:d1')]);
+    });
+
+    test('a quiet one replaces its notification with no sound, no vibration and no banner (task #3248)', () async {
+      await notices.showSwarm((
+        key: 'thread:tab-1:g9:root-1',
+        title: 'Mia replied in a thread',
+        subtitle: 'Mobile',
+        body: 'Open Harness to read it.',
+        target: target,
+        quiet: true,
+      ));
+      final details = plugin.shown.single.details!;
+      expect(details.android!.silent, isTrue);
+      expect(details.iOS!.presentSound, isFalse);
+      expect(details.iOS!.presentBanner, isFalse);
+      expect(details.iOS!.interruptionLevel, InterruptionLevel.passive);
+      // A notice with sound leaves them to the channel and the plugin.
+      await notices.showSwarm(swarm);
+      expect(plugin.shown.last.details!.android!.silent, isFalse);
+      expect(plugin.shown.last.details!.iOS!.presentSound, isNull);
+    });
+
+    test('Android: the push channels exist before a push can arrive, the quiet one silent (task #3248)', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      await notices.preparePush();
+      expect(plugin.android.channels.map((c) => (c.id, c.importance, c.playSound)), [
+        ('swarm-needs-you', Importance.high, true),
+        ('swarm-quiet', Importance.low, false),
+      ]);
+      expect(plugin.initialized, 0, reason: 'made without starting the centre');
+    });
+
+    test('iOS has no channels to make', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      await notices.preparePush();
+      await notices.requestPermission();
+      expect(plugin.android.channels, isEmpty);
+    });
+
+    for (final eager in [false, true]) {
+      for (final request in [false, true]) {
+        test('Android: ${request ? 'request' : 'check'} permission waits for both '
+            'push channels (eager start: $eager)', () {
+          fakeAsync((clock) {
+            debugDefaultTargetPlatformOverride = TargetPlatform.android;
+            plugin.androidOnly = true;
+            plugin.android.holdQuiet = Completer<void>();
+            if (eager) unawaited(notices.preparePush());
+            var finished = false;
+            bool? allowed;
+            final permission = request
+                ? notices.requestPermission()
+                : notices.enabled();
+            unawaited(permission.then((value) {
+              allowed = value;
+              finished = true;
+            }));
+            clock.flushMicrotasks();
+
+            expect(finished, isFalse, reason: 'push registration must wait');
+            expect(plugin.android.asked, 0);
+            expect(plugin.android.checked, 0);
+            expect(plugin.android.channels.map((c) => c.id), ['swarm-needs-you']);
+
+            plugin.android.holdQuiet!.complete();
+            clock.flushMicrotasks();
+            expect(finished, isTrue);
+            expect(allowed, isTrue);
+            expect(plugin.android.channels.map((c) => (c.id, c.importance, c.playSound, c.enableVibration)), [
+              ('swarm-needs-you', Importance.high, true, true),
+              ('swarm-quiet', Importance.low, false, false),
+            ]);
+
+            unawaited(notices.preparePush());
+            unawaited(notices.enabled());
+            unawaited(notices.showSwarm(swarm));
+            clock.flushMicrotasks();
+            expect(plugin.android.channels, hasLength(2), reason: 'one shared preparation');
+            final loud = plugin.android.channels.first;
+            final posted = plugin.shown.single.details!.android!;
+            expect(posted.channelId, loud.id);
+            expect(posted.channelName, loud.name);
+            expect(posted.channelDescription, loud.description);
+            expect(posted.importance, loud.importance);
+          });
+        });
+      }
+    }
+
+    test('Android: a stalled channel times out and leaves local notices working', () {
+      fakeAsync((clock) {
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        plugin.androidOnly = true;
+        plugin.android.holdQuiet = Completer<void>();
+        final log = _Log();
+        final previous = appLog;
+        appLog = log;
+        addTearDown(() => appLog = previous);
+        var finished = false;
+        unawaited(notices.requestPermission().then((_) => finished = true));
+        clock.elapse(const Duration(seconds: 9));
+        expect(finished, isFalse);
+        clock.elapse(const Duration(seconds: 1));
+        expect(finished, isTrue);
+        expect(log.warnings, ['notify: push channels not made']);
+        unawaited(notices.showSwarm(swarm));
+        clock.flushMicrotasks();
+        expect(plugin.shown, hasLength(1));
+        plugin.android.holdQuiet!.complete();
+        clock.flushMicrotasks();
+      });
+    });
+
+    for (final channel in ['swarm-needs-you', 'swarm-quiet']) {
+      test('Android: failure creating $channel is logged and local notices still work', () async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        plugin.androidOnly = true;
+        plugin.android.failChannel = channel;
+        final log = _Log();
+        final previous = appLog;
+        appLog = log;
+        addTearDown(() => appLog = previous);
+
+        expect(await notices.requestPermission(), isTrue);
+        await notices.showSwarm(swarm);
+        expect(plugin.shown, hasLength(1));
+        expect(log.warnings, ['notify: push channels not made']);
+        expect(plugin.initialized, 1);
+      });
+    }
 
     test('a plugin that fails never throws into the Swarm', () async {
       plugin.failShow = true;
@@ -200,6 +356,32 @@ void main() {
     },
   );
 
+  test('a loud notice keeps the channel\'s sound, vibration and banner', () async {
+    await notices.show(message(NoticeKind.question));
+    final shown = plugin.shown.single;
+    expect(shown.details!.android!.silent, isFalse);
+    final ios = shown.details!.iOS!;
+    expect(ios.presentSound, isNull, reason: 'the plugin default: sound');
+    expect(ios.presentBanner, isNull, reason: 'the plugin default: a banner');
+    expect(ios.interruptionLevel, isNull);
+  });
+
+  test('a quiet notice: no sound, no vibration, no banner — only the list', () async {
+    await notices.show(
+      message(NoticeKind.question, body: 'Approve Bash command: npm test', quiet: true),
+    );
+    final shown = plugin.shown.single;
+    expect(shown.id, noticeIdFor(ref), reason: 'it replaces the agent\'s notice');
+    expect(shown.body, 'Approve Bash command: npm test');
+    expect(shown.details!.android!.channelId, 'agent-question');
+    expect(shown.details!.android!.silent, isTrue);
+    final ios = shown.details!.iOS!;
+    expect(ios.presentSound, isFalse);
+    expect(ios.presentBanner, isFalse);
+    expect(ios.interruptionLevel, InterruptionLevel.passive);
+    expect(ios.threadIdentifier, 'agent-question');
+  });
+
   test('newer news about the same agent replaces its notice', () async {
     await notices.show(message(NoticeKind.done));
     await notices.show(message(NoticeKind.question));
@@ -210,7 +392,7 @@ void main() {
 
   test('taking a notice down cancels that agent\'s id', () async {
     await notices.cancel(ref);
-    expect(plugin.cancelled, [noticeIdFor(ref)]);
+    expect(plugin.cancelled, [(id: noticeIdFor(ref), tag: null)]);
   });
 
   test('asking permission asks both platforms for alerts, sound and the icon count', () async {
@@ -335,6 +517,97 @@ void main() {
       expect(silent.opened.value, isNull);
     });
   });
+
+  group('pushes', () {
+    test('allowing notices is told, so pushes can start reaching the person', () async {
+      var told = 0;
+      notices.onAllowed = () => told++;
+      await notices.requestPermission();
+      expect(told, 1);
+    });
+
+    test('refusing them is not', () async {
+      var told = 0;
+      notices.onAllowed = () => told++;
+      plugin.ios.allow = false;
+      await notices.requestPermission();
+      plugin.ios.fail = true;
+      await notices.requestPermission();
+      expect(told, 0);
+    });
+
+    // What the server sends (backend push/notices.ts): `key`, and `link`, the app's own `swarm:`
+    // payload.
+    test('a tapped reply push opens the thread at the reply', () {
+      openPushed({'key': 'reply:s1:r1', 'link': 'swarm:s1/c1/message/m1/thread/t1'}, notices);
+      expect(notices.openedSwarm.value, (
+        swarmId: 's1',
+        conversationId: 'c1',
+        messageId: 'm1',
+        decisionId: null,
+        threadId: 't1',
+      ));
+      expect(notices.opened.value, isNull);
+    });
+
+    test('a tapped tag push opens the chat at the message, its ids decoded', () {
+      openPushed({'key': 'mention:x1', 'link': 'swarm:s%2F1/c1/message/m1'}, notices);
+      expect(notices.openedSwarm.value, (
+        swarmId: 's/1',
+        conversationId: 'c1',
+        messageId: 'm1',
+        decisionId: null,
+        threadId: null,
+      ));
+    });
+
+    test('a push opens the chat its link names and nothing else', () {
+      for (final data in <Map<String, String>>[
+        {},
+        {'key': 'mention:x1'},
+        {'link': 'machine-1\nagent-7'},
+        {'link': 'device:key-1'},
+        {'link': 'swarm:s1'},
+        {'link': 'swarm:s1/c1/agent/a1'},
+        {'link': 'https://example.com/swarm:s1/c1'},
+        // The first contract's keys: the server never sends them, and they open nothing.
+        {'kind': 'agent_question', 'machine': 'machine-1', 'agent': 'agent-7'},
+        {'kind': 'swarm', 'swarm': 's1', 'conversation': 'c1', 'message': 'm1'},
+      ]) {
+        openPushed(data, notices);
+      }
+      expect(notices.openedSwarm.value, isNull);
+      expect(notices.opened.value, isNull);
+      expect(notices.openedDevice.value, isNull);
+    });
+
+    test('a centre without Swarm notices opens nothing', () {
+      final silent = _AgentsOnly();
+      openPushed({'link': 'swarm:s1/c1/message/m1'}, silent);
+      openPushed({'link': 'machine-1\nagent-7'}, silent);
+      expect(silent.opened.value, isNull);
+    });
+
+    // A push and the notice the running app posts for the same news share an id, so one replaces
+    // the other: Android's PushService.noticeId computes these too, and the backend sets the same as
+    // `apns-collapse-id` (docs/design/2026-11-05-phone-push.md lists them).
+    test('the ids a push shares with the app’s own notices', () {
+      expect(swarmNoticeIdFor('mention:m1'), 1161357565);
+      expect(swarmNoticeIdFor('decision:d1'), 15921470);
+      expect(swarmNoticeIdFor('work:s1:c1:a1:needs_human'), 701122187);
+      expect(swarmNoticeIdFor('mention:é✓'), 1555091707);
+      expect(noticeIdFor(ref), 1081005959);
+    });
+  });
+}
+
+/// A centre with no Swarm side: what [openPushed] must not assume.
+class _AgentsOnly implements SystemNotices {
+  @override
+  final opened = ValueNotifier<AgentRef?>(null);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 typedef _Shown = ({
@@ -349,7 +622,7 @@ typedef _Shown = ({
 /// falls to [noSuchMethod] — and so fails the test, which is the point.
 class _FakePlugin implements FlutterLocalNotificationsPlugin {
   final shown = <_Shown>[];
-  final cancelled = <int>[];
+  final cancelled = <({int id, String? tag})>[];
   final ios = _FakeIos();
   final android = _FakeAndroid();
   int initialized = 0;
@@ -359,6 +632,7 @@ class _FakePlugin implements FlutterLocalNotificationsPlugin {
   bool failInitOnce = false;
   bool failShow = false;
   bool failCancel = false;
+  bool androidOnly = false;
 
   @override
   Future<bool?> initialize({
@@ -385,7 +659,7 @@ class _FakePlugin implements FlutterLocalNotificationsPlugin {
   T? resolvePlatformSpecificImplementation<
     T extends FlutterLocalNotificationsPlatform
   >() {
-    if (T == IOSFlutterLocalNotificationsPlugin) return ios as T;
+    if (T == IOSFlutterLocalNotificationsPlugin) return androidOnly ? null : ios as T;
     if (T == AndroidFlutterLocalNotificationsPlugin) return android as T;
     return null;
   }
@@ -411,7 +685,7 @@ class _FakePlugin implements FlutterLocalNotificationsPlugin {
   @override
   Future<void> cancel({required int id, String? tag}) async {
     if (failCancel) throw PlatformException(code: 'cancel');
-    cancelled.add(id);
+    cancelled.add((id: id, tag: tag));
   }
 
   @override
@@ -421,6 +695,7 @@ class _FakePlugin implements FlutterLocalNotificationsPlugin {
 class _FakeIos implements IOSFlutterLocalNotificationsPlugin {
   final asked = <({bool alert, bool sound, bool badge})>[];
   bool fail = false;
+  bool? allow = true;
 
   @override
   Future<bool?> requestPermissions({
@@ -434,7 +709,7 @@ class _FakeIos implements IOSFlutterLocalNotificationsPlugin {
   }) async {
     if (fail) throw PlatformException(code: 'permission');
     asked.add((alert: alert, sound: sound, badge: badge));
-    return true;
+    return allow;
   }
 
   @override
@@ -443,6 +718,23 @@ class _FakeIos implements IOSFlutterLocalNotificationsPlugin {
 
 class _FakeAndroid implements AndroidFlutterLocalNotificationsPlugin {
   int asked = 0;
+  int checked = 0;
+  final channels = <AndroidNotificationChannel>[];
+  Completer<void>? holdQuiet;
+  String? failChannel;
+
+  @override
+  Future<void> createNotificationChannel(AndroidNotificationChannel notificationChannel) async {
+    if (notificationChannel.id == failChannel) throw PlatformException(code: 'channel');
+    if (notificationChannel.id == 'swarm-quiet') await holdQuiet?.future;
+    channels.add(notificationChannel);
+  }
+
+  @override
+  Future<bool?> areNotificationsEnabled() async {
+    checked++;
+    return true;
+  }
 
   @override
   Future<bool?> requestNotificationsPermission() async {
@@ -452,4 +744,16 @@ class _FakeAndroid implements AndroidFlutterLocalNotificationsPlugin {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _Log implements AppLog {
+  final warnings = <String>[];
+
+  @override
+  void record(AppLogLevel level, String category, String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) {
+    if (level == AppLogLevel.warn) warnings.add('$category: $message');
+  }
 }

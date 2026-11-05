@@ -179,9 +179,9 @@ describe('what the route-decision list gives each reader', () => {
     const w = await world(60)
     await decide(w, [[w.web, 60], [w.secretGroup, 600]])
     const got = await sameAnswers(w)
-    // Both windows, then every group.
+    // Both windows, then every group: the quiet ones from the database, the awake ones as this server holds them (#3146).
     const [, profile] = await profiled(() => store.routeDecisions(peer, w.tabId))
-    expect(profile.SwarmGroup!.docsExamined).toBeGreaterThanOrEqual(await db.swarmGroup.count({ where: { tabId: w.tabId, deleted: false } }))
+    expect(profile.SwarmGroup!.docsExamined).toBeGreaterThanOrEqual(await db.swarmGroup.count({ where: { tabId: w.tabId, deleted: false, dormant: true } }))
     expect(ids(got['a collaborator'])).toHaveLength(60)
     expect(ids(got['the owner'])).toHaveLength(100)
   })

@@ -34,21 +34,15 @@ VideoPlayerController _player(Uri source) => source.isScheme('file')
 /// system's player, as its chip would.
 bool get _playsHere => kIsWeb || defaultTargetPlatform != TargetPlatform.linux;
 
-/// A voice message as Telegram draws one: `( ▶ ) ıllıllııılll 1:21 →A`. Play
+/// A voice message as Telegram draws one: `( ▶ ) ıllıllııılll 1:21`. Play
 /// plays a copy of the file read once to this computer, never the signed
-/// link, which stops opening within minutes; →A shows the [words] under it.
+/// link, which stops opening within minutes. It plays only: no words and no
+/// option to show them (anh Dee, 2026-11-04).
 class SuperTabVoiceBubble extends StatefulWidget {
-  const SuperTabVoiceBubble({
-    super.key,
-    required this.file,
-    required this.words,
-  });
+  const SuperTabVoiceBubble({super.key, required this.file});
 
   /// A file whose [SuperTabAttachment.voice] is set.
   final SuperTabFileRef file;
-
-  /// The message's text: the clip's words, when it was transcribed.
-  final String words;
 
   @override
   State<SuperTabVoiceBubble> createState() => _SuperTabVoiceBubbleState();
@@ -60,7 +54,7 @@ class _SuperTabVoiceBubbleState extends State<SuperTabVoiceBubble> {
   /// Where the local copy is; removed with the bubble.
   Directory? _copy;
 
-  bool _loading = false, _showWords = false;
+  bool _loading = false;
 
   /// The last read failed: the next one asks for a fresh link first.
   bool _stale = false;
@@ -189,14 +183,17 @@ class _SuperTabVoiceBubbleState extends State<SuperTabVoiceBubble> {
         ? (position.inMilliseconds / length.inMilliseconds).clamp(0.0, 1.0)
         : 0.0;
     final finger = workspaceIsCompact(context);
-    final bubble = Material(
+    return Material(
       // The file chip's fill: the bubble is the chip of a voice file.
       color: DesktopChrome.foreground.withValues(alpha: .055),
       shape: const StadiumBorder(),
       child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: grid.AppDesktop.menuInset,
-          vertical: grid.AppDesktop.menuInset,
+        // The length ends it, a group's gap in from the bubble's round end.
+        padding: const EdgeInsetsDirectional.fromSTEB(
+          grid.AppDesktop.menuInset,
+          grid.AppDesktop.menuInset,
+          grid.AppDesktop.groupGap,
+          grid.AppDesktop.menuInset,
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -218,65 +215,9 @@ class _SuperTabVoiceBubbleState extends State<SuperTabVoiceBubble> {
                 fontFeatures: const [FontFeature.tabularFigures()],
               ),
             ),
-            const SizedBox(width: grid.AppDesktop.groupGap),
-            fingerTarget(
-              enabled: finger,
-              Tooltip(
-                message: _showWords ? 'Hide words' : 'Show words',
-                child: TextButton(
-                  key: ValueKey('super-voice-words-toggle:$id'),
-                  onPressed: () => setState(() => _showWords = !_showWords),
-                  style: TextButton.styleFrom(
-                    minimumSize: const Size.square(
-                      DesktopChrome.compactControlHeight,
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: grid.AppDesktop.menuInset,
-                    ),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    visualDensity: VisualDensity.compact,
-                  ),
-                  child: Text(
-                    '→A',
-                    style: DesktopChrome.control(
-                      color: _showWords
-                          ? DesktopChrome.accent
-                          : DesktopChrome.muted,
-                      medium: true,
-                    ),
-                  ),
-                ),
-              ),
-            ),
           ],
         ),
       ),
-    );
-    if (!_showWords) return bubble;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      spacing: grid.AppDesktop.controlGap,
-      children: [
-        bubble,
-        ConstrainedBox(
-          // The width a message's text keeps (message_row.dart).
-          constraints: const BoxConstraints(maxWidth: 960),
-          // The chat's selection area makes the words selectable.
-          child: voice.transcribed
-              ? Text(
-                  widget.words,
-                  key: ValueKey('super-voice-words:$id'),
-                  style: DesktopChrome.text(),
-                )
-              : Text(
-                  voice.failure == 'limit'
-                      ? 'Not transcribed: today’s voice limit was used'
-                      : 'Not transcribed',
-                  key: ValueKey('super-voice-words:$id'),
-                  style: DesktopChrome.metadata(),
-                ),
-        ),
-      ],
     );
   }
 }

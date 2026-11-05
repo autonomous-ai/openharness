@@ -41,6 +41,12 @@ class _Backend {
   /// The machine whose preparing fails.
   String? failPrepareOn;
 
+  /// How [failPrepareOn]'s preparing fails.
+  Object prepareFailure = const SuperTabFailure(
+    'SETUP_FAILED',
+    'Setup failed there.',
+  );
+
   /// Machines answer preparing with this state ('ready' sets them up).
   String prepareState = 'ready';
 
@@ -183,9 +189,7 @@ class _Connection extends WsConn {
     backend.machineCalls.add((machineId, action ?? ''));
     if (action == 'prepareContribution') {
       if (backend.holdPrepare case final hold?) await hold.future;
-      if (backend.failPrepareOn == machineId) {
-        throw const SuperTabFailure('SETUP_FAILED', 'Setup failed there.');
-      }
+      if (backend.failPrepareOn == machineId) throw backend.prepareFailure;
       return {
         'state': backend.prepareState,
         'scope': 'swarm',
@@ -206,11 +210,12 @@ void _ownMachine(
   bool team = false,
   bool shared = false,
   bool linked = true,
+  String? name,
 }) {
   final machine = Machine(
     machineId: id,
     authMode: MachineAuthMode.remote,
-    name: 'Machine $id',
+    name: name ?? 'Machine $id',
     sessionKind: team ? 'team' : null,
     machineShare: shared
         ? MachineShare(
@@ -1342,7 +1347,8 @@ void main() {
         expect(added(backend, c.tabId), ['m']);
         final row = PersonalMachines.of(app).waiting(c).single;
         expect(row.machineId, 'lamp');
-        expect(row.status, 'Offline');
+        expect(row.status, "Couldn't join: machine is off");
+        expect(row.canRetry, isTrue);
         app.machineStates['lamp']!
           ..nodeOnline = true
           ..connectionStatus = ConnectionStatus.connected;
@@ -1388,8 +1394,9 @@ void main() {
         expect(added(backend, c.tabId), contains('lamp'));
         final row = PersonalMachines.of(app).waiting(c).single;
         expect(row.machineId, 'rig');
-        expect(row.status, "Couldn't add");
-        expect(row.reason, isNotEmpty);
+        expect(row.status, "Couldn't join");
+        expect(row.reason, 'Setup failed there.');
+        expect(row.canRetry, isTrue);
         // Within its wait it is not asked again.
         final asked = backend.machineCalls
             .where((call) => call.$1 == 'rig')
@@ -1505,6 +1512,192 @@ void main() {
       expect(added(backend, c.tabId), contains('buddy-only'));
     });
 
+    group('a machine that has not joined says why in a few words, with '
+        'Try again (task #3042)', () {
+      Future<(AppNotifier, _Backend, SuperTabController)> failing(
+        Object failure,
+      ) async {
+        final (app, backend) = await _twoTabs();
+        await PersonalSwarm.of(app).show(app.activeSwarmId);
+        await _settle();
+        final c = await app.superTabs.open(PersonalSwarm.of(app).id!);
+        _ownMachine(app, 'rig');
+        backend
+          ..failPrepareOn = 'rig'
+          ..prepareFailure = failure;
+        await PersonalMachines.of(app).sync(c);
+        await _settle();
+        return (app, backend, c);
+      }
+
+      for (final (failure, words) in [
+        (
+          const SuperTabFailure('SIGNED_OUT', 'Sign in to use Swarm.'),
+          'not signed in to Harness',
+        ),
+        (
+          const SuperTabFailure(
+            'MACHINE_UNAVAILABLE',
+            'This machine is not signed in.',
+          ),
+          'not signed in to Harness',
+        ),
+        (
+          const SuperTabFailure('X', 'Unauthorized', statusCode: 401),
+          'not signed in to Harness',
+        ),
+        (
+          const SuperTabFailure(
+            'UPDATE_REQUIRED',
+            'Update Harness on this machine, then try again.',
+          ),
+          'needs a Harness update',
+        ),
+        (
+          const SuperTabFailure(
+            'NO_SWARM_ENGINE',
+            'Install Claude Code or Codex on this machine, then try again.',
+          ),
+          'no Claude Code or Codex',
+        ),
+        (
+          const SuperTabFailure(
+            'MACHINE_SLOW',
+            'Machine rig is taking too long to answer.',
+          ),
+          'not answering',
+        ),
+        (
+          const SuperTabFailure(
+            'MACHINE_UNAVAILABLE',
+            'Machine rig is offline. Open Harness on it, then try again.',
+          ),
+          'machine is off',
+        ),
+        (
+          const SuperTabFailure(
+            'SETUP_PENDING',
+            'Project setup is still running. Try again to check its progress.',
+          ),
+          'still setting up',
+        ),
+      ]) {
+        test('${failure.code} reads "$words", the '
+            'whole reason on hover', () async {
+          final (app, _, c) = await failing(failure);
+          final row = PersonalMachines.of(app).waiting(c).single;
+          expect(row.status, "Couldn't join: $words");
+          expect(row.reason, failure.message);
+          expect(row.canRetry, isTrue);
+        });
+      }
+
+      test('Try again asks again at once, inside its wait, and the row goes '
+          'once it joined', () async {
+        final (app, backend, c) = await failing(
+          const SuperTabFailure('SIGNED_OUT', 'Sign in to use Swarm.'),
+        );
+        final asked = backend.machineCalls
+            .where((call) => call.$1 == 'rig')
+            .length;
+        backend.failPrepareOn = null;
+        await PersonalMachines.of(app).retry(c, 'rig');
+        await _settle();
+        await c.refresh();
+        expect(
+          backend.machineCalls.where((call) => call.$1 == 'rig').length,
+          greaterThan(asked),
+        );
+        expect(
+          backend.contributions(c.tabId).map((m) => m['machineId']),
+          contains('rig'),
+        );
+        expect(PersonalMachines.of(app).waiting(c), isEmpty);
+      });
+
+      test('Try again asks once: a second press while it is asked adds no '
+          'second ask, and the row reads Adding with no Try again', () async {
+        final (app, backend, c) = await failing(
+          const SuperTabFailure('MACHINE_SLOW', 'Slow.'),
+        );
+        backend.failPrepareOn = null;
+        final hold = backend.holdPrepare = Completer<void>();
+        final before = backend.machineCalls
+            .where(
+              (call) => call.$1 == 'rig' && call.$2 == 'prepareContribution',
+            )
+            .length;
+        final first = PersonalMachines.of(app).retry(c, 'rig');
+        await _settle();
+        final row = PersonalMachines.of(app).waiting(c).single;
+        expect(row.status, 'Adding');
+        expect(row.canRetry, isFalse);
+        final second = PersonalMachines.of(app).retry(c, 'rig');
+        await _settle();
+        hold.complete();
+        backend.holdPrepare = null;
+        await Future.wait([first, second]);
+        await _settle();
+        expect(
+          backend.machineCalls
+              .where(
+                (call) => call.$1 == 'rig' && call.$2 == 'prepareContribution',
+              )
+              .length,
+          before + 1,
+        );
+      });
+
+      test('Try again never adds one its person took out since', () async {
+        final (app, backend, c) = await failing(
+          const SuperTabFailure('MACHINE_SLOW', 'Slow.'),
+        );
+        backend.failPrepareOn = null;
+        backend.servers[c.tabId]!.state['removedMachines'] = ['rig'];
+        await c.refresh();
+        final asked = backend.machineCalls
+            .where((call) => call.$1 == 'rig')
+            .length;
+        await PersonalMachines.of(app).retry(c, 'rig');
+        await _settle();
+        expect(
+          backend.machineCalls.where((call) => call.$1 == 'rig'),
+          hasLength(asked),
+        );
+        expect(
+          backend.contributions(c.tabId).map((m) => m['machineId']),
+          isNot(contains('rig')),
+        );
+      });
+
+      test('Try again on a machine that is off asks the machines to '
+          'reconnect first, then joins it once it is on', () async {
+        final (app, backend) = await _twoTabs();
+        _ownMachine(app, 'lamp', online: false);
+        await PersonalSwarm.of(app).show(app.activeSwarmId);
+        await _settle();
+        final c = await app.superTabs.open(PersonalSwarm.of(app).id!);
+        await PersonalMachines.of(app).sync(c);
+        await _settle();
+        var reconnects = 0;
+        PersonalMachines.of(app).reconnect = () async {
+          reconnects++;
+          app.machineStates['lamp']!
+            ..nodeOnline = true
+            ..connectionStatus = ConnectionStatus.connected;
+        };
+        await PersonalMachines.of(app).retry(c, 'lamp');
+        await _settle();
+        await c.refresh();
+        expect(reconnects, 1);
+        expect(
+          backend.contributions(c.tabId).map((m) => m['machineId']),
+          contains('lamp'),
+        );
+        expect(PersonalMachines.of(app).waiting(c), isEmpty);
+      });
+    });
+
     group('their rows', () {
       Finder row(String id) =>
           find.byKey(ValueKey('super-personal-machine-$id'));
@@ -1531,7 +1724,8 @@ void main() {
       }
 
       testWidgets(
-        'an offline machine reads one word, and the row goes once it joined',
+        'an offline machine reads why, with Try again, and the row goes once '
+        'it joined',
         (tester) async {
           late AppNotifier app;
           late SuperTabController c;
@@ -1551,7 +1745,14 @@ void main() {
             findsOneWidget,
           );
           expect(
-            find.descendant(of: row('lamp'), matching: find.text('Offline')),
+            find.descendant(
+              of: row('lamp'),
+              matching: find.text("Couldn't join: machine is off"),
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(of: row('lamp'), matching: find.text('Try again')),
             findsOneWidget,
           );
           await tester.runAsync(() async {
@@ -1567,9 +1768,8 @@ void main() {
         },
       );
 
-      testWidgets('a failure reads one word, with its reason on hover', (
-        tester,
-      ) async {
+      testWidgets('a failure reads why in a few words, with its whole reason '
+          'on hover', (tester) async {
         late AppNotifier app;
         late SuperTabController c;
         await tester.runAsync(() async {
@@ -1583,7 +1783,11 @@ void main() {
         });
         await pump(tester, app, c);
         expect(
-          find.descendant(of: row('rig'), matching: find.text("Couldn't add")),
+          find.descendant(of: row('rig'), matching: find.text("Couldn't join")),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: row('rig'), matching: find.text('Try again')),
           findsOneWidget,
         );
         expect(
@@ -1601,6 +1805,107 @@ void main() {
           findsOneWidget,
         );
       });
+
+      testWidgets('Try again on a row joins it, and the row goes', (
+        tester,
+      ) async {
+        late AppNotifier app;
+        late _Backend backend;
+        late SuperTabController c;
+        await tester.runAsync(() async {
+          final (a, b, opened) = await personal();
+          app = a;
+          backend = b;
+          c = opened;
+          b
+            ..failPrepareOn = 'rig'
+            ..prepareFailure = const SuperTabFailure(
+              'SIGNED_OUT',
+              'Sign in to use Swarm.',
+            );
+          _ownMachine(a, 'rig');
+          await PersonalMachines.of(a).sync(c);
+          await _settle();
+        });
+        await pump(tester, app, c);
+        expect(
+          find.descendant(
+            of: row('rig'),
+            matching: find.text("Couldn't join: not signed in to Harness"),
+          ),
+          findsOneWidget,
+        );
+        backend.failPrepareOn = null;
+        await tester.tap(
+          find.descendant(of: row('rig'), matching: find.text('Try again')),
+        );
+        await tester.runAsync(() async {
+          await _settle();
+          await c.refresh();
+        });
+        await tester.pump();
+        expect(row('rig'), findsNothing);
+        expect(
+          backend.contributions(c.tabId).map((m) => m['machineId']),
+          contains('rig'),
+        );
+      });
+
+      for (final brightness in Brightness.values) {
+        testWidgets('pictures of the rows saying why, with Try again (task '
+            '#3042), in ${brightness.name}', (tester) async {
+          if (_shots == null) return;
+          final previous = grid.AppTheme.brightness.value;
+          grid.AppTheme.brightness.value = brightness;
+          addTearDown(() => grid.AppTheme.brightness.value = previous);
+          tester.view.devicePixelRatio = 2;
+          tester.view.physicalSize = const Size(1400, 700);
+          addTearDown(tester.view.reset);
+          late AppNotifier app;
+          late SuperTabController c;
+          await tester.runAsync(() async {
+            final (a, backend, opened) = await personal(
+              before: (a) =>
+                  _ownMachine(a, 'studio', name: 'Studio', online: false),
+            );
+            app = a;
+            c = opened;
+            backend
+              ..failPrepareOn = 'mini'
+              ..prepareFailure = const SuperTabFailure(
+                'MACHINE_UNAVAILABLE',
+                'This machine is not signed in.',
+              );
+            _ownMachine(a, 'mini', name: 'Mac mini');
+            await PersonalMachines.of(a).sync(c);
+            await _settle();
+          });
+          await tester.pumpWidget(
+            MaterialApp(
+              debugShowCheckedModeBanner: false,
+              theme: grid.buildAppTheme(brightness: brightness),
+              home: Scaffold(
+                body: SingleChildScrollView(
+                  child: SuperTabMachines(
+                    controller: c,
+                    app: app,
+                    embedded: true,
+                    onAddAgent: (_) {},
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pump();
+          await tester.pump();
+          await captureWindow(
+            tester,
+            _shots,
+            'personal-machine-rows-${brightness.name}',
+          );
+          await _releaseAll(tester, app);
+        });
+      }
 
       testWidgets('another Swarm lists none', (tester) async {
         late AppNotifier app;

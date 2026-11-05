@@ -589,6 +589,7 @@ class AgentProject {
     required this.cwd,
     this.root,
     this.remote,
+    this.repository,
     this.branch,
     this.worktree = false,
     this.branchPending = false,
@@ -597,6 +598,11 @@ class AgentProject {
   final String cwd;
   final String? root;
   final String? remote;
+
+  /// The repository [remote] stands for when its host is an SSH alias
+  /// (`gh-work/acme/games` for `github.com/acme/games`), as the daemon reports
+  /// it (desktop `AgentProject.repository`, #2476); null when [remote] is it.
+  final String? repository;
   final String? branch;
   final bool worktree;
 
@@ -690,6 +696,7 @@ class AgentProject {
       cwd: cwd,
       root: field('root'),
       remote: field('remote'),
+      repository: field('repository'),
       branch: field('branch', 256),
       worktree: raw['worktree'] == true,
       branchPending: raw['branchPending'] == true,

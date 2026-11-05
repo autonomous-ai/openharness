@@ -71,6 +71,7 @@ import { ShortTurnGuard } from './shortTurnGuard.js'
 import { markCpuKind } from './selfProfile.js'
 import { createConnectionRoutes } from './terminalRoute.js'
 import { recordRelay } from './relayStats.js'
+import { computerSignedIn } from '../superTabs/computerMoves.js'
 
 const wss = createWss(WS_LIMITS.adapter, { echoFirstProtocol: true })
 
@@ -98,8 +99,12 @@ const CLIENT_VERSION_RE = /^[A-Za-z0-9._+-]{1,64}$/
 // How often an OPEN adapter socket refreshes `machines.lastSeenAt`. Rides the node role's existing 15s
 // heartbeat (plus every app ping) rather than a timer of its own — this is just the floor between two
 // Mongo writes, so a machine that is up all day costs ~300 updates, not ~6000. The floor starts from the row's own
-// stamp, so a connect stamps only when that is due too (#2676); close always writes.
+// stamp, so a connect stamps only when that is due too (#2676); a close at most once a minute (MACHINE_CLOSE_FLOOR_MS).
 const MACHINE_PRESENCE_WRITE_MS = 5 * 60_000
+// A close stamps the exact "offline since", unless the row was stamped less than this ago: a looping adapter reconnects every
+// few seconds, and each close rewrote the row (task #3119, Ken's prod scan of 11-05: `Machine.update` by adapter-ws slow 31
+// times at peak). Offline since is then at most this early.
+const MACHINE_CLOSE_FLOOR_MS = 60_000
 
 // Daily presence of the PERSON (`user_daily_presence`): the daemon reports its own loopback clients —
 // `open` the moment a desktop window attaches, `ping` on its 15s app-ping tick while one stays, at
@@ -220,6 +225,12 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
     if (!(await claimMachineOwner(machineId, computerId, PRESENCE_TTL_SEC))) { denyBusy(); return }
     const row = machine
     wss.handleUpgrade(req, socket, head, (ws) => void attachAdapter(ws, row, label, computerId, clientVersion, countryCode, user.harnessSessionId, team))
+    // A computer is signed in as one account at a time: Swarm entries of the account signed in here before move to this one
+    // (superTabs/computerMoves.ts, #3122). Never awaited: the connect does not wait on Swarms.
+    if (!team) {
+      void computerSignedIn({ machineId, ownerId: user.sub, computerId, autonomousEnv: user.autonomousEnv })
+        .catch(error => logger.warn('[swarm] computer move failed', { machineId, error: String(error) }))
+    }
   })().catch((err) => {
     if (err instanceof AppError) {
       // 403 is the revoked-machine answer from `resolveOrCreateForComputer`, 429 its new-id rate limit
@@ -330,7 +341,8 @@ async function attachAdapter(ws: WebSocket, machine: AttachedMachine, label?: st
   // interval + app ping), and before the connect write lands `presenceWriteDue` would say "due" —
   // without this a slow Mongo gets a second concurrent upsert precisely when it is already slow.
   // The floor starts from the row's own stamp, not from this socket: a reconnect a minute after the last stamp neither
-  // stamps on connect nor on its first heartbeat (#2676). Close always stamps: it is the exact "offline since".
+  // stamps on connect nor on its first heartbeat (#2676). A close stamps the "offline since" unless the row was stamped less
+  // than MACHINE_CLOSE_FLOOR_MS ago.
   const lastMachinePresence: PresenceWriteState = presenceStateFromRow(machine.lastSeenAt)
   let machinePresenceInFlight = false
   // The connect's changed facts until a write carries them: a failed connect write is retried by the next heartbeat.
@@ -339,9 +351,11 @@ async function attachAdapter(ws: WebSocket, machine: AttachedMachine, label?: st
     const now = new Date()
     if (changes) pendingChanges = changes
     const carried = pendingChanges
-    const due = presenceWriteDue(lastMachinePresence, now, MACHINE_PRESENCE_WRITE_MS)
-    if (kind === 'heartbeat' && (machinePresenceInFlight || (!due && !Object.keys(carried).length))) return
-    const stamp = kind === 'close' || due
+    const due = kind === 'close' ? presenceWriteDue(lastMachinePresence, now, MACHINE_CLOSE_FLOOR_MS)
+      : presenceWriteDue(lastMachinePresence, now, MACHINE_PRESENCE_WRITE_MS)
+    if (kind === 'heartbeat' && machinePresenceInFlight) return
+    if (kind !== 'connect' && !due && !Object.keys(carried).length) return
+    const stamp = due
     machinePresenceInFlight = true
     touchMachineOnlineDay(userId, machineId, now, { isNewConnection: kind === 'connect', countryCode, changes: carried, stamp })
       .then(() => {
@@ -628,7 +642,7 @@ async function attachAdapter(ws: WebSocket, machine: AttachedMachine, label?: st
       // and every row builder omits the app keys when offline, so the device converges on that frame;
       // this delete is what stops a reconnect from briefly re-reading the dead value.
       void clearMachineAppState(machineId)
-      touchMachinePresence('close') // exact lastSeenAt at disconnect; a superseded socket must not stamp it
+      touchMachinePresence('close') // lastSeenAt at disconnect, floored (MACHINE_CLOSE_FLOOR_MS); a superseded socket must not stamp it
     }
   }
   ws.on('close', cleanup)

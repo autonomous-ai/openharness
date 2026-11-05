@@ -15,6 +15,8 @@ import 'package:harness_mobile/core/machine_cache.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/core/snapshot_store.dart';
 import 'package:harness_mobile/measurement/product_measurement.dart';
+import 'package:harness_mobile/notify/push_channel.dart';
+import 'package:harness_mobile/notify/push_tokens.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/state/desk_sync.dart';
@@ -150,6 +152,18 @@ class FakeApi extends ApiClient {
     machineFetches++;
     return onMachines();
   }
+
+  /// The push addresses told to the backend, and those taken back. Never the network.
+  final List<PushAddress> pushRegistered = [];
+  final List<PushAddress> pushForgotten = [];
+
+  @override
+  Future<void> registerPushToken(PushAddress address) async =>
+      pushRegistered.add(address);
+
+  @override
+  Future<void> forgetPushToken(PushAddress address) async =>
+      pushForgotten.add(address);
 
   // No acknowledgements ("It's mine" said on another device) unless a test serves some: never the network.
   @override
@@ -516,6 +530,7 @@ ViewerRig viewerApp({
   LocalKeyValueStore? storage,
   Duration turnActivityTimeout = const Duration(seconds: 12),
   ProductMeasurement? productMeasurement,
+  PushTokens? pushTokens,
 }) {
   final session = AuthSession(storage: MemoryKeyValueStore());
   final viewer = FakeViewer(session);
@@ -531,6 +546,7 @@ ViewerRig viewerApp({
     viewer: viewer,
     paneLayoutStore: storage == null ? null : PaneLayoutStore(storage: storage),
     systemNotices: SilentSystemNotices(),
+    pushTokens: pushTokens,
     machineCache:
         machineCache ??
         (storage == null ? null : MachineCache(store: MemorySnapshotStore())),

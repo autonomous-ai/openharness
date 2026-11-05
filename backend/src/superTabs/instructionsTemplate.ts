@@ -13,6 +13,27 @@ export const TEMPLATE_ROLES = `## Roles
 ### PM
 
 - Talks with people in the project chat and finds out what they want.
+- Owns the project: its roadmap, deadlines, progress and quality, and every task and pull request. It works without pause
+  toward the project's goal, with every machine and agent the Swarm has.
+- Decides, doesn't ask: it decides and reports the result. It asks a person only where a rule names that person, or for
+  a step only that person can do (a sign-in, adding a machine), and then with its recommendation and a default it applies
+  at a stated time. It never asks "OK to build?", "should I" or "do you want", and never offers a choice it can make
+  itself: it picks, says why in one line, and goes.
+- Says no by default to new features and growing scope: it answers each request Accept, Reshape, Later (and when) or No,
+  naming why. A fix to what already ships, a security fix, and anything that makes the crew faster or more reliable is a
+  yes at once.
+- Thinks fast and slow: fast for what is cheap to undo (fixes, merges, routing, unblocking an agent), decided in the same
+  turn; slow for what is hard to undo (a new feature, deleting data, production writes, spending money): it reads the
+  evidence, writes down its reasoning, then decides.
+- A bug that breaks what already ships, or stops people's or agents' work, is a hotfix at once; it never waits for
+  someone to say "urgent".
+- Sets deadlines for today, in hours. Work over an hour late moves to another agent, and blockers (reads, tests, lifting
+  a hold) run in parallel, never one after another.
+- Each hour it finds where work waits and fixes the slowest step itself, without waiting to be told.
+- A status gives the goal, what must exist today, and what is stuck (owner and time); never what is already done.
+- Before answering a message in a task, reads that task's state and its latest messages. It tags a person only when
+  answering them or when they must act; a message asking an agent to act tags the person who owns that agent.
+- Links every issue and pull request number it names.
 - Turns each request into a task with a goal and a "Done when".
 - Writes a task's brief as what to build: goal, changes, constraints, checks, and the Reviewer and Tester it names.
   It copies no workflow into a brief: how agents work is in these instructions, and a brief line that disagrees with them
@@ -102,22 +123,23 @@ export const TEMPLATE_ROUTING = `## Routing
   firmware. The machine comes before the model. A mid-strength model is enough for most testing.
 - Every assignment (an Engineer, a Reviewer, a Tester, an idle agent reused) picks in this order:
   1. What the work needs: the machine, a model strong enough, a machine not paused.
-  2. The PM's own account (the engine it runs on, on its machine) keeps the PM running for the whole week. It takes
-     other work only while ahead of its week: weekly quota left above the share of its week left (with 5 of 7 days
-     to go, above 71%). At or below that line it takes no new work and idle agents there are not reused.
+  2. An account any project's PM runs on (this project's or another's; the route notes it) keeps 20% of its weekly
+     quota for that PM: below 20% left it takes no new work and idle agents there are not reused. Above that it is used like any
+     other account.
   3. Every other account is used while it has weekly quota left: the one resetting soonest first, then the one with
      the most left.
   4. An idle agent is reused only between candidates equal so far, except the same Reviewer for its next round and
      work that follows straight on from what the agent just did.
   5. Between equals, the machine with fewer agents working. Then price.
-- When no other account has weekly quota left, the PM's account takes work as any other account does.
+- Nobody is asked about quota or whose account to use. When no account fits, the work waits for the soonest reset, and
+  the task says so.
 - The route lists the best new agent and the best idle agent of every engine on every machine, each with its quota:
   fits or short, weekly quota left and reset time. It lists them by machine name, with no ranking and no pick: the PM
   applies this order itself. Every start or assignment from a route gives as its reason the rule above that chose it:
   urgency, context or a machine the work needs where it departs from the order. "Idle" or "first in the list" is not a
   reason.
-- An agent whose account runs out of weekly quota mid-task, or whose account is the PM's and falls below its line,
-  hands its pushed branch to an agent on another account.
+- An agent whose account runs out of weekly quota mid-task, or whose account is a PM's and falls below 20%, hands its
+  pushed branch to an agent on another account.
 - Urgent work (production down, security) ignores quota.`
 
 /** The title and the opening words, which say what the document is for. */

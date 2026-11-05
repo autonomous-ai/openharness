@@ -9,6 +9,8 @@ import '../core/config.dart';
 import '../core/models.dart';
 import '../logging/app_log.dart';
 import '../logging/http_log.dart';
+import '../notify/push_channel.dart' show PushAddress;
+import '../notify/push_tokens.dart' show PushTokenApi;
 import '../swarm/swarm_outgoing_files.dart';
 import '../swarm/swarm_request.dart' show SuperTabFailure;
 import '../viewer/device_ack.dart';
@@ -20,7 +22,7 @@ import 'bearer_auth_interceptor.dart';
 import 'multipart_body.dart';
 
 /// Authenticated control-plane REST client for the phone.
-class ApiClient {
+class ApiClient implements PushTokenApi {
   Future<Map<String, dynamic>> productUsageReport(
     Map<String, dynamic> report,
   ) async {
@@ -143,6 +145,30 @@ class ApiClient {
     );
     unwrapApiResponse(res);
   }
+
+  // -- where to push to this phone (notify/push_tokens.dart) --
+
+  @override
+  Future<void> registerPushToken(PushAddress address) async {
+    final res = await _dio.post('/api/push-devices', data: _pushBody(address));
+    unwrapApiResponse(res);
+  }
+
+  @override
+  Future<void> forgetPushToken(PushAddress address) async {
+    // In the body, not the path: a path lands in access logs.
+    final res = await _dio.post(
+      '/api/push-devices/drop',
+      data: _pushBody(address),
+    );
+    unwrapApiResponse(res);
+  }
+
+  /// The server's body is strict (`routes/pushDevices.ts`): these two keys, nothing else.
+  static Map<String, String> _pushBody(PushAddress address) => {
+    'platform': address.platform,
+    'token': address.token,
+  };
 
   // -- the account's device key log (viewer/device_log_sync.dart) --
 

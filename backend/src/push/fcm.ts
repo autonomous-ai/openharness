@@ -1,6 +1,6 @@
 import { sign } from 'node:crypto'
 import type { FcmAccount } from './keys.js'
-import { SEND_TIMEOUT_MS, SWARM_CHANNEL, withTimeout, type Sender } from './sender.js'
+import { SEND_TIMEOUT_MS, SWARM_CHANNEL, SWARM_QUIET_CHANNEL, withTimeout, type Sender } from './sender.js'
 
 const SCOPE = 'https://www.googleapis.com/auth/firebase.messaging'
 /** An access token is used until this long before Google says it runs out. */
@@ -43,8 +43,10 @@ export function fcmSender(account: FcmAccount, options: { fetcher?: typeof fetch
             token: device.token,
             // Android's notification has no subtitle: the project leads the body, as the local notice's subtext shows it.
             notification: { title: notice.title, body: notice.subtitle ? `${notice.subtitle} · ${notice.body}` : notice.body },
-            android: { priority: 'high', notification: { channel_id: SWARM_CHANNEL, tag: notice.key, visibility: 'PRIVATE' } },
-            data: { key: notice.key, link: notice.link },
+            // Tagged with its slot (task #3248): Android replaces a notification of the same tag, so a thread's replies share
+            // one, and the app posts its own notice for it under the same tag. A quiet one goes on the app's silent channel.
+            android: { priority: 'high', notification: { channel_id: notice.quiet ? SWARM_QUIET_CHANNEL : SWARM_CHANNEL, tag: notice.slot, visibility: 'PRIVATE' } },
+            data: { key: notice.key, link: notice.link, slot: notice.slot },
           } }),
         })
         if (answer.ok) return { outcome: 'sent' }

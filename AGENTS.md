@@ -82,6 +82,21 @@ For product names, terminology, and visible copy, follow the
   automatically reuses matching Desktop build inputs/version and otherwise builds
   normally; unrelated CLI, firmware or documentation merges do not force a rebuild.
 
+# Windows rules
+
+Details, measurements and sources: [docs/windows-rules.md](docs/windows-rules.md). Read it before changing code
+that starts a process or before testing on Windows. Every feature must look and work on Windows as it does on a Mac.
+
+1. Harness never opens a window the person did not ask for, not even for a moment. On Windows, `detached: true`
+   makes everything the child starts flash a console window, and `windowsHide: true` does not fix it. Use
+   `ownProcessGroup()` in the CLI and `startHidden`/`runHidden` in Desktop.
+2. Your test scripts follow rule 1 too: a window from a test looks like a window from the product.
+3. Prove it by recording the windows through the flow, in the person's session and on the signed build. Tests over SSH
+   cannot see windows, and a detached PowerShell exits 0 having run nothing.
+4. Found a new Windows mistake? Add it to the rules in the same change, with a test that fails if it comes back.
+5. Meet a problem on Windows? First read how the Mac path solves it, and do the same thing the Windows way. The Mac is the
+   reference for what the person sees; only the mechanism differs.
+
 # Feature design rules
 
 Details, incidents and a checklist to copy: [docs/feature-design-rules.md](docs/feature-design-rules.md).

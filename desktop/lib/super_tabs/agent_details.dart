@@ -86,12 +86,17 @@ class SuperTabAgentInfo {
   String? get engine =>
       _known(agent.engine) == null ? null : engineIdentity(agent.engine).label;
 
-  /// The computer it runs on: the Mac, for an agent in that Mac's Harness Team account ([SuperTabSnapshot.placeOf]).
+  /// The computer it runs on: the Mac, for an agent in that Mac's Harness Team account ([SuperTabSnapshot.placeOf]),
+  /// named '<Mac> · Team account' then, so it never reads like an agent of the Mac's own account (task #3060).
   String? get machine {
     final place =
         controller.snapshot?.placeOf(agent.machineId) ?? agent.machineId;
-    return _known(app?.stateOf(place)?.machine.displayName) ??
+    final mac =
+        _known(app?.stateOf(place)?.machine.displayName) ??
         _known(controller.snapshot?.pool(place)?['name'] as String?);
+    return mac == null || place == agent.machineId
+        ? mac
+        : '$mac$kTeamEntryLabel';
   }
 
   String? get folder => _known(native?.project?.cwd);

@@ -156,6 +156,44 @@ it('parses route GROUP JSON', () => {
   expect(parseSuperTabArgs([...prefix, 'route', 'g1', '{"difficulty":"low","risk":"low","why":"x"}'], where).payload)
     .toMatchObject({ action: 'route', conversationId: 'g1', assessment: { difficulty: 'low' } })
 })
+// Task #3294: the whole instructions only on request, and none of it again for a revision the caller read.
+it('parses route\'s --full-instructions and --instructions-read N, and refuses anything else after the JSON', () => {
+  const json = '{"difficulty":"low","risk":"low","why":"x"}'
+  expect(parseSuperTabArgs([...prefix, 'route', 'g1', json], where).payload).not.toHaveProperty('fullInstructions')
+  expect(parseSuperTabArgs([...prefix, 'route', 'g1', json, '--full-instructions'], where).payload).toMatchObject({ action: 'route', fullInstructions: true })
+  expect(parseSuperTabArgs([...prefix, 'route', 'g1', json, '--instructions-read', '74'], where).payload).toMatchObject({ instructionsRead: 74 })
+  expect(parseSuperTabArgs([...prefix, 'route', 'g1', json, '--instructions-read', '74', '--full-instructions'], where).payload)
+    .toMatchObject({ instructionsRead: 74, fullInstructions: true })
+  for (const tail of [['--instructions-read'], ['--instructions-read', 'x'], ['--instructions-read', '-1'], ['--full'], ['--full-instructions', '--full-instructions']]) {
+    expect(() => parseSuperTabArgs([...prefix, 'route', 'g1', json, ...tail], where)).toThrow('harness super-tab')
+  }
+})
+it('prints the compact route answer: the Routing section, not the whole instructions', async () => {
+  const print = vi.fn(), close = vi.fn()
+  const text = '# P\n\n## Roles\nWHOLE\n\n## Routing\nBy quota.\n'
+  const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => {
+    if (type === 'agents_list') return { agents: [{ id: 'native', engine: 'claude', tmuxPane: '%42', status: 'active' }] }
+    if (payload.action === 'routeContext') return { ok: true, value: { agentId: 'lead', tab: { revision: 1, state: {
+      agents: [{ id: 'a1', name: 'Multiply', machineId: 'machine', harnessId: 'native', configuration: { engine: 'claude', model: 'opus', effort: 'high' } }],
+      conversations: [{ id: 'g1', title: 'API', leadId: 'a1', agentIds: ['a1'], archived: false, brief: '', checks: [], assignment: null }] } },
+      policy: { policy: { version: 1, models: [{ engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, enabled: true }] } }, machines: [{ machineId: 'machine', name: 'mac' }] } }
+    if (payload.action === 'command') return { ok: true, value: { result: { routeDecisionId: 'd1' } } }
+    if (payload.action === 'instructions') return { ok: true, value: { revision: 7, text, notes: [] } }
+    if (payload.action === 'routeHistory') return { ok: true, value: { decisions: [], attempts: [] } }
+    if (type === 'engines_probe') return { engines: [{ engine: 'claude', installed: true, signedIn: true }] }
+    if (type === 'usage_read') return { providers: [] }
+    return { resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10, projectDiskFreeBytes: 1e11 }, tools: { git: true }, devices: {} }
+  })
+  const deps = { where: () => where, pane: '%42', open: async () => ({ request, close, machineId: 'machine' }), print }
+  await superTabCommand(['--tab', 'tab', 'route', 'g1', '{"difficulty":"low","risk":"low","why":"x"}'], deps)
+  const printed = JSON.parse(print.mock.calls.at(-1)![0] as string)
+  expect(printed).toMatchObject({ ok: true, instructions: { revision: 7, routing: '## Routing\nBy quota.' }, candidates: { 'mac · machineId machine · 1 agents': [expect.stringMatching(/^c0 Multiply/), expect.stringMatching(/^c1 new/)] } })
+  expect(JSON.stringify(printed)).not.toContain('WHOLE')
+  await superTabCommand(['--tab', 'tab', 'route', 'g1', '{"difficulty":"low","risk":"low","why":"x"}', '--full-instructions'], deps)
+  expect(JSON.parse(print.mock.calls.at(-1)![0] as string)).toMatchObject({ instructions: { revision: 7, text } })
+  await superTabCommand(['--tab', 'tab', 'route', 'g1', '{"difficulty":"low","risk":"low","why":"x"}', '--instructions-read', '7'], deps)
+  expect(JSON.parse(print.mock.calls.at(-1)![0] as string).instructions).toEqual({ revision: 7, unchanged: expect.any(String), notes: [] })
+})
 it('routes through the caller and prints the decision, or the parse failure as an error', async () => {
   const print = vi.fn(), close = vi.fn()
   const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => {

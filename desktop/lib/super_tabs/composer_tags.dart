@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -298,5 +300,77 @@ class SuperTabTagBackspace extends TextInputFormatter {
       );
     }
     return newValue;
+  }
+}
+
+/// Whether an input method is composing in [value] (Telex, kana, jamo): the
+/// marked text is the input method's, and the box must not replace it.
+bool superTabComposing(TextEditingValue value) =>
+    value.composing.isValid && !value.composing.isCollapsed;
+
+/// The writes a chat box takes from the app rather than from typing: a draft
+/// saved elsewhere, a path taken back out. None replaces the box while an
+/// input method composes in it, where a fresh value would drop the marked
+/// range and the next diacritic would stack on text the input method no
+/// longer sees (task #3245). Such a write waits and runs once composing ends,
+/// worked out from the box's text then, with the caret kept.
+class SuperTabComposerWrites {
+  SuperTabComposerWrites(this.box) {
+    box.addListener(_moved);
+  }
+
+  final TextEditingController box;
+
+  /// The write waiting for composing to end.
+  String? Function(String current)? _waiting;
+  var _scheduled = false;
+
+  /// Puts what [next] makes of the box's text into the box: now, with the
+  /// caret at its end, or once composing ends, with the caret where it is.
+  /// [next] answers null when it no longer applies (another chat shown).
+  void write(String? Function(String current) next) {
+    if (superTabComposing(box.value)) {
+      _waiting = next;
+      return;
+    }
+    _waiting = null;
+    final text = next(box.text);
+    if (text == null || text == box.text) return;
+    box.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
+
+  /// Drops a waiting write: the box was replaced for another chat.
+  void cancel() => _waiting = null;
+
+  void dispose() {
+    _waiting = null;
+    box.removeListener(_moved);
+  }
+
+  void _moved() {
+    if (_waiting == null || _scheduled || superTabComposing(box.value)) {
+      return;
+    }
+    // After the edit that ended composing has been reported, so the draft
+    // [next] reads already holds what was committed.
+    _scheduled = true;
+    scheduleMicrotask(() {
+      _scheduled = false;
+      final next = _waiting;
+      if (next == null || superTabComposing(box.value)) return;
+      _waiting = null;
+      final text = next(box.text);
+      if (text == null || text == box.text) return;
+      final caret = box.selection.isValid
+          ? box.selection.extentOffset.clamp(0, text.length)
+          : text.length;
+      box.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: caret),
+      );
+    });
   }
 }

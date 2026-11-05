@@ -150,6 +150,39 @@ const groupKeys = (read: { groups: Array<{ key: string }> }) => read.groups.map(
 const partReads = <T>(run: () => Promise<T>) => profiledReads(db, /\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/, run)
 
 describe('reads through the cache', () => {
+  it('reuses row metadata per pod and observes deletion when the short hold expires', async () => {
+    const { tabId } = await privateScene()
+    let now = Date.now()
+    const { store } = pod()
+    const reads = new SwarmReads(store, { now: () => now })
+    await expect(reads.firstLoad({ ...people.owner, autonomousEnv: 'other' }, tabId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    const first = await profiledReads(db, /\.SuperTab$/, () => reads.firstLoad(people.owner, tabId))
+    const second = await profiledReads(db, /\.SuperTab$/, () => reads.firstLoad(people.owner, tabId))
+    expect(first.reads).toBe(1)
+    expect(second.reads).toBe(0)
+
+    await db.superTab.update({ where: { id: tabId }, data: { deletedAt: new Date(now) } })
+    now += 2_999
+    await expect(reads.firstLoad(people.owner, tabId)).resolves.toBeDefined()
+    now += 1
+    await expect(reads.firstLoad(people.owner, tabId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
+  it('checks a changed format at hold expiry and refuses an invalid legacy row', async () => {
+    const { tabId } = await privateScene()
+    let now = Date.now()
+    const { store } = pod()
+    const reads = new SwarmReads(store, { now: () => now })
+    await reads.firstLoad(people.owner, tabId)
+
+    // Simulate an incompatible format transition: the fenced v2 state cannot be migrated as a legacy v1 state.
+    await db.superTab.update({ where: { id: tabId }, data: { format: 1 } })
+    now += 2_999
+    await expect(reads.firstLoad(people.owner, tabId)).resolves.toBeDefined()
+    now += 1
+    await expect(reads.firstLoad(people.owner, tabId)).rejects.toMatchObject({ code: 'SWARM_MIGRATING' })
+  })
+
   it('reads a Swarm whose stamp did not move without asking Mongo for its parts', async () => {
     const { tabId } = await privateScene()
     const { reads } = pod()

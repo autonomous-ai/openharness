@@ -148,6 +148,30 @@ export interface SetupScriptInput {
   mintEnv: Record<string, string>
   /** `missing`: hand over a sign-in only when the team account has none. `always`: a new one regardless. */
   signIn: 'missing' | 'always'
+  /** The owner's own installed Claude Code and Codex (./engines.ts `ownerEngineCopies`), copied in place of npm (#3169). */
+  engineCopies?: readonly EngineCopy[]
+}
+
+/** One engine the owner has installed as npm leaves one: its package folder, and the command npm links to it. */
+export interface EngineCopy {
+  packageName: string
+  dir: string
+  bin: string
+  /** The command's file inside the package, as its package.json `bin` names it, relative and plain. */
+  binPath: string
+}
+
+const PLAIN_RELATIVE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*(\/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$/
+
+/** A copy whose every value setup can quote plainly: one of the team's engines, by its own package and command. */
+export function checkEngineCopy(copy: EngineCopy): EngineCopy {
+  const engine = TEAM_ENGINES.find((e) => e.packageName === copy.packageName)
+  if (!engine) throw new Error(`not an engine of the team account: ${JSON.stringify(copy.packageName)}`)
+  if (copy.bin !== engine.engine) throw new Error(`not the command of ${engine.name}: ${JSON.stringify(copy.bin)}`)
+  if (!PLAIN_RELATIVE.test(copy.binPath) || copy.binPath.split('/').some((part) => part === '..' || part === '.') || copy.binPath.length > 200) {
+    throw new Error(`not a plain path inside the package: ${JSON.stringify(copy.binPath)}`)
+  }
+  return { packageName: engine.packageName, dir: checkPath(copy.dir, `${engine.name} folder`), bin: engine.engine, binPath: copy.binPath }
 }
 
 const basename = (path: string): string => path.slice(path.lastIndexOf('/') + 1)
@@ -236,6 +260,59 @@ export const TEAM_ENGINES_INSTALL = [
 ].join('\n')
 
 /**
+ * The team account's side of copying one of the owner's installed engines (#3169: npm took 4 min 18 s of a 4 min 35 s
+ * setup on this Mac; copying the two packages took 2.3 s). Run as the team account, never as root. Positional: the mode,
+ * the home, the package, its command and the command's file inside it.
+ * - `unpack` reads a tar of the package on its input into `<package>.next` in the team's npm prefix, and keeps it only when
+ *   it is that package with its command there, a file and not a link (security review 1 of #3124), executable to the
+ *   team account. tar refuses to write outside the folder or through a link, and as this account sets no owner or set-id bit.
+ * - `commit` puts it in place of the one there, and links the command as npm does, relatively.
+ * - `discard` removes what `unpack` left.
+ */
+export const TEAM_ENGINE_COPY = [
+  'set -eu',
+  'umask 022',
+  'mode=$1; home=$2; pkg=$3; name=$4; file=$5',
+  'dest="$home/.local/lib/node_modules/$pkg"; bin="$home/.local/bin"',
+  'case $mode in',
+  'unpack)',
+  '  mkdir -p "${dest%/*}" "$bin"',
+  '  rm -rf "$dest.next"; mkdir "$dest.next"',
+  '  /usr/bin/tar -C "$dest.next" -xf - || { rm -rf "$dest.next"; exit 1; }',
+  // The package's own name, as npm wrote it: what the owner has there is that engine, not something else by its folder.
+  '  grep -Eq "\\"name\\"[[:space:]]*:[[:space:]]*\\"$pkg\\"" "$dest.next/package.json" 2>/dev/null \\',
+  '    && [ ! -L "$dest.next/$file" ] && [ -f "$dest.next/$file" ] && [ -x "$dest.next/$file" ] || { rm -rf "$dest.next"; exit 1; } ;;',
+  'commit)',
+  '  [ -d "$dest.next" ] || exit 1',
+  '  rm -rf "$dest"; mv "$dest.next" "$dest"',
+  '  ln -sfn "../lib/node_modules/$pkg/$file" "$bin/$name" ;;',
+  'discard)',
+  '  rm -rf "$dest.next" ;;',
+  '*) exit 2 ;;',
+  'esac',
+].join('\n')
+
+/**
+ * `copy_engine PACKAGE FOLDER COMMAND FILE`, inside the setup script, with as_owner, as_team, $RT and $TEAM_HOME: the
+ * owner's tar of their package piped into the team account's (TEAM_ENGINE_COPY), so root reads nothing of the owner's and
+ * writes nothing of the team account's. The owner's tar failing part-way (a file it could not read) is noted in root's own
+ * $RT, where neither account can write, and the copy is discarded rather than kept short of a file. False when not copied:
+ * npm installs it then.
+ */
+export const TEAM_ENGINE_COPY_FN = [
+  'copy_engine() {',
+  '  : > "$RT/engine-copy"',
+  `  if { as_owner /usr/bin/tar -C "$2" -cf - . 2>/dev/null || echo failed > "$RT/engine-copy"; } \\`,
+  `    | as_team /bin/sh -c ${sh(TEAM_ENGINE_COPY)} sh unpack "$TEAM_HOME" "$1" "$3" "$4" && [ ! -s "$RT/engine-copy" ]; then`,
+  `    as_team /bin/sh -c ${sh(TEAM_ENGINE_COPY)} sh commit "$TEAM_HOME" "$1" "$3" "$4" && say "copied $1 for the team account" && return 0`,
+  '  fi',
+  `  as_team /bin/sh -c ${sh(TEAM_ENGINE_COPY)} sh discard "$TEAM_HOME" "$1" "$3" "$4" || true`,
+  '  say "could not copy $1 for the team account; npm installs it"',
+  '  return 1',
+  '}',
+].join('\n')
+
+/**
  * The team account's password. macOS lists only an account with one: macOS 26 hides an account whose password is `*`
  * from Users & Groups. A random one, made here and forgotten: never printed, logged or stored, and never a process's
  * argument, where `ps` shows it to every account. `printf` is the shell's own, and dscl reads the command from its
@@ -301,11 +378,44 @@ function checkedSetup(input: SetupScriptInput) {
     ownerCli: checkPath(input.ownerCli, 'owner CLI'),
     mintEnv: Object.entries(checkEnv(input.mintEnv)).map(([name, value]) => sh(`${name}=${value}`)).join(' '),
     paths: teamPaths(home),
+    engineCopies: (input.engineCopies ?? []).map(checkEngineCopy),
   }
 }
 
+/**
+ * Steps 5a and 5b of the Mac's setup: the owner's installed engines copied, then npm for each one not copied. Each engine
+ * is named once in the script, quoted, from ./engines.ts.
+ */
+function engineSteps(copies: readonly EngineCopy[]): string[] {
+  const lines = TEAM_ENGINES.map(({ engine }) => `copied_${engine}=`)
+  if (copies.length) {
+    lines.push(
+      'step copy-engines',
+      '# 5a. Claude Code and Codex as this Mac already has them (#3169): the owner\'s own install, copied in seconds instead of',
+      '#     downloaded again. None of the owner\'s sign-ins is in it: those live outside the package folders.',
+      TEAM_ENGINE_COPY_FN,
+      ...copies.map((copy) => {
+        const { engine } = TEAM_ENGINES.find((e) => e.packageName === copy.packageName)!
+        return `if copy_engine ${[copy.packageName, copy.dir, copy.bin, copy.binPath].map(sh).join(' ')}; then copied_${engine}=1; fi`
+      }),
+    )
+  }
+  lines.push(
+    '# 5b. What was not copied, installed by the team account itself into its own home: the owner\'s copies are inside the',
+    '#     owner\'s private home. None of the owner\'s sign-ins is copied; the owner signs them in once (harness team status).',
+    'set --',
+    ...TEAM_ENGINES.map(({ engine, packageName }) => `[ -n "$copied_${engine}" ] || set -- "$@" ${sh(packageName)}`),
+    'if [ $# -gt 0 ]; then',
+    '  step engines',
+    `  as_team /bin/sh -c ${sh(TEAM_ENGINES_INSTALL)} sh "$TEAM_HOME" "$NODE_NAME" "$@" || true`,
+    'fi',
+  )
+  return lines
+}
+
 export function buildSetupScript(input: SetupScriptInput): string {
-  const { user, owner, home, ownerHome, stage, nodeDir, nodeName, tmuxDir, tmuxName, cliDir, ownerNode, ownerCli, mintEnv, paths } = checkedSetup(input)
+  const { user, owner, home, ownerHome, stage, nodeDir, nodeName, tmuxDir, tmuxName, cliDir, ownerNode, ownerCli, mintEnv, paths, engineCopies } =
+    checkedSetup(input)
   const lines = [
     '#!/bin/sh',
     '# Harness Team account setup (cli/src/team/script.ts), run once as root behind the macOS administrator prompt.',
@@ -431,10 +541,7 @@ export function buildSetupScript(input: SetupScriptInput): string {
     'chmod 755 "$RT"',
     `as_team /bin/sh -c ${sh(TEAM_COPY)} sh "$RT" "$TEAM_HOME" "$NODE_NAME" "$TMUX_NAME"`,
     '',
-    'step engines',
-    '# 5b. Claude Code and Codex, installed by the team account itself into its own home: the owner\'s copies are inside the',
-    '#     owner\'s private home. None of the owner\'s sign-ins is copied; the owner signs them in once (harness team status).',
-    `as_team /bin/sh -c ${sh(TEAM_ENGINES_INSTALL)} sh "$TEAM_HOME" "$NODE_NAME" ${TEAM_ENGINES.map((e) => sh(e.packageName)).join(' ')} || true`,
+    ...engineSteps(engineCopies),
     '',
     '# 6. What setup made (root\'s), and the team account\'s status folder, which the owner can read.',
     // A folder setup made says so, so that removal takes it away again once it is empty, and never one made by anything else.

@@ -158,7 +158,9 @@ void main() {
   testWidgets('a search reads at most 50 older pages, then says so', (
     tester,
   ) async {
-    final server = chat(80, matching: {80})..messagePage = 1;
+    // Long enough that what the list reads ahead by itself leaves more
+    // than 50 pages.
+    final server = chat(200, matching: {200})..messagePage = 1;
     final reads = <String>[];
     await show(tester, server);
     server.onRead = reads.add;

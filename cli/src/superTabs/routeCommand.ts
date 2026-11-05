@@ -9,7 +9,8 @@ import { RELAYED_QUOTA, requiredToolReason, startRequirements, USED_UP_WINDOW } 
 import { START_DEADLINE_MS, START_WINDOW_MS } from './reservations.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, bytes, machineBrief, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, OLD_RECORD_MAX, quotaBrief, quotaOf2, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type Shown, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
+import { withPmAccounts } from './pmAccounts.js'
+import { accountOf, API_BUILDERS, bytes, machineBrief, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, OLD_RECORD_MAX, quotaBrief, quotaLine, quotaOf2, recentStartNotes, UNRATED, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type Shown, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
 import { makePlugins, ROUTE_PLUGIN_MAKERS, type PluginMaker } from './routePlugins.js'
 import { CI_HOLD_OPENING, CI_RETRY_MINUTES, heavyOfStart, MACHINE_FIT_MAKER } from './machineFit.js'
 import { stat } from 'node:fs/promises'
@@ -46,11 +47,83 @@ const WAITING = 'This task waits for the machine it requires; route it again onc
 /** What a group's task requires of where it runs (backend superTabs/model.ts TaskRequirement): the machines it runs on, null
  *  when it names none, and the devices every start for it asks its machine to check. An agent that does not see a required
  *  machine reads only that there is one, so the set may be empty and still require. */
-export function taskRequirement(group: Json): { machines: Set<string> | null; devices: string[] } {
+export function taskRequirement(group: Json): { machines: Set<string> | null; devices: string[]; access: string[] } {
   const requires = object(object(group.task).requires)
   const strings = (value: unknown) => Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []
   const unseen = finite(requires.unseenMachines) && requires.unseenMachines > 0
-  return { machines: Array.isArray(requires.machines) || unseen ? new Set(strings(requires.machines)) : null, devices: strings(requires.devices) }
+  return { machines: Array.isArray(requires.machines) || unseen ? new Set(strings(requires.machines)) : null, devices: strings(requires.devices),
+    access: strings(requires.access) }
+}
+
+// ── What a machine can reach (backend superTabs/machineAccess.ts, task #3047) ───────────────────────────────────────────
+const accessKey = (name: string): string => name.trim().replace(/\s+/g, ' ').toLowerCase()
+const entryOf = (mac: Json | undefined, name: string, account: 'own' | 'team'): Json | undefined =>
+  list(mac?.access).find(e => e.account === account && typeof e.name === 'string' && accessKey(e.name) === accessKey(name))
+/** Whether every name [needed] is an own-account entry of the Mac [mac] its owner shared with teammates, ok: a teammate's task
+ *  that needs them runs on the Mac, in the owner's account (backend sharedOwnAccess). */
+export function sharedOwnAccess(mac: Json | undefined, needed: readonly string[]): boolean {
+  if (!mac || typeof mac.hostMachineId === 'string' || !needed.length) return false
+  return needed.every(name => { const e = entryOf(mac, name, 'own'); return !!e && e.state === 'ok' && e.teammates === true })
+}
+function editDistance(a: string, b: string): number {
+  let row = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i]
+    for (let j = 1; j <= b.length; j++) next[j] = Math.min(row[j]! + 1, next[j - 1]! + 1, row[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1))
+    row = next
+  }
+  return row[b.length]!
+}
+/** The name of [names] closest to [name], when one is close: one holds the other ("Desk lamp", "Lamp"), or a few letters differ. */
+export function closestAccessName(name: string, names: readonly string[]): string | null {
+  const key = accessKey(name)
+  let best: { name: string; score: number } | null = null
+  for (const other of new Set(names)) {
+    const k = accessKey(other)
+    if (k === key) continue
+    const score = k.includes(key) || key.includes(k) ? Math.abs(k.length - key.length) : editDistance(k, key)
+    const close = k.includes(key) || key.includes(k) || score <= Math.max(1, Math.floor(key.length / 4))
+    if (close && (!best || score < best.score)) best = { name: other, score }
+  }
+  return best?.name ?? null
+}
+/**
+ * Why work for a project owned by [projectOwner] that needs [needed] cannot run in [pool]'s account, one line each, as the
+ * backend's start check says it (machineAccess.ts accessRefusal): the entries of that account only, ok, and an own-account
+ * entry for a teammate's project only when shared or when its owner lets teammates' work run there. [pool] undefined: a
+ * machine off the Machines list, which lists nothing. [names]: every name the Swarm's machines list, for "Did you mean".
+ */
+export function accessReasons(pool: Json | undefined, mac: Json | undefined, projectOwner: unknown, needed: readonly string[], people: Json[],
+  names: readonly string[],
+  /** Whether the task itself names every needed name: a shared own-account entry keeps a start on the Mac only then (backend
+   *  teamMachineFor reads the task's access), so a route asked with needs.access alone never counts one. */
+  taskNamed = true): string[] {
+  const account = typeof pool?.hostMachineId === 'string' ? 'team' : 'own'
+  const owner = (() => { const p = people.find(x => x.id === mac?.contributorId); return text(p?.name) ?? text(p?.username) ?? 'its owner' })()
+  const teammate = projectOwner !== mac?.contributorId
+  const ownAccountWork = typeof object(mac?.teamWork).ownAccount === 'string'
+  const onlyNamed = (e: Json) => `${String(e.name)} is shared from ${owner}'s own account only with tasks that name it in their access.`
+  return needed.flatMap(name => {
+    const entry = pool && mac ? entryOf(mac, name, account) : undefined
+    if (!entry) {
+      const other = pool && mac ? entryOf(mac, name, account === 'own' ? 'team' : 'own') : undefined
+      if (other && account === 'own') return [`${String(other.name)} is in the Harness Team account on ${String(mac!.name)}, which runs only teammates' work.`]
+      if (other && teammate && other.teammates === true && other.state === 'ok' && !taskNamed) return [onlyNamed(other)]
+      if (other && teammate) return [`${String(other.name)} is in ${owner}'s own account, not shared with teammates.`]
+      const closest = closestAccessName(name, names)
+      return [`No ${name} here.${closest ? ` Did you mean ${closest}?` : ''}`]
+    }
+    if (entry.state !== 'ok') return [`${String(entry.name)} on ${String(mac!.name)} is waiting for ${owner} to confirm.`]
+    if (account === 'own' && teammate && !ownAccountWork && entry.teammates === true && !taskNamed) return [onlyNamed(entry)]
+    if (account === 'own' && teammate && entry.teammates !== true && !ownAccountWork) return [`${String(entry.name)} is in ${owner}'s own account, not shared with teammates.`]
+    return []
+  })
+}
+/** What the route notes on a candidate whose account would use a production system: access is never permission (design section 4). */
+export function productionNotes(pool: Json | undefined, mac: Json | undefined, needed: readonly string[]): string[] {
+  const account = typeof pool?.hostMachineId === 'string' ? 'team' : 'own'
+  return needed.map(name => entryOf(mac, name, account)).filter((e): e is Json => !!e && e.production === true)
+    .map(e => `${String(e.name)} is a production system: writes still need a person's go.`)
 }
 /** A note on a new agent there, not a filter (project instructions, phase 4): the agent choosing may still try it. */
 export const STALLED = 'Its last 2 starts on this machine started no agent (they failed or were never picked up); its owner can check the machine. This clears once a start there succeeds, its Harness is updated, or 30 minutes pass.'
@@ -121,6 +194,7 @@ export function unreadyPool(pool: Json, project: Json | undefined, projectId: st
   const checkout = pool.scope === 'swarm' && repository.machineId !== pool.machineId ? list(readiness.checkouts).find(c => c.folder === projectId) : undefined
   const wanted = typeof repository.repositoryUrl === 'string' ? repositoryKey(repository.repositoryUrl) : null
   const all = [
+    ...(typeof pool.machineSuspended === 'string' ? [pool.machineSuspended] : []),
     ...(NO_SWARM_AGENTS_ON.includes(String(object(observed.resources).os)) ? [`Swarm agents do not run on ${String(object(observed.resources).os)} yet.`] : []),
     ...(checkout?.git === false ? ['The project folder on this machine is not a git checkout. Its owner can remove it, and the next start clones the project.'] : []),
     ...(checkout?.git === true && wanted && typeof checkout.repository === 'string' && checkout.repository !== wanted
@@ -219,6 +293,15 @@ function endedWork(conversations: Json[], decisions: Json[] | null, attempts: Js
   }
   return ended
 }
+/** How many of the task's attempts ended: its earlier assignments the route read and its own last one, once each; null when its
+ *  attempts could not be read. The route steps small work up after the second (route.ts tierOf). */
+function endedAttempts(group: Json, attempts: Json[] | null): number | null {
+  if (!attempts) return null
+  const ended = new Set(attempts.filter(a => typeof a.id === 'string' && !active(a)).map(a => a.id))
+  const current = object(group.assignment)
+  if (current.id && !active(current)) ended.add(current.id)
+  return ended.size
+}
 /** The fields of a frame that say what the agent works on; an absent or malformed one says nothing. */
 function frameOf(frame: Json): MemberFrame {
   const project = object(frame.project), updatedAt = Date.parse(String(frame.updatedAt))
@@ -252,6 +335,15 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // read, and the server records a decision only for a group in the agent's project.
   const required = taskRequirement(group)
   if (required.devices.length) assessment = { ...assessment, needs: { ...assessment.needs, devices: [...new Set([...assessment.needs.devices, ...required.devices])] } }
+  // What the task needs to reach joins what the Lead said it needs: the backend holds every start to the task's (machineAccess.ts).
+  if (required.access.length) {
+    const access = [...assessment.needs.access ?? []]
+    for (const name of required.access) if (!access.some(a => accessKey(a) === accessKey(name))) access.push(name)
+    assessment = { ...assessment, needs: { ...assessment.needs, access } }
+  }
+  const needed = assessment.needs.access ?? []
+  // Only what the task itself names keeps a teammate's start in the owner's account (backend teamMachineFor).
+  const taskNamed = needed.length > 0 && needed.every(n => required.access.some(r => accessKey(r) === accessKey(n)))
   const projectId = String(group.projectId ?? 'lead')
   const project = list(state.projects).find(p => p.id === projectId)
   // Every idle agent is a candidate, whatever its role: the coordinator, and an agent an older client started as a Reviewer.
@@ -267,7 +359,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   // (production, 2026-10-21). A member may run on a machine only its collaborator can open; the route tries that machine
   // too, but a member there is unknown, never offline.
   const swarmMachines = new Set([where.machineId, ...list(state.machines).map(m => String(m.machineId)), ...agents.map(a => String(a.machineId))])
-  const machines = new Map<string, { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean; held?: ReturnType<typeof heldByStarts> }>()
+  const machines = new Map<string, { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean; held?: ReturnType<typeof heldByStarts>; access?: string[]; accessNotes?: string[] }>()
   for (const m of list(value.machines)) if (swarmMachines.has(String(m.machineId))) machines.set(String(m.machineId), { name: String(m.name), status: String(m.status ?? 'unknown'), account: true })
   // The routing agent's own machine is the account's even when the list could not be read.
   if (!machines.has(where.machineId)) machines.set(where.machineId, { name: where.machineId, status: 'unknown', account: true })
@@ -286,13 +378,22 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     return named.length ? `${String(mac.name)} runs only ${named.length > 1 ? `${named.slice(0, -1).join(', ')} and ${named.at(-1)}` : named[0]}.`
       : `${String(mac.name)} is kept by its owner for other projects.`
   }
+  // A Mac's own entry holds both its accounts' lists (backend machineAccess.ts): a Team account's pool reads its Mac's.
+  const macPoolOf = (m: Json): Json | undefined => typeof m.hostMachineId === 'string'
+    ? list(state.machines).find(x => x.machineId === m.hostMachineId && x.contributorId === m.contributorId) : m
+  const people = list(state.people), accessNames = list(state.machines).flatMap(m => list(m.access).map(e => String(e.name)))
   for (const original of list(state.machines)) {
     const repository = object(project?.repository)
     const teamWork = object(original.teamWork)
+    // A teammate's task that needs only entries its owner shared runs on the Mac, in the owner's account: said, not refused.
+    const shared = projectOwner !== original.contributorId && taskNamed && sharedOwnAccess(original, needed)
+    const ownerName = (() => { const p = people.find(x => x.id === original.contributorId); return text(p?.name) ?? text(p?.username) ?? 'its owner' })()
     const pool: Json = { ...original,
       // Offline is said once, by the reading's own age below.
-      ...(teamWork.allowed === false && teamWork.code !== 'MACHINE_OFFLINE' && typeof teamWork.reason === 'string'
+      ...(teamWork.allowed === false && teamWork.code !== 'MACHINE_OFFLINE' && typeof teamWork.reason === 'string' && !shared
         ? { teammatesRefused: teamWork.reason, projectOwnerId: projectOwner } : {}),
+      ...(shared ? { ownAccount: `${String(original.name)} runs this task in ${ownerName}'s own account: ${needed.join(', ')} ${needed.length > 1 ? 'are' : 'is'} shared with teammates.`,
+        projectOwnerId: projectOwner } : {}),
       // Its owner lets teammates' work run in their own account (backend machines.ts ownAccountWork, task #2806): the teammate
       // whose task lands there did not choose that, so the route says it (River, 11-04).
       ...(teamWork.allowed === true && typeof teamWork.ownAccount === 'string' ? { ownAccount: teamWork.ownAccount, projectOwnerId: projectOwner } : {}),
@@ -308,16 +409,34 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
       unready: unreadyPool(original, project, projectId, object(value.tab).githubApp === true, projectOwner) })
   }
   for (const [machineId, machine] of machines) {
+    const listed = list(state.machines).find(m => m.machineId === machineId)
+    if (needed.length) {
+      machine.access = accessReasons(listed, listed && macPoolOf(listed), projectOwner, needed, people, accessNames, taskNamed)
+      machine.accessNotes = productionNotes(listed, listed && macPoolOf(listed), needed)
+    }
     machine.stalled = stalled(list(state.starts), machineId, list(state.machines).find(m => m.machineId === machineId))
     machine.held = heldByStarts(list(state.starts), machineId)
   }
   // One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is that Mac, under its name. A
   // teammate's project starts only in the team account and the Mac's owner's own projects only with the owner, so only one
   // of the two offers new agents here, and the other is not listed as unfit; agents already on either stay members.
+  // Not when the Mac's owner runs teammates' work in their own account (backend machines.ts ownAccountWork, task #3060): a
+  // teammate's work no Team agent wrote starts on the Mac, and the server refuses a start naming the Team account there.
+  // Work a Team agent wrote stays in the Team account (backend teamWritten.ts teamWrittenTask): a step reads its task's mark,
+  // an unknown task counts as written, and so does a task from before the mark whose assignee runs in a Team account.
+  const task = group.reviewOf ? conversations.find(c => c.id === group.reviewOf) : group
+  const assignee = task ? agents.find(a => a.id === object(task.assignment).agentId) : undefined
+  const onTeam = (agent: Json) => agent.teamAccount === true || list(state.machines).some(m => m.machineId === agent.machineId
+    && (typeof m.hostMachineId === 'string' || object(m.observation).sessionKind === 'team'))
+  const teamWritten = group.teamWritten === true || !task || task.teamWritten === true || (!!assignee && onTeam(assignee))
   for (const [team, mac] of macOf) {
     const pool = machines.get(team)?.pool
     if (!pool || !machines.has(mac)) continue
-    machines.get(projectOwner === pool.contributorId ? team : mac)!.folded = true
+    // Its owner runs teammates' work no Team agent wrote in their own account (#3060), or a teammate's task needs only what
+    // the owner shared (backend teamMachineFor): either stays on the Mac, and its Team account folds.
+    const ownAccount = typeof machines.get(mac)!.pool?.ownAccount === 'string' && !teamWritten
+    const onMac = projectOwner === pool.contributorId || ownAccount || (taskNamed && sharedOwnAccess(list(state.machines).find(m => m.machineId === mac), needed))
+    machines.get(onMac ? team : mac)!.folded = true
   }
   // Every row of the catalog is probed: one not offered by default is offered when a person names it (route.ts choose).
   const rows = catalog.models
@@ -381,16 +500,19 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     ...probes.filter(p => p.machineId === failedOn && p.engine === failedEngine && !p.gridModel).map(accountOf)] : [])
   for (const [i, p] of probes.entries()) {
     const notes = [...(outside(p.machineId) ? [ELSEWHERE] : []), ...(p.kind === 'member' && !checked(p.agentId) ? [UNCHECKED_DEVICE] : []),
+      ...(p.kind === 'new' ? recentStartNotes(list(state.starts), p.machineId, p.engine, Date.now()) : []),
       ...(avoid.has(accountOf(p)) ? [AVOIDED] : [])]
     if (notes.length) probes[i] = { ...p, notes: [...p.notes, ...notes] }
   }
+  // Whose PM an account keeps running, any project's (pmAccounts.ts): the project's Routing guards that PM's week.
+  probes.splice(0, probes.length, ...withPmAccounts(state, probes))
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
   const working = (decisions ?? []).filter(d => d.final && d.outcome === null && typeof d.account === 'string')
     .map(d => ({ account: d.account, spend: object(d.spend), size: d.size, createdAt: Date.parse(String(d.createdAt)) }) as Commitment)
   // A model a host now offline served is left out with that reason, and a person naming it gets no stand-in (route.ts choose).
   const offline = offlineModels(state)
   const now = Date.now()
-  const choice = choose(probes, catalog, assessment, now, working, heldLocalModels(state), offline, made.plugins)
+  const choice = choose(probes, catalog, { ...assessment, ended: endedAttempts(group, attempts) }, now, working, heldLocalModels(state), offline, made.plugins)
   const skipped = [...made.warnings, ...(choice.warnings ?? [])]
   choice.excluded.push(...offline, ...(catalog.models.length ? [] : [{ title: 'New agents', reason: CATALOG_UNREADABLE }]))
   // The task stays in the agent's queue rather than going where it cannot be done.
@@ -407,6 +529,8 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const record = (shape: RecordShape) => scoped({ action: 'command', operationId,
     command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf({ ...choice, shown: offered }, verdict, assessment, shape) } })
   let recorded = await record('current')
+  // A backend from before task #3163 refuses each candidate's weekly % left and reset: the same decision without them.
+  if (recorded.error === 'VALIDATION_ERROR') recorded = await record('unquoted')
   // A backend from before task #2901 takes a record only with a pick: c0 stands in for one, so its decision log and the starts
   // linked to it still work (route.ts recordOf).
   if (recorded.error === 'VALIDATION_ERROR') recorded = await record('picked')
@@ -425,7 +549,15 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const publicOf = (s: Shown) => ({ id: s.id, kind: s.kind, ...(s.agentId ? { agentId: s.agentId } : {}), machineId: s.machineId,
     engine: s.engine, model: s.model, effort: s.effort, title: s.title, ...(s.gridModel ? { gridModel: s.gridModel, gridName: s.gridName } : {}),
     ...(s.unrated ? { unrated: true } : {}), quota: quotaBrief(s, now), ...(s.kind === 'new' ? { cwd: cwdOn(s.machineId) } : {}),
-    ...(s.kind === 'new' && s.load?.room ? { machine: machineBrief(s.load.room) } : {}), ...(s.notes.length ? { notes: s.notes } : {}) })
+    ...(s.kind === 'new' && s.load?.room ? { machine: machineBrief(s.load.room) } : {}), ...(s.notes.length ? { notes: s.notes } : {}),
+    machineName: s.machineName, ...(agentsOn.has(s.machineId) ? { agents: agentsOn.get(s.machineId) } : {}), line: lineOf(s) })
+  // The agents on each machine, as any of its rows read them: a member's row may carry no reading of its machine.
+  const agentsOn = new Map(offered.filter(s => typeof s.load?.agents === 'number').map(s => [s.machineId, s.load!.agents!]))
+  // A candidate in one line for the agent choosing (task #3294), under its machine, which says its id, agents, folder and room
+  // once (routeAnswer).
+  const lineOf = (s: Shown) => [`${s.id} ${s.kind === 'new' ? 'new' : `${s.name ?? 'Member'} (agent ${s.agentId}, ${s.activity})`}`,
+    s.gridModel ? `${s.engine} on the grid: gridModel ${s.gridModel}, gridName ${s.gridName}` : `${s.engine} ${s.model} ${s.effort}${s.unrated ? ' (unrated)' : ''}`,
+    quotaLine(s, now), ...s.notes.filter(n => n !== UNRATED).map(noteClause)].join(' · ')
   // Every recorded row: the coordinator may reuse a particular member (the same Reviewer for its next round, Routing rule 3),
   // so none is hidden behind another on its account.
   const shownRows = offered
@@ -447,17 +579,18 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
  *  agent started, each with the chosen row's own fields; RULE is the Routing rule that chose it, which the backend asks for
  *  with a decision that has no pick, and the start or assignment records the candidate it matches. */
 function nextOf(rows: Shown[], conversationId: string, routeDecisionId: string | undefined, instructions: boolean, needs: Assessment['needs']): string {
-  const choose = 'Choose one candidate by the project\'s Routing instructions (Order and quota); the list is by machine name, not by merit.'
+  // Said once and short (task #3294): it rode on every route, 467 a day in one PM's context.
+  const choose = 'Not ranked: listed by machine name. Choose one by the project\'s Routing instructions (Order and quota), and give the rule that chose it as overrideReason.'
   const decided = routeDecisionId ? { routeDecisionId, overrideReason: 'RULE' } : {}
-  const assign = `Assign a member with: command OPERATION_ID ${JSON.stringify({ type: 'work.assign', conversationId, agentId: 'AGENT', ...decided })}`
+  const assign = `Assign a member: command OPERATION_ID ${JSON.stringify({ type: 'work.assign', conversationId, agentId: 'AGENT', ...decided })}`
   // No fixed role name: NAME and ROLE are the agent's to fill from the project's instructions. A backend without instructions
   // takes no roleName (it came with them, phase 2).
-  const start = `Start a new agent with: start OPERATION_ID ${JSON.stringify({ conversationId, name: 'NAME', ...(instructions ? { roleName: 'ROLE' } : {}),
+  const start = `Start a new agent: start OPERATION_ID ${JSON.stringify({ conversationId, name: 'NAME', ...(instructions ? { roleName: 'ROLE' } : {}),
     cwd: 'CWD', worktree: true, requirements: startRequirements(needs), ...(needs.heavy ? { heavy: needs.heavy } : {}),
-    machineId: 'MACHINE', engine: 'ENGINE', model: 'MODEL', effort: 'EFFORT', ...decided })}, then assign the started agent${routeDecisionId ? ' with the same routeDecisionId' : ''}. `
-    + 'Put the chosen row\'s machineId, engine, model, effort and cwd for MACHINE, ENGINE, MODEL, EFFORT and CWD; a row on a model served on the Swarm\'s grid takes its gridModel and gridName in place of model and effort. '
-    + `Put the agent's name for NAME${instructions ? ' and its role in the project\'s instructions for ROLE' : ''}. It starts from the repository's default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" to start from another branch.`
-  const rule = routeDecisionId ? ' Put the Routing rule that chose it for RULE (urgency, context or a machine the work needs where it departs from the order).' : ''
+    machineId: 'MACHINE', engine: 'ENGINE', model: 'MODEL', effort: 'EFFORT', ...decided })}, then assign it${routeDecisionId ? ' with the same routeDecisionId' : ''}. `
+    + 'MACHINE is its machine\'s machineId, CWD the cwd its machine names or else the answer\'s; ENGINE, MODEL and EFFORT its line\'s; a grid line takes its gridModel and gridName in place of model and effort. '
+    + `NAME is the agent's name${instructions ? ', ROLE its role in the instructions' : ''}. It starts from the default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" for another.`
+  const rule = routeDecisionId ? ' RULE: the Routing rule that chose it.' : ''
   return [choose, ...(rows.some(r => r.kind === 'member') ? [assign] : []), ...(rows.some(r => r.kind === 'new') ? [start] : [])].join(' ') + rule
 }
 
@@ -579,7 +712,7 @@ function loadOf(resources: Json, agents: number | null, cwd: string | undefined)
     cpuPercent: finite(resources.cpuPercent) ? resources.cpuPercent : null }
 }
 
-async function probeMachine(machineId: string, { name: machineName, status, account, pool, folded, unready = READY, stalled: stuck = false, held = heldByStarts([], machineId) }: { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean; held?: ReturnType<typeof heldByStarts> },
+async function probeMachine(machineId: string, { name: machineName, status, account, pool, folded, unready = READY, stalled: stuck = false, held = heldByStarts([], machineId), access: unreached = [], accessNotes: noted = [] }: { name: string; status: string; account: boolean; pool?: Json; folded?: boolean; unready?: Unready; stalled?: boolean; held?: ReturnType<typeof heldByStarts>; access?: string[]; accessNotes?: string[] },
   members: Json[], allModels: CatalogModel[], catalog: Catalog, a: Assessment, where: Where, open: typeof openDaemon): Promise<Probe[]> {
   const listedEngines = Array.isArray(pool?.engines) ? pool.engines.filter((engine): engine is string => typeof engine === 'string') : []
   const legacy = listedEngines.some(engine => !ENGINES.includes(engine))
@@ -599,7 +732,7 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
   const newProbe = (m: CatalogModel, refusals: string[], quota: Probe['quota'], known: boolean, load: Probe['load'] = UNKNOWN_LOAD, notes: string[] = []): Probe => ({
     kind: 'new', machineId, machineName, engine: m.engine, model: m.model, effort: m.effort, quality: m.strength, cost: m.cost,
     quota, activity: 'new agent', known, refusals, notes, load })
-  const offline = () => models.map(m => newProbe(m, [OFFLINE], UNKNOWN_QUOTA, false))
+  const offline = () => models.map(m => newProbe(m, [OFFLINE, ...unreached], UNKNOWN_QUOTA, false))
   const needs = startRequirements(a.needs)
   if (pool) {
     const observed = object(pool.observation), resources = object(observed.resources)
@@ -635,7 +768,7 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       ...(freeMemory === null || freeMemory < needs.memoryBytes ? [`Insufficient measured free memory${setAside(held.memoryBytes)}.`] : []),
       ...needs.tools.map(t => requiredToolReason(t, tools[t], object(observed.toolProbeErrors)[t])).filter((reason): reason is string => reason !== null),
       ...(needs.devices.length ? ['Required devices have not been reported.'] : []),
-      ...unready.all]
+      ...unready.all, ...unreached]
     const pushNote = unready.push ? [unready.push] : []
     // What the machine has, for new agents and members alike: heavy work runs on the machine whoever does it (machineFit.ts).
     const load: Probe['load'] = { agents: Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.length : null,
@@ -649,18 +782,18 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       const running = Array.isArray(observed.runningHarnessIds) ? observed.runningHarnessIds.includes(m.harnessId) : null
       const closed = Array.isArray(observed.closedHarnessIds) && observed.closedHarnessIds.includes(m.harnessId)
       return { ...memberProbe(m, fresh ? [...memberRefusals(running, closed, needs.tools, needs.devices, tools, object(observed.devices), object(observed.toolProbeErrors)),
-        ...kept, ...teammates(m.contributorId)] : [OFFLINE],
-        allowance, null, fresh && running === null, [...pushNote, ...usedUp(allowance), ...ownAccount]), ...(fresh ? { load } : {}) }
+        ...kept, ...teammates(m.contributorId), ...unreached] : [OFFLINE],
+        allowance, null, fresh && running === null, [...pushNote, ...usedUp(allowance), ...ownAccount, ...noted]), ...(fresh ? { load } : {}) }
     }),
       ...models.map(m => ({ ...newProbe(m, [...newReasons, ...(unready.engines[m.engine] ? [unready.engines[m.engine]!] : [])], quota(m.engine), fresh && quota(m.engine).known,
-        load, [...pushNote, ...(stuck ? [STALLED] : []), ...usedUp(quota(m.engine)), ...ownAccount]) }))]
+        load, [...pushNote, ...(stuck ? [STALLED] : []), ...usedUp(quota(m.engine)), ...ownAccount, ...noted]) }))]
   }
   // The account says this machine is off, so nothing there can run or be asked.
   if (account && status === 'offline') return [...members.map(m => memberProbe(m, [OFFLINE])), ...offline()]
   let target: Daemon
   try { target = await open(where, machineId) } catch {
     // Not being able to open a machine says nothing about the agents already on it; only a new start needs it.
-    return [...members.map(m => memberProbe(m)), ...offline()]
+    return [...members.map(m => memberProbe(m, unreached)), ...offline()]
   }
   try {
     const listed = object(await target.request('agents_list', {}, 10_000).catch(() => ({})))
@@ -681,7 +814,7 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       const refusals = memberRefusals(live.has(String(m.harnessId)), false, needs.tools, needs.devices,
         object(capacity.tools), object(capacity.devices), object(capacity.toolProbeErrors))
       const frame = frames.find(f => f.id === m.harnessId)
-      probes.push({ ...memberProbe(m, refusals, allowance, frame ? frameOf(frame) : null, false, usedUp(allowance)),
+      probes.push({ ...memberProbe(m, [...refusals, ...unreached], allowance, frame ? frameOf(frame) : null, false, usedUp(allowance)),
         load: loadOf(object(capacity.resources), Array.isArray(listed.agents) ? frames.length : null, a.needs.cwd) })
     }
     for (const m of models) {
@@ -697,9 +830,97 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
       const os = String(resources.os)
       const unfit = NO_SWARM_AGENTS_ON.includes(os) ? [`Swarm agents do not run on ${os} yet.`] : []
       const allowance = quotaOf2(inspected.quota)
-      probes.push(newProbe(m, [...(inspected.allowed ? [] : reasons), ...unfit], allowance, inspected.unknown.length === 0 && inspected.quota.known, load,
+      probes.push(newProbe(m, [...(inspected.allowed ? [] : reasons), ...unfit, ...unreached], allowance, inspected.unknown.length === 0 && inspected.quota.known, load,
         [...(stuck ? [STALLED] : []), ...usedUp(allowance)]))
     }
     return probes
   } finally { target.close() }
 }
+
+/** A note in a candidate's line: its first sentence, cut short. The record for Details keeps it whole. Long enough for the
+ *  name or the cause a note carries (which PM an account runs, what a failed start was preparing; review of #3169). */
+export function noteClause(note: string): string {
+  const first = /^(.*?[^.])(?:\.\s|;\s|\.$|$)/.exec(note.trim())?.[1] ?? note
+  return first.length <= NOTE_MAX ? first : `${first.slice(0, NOTE_MAX - 1)}…`
+}
+const NOTE_MAX = 72, LEFT_OUT_REASON_MAX = 120, WARNING_MAX = 240
+
+/** The section of the instructions headed "Routing" (any level), up to the next heading of its level or higher, with its
+ *  own subsections (Models, Machines, Order and quota); null when the instructions have none. */
+export function routingSection(text: string): string | null {
+  // Line by line, so a shell comment in a fenced block is not taken for a heading (review of #3169).
+  const lines = text.split('\n')
+  let fenced = false, start = -1, level = 0
+  for (const [i, line] of lines.entries()) {
+    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue }
+    const head = fenced ? null : /^(#{1,6})[ \t]+(.*?)[ \t]*$/.exec(line)
+    if (!head) continue
+    if (start >= 0 && head[1]!.length <= level) return lines.slice(start, i).join('\n').trimEnd()
+    if (start < 0 && head[2] === 'Routing') { start = i; level = head[1]!.length }
+  }
+  return start < 0 ? null : lines.slice(start).join('\n').trimEnd()
+}
+
+/** What `harness super-tab route` prints of [answer] (task #3294, Ken 2026-11-05): each answer was ~45k characters, the
+ *  whole instructions (~30k) and every candidate as an object (~15k), 467 a day in one PM's context. It prints the
+ *  instructions' Routing section and revision (the whole text with [fullInstructions]; only the revision when the caller
+ *  already read it, [instructionsRead]), each candidate in one line, each machine's id, start folder and room once, and one
+ *  line per machine left out. The decision recorded for Details is the whole one ([routeTask]). */
+export function routeAnswer(answer: Json, options: { fullInstructions?: boolean; instructionsRead?: number } = {}): Json {
+  const { instructions, candidates, leftOut: out, excluded, warnings, p, why, ...rest } = answer
+  // An unranked route's why is its next's first sentence; the record keeps it whole.
+  const printed: Json = { ...rest, ...(p === null || p === undefined ? {} : { p }), ...(why === undefined || answer.via === 'instructions' ? {} : { why }) }
+  const written = instructions && typeof instructions === 'object' ? object(instructions) : null
+  if (written) {
+    const notes = Array.isArray(written.notes) ? written.notes.map(n => String(object(n).text ?? n)) : []
+    const text = String(written.text ?? ''), routing = routingSection(text)
+    printed.instructions = options.fullInstructions || routing === null ? { revision: written.revision, text, notes }
+      : options.instructionsRead === written.revision
+        // Its notes still come: adding one does not change the revision (backend note.add), and they hold the short-lived
+        // routing facts (a machine away today; review of #3169).
+        ? { revision: written.revision, unchanged: `You read revision ${written.revision}; it is current. Route with --full-instructions to have it again.`, notes }
+        : { revision: written.revision, routing, notes, more: 'The Routing section only: the whole text with the instructions command, or route with --full-instructions. '
+          + `Route with --instructions-read ${written.revision} once you have read this revision.` }
+  }
+  if (Array.isArray(candidates)) {
+    // By machine, in the list's order: the machine's id and agents once, then its candidates' lines. The folder a start takes
+    // is said once, the one most machines share (a live route: 23 machines, one folder of 85 characters), and on a machine
+    // only where it differs. Free slots, memory and disk stay in the record: the route already leaves out what cannot run.
+    const rows = candidates.map(object)
+    const folders = new Map<string, number>()
+    for (const row of rows) if (row.kind === 'new' && typeof row.cwd === 'string') folders.set(row.cwd, (folders.get(row.cwd) ?? 0) + 1)
+    const cwd = [...folders].sort((x, y) => y[1] - x[1])[0]?.[0]
+    if (cwd) printed.cwd = cwd
+    const machines = new Map<string, { machine: string; candidates: string[] }>()
+    // By id: two machines of one name are told apart by the machineId their lines say.
+    for (const row of rows) {
+      const id = String(row.machineId), name = String(row.machineName ?? row.machineId)
+      const at = machines.get(id) ?? machines.set(id, { machine: '', candidates: [] }).get(id)!
+      if (!at.machine || row.kind === 'new' && row.cwd !== cwd && !at.machine.includes(' · cwd ')) {
+        at.machine = [name, `machineId ${row.machineId}`, ...(typeof row.agents === 'number' ? [`${row.agents} agents`] : []),
+          ...(row.kind === 'new' && row.cwd && row.cwd !== cwd ? [`cwd ${row.cwd}`] : [])].join(' · ')
+      }
+      at.candidates.push(String(row.line))
+    }
+    // Keyed by the machine's line: an object per machine cost 30 characters each (a live route: 21 machines).
+    printed.candidates = Object.fromEntries([...machines.values()].map(m => [m.machine, m.candidates]))
+  }
+  if (Array.isArray(excluded)) {
+    // Without a candidate: what is left out of no machine (a named model, the catalog) is said; each machine's is in leftOut.
+    const general = excluded.map(object).filter(e => !e.machine).map(e => `${e.title}: ${cut(String(e.reason), LEFT_OUT_REASON_MAX)}`)
+    if (general.length) printed.excluded = general
+  }
+  if (Array.isArray(out)) {
+    // Machines left out for the same first reason share its line (a live route: five machines offline, five lines).
+    const byReason = new Map<string, string[]>()
+    for (const m of out.map(object)) {
+      const reasons = Array.isArray(m.reasons) ? m.reasons.map(String) : []
+      const reason = cut(reasons[0] ?? 'left out', LEFT_OUT_REASON_MAX)
+      byReason.set(reason, [...byReason.get(reason) ?? [], `${m.machine}${reasons.length > 1 ? ` (+${reasons.length - 1} more reasons)` : ''}`])
+    }
+    printed.leftOut = [...byReason].map(([reason, machines]) => `${machines.join(', ')}: ${reason}`)
+  }
+  if (Array.isArray(warnings) && warnings.length) printed.warnings = warnings.map(w => cut(String(w), WARNING_MAX))
+  return printed
+}
+const cut = (text: string, max: number) => text.length <= max ? text : `${text.slice(0, max - 1)}…`

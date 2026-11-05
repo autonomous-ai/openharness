@@ -6,6 +6,7 @@ const update = vi.hoisted(() => vi.fn())
 const remove = vi.hoisted(() => vi.fn())
 const updateManyDevices = vi.hoisted(() => vi.fn())
 const transaction = vi.hoisted(() => vi.fn())
+const signInsChanged = vi.hoisted(() => vi.fn(async () => {}))
 
 vi.mock('../lib/prisma.js', () => ({
   prisma: {
@@ -16,6 +17,7 @@ vi.mock('../lib/prisma.js', () => ({
 }))
 vi.mock('../config/env.js', () => ({ ADMIN_EMAILS: new Set<string>(['boss@example.com']) }))
 vi.mock('../lib/password.js', () => ({ hashPassword: (p: string) => `hashed:${p}` }))
+vi.mock('../lib/harnessAuthCache.js', () => ({ signInsChanged }))
 
 import {
   isProvisionalUserEmail,
@@ -319,5 +321,46 @@ describe('create — locally-created accounts', () => {
 
     await expect(userService.create({ email: 'a@example.com', password: 'pw' })).rejects.toThrow(/already exists/i)
     expect(findUnique).toHaveBeenCalledWith({ where: { email: 'a@example.com' } })
+  })
+})
+
+describe('a change to what a sign-in answers ends every pod\'s remembered sign-in (#3041)', () => {
+  const after = (write: { mock: { invocationCallOrder: number[] } }): void => {
+    expect(signInsChanged.mock.invocationCallOrder.at(-1)).toBeGreaterThan(write.mock.invocationCallOrder.at(-1)!)
+  }
+
+  it('an SSO sign-in that rewrites the email or the role, after the write', async () => {
+    findUnique.mockResolvedValue(row({ email: 'old@example.com' }))
+    await userService.upsertFromSso({ externalId: 'prod-sub-1', email: 'boss@example.com', autonomousEnv: 'prod' })
+    expect(signInsChanged).toHaveBeenCalledWith('u1')
+    after(update)
+  })
+
+  it('an account already current writes nothing and moves nothing: SSO auth runs on every request', async () => {
+    findUnique.mockResolvedValue(row())
+    await userService.upsertFromSso({ externalId: 'prod-sub-1', email: 'a@example.com', autonomousEnv: 'prod' })
+    expect(signInsChanged).not.toHaveBeenCalled()
+  })
+
+  it('a provisional row merged away, after it is deleted', async () => {
+    findUnique.mockResolvedValueOnce(row({ id: 'real', externalId: 'local-prod-real' }))
+      .mockResolvedValueOnce(row({ id: 'pending', email: provisionalEmailForExternalId('prod-sub-1') }))
+    await userService.upsertFromSso({ externalId: 'prod-sub-1', email: 'a@example.com', autonomousEnv: 'prod' })
+    expect(signInsChanged).toHaveBeenCalledWith('pending')
+    expect(signInsChanged.mock.invocationCallOrder[0]).toBeGreaterThan(remove.mock.invocationCallOrder[0]!)
+  })
+
+  it('an update of the role or the plane, after the write', async () => {
+    findUnique.mockResolvedValue(row())
+    await userService.update('u1', { role: 'admin', autonomousEnv: 'stag' })
+    expect(signInsChanged).toHaveBeenCalledWith('u1')
+    after(update)
+  })
+
+  it('removing an account, after the delete', async () => {
+    findUnique.mockResolvedValue(row())
+    await userService.remove('u1')
+    expect(signInsChanged).toHaveBeenCalledWith('u1')
+    after(remove)
   })
 })

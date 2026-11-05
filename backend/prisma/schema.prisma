@@ -295,6 +295,9 @@ model Machine {
 
   @@index([userId])
   @@index([userId, computerId])
+  /// A computer's rows of every account (superTabs/computerMoves.ts otherAccountsOnComputer): another account's sign-in there
+  /// moves the computer's Swarm entries to it (#3122).
+  @@index([computerId, userId])
   @@index([managerId, billingStatus])
   @@index([billingStatus, externalSubscriptionStatus, externalSubscriptionEndAt])
   @@map("machines")
@@ -1213,6 +1216,9 @@ model SuperTabActivity {
   @@index([tabId, personId, createdAt])
   /// One thread's or chat's rows of a person, for the read marks that clear them (activity.ts markActivityThreadRead).
   @@index([tabId, personId, conversationId, threadId])
+  /// A person's unread rows, newest first: the digest each of their reads asks for (activity.ts activityDigest). Through the
+  /// index above it examined every row of 30 days to find the unread (task #3146).
+  @@index([tabId, personId, readAt, createdAt])
   /// The sweep's rows past their expiry (activity.ts sweepActivity); no TTL option, which the app user cannot set (#2238).
   @@index([createdAt])
 }
@@ -1403,6 +1409,11 @@ model SuperTabAttachment {
   /// A voice message's facts (superTabs/voiceMessages.ts StoredVoice): its length, waveform and words, read once before it is
   /// sent (store.ts readVoice). Absent on any other file. Removed with its row: the unsent-file sweep's, or its message's.
   voice          Json?
+  /// A picture's size and its thumbnail (superTabs/thumbnails.ts StoredImage): `{ width, height, thumb?: { url, width, height, size } }`,
+  /// made when the picture was uploaded. The thumbnail object sits beside the original (`<objectKey>.thumb.webp`) and goes with
+  /// it: the unsent-file sweep (lib/attachmentSweep.ts) and the Swarm purge (superTabs/purge.ts) remove both. Absent on a file
+  /// that is not a PNG, JPEG or WebP, on one stored before thumbnails, and on one that would not decode. About 150 bytes.
+  image          Json?
   /// When a readVoice call claimed this file to transcribe it; unset once it stored `voice`. A claim older than two minutes
   /// is taken over.
   voiceSince     DateTime?
@@ -1583,6 +1594,23 @@ model SuperTabRouteDecision {
   @@index([tabId, assignmentId])
 }
 
+/// One project's scorecard for one local day (superTabs/scorecard): counts and minutes only, never text, names or ids. One row
+/// per project and day, about 1 KB; the nightly job deletes a project's rows older than 120 days when it writes (rows.ts
+/// SCORECARD_DAYS_KEPT), and a Swarm's go with its purge (purge.ts).
+model SuperTabScorecard {
+  id         String   @id @map("_id")
+  tabId      String
+  projectId  String
+  /// The local date, YYYY-MM-DD, in timeZone.
+  on         String
+  timeZone   String
+  figures    Json
+  computedAt DateTime
+
+  /// A project's days, and the prune of its old ones.
+  @@index([tabId, projectId, on])
+}
+
 /// How one model did on one kind of job in one week of one project of a Swarm (superTabs/evidence/store.ts): counts and sums
 /// only, never a person, an agent or task text. `id` is the hash of the Swarm, project, engine, model, kind and week. Kept 180 days.
 model SuperTabModelEvidence {
@@ -1681,7 +1709,9 @@ model SuperTabInstructions {
 
 // Every save of a project's instructions, the current one included: its last 50 (instructions.ts MAX_REVISIONS); the save
 // that writes the 51st deletes the oldest. `writtenBy` is a person's or the coordinator's id (`writtenByKind`), `askedBy` the
-// member whose words it carries. id = stableId(tabId, projectId, revision).
+// member whose words it carries. `dropped`: the lines that save dropped, each with its kind and who gave it, for the History
+// (superTabs/ruleGuard.ts droppedLines): at most 500 of 400 characters, removed with its revision. id = stableId(tabId,
+// projectId, revision).
 model SuperTabInstructionsRevision {
   id            String   @id @map("_id")
   tabId         String
@@ -1693,6 +1723,30 @@ model SuperTabInstructionsRevision {
   writtenByKind String
   writtenBy     String
   askedBy       String?
+  at            DateTime
+  dropped       Json?
+
+  @@index([tabId, projectId, revision])
+}
+
+// A project's rules record (superTabs/policy.ts), one row per saved revision: the newest is the record, the rest its history.
+// Removed: the save that writes revision N deletes revisions <= N - 50 of its project (policyStore.ts writeRules, MAX_RULES_REVISIONS);
+// a deleted project takes its rows; the Swarm purge takes the tab's (purge.ts). A row is at most 16 KB of rules plus its diff.
+// `writtenBy` is a person's or the project's PM's id (`writtenByKind`), `askedBy` the person whose words it carries, `askedIn`
+// the chat message the PM passed on (null when a person saved). id = stableId(tabId, projectId, revision): two saves of one
+// revision collide on it, and one retries into RULES_STALE.
+model SuperTabProjectRules {
+  id            String   @id @map("_id")
+  tabId         String
+  projectId     String
+  revision      Int
+  rules         Json
+  diff          Json
+  summary       String
+  writtenByKind String
+  writtenBy     String
+  askedBy       String
+  askedIn       Json?
   at            DateTime
 
   @@index([tabId, projectId, revision])
@@ -1933,6 +1987,9 @@ model SwarmGroup {
   @@index([tabId, executionMachineId])
   /// The host signature (read/host.ts inputs) reads every conversation's digest and dormancy from this index alone.
   @@index([tabId, deleted, key, hostDigest, dormant])
+  /// A command's awake conversations, listed by the columns it compares with what it holds (parts/held.ts) from this index alone:
+  /// each command read every awake one whole before (task #3146).
+  @@index([tabId, dormant, deleted, key, version, changedAt])
   /// Removed parts go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
   @@index([purgeAt], map: "part_purge")
 }

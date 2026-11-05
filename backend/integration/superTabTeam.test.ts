@@ -242,6 +242,80 @@ describe('a task a Team agent worked on', () => {
     expect((await storedState(tab)).conversations.find(c => c.id === clean)?.teamWritten).toBeUndefined()
     await expect(assign()).resolves.toBeTruthy()
   })
+
+  // #3304: a join marked Magnolia2's task before, and nothing cleared it. GitHub's clean read of every pull request it records does.
+  it('clears a stored mark from a join, on the task and its step, once GitHub reads every pull request the task records as clean', async () => {
+    const { tab } = await fixture()
+    const joined = await task(tab, 'Owner work'), main = await owners(tab, joined)
+    const state = await storedState(tab)
+    state.projects!.find(p => p.id === 'lead')!.repository = { machineId: 'owner-host', cwd: '/repo', repositoryUrl: 'https://github.com/acme/app' }
+    Object.assign(state.conversations.find(c => c.id === joined)!, { teamWritten: true, pullRequestUrls: ['https://github.com/acme/app/pull/3154'] })
+    await saveState(tab, state)
+    const review = await step(tab, joined)
+    expect((await storedState(tab)).conversations.find(c => c.id === review)?.teamWritten).toBe(true)
+    const read = vi.fn(async () => 'clean' as const)
+    const asked = new SuperTabStore(db, Date.now, undefined, { pushOrigin: read })
+    await expect(asked.execute(owner, tab, { operationId: randomUUID(), command: { type: 'work.assign', conversationId: review, agentId: main } })).resolves.toBeTruthy()
+    expect(read).toHaveBeenCalledWith('https://github.com/acme/app', ['https://github.com/acme/app/pull/3154'])
+    const stored = await storedState(tab)
+    expect(stored.conversations.find(c => c.id === joined)?.teamWritten).toBeUndefined()
+    expect(stored.conversations.find(c => c.id === review)?.teamWritten).toBeUndefined()
+  })
+
+  // Security review 2 of #3304: the reader reads only the project's own repository's pull requests, and answers clean for none.
+  it('keeps a stored mark when the clean read covered no pull request of the project\'s repository', async () => {
+    const { tab } = await fixture()
+    const joined = await task(tab, 'Owner work'), main = await owners(tab, joined)
+    const state = await storedState(tab)
+    state.projects!.find(p => p.id === 'lead')!.repository = { machineId: 'owner-host', cwd: '/repo', repositoryUrl: 'https://github.com/acme/app' }
+    state.conversations.find(c => c.id === joined)!.teamWritten = true
+    await saveState(tab, state)
+    const review = await step(tab, joined)
+    // Recorded as stored, under a name the project's repository no longer matches.
+    const later = await storedState(tab)
+    later.conversations.find(c => c.id === joined)!.pullRequestUrls = ['https://github.com/acme/old-app/pull/3154']
+    await saveState(tab, later)
+    const asked = new SuperTabStore(db, Date.now, undefined, { pushOrigin: async () => 'clean' })
+    await expect(asked.execute(owner, tab, { operationId: randomUUID(), command: { type: 'work.assign', conversationId: review, agentId: main } }))
+      .rejects.toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
+    expect((await storedState(tab)).conversations.find(c => c.id === joined)?.teamWritten).toBe(true)
+  })
+})
+
+// Huy's groupme, 2026-11-05 (task #3266): a Team account start for a repository the Harness GitHub App is not on failed
+// twice on its machine and suspended Claude there. The store reads the project's GitHub access first and refuses it at once.
+describe('a start whose account cannot reach the project repository', () => {
+  const withRepository = async (tab: string) => {
+    const state = await storedState(tab)
+    state.projects!.find(p => p.id === 'lead')!.repository = { machineId: 'owner-host', cwd: '/repo', repositoryUrl: 'https://github.com/acme/app' }
+    await saveState(tab, state)
+  }
+  const startOn = (asked: SuperTabStore, tab: string, conversationId: string) => asked.execute(owner, tab, { operationId: randomUUID(), command: { type: 'agent.start',
+    request: { conversationId, machineId: 'team-mac', engine: 'codex', name: 'Reviewer', cwd: '/team', worktree: false, requirements } } })
+  const starts = async (tab: string) => (await storedState(tab)).starts?.length ?? 0
+
+  it('is refused through the store before anything is queued, from the access it reads for that project', async () => {
+    const { tab, teamGroup } = await fixture()
+    await withRepository(tab)
+    const reach = vi.fn(async () => ({ state: 'not-installed' as const, repository: 'acme/app', installUrl: 'https://github.com/apps/harness/installations/new' }))
+    const asked = new SuperTabStore(db, Date.now, undefined, { repositoryReach: reach })
+    const before = await starts(tab)
+    await expect(startOn(asked, tab, teamGroup)).rejects.toMatchObject({ code: 'REPOSITORY_UNREACHABLE', status: 409,
+      message: expect.stringContaining('An owner of acme installs it (https://github.com/apps/harness/installations/new)') })
+    expect(reach).toHaveBeenCalledWith('prod', tab, 'lead', 'https://github.com/acme/app')
+    expect(await starts(tab)).toBe(before)
+  })
+
+  it('starts as before when the read fails, and reads nothing for a project with no GitHub repository', async () => {
+    const { tab, teamGroup } = await fixture()
+    const reach = vi.fn(async () => { throw new Error('GitHub did not answer') })
+    const asked = new SuperTabStore(db, Date.now, undefined, { repositoryReach: reach })
+    await expect(startOn(asked, tab, teamGroup)).resolves.toBeTruthy()
+    expect(reach).not.toHaveBeenCalled()
+    await withRepository(tab)
+    await expect(startOn(asked, tab, teamGroup)).resolves.toBeTruthy()
+    expect(reach).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('a team session speaking in a Swarm', () => {
@@ -566,7 +640,7 @@ describe('a teammate\'s work and the machines that take it', () => {
     const refused = { code: 'TEAM_ACCOUNT_REQUIRED', message: NO_TEAM_ACCOUNT }
     await expect(run(f.tab, post([volunteer]), owner, f.lead)).rejects.toMatchObject(refused)
     await expect(run(f.tab, post([]), person, volunteer)).rejects.toMatchObject(refused)
-    await expect(run(f.tab, { type: 'conversation.create', title: 'Its own task', brief: 'Do it', checks: [] }, person, volunteer)).rejects.toMatchObject(refused)
+    await expect(run(f.tab, { type: 'conversation.create', title: 'Its own task', brief: 'Do it', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: person.sub }, person, volunteer)).rejects.toMatchObject(refused)
     const task = (await store.read(owner, f.tab)).state.conversations.find(c => c.id === f.teamGroup)!
     expect(task.agentIds).not.toContain(volunteer)
     // The agent on the person's Team machine is named into another task of the owner's project.
@@ -745,7 +819,7 @@ describe('one machine: a Mac and its Harness Team account', () => {
         maxAgents: 1, ifMissing: true }, person)
       expect(await joins()).toEqual([])
       const listed = (await store.read(owner, tab)).state.machines!.find(m => m.machineId === 'team-mac')!
-      expect(listed).toMatchObject({ hostMachineId: 'personal-mac', name: 'MacBook Pro', maxAgents: 3, cwd: '/team' })
+      expect(listed).toMatchObject({ hostMachineId: 'personal-mac', name: 'MacBook Pro · Team account', maxAgents: 3, cwd: '/team' })
       const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === tab)!.machine.generation
       await store.observeMachine(team, tab, 'team-mac', reading(generation))
       const group = String((await run(tab, { type: 'conversation.create', projectId: 'lead', title: 'Work', brief: 'Do it',
@@ -1087,8 +1161,12 @@ describe('a message from an agent of another account (audit M3)', () => {
     const tester = await startTeam(f, 'Tester')
     const helper = String((await run(f.tab, { type: 'agent.add', conversationId: f.teamGroup, machineId: 'owner-host', harnessId: randomUUID(),
       name: 'Helper', configuration: config, lead: false })).result.agentId)
-    await run(f.tab, { type: 'conversation.agent', conversationId: f.teamGroup, agentId: f.lead, present: true, lead: true })
-    return { ...f, tester, helper }
+    // The owner's agent leading the task, not the project's coordinator: agents' posts to the coordinator wait for its digest,
+    // which marks them there (#3387), while these tests read the mark a host's claim carries.
+    const lead = String((await run(f.tab, { type: 'agent.add', conversationId: f.teamGroup, machineId: 'owner-host', harnessId: randomUUID(),
+      name: 'Owner Lead', configuration: config, lead: false })).result.agentId)
+    await run(f.tab, { type: 'conversation.agent', conversationId: f.teamGroup, agentId: lead, present: true, lead: true })
+    return { ...f, lead, tester, helper }
   }
   /** What an ordinary sign-in connecting as the Team computer does to its account row (lib/adapterWs.ts), after the send,
    *  which the team session could no longer make. */
@@ -1183,7 +1261,7 @@ describe('a message from an agent of another account (audit M3)', () => {
     expect(answer).not.toHaveProperty('otherAccount')
     expect(answer.quotedOtherAccount).toEqual([asked.id])
     // A reply to the Lead's reply quotes the Lead's, and its thread is the Team agent's.
-    const again = await said(f, 'On it.', f.lead, { agent: f.helper, user: owner }, relayed.id)
+    const again = await said(f, 'On it, rebasing now.', f.lead, { agent: f.helper, user: owner }, relayed.id)
     expect((await claimed(f, owner, f.lead, again.id)).quotedOtherAccount).toEqual([asked.id])
   })
   it('names no quoted message from the same account, nor a person\'s', async () => {
@@ -1192,7 +1270,7 @@ describe('a message from an agent of another account (audit M3)', () => {
     const reply = await said(f, 'Agreed.', f.lead, { agent: f.helper, user: owner }, own.id)
     expect(await claimed(f, owner, f.lead, reply.id)).not.toHaveProperty('quotedOtherAccount')
     const person = await said(f, 'From the owner, quoted.', f.lead)
-    const answer = await said(f, 'Will do.', f.helper, { agent: f.lead, user: owner }, person.id)
+    const answer = await said(f, 'Will do, after the rebase.', f.helper, { agent: f.lead, user: owner }, person.id)
     expect(await claimed(f, owner, f.helper, answer.id)).not.toHaveProperty('quotedOtherAccount')
   })
 

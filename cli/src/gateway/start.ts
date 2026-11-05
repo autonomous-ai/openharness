@@ -291,7 +291,10 @@ export function startGateway(host: GatewayHost): StartedGateway {
     switchAccount: (from, to) => {
       // Run once, whatever it throws: the log goes on to the new account either way, and its devices
       // come back from that log. Run again, a half-done switch would put away what it already restored.
-      try { switchAccountTrust(from, to) } catch (err) {
+      try {
+        const epoch = account.signIn?.epoch ?? ''
+        switchAccountTrust(from, to, undefined, { forgetPrevious: epoch.startsWith('team:') || epoch.startsWith('adopted:team:') })
+      } catch (err) {
         console.log(`[devlog] could not swap the trust stores to the new account: ${err instanceof Error ? err.message : String(err)}`)
       }
       gateway.e2ee.reloadPaired()

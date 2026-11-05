@@ -247,8 +247,8 @@ void main() {
     _expectReadable(_inks(tester, sidebar, ground), 'Cloud\'s sidebar');
   });
 
-  testWidgets('on Plum, Threads, Mentions and Decisions read too, counts '
-      'and arrows included', (tester) async {
+  testWidgets('on Plum, Threads, Mentions and Decisions read too, arrows '
+      'included', (tester) async {
     _wear(HarnessPalette.plum);
     final server = swarm()..state['swarmBuddy'] = true;
     server.ask(['Ship it?']);
@@ -286,9 +286,10 @@ void main() {
     await tester.pump();
     addTearDown(() => tester.pumpWidget(const SizedBox()));
     final threads = find.byKey(const ValueKey('super-threads'));
+    // No number on a page row (task #3128): it is bold instead.
     expect(
       find.descendant(of: threads, matching: find.text('1')),
-      findsOneWidget,
+      findsNothing,
     );
     _expectReadable(
       _inks(tester, find.byType(ProjectSidebar), HarnessPalette.plum.sidebar),

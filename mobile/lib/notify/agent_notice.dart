@@ -19,6 +19,13 @@ enum AgentNotice {
   /// without a beep or a wake.
   filed,
 
+  /// Still news, but the person was told already: the same question back after
+  /// its dialog flickered off the pane, or another one from an agent that
+  /// buzzed moments ago (2026-11-05: a Team machine's approvals buzzed a phone
+  /// over and over). Marked and posted to the OS centre with no sound, no
+  /// vibration and no banner — there to find, not a second interruption.
+  quiet,
+
   /// The person is looking straight at this agent. The tap still comes — the
   /// dial's beep ALWAYS sounded before the daemon sent a tier — but nothing is
   /// filed for later: they are already where the news is.
@@ -33,8 +40,11 @@ enum AgentNotice {
   alert;
 
   bool get chimes => this == chime || this == alert;
-  bool get marks => this == filed || this == alert;
-  bool get alerts => this == alert;
+  bool get marks => this == filed || this == quiet || this == alert;
+
+  /// Whether a system notice is posted: loudly for [alert], silently for
+  /// [quiet].
+  bool get alerts => this == quiet || this == alert;
 }
 
 /// How far news that IS news goes, by where the person is. [watching] — the

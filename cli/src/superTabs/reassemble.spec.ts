@@ -67,4 +67,13 @@ describe('the old Swarm state, rebuilt from parts', () => {
     expect(state.mentionsWaiting).toBe(2)
     expect(state).not.toHaveProperty('projects')
   })
+
+  // Ken, 11-05: the route reads every project's PM account from the derived summary (pmAccounts.ts).
+  it('carries the PM accounts a project agent\'s read sends, and none when it sends none', () => {
+    const first = readFixture<FirstLoad>('parts-builder')
+    expect(reassemble(storeOf(first))).not.toHaveProperty('pmAccounts')
+    const accounts = [{ machineId: 'm1', engine: 'claude', project: 'another project', pm: 'its PM' }]
+    first.derived.pmAccounts = accounts
+    expect(reassemble(storeOf(first)).pmAccounts).toEqual(accounts)
+  })
 })

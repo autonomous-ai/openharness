@@ -13,6 +13,15 @@ import gridInstructions from './gridInstructions.json' with { type: 'json' }
 
 const REQUEST_MS = 30_000
 
+/**
+ * Codex 0.166 advertises `exec` in the conversation it resumes but does not declare it as a tool on a
+ * grid. A model following that habit calls it, Codex answers `unsupported call: exec`, and the turn
+ * never ends. A person's request is one turn and the history still shows the old tool, so the only
+ * place a grid move can say otherwise is the instructions the fork starts with.
+ */
+export const GRID_SHELL_INSTRUCTION =
+  '\n\nThe shell tool on this provider is `exec_command`. Do not call `exec`: it does not exist here, and a call to it fails the turn. Run shell commands with `exec_command` directly.'
+
 export interface CodexMove {
   sessionId: string
   toGrid: boolean
@@ -92,7 +101,7 @@ export async function moveCodexConversation(move: CodexMove): Promise<string> {
     // The launch's model, or the fork asks the new provider for the one the conversation was on.
     const params: Record<string, unknown> = { threadId: move.sessionId, ...(model ? { model } : {}), ...(move.cwd ? { cwd: move.cwd } : {}) }
     if (move.toGrid) {
-      params.baseInstructions = gridInstructions.instructions
+      params.baseInstructions = gridInstructions.instructions + GRID_SHELL_INSTRUCTION
     } else {
       const listed = await server.request('model/list', { includeHidden: true })
       const slug = model ?? listed?.data?.find((entry: { isDefault?: boolean }) => entry.isDefault)?.model

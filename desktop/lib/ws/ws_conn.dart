@@ -958,7 +958,12 @@ class WsConn {
   /// know. At WARN each was an immediate, fsync'd write to the app log on the
   /// UI isolate — once a minute for `shares` alone, for every account that
   /// never turned Agent Messages on — while saying nothing anyone acts on.
-  static const _expectedRefusals = {'MESSAGES_OFF', 'UNKNOWN_ACTION'};
+  static const _expectedRefusals = {
+    'MESSAGES_OFF',
+    'UNKNOWN_ACTION',
+    // A computer shared with this account answers some actions this way by design, not a fault.
+    'GUEST_NOT_ALLOWED',
+  };
 
   static bool _expectedRefusal(Object error) =>
       error is WsRequestFailure && _expectedRefusals.contains(error.code);

@@ -20,7 +20,8 @@ import { dirname, join } from 'node:path'
 import type { TeamConfig } from './config.js'
 import type { TeamStatus } from './privacy.js'
 import { TEAM_ENGINES } from './engines.js'
-import { checkWindowsPath } from './layout.js'
+import { checkWindowsPath, teamPaths } from './layout.js'
+import { ownProcessGroup } from '../lib/windows/noWindow.js'
 import { windowsTeamPaths } from './windowsLayout.js'
 
 /** How long after one try the owner's daemon may try again. */
@@ -61,6 +62,18 @@ export function teamBuildStale(status: TeamStatus | null, publishedAt: number | 
  * into the very line cmd.exe parses (it quotes only a word that needs it).
  */
 export function teamUpdateArgv(config: Pick<TeamConfig, 'node' | 'cli' | 'home'>, platform: NodeJS.Platform): string[] {
+  if (platform === 'darwin') {
+    // The shell belongs to the daemon update stops. Start outside its process group before acknowledging the request.
+    // Inline Node also works on the old Team builds this refresh exists to repair: they have no new internal command.
+    const script = `const fs = require('node:fs');
+const fd = fs.openSync(process.argv[3], 'a', 0o600);
+const child = require('node:child_process').spawn(process.argv[1], [process.argv[2], 'update', '--force'], {
+  ...${JSON.stringify(ownProcessGroup('darwin'))}, stdio: ['ignore', fd, fd], env: process.env
+});
+child.once('spawn', () => { fs.closeSync(fd); child.unref(); });
+child.once('error', () => { fs.closeSync(fd); console.error('The Team updater could not start; see harness team logs.'); process.exitCode = 1; });`
+    return [config.node, '-e', script, config.node, config.cli, teamPaths(config.home).log]
+  }
   if (platform !== 'win32') return [config.node, config.cli, 'update', '--force']
   const cli = windowsTeamPaths(checkWindowsPath(config.home, 'team home')).cli
   const node = checkWindowsPath(config.node, 'team Node')

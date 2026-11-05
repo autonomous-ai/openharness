@@ -5,6 +5,12 @@ import 'pane_preset.dart';
 import 'pane_arrangement.dart';
 import 'terminal_pane.dart';
 
+/// A Personal project's own desk tab id: `project-`, 24 hex characters of
+/// the project id's hash, then `-2`, `-3` for its further tabs.
+final kProjectTabId = RegExp(
+  r'^(project-[0-9a-f]{24})(?:-([2-9]|[1-9][0-9]+))?$',
+);
+
 /// A named arrangement of agents. Membership never owns the agent process.
 /// Shared agents reuse the same pane/session across swarms, so the daemon has
 /// exactly one controller and switching tabs cannot take over our own stream.
@@ -43,6 +49,10 @@ class Swarm {
   bool get isCompanions => kind == 'companions';
   bool get isDevices => kind == 'devices';
   bool get isUtility => isStore || isCompanions || isDevices;
+
+  /// A Personal project's own tab (super_tabs/personal_projects.dart, task
+  /// #3099): it is named after its project, never after a harness in it.
+  bool get isProjectTab => kProjectTabId.hasMatch(id);
   bool get isOrchestrator =>
       kind == 'orchestrator' &&
       orchestratorId != null &&

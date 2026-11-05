@@ -2,7 +2,7 @@
  * `harness team` against fake deps: no administrator prompt, account, launchd, daemon or backend is touched.
  */
 import { describe, expect, it, vi } from 'vitest'
-import type { AuthSession } from '../lib/authSession.js'
+import { signInOf, type AuthSession } from '../lib/authSession.js'
 import { SIGN_OUT_BUTTON_FLAG, signOutAsked } from '../lib/signOut.js'
 import { NO_PROMPT_MESSAGE, type AdminScript, type RunAdmin } from './admin.js'
 import { REPAIR_PROMPT, SETUP_PROMPT, teamCommand, type TeamCommandDeps } from './command.js'
@@ -97,6 +97,17 @@ describe('harness team', () => {
 })
 
 describe('harness team setup', () => {
+  it('copies the engines this Mac already has into the team account, instead of downloading them (#3169)', async () => {
+    const codex = { packageName: '@openai/codex', dir: `${OWNER_HOME}/.local/lib/node_modules/@openai/codex`, bin: 'codex', binPath: 'bin/codex.js' }
+    const f = fake({ statusAfter: reported })
+    const installed = f.deps.installed()
+    f.deps.installed = () => ({ ...installed, engineCopies: [codex] })
+    expect(await teamCommand(['setup'], f.deps)).toBe(0)
+    const { script } = f.built[0]!
+    expect(script).toContain(`copy_engine '@openai/codex' '${OWNER_HOME}/.local/lib/node_modules/@openai/codex' 'codex' 'bin/codex.js'`)
+    expect(script).toContain("[ -n \"$copied_claude\" ] || set -- \"$@\" '@anthropic-ai/claude-code'")
+  })
+
   it('says what it will make, runs one privileged script, and waits for the team daemon to sign in and pass its check', async () => {
     const f = fake({ statusAfter: reported, env: { BACKEND_WS_URL: 'wss://backend.example.test', HARNESS_AUTH_DIR: '/tmp/auth' } })
     expect(await teamCommand(['setup'], f.deps)).toBe(0)
@@ -645,6 +656,54 @@ describe('internal verbs', () => {
     const broken = inTeam({ engines: vi.fn(async () => { throw new Error('no home') }) })
     expect(await teamCommand(['__start'], broken.deps)).toBe(0)
     expect(broken.out.join('\n')).toContain('could not check the engines: no home')
+  })
+
+  it('__start replaces a historical sign-in success when no Team session remains', async () => {
+    const f = inTeam()
+    f.status.set(STATUS, { version: 1, signIn: { state: 'signed-in', at: 1 } })
+    await teamCommand(['__start'], f.deps)
+    expect(f.status.get(STATUS)?.signIn).toMatchObject({ state: 'signed-out', at: 1_000_000 })
+  })
+
+  it('__start pins the handed sign-in to its redeemed account', async () => {
+    const f = inTeam()
+    await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], f.deps)
+    expect(f.session()?.signInAcct).toBe('user-placeholder-1')
+    expect(f.deps.get).toHaveBeenCalledWith('/api/auth/me', {
+      authorization: 'Bearer hna_team', 'x-autonomous-env': 'prod',
+    })
+  })
+
+  it('__start does not pin a replacement sign-in when the account lookup returns late', async () => {
+    const f = inTeam()
+    f.deps.get = vi.fn(async () => {
+      f.setSession({ ...computer, signInEpoch: 'replacement@1000001' })
+      return { user: { id: 'previous-owner' } }
+    }) as never
+    await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], f.deps)
+    expect(f.session()?.signInEpoch).toBe('replacement@1000001')
+    expect(f.session()?.signInAcct).toBeUndefined()
+  })
+
+  it('__start keeps a redeemed sign-in and reports an account lookup failure', async () => {
+    const f = inTeam({ get: vi.fn(async () => { throw new Error('offline') }) as never })
+    await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], f.deps)
+    expect(f.session()).toMatchObject({ kind: 'team', refreshToken: 'hnr_team' })
+    expect(f.out.join('\n')).toContain('could not record the signed-in account')
+    expect(f.status.get(STATUS)?.signIn?.state).toBe('signed-in')
+  })
+
+  // Task #3262 (Amon, 11-05): Repair handed his Harness Team account to him, but the sign-in it made was adopted, so its device
+  // key log stayed kelvin's and froze, and it refused his daemon. A sign-in from the handoff file is the owner's own setup run,
+  // behind the macOS password: made by hand, at this run, so the log may start over for the account it was handed to.
+  it('__start gives a handed-over sign-in an epoch made by hand at this run, never an adopted one', async () => {
+    const f = inTeam()
+    expect(await teamCommand(['__start', '/Users/harnessteam/.harness/team-handoff'], f.deps)).toBe(0)
+    expect(signInOf(f.session()!.signInEpoch)).toMatchObject({ adopted: false, at: f.deps.now() })
+    // `harness team on` at this computer's own terminal hands nothing over: its sign-in stays adopted, as it always was.
+    const on = fake({ interactive: true })
+    expect(await teamCommand(['on'], on.deps)).toBe(0)
+    expect(signInOf(on.session()!.signInEpoch)).toMatchObject({ adopted: true })
   })
 
   it('__start stores nothing when the backend makes a session that is not a team one', async () => {

@@ -16,7 +16,7 @@
  */
 import { constants, fstatSync, openSync, readSync, closeSync, unlinkSync } from 'node:fs'
 import { b64e, sign, utf8 } from '../lib/e2ee/core.js'
-import { teamSignInEpoch, type AuthSession } from '../lib/authSession.js'
+import { newSignInEpoch, teamSignInEpoch, type AuthSession } from '../lib/authSession.js'
 import { HANDOFF_CODE } from './layout.js'
 import { TeamSignInError } from './signInError.js'
 
@@ -184,6 +184,14 @@ export async function redeemTeamHandoff(code: string, label: string, computerId:
     }
   }
 }
+
+/** The epoch of a Team sign-in made from the handoff file (command.ts `team __start`): a sign-in by hand, not adopted. Only
+ *  the owner's setup run writes that file, as the Team account, behind the administrator's password (script.ts step 7), and
+ *  `takeHandoffFile` refuses one the Team account does not own or others can read. So the device key log treats it as any
+ *  sign-in by hand: within DEVLOG_RESET_WINDOW_MS it may start over for another account, as Repair handing the Team account
+ *  to another owner needs (Amon, #3262), and the trust the old account left is put away (lib/e2ee/accountTrust.ts). Any
+ *  other Team sign-in stays adopted ([teamSignInEpoch]), and a backend's word alone never starts the log over. */
+export const handedTeamSignInEpoch = (now: number): string => `team:${newSignInEpoch(now)}`
 
 /** The session file for a team sign-in: the same shape `harness login` writes, marked `kind: team`. */
 export function teamSession(tokens: TeamTokens, computerId: string, fallbackEnv: 'prod' | 'stag', now: number, extra: Partial<AuthSession> = {}): AuthSession {

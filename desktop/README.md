@@ -241,6 +241,23 @@ Offline and shared harnesses expose their state without offering process control
 Errors remain beside the affected row, and an uncertain resume checks its original
 receipt rather than starting the process twice.
 
+## Speed marks
+
+Desktop writes `speed` lines to its app log (`~/.harness/logs/app-YYYYMMDD.log`): launch steps in
+milliseconds since the app started (ending at `first_chat_painted`), each first-page and scroll-up
+message read of a chat (rows, request time, total time), and each picture shown in a chat (bytes and
+fetch time, or a failure). A line holds no name, path, address or message text. To measure a build:
+open the app, open a large chat and scroll back through it, open an image-heavy chat, then run
+
+```bash
+dart run tool/speed_report.dart        # today's and yesterday's logs, or pass log files
+```
+
+It prints the table and names the three slowest launch steps and message reads. The clock starts when
+Dart's `main` runs, so the engine's own start before it is not counted; compare with the process start
+time (`ps -o lstart= -p PID`) when that matters. The launch table counts each step from the one before it as logged; steps that run side by side (the daemon check and the saved tabs) show a gap, not a duration of their own. Keep the "before" table with each speed task and run
+the same steps for its "after".
+
 ## Open media from agent output
 
 Hold **⌘ and click** on macOS, or **Ctrl and click** on Linux, to open an

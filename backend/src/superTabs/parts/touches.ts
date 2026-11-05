@@ -83,7 +83,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       break
     case 'project.report': case 'project.repository':
     // The coordinator's own writes check it leads the project, which a concurrent Lead change ends (review of phase 2).
-    case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName':
+    case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName': case 'rules.set':
       leadCheck(command.projectId)
       break
     // An older CLI's rule is a save to its project's instructions, the coordinator's like instructions.save (commands.ts).
@@ -113,6 +113,10 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       break
     }
     case 'conversation.merged':
+      leadCheck(projectOfGroup(command.conversationId)?.id)
+      break
+    // Whether an agent may change a priority is whether it is still its project's PM (commands.ts coordinatorOrPerson).
+    case 'work.priority':
       leadCheck(projectOfGroup(command.conversationId)?.id)
       break
     case 'conversation.requester':
@@ -165,7 +169,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       head()
       break
     }
-    case 'agent.release':
+    case 'agent.release': case 'crew.add': case 'crew.remove':
       leadCheck(agentProject(command.agentId))
       break
     case 'agent.rebind':

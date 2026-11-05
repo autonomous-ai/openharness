@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CoreApi } from '../core/api.js'
-import { backend, REQUEST_BLOCKED, SuperTabHostError } from './wire.js'
+import { backend, readable, REQUEST_BLOCKED, SuperTabHostError } from './wire.js'
 
 const core = (status: number, body: Record<string, unknown>) => ({ account: { backend: async () => ({ status, body }) } }) as unknown as CoreApi
 
@@ -18,5 +18,26 @@ describe('a backend request that fails', () => {
     expect([own.code, own.message]).toEqual(['NOT_A_MEMBER', 'No.'])
     const down = await backend(core(502, {}), 'GET', '/x').catch((error: unknown) => error) as SuperTabHostError
     expect(down.code).toBe('BACKEND_UNAVAILABLE')
+  })
+})
+
+
+describe('read compatibility', () => {
+  it.each([undefined, null, false, '2', '3', 0, 1, 2.5, NaN, Infinity, [], {}])('treats malformed or older format %j as a retryable read failure', format => {
+    expect(() => readable({ format })).toThrow(expect.objectContaining({ code: 'BACKEND_UNAVAILABLE', status: 503 }))
+  })
+
+  it.each([undefined, null, 'garbled', [], {}])('does not require an update for a partial reply %j', reply => {
+    expect(() => readable(reply)).toThrow(expect.objectContaining({ code: 'BACKEND_UNAVAILABLE', status: 503 }))
+  })
+
+  it('accepts format 2 and requires an update only for a higher integer format', () => {
+    const reply = { format: 2 }
+    expect(readable(reply)).toBe(reply)
+    expect(() => readable({ format: 3 })).toThrow(expect.objectContaining({ code: 'UPDATE_REQUIRED', status: 426 }))
+  })
+
+  it('preserves a real HTTP 426 even without an error body', async () => {
+    await expect(backend(core(426, {}), 'GET', '/x')).rejects.toMatchObject({ code: 'UPDATE_REQUIRED', status: 426 })
   })
 })

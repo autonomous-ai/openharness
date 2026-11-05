@@ -577,7 +577,7 @@ void main() {
 
   group('notifications view', () {
     testWidgets(
-      'the entry counts the unread tag; the Mentions tab lists only what is '
+      'the entry reads the unread tag; the Mentions tab lists only what is '
       'unread',
       (tester) async {
         final server = ConversationServer()
@@ -590,11 +590,24 @@ void main() {
           ..['resolvedBy'] = 'reply';
         server.state['mentionsWaiting'] = 1;
         await showView(tester, server);
-        // The Activity row counts the unread tag, as the Mentions tab does
-        // (#2887); the one answered before this server said where is read.
+        // The Mentions row is bold for the unread tag, as the Mentions tab
+        // lists it (#2887), and shows no number (task #3128); the one
+        // answered before this server said where is read.
         expect(
           find.descendant(of: notificationsEntry(), matching: find.text('1')),
-          findsOneWidget,
+          findsNothing,
+        );
+        expect(
+          tester
+              .widget<Text>(
+                find.descendant(
+                  of: notificationsEntry(),
+                  matching: find.text('Mentions'),
+                ),
+              )
+              .style
+              ?.fontWeight,
+          grid.AppFont.semibold,
         );
         await tester.tap(find.byKey(const ValueKey('super-mentions')));
         await tester.pumpAndSettle();

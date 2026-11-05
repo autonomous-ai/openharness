@@ -2,6 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import type { PrismaClient } from '@prisma/client'
 import { AVATAR_PURPOSE, EXPIRED_UPLOAD, PENDING_UPLOAD_PURPOSE, REMOVING_UPLOAD_PURPOSE, UNSENT_LIFE_MS, type AttachmentStore, type Attachments } from '../superTabs/attachments.js'
 import { logger } from '../utils/logger.js'
+import { imageFacts, thumbKeyOf } from '../superTabs/thumbnails.js'
 
 /**
  * Removes Swarm uploads nobody used within a day (Diego, 10-30): chat files never sent and pictures never set, row and stored
@@ -66,7 +67,7 @@ export function failureCode(error: unknown): string {
 /** Removes up to [chunk] taken uploads, skipping those whose file failed earlier in this run. */
 async function remove(db: PrismaClient, attachments: Attachments, chunk: number, failedIds: Set<string>, log: Log): Promise<AttachmentSweepPass & { found: number }> {
   const found = await db.$runCommandRaw({ find: COLLECTION, filter: { usedBy: EXPIRED_UPLOAD, _id: { $nin: [...failedIds] } },
-    projection: { _id: 1, objectKey: 1, purpose: 1 }, limit: chunk, singleBatch: true } as never) as Found<{ _id: string; objectKey: string; purpose?: string | null }>
+    projection: { _id: 1, objectKey: 1, purpose: 1, image: 1 }, limit: chunk, singleBatch: true } as never) as Found<{ _id: string; objectKey: string; purpose?: string | null; image?: unknown }>
   const rows = found.cursor.firstBatch
   const gone: string[] = []
   for (const row of rows) {
@@ -74,6 +75,8 @@ async function remove(db: PrismaClient, attachments: Attachments, chunk: number,
     try {
       if (!store) throw new Error('No avatar store is configured')
       await store.delete(row.objectKey)
+      // A picture's thumbnail sits beside it and goes with it (superTabs/thumbnails.ts); one failing keeps the row for the next run.
+      if (imageFacts(row.image)?.thumb) await store.delete(thumbKeyOf(row.objectKey))
       gone.push(row._id)
     } catch (error) {
       // The key and the error's text hold the file's name and link key: only the row id and the error's code are logged.

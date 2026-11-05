@@ -67,7 +67,10 @@ for who is told.
    app is signed out, so a push it gets opens the welcome screen and shows no content beyond the notice. The next person
    signing in on that phone takes the token over (1), and Apple or Google calling it dead deletes it. Tested by (1).
 3. A development build (Xcode) has a sandbox token: production APNs answers `BadDeviceToken`, and the server retries once
-   on the sandbox host and remembers it. Test in Task 3.
+   on the sandbox host and remembers it. Test in Task 3. Apple's keys are per environment (Ken, 11-05): the production key
+   (`APNS_KEY_ID`, `APNS_PRIVATE_KEY`) signs for the production host alone, an optional sandbox key (`APNS_SANDBOX_KEY_ID`,
+   `APNS_SANDBOX_PRIVATE_KEY`) for the sandbox host alone; with no sandbox key nothing goes to the sandbox host, the push
+   is skipped (`unconfigured`, logged without the token) and the token kept.
 4. A push while the app is in front must not show twice (push and local notice): iOS presents nothing for a remote Swarm
    push in the foreground, FCM does not draw a notification message in the foreground. And a push already in the tray is
    not posted again by the app when it comes back: the app marks the keys of delivered pushes told (Task 7 test).
@@ -125,7 +128,7 @@ for who is told.
 
 **Interfaces:**
 - Produces: `interface PhoneNotice { personId: string; key: string; title: string; subtitle: string; body: string; link: string }`;
-  `type SendOutcome = 'sent' | 'gone' | 'sandbox' | 'failed'`; `interface SendResult { outcome: SendOutcome; reason?: string }`;
+  `type SendOutcome = 'sent' | 'gone' | 'sandbox' | 'failed' | 'unconfigured'`; `interface SendResult { outcome: SendOutcome; reason?: string }`;
   `interface Sender { send(device: PushDevice, notice: PhoneNotice): Promise<SendResult> }`;
   `apnsSender(keys: ApnsKeys, options?: { transport?; now?; timeoutMs? }): Sender`; `fcmSender(account: FcmAccount, options?: { fetcher?; now?; timeoutMs? }): Sender`;
   `pushKeysFromEnv(env): { apns: ApnsKeys | null; fcm: FcmAccount | null }` (throws a message without the key on a bad one).

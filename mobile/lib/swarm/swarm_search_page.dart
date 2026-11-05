@@ -210,8 +210,8 @@ List<SwarmSearchHit> swarmSearchFind(
 
 final _wordGap = RegExp(r'[\s·_\-./]+');
 
-/// Opens Search over [context]'s page: from Home's search field, or a pull
-/// down at the top of Home.
+/// Opens Search over [context]'s page: from the Search button on Home's top
+/// bar.
 void openSwarmSearch(BuildContext context) => unawaited(
   Navigator.of(context)
       .push(phoneRoute((_) => const SwarmSearchPage(), listensForItself: true)),

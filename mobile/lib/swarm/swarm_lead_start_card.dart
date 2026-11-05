@@ -72,6 +72,8 @@ class _SwarmLeadStartCardState extends State<SwarmLeadStartCard> {
       final picked = kept?.machineId ?? _machine;
       SwarmLeadPlan? plan;
       String? unavailable;
+      // None of the person's computers is online: Harness must be open on one.
+      final offline = widget.computers.leadComputers.isEmpty;
       try {
         plan = swarmLeadPlan(
           widget.reader,
@@ -200,6 +202,16 @@ class _SwarmLeadStartCardState extends State<SwarmLeadStartCard> {
                     ),
                   ),
                 ),
+              ] else if (offline) ...[
+                const SizedBox(height: AppSpace.m),
+                // A state, not an action: quiet, and it starts nothing.
+                const SwarmButton(
+                  key: ValueKey('swarm-lead-start-offline'),
+                  label: 'Open Harness on your Mac to start',
+                  style: SwarmButtonStyle.plain,
+                  wide: true,
+                  onPressed: null,
+                ),
               ] else ...[
                 const SizedBox(height: AppSpace.xs),
                 Text(
@@ -208,7 +220,8 @@ class _SwarmLeadStartCardState extends State<SwarmLeadStartCard> {
                   style: AppType.body(color: AppPalette.textPrimary),
                 ),
               ],
-              if (status?.reason case final reason?) ...[
+              // An old failure says nothing while no computer is on.
+              if (status?.reason case final reason? when !offline) ...[
                 const SizedBox(height: AppSpace.s),
                 Text(
                   'Couldn’t start a Lead: $reason',

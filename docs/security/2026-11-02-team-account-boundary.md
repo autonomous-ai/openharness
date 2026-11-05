@@ -80,8 +80,9 @@ there with its project settings off. Until then, route those Reviewers and Teste
 **Status (task #2025, `docs/plans/2026-11-02-team-written-branch-plan.md`):** the attack was then tried with Claude Code 2.1.316 on a
 fixture: planted `settings.json`, `settings.local.json` and `.mcp.json` all ran in a trusted folder. The fix:
 
-- The server refuses a main-account agent for a task a Team agent worked on, and for any pull request GitHub's activity log shows the
-  app's bot pushed to. If GitHub can't say, or a review names no pull request, the main account is refused too.
+- The server refuses a main-account agent for a task a Team agent was assigned to build, and for any pull request GitHub's activity log
+  shows the app's bot pushed to. If GitHub can't say, or a review names no pull request, the main account is refused too. A Team agent
+  joining or posting in a task marks nothing, and a push mark clears only on a clean read of the pull requests it rests on (#3304).
 - A new mark tells every main-account member of the task and its steps to stop, and another agent's post can't name them.
 - These agents start with project settings off, and a daemon in the main account refuses such a start.
 

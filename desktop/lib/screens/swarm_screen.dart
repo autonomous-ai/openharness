@@ -9176,7 +9176,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       );
       final total = _tabWidths.fold(0.0, (sum, width) => sum + width);
       // Arrows come out of the tabs' own budget, so the bar never reflows.
-      final arrows = chrome?.scrollsTabsByArrows == true && total > tabBudget;
+      final arrows =
+          scrollsTabsByMouse(chrome, windows: _windowsCaption) &&
+          total > tabBudget;
       final tabsWidth = math.max(
         0.0,
         math.min(total, tabBudget) -
@@ -9506,7 +9508,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     bool arrows, {
     required Color color,
     required Widget child,
-  }) => widget.chrome?.scrollsTabsByArrows != true
+  }) => !scrollsTabsByMouse(widget.chrome, windows: _windowsCaption)
       ? child
       : WorkspaceTabScroller(
           controller: _tabScroll,

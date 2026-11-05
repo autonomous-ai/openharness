@@ -18,7 +18,6 @@ import 'swarm_agents.dart';
 import 'swarm_conversation_page.dart' show openSwarmConversation;
 import 'swarm_home_list.dart';
 import 'swarm_home_rows.dart';
-import 'swarm_home_search.dart';
 import 'swarm_home_need_line.dart';
 import 'swarm_home_top.dart';
 import 'swarm_inbox.dart';
@@ -64,8 +63,9 @@ bool swarmHomeListed(SwarmInbox inbox, String swarmId, String projectId) {
 /// Slack's (2026-11-03), the Home tab: its title the Swarm shown, with a
 /// switcher to every Swarm, All Swarms and Join or create
 /// ([showSwarmSwitcher]), then Search ([openSwarmSearch]) and the person's
-/// avatar, which opens You ([SwarmYouButton]); a pull down at the top opens
-/// Search too ([SwarmPullToSearch]); one line while something needs the
+/// avatar, which opens You ([SwarmYouButton]); a pull down at the top reads
+/// the Swarms again, as it did before Slack's tune (2026-11-05: a pull that
+/// opened Search read as a broken refresh); one line while something needs the
 /// person, "2 need you · 1 done" ([SwarmNeedLine], anh Dee 2026-11-04: less
 /// is better), in place of three tiles; then the projects they pinned on this
 /// phone, one line each, then the others by their latest activity, those
@@ -218,7 +218,7 @@ class _SwarmPageState extends State<SwarmPage> {
     openSwarmConversation(context, sent.swarmId, sent.chatId);
   }
 
-  /// Refresh, from Sort and filter, reads the Swarms, as a pull on Home did;
+  /// Refresh, from Sort and filter, reads the Swarms, as a pull on Home does;
   /// with no computer answering, after looking for the computers, whatever
   /// that finds. A toast says it is on its way.
   Future<void> _refresh(BuildContext context, SwarmSession session) async {
@@ -305,25 +305,21 @@ class _SwarmPageState extends State<SwarmPage> {
     );
   }
 
-  /// Home's list: at the root, pulled down at its top, Search; pushed, the
-  /// list alone, with no Sort and filter.
+  /// Home's list, pulled down at its top, reads the Swarms again; pushed,
+  /// with no Sort and filter.
   Widget _list(
     BuildContext context,
     SwarmSession session, {
     required bool pushed,
-  }) {
-    final list = ListView(
+  }) => RefreshIndicator(
+    onRefresh: () => _pulled(context, session),
+    child: ListView(
       key: const ValueKey('swarm-home-list'),
       physics: const AlwaysScrollableScrollPhysics(),
       padding: _listPadding(context),
       children: _body(context, session, pushed: pushed),
-    );
-    if (pushed) return list;
-    return SwarmPullToSearch(
-      onPull: () => openSwarmSearch(context),
-      child: list,
-    );
-  }
+    ),
+  );
 
   /// Around Home's rows: the last clears the phone's home indicator.
   EdgeInsets _listPadding(BuildContext context) => EdgeInsets.fromLTRB(

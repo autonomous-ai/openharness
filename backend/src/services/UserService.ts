@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto'
 import { prisma } from '../lib/prisma.js'
 import { ADMIN_EMAILS } from '../config/env.js'
 import { hashPassword } from '../lib/password.js'
+import { signInsChanged } from '../lib/harnessAuthCache.js'
 import { ConflictError, NotFoundError } from '../errors/index.js'
 import type { AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import type { SignInAttribution } from '../lib/signInAttribution.js'
@@ -56,6 +57,7 @@ async function mergeProdProvisionalUser(provisional: User, user: User): Promise<
     }),
     prisma.user.delete({ where: { id: provisional.id } }),
   ])
+  await signInsChanged(provisional.id)
 }
 
 export const userService = {
@@ -125,10 +127,13 @@ export const userService = {
       // SSO profile auth runs on every control-plane request. Avoid turning that validation into a
       // write-per-request DB hot path when the mirrored user record is already current.
       if (Object.keys(data).length === 0) return existing
-      return prisma.user.update({
+      const updated = await prisma.user.update({
         where: { id: existing.id },
         data,
       })
+      // Its email or role may have changed: a Harness sign-in each pod remembers answers them (lib/harnessAuthCache.ts).
+      await signInsChanged(existing.id)
+      return updated
     }
 
     const data = {
@@ -259,7 +264,7 @@ export const userService = {
 
   async update(id: string, input: { name?: string; password?: string; role?: string; autonomousEnv?: AutonomousEnvironment }): Promise<User> {
     if (!(await prisma.user.findUnique({ where: { id } }))) throw new NotFoundError('User')
-    return prisma.user.update({
+    const updated = await prisma.user.update({
       where: { id },
       data: {
         ...(input.name !== undefined ? { name: input.name } : {}),
@@ -268,10 +273,13 @@ export const userService = {
         ...(input.password ? { passwordHash: hashPassword(input.password) } : {}),
       },
     })
+    await signInsChanged(id)
+    return updated
   },
 
   async remove(id: string): Promise<void> {
     if (!(await prisma.user.findUnique({ where: { id } }))) throw new NotFoundError('User')
     await prisma.user.delete({ where: { id } })
+    await signInsChanged(id)
   },
 }

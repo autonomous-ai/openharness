@@ -211,7 +211,7 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
     const log = openSync(join(logDir, logName), 'a', 0o600)
     try {
       // Its own process group, so it outlives this daemon and Stop ends it with whatever it started.
-      const child = spawn(binary, args, { env: { ...env, ...extra }, detached: true, stdio: ['ignore', log, log] })
+      const child = spawn(binary, args, { env: { ...env, ...extra }, detached: true, windowsHide: true, stdio: ['ignore', log, log] })
       child.unref()
       if (!child.pid) throw new AppStartError('The model could not start. Try again.')
       return child.pid

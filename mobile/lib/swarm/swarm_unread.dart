@@ -88,14 +88,13 @@ const _unknown = 1 << 52;
 bool swarmUnreadShown(SwarmReader reader, SuperTabConversation group) =>
     !swarmMuted(reader, group) && (reader.readMarks?.unread(group) ?? false);
 
-/// Each project's row with something new, by project id: bold while its
-/// project chat or any of its open work shows unread, as the desktop's
-/// sidebar reads a collapsed project — never for closed work, a private chat
-/// or the person's Buddy chat, which has a row of its own — or while tags
-/// count there. Its number counts only its project chat's tags, which opening
-/// the project reads; decisions asked there are on that chat's own row
-/// ([swarmChatCount]) and in Activity (#2927). Task tags stay on their own rows and in
-/// Activity. A tag counts only in a listed chat under its own project.
+/// Each project's row with something new, by project id: bold only for a
+/// person's message or a tag in its own chat, as the desktop's sidebar
+/// (#2427, #2638). Agents' progress and system notices never keep it bold.
+/// Its number counts only that chat's tags, which opening the project reads.
+/// Decisions and open task tags keep it under Home's filters, without
+/// bolding it; their counts stay on their own rows and in Activity (#2927).
+/// Closed work, private chats and Buddy chats never contribute.
 /// One pass over the Swarm's chats for every project.
 Map<String, SwarmProjectNews> swarmProjectNews(
   SwarmReader reader,
@@ -114,6 +113,10 @@ Map<String, SwarmProjectNews> swarmProjectNews(
   final unread = <String>{};
   final tags = <String, int>{};
   final hasWaitingTag = <String>{};
+  final projectChats = {
+    for (final project in snapshot.projects)
+      project.id: project.leadConversationId,
+  };
   for (final group in snapshot.conversations) {
     if (group.closed ||
         group.audience != null ||
@@ -121,9 +124,13 @@ Map<String, SwarmProjectNews> swarmProjectNews(
       continue;
     }
     final projectId = group.projectId;
-    if (!unread.contains(projectId) && swarmUnreadShown(reader, group)) {
+    final ownChat = group.id == projectChats[projectId];
+    if (ownChat && (reader.readMarks?.unreadForPeople(group) ?? false)) {
       unread.add(projectId);
     }
+    // Most task updates are agents' progress, with no tags or decisions.
+    if (!waiting.containsKey(group.id) && !asked.containsKey(group.id))
+      continue;
     final count = _countIn(
       reader,
       group,
@@ -131,9 +138,8 @@ Map<String, SwarmProjectNews> swarmProjectNews(
       asked[group.id] ?? 0,
     );
     if (count > 0) {
-      unread.add(projectId);
       hasWaitingTag.add(projectId);
-      if (group.id == snapshot.projectById(projectId)?.leadConversationId) {
+      if (ownChat) {
         // Its chat's tags alone (#2927): decisions are in Activity and on
         // the chat's own row.
         tags[projectId] = _countIn(
@@ -142,13 +148,14 @@ Map<String, SwarmProjectNews> swarmProjectNews(
           waiting[group.id] ?? const [],
           0,
         );
+        if (tags[projectId]! > 0) unread.add(projectId);
       }
     }
   }
   return {
-    for (final id in {...unread, ...tags.keys})
+    for (final id in {...unread, ...hasWaitingTag})
       id: (
-        bold: true,
+        bold: unread.contains(id),
         tags: tags[id] ?? 0,
         hasWaitingTag: hasWaitingTag.contains(id),
       ),

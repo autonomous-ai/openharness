@@ -1,50 +1,15 @@
 /**
- * What an instructions save really changed, for the line it posts in the project chat (task #3021, Ken 11-05): the items it
- * removed and added against the revision it replaced, so a PM's "I wrote it into the instructions" can be checked.
- * Computed once per save from the two texts the save already holds (commands.ts saveInstructions); nothing is stored or
- * read for it.
- *
- * Instructions are hard-wrapped, so one bullet spans several lines and a one-word edit rewraps it. They are compared by
- * item instead: a bullet, a numbered step, a paragraph or a fenced block, its wrapped lines joined, its list marker
- * dropped (so renumbered steps are no change), and each heading. A change is written in words, "Added:" or "Removed:"
- * under the section it sits in ("In Routing › Models:"), which reads the same in every client with no colouring (Ken's
- * review; River chose words).
+ * A project's instructions read as items, to check what a save drops (task #3151): a bullet, a numbered step, a paragraph or a
+ * fenced block, its wrapped lines joined and its list marker dropped (so rewrapped and renumbered items are no change), and
+ * each heading. The chat line that showed a save's change (#3021) left with #3132; these items now find the rules people
+ * gave and the lines a save drops, for the save's check and the revision's History (ruleGuard.ts).
  */
 
-/** Changed items the chat line shows; the rest are counted. */
-export const CHANGE_ITEMS = 12
-/** Characters of one shown item; a longer one is cut, never left out. */
+/** Characters of one line a History lists; a longer one is cut. */
 export const ITEM_CHARS = 400
-/** Edits compared item by item. Past this a 64 KB rewrite would cost (N+M)·D steps, so the region between the common head
- *  and tail is shown as removed and added whole: still the real items, only not the fewest changes. */
-const MAX_EDITS = 1000
 
 /** One item of a document: its words on one line, the section path it sits under, and whether it is a heading. */
 interface Item { key: string; text: string; path: string; heading: boolean }
-interface Edit { added: boolean; item: Item }
-
-/** The words under the summary of a save from [before] to [after]: each changed item on its own line, starting "Added:" or
- *  "Removed:", grouped under its section, then how many more changes there are. Every line starts with one of those words,
- *  so a saved item's Markdown never opens a heading, list, quote, code block or table in the chat. [before] null is an
- *  earlier revision the store could not read: said, never shown as no change. */
-export function instructionsChange(before: string | null, after: string): string {
-  if (before === null) return 'The earlier revision could not be read, so the change is not shown.'
-  const edits = itemEdits(items(before), items(after))
-  if (!edits.length) return 'Only spacing and line breaks changed.'
-  const lines: string[] = []
-  let section: string | undefined
-  for (const { added, item } of edits.slice(0, CHANGE_ITEMS)) {
-    if (item.path !== section) {
-      if (lines.length) lines.push('')
-      if (item.path) lines.push(`In ${item.path}:`)
-      section = item.path
-    }
-    lines.push(`${added ? 'Added' : 'Removed'}${item.heading ? ' section' : ''}: ${cut(item.text)}`)
-  }
-  const more = edits.length - CHANGE_ITEMS
-  if (more > 0) lines.push('', `and ${more} more change${more === 1 ? '' : 's'}.`)
-  return lines.join('\n')
-}
 
 const HEADING = /^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/
 const LIST_ITEM = /^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+(.*)$/
@@ -96,55 +61,204 @@ function item(words: string, path: string, heading: boolean): Item {
   return { key: `${heading ? '#' : '-'}${text}`, text, path, heading }
 }
 
-function cut(text: string): string {
-  if (text.length <= ITEM_CHARS) return text
-  let end = ITEM_CHARS - 1
-  // Never half of a surrogate pair.
-  if (/[\uD800-\uDBFF]/.test(text[end - 1]!)) end -= 1
-  return `${text.slice(0, end)}…`
+/**
+ * The rules people gave, and the ones a save drops (task #3151, Ken 11-05, from lamp): a PM's tidy dropped Leo's rule, judging
+ * it impossible, and the "(0xken15, 4 Nov)" of a rule it kept, and nothing checked the save. A rule is an item (as above)
+ * carrying a person and a date in parentheses, as these documents write who gave it: "(Ken, 2026-11-02)", "(0xken15, 4 Nov)",
+ * "(Scholes, 11-04)", "(Ken and Dee, 11-03)", "(Ken, 11-02; Dee, 11-03)", "(Ken, 2026-11-04: why)". An item with one such
+ * attribution is one rule, whatever side of it the words are on; one with several is split after each, the words after the
+ * last going with it. Nothing is stored: commands.ts checks a save against the revision it replaces.
+ */
+export interface AttributedRule {
+  /** Its words as the document has them, attribution included. */
+  text: string
+  /** Who gave it, as written ("anh Dee", "0xken15"). */
+  people: string[]
+}
+/** How a save lost a rule: gone, kept without who gave it, or changed so its meaning may differ (a negation, a number, a
+ *  condition, more than a rewording). The last is "can't tell", refused like the others. */
+export interface DroppedRule extends AttributedRule { why: 'removed' | 'unattributed' | 'changed' }
+
+const MONTH = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?'
+const DATE = `(?:\\d{4}-\\d{1,2}-\\d{1,2}|\\d{1,2}[-/]\\d{1,2}(?:[-/]\\d{2,4})?|\\d{1,2}\\s+${MONTH}(?:\\s+\\d{4})?|${MONTH}\\s+\\d{1,2}(?:,?\\s+\\d{4})?)`
+/** One attribution: names, a comma, a date, and optionally a note after it ("Ken, 2026-11-04: ad hoc reads..."). */
+const CLAUSE = new RegExp(`^\\s*(.+?)\\s*,\\s*${DATE}(?![\\p{L}\\p{N}])\\s*(?:[:;,.\\u2013\\u2014-].*)?$`, 'isu')
+/** A person's name or username: up to three words. */
+const NAME = /^@?[\p{L}\p{N}][\p{L}\p{N}._'’-]*(?:\s+[\p{L}\p{N}][\p{L}\p{N}._'’-]*){0,2}$/u
+const NAME_SEPARATOR = /\s*(?:,|&|\+|\/|\band\b|\bvà\b)\s*/iu
+/** Words said before a name, as "anh Dee" is Dee. */
+const HONORIFIC = /^(?:anh|chị|chi|em|cô|chú|bác|mr\.?|mrs\.?|ms\.?|dr\.?)\s+/iu
+
+/** The people of one parenthesized text, or none when it is not an attribution. */
+function attribution(inside: string): { people: string[]; clauses: number } | null {
+  const people: string[] = []
+  let clauses = 0
+  for (const clause of inside.split(';')) {
+    const names = CLAUSE.exec(clause)?.[1]?.split(NAME_SEPARATOR).map(n => n.trim().replace(/^@/, '')).filter(Boolean)
+    if (!names?.length || !names.every(n => NAME.test(n) && [...n].length <= 40)) continue
+    clauses++
+    people.push(...names)
+  }
+  return clauses ? { people, clauses } : null
 }
 
-/** The removals and additions from [a] to [b] in document order, a removal before the addition that replaces it. */
-function itemEdits(a: Item[], b: Item[]): Edit[] {
-  let head = 0
-  while (head < a.length && head < b.length && a[head]!.key === b[head]!.key) head++
-  let tail = 0
-  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail]!.key === b[b.length - 1 - tail]!.key) tail++
-  const from = a.slice(head, a.length - tail), to = b.slice(head, b.length - tail)
-  return myers(from, to) ?? [...from.map(item => ({ added: false, item })), ...to.map(item => ({ added: true, item }))]
+/** A name as one person: case, width, spaces, a leading "@", an honorific and a possessive aside ("Dee's daily check" is
+ *  Dee's). */
+export const personKey = (name: string): string => name.normalize('NFKC').trim().replace(/^@/, '').replace(HONORIFIC, '')
+  .replace(/['\u2019]s\b.*$/su, '').toLowerCase().replace(/[\s\p{Zs}]+/gu, '')
+
+/** One rule's or plain item's words, for comparing two revisions. */
+interface Segment {
+  text: string
+  people: string[]
+  clauses: number
+  /** Its content words in order (stemmed; negations, limits and numbers among them), attributions left out. */
+  seq: string[]
+  words: Set<string>
 }
 
-/** Myers' shortest edit script (1986), or null past MAX_EDITS. Each step keeps only its own diagonals -d..d. */
-function myers(a: Item[], b: Item[]): Edit[] | null {
-  const n = a.length, m = b.length
-  if (!n || !m) return [...a.map(item => ({ added: false, item })), ...b.map(item => ({ added: true, item }))]
-  const offset = n + m + 1
-  const v = new Int32Array(2 * offset + 1)
-  const trace: Int32Array[] = []
-  let found = -1
-  for (let d = 0; d <= Math.min(n + m, MAX_EDITS) && found < 0; d++) {
-    for (let k = -d; k <= d; k += 2) {
-      let x = k === -d || (k !== d && v[offset + k - 1]! < v[offset + k + 1]!) ? v[offset + k + 1]! : v[offset + k - 1]! + 1
-      let y = x - k
-      while (x < n && y < m && a[x]!.key === b[y]!.key) { x++; y++ }
-      v[offset + k] = x
-      if (x >= n && y >= m) { found = d; break }
+/** Words that carry no rule: articles, prepositions and the like. Negations, limits, numbers and "and"/"or" are kept. */
+const STOP = new Set(['a', 'an', 'the', 'of', 'to', 'in', 'on', 'for', 'is', 'are', 'be', 'it', 'its', 'their', 'that', 'this', 'by', 'with',
+  'as', 'at', 'from', 'into', 'so', 'was', 'were', 'will', 's'])
+/** A word a merge may add between the rules it joins. */
+const JOINERS = new Set(['and'])
+const stem = (word: string) => /\d/.test(word) || word.length <= 3 || !word.endsWith('s') || word.endsWith('ss') ? word : word.slice(0, -1)
+
+function segment(text: string, people: string[], clauses: number, body: string): Segment {
+  const seq = (body.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+(?:[.:,%][\p{N}]+)*%?/gu) ?? []).map(stem).filter(t => !STOP.has(t))
+  return { text, people, clauses, seq, words: new Set(seq) }
+}
+
+/** An item's segments: one per attribution as above, or the whole item when it has none. */
+function segments(text: string): Segment[] {
+  const found: { start: number; end: number; people: string[]; clauses: number }[] = []
+  for (const match of text.matchAll(/\(([^()]*)\)/g)) {
+    const parsed = attribution(match[1]!)
+    if (parsed) found.push({ start: match.index!, end: match.index! + match[0].length, ...parsed })
+  }
+  const strip = (part: string) => part.replace(/\(([^()]*)\)/g, (whole, inside: string) => attribution(inside) ? ' ' : whole)
+  if (found.length <= 1) return [segment(text, found[0]?.people ?? [], found[0]?.clauses ?? 0, strip(text))]
+  return found.map((a, i) => {
+    const from = i ? /^[.,;:!?]*\s*/.exec(text.slice(found[i - 1]!.end))![0].length + found[i - 1]!.end : 0
+    const to = i === found.length - 1 ? text.length : a.end + /^[.,;:!?]*/.exec(text.slice(a.end))![0].length
+    const part = text.slice(from, to).trim()
+    return segment(part, a.people, a.clauses, strip(part))
+  })
+}
+
+const ruleSegments = (text: string): Segment[] => items(text).flatMap(i => segments(i.text))
+
+/** Every attributed rule of [text], in document order. */
+export function attributedRules(text: string): AttributedRule[] {
+  return ruleSegments(text).filter(s => s.people.length).map(s => ({ text: s.text, people: s.people }))
+}
+
+/** Whether all of [a]'s words are in [b]: a line merged into another, as far as words show (keptIn, for the History). */
+const covers = (a: Set<string>, b: Set<string>): boolean => [...a].every(word => b.has(word))
+const share = (a: Set<string>, b: Set<string>) => a.size ? [...a].filter(w => b.has(w)).length / a.size : 0
+/** Every place [part] runs, word for word and in order, inside [whole]. */
+function occurrences(whole: readonly string[], part: readonly string[]): number[] {
+  const found: number[] = []
+  outer: for (let i = 0; i + part.length <= whole.length; i++) {
+    for (let j = 0; j < part.length; j++) if (whole[i + j] !== part[j]) continue outer
+    found.push(i)
+  }
+  return found
+}
+const contains = (whole: readonly string[], part: readonly string[]) => occurrences(whole, part).length > 0
+
+/**
+ * The attributed rules of [before] that [after] drops: removed, kept without its people, or changed beyond a rewording by the
+ * same people. [identify] says who a written name is (commands.ts: a member's id), so "0xken15" and "Ken" can be one person;
+ * by default a name is itself, honorifics aside.
+ */
+export function droppedRules(before: string, after: string, identify: (name: string) => string = personKey): DroppedRule[] {
+  const next = items(after).map(i => segments(i.text))
+  const flat = next.flat()
+  const ids = new Map<Segment, Set<string>>(flat.map(s => [s, new Set(s.people.map(identify))]))
+  const rules = ruleSegments(before).filter(s => s.people.length).map(rule => ({ rule, people: rule.people.map(identify) }))
+  // A segment says only what the rules it names said: each of its words lies in one of them, word for word and in order, or
+  // joins two of them (a merge). Anything else (a word changed, moved, added: "unless the PM judges it urgent") is a change
+  // nobody can tell is harmless, so every rule in it counts as changed (review of #3112).
+  const faithful = new Map<Segment, boolean>()
+  const isFaithful = (s: Segment) => faithful.get(s) ?? faithful.set(s, (() => {
+    const covered = s.seq.map(word => JOINERS.has(word))
+    for (const { rule, people } of rules) {
+      if (!rule.seq.length || !people.every(p => ids.get(s)!.has(p))) continue
+      for (const at of occurrences(s.seq, rule.seq)) for (let k = 0; k < rule.seq.length; k++) covered[at + k] = true
     }
-    trace.push(v.slice(offset - d, offset + d + 1))
+    return covered.every(Boolean)
+  })()).get(s)!
+  const dropped: DroppedRule[] = []
+  for (const { rule, people } of rules) {
+    const theirs = flat.filter(s => people.every(p => ids.get(s)!.has(p)))
+    if (theirs.some(s => contains(s.seq, rule.seq) && isFaithful(s))) continue
+    // Its words still there, in order: with its people that is a change of meaning, without them a lost attribution.
+    const kept = next.find(item => contains(item.flatMap(s => s.seq), rule.seq))
+    const why = kept ? (kept.some(s => theirs.includes(s)) ? 'changed' : 'unattributed')
+      : theirs.some(s => share(rule.words, s.words) >= 0.5) ? 'changed' : 'removed'
+    dropped.push({ text: rule.text, people: rule.people, why })
   }
-  if (found < 0) return null
-  const at = (d: number, k: number) => trace[d]![k + d]!
-  const edits: Edit[] = []
-  let x = n, y = m
-  for (let d = found; d > 0; d--) {
-    const k = x - y
-    const down = k === -d || (k !== d && at(d - 1, k - 1) < at(d - 1, k + 1))
-    const prevK = down ? k + 1 : k - 1
-    const prevX = at(d - 1, prevK), prevY = prevX - prevK
-    while (x > prevX && y > prevY) { x--; y-- }
-    edits.push(down ? { added: true, item: b[prevY]! } : { added: false, item: a[prevX]! })
-    x = prevX
-    y = prevY
+  return dropped
+}
+
+/** The items of [before] that [after] no longer has word for word (a moved or renumbered item is no removal), in document
+ *  order: what the History lists as a save's dropped lines (commands.ts instructions.save). */
+export function removedItems(before: string, after: string): string[] {
+  const left = new Map<string, number>()
+  for (const item of items(after)) left.set(item.key, (left.get(item.key) ?? 0) + 1)
+  return items(before).flatMap(item => {
+    const n = left.get(item.key) ?? 0
+    if (n) { left.set(item.key, n - 1); return [] }
+    return [item.text]
+  })
+}
+
+/** Whether an item's words, attributions aside, are all still in one item of [after]: merged there, as far as words show. */
+export function keptIn(after: string): (text: string) => boolean {
+  const kept = items(after).map(i => new Set(segments(i.text).flatMap(s => [...s.words])))
+  return text => {
+    const words = new Set(segments(text).flatMap(s => [...s.words]))
+    return kept.some(set => covers(words, set))
   }
-  return edits.reverse()
+}
+
+/** A line [after] adds that repeats one it keeps: the added line's words and the existing line's, as the document has them. */
+export interface RepeatedRule { added: string; existing: string }
+/** Fewest content words of a line that can be a repeat: a short line ("Tests pass.") says too little to be the same rule. */
+const MIN_REPEAT_WORDS = 4
+/** Repeats one refusal lists; more are cut. */
+export const MAX_REPEATS = 20
+
+/**
+ * The lines [after] adds, or rewrites, that say what a line it keeps already says (task #3283, Leo 11-05, from lamp: a PM
+ * saved a rule the document had as if it were new, which hid that it had skipped it). Conservative: a repeat has the same
+ * content words in the same order, so case, punctuation, list marker, wrapping, attribution, filler words and plurals make no
+ * difference, and any changed, added or dropped word, negation or number is a change of substance, not a repeat. A line the
+ * old text has word for word is not new; headings and lines under MIN_REPEAT_WORDS words are never repeats; the existing line
+ * is one the save keeps, in the same section, or an attributed rule against another (a rule is one rule wherever it sits).
+ */
+export function repeatedRules(before: string, after: string): RepeatedRule[] {
+  const old = new Map<string, number>()
+  for (const item of items(before)) old.set(item.key, (old.get(item.key) ?? 0) + 1)
+  const kept = new Map<string, { text: string; path: string; attributed: boolean }[]>()
+  const added: { segment: Segment; path: string }[] = []
+  for (const item of items(after)) {
+    if (item.heading) continue
+    const n = old.get(item.key) ?? 0
+    if (n) old.set(item.key, n - 1)
+    for (const segment of segments(item.text)) {
+      if (segment.seq.length < MIN_REPEAT_WORDS) continue
+      if (n) {
+        const key = segment.seq.join(' ')
+        kept.set(key, [...kept.get(key) ?? [], { text: segment.text, path: item.path, attributed: segment.people.length > 0 }])
+      } else added.push({ segment, path: item.path })
+    }
+  }
+  const repeats: RepeatedRule[] = []
+  for (const { segment, path } of added) {
+    const same = kept.get(segment.seq.join(' '))?.find(k => k.path === path || (k.attributed && segment.people.length > 0))
+    if (same) repeats.push({ added: segment.text, existing: same.text })
+  }
+  return repeats
 }

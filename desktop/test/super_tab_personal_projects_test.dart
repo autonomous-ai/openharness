@@ -11,7 +11,9 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/personal_projects.dart';
+import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
 import 'package:harness/super_tabs/workspace.dart';
 import 'package:harness/widgets/pane_grid.dart';
@@ -220,6 +222,69 @@ void main() {
         await tester.pump(const Duration(milliseconds: 20));
       }
       await captureWindow(tester, _shots, 'personal-term-${brightness.name}');
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+  }
+
+  for (final brightness in Brightness.values) {
+    testWidgets('pictures of a Personal project leaving the list once its '
+        'panes close (task #3042), in ${brightness.name}', (tester) async {
+      if (_shots == null) return;
+      final previous = grid.AppTheme.brightness.value;
+      grid.AppTheme.brightness.value = brightness;
+      addTearDown(() => grid.AppTheme.brightness.value = previous);
+      tester.view.devicePixelRatio = 2;
+      tester.view.physicalSize = const Size(2560, 1440);
+      addTearDown(tester.view.reset);
+      final f = SuperTabLaunchFixture();
+      final p = _desk(f);
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      c.select(
+        c.snapshot!.projects
+            .firstWhere((p) => p.name == 'web')
+            .leadConversationId,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: grid.buildAppTheme(brightness: brightness),
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: f.app,
+              builder: (_, _) => SuperTabWorkspace(
+                app: f.app,
+                canvas: PaneGrid(notifier: f.app, swarmMode: true),
+                onAddAgent: (_) {},
+                onNewProject: () {},
+                onNewSwarm: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      await captureWindow(
+        tester,
+        _shots,
+        'personal-panes-open-${brightness.name}',
+      );
+      f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
+      f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
+      f.app.notifyListeners();
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      await captureWindow(
+        tester,
+        _shots,
+        'personal-panes-closed-${brightness.name}',
+      );
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       f.app.superTabs.dispose();
@@ -1165,6 +1230,204 @@ void main() {
         findsOneWidget,
       );
       await close(tester, f, c);
+    });
+  });
+
+  // Huy, 11-05 (task #3042): every pane of a repo or tab closed, its project
+  // leaves the list; its chat stays; a pane of it opening brings it back.
+  group('a project with no panes leaves the list', () {
+    SuperTabProject named(SuperTabController c, String name) =>
+        c.snapshot!.projects.firstWhere((p) => p.name == name);
+
+    List<Map<String, dynamic>> removals(SuperTabLaunchFixture f) => [
+      for (final post in f.connection.server.posts)
+        if ((post['command'] as Map?)?['type'] case final String type
+            when type.contains('delete') || type.contains('archive'))
+          Map<String, dynamic>.from(post),
+    ];
+
+    test('closing every pane of a repo hides its project, and a pane of it '
+        'opening shows it again with its chat', () async {
+      final f = SuperTabLaunchFixture();
+      final p = _desk(f);
+      final c = await _personal(f);
+      final projects = PersonalProjects.of(f.app);
+      await projects.sync(c);
+      final api = named(c, 'api'), web = named(c, 'web');
+      expect(projects.hidden(c, api.id), isFalse);
+
+      final one = f.app.swarms.firstWhere((s) => s.id == 'one');
+      final two = f.app.swarms.firstWhere((s) => s.id == 'two');
+      one.panes.remove(p.api);
+      // One of its panes is still open, on the laptop.
+      expect(projects.hidden(c, api.id), isFalse);
+      two.panes.remove(p.api2);
+      expect(projects.hidden(c, api.id), isTrue);
+      expect(projects.hidden(c, web.id), isFalse);
+      expect(projects.hidden(c, named(c, 'one').id), isFalse);
+
+      // Its chat is kept: nothing was deleted or archived on the server.
+      expect(removals(f), isEmpty);
+      expect(c.snapshot!.conversation(api.leadConversationId), isNotNull);
+
+      two.panes.add(p.api2);
+      expect(projects.hidden(c, api.id), isFalse);
+      expect(projects.panesFor(c, api.leadConversationId), [p.api2]);
+    });
+
+    test('the list works out every hidden project in one pass, with the same '
+        'answer as asking each (review of #3073)', () async {
+      final f = SuperTabLaunchFixture();
+      final p = _desk(f);
+      final c = await _personal(f);
+      final projects = PersonalProjects.of(f.app);
+      await projects.sync(c);
+      final api = named(c, 'api');
+      expect(projects.hiddenIn(c), isEmpty);
+      f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
+      f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
+      expect(projects.hiddenIn(c), {api.id});
+      for (final project in c.snapshot!.projects) {
+        expect(
+          projects.hidden(c, project.id),
+          projects.hiddenIn(c).contains(project.id),
+          reason: project.name,
+        );
+      }
+      // A machine with one of the panes not listed yet: nothing hides.
+      f.app.machineStates['m']!
+        ..agentsListedOnce = false
+        ..agentLoadStatus = AgentLoadStatus.loading;
+      expect(projects.hiddenIn(c), isEmpty);
+    });
+
+    test(
+      'a tab\'s project hides once its panes with no repo are closed',
+      () async {
+        final f = SuperTabLaunchFixture();
+        final p = _huyDesk(f);
+        final c = await _personal(f);
+        final projects = PersonalProjects.of(f.app);
+        await projects.sync(c);
+        final code = named(c, 'code');
+        f.app.swarms.firstWhere((s) => s.id == 'desk-code').panes
+          ..remove(p.a1)
+          ..remove(p.a2);
+        expect(projects.hidden(c, code.id), isTrue);
+        expect(projects.hidden(c, named(c, 'Harness Monitor').id), isFalse);
+      },
+    );
+
+    test('nothing hides while a machine with one of the panes has not listed '
+        'its agents yet', () async {
+      final f = SuperTabLaunchFixture();
+      final p = _desk(f);
+      final c = await _personal(f);
+      final projects = PersonalProjects.of(f.app);
+      await projects.sync(c);
+      final api = named(c, 'api');
+      f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
+      // The laptop just came back and has not said what runs there: its
+      // pane may well be the api's.
+      f.app.machineStates['laptop']!
+        ..agents = const []
+        ..agentsListedOnce = false
+        ..agentLoadStatus = AgentLoadStatus.loading;
+      expect(projects.hidden(c, api.id), isFalse);
+      f.app.machineStates['laptop']!
+        ..agents = [_agent('n1', remote: 'https://github.com/acme/api')]
+        ..agentsListedOnce = true
+        ..agentLoadStatus = AgentLoadStatus.loaded;
+      expect(projects.hidden(c, api.id), isFalse);
+      f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
+      expect(projects.hidden(c, api.id), isTrue);
+    });
+
+    test('a project made by hand, and any project of a Team Swarm, never '
+        'hides', () async {
+      final f = SuperTabLaunchFixture();
+      _desk(f);
+      final c = await _personal(f);
+      final projects = PersonalProjects.of(f.app);
+      await projects.sync(c);
+      f.app.swarms.removeWhere((s) => s.id == 'one' || s.id == 'two');
+      expect(projects.hidden(c, named(c, 'api').id), isTrue);
+      final byHand = c.snapshot!.projects
+          .firstWhere((p) => p.leadConversationId == 'lead')
+          .id;
+      expect(projects.hidden(c, byHand), isFalse);
+
+      final team = SuperTabLaunchFixture();
+      _desk(team);
+      final tc = await _personal(team, people: const ['owner', 'kim']);
+      expect(PersonalProjects.of(team.app).hidden(tc, byHand), isFalse);
+    });
+
+    testWidgets('the list leaves it out, but keeps it while its chat is open', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final f = SuperTabLaunchFixture();
+      final p = _desk(f);
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      final api = named(c, 'api'), web = named(c, 'web');
+      final redraw = ValueNotifier(0);
+      addTearDown(redraw.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: Listenable.merge([f.app, c, redraw]),
+              builder: (_, _) => SizedBox(
+                width: 260,
+                child: ProjectSidebar(
+                  controller: c,
+                  app: f.app,
+                  onSelect: c.select,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      Finder row(SuperTabProject project) =>
+          find.byKey(ValueKey('super-project-${project.id}'));
+      expect(row(api), findsOneWidget);
+
+      c.select(api.leadConversationId);
+      f.app.swarms.firstWhere((s) => s.id == 'one').panes.remove(p.api);
+      f.app.swarms.firstWhere((s) => s.id == 'two').panes.remove(p.api2);
+      redraw.value++;
+      await tester.pump();
+      // Open now: it stays until the person goes elsewhere.
+      expect(row(api), findsOneWidget);
+
+      c.select(web.leadConversationId);
+      redraw.value++;
+      await tester.pump();
+      expect(row(api), findsNothing);
+      expect(row(web), findsOneWidget);
+      expect(
+        superTabSidebarOrder(c, app: f.app),
+        isNot(contains(api.leadConversationId)),
+      );
+
+      f.app.swarms.firstWhere((s) => s.id == 'two').panes.add(p.api2);
+      redraw.value++;
+      await tester.pump();
+      expect(row(api), findsOneWidget);
+      expect(
+        superTabSidebarOrder(c, app: f.app),
+        contains(api.leadConversationId),
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
     });
   });
 

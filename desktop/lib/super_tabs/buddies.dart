@@ -572,6 +572,92 @@ class SuperTabBuddyBar extends StatelessWidget {
     );
   }
 
+  /// The words the Buddy's machine reports for a switch the Buddy guard held
+  /// (cli superTabs/buddyModel.ts refusal(), task #3256), as the backend's
+  /// line in the Buddy chat begins (backend superTabs/buddyModel.ts).
+  static const _heldSwitch =
+      "Couldn't switch your Buddy: Start your Buddy again to switch its model";
+
+  /// How far back the bar looks for that line: one page of the chat. The read
+  /// runs on every build, so it is bounded (ENGINEERING.md 4); a refusal under
+  /// more newer messages than this offers nothing, and nothing is removed.
+  static const _heldSwitchReach = 100;
+
+  /// Whether [agent]'s last switch failed because it must be started again:
+  /// its newest system line in this chat says so, and no switch is under way.
+  /// Its machine writes that line as the Buddy itself, so a later line (a
+  /// switch that landed, another failure) settles it, and a Buddy started
+  /// again, a new agent, never inherits it. Scholes, 11-05: the line alone
+  /// told him to start his Buddy again, with no way to do it while it ran.
+  ///
+  /// Only from the chat's newest messages (Guide's review of #3171): a window
+  /// opened at an older read mark holds an older page, and the line that
+  /// settled the switch may be among the newer ones it has not read. The
+  /// cheap checks come first, and the held rows are read from the end without
+  /// a copy ([SuperTabController.newestFirst]), so the scan stops at this
+  /// Buddy's newest system line.
+  bool _mustStartAgain(SuperTabController c, SuperTabAgent agent) {
+    if (!chat.isSwarmBuddyChat || agent.modelRequest != null) return false;
+    final conversation = c.snapshot?.conversation(chat.id);
+    if (conversation == null ||
+        c.hasNewer(chat.id) ||
+        c.awaitsNewest(chat.id)) {
+      return false;
+    }
+    final held = c.newestFirst(chat.id);
+    final newest =
+        conversation.lastMainSequence ?? conversation.lastMessageSequence;
+    if ((held.firstOrNull?.sequence ?? -1) < newest) return false;
+    for (final m in held.take(_heldSwitchReach)) {
+      if (m.source['kind'] == 'system' && m.author['id'] == agent.id) {
+        return m.text.startsWith(_heldSwitch);
+      }
+    }
+    return false;
+  }
+
+  /// Why Start again cannot run now, in words, or null when it can: new work
+  /// paused in the Swarm, or [agent]'s machine paused or offline there.
+  String? _restartHeld(
+    SuperTabController c,
+    SuperTabAgent agent,
+    String machine,
+  ) {
+    if (c.snapshot!.paused) {
+      return 'New work is paused. Start your Buddy again once it resumes.';
+    }
+    final target = buddyMachines(
+      c,
+      app: app,
+    ).where((m) => m.id == agent.machineId).firstOrNull;
+    final block = target == null ? null : buddyMachineBlock(target);
+    return block == null
+        ? null
+        : "$machine is $block. Start your Buddy again once it's back.";
+  }
+
+  /// A running Buddy refuses a second start (backend BUDDY_EXISTS): it is
+  /// removed, then started on the same machine and engine. Its chat and its
+  /// name stay. Unlike a down Buddy's Start again, which the server replaces
+  /// in one command, these are two: the machine and engine are kept first
+  /// ([_restartTargets]), so a start refused after the removal, or a removal
+  /// whose answer was lost, leaves the Start bar on them, one click away.
+  Future<void> _startAgain(SuperTabController c, SuperTabAgent agent) async {
+    final projectId = chat.projectId;
+    (_restartTargets[c] ??= {})[projectId] = (
+      machineId: agent.machineId,
+      engine: agent.engine,
+    );
+    if (!await c.removeBuddy(projectId)) return;
+    if (await c.addBuddy(
+      projectId: projectId,
+      machineId: agent.machineId,
+      engine: agent.engine,
+    )) {
+      _restartTargets[c]?.remove(projectId);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -594,6 +680,8 @@ class SuperTabBuddyBar extends StatelessWidget {
       access,
     ].join(' · ');
     final busy = !c.canWrite || c.saving || c.hasPendingAction;
+    final offer = agent.downSince == null && _mustStartAgain(c, agent);
+    final held = offer ? _restartHeld(c, agent, machine) : null;
     return Padding(
       key: const ValueKey('super-buddy-bar'),
       padding: _padding,
@@ -633,6 +721,27 @@ class SuperTabBuddyBar extends StatelessWidget {
             )
           else
             Text(where, style: DesktopChrome.metadata()),
+          if (offer)
+            Row(
+              key: const ValueKey('super-buddy-start-again'),
+              children: [
+                Expanded(
+                  child: Text(
+                    held ?? 'Start your Buddy again to switch its model.',
+                    style: DesktopChrome.control(),
+                  ),
+                ),
+                // The server refuses a start while new work is paused, in the
+                // Swarm or on the Buddy's machine: the Buddy is not removed
+                // for a start that cannot follow (reviews of #3171).
+                TextButton(
+                  onPressed: busy || held != null
+                      ? null
+                      : () => unawaited(_startAgain(c, agent)),
+                  child: const Text('Start again'),
+                ),
+              ],
+            ),
           if (agent.downSince != null)
             Row(
               children: [
@@ -662,6 +771,15 @@ class SuperTabBuddyBar extends StatelessWidget {
   }
 }
 
+/// The machine and engine of a Buddy removed to start again (the Buddy bar's
+/// Start again), by its project key, until a start of it is accepted: per
+/// controller, so another account's never shows. In memory only: it serves
+/// the restart under way in this window.
+final _restartTargets =
+    Expando<Map<String, ({String machineId, String engine})>>(
+      'buddy restart targets',
+    );
+
 /// A Buddy chat with no Buddy: one click starts one, on the reader's own
 /// machine and with Claude unless they pick otherwise (mockup A, Lead 10-29).
 /// A viewer, who adds nothing, sees no bar.
@@ -688,6 +806,22 @@ class _BuddyStartState extends State<_BuddyStart> {
   String? _machine, _error;
   String _engine = 'claude';
   bool _adding = false;
+
+  /// [_machine] is a restart's target, kept while it cannot be used, until
+  /// the reader chooses another (Guide's second review of #3171).
+  bool _keepTarget = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // A Buddy removed to start again whose start did not follow: back on the
+    // machine and engine it ran on.
+    if (_restartTargets[c]?[widget.projectId] case final target?) {
+      _machine = target.machineId;
+      _engine = target.engine;
+      _keepTarget = true;
+    }
+  }
 
   /// Starts the Buddy on [machine], first preparing it when it is one of the
   /// reader's machines outside the Swarm. A failed setup says why and starts
@@ -720,6 +854,7 @@ class _BuddyStartState extends State<_BuddyStart> {
             setup: setup,
           )
           .then((added) {
+            if (added) _restartTargets[c]?.remove(projectId);
             // Its host reads the Swarm now rather than on its next pass.
             if (added && setup != null) unawaited(app?.wakeSuperTabHost(id));
           }),
@@ -730,7 +865,11 @@ class _BuddyStartState extends State<_BuddyStart> {
   Widget build(BuildContext context) {
     if (!c.canWrite) return const SizedBox.shrink();
     final machines = buddyMachines(c, app: widget.app);
-    final machine = pickedBuddyMachine(machines, _machine);
+    final kept = _keepTarget
+        ? machines.where((m) => m.id == _machine).firstOrNull
+        : null;
+    final keptBlock = kept == null ? null : buddyMachineBlock(kept);
+    final machine = kept ?? pickedBuddyMachine(machines, _machine);
     final busy = c.saving || c.hasPendingAction || _adding;
     return Padding(
       key: const ValueKey('super-buddy-start'),
@@ -756,7 +895,11 @@ class _BuddyStartState extends State<_BuddyStart> {
                   busy: busy,
                   fitNames: true,
                   onChanged: (value) {
-                    if (!busy) setState(() => _machine = value);
+                    if (busy) return;
+                    setState(() {
+                      _machine = value;
+                      _keepTarget = false;
+                    });
                   },
                 ),
                 const SizedBox(width: 8),
@@ -779,13 +922,21 @@ class _BuddyStartState extends State<_BuddyStart> {
                 ),
                 const SizedBox(width: 8),
                 FilledButton(
-                  onPressed: busy || machine == null
+                  onPressed: busy || machine == null || keptBlock != null
                       ? null
                       : () => unawaited(_start(machine)),
                   child: const Text('Start'),
                 ),
               ],
             ),
+          if (keptBlock != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              '${kept!.name} is $keptBlock. Your Buddy starts there once '
+              "it's back, or choose another machine.",
+              style: DesktopChrome.control(),
+            ),
+          ],
           if (machines.isNotEmpty && machine == null) ...[
             const SizedBox(height: 4),
             BuddyNoMachine(machines: machines),

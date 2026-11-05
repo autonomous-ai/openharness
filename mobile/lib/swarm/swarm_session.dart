@@ -446,6 +446,11 @@ class SwarmHost extends ChangeNotifier {
     session?.foreground = value;
   }
 
+  /// Notices the person was already shown by a push while the app was away,
+  /// by their keys and slots: never posted again, and a thread a push still
+  /// shows gets no notice of its own ([SwarmTold.pushesShown]).
+  void toldElsewhere(Iterable<String> keys) => _told.pushesShown(keys);
+
   /// A computer may have come up: a Swarm waiting for one reads at once.
   void _computersChanged() {
     session?.inbox.computerUp();

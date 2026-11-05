@@ -5,6 +5,7 @@ import { devicesOf, forgetPushDevice, markSandbox, type PushDevice, type PushPla
 import { apnsSender } from './apns.js'
 import { fcmSender } from './fcm.js'
 import { pushKeysFromEnv, type PushEnv } from './keys.js'
+import { quietRepeats } from './repeats.js'
 import type { PhoneNotice, Sender } from './sender.js'
 
 /** A platform's sender, or null when the server has no keys for it. */
@@ -17,7 +18,8 @@ const AT_ONCE = 8
 export function phoneSendersFromEnv(env: PushEnv): PhoneSenders {
   const keys = pushKeysFromEnv(env)
   const senders = { ios: keys.apns && apnsSender(keys.apns), android: keys.fcm && fcmSender(keys.fcm) }
-  logger.info('phone push', { ios: senders.ios ? 'on' : 'off: no APNs key', android: senders.android ? 'on' : 'off: no FCM service account' })
+  const ios = !keys.apns ? 'off: no APNs key' : keys.apns.sandbox ? 'on, Xcode builds too' : 'on, but Xcode builds skipped: no APNs sandbox key'
+  logger.info('phone push', { ios, android: senders.android ? 'on' : 'off: no FCM service account' })
   return senders
 }
 
@@ -26,10 +28,16 @@ export function phoneSendersFromEnv(env: PushEnv): PhoneSenders {
  * of those people's phones; each notice to each of its person's phones, AT_ONCE at a time. A dead token is forgotten, a
  * sandbox one remembered. It never throws: what failed is logged, by platform and Apple's or Google's reason, and counted.
  */
-export async function sendPhoneNotices(db: PrismaClient, senders: PhoneSenders, notices: PhoneNotice[]): Promise<void> {
-  if (!notices.length) return
+export async function sendPhoneNotices(db: PrismaClient, senders: PhoneSenders, given: PhoneNotice[]): Promise<void> {
+  if (!given.length) return
   const started = Date.now()
+  let notices = given
   try {
+    // A thread's repeat goes quietly (task #3248). Not read, each goes with its sound: a notice is never lost to it.
+    notices = await quietRepeats(db, given).catch((error: unknown) => {
+      logger.warn('phone push repeats not read', { notices: given.length, error: error instanceof Error ? error.message : String(error) })
+      return given
+    })
     const phones = new Map<string, PushDevice[]>()
     for (const device of await devicesOf(db, [...new Set(notices.map(n => n.personId))])) phones.set(device.userId, [...phones.get(device.userId) ?? [], device])
     const sends = notices.flatMap(notice => (phones.get(notice.personId) ?? []).map(device => ({ notice, device })))
@@ -51,6 +59,7 @@ export async function sendPhoneNotices(db: PrismaClient, senders: PhoneSenders, 
         if (result.outcome === 'gone') await forgetPushDevice(db, device.id)
         if (result.outcome === 'sandbox') await markSandbox(db, device.id)
         if (result.outcome === 'failed') logger.warn('phone push failed', { platform: device.platform, reason: result.reason })
+        if (result.outcome === 'unconfigured') logger.warn('phone push skipped', { platform: device.platform, reason: result.reason })
       }
     }
     await Promise.all(Array.from({ length: Math.min(AT_ONCE, sends.length) }, lane))

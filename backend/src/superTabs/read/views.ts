@@ -3,7 +3,7 @@
  * plus the private-conversation check, each record sent in its part's envelope. Time-based and cross-part values go only
  * in `derived`, so a part never changes without a new version (Lead's ruling).
  */
-import { suspendedEngines } from '../engineHealth.js'
+import { machineSuspensionReason, suspendedEngines } from '../engineHealth.js'
 import { leadChoices } from '../leadStart.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
 import { agentForBuddy, agentWithoutMachine, groupForBuddy, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
@@ -41,6 +41,8 @@ export interface ReadExtras {
   teamAccountsIdle?: boolean
   /** Each contributed machine's CLI version as its daemon last connected (store.ts machineFacts). */
   machineVersions?: Record<string, string>
+  /** Macs whose owner's Harness Team account on them is not listed yet (store.ts joiningTeams). */
+  joiningTeams?: string[]
   /** A person's open mentions, counted by the store. */
   mentionsWaiting?: number
   /** Which ones they are, as a digest (mentions.ts). */
@@ -135,12 +137,13 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
   const slots = slotCounter(state)
   const machine = (pool: ContributedMachine) => {
     const stored = state.machines!.find(m => m.machineId === pool.machineId)!
-    const refusal = machineTeamWork(state, stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [])
+    const refusal = machineTeamWork(state, stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [], extras.joiningTeams ?? [])
     const version = extras.machineVersions?.[pool.machineId]
     const suspended = suspendedEngines(stored, now)
+    const machineSuspended = machineSuspensionReason(stored, now)
     return [pool.machineId, { availableSlots: availableSlots(state, stored, slots(stored)),
       teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const }, ...(version ? { clientVersion: version } : {}),
-      ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(leads[pool.machineId] ? { lead: leads[pool.machineId] } : {}) }] as const
+      ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(machineSuspended ? { machineSuspended } : {}), ...(leads[pool.machineId] ? { lead: leads[pool.machineId] } : {}) }] as const
   }
   return {
     agents: Object.fromEntries(visible.agents.map(seen => [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,
@@ -150,6 +153,8 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
       roleName: roleNameOf(state, state.agents.find(a => a.id === seen.id)!) }])),
     machines: Object.fromEntries((visible.machines ?? []).map(machine)),
     ...(visible.otherProjectsWork ? { otherProjectsWork: visible.otherProjectsWork } : {}),
+    ...(visible.pmAccounts ? { pmAccounts: visible.pmAccounts } : {}),
+    ...(visible.ownerlessProjects ? { ownerlessProjects: visible.ownerlessProjects } : {}),
     ...(actor.kind === 'person' && extras.mentionsWaiting !== undefined ? { mentionsWaiting: extras.mentionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.mentionsDigest !== undefined ? { mentionsDigest: extras.mentionsDigest } : {}),
     ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),

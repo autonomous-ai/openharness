@@ -6,6 +6,8 @@ import 'super_tab_fixture.dart';
 /// [voiceAnswers] are given in turn, the last one again; a [SuperTabFailure]
 /// in it is thrown.
 class VoiceServer extends ConversationServer {
+  void Function()? onVoiceRead;
+
   final voiceReads = <String>[];
   List<Object> voiceAnswers = [
     {
@@ -36,6 +38,7 @@ class VoiceServer extends ConversationServer {
   }) async {
     if (method == 'POST' && path.contains('/voice')) {
       voiceReads.add(path);
+      onVoiceRead?.call();
       final answer =
           voiceAnswers[(voiceReads.length - 1).clamp(
             0,

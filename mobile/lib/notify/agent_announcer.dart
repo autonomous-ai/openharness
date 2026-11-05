@@ -23,6 +23,23 @@ typedef _AwaitingTier = ({
   Timer timer,
 });
 
+/// A question heard while the app is in front, waiting out
+/// [AgentAnnouncer.questionGrace] before it buzzes.
+typedef _PendingQuestion = ({
+  NoticeAgent agent,
+  String requestId,
+  String prompt,
+  bool Function() watching,
+  Timer timer,
+});
+
+/// One request of one agent: what a question that comes back is known by.
+typedef _QuestionKey = ({AgentRef ref, String requestId});
+
+/// What the phone did with one question lately: when it was first heard, when
+/// it was last heard or closed, and whether the person was told of it.
+typedef _HeardQuestion = ({DateTime first, DateTime touched, bool told});
+
 /// Carries out the dial's two rules — [decideDoneNotice] and
 /// [decideQuestionNotice]: the chime, the unread mark, the system notice. The
 /// notifier says what happened; this decides what it is worth and does it, so
@@ -33,12 +50,65 @@ class AgentAnnouncer {
     Future<void> Function()? chime,
     bool Function()? inFront,
     this.tierWait = const Duration(seconds: 4),
+    this.questionGrace = const Duration(seconds: 15),
+    this.alertCooldown = const Duration(minutes: 5),
+    this.reopenWindow = const Duration(minutes: 10),
+    this.inTeamAccount,
+    DateTime Function()? now,
   }) : _chime = chime ?? _haptic,
-       _inFront = inFront ?? _appInFront;
+       _inFront = inFront ?? _appInFront,
+       _now = now ?? DateTime.now {
+    _away.attach();
+  }
 
   final SystemNotices system;
+
+  /// Whether an agent runs in a Harness Team account: a teammate's Swarm work
+  /// on this person's Mac. Its turns and questions are not this person's news
+  /// — it reaches them only through the Swarm rule (tags, decisions asked of
+  /// them, replies in their threads) — so none is announced: no chime, no
+  /// mark, no notice (2026-11-05: Dee's phone showed a banner for a teammate's
+  /// tester in a task she was not part of). Null counts every agent as the
+  /// person's own. Set after construction by the app, which knows the
+  /// machines; read at each turn and question, never remembered.
+  bool Function(AgentRef agent)? inTeamAccount;
+
+  bool _teams(AgentRef ref) => inTeamAccount?.call(ref) ?? false;
+
   final unread = AgentUnread();
   final _asked = AskedQuestions();
+
+  /// How long a question waits, while the app is in front, before it buzzes.
+  /// One answered within it — at the computer, by an auto mode, on another
+  /// client — was never the person's to hear (2026-11-05: a Team machine's
+  /// approvals, each answered at its desk in seconds, buzzed a phone over and
+  /// over). Its mark shows at once. Away it goes at once, and so does one
+  /// still waiting when the app goes away ([wentAway]): iOS suspends a
+  /// backgrounded app within seconds, and a timer then fires only when it is
+  /// opened again.
+  final Duration questionGrace;
+
+  /// After an agent buzzes for a question, its next ones within this long are
+  /// posted quietly ([AgentNotice.quiet]): a run of approvals is one
+  /// interruption, then quiet updates of the same notice.
+  final Duration alertCooldown;
+
+  /// How long a question is remembered after it was last heard or closed. One
+  /// back within it — its dialog flickered off the pane and on, and the daemon
+  /// closed and announced it again with the same id — never buzzes twice.
+  final Duration reopenWindow;
+
+  final DateTime Function() _now;
+  late final _away = _AwayWatch(wentAway);
+
+  /// Questions waiting out [questionGrace]: the newest per agent.
+  final _pendingQuestions = <AgentRef, _PendingQuestion>{};
+
+  /// Questions heard within [reopenWindow], and those still open.
+  final _heard = <_QuestionKey, _HeardQuestion>{};
+
+  /// When each agent last buzzed for a question ([alertCooldown]).
+  final _lastBuzz = <AgentRef, DateTime>{};
 
   /// How long a turn's end waits for the daemon's tier. It follows
   /// `turn_ended` by the daemon's decision — at most a second of Jev — and the
@@ -55,6 +125,10 @@ class AgentAnnouncer {
   /// second thing to dismiss by hand — without asking the OS for one that was
   /// never posted.
   final _posted = <AgentRef>{};
+
+  /// Of [_posted], the agents whose notice up tells of a finished turn: the
+  /// next turn's end replaces it quietly (task #3248).
+  final _doneUp = <AgentRef>{};
   final Future<void> Function() _chime;
   final bool Function() _inFront;
 
@@ -93,6 +167,7 @@ class AgentAnnouncer {
     // Whatever it was asking, the turn it asked in is over — and a turn that
     // ends with nothing to say must not leave the question's mark standing.
     questionClosed(agent.ref);
+    if (_teams(agent.ref)) return AgentNotice.none;
     return _announceEnd(agent, end, watching: watching);
   }
 
@@ -107,6 +182,7 @@ class AgentAnnouncer {
   }) {
     questionClosed(agent.ref);
     _awaitingTier.remove(agent.ref)?.timer.cancel();
+    if (_teams(agent.ref)) return;
     if (!isNewsEnd(end)) {
       appLog.debug('notify', 'turn end · ${_short(agent.ref)} · not news');
       return;
@@ -148,7 +224,13 @@ class AgentAnnouncer {
   }) {
     final front = inFront;
     final seen = front && watching();
-    final notice = decideDoneNotice(end, inFront: front, watching: seen);
+    var notice = decideDoneNotice(end, inFront: front, watching: seen);
+    // Sounds once until the person goes to the agent (task #3248, the rule
+    // Tony approved): a turn that ends while the last one's notice is still up
+    // replaces it quietly.
+    if (notice == AgentNotice.alert && _doneUp.contains(agent.ref)) {
+      notice = AgentNotice.quiet;
+    }
     // Ids and decisions only: what the turn said stays out of the log.
     appLog.debug('notify', 'done · ${_short(agent.ref)} · ${front ? 'front' : 'away'}${seen ? ' · watching' : ''} · ${notice.name}');
     _deliver(agent, notice, NoticeKind.done, () => noticeBody(end.reply!));
@@ -158,30 +240,133 @@ class AgentAnnouncer {
   static String _short(AgentRef ref) => ref.agentId.length > 8 ? ref.agentId.substring(0, 8) : ref.agentId;
 
   /// The agent stopped to ask the person [prompt]. [requestId] is the
-  /// daemon's id for it, which a re-announce repeats.
+  /// daemon's id for it, which a re-announce repeats. What was done now: a
+  /// new question in front is only marked until its [questionGrace] runs out.
   AgentNotice questionAsked(
     NoticeAgent agent, {
     required String requestId,
     required String prompt,
     required bool Function() watching,
   }) {
+    final ref = agent.ref;
+    if (_teams(ref)) return AgentNotice.none;
+    final now = _now();
+    // Before hearing it: heard first, this very request would read as open,
+    // and be kept however long ago it was last told.
+    _forgetOldQuestions(now);
+    if (!_asked.hear(ref, requestId)) {
+      appLog.debug('notify', 'question · ${_short(ref)} · open already · none');
+      return AgentNotice.none;
+    }
+    // Only the newest question is asked: one still waiting is dropped.
+    _pendingQuestions.remove(ref)?.timer.cancel();
+    final key = (ref: ref, requestId: requestId);
+    final before = _heard[key];
+    final heard = (
+      first: before?.first ?? now,
+      touched: now,
+      told: before?.told ?? false,
+    );
+    _heard[key] = heard;
+    final front = inFront;
+    final wait = heard.first.add(questionGrace).difference(now);
+    // Away there is no time to wait; on the agent its pane shows the dialog;
+    // one told of already never buzzes; one back after its grace ran out,
+    // while its dialog was off the pane, has waited long enough.
+    if (!front || watching() || heard.told || wait <= Duration.zero) {
+      return _askNow(agent, requestId: requestId, prompt: prompt, watching: watching);
+    }
+    unread.mark(ref, NoticeKind.question);
+    _pendingQuestions[ref] = (
+      agent: agent,
+      requestId: requestId,
+      prompt: prompt,
+      watching: watching,
+      timer: Timer(wait, () => _questionDue(ref)),
+    );
+    appLog.debug('notify', 'question · ${_short(ref)} · front · waits ${wait.inSeconds}s · filed');
+    return AgentNotice.filed;
+  }
+
+  /// Tells of question [requestId] now, by where the person is ([decideQuestionNotice]).
+  AgentNotice _askNow(
+    NoticeAgent agent, {
+    required String requestId,
+    required String prompt,
+    required bool Function() watching,
+  }) {
+    final ref = agent.ref;
+    final now = _now();
+    final key = (ref: ref, requestId: requestId);
+    final heard = _heard[key];
+    final told = heard?.told ?? false;
     final front = inFront;
     final seen = front && watching();
+    final last = _lastBuzz[ref];
+    final cooling = last != null && now.difference(last) < alertCooldown;
     final notice = decideQuestionNotice(
-      isNew: _asked.hear(agent.ref, requestId),
+      isNew: true,
       inFront: front,
       watching: seen,
+      told: told,
+      cooling: cooling,
     );
-    appLog.debug('notify', 'question · ${_short(agent.ref)} · ${front ? 'front' : 'away'}${seen ? ' · watching' : ''} · ${notice.name}');
+    if (notice == AgentNotice.alert) _lastBuzz[ref] = now;
+    _heard[key] = (first: heard?.first ?? now, touched: now, told: true);
+    appLog.debug('notify', 'question · ${_short(ref)} · ${front ? 'front' : 'away'}${seen ? ' · watching' : ''}${told ? ' · told' : ''}${cooling ? ' · cooling' : ''} · ${notice.name}');
     _deliver(agent, notice, NoticeKind.question, () => noticeBody(prompt));
     return notice;
   }
 
+  /// [ref]'s question waited out its grace, or the app is going away while it
+  /// waits: told now.
+  void _questionDue(AgentRef ref) {
+    final waiting = _pendingQuestions.remove(ref);
+    if (waiting == null) return;
+    waiting.timer.cancel();
+    _askNow(
+      waiting.agent,
+      requestId: waiting.requestId,
+      prompt: waiting.prompt,
+      watching: waiting.watching,
+    );
+  }
+
+  /// The app left the screen: every question still waiting out its grace is
+  /// told now, while there is time to post it — iOS suspends a backgrounded
+  /// app within seconds, and its timers with it.
+  void wentAway() {
+    for (final ref in _pendingQuestions.keys.toList()) {
+      _questionDue(ref);
+    }
+  }
+
+  /// Forgets the questions last heard or closed more than [reopenWindow] ago,
+  /// keeping those still open: one asked for an hour is still the same
+  /// question when its dialog flickers.
+  void _forgetOldQuestions(DateTime now) {
+    _heard.removeWhere(
+      (key, heard) =>
+          now.difference(heard.touched) > reopenWindow &&
+          _asked.openOn(key.ref) != key.requestId,
+    );
+  }
+
   /// The question is off the pane — answered here, by hand, on another client
   /// or on the dial. Its mark and its notice go with it: news nobody can act
-  /// on any more is not news. A finished turn's mark is left alone.
+  /// on any more is not news. A finished turn's mark is left alone. What was
+  /// told of it is kept ([reopenWindow]), and a grace it was waiting out
+  /// resumes if it comes back.
   void questionClosed(AgentRef ref, {String? requestId}) {
+    final open = _asked.openOn(ref);
     if (!_asked.forget(ref, requestId: requestId)) return;
+    _pendingQuestions.remove(ref)?.timer.cancel();
+    if (open != null) {
+      final key = (ref: ref, requestId: open);
+      if (_heard[key] case final heard?) {
+        _heard[key] = (first: heard.first, touched: _now(), told: heard.told);
+      }
+    }
     if (unread.kindFor(ref) != NoticeKind.question) return;
     unread.clear(ref, kind: NoticeKind.question);
     _withdraw(ref);
@@ -203,9 +388,20 @@ class AgentAnnouncer {
   /// The person went to the agent — tapped its row, its notice, or came back
   /// to the app on it. Whatever it was carrying has been read: the mark AND
   /// the notice still sitting in the OS centre come down together, and a
-  /// finished turn still waiting for its tier is not announced after.
+  /// finished turn still waiting for its tier is not announced after. A
+  /// question still waiting out its grace is not either: the person has seen
+  /// its dialog, and it counts as told. Its [alertCooldown] ends: the run of
+  /// questions it grouped has been dealt with, and the next one is news.
   void seen(AgentRef ref) {
     _awaitingTier.remove(ref)?.timer.cancel();
+    _pendingQuestions.remove(ref)?.timer.cancel();
+    _lastBuzz.remove(ref);
+    if (_asked.openOn(ref) case final open?) {
+      final key = (ref: ref, requestId: open);
+      final heard = _heard[key];
+      final now = _now();
+      _heard[key] = (first: heard?.first ?? now, touched: now, told: true);
+    }
     unread.clear(ref);
     _withdraw(ref);
   }
@@ -215,6 +411,8 @@ class AgentAnnouncer {
   void forgetAgent(AgentRef ref) {
     _asked.forget(ref);
     seen(ref);
+    _heard.removeWhere((key, _) => key.ref == ref);
+    _lastBuzz.remove(ref);
   }
 
   /// Signed out: nothing any of it was about is this person's any more.
@@ -222,6 +420,8 @@ class AgentAnnouncer {
     _cancelAwaiting();
     unread.clearAll();
     _asked.clear();
+    _heard.clear();
+    _lastBuzz.clear();
     _posted.toList().forEach(_withdraw);
   }
 
@@ -230,9 +430,14 @@ class AgentAnnouncer {
       waiting.timer.cancel();
     }
     _awaitingTier.clear();
+    for (final waiting in _pendingQuestions.values) {
+      waiting.timer.cancel();
+    }
+    _pendingQuestions.clear();
   }
 
   void _withdraw(AgentRef ref) {
+    _doneUp.remove(ref);
     if (_posted.remove(ref)) system.cancel(ref);
   }
 
@@ -246,12 +451,20 @@ class AgentAnnouncer {
     if (notice.marks) unread.mark(agent.ref, kind);
     if (!notice.alerts) return;
     _posted.add(agent.ref);
+    // The agent's one notice now tells of this kind: a question over a
+    // finished turn leaves the next turn's end free to sound.
+    if (kind == NoticeKind.done) {
+      _doneUp.add(agent.ref);
+    } else {
+      _doneUp.remove(agent.ref);
+    }
     system.show((
       agent: agent.ref,
       kind: kind,
       title: agent.name,
       machine: agent.machine,
       body: body(),
+      quiet: notice == AgentNotice.quiet,
     ));
   }
 
@@ -259,7 +472,44 @@ class AgentAnnouncer {
   /// [SystemNotices.opened] after the notifier has gone.
   void dispose() {
     _cancelAwaiting();
+    _away.detach();
     unread.dispose();
+  }
+}
+
+/// Calls [onAway] when the app leaves the screen: hidden or paused. A plain
+/// observer rather than an `AppLifecycleListener`, which asserts on the jumps
+/// between states that widget tests make.
+class _AwayWatch extends WidgetsBindingObserver {
+  _AwayWatch(this.onAway);
+
+  final VoidCallback onAway;
+  bool _attached = false;
+
+  /// Tolerant of there being NO binding, as [AgentAnnouncer._appInFront] is:
+  /// plain `test()`s build the announcer without one.
+  void attach() {
+    try {
+      WidgetsBinding.instance.addObserver(this);
+      _attached = true;
+    } catch (_) {}
+  }
+
+  void detach() {
+    if (!_attached) return;
+    _attached = false;
+    try {
+      WidgetsBinding.instance.removeObserver(this);
+    } catch (_) {}
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      onAway();
+    }
   }
 }
 

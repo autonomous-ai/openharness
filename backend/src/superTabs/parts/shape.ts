@@ -13,7 +13,7 @@ const PART_ONLY_GROUP_FIELDS = ['messageSeq', 'reportSeq', 'dormant', 'lastActiv
 /** Optional lists of `SuperTab.state` an empty one of which differs from an absent one (`[]` after the last machine left). */
 const LISTS = ['parkedConversations', 'starts', 'machines', 'harnessReservations', 'releasedHarnesses', 'closingSessions', 'removedSessions', 'machineCleanups'] as const
 const STATE_ONLY = ['people', 'agents', 'conversations', 'parkedConversations', 'starts', 'machines', 'harnessReservations',
-  'releasedHarnesses', 'closingSessions', 'removedSessions', 'machineCleanups', 'otherProjectsWork', 'groupCounter', 'sequenceBase'] as const
+  'releasedHarnesses', 'closingSessions', 'removedSessions', 'machineCleanups', 'otherProjectsWork', 'pmAccounts', 'groupCounter', 'sequenceBase'] as const
 
 const isLegacyProgress = (progress: unknown): progress is LegacyProgress =>
   !!progress && typeof progress === 'object' && 'dirtyRevision' in progress

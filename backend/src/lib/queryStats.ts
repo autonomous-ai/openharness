@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks'
 import type { PrismaClient } from '@prisma/client'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { logger } from '../utils/logger.js'
+import type { EngineCpu, EngineSample } from './engineCpu.js'
 
 /**
  * Which queries this process sends, per kind of work (DB roadmap Phase 1). Atlas logs only operations over 100 ms; the
@@ -114,7 +115,7 @@ export function filterShape(action: string, args: unknown): string {
 }
 
 /** `Model.action`; a raw command by its collection and command name (`SwarmGroup.$runCommandRaw aggregate`). */
-function opName(model: string | undefined, action: string, args: unknown): string {
+export function opName(model: string | undefined, action: string, args: unknown): string {
   if (model) return `${model}.${action}`
   if (action === '$runCommandRaw' && isPlainObject(args)) {
     const command = Object.keys(args)[0] ?? '?'
@@ -125,7 +126,7 @@ function opName(model: string | undefined, action: string, args: unknown): strin
 }
 
 /** Documents a result holds: a list's length, one for a document, a raw cursor reply's first batch. */
-function docsOf(result: unknown): number {
+export function docsOf(result: unknown): number {
   if (Array.isArray(result)) return result.length
   if (isPlainObject(result)) {
     const cursor = result.cursor
@@ -319,33 +320,44 @@ export function startQueryStats(options: QueryStatsOptions & { reportMs?: number
 /** The client with one query hook that times every operation, model calls and raw commands alike, for `db by shape` and
  *  for `observe` (the Prometheus histogram, lib/metrics.ts; `raw` for a call without a model). Query extensions keep the
  *  client's types, so it is still a PrismaClient to its callers. [label] names this client's queries in `db by shape`
- *  (`secondary:User.findMany`, lib/prisma.ts prismaSecondary). A failure of either never reaches the query: it is warned
- *  about once per client, and the query's own result or error goes back unchanged. */
+ *  (`secondary:User.findMany`, lib/prisma.ts prismaSecondary). [engine] is the engine CPU sampler (lib/engineCpu.ts),
+ *  told of every query's start and end. A failure of any of them never reaches the query: it is warned about once per
+ *  client, and the query's own result or error goes back unchanged. */
 export function withQueryStats(client: PrismaClient, stats: () => QueryStats | undefined = () => active,
   warn: (message: string, context: Record<string, unknown>) => void = (m, c) => logger.warn(m, c),
-  observe?: (model: string, operation: string, seconds: number) => void, label?: string): PrismaClient {
+  observe?: (model: string, operation: string, seconds: number) => void, label?: string,
+  engine: () => EngineCpu | undefined = () => undefined): PrismaClient {
   let warned = false
+  const failedOnce = (error: unknown) => {
+    if (warned) return
+    warned = true
+    warn('query stats failed', { error: error instanceof Error ? error.message : String(error) })
+  }
   const note = (model: string | undefined, operation: string, args: unknown, ms: number, result: unknown, failed: boolean) => {
     try {
       observe?.(model ?? 'raw', operation, ms / 1000)
       stats()?.record(model, operation, args, ms, result, failed, label)
-    } catch (error) {
-      if (warned) return
-      warned = true
-      warn('query stats failed', { error: error instanceof Error ? error.message : String(error) })
-    }
+    } catch (error) { failedOnce(error) }
   }
   return client.$extends({
     query: {
       async $allOperations({ model, operation, args, query }) {
+        // The engine CPU sampler (lib/engineCpu.ts) sees every query's start and end, so it knows which one ran alone.
+        let sampler: EngineCpu | undefined, sample: EngineSample | undefined
+        try { sampler = engine(); sample = sampler?.start() } catch (error) { failedOnce(error) }
+        const ended = (result: unknown) => {
+          try { sampler?.end(sample, model, operation, args, result) } catch (error) { failedOnce(error) }
+        }
         const started = performance.now()
         let result: unknown
         try {
           result = await query(args)
         } catch (error) {
+          ended(undefined)
           note(model, operation, args, performance.now() - started, undefined, true)
           throw error
         }
+        ended(result)
         note(model, operation, args, performance.now() - started, result, false)
         return result
       },

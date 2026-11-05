@@ -1,0 +1,11 @@
+{
+  "aps": {
+    "alert": { "title": "River replied in a thread", "subtitle": "Phone Swarm", "body": "Open Harness to read it." },
+    "sound": "default",
+    "thread-id": "swarm-needs-you",
+    "category": "swarm-needs-you"
+  },
+  "key": "reply:tab-1:act-r2",
+  "link": "swarm:tab-1/g1/message/r2/thread/m1",
+  "slot": "thread:tab-1:g1:m1"
+}

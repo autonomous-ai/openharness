@@ -63,6 +63,35 @@ describe('message edits', () => {
     expect(f.lead().reactionSeq ?? 0).toBe(0)
   })
 
+  it.each([false, true])('lets only the attributed owner delete their Buddy proposal, with replies: %s', hasReplies => {
+    const f = fixture()
+    f.invite()
+    const proposalTarget = { ...target({ plain: false, author: { kind: 'person', id: 'peer' }, hasReplies }).messageChange!, proposalOwnerId: 'peer' }
+    // Even the Swarm owner cannot delete another person's proposal.
+    expect(() => f.run(remove(), owner, { messageChange: proposalTarget })).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(() => f.run(edit(), peer, { messageChange: proposalTarget })).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    const asAgent: Actor = { kind: 'agent', agentId: f.agent(), machineOwnerId: 'peer' }
+    expect(() => f.run(remove(), asAgent, { messageChange: proposalTarget })).toThrow(expect.objectContaining({ status: 403 }))
+    expect(f.run(remove(), peer, { messageChange: proposalTarget }).result).toMatchObject({ changed: true, kept: hasReplies })
+    expect(f.lead().reactionSeq).toBe(1)
+  })
+
+  it('refuses proposal deletion when the source owner and attributed person disagree', () => {
+    const f = fixture()
+    f.invite()
+    const messageChange = { ...target({ plain: false }).messageChange!, proposalOwnerId: 'peer' }
+    for (const actor of [owner, peer]) expect(() => f.run(remove(), actor, { messageChange }))
+      .toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(f.lead().reactionSeq ?? 0).toBe(0)
+  })
+
+  it('keeps deleted proposals deleted and never makes a system message deletable', () => {
+    const f = fixture()
+    const messageChange = { ...target({ plain: false, deleted: true }).messageChange!, proposalOwnerId: 'owner' }
+    expect(() => f.run(remove(), owner, { messageChange })).toThrow(expect.objectContaining({ code: 'MESSAGE_DELETED' }))
+    expect(() => f.run(remove(), owner, target({ plain: false }))).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+  })
+
   it('refuses a viewer, a system row, a deleted message and a message the store did not find', () => {
     const f = fixture()
     for (const command of [edit(), remove()]) {

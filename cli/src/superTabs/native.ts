@@ -244,10 +244,14 @@ export class NativeRecorder {
             this.gap(row, id, harnessId, reason === 'recording_restarted' ? page.cursor.epoch
               : `${page.cursor.epoch}:${page.cursor.sequence}`, reason)
           }
-          if (page.gap || page.observations.some(event => event.kind === 'prompt' && event.unattributedInput)) {
-            for (const [id, c] of Object.entries(row.contexts)) {
-              if (!c.blocked) gap(id, page.gap ? (page.cursor.epoch !== before.cursor.epoch ? 'recording_restarted' : 'history_lost') : 'unattributed_input')
-            }
+          if (page.gap && page.cursor.epoch !== before.cursor.epoch) {
+            // A new epoch comes with each core restart and each history replay or resumed turn after it (task #3127:
+            // two views across one restart posted four gaps). It loses only a recorded turn left unfinished: that view
+            // reports it, once. An idle view lost nothing.
+            for (const id of new Set(Object.values(row.turns))) if (!row.contexts[id]!.blocked) gap(id, 'recording_restarted')
+            row.turns = {}
+          } else if (page.gap || page.observations.some(event => event.kind === 'prompt' && event.unattributedInput)) {
+            for (const [id, c] of Object.entries(row.contexts)) if (!c.blocked) gap(id, page.gap ? 'history_lost' : 'unattributed_input')
             if (page.gap) row.turns = {}
           }
           for (const observation of page.observations) {

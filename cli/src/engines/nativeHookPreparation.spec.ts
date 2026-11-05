@@ -239,7 +239,7 @@ it('holds a large YAML structure before parsing or modifying it', async () => {
   const { root } = await fixture()
   const { installHermesHooks } = await import('./nativeHooks.js')
   const home = join(root, 'HERMES_HOME'), file = join(home, 'config.yaml')
-  const config = Array.from({ length: 5000 }, (_, index) => `key${index}: value`).join('\n')
+  const config = Array.from({ length: 60_000 }, (_, index) => `key${index}: value`).join('\n')
   writeFileSync(file, config)
   expect(await installHermesHooks(4242, home)).toBe(false)
   expect(readFileSync(file, 'utf8')).toBe(config)

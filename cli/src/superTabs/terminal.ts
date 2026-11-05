@@ -14,6 +14,7 @@ import { updateDismissKeys } from '../engines/codex/screen.js'
 import { feedbackDismissKeys } from '../engines/claude/screen.js'
 import type { MessageHold } from '../engines/facets/screen.js'
 import { backend } from './host.js'
+import type { RelaySeen } from './relayRecovery.js'
 import { identifier, object } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -94,6 +95,25 @@ export function modelFailing(text: string): boolean {
   return text.split('\n').slice(-LIMIT_NEAR_LINES).some(line => MODEL_LINE.test(line))
 }
 
+/** An engine whose model refuses its sign-in: Claude Code's "Not logged in · Please run /login", "API Error: 401 {…
+ *  authentication_error …} · Please run /login", "Invalid API key · Please run /login" and "OAuth token has expired", and
+ *  Codex's "■ unexpected status 401 Unauthorized". A CLI release restarts the owner's daemon and its relay: a Team agent
+ *  launched in that gap, or holding a token the relay no longer takes, showed one and sat there (task #3301, Quince,
+ *  2026-11-05). Only a line that starts with the notice, bare or under the engines' own marks (Claude Code's "⎿", Codex's
+ *  "■"), where the engine draws its own ([ownNotice]), and near the prompt: an agent writing or printing these words, its
+ *  reply under "⏺" or "•" included, is not signed out (security review 2 of #3172). */
+const SIGNED_OUT_LINE = /^\s*(?:⎿\s+|■\s+)?(?:api error:\s*401\b|not logged in\b|invalid api key\b|oauth token has (?:expired|been revoked)|unexpected status 401\b)/i
+
+/** Whether the screen shows its engine signed out of its model: no answer will come until it is launched signed in. */
+export function signedOut(text: string): boolean {
+  const lines = text.split('\n')
+  const from = Math.max(0, lines.length - LIMIT_NEAR_LINES)
+  return lines.slice(from).some((line, i) => SIGNED_OUT_LINE.test(line) && ownNotice(lines, from + i))
+}
+
+/** A model the agent gets no answer from: retrying one that does not answer, or signed out of it. */
+const unanswered = (text: string) => modelFailing(text) || signedOut(text)
+
 /** Claude Code's tool call, whose output it draws under it: "⏺ Bash(…)", "⏺ Read(…)", "⏺ mcp__github__get_pr(…)". */
 const TOOL_CALL = /^⏺\s+[\w.-]+\(/
 
@@ -164,6 +184,11 @@ function screenDigest(text: string): string {
 }
 
 type Episode = { since: number; alerted: boolean } | null
+/** What the watch tells of each read (./relayRecovery.ts `RelayRecovery`). */
+export interface TerminalRelay {
+  seen(harnessId: string, engine: string | undefined, read: RelaySeen): Promise<void>
+  keep(harnessIds: ReadonlySet<string>): void
+}
 interface Watched { prompt: Episode; limit: Episode; model: Episode; retried?: number; skips?: number }
 
 export class TerminalHost {
@@ -181,23 +206,28 @@ export class TerminalHost {
   private readonly alertRetries = new CommandRetries(() => this.now())
   /** Per running harness here, its last screen's digest and when that last changed. */
   private readonly progress = new Map<string, { digest: string; at: number }>()
+  /** When each harness's whole screen, status lines too, last changed: one still while its engine works is frozen (crew.ts). */
+  private readonly still = new Map<string, { digest: string; at: number }>()
   private readonly now: () => number
   private readonly log: (message: string) => void
   /** Whether the server is known to push now (the host's delivery push lease). */
   private readonly pushes: () => boolean
+  /** On a Team daemon, what restarts an agent stranded on an old relay grant (./relayRecovery.ts). */
+  private readonly relay: TerminalRelay | null
 
   constructor(private readonly core: CoreApi, private readonly machineId: string,
-    options: { now?: () => number; log?: (message: string) => void; pushes?: () => boolean } = {}) {
+    options: { now?: () => number; log?: (message: string) => void; pushes?: () => boolean; relay?: TerminalRelay } = {}) {
     this.now = options.now ?? Date.now
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
     this.pushes = options.pushes ?? (() => false)
+    this.relay = options.relay ?? null
   }
 
   /** Each host roster read. Serving and watching run on their own cadence, and the returned promise is only for specs:
    *  the host never waits on it, so a slow screen read never delays deliveries. */
   tick(rows: unknown[]): Promise<void> {
     const here = this.here = this.agentsHere(rows)
-    if (!here.length) { this.watched.clear(); this.progress.clear(); return Promise.resolve() }
+    if (!here.length) { this.watched.clear(); this.progress.clear(); this.still.clear(); return Promise.resolve() }
     const own = here.filter(agent => agent.running)
     const now = this.now()
     if (!this.serving && !this.pushes() && now - this.servedAt >= SERVE_EVERY_MS) this.startServing()
@@ -227,6 +257,12 @@ export class TerminalHost {
 
   /** When each of these harnesses' screens last changed, epoch ms, for those running here that the watch has read. An
    *  agent's first read counts as a change: the host cannot know what its screen showed before. */
+  /** When [harnessId]'s whole screen last changed, status lines included, from the reads the watch already makes; undefined
+   *  for one it has not read. A working engine redraws its timer, so a screen that stays the same while it works is frozen. */
+  stillSince(harnessId: string): number | undefined {
+    return this.still.get(harnessId)?.at
+  }
+
   progressOf(harnessIds: readonly string[]): Record<string, number> {
     return Object.fromEntries(harnessIds.flatMap(id => {
       const seen = this.progress.get(id)
@@ -294,6 +330,8 @@ export class TerminalHost {
     this.alertRetries.keepIf(key => agents.has(key.split('-')[2] ?? ''))
     const harnesses = new Set(own.map(a => a.harnessId))
     for (const id of this.progress.keys()) if (!harnesses.has(id)) this.progress.delete(id)
+    for (const id of this.still.keys()) if (!harnesses.has(id)) this.still.delete(id)
+    this.relay?.keep(harnesses)
     for (const agent of own) {
       const key = `${agent.tabId}:${agent.agentId}`
       const state = this.watched.get(key) ?? { prompt: null, limit: null, model: null }
@@ -304,16 +342,24 @@ export class TerminalHost {
       state.skips = await this.skipUpdate(agent, read, state.skips ?? 0)
       const now = this.now()
       const digest = screenDigest(read.text), seen = this.progress.get(agent.harnessId)
+      const failing = unanswered(read.text)
       // A model being retried is not the agent's work moving, whatever else the screen shows meanwhile.
-      if (!seen || (seen.digest !== digest && !modelFailing(read.text))) this.progress.set(agent.harnessId, { digest, at: now })
+      if (!seen || (seen.digest !== digest && !failing)) this.progress.set(agent.harnessId, { digest, at: now })
+      const whole = createHash('sha256').update(read.text).digest('base64url')
+      if (this.still.get(agent.harnessId)?.digest !== whole) this.still.set(agent.harnessId, { digest: whole, at: now })
       state.prompt = await this.episode(agent, 'prompt', state.prompt, read.hold !== null && WAITING.has(read.hold), now, since => now - since >= PROMPT_WAIT_MS, {})
       const limit = limitOf(read.text, now)
       state.limit = await this.episode(agent, 'limit', state.limit, limit !== null, now, () => true, limit ?? {})
-      if (modelFailing(read.text)) state.retried = now
+      if (failing) state.retried = now
       const retrying = state.retried !== undefined && now - state.retried < MODEL_CLEAR_MS
       // Ten minutes up to the last retry seen, not up to now: the quiet minutes that confirm answers came again are not
       // failure, so a burst that recovers before ten minutes never alerts (and its task is never lost for it).
       state.model = await this.episode(agent, 'model', state.model, retrying, now, since => state.retried! - since >= MODEL_WAIT_MS, {})
+      // Failing now, on this read: the model alert's episode outlasts the retries by ten minutes, a restart's by as long. Not
+      // waited on: a restart takes up to a minute, and the other agents' reads and alerts must not wait behind it.
+      void this.relay?.seen(agent.harnessId, this.core.agents.byAgent(agent.harnessId)?.engine,
+        { failingSince: failing && state.model ? state.model.since : null, waiting: read.hold !== null && WAITING.has(read.hold) })
+        .catch(error => this.log(`relay recovery: ${error instanceof Error ? error.message : String(error)}`))
     }
   }
 

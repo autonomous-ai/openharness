@@ -31,6 +31,7 @@ const fakes = vi.hoisted(() => {
     }),
     set: vi.fn(async (key: string, value: string, ...opts: unknown[]) => set(key, value, ...opts)),
     get: vi.fn(async (key: string) => redis.get(key) ?? null),
+    mget: vi.fn(async (...keys: string[]) => keys.map((key) => redis.get(key) ?? null)),
     del: vi.fn(async (key: string) => (redis.delete(key) ? 1 : 0)),
     multi: vi.fn(() => {
       const ops: Array<() => unknown> = []

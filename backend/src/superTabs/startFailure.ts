@@ -28,6 +28,8 @@ const TIMEOUTS: Array<[string, string]> = [[TIMED_OUT_SUFFIX, TIMED_OUT],
   [STOPPED_REPORTING_SUFFIX, 'Its machine stopped reporting while preparing it.']]
 /** Reasons the server writes itself, which name nothing (commands.ts removeMachine and machine.contribute). */
 export const MACHINE_REMOVED = 'Its machine was removed from the Swarm.'
+/** Its machine's computer is signed in to another account now (commands.ts machine.moved, #3122). */
+export const MACHINE_MOVED = 'Its machine is signed in to another account now.'
 export const ABANDONED = 'Abandoned before it started.'
 /** A Team account's host refusing a Codex Product Manager it cannot sign in (cli superTabs/start.ts): it names nothing of the
  *  machine but its lack of the owner's relay, which its project reads (security re-check 3 of #2089). */
@@ -77,8 +79,12 @@ export function coordinatorCopy(state: SuperTabState, group: Conversation, recip
   return chat && coordinator && chat.id !== group.id && !recipients.includes(coordinator) ? { conversationId: chat.id, coordinator } : null
 }
 
-/** Who reads a start's raw reason: whoever made it, its group's coordinator, and its machine's owner. */
+/** Who reads a start's raw reason: whoever made it, its group's coordinator, its machine's owner, and a Buddy chat's owner. */
 export function readsRawReason(actor: Actor, start: AgentStart, group: Conversation | undefined): boolean {
   if (start.actorKey === actorKey(actor)) return true
-  return actor.kind === 'agent' ? !!group?.leadId && group.leadId === actor.agentId : actor.userId === start.machineOwnerId
+  if (actor.kind === 'agent') return !!group?.leadId && group.leadId === actor.agentId
+  if (actor.userId === start.machineOwnerId) return true
+  // A Buddy chat is read only by its owner (buddies.ts openBuddyChat), so its owner reads why their own Buddy did not
+  // start even when an agent made the start for them or the machine belongs to someone else.
+  return !!group && isBuddyChat(group) && group.audience?.people.some(p => p.id === actor.userId) === true
 }

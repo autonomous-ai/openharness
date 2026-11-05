@@ -104,7 +104,23 @@ export async function gridExec(args: readonly string[], opts: GridExecOptions = 
   const ended = await gridCallStarted()
   return await new Promise<GridResult>((resolve) => {
     const command = gridCommand(binary, args)
-    const child = spawn(command.file, command.args, { stdio: ['pipe', 'pipe', 'pipe'], env: gridChildEnv(processEnv) })
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(command.file, command.args, { stdio: ['pipe', 'pipe', 'pipe'], env: gridChildEnv(processEnv) })
+    } catch (error) {
+      // A synchronous spawn failure (Windows' application control answers UNKNOWN, for one) must not
+      // reject this promise: every caller reads the result, and the counter an install waits on would
+      // otherwise never be released.
+      ended()
+      resolve({
+        code: 'GRID_FAILED',
+        exitCode: 1,
+        stdout: '',
+        stderr: '',
+        message: `Could not run \`${binary}\`: ${error instanceof Error ? error.message : String(error)}`,
+      })
+      return
+    }
     let stdout = ''
     let stderr = ''
     let settled = false

@@ -17,17 +17,21 @@ const _id = r'[A-Za-z0-9_-]+';
 final _swarmRoute = RegExp(
   '^/api/super-tabs(?:'
   '|/list|/invitations|/deleted'
-  '|/$_tab/(?:parts|changes|commands|mentions|decisions|leaderboard|sharing'
+  '|/$_tab/(?:parts|changes|commands|mentions|decisions|leaderboard|scorecard|sharing'
   '|routing-policy|groups|groups/$_id|join|join/preview|native'
   '|activity|activity/read|threads|inbox|proposals'
   '|reminders'
+  // New Project's New Repository asks whether an organization can (#3374).
+  '|github/owners/$_id'
   // A voice message's clip, read once before it is sent (#2887; the mic, #2665).
   '|attachments/$_id/voice'
   '|conversations/$_id/(?:messages|catch-up|read|unread|notifications'
   '|threads/$_id/(?:read|follow)'
   '|messages/$_id/attachments/$_id|messages/$_id/reminder)'
-  '|projects/$_id/(?:github|github/approve'
-  '|instructions(?:/revisions(?:/[0-9]+)?)?)'
+  '|projects/$_id/(?:github|github/approve|github/repository'
+  '|instructions(?:/revisions(?:/[0-9]+)?)?'
+  // The project's rules record, read in Project settings (#3393).
+  '|rules)'
   '|route-decisions/$_id|machines/$_id/removal(?:/v2)?)'
   r')(?:\?[A-Za-z0-9_=&%-]+)?$',
 );

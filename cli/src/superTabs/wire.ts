@@ -39,8 +39,10 @@ export async function backend(core: CoreApi, method: string, path: string, body?
   return reply.body.data
 }
 
-/** A read reply in a format this client cannot read comes from a newer server: the person updates Harness (design 5.1). */
+/** Only a newer format proves this client needs an update. A partial reconnect reply is a retryable read failure. */
 export function readable<T>(reply: unknown): T {
-  if (object(reply).format !== READ_FORMAT) throw new SuperTabHostError(UPDATE_REQUIRED, UPDATE_MESSAGE, 426)
+  const format = object(reply).format
+  if (typeof format === 'number' && Number.isSafeInteger(format) && format > READ_FORMAT) throw new SuperTabHostError(UPDATE_REQUIRED, UPDATE_MESSAGE, 426)
+  if (format !== READ_FORMAT) throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'Could not read this Swarm. Try again.', 503)
   return reply as T
 }

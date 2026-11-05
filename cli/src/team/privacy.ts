@@ -327,6 +327,7 @@ export interface PrivacyObserverDeps {
 
 export class TeamPrivacyObserver {
   private last: PrivacyResult | null = null
+  private signedIn: boolean | null = null
   constructor(private readonly deps: PrivacyObserverDeps) {}
 
   /** This daemon runs in the Harness Team account that setup made. */
@@ -339,6 +340,16 @@ export class TeamPrivacyObserver {
     const config = this.inTeamAccount()
     if (config) {
       const now = this.deps.now()
+      const signedIn = this.deps.teamSession()
+      if (signedIn !== this.signedIn) {
+        if (!signedIn) {
+          try {
+            this.deps.writeStatus(config.statusFile, { signIn: { state: 'signed-out', at: now,
+              detail: 'The Team sign-in is no longer available. Run harness team setup --sign-in-again.' } })
+            this.signedIn = signedIn
+          } catch { /* Try the status write again at the next observation; privacy is checked independently. */ }
+        } else this.signedIn = signedIn
+      }
       if (!this.last || now - this.last.checkedAt >= PRIVACY_RECHECK_MS || now < this.last.checkedAt) {
         try {
           this.last = this.deps.check(config)

@@ -25,6 +25,12 @@ KEYS = (
 )
 MANIFEST = "https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/metadata.json"
 USER_AGENT = "Dart/3.13 (dart:io)"
+# curl's exit codes for a connection lost, not an answer: could not connect, partial file, TLS or
+# handshake reset, empty reply, send error, receive error. A reset on one of nine downloads failed
+# 1.3.65's publish after its manifest was already live.
+CONNECTION_DROPPED = frozenset({7, 18, 35, 52, 55, 56})
+DOWNLOAD_TRIES = 3
+RETRY_PAUSE_SECONDS = 2
 
 
 def utc_now():
@@ -77,6 +83,35 @@ def entries_for_version(manifest, version, keys=KEYS):
     return entries
 
 
+class ConnectionDropped(ValueError):
+    """The network dropped the download. Nothing was said about the file, so it is worth another try."""
+
+
+def download(entry, timeout):
+    """The file's size and digest. A timeout is not retried: it would break the deadline this check promises."""
+    digest = hashlib.sha256()
+    size = 0
+    with subprocess.Popen(
+        curl_command(entry["url"], timeout) + ["--max-filesize", str(entry["size"])],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ) as process:
+        try:
+            for chunk in iter(lambda: process.stdout.read(1024 * 1024), b""):
+                size += len(chunk)
+                digest.update(chunk)
+            error = process.stderr.read().decode(errors="replace").strip()
+            code = process.wait()
+            if code in CONNECTION_DROPPED:
+                raise ConnectionDropped(f"download failed: {error}")
+            if code != 0:
+                raise ValueError(f"download failed: {error}")
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+    return size, digest
+
+
 def verify_artifact(item, timeout):
     key, entry = item
     started = time.monotonic()
@@ -85,21 +120,14 @@ def verify_artifact(item, timeout):
     digest = hashlib.sha256()
     size = 0
     try:
-        with subprocess.Popen(
-            curl_command(entry["url"], timeout) + ["--max-filesize", str(entry["size"])],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        ) as process:
+        for attempt in range(1, DOWNLOAD_TRIES + 1):
             try:
-                for chunk in iter(lambda: process.stdout.read(1024 * 1024), b""):
-                    size += len(chunk)
-                    digest.update(chunk)
-                error = process.stderr.read().decode(errors="replace").strip()
-                if process.wait() != 0:
-                    raise ValueError(f"download failed: {error}")
-            finally:
-                if process.poll() is None:
-                    process.kill()
-                    process.wait()
+                size, digest = download(entry, timeout)
+                break
+            except ConnectionDropped:
+                if attempt == DOWNLOAD_TRIES:
+                    raise
+                time.sleep(attempt * RETRY_PAUSE_SECONDS)
         if size != entry["size"]:
             raise ValueError(f"size mismatch: expected {entry['size']}, received {size}")
         if digest.hexdigest() != entry["sha256"]:

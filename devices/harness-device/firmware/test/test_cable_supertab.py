@@ -120,6 +120,8 @@ int main(void) {
     assert(!strcmp(field(wire[0],"swarmBuddy"),"v1"));
     // and swarmThread v1: each Lead's thread fields, a recap naming its thread, and supertab.thread.leave back.
     assert(!strcmp(field(wire[0],"swarmThread"),"v1"));
+    // and swarmNeedsYou v1: a card may carry `personal`, a Swarm that is the reader's own.
+    assert(!strcmp(field(wire[0],"swarmNeedsYou"),"v1"));
     // and no swarmReview: words for a Swarm chat are sent as any harness's are, reviewed only when held (Diego's dial,
     // 2026-10-29), and a daemon that heard it would refuse every word not reviewed.
     assert(!strcmp(field(wire[0],"swarmReview"),"<absent>"));
@@ -204,6 +206,15 @@ int main(void) {
     assert(got_card.side == HT_SIDE_NONE);
     feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"n\",\"side\":1,\"leads\":[]}");
     assert(got_card.side == HT_SIDE_NONE);
+
+    // `personal` is true only for JSON true: absent, false, or any other type is a plain Swarm.
+    assert(!got_card.personal);
+    feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"n\",\"personal\":true,\"leads\":[]}");
+    assert(got_card.personal);
+    feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"n\",\"personal\":false,\"leads\":[]}");
+    assert(!got_card.personal);
+    feed(handle_supertab,"{\"id\":\"s1\",\"name\":\"n\",\"personal\":1,\"leads\":[]}");
+    assert(!got_card.personal);
 
     // supertab.notice and supertab.notice.read reach the ui calls with their fields; the UI decides the beep.
     const unsigned beeps_before=beeps;

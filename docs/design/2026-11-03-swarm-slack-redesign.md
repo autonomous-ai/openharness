@@ -20,7 +20,7 @@ Slack reports that people open its mobile apps 15–20 times a day, for 20–30 
 | Five tabs cut to three, still labelled (label-less tabs hurt accessibility and comprehension) | Four labelled tabs: Home · Buddy · Activity · You | Three labelled tabs: Home · Buddy · Activity. You moves to an avatar |
 | A bar of tiles for unreads and secondary surfaces | Two large cards: While you were away, Threads | One tile bar: While you were away · Threads · Agents |
 | Filters in each tab, as a bottom sheet on Android, not an overflow menu | Home has a Sort and filter sheet | The same sheet, now also holding Mark all read and Refresh |
-| Pull down to open search, swipe sideways to change kind | No search in Swarm. Find lives only in the terminal | A Search button on Home's top bar plus a pull down at its top. Chips or a sideways swipe change the kind |
+| Pull down to open search, swipe sideways to change kind | No search in Swarm. Find lives only in the terminal | A Search button on Home's top bar. Chips or a sideways swipe change the kind. Pulling down on Home refreshes it (D5, updated 2026-11-05) |
 | One feed for threads, mentions, alerts, invitations | What needs you is in 6 places. Invitations sit on Home | Activity opens on All. Invitations head All and Needs you and count on the tab's badge |
 | The header shrinks as you scroll | Fixed header | Built, then dropped with the Search field (D10) |
 | Less-used surfaces move to familiar places | Harness is reachable only through 4 "Open terminal" menu items | An Agents tile, and Agents in Search |
@@ -45,7 +45,7 @@ Paths are relative to `mobile/lib/`.
 | Idea | Arrange Swarm as Slack does: tiles, one-line rows, Search, one Activity feed | Merge Home and Activity into one urgency-sorted inbox | Keep the structure, fix density only |
 | Tabs | Home · Buddy · Activity, You on the avatar | Inbox · Projects · Buddy | Home · Buddy · Activity · You |
 | Strongest point | Fixes all five problems with little to learn | Approve is one tap from opening the app | Lowest risk |
-| Cost | You is one tap further. Two earlier decisions are reversed. Home loses pull-to-refresh | Far from Slack. The list reorders under your finger. The most work | Four tabs stay, Harness stays hidden |
+| Cost | You is one tap further. Two earlier decisions are reversed | Far from Slack. The list reorders under your finger. The most work | Four tabs stay, Harness stays hidden |
 
 **Why not B.** Slack keeps places (Home) apart from work (Activity). Merging them gives a list that grows with every task and keeps reordering itself.
 
@@ -92,20 +92,21 @@ Each decision lists what was chosen, the alternatives, the reasoning, the cost, 
 - **No state dot** (Tony, 2026-11-03): an idle team's grey dot sat on nearly every row and said nothing, so the dot went first for idle teams and then altogether. A tag or decision waiting on the person still makes the name bold and adds `@N`; who works, waits or is down is on the project's page, in Activity and on the Agents tile. Home no longer counts a team per row, and its loading rows draw the name's bar alone.
 - **Phase 2:** the unread rule. Agents post constantly, so almost every row ends up bold. The proposal is that only people's messages, tags of the person and items that need them make a row bold. That has to change together with desktop `_hasUnread`.
 
-### D5. Search from the top bar, plus a pull down to open it
+### D5. Search from the top bar; pull down to refresh Home
 
 - **Alternatives:** a Search tab (old Slack); a magnifier only; the pull only (new Slack); the terminal's Find.
-- **Why:** Slack removed the overlap between "Jump to" and a Search tab. Swarm had no search at all. A visible field is easy to find, and the pull is a shortcut for those who know it. The field folds on scroll, so it costs nothing while browsing.
-- **Cost:** Home loses pull-to-refresh. Swarm already polls, so Refresh moves into the filter sheet (D9).
-- **Changed after review** (Tony, 2026-11-03): the field under the top bar is gone. Search is a magnifier on the top bar, before the avatar, where Sort and filter was; it opens the same Search page. The pull stays.
-- **Built** (`swarm/swarm_home_search.dart`, `swarm/swarm_search_page.dart`):
+- **Why:** Slack removed the overlap between "Jump to" and a Search tab. Swarm had no search at all. A visible Search button makes it easy to find without taking space from Home's list. People expect a pull down on Home to refresh it.
+- **Cost:** Search takes a tap on the top bar; it has no pull shortcut. Refresh is available both by pulling and in Sort and filter (D9).
+- **Changed after review** (Tony, 2026-11-03): the field under the top bar is gone. Search is a magnifier on the top bar, before the avatar, where Sort and filter was; it opens the same Search page.
+- **Updated** (Tony, 2026-11-05, [#3176](https://github.com/autonomous-ai/openharness/pull/3176)): pulling down refreshes Home again. The earlier pull-to-search behavior looked like a broken refresh, so it was removed.
+- **Built** (`swarm/swarm_page.dart`, `swarm/swarm_search_page.dart`):
   - Chips: **Recent · Projects · Chats · Agents**. People are left out: a person has no page of their own in Swarm yet. Agents shows only when the app's computers can list them.
   - Recent lists what moved last, at most 12. While something is typed, the Recent chip reads All and lists every kind.
   - Matching ignores case and accents, as New message's To: does (`swarmSearchFold`). Ranking: the title starts with the text (a leading # is optional), then a word in it does, then the title holds it, then its Swarm or computer does. The prototype said to reuse Find's ranking, but Find ranks machines and agents for the terminal, and the To: field is the matching people already know in Swarm.
   - Projects are those the person reads; a private project someone else owns stays out unless they are on it. Chats are the person's own Buddy chats, never another person's or an archived one.
   - A row opens its project, chat or agent over Search, and back returns to Search as it was left.
   - While the Swarms are read it shows a skeleton, never "nothing". A Swarm that could not be read is said above what the others have.
-  - The pull counts only a drag that began with the list at its top and went past 72pt, on Android (clamping) and iOS (bouncing) alike. A hint says "Pull to search", then "Release to search", with a haptic at the threshold.
+  - Pulling down at the top of Home shows the refresh indicator and reads the Swarms again, on Android and iOS. With no computer answering, it rechecks the computers first; a failed recheck is logged and the Swarms are still read. This uses the same refresh path as Sort and filter, including when Home is pushed over another page, and opens no Search page.
   - The chips scroll sideways on a narrow phone, as Activity's pills do. A chip opened by a swipe of the pages scrolls into sight.
   - A drag on the results puts the keyboard away, a short list included.
 - **Phase 2:** searching message content needs a backend API.
@@ -149,7 +150,7 @@ Each decision lists what was chosen, the alternatives, the reasoning, the cost, 
 - **Why:** the app already has the sheet (`swarm/swarm_home_view_sheet.dart`), and the header drops to two controls, which suits Dee's preference for a minimal UI.
 - **Where:** at the right of the projects' first caption (Projects, or Pinned when a project is pinned), not on the top bar (Tony, 2026-11-03): it sorts and filters the projects, so it sits over them, and the top bar keeps Search and the avatar. A Home pushed over another page has none, as before.
 - **Cost:** Mark all read is one tap further. Its Undo toast stays.
-- **Built:** both close the sheet, then act. Mark all read is greyed when nothing is unread. Refresh does what the pull did (recheck the computers when there are none, then read every Swarm) and says "Refreshing…".
+- **Built:** both close the sheet, then act. Mark all read is greyed when nothing is unread. Refresh does what the pull does (recheck the computers when none answers, then read every Swarm) and says "Refreshing…".
 
 ### D10. The header folds on scroll
 
@@ -174,7 +175,7 @@ The New message button (2026-10-30), the composer (approved 2026-11-01), labelle
 
 1. Direction A.
 2. Drop the You tab and the Threads row on Home: yes.
-3. Pull down to search in place of pull to refresh, with Refresh in the filter sheet: yes.
+3. The initial pull-to-search choice was superseded on 2026-11-05: a pull refreshes Home, Search stays on the top bar, and Refresh stays in the filter sheet (D5).
 4. "@" becomes "Mentions" on the phone only. Desktop does not change.
 5. Built in a worktree from `feat/mobile-ios-android`, with this spec and the prototype in the same commit.
 
@@ -182,9 +183,10 @@ The New message button (2026-10-30), the composer (approved 2026-11-01), labelle
 
 All under `mobile/lib/swarm/`.
 
-- **New:** `swarm_agents.dart`, `swarm_home_tiles.dart`, `swarm_home_search.dart`, `swarm_search_page.dart`, `swarm_project_details.dart`.
+- **New:** `swarm_agents.dart`, `swarm_home_tiles.dart`, `swarm_search_page.dart`, `swarm_project_details.dart`.
 - **Changed:** `swarm_tabs.dart`, `swarm_you_page.dart`, `swarm_page.dart`, `swarm_home_rows.dart`, `swarm_home_top.dart`, `swarm_home_view_sheet.dart`, `swarm_activity.dart`, `swarm_activity_page.dart`, `swarm_computers.dart`, `swarm_project_page.dart`, `swarm_conversation_page.dart`, `swarm_style.dart`, `swarm_threads_page.dart`.
 - **Removed:** `SwarmAwayCard` and `SwarmThreadsRow`, replaced by tiles, and the You tab.
+- **Removed on 2026-11-05:** `swarm_home_search.dart` and its pull-to-search widget; Home uses `RefreshIndicator` instead.
 
 ## 9. Tests
 
@@ -193,7 +195,8 @@ Widget and unit tests under `mobile/test/swarm/`. Run with `cd mobile && flutter
 - **Tabs** (`swarm_tabs_test.dart`, `phone/phone_shell_swarm_home_test.dart`): three labelled tabs, the avatar opening You with back, You going with the tabs when Swarm is turned off, While you were away opening Activity on Needs you, a repeated ask applied again.
 - **Tiles** (`swarm_home_tiles_test.dart`): figures, skeletons and what a screen reader hears; the row's order, sizes and sideways scroll.
 - **Project rows** (`swarm_home_project_row_test.dart`, `swarm_home_test.dart`): one line, bold when new, the Swarm's name with several, no people line.
-- **Search** (`swarm_search_page_test.dart`, `swarm_home_search_test.dart`): the ways in; each kind and what it leaves out; ranking, case and accents; chips, swipes and the chip following; opening a row and coming back; agents; reading and failure; the keyboard inset (the page ends at the keyboard, once) and a drag putting the keyboard away. The pull is tested on clamping and bouncing lists, and a drag begun mid-list opens nothing. Home has no field; the top bar's Search opens the page. The page's field takes none of the app's field outline or fill, focused or not, in light and dark.
+- **Search** (`swarm_search_page_test.dart`): the ways in; each kind and what it leaves out; ranking, case and accents; chips, swipes and the chip following; opening a row and coming back; agents; reading and failure; the keyboard inset (the page ends at the keyboard, once) and a drag putting the keyboard away. Home has no field; the top bar's Search opens the page, while a pull refreshes Home without opening Search. The page's field takes none of the app's field outline or fill, focused or not, in light and dark.
+- **Pull to refresh** (`swarm_home_instant_test.dart`): Android and iOS pulls recheck computers before reading the Swarms when none answers; failed rechecks are logged and the Swarms still read; with computers answering, the pull only reads the Swarms.
 - **Activity** (`swarm_activity_test.dart`, `swarm_activity_page_test.dart`, `swarm_activity_feed_page_test.dart`, `swarm_invitations_in_swarm_test.dart`): All's order, Mentions, Invitations in All and Needs you with their counts, the tab badge counting them and dropping one put off.
 - **Filter sheet** (`swarm_home_view_test.dart`, `swarm_mark_all_test.dart`, `swarm_home_instant_test.dart`): Mark all read and Refresh in the sheet.
 - **Project details** (`swarm_project_details_test.dart`): the header button, every item and its order, Invite for the owner alone, Open terminal and its greyed states, each row's sheet, and the sheet closing with access, sign-out or the project.

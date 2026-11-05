@@ -58,7 +58,6 @@ void main() {
     int revision = 3,
     Object? Function(Map<String, dynamic>? body)? commands,
     String role = 'owner',
-    int? saved,
   }) async {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/$tab/parts'] = (_) {
@@ -70,7 +69,7 @@ void main() {
       return load;
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
-    fake.routes[saved == null ? path : '$path/revisions/$saved'] = route;
+    fake.routes[path] = route;
     if (commands != null) {
       fake.routes['/api/super-tabs/$tab/commands'] = commands;
     }
@@ -83,13 +82,7 @@ void main() {
     await reader.refresh();
     await tester.pumpWidget(
       MaterialApp(
-        home: saved == null
-            ? SwarmInstructionsPage(reader: reader, projectId: project)
-            : SwarmInstructionsRevisionPage(
-                reader: reader,
-                projectId: project,
-                revision: saved,
-              ),
+        home: SwarmInstructionsPage(reader: reader, projectId: project),
       ),
     );
     await tester.pumpAndSettle();
@@ -161,51 +154,6 @@ void main() {
     expect(find.textContaining('Text of revision 4'), findsOneWidget);
     expect(find.textContaining('revision 4'), findsWidgets);
     expect(reads(fake), 2);
-  });
-
-  // Ken, 11-05 (#3021): an instructions save's chat line opens the revision
-  // it saved, to read the change whole.
-  group('one revision', () {
-    testWidgets('reads that revision alone and shows its text read only', (
-      tester,
-    ) async {
-      final (:fake, reader: _) = await open(
-        tester,
-        saved: 7,
-        route: (_) => {
-          'projectId': project,
-          'revision': 7,
-          'hash': 'h7',
-          'text': '## Routing\n- Reviews run on Opus.',
-          'summary': 'Reviews run on Opus',
-          'writtenBy': {'kind': 'person', 'id': me},
-          'askedBy': me,
-          'at': '2026-10-29T01:00:00.000Z',
-        },
-      );
-      expect(fake.paths.where((p) => p == '$path/revisions/7'), hasLength(1));
-      expect(reads(fake), 0);
-      expect(find.textContaining('revision 7'), findsOneWidget);
-      expect(find.textContaining('Reviews run on Opus.'), findsWidgets);
-      expect(find.textContaining('ken · '), findsOneWidget);
-      expect(find.text('Delete'), findsNothing);
-    });
-
-    testWidgets('one no longer kept says so', (tester) async {
-      await open(
-        tester,
-        saved: 2,
-        route: (_) => throw const SuperTabFailure(
-          'NOT_FOUND',
-          'This revision is unavailable.',
-          statusCode: 404,
-        ),
-      );
-      expect(
-        find.text('Revision 2 is no longer kept: a project keeps its last 50.'),
-        findsOneWidget,
-      );
-    });
   });
 
   testWidgets('a backend without instructions says so', (tester) async {

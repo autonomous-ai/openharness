@@ -667,6 +667,12 @@ class ConversationServer {
 
   /// Every instructions read, by path.
   final instructionReads = <String>[];
+
+  /// Each project's rules record as GET .../projects/:id/rules answers it (backend store.ts `projectRules`), by
+  /// project id; a project missing here reads as unavailable. False [rulesRoute] answers as a backend from before it.
+  final projectRules = <String, Map<String, dynamic>>{};
+  bool rulesRoute = true;
+  final rulesReads = <String>[];
   final state = <String, dynamic>{
     'version': 1,
     'id': 'tab',
@@ -1746,6 +1752,15 @@ class ConversationServer {
               : (key(siblings[i]) + key(next)) / 2;
         }
         revision++;
+      } else if (command['type'] == 'work.priority') {
+        // As backend taskPriority.ts sets it: the task's one field.
+        (state['conversations'] as List)
+                .cast<Map<String, dynamic>>()
+                .firstWhere(
+                  (g) => g['id'] == command['conversationId'],
+                )['priority'] =
+            command['priority'];
+        revision++;
       } else if (command['type'] == 'conversation.archive') {
         (state['conversations'] as List)
                 .cast<Map<String, dynamic>>()
@@ -1854,6 +1869,27 @@ class ConversationServer {
         uri.pathSegments[3] == 'projects' &&
         uri.pathSegments[5] == 'instructions') {
       return _readInstructions(path, uri);
+    }
+    if (uri.pathSegments.length == 6 &&
+        uri.pathSegments[3] == 'projects' &&
+        uri.pathSegments[5] == 'rules') {
+      rulesReads.add(path);
+      if (!rulesRoute) {
+        throw const SuperTabFailure(
+          'BACKEND_UNAVAILABLE',
+          'Not Found',
+          statusCode: 404,
+        );
+      }
+      final rules = projectRules[uri.pathSegments[4]];
+      if (rules == null) {
+        throw const SuperTabFailure(
+          'NOT_FOUND',
+          'This project is unavailable.',
+          statusCode: 404,
+        );
+      }
+      return jsonDecode(jsonEncode(rules)) as Map<String, dynamic>;
     }
     if (uri.pathSegments.length > 2 &&
         uri.pathSegments[uri.pathSegments.length - 2] == 'attachments') {

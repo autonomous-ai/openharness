@@ -1,16 +1,21 @@
 import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import http2 from 'node:http2'
 import type { AddressInfo } from 'node:net'
 import { afterAll, describe, expect, it } from 'vitest'
 import { apnsSender, http2Transport, type ApnsAnswer, type ApnsRequest } from './apns.js'
 import type { PushDevice } from './devices.js'
-import type { PhoneNotice } from './sender.js'
+import { swarmNoticeId, type PhoneNotice } from './sender.js'
 
 const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
-const keys = { keyId: 'ABC123DEFG', teamId: 'TEAM123456', privateKey, topic: 'ai.autonomous.harness.ios' }
+const sandboxKey = generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey
+// Apple's keys are per environment: the production key is refused on the sandbox host and the other way round (Ken, 11-05).
+const keys = { teamId: 'TEAM123456', topic: 'ai.autonomous.harness.ios', production: { keyId: 'ABC123DEFG', privateKey },
+  sandbox: { keyId: '5UTFPCN7LP', privateKey: sandboxKey } }
+const productionOnly = { ...keys, sandbox: null }
 const device: PushDevice = { id: 'd1', userId: 'u1', platform: 'ios', token: 'ab'.repeat(32), sandbox: false }
 const notice: PhoneNotice = { personId: 'u1', key: 'reply:tab:row', title: 'Mia replied in a thread', subtitle: 'openharness',
-  body: 'Open Harness to read it.', link: 'swarm:tab/conv/message/m/thread/root' }
+  body: 'Open Harness to read it.', link: 'swarm:tab/conv/message/m/thread/root', slot: 'thread:tab:conv:root' }
 const NOW = Date.UTC(2026, 10, 5, 9)
 
 /** A transport that answers each request in turn and remembers what it was asked. */
@@ -32,10 +37,11 @@ describe('APNs sender (task #2905)', () => {
     expect(await apnsSender(keys, { transport, now: () => NOW }).send(device, notice)).toEqual({ outcome: 'sent' })
     const [request] = asked
     expect(request).toMatchObject({ sandbox: false, path: `/3/device/${device.token}` })
-    expect(request!.headers).toMatchObject({ 'apns-topic': 'ai.autonomous.harness.ios', 'apns-push-type': 'alert', 'apns-priority': '10' })
+    expect(request!.headers).toMatchObject({ 'apns-topic': 'ai.autonomous.harness.ios', 'apns-push-type': 'alert', 'apns-priority': '10',
+      'apns-collapse-id': String(swarmNoticeId('thread:tab:conv:root')) })
     expect(JSON.parse(request!.body)).toEqual({
       aps: { alert: { title: notice.title, subtitle: notice.subtitle, body: notice.body }, sound: 'default', 'thread-id': 'swarm-needs-you', category: 'swarm-needs-you' },
-      key: notice.key, link: notice.link,
+      key: notice.key, link: notice.link, slot: notice.slot,
     })
     const jwt = jwtOf(request!)
     expect(part(jwt, 0)).toEqual({ alg: 'ES256', kid: 'ABC123DEFG' })
@@ -64,10 +70,26 @@ describe('APNs sender (task #2905)', () => {
     }
   })
 
-  it('tries a development build\'s token on the sandbox host once, and says so when it is taken there', async () => {
+  it('tries a development build\'s token on the sandbox host once, signed with the sandbox key, and says so when it is taken there', async () => {
     const { asked, transport } = scripted({ status: 400, reason: 'BadDeviceToken' }, { status: 200, reason: null })
     expect(await apnsSender(keys, { transport }).send(device, notice)).toEqual({ outcome: 'sandbox' })
     expect(asked.map(r => r.sandbox)).toEqual([false, true])
+    expect(part(jwtOf(asked[0]!), 0).kid).toBe('ABC123DEFG')
+    expect(part(jwtOf(asked[1]!), 0).kid).toBe('5UTFPCN7LP')
+    const [head, claims, signature] = jwtOf(asked[1]!).split('.')
+    expect(verify('sha256', Buffer.from(`${head}.${claims}`), { key: createPublicKey(sandboxKey), dsaEncoding: 'ieee-p1363' }, Buffer.from(signature!, 'base64url'))).toBe(true)
+  })
+
+  it('without a sandbox key, never sends to the sandbox host: a production BadDeviceToken is skipped, and the token kept', async () => {
+    const { asked, transport } = scripted({ status: 400, reason: 'BadDeviceToken' })
+    expect(await apnsSender(productionOnly, { transport }).send(device, notice)).toEqual({ outcome: 'unconfigured', reason: 'no APNs sandbox key' })
+    expect(asked.map(r => r.sandbox)).toEqual([false])
+  })
+
+  it('without a sandbox key, sends nothing for a token known to be a sandbox one', async () => {
+    const { asked, transport } = scripted()
+    expect(await apnsSender(productionOnly, { transport }).send({ ...device, sandbox: true }, notice)).toEqual({ outcome: 'unconfigured', reason: 'no APNs sandbox key' })
+    expect(asked).toEqual([])
   })
 
   it('calls a token neither host takes gone', async () => {
@@ -75,10 +97,11 @@ describe('APNs sender (task #2905)', () => {
     expect(await apnsSender(keys, { transport }).send(device, notice)).toEqual({ outcome: 'gone', reason: 'BadDeviceToken' })
   })
 
-  it('sends a sandbox token to the sandbox host alone', async () => {
+  it('sends a sandbox token to the sandbox host alone, signed with the sandbox key', async () => {
     const { asked, transport } = scripted({ status: 200, reason: null })
     expect(await apnsSender(keys, { transport }).send({ ...device, sandbox: true }, notice)).toEqual({ outcome: 'sent' })
     expect(asked.map(r => r.sandbox)).toEqual([true])
+    expect(part(jwtOf(asked[0]!), 0)).toEqual({ alg: 'ES256', kid: '5UTFPCN7LP' })
   })
 
   it('fails on Apple\'s error, a broken connection, or no answer in time', async () => {
@@ -88,6 +111,33 @@ describe('APNs sender (task #2905)', () => {
       .toEqual({ outcome: 'failed', reason: 'ECONNRESET' })
     expect(await apnsSender(keys, { transport: scripted('hang').transport, timeoutMs: 20 }).send(device, notice))
       .toEqual({ outcome: 'failed', reason: 'timeout' })
+  })
+})
+
+describe('APNs: one notification per slot, and quiet repeats (task #3248)', () => {
+  it('collapses on the app\'s own id for the slot, so the app\'s notice and the push are one notification', () => {
+    // mobile/test/notify/local_system_notices_test.dart pins the same ids.
+    expect(swarmNoticeId('mention:m1')).toBe(1161357565)
+    expect(swarmNoticeId('decision:d1')).toBe(15921470)
+    expect(swarmNoticeId('work:s1:c1:a1:needs_human')).toBe(701122187)
+    expect(swarmNoticeId('mention:é✓')).toBe(1555091707)
+  })
+
+  it('sends the body the phone end to end replays on a simulator (mobile/integration_test/push_e2e)', async () => {
+    const replay = JSON.parse(readFileSync(new URL('../../../mobile/integration_test/push_e2e/reply_push.apns', import.meta.url), 'utf8'))
+    const { asked, transport } = scripted({ status: 200, reason: null })
+    await apnsSender(keys, { transport, now: () => NOW }).send(device, { personId: 'u1', ...replay.aps.alert, key: replay.key,
+      link: replay.link, slot: replay.slot })
+    expect(JSON.parse(asked[0]!.body)).toEqual(replay)
+  })
+
+  it('sends a quiet push with no sound and passive, so it only replaces what its slot showed', async () => {
+    const { asked, transport } = scripted({ status: 200, reason: null })
+    await apnsSender(keys, { transport, now: () => NOW }).send(device, { ...notice, quiet: true })
+    const body = JSON.parse(asked[0]!.body)
+    expect(body.aps).toEqual({ alert: { title: notice.title, subtitle: notice.subtitle, body: notice.body }, 'interruption-level': 'passive',
+      'thread-id': 'swarm-needs-you', category: 'swarm-needs-you' })
+    expect(asked[0]!.headers['apns-collapse-id']).toBe(String(swarmNoticeId(notice.slot)))
   })
 })
 

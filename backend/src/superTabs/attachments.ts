@@ -12,7 +12,12 @@ import type { VoiceFacts } from './voiceMessages.js'
  *  open the public address; only a file with neither comes from a server from before links. None of the three is stored. */
 export interface Attachment { id: string; name: string; mime: string; size: number; url: string; link?: string; expiresAt?: number; unlinked?: true
   /** A voice message's length, waveform and whether it has words (voiceMessages.ts); its words are the message's text. */
-  voice?: VoiceFacts }
+  voice?: VoiceFacts
+  /** A picture's size as it is shown, and the small WebP the server made of it at upload (thumbnails.ts): a chat draws that and
+   *  the viewer opens the original. `thumb.url` is its public address beside the original's; a read adds `link` and
+   *  `expiresAt` (or `unlinked`) exactly as for the file, from the same read (fileLinks.ts). Absent on a file without them. */
+  width?: number; height?: number
+  thumb?: { url: string; width: number; height: number; size: number; link?: string; expiresAt?: number; unlinked?: true } }
 
 /** One chat file, whichever way it comes. Every client checks the same number before it sends (attachments.limits.test.ts). */
 export const MAX_ATTACHMENT_BYTES = 256 * 1024 * 1024
@@ -69,6 +74,8 @@ export interface DirectUploads {
   stored(objectKey: string): Promise<{ size: number } | null>
   /** Its first `bytes` bytes. */
   head(objectKey: string, bytes: number): Promise<Buffer>
+  /** The whole object, for a picture to be thumbnailed once its upload is complete; `size` is what `stored` answered. */
+  read(objectKey: string): Promise<Buffer>
   /** Removes it; an object already gone counts as removed. */
   delete(objectKey: string): Promise<void>
 }
@@ -263,6 +270,10 @@ export class GcsAttachmentStore implements AttachmentStore, DirectUploads {
     const [content] = await (await this.files()).file(objectKey).download({ start: 0, end: bytes - 1 })
     return content
   }
+  async read(objectKey: string) {
+    const [content] = await (await this.files()).file(objectKey).download()
+    return content
+  }
   async delete(objectKey: string) {
     await (await this.files()).file(objectKey).delete({ ignoreNotFound: true })
   }
@@ -343,6 +354,7 @@ export class MemoryAttachmentStore implements AttachmentStore, DirectUploads {
   }
   async stored(objectKey: string) { const object = this.objects.get(objectKey); return object ? { size: object.bytes.byteLength } : null }
   async head(objectKey: string, bytes: number) { return (this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0)).subarray(0, bytes) }
+  async read(objectKey: string) { return this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0) }
   async delete(objectKey: string) { this.objects.delete(objectKey) }
 }
 

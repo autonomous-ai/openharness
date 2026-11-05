@@ -16,6 +16,8 @@ const _sayMacBehindACheck = {
   'lib/shortcuts/shortcut_recorder.dart',
   'lib/state/harness_monitor.dart',
   'lib/super_tabs/team_account_setup.dart',
+  // Platform copy is covered by swarm_join_account_choice_test.dart.
+  'lib/super_tabs/join_account_choice.dart',
   'lib/super_tabs/voice_row.dart',
   'lib/autonomous_device/autonomous_device_cli.dart',
   'lib/devices/wifi_robots.dart',

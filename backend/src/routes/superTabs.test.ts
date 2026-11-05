@@ -12,6 +12,7 @@ const fakes = vi.hoisted(() => {
     pub: {
       set: vi.fn(async (key: string, value: string) => { redis.set(key, value); return 'OK' }),
       get: vi.fn(async (key: string) => redis.get(key) ?? null),
+      mget: vi.fn(async (...keys: string[]) => keys.map((key) => redis.get(key) ?? null)),
       multi: vi.fn(() => {
         const ops: Array<() => unknown> = []
         const chain = {
@@ -32,6 +33,8 @@ const fakes = vi.hoisted(() => {
       machine: {
         findMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => where.computerId === 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
           ? [{ machineId: 'team-mac', userId: 'owner', computerId: where.computerId, billingStatus: 'not_required', sessionKind: 'team' }] : []),
+        // Other accounts' Team machines on the redeeming computer (superTabs/computerMoves.ts teamCleanupPending): none here.
+        aggregateRaw: vi.fn(async () => []),
       },
     },
     user: { id: 'owner', email: 'owner@example.com', role: 'user', autonomousEnv: 'prod' },

@@ -185,6 +185,107 @@ void main() {
       }
     }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
+    // Task #3256: after a switch the Buddy guard held, the bar offers Start
+    // again (Scholes approved the mockup, 11-05).
+    // The UI checklist's states (review of #3171): the line at 100% and 200%
+    // text, while paused (Start again disabled), and the Start bar a start
+    // refused after the removal leaves, on the Buddy's machine and engine.
+    for (final (state, scale) in [
+      ('', 1.0),
+      ('-200', 2.0),
+      ('-paused', 1.0),
+      ('-refused', 1.0),
+      ('-machine-paused', 1.0),
+      ('-kept', 1.0),
+    ]) {
+      testWidgets(
+        'Buddy Start again$state after a held switch in ${brightness.name}',
+        (tester) async {
+          if (shots == null) return;
+          final previous = grid.AppTheme.brightness.value;
+          grid.AppTheme.brightness.value = brightness;
+          addTearDown(() => grid.AppTheme.brightness.value = previous);
+          tester.view.devicePixelRatio = 2;
+          tester.view.physicalSize = const Size(2400, 1400);
+          addTearDown(tester.view.reset);
+          final server = sharedModels();
+          if (state == '-paused') server.state['paused'] = true;
+          Map ownMac() => (server.state['machines'] as List)
+              .cast<Map>()
+              .firstWhere((m) => m['machineId'] == 'ken-mac');
+          if (state == '-machine-paused') ownMac()['paused'] = true;
+          if (state == '-refused' || state == '-kept') {
+            (server.state['agents'] as List).cast<Map>().firstWhere(
+              (a) => a['id'] == 'wren',
+            )['configuration'] = {
+              'engine': 'codex',
+              'model': 'default',
+            };
+            server.unknownCommand = (command) =>
+                command['type'] == 'buddy.create';
+          }
+          server.append(
+            "Couldn't switch your Buddy: Start your Buddy again to switch its "
+            'model. It is still on your subscription.',
+            conversationId: 'swarm-buddy-peer',
+          );
+          server.messages.last
+            ..['author'] = {'kind': 'agent', 'id': 'wren', 'name': 'Wren'}
+            ..['source'] = {'kind': 'system'};
+          final c = server.controller(account: 'peer');
+          await c.refresh();
+          await c.select('swarm-buddy-peer');
+          await tester.pumpWidget(
+            MaterialApp(
+              debugShowCheckedModeBanner: false,
+              theme: grid.buildAppTheme(brightness: brightness),
+              builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(context)
+                    .copyWith(textScaler: TextScaler.linear(scale)),
+                child: child!,
+              ),
+              home: Scaffold(
+                body: SuperTabView(
+                  controller: c,
+                  onInvite: () {},
+                  onAddAgent: (_) {},
+                  onOpenTerminal: (_) {},
+                  machineName: (_) => 'Team Mac',
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            find.byKey(const ValueKey('super-buddy-start-again')),
+            findsOneWidget,
+          );
+          if (state == '-refused' || state == '-kept') {
+            await tester.tap(find.widgetWithText(TextButton, 'Start again'));
+            await tester.pumpAndSettle();
+            if (state == '-kept') {
+              ownMac()['paused'] = true;
+              await c.refresh();
+              await tester.pumpAndSettle();
+            }
+            expect(
+              find.byKey(const ValueKey('super-buddy-start')),
+              findsOneWidget,
+            );
+          }
+          await captureWindow(
+            tester,
+            shots,
+            'buddy-start-again$state-${brightness.name}',
+          );
+          await tester.pumpWidget(const SizedBox());
+          await c.flush();
+          c.dispose();
+        },
+        variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+      );
+    }
+
     testWidgets('Buddies in ${brightness.name}', (tester) async {
       if (shots == null) return;
       final previous = grid.AppTheme.brightness.value;

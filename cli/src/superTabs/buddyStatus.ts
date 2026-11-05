@@ -7,6 +7,7 @@
  */
 import { PULL_REQUESTS_MAX, type PullRequestsResult } from '../lib/pullRequestsStatus.js'
 import { validPullRequestUrl } from '../lib/sessionWorkWire.js'
+import { effectivePriority } from './taskPriority.js'
 
 type Json = Record<string, unknown>
 const object = (value: unknown): Json => value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {}
@@ -147,7 +148,8 @@ async function taskRows(groups: Json[], state: Json, deps: BuddyStatusDeps, acti
     const assignment = object(group.assignment), status = typeof assignment.status === 'string' ? assignment.status : 'open'
     return {
       conversationId: group.id, number: group.number ?? null, title: group.title, ...(group.archived === true ? { archived: true } : {}),
-      ...(group.reviewOf ? { reviewOf: group.reviewOf } : {}),
+      // A step carries no priority of its own (#3117).
+      ...(group.reviewOf ? { reviewOf: group.reviewOf } : { priority: effectivePriority(group) }),
       status, ...(text(assignment.result, 500) ? { note: text(assignment.result, 500) } : {}),
       owns: Array.isArray(object(group.task).owns) ? (object(group.task).owns as unknown[]).filter(o => typeof o === 'string').slice(0, 40) : [],
       agents: (Array.isArray(group.agentIds) ? group.agentIds : []).flatMap(id => {

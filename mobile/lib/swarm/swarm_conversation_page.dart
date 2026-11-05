@@ -50,7 +50,6 @@ import 'swarm_link_previews.dart';
 import 'swarm_message_edit.dart';
 import 'swarm_message_link.dart';
 import 'swarm_message_receipt.dart';
-import 'swarm_instructions_page.dart' show openSwarmInstructionsRevision;
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_paste.dart';
@@ -1865,14 +1864,22 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       readerId: c.reader.accountId,
       react: c.canPost,
       link: _linkTo(c, id),
-      onEdit: mine
+      onEdit: mine && !_isVoice(message)
           ? () => unawaited(_edit(shown, (m, text) => t.editMessage(m, text)))
           : null,
-      onDelete: mine ? () => unawaited(_delete(shown, t.deleteMessage)) : null,
+      onDelete: c.mayDelete(message)
+          ? () => unawaited(_delete(shown, t.deleteMessage))
+          : null,
     );
     if (emoji == null || !mounted) return;
     if (shown() case final now?) await t.react(now, emoji);
   }
+
+  /// Whether [message] is a voice message: its text is its words, never
+  /// opened to edit, as they are never shown (anh Dee, 2026-11-04). Delete
+  /// stays.
+  static bool _isVoice(SuperTabMessage message) =>
+      message.attachments.any((file) => file.voice != null);
 
   /// Edit message on the message [shown] finds: its text in a sheet, and the
   /// new text through [edit]. A refusal says why at the foot; the old text
@@ -1932,8 +1939,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       readerId: c.reader.accountId,
       react: c.canPost,
       link: link ? _linkTo(c, id) : null,
-      onEdit: mine ? () => unawaited(_edit(shown, c.editMessage)) : null,
-      onDelete: mine ? () => unawaited(_delete(shown, c.deleteMessage)) : null,
+      onEdit: mine && !_isVoice(message)
+          ? () => unawaited(_edit(shown, c.editMessage))
+          : null,
+      onDelete: link && c.mayDelete(message)
+          ? () => unawaited(_delete(shown, c.deleteMessage))
+          : null,
     );
     if (emoji == null || !mounted) return;
     if (shown() case final now?) await c.react(now, emoji);
@@ -2267,12 +2278,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               readerId: c.reader.accountId,
               references: references,
               onOpenConversation: (id) => _openNumberedConversation(c, id),
-              onOpenInstructions: (saved) => openSwarmInstructionsRevision(
-                context,
-                reader: c.reader,
-                projectId: saved.projectId,
-                revision: saved.revision,
-              ),
               grouped: grouped,
               lit: lit,
               followed: followed,
@@ -3460,7 +3465,7 @@ class _Pending extends StatelessWidget {
   /// nothing until the post is read back with their links.
   final List<SwarmOutgoingFile> files;
 
-  /// What makes it a voice message, its one file the clip: drawn as its
+  /// What makes it a voice message, its final file the clip: drawn as its
   /// bubble, which plays once the post is read back.
   final SuperTabVoice? voice;
 
@@ -3508,20 +3513,19 @@ class _Pending extends StatelessWidget {
                   ),
                 ),
               ),
-          if (voice case final voice? when files.length == 1)
-            SwarmVoiceBubble(
-              file: SuperTabAttachment.fromJson({
-                'id': '',
-                'name': files.single.name,
-                'mime': swarmMimeForName(files.single.name),
-                'size': files.single.size,
-                'url': '',
-              }),
-              voice: voice,
-              words: '',
-            )
-          else
-            for (final file in files)
+          for (final (index, file) in files.indexed)
+            if (voice case final voice? when index == files.length - 1)
+              SwarmVoiceBubble(
+                file: SuperTabAttachment.fromJson({
+                  'id': '',
+                  'name': file.name,
+                  'mime': swarmMimeForName(file.name),
+                  'size': file.size,
+                  'url': '',
+                }),
+                voice: voice,
+              )
+            else
               SwarmFileChip(
                 file: SuperTabAttachment.fromJson({
                   'id': '',

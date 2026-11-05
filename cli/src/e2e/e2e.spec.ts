@@ -193,7 +193,7 @@ describe('matrix entry (dry run)', () => {
 })
 
 describe('scenario (what a person does, on each side of the switch)', () => {
-  it('four plain requests on each side — read, write, edit, then MCP — with nothing shared', () => {
+  it('four requests on each side — read, write, edit, then MCP — with nothing shared', () => {
     expect(LEGS).toEqual(['subscription', 'grid'])
     // The own account calls the workspace's MCP server; the grid, the harness's web search.
     expect(SCENARIO.subscription.map((c) => c.id)).toEqual(['read', 'write', 'edit', 'mcp'])
@@ -207,16 +207,26 @@ describe('scenario (what a person does, on each side of the switch)', () => {
     expect(plannedLegs().flatMap((l) => l.checks).every((c) => c.status === 'not-run')).toBe(true)
   })
 
-  it('every prompt is a plain request, and never contains its own proof', () => {
-    for (const c of SMOKE_CHECKS) {
-      expect(c.prompt).not.toMatch(/reply with exactly|<result>|RECALL_|TOOL_|MCP_/i)
-      if (c.logPattern) expect(c.prompt).not.toContain(c.logPattern) // "add 40 2" is asked; "= 42" is only the log's
-      expect(!!c.log || !!c.answerFromFile || !!c.file || !!c.sessionTool).toBe(true) // proven by the machine, never by the reply
-      // The result is what is tested, not the route: no request tells the engine which tool to use.
-      expect(c.prompt).not.toMatch(/\b(Bash|Read|Write|Edit) tool\b|apply_patch|in the shell/)
+  it('names each engine its own tool and the exact path, and never its own proof', () => {
+    for (const engine of ['codex', 'claude'] as const) {
+      const scenario = scenarioFor(engine)
+      for (const c of [...scenario.subscription, ...scenario.grid]) {
+        expect(c.prompt).not.toMatch(/reply with exactly|<result>|\bRECALL_|\bTOOL_|\bMCP_(?!_)/i)
+        if (c.logPattern) expect(c.prompt).not.toContain(c.logPattern) // "a=30 b=12" is asked; "= 42" is only the log's
+        expect(!!c.log || !!c.answerFromFile || !!c.file || !!c.sessionTool).toBe(true) // proven by the machine, never by the reply
+        const path = c.answerFromFile ?? c.file?.path
+        if (path) expect(c.prompt).toContain(path)
+        if (engine === 'codex' && ['read', 'write', 'edit'].includes(c.id)) expect(c.prompt).toContain('exec_command')
+      }
     }
-    // And every engine gets the same words.
-    expect(scenarioFor('codex')).toEqual(scenarioFor('claude'))
+    const claude = scenarioFor('claude')
+    for (const c of [...claude.subscription, ...claude.grid]) {
+      if (c.id === 'read') expect(c.prompt).toContain('Read tool')
+      if (c.id === 'write') expect(c.prompt).toContain('Write tool')
+      if (c.id === 'edit') expect(c.prompt).toContain('Edit tool')
+    }
+    // The engine's own tool name is what differs; a step is still proven only by its result.
+    expect(scenarioFor('codex')).not.toEqual(scenarioFor('claude'))
   })
 
   it('firstStuck names the first leg/step that did not pass', () => {
@@ -280,20 +290,20 @@ function fakeAgent(opts: { lie?: CheckId[]; empty?: boolean } = {}) {
   const lie = new Set(opts.lie ?? [])
   const reply = (p: string): string | null => {
     let m: RegExpMatchArray | null
-    if ((m = p.match(/Read (notes\/info-\d\.txt)/))) return lie.has('read') ? 'It says hello.' : `It says: ${files[m[1]].trim()}`
-    if ((m = p.match(/Search the web .*\((ref-[0-9a-z]{6})\)/))) {
+    if ((m = p.match(/Read tool on (notes\/info-\d\.txt)/))) return lie.has('read') ? 'It says hello.' : `It says: ${files[m[1]].trim()}`
+    if ((m = p.match(/mcp__harness__web_search tool .*\((ref-[0-9a-z]{6})\)/))) {
       if (!lie.has('web')) searched[m[1]] = opts.empty ? 'No results.' : 'Node.js 24.11.0 — https://nodejs.org/en/download'
       return 'The latest stable Node.js is 24.11.0.'
     }
-    if ((m = p.match(/Create the file (\S+) with this text: (.*) \(ref-/))) {
+    if ((m = p.match(/Write tool to create (out\/hello-\d\.txt) .*text: (.*) \(ref-/))) {
       if (!lie.has('write')) files[m[1]] = `${m[2]}\n`
       return 'Done.'
     }
-    if ((m = p.match(/In (\S+), change pending to done/))) {
+    if ((m = p.match(/Edit tool on (notes\/todo-\d\.txt) .*change pending to done/))) {
       if (!lie.has('edit')) files[m[1]] = files[m[1]].replace('pending', 'done')
       return 'Updated.'
     }
-    if ((m = p.match(/e2e_calc to add (\d+) and (\d+)/))) {
+    if ((m = p.match(/e2e_calc .*add tool with a=(\d+) and b=(\d+)/))) {
       if (!lie.has('mcp')) logs.lines.mcp.push(`t add ${m[1]} ${m[2]} = ${+m[1] + +m[2]}`)
       return `${+m[1] + +m[2]}`
     }

@@ -242,6 +242,22 @@ describe('privacy observer', () => {
     return { o, check, writeStatus, step: (ms: number) => { now += ms } }
   }
 
+  it('reports when the Team daemon loses its sign-in instead of retaining historical success', () => {
+    let signedIn = true
+    const writeStatus = vi.fn()
+    const o = new TeamPrivacyObserver({ config: () => teamConfig, user: () => 'harnessteam',
+      teamSession: () => signedIn, check: () => ({ passed: true, checkedAt: 7 }), writeStatus, now: () => 7 })
+    o.observe()
+    signedIn = false
+    o.observe()
+    expect(writeStatus).toHaveBeenCalledWith(teamConfig.statusFile, {
+      signIn: { state: 'signed-out', at: 7, detail: 'The Team sign-in is no longer available. Run harness team setup --sign-in-again.' },
+    })
+    const calls = writeStatus.mock.calls.length
+    o.observe()
+    expect(writeStatus).toHaveBeenCalledTimes(calls)
+  })
+
   it('checks in the team account, at most every five minutes, and reports it for the owner', () => {
     const f = observer()
     expect(f.o.observe()).toEqual({ mode: 'account', passed: true, checkedAt: 1_000 })
@@ -280,7 +296,8 @@ describe('privacy observer', () => {
     const o = new TeamPrivacyObserver({ config: () => ({ ...teamConfig, statusFile: file }), user: () => 'harnessteam', teamSession: () => false,
       check: () => ({ passed: true, checkedAt: 7 }), writeStatus: writeTeamStatus, now: () => 7 })
     o.observe()
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ version: 1, privacy: { passed: true, checkedAt: 7 } })
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ version: 1, privacy: { passed: true, checkedAt: 7 },
+      signIn: { state: 'signed-out', at: 7, detail: 'The Team sign-in is no longer available. Run harness team setup --sign-in-again.' } })
   })
 })
 

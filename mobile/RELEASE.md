@@ -235,14 +235,18 @@ terminal,tmux,ssh,claude,codex,cursor,coding,agent,developer,remote,shell,devops
 
 ## App Privacy
 
-Answer these from what the code actually does, not from habit. The app has **no third-party SDK**:
-analytics go to Autonomous's own `event_tracking` endpoint (`lib/analytics/`), and crash records are
-written to a local `errors.log` and never leave the device (`lib/core/crash_log.dart`).
+Answer these from what the code actually does, not from habit. The app has **one third-party SDK,
+on Android only**: Firebase Cloud Messaging (`firebase-messaging`, no Analytics), which is how a push
+reaches an Android app that is not running (`android/app/src/main/kotlin/ai/autonomous/harness/android/PushService.kt`).
+iOS pushes go through Apple's own APNs, with no SDK. Analytics go to Autonomous's own
+`event_tracking` endpoint (`lib/analytics/`), and crash records are written to a local `errors.log`
+and never leave the device (`lib/core/crash_log.dart`).
 
 | Data type | Collected | Linked to the user | Purpose |
 | --- | --- | --- | --- |
 | Contact Info ▸ Email Address | Yes | Yes | App Functionality, Analytics |
 | Identifiers ▸ User ID | Yes | Yes | App Functionality, Analytics |
+| Identifiers ▸ Device ID | Yes | Yes | App Functionality: the push token, so the backend can notify this phone (`docs/design/2026-11-05-phone-push.md`) |
 | Usage Data ▸ Product Interaction | Yes | Yes | Analytics |
 | Diagnostics | No | — | crash log stays on device |
 
@@ -344,8 +348,9 @@ team's password manager.**
    - *Ads*: no. *Content rating*: fill the questionnaire (a utility, no user-generated content shown
      to others). *Target audience*: 18+.
    - *Data safety*: the [App Privacy](#app-privacy) table above, restated — email address and user ID
-     (app functionality, analytics), app interactions (analytics); all encrypted in transit; no data
-     shared with third parties; crash logs stay on the device.
+     (app functionality, analytics), app interactions (analytics), device or other IDs (the push
+     token: app functionality); all encrypted in transit; no data shared with third parties (FCM
+     carries the push as a service provider); crash logs stay on the device.
      ⚠️ **Plus Audio ▸ Voice or sound recordings (app functionality)**, which that table leaves out:
      voice input uploads the recording to the backend's `/api/voice/stt` to be transcribed. Declare it
      *processed ephemerally* only if the backend keeps nothing — TODO(BE): confirm. The same gap is on

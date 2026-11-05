@@ -233,8 +233,13 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
           );
         }
         if (current() && agents.isEmpty && tab != null) {
-          if (PersonalProjects.of(app).soleTab(local) case final source?) {
+          final personal = PersonalProjects.of(app);
+          if (personal.soleTab(local) case final source?) {
             app.copySuperTabLayout(swarmId, source);
+          } else if (local.isNotEmpty) {
+            // Panes from several tabs: the sizes the person gave this
+            // project on this computer, if any (task #3099).
+            personal.applyLayout(controller, request.$2, tab);
           }
         }
         if (current()) {

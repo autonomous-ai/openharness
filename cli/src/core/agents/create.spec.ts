@@ -767,8 +767,8 @@ describe('creating an agent', () => {
       } finally { Object.defineProperty(process, 'platform', platform) }
       // The launch's cleared names too, which the host must keep from its own environment (a grid launch's keys).
       const cleared = (vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1] as { clearEnv?: string[] }).clearEnv ?? []
-      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0].paneLaunch).toEqual({ cwd: input.cwd, afterExit: windowsAfterExit('claude'),
-        ...(cleared.length ? { clearInherited: cleared } : {}) })
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0].paneLaunch).toMatchObject({ cwd: input.cwd, afterExit: windowsAfterExit('claude'),
+        ...(cleared.length ? { clearInherited: cleared } : {}), env: { GRID_NO_UPDATE_CHECK: '1' } })
       expect(await setup().create(request())).toMatchObject({ ok: true })
       expect(vi.mocked(createAndRegisterPane).mock.calls[1][0].paneLaunch).toEqual({})
     })
@@ -950,14 +950,17 @@ describe('creating an agent', () => {
       expect(t.deps.gridLaunchMachine).toHaveBeenCalledWith('claude', undefined)
     })
 
-    it('launches with the model and effort it was given, as a launch option the registry row never keeps', async () => {
+    // Task #3395: kept on the registry row too, so every relaunch passes the same flags again (lib/launchOverrides.ts);
+    // the person's own settings are still never written.
+    it('launches with the model and effort it was given, and keeps them on the row for its relaunches', async () => {
       const { create } = setup()
       await create(request({ launchModel: { model: 'opus', effort: 'high' } }))
       const options = vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>
       expect(options).toMatchObject({ launchModel: { model: 'opus', effort: 'high' } })
-      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).not.toHaveProperty('launchModel')
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ launchModel: { model: 'opus', effort: 'high' } })
       await create(request())
       expect(vi.mocked(buildEngineLaunchArgv).mock.calls[1][1]).not.toHaveProperty('launchModel')
+      expect(vi.mocked(createAndRegisterPane).mock.calls[1][0]).not.toHaveProperty('launchModel')
     })
 
     it('opens as a named agent, with a first prompt, and does not install an engine with a path override', async () => {

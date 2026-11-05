@@ -17,6 +17,7 @@ import 'package:harness_mobile/swarm/swarm_lead_start.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_style.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_computers_fake.dart';
@@ -275,6 +276,23 @@ void main() {
     expect(sent(), ['lead.claim', 'lead.claim', 'agent.add']);
   });
 
+  testWidgets('an earlier failure is not shown while no computer is online '
+      '(task #3042)', (tester) async {
+    await pump(tester);
+    lead.failure = const SuperTabFailure(
+      'CREATE_FAILED',
+      'Codex isn’t signed in.',
+    );
+    await tester.tap(key('swarm-lead-start-button'));
+    await tester.pumpAndSettle();
+    expect(key('swarm-lead-start-error'), findsOneWidget);
+    lead.leadComputers = [];
+    (host.computers! as ChangeNotifier).notifyListeners();
+    await tester.pumpAndSettle();
+    expect(key('swarm-lead-start-offline'), findsOneWidget);
+    expect(key('swarm-lead-start-error'), findsNothing);
+  });
+
   testWidgets('after a failed join the card keeps the computer the agent '
       'started on', (tester) async {
     await pump(tester);
@@ -298,19 +316,46 @@ void main() {
     expect(find.text('Air'), findsNothing);
   });
 
-  testWidgets('no computer online says why and offers no Start', (
-    tester,
-  ) async {
+  testWidgets('no computer online: the button says to open Harness on '
+      'their Mac, and starts nothing (task #3042)', (tester) async {
     await pump(tester);
     lead.leadComputers = [];
     // The card reads the computers as it draws.
     (host.computers! as ChangeNotifier).notifyListeners();
     await tester.pumpAndSettle();
+    expect(key('swarm-lead-start-button'), findsNothing);
+    final offline = key('swarm-lead-start-offline');
     expect(
-      find.text('Can’t start a Lead: none of your computers is online'),
+      find.descendant(
+        of: offline,
+        matching: find.text('Open Harness on your Mac to start'),
+      ),
       findsOneWidget,
     );
-    expect(key('swarm-lead-start-button'), findsNothing);
+    expect(
+      find.textContaining('none of your computers is online'),
+      findsNothing,
+    );
+    expect(
+      tester
+          .widget<SwarmButton>(
+            find.byKey(const ValueKey('swarm-lead-start-offline')),
+          )
+          .onPressed,
+      isNull,
+    );
+    await tester.tap(offline);
+    await tester.pumpAndSettle();
+    expect(sent(), isEmpty);
+    expect(lead.starts, isEmpty);
+    // Once a computer is on, the card offers its start again.
+    lead.leadComputers = [
+      computer('mac-1', 'Studio', folders: {repo: '/Users/me/games'}),
+    ];
+    (host.computers! as ChangeNotifier).notifyListeners();
+    await tester.pumpAndSettle();
+    expect(key('swarm-lead-start-button'), findsOneWidget);
+    expect(offline, findsNothing);
   });
 
   testWidgets('a Team Swarm\'s project chat shows no card', (tester) async {
@@ -351,6 +396,13 @@ void main() {
       lead.held!.complete();
       await tester.pumpAndSettle();
       await capture(tester, 'failed-${brightness.name}');
+      // None of the person's computers online (task #3042).
+      final online = lead.leadComputers;
+      lead.leadComputers = [];
+      (host.computers! as ChangeNotifier).notifyListeners();
+      await tester.pumpAndSettle();
+      await capture(tester, 'offline-${brightness.name}');
+      lead.leadComputers = online;
       await tester.pumpWidget(const SizedBox.shrink());
     }
   });

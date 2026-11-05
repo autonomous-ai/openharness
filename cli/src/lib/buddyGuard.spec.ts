@@ -6,7 +6,7 @@ import { inspect } from 'node:util'
 import { basename, join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { artifactLinks, buddyAccountFile, buddyGrantLive, buddyLaunchFile, buddyLaunchOf, buddyReadsOf, forgetBuddyReads, grantBuddyWide,
-  revokeBuddyWide, SentListsError, writeBuddyAccount, type BuddyReads } from './buddyGuard.js'
+  heldByOldGuard, listSentToOldGuard, revokeBuddyWide, SentListsError, writeBuddyAccount, type BuddyReads } from './buddyGuard.js'
 
 // What is left of a Buddy's guard (task #2832): each Buddy session's list, which holds its owner's grant, and its end.
 const parent = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-guard-')))
@@ -399,5 +399,66 @@ describe('the Artifact links in a message', () => {
   it('finds at most 50', () => {
     const text = Array.from({ length: 55 }, (_, i) => `https://claude.ai/artifact/l${i}`).join(' ')
     expect(artifactLinks(text)).toEqual(Array.from({ length: 50 }, (_, i) => `https://claude.ai/artifact/l${i}`))
+  })
+})
+
+// Task #3159: a Buddy launched before #2832 still runs that release's guard, which opens only what the host listed. The guard
+// itself runs in superTabs/host.spec.ts; these pin the list it reads.
+describe('the list for a Buddy on the guard before #2832', () => {
+  const lists = join(parent, 'old-guard-lists'), drops = join(parent, 'drops'), reads: BuddyReads = { file: join(lists, 'old.json') }
+  const LINK = 'https://claude.ai/artifact/abc'
+  const held = () => JSON.parse(readFileSync(reads.file, 'utf8'))
+  beforeEach(() => { rmSync(lists, { recursive: true, force: true }); rmSync(drops, { recursive: true, force: true }); mkdirSync(drops) })
+  const drop = (name: string, text = 'png') => { const path = join(drops, name); writeFileSync(path, text); return path }
+
+  it('lists a file in the downloads by its path, device, inode, size and bytes, and an Artifact link as itself', () => {
+    const shot = drop('a-screen.png')
+    listSentToOldGuard(reads, { session: 's1', files: [shot], links: [LINK] }, 1_000, drops)
+    const stat = lstatSync(shot, { bigint: true })
+    expect(held()).toEqual({ version: 1, session: 's1', files: [{ path: shot, dev: String(stat.dev), ino: String(stat.ino), size: '3',
+      sha256: createHash('sha256').update('png').digest('hex'), at: 1_000 }], links: [{ url: LINK, at: 1_000 }] })
+  })
+  it('lists nothing outside the downloads, through a link, with a second name, or a link that is not an Artifact\'s own', () => {
+    const outside = join(parent, 'outside.txt'); writeFileSync(outside, 'secret')
+    const linked = join(drops, 'b-linked.png'); symlinkSync(outside, linked)
+    const nested = join(drops, 'sub'); mkdirSync(nested); writeFileSync(join(nested, 'c.png'), 'png')
+    listSentToOldGuard(reads, { session: 's1', files: [outside, linked, join(nested, 'c.png'), `${drops}/../outside.txt`],
+      links: [`${LINK}?x=1`, 'https://example.com/artifact/abc'] }, 1_000, drops)
+    expect(existsSync(reads.file)).toBe(false)
+  })
+  it('keeps what it listed through a grant and its revoke, for a day, and only for its own session', () => {
+    const shot = drop('d-screen.png'), now = Date.now()
+    listSentToOldGuard(reads, { session: 's1', files: [shot], links: [] }, now, drops)
+    grantBuddyWide(reads, { session: 's1', wide: true, account: 'person-1', launch: 'launch-1' }, now + 1)
+    expect(held().files.map((file: { path: string }) => file.path)).toEqual([shot])
+    revokeBuddyWide(reads)
+    expect(held().files.map((file: { path: string }) => file.path)).toEqual([shot])
+    // A day on, the download is gone, and so is its entry.
+    grantBuddyWide(reads, { session: 's1', wide: false }, now + 24 * 60 * 60 * 1000)
+    expect(held()).toEqual({ version: 1, session: 's1', wide: false })
+    // Another session listing under the same key starts from nothing.
+    listSentToOldGuard(reads, { session: 's1', files: [shot], links: [] }, now, drops)
+    grantBuddyWide(reads, { session: 's2', wide: false }, now + 1)
+    expect(held()).toEqual({ version: 1, session: 's2', wide: false })
+  })
+  it('lists a file sent again once, by its newest bytes', () => {
+    const shot = drop('e-screen.png')
+    listSentToOldGuard(reads, { session: 's1', files: [shot], links: [] }, 1_000, drops)
+    writeFileSync(shot, 'PNG2')
+    listSentToOldGuard(reads, { session: 's1', files: [shot], links: [] }, 2_000, drops)
+    expect(held().files).toEqual([expect.objectContaining({ path: shot, size: '4', at: 2_000 })])
+  })
+  it('knows the older release\'s lock by its guard and the settings that name it, and nothing else', () => {
+    const root = join(parent, 'locked'), claude = join(root, '.claude')
+    mkdirSync(claude, { recursive: true })
+    expect(heldByOldGuard(root)).toBe(false)
+    writeFileSync(join(claude, 'buddy-guard.mjs'), '// guard')
+    writeFileSync(join(claude, 'settings.local.json'), '{"hooks":{}}')
+    // A project's own settings that do not name this folder's guard are not Harness's lock.
+    expect(heldByOldGuard(root)).toBe(false)
+    writeFileSync(join(claude, 'settings.local.json'), JSON.stringify({ command: join(claude, 'buddy-guard.mjs') }))
+    expect(heldByOldGuard(root)).toBe(true)
+    writeFileSync(join(parent, 'elsewhere.mjs'), '// guard'); rmSync(join(claude, 'buddy-guard.mjs')); symlinkSync(join(parent, 'elsewhere.mjs'), join(claude, 'buddy-guard.mjs'))
+    expect(heldByOldGuard(root)).toBe(false)
   })
 })

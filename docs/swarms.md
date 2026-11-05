@@ -1030,8 +1030,8 @@ and on which model is the document's to say, and the agents follow it.
   the document again, keeps the draft in the editor and shows the newer text
   beside it, and the next Save goes on the newer revision. **Restore** loads an
   old revision into the editor with the summary "Restored revision N."; Save
-  writes it. Each save posts one line in the project chat: "dee changed the
-  instructions: Reviews run on Opus." When a request contradicts the document,
+  writes it. A save posts nothing in any chat; every save is a kept
+  revision, read in History. When a request contradicts the document,
   the coordinator changes the document, says so and tells the author of the line
   it replaced.
 - **History**: the last 50 revisions, each with who wrote it, whose words it
