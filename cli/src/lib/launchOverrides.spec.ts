@@ -654,3 +654,38 @@ describe('buildLaunchOverrides — the owner\'s private temporary folder (audit 
     expect(result).toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/chosen' } } })
   })
 })
+
+// Task #3395 (anh Dee, 11-05): a Product Manager launched on Opus at xhigh was reopened (the Swarm's keep-alive, a restore)
+// with no flags, so it ran its engine's own default, the machine's last-used Claude Code model (Sonnet medium).
+describe('buildLaunchOverrides — the model the session was launched with', () => {
+  it('launches every relaunch with it again', async () => {
+    const result = await buildLaunchOverrides(deps().d, 'claude', { launchModel: { model: 'opus', effort: 'xhigh' } }, 'a')
+    expect(result).toMatchObject({ ok: true, overrides: { extraArgs: ['--model', 'opus', '--effort', 'xhigh'] } })
+  })
+
+  it('leaves it to a grid launch, and to an engine with no launch flags', async () => {
+    const grid = await buildLaunchOverrides(deps().d, 'claude', { gridLaunch: GRID, launchModel: { model: 'opus', effort: 'xhigh' } }, 'a')
+    expect(grid.ok && grid.overrides.extraArgs).not.toContain('--effort')
+    const codex = await buildLaunchOverrides(deps().d, 'codex', { launchModel: { model: 'gpt-6', effort: 'high' } }, 'a')
+    expect(codex).toMatchObject({ ok: true, overrides: { extraArgs: ['-c', 'model_provider="openai"'] } })
+    const codexHome = await buildLaunchOverrides(deps().d, 'codex', { subscriptionModel: 'gpt-5-codex', launchModel: { model: 'gpt-6', effort: 'high' } }, 'a')
+    expect(codexHome).toMatchObject({ ok: true, overrides: { extraArgs: ['-c', 'model_provider="openai"', '-m', 'gpt-5-codex'] } })
+  })
+
+  // Task #3449: the model remembered when the session left for a grid is a model alone, and it stays after the move home.
+  // Ranked first, a PM back from a grid relaunched without its xhigh, then and on every relaunch after, and a later pick lost.
+  it('outranks the model remembered off a grid, once back home and on every relaunch after', async () => {
+    for (const subscriptionModel of ['opus', 'sonnet']) {
+      const home = await buildLaunchOverrides(deps().d, 'claude', { subscriptionModel, launchModel: { model: 'opus', effort: 'xhigh' } }, 'a')
+      expect(home).toMatchObject({ ok: true, overrides: { extraArgs: ['--model', 'opus', '--effort', 'xhigh'] } })
+      expect(home.ok && home.overrides.env).not.toHaveProperty('ANTHROPIC_MODEL')
+    }
+    const picked = await buildLaunchOverrides(deps().d, 'claude', { subscriptionModel: 'opus', launchModel: { model: 'sonnet', effort: 'high' } }, 'a')
+    expect(picked).toMatchObject({ ok: true, overrides: { extraArgs: ['--model', 'sonnet', '--effort', 'high'] } })
+  })
+
+  it('keeps the remembered model beside a launch effort that names no model', async () => {
+    const result = await buildLaunchOverrides(deps().d, 'claude', { subscriptionModel: 'opus', launchModel: { model: null, effort: 'xhigh' } }, 'a')
+    expect(result).toMatchObject({ ok: true, overrides: { env: { ANTHROPIC_MODEL: 'opus' }, extraArgs: ['--effort', 'xhigh'] } })
+  })
+})

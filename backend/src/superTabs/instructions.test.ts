@@ -521,6 +521,68 @@ describe('an instructions save keeps the rules people gave', () => {
   })
 })
 
+// Task #3283 (Leo, 11-05, from lamp): Faye saved a rule the instructions already had, as if new, which hid that it had skipped it.
+describe('an instructions save refuses a rule that is already there', () => {
+  const save = (baseRevision: number, text: string): Command => ({ type: 'instructions.save', projectId: 'lead', baseRevision, text, summary: 'Added a rule' })
+  const rule = 'Every phone app task runs on Tony\'s Mac first, its Engineer and its Tester both (owner, 4 Nov).'
+  const doc = (...rules: string[]) => ['# Project instructions', '', '## Rules', '', ...rules.map(r => `- ${r}`)].join('\n')
+  const base = doc(rule, 'No releases between 18:00 and 09:00 Vietnam time (owner, 2026-11-02).')
+  const stored = { instructions: { revision: 1, text: base, at: 500 } }
+  const refusal = (run: () => unknown) => {
+    try { run() } catch (error) { return error as { code: string; status: number; message: string; details: { repeated: unknown[] } } }
+    throw new Error('the save went through')
+  }
+
+  it('refuses a repeat of a rule, quoting the existing line and saying how to change it', () => {
+    const f = fixture()
+    const again = 'every phone-app task runs on Tony\'s Mac first, its Engineer and its Tester both! (Faye, 11-05)'
+    const refused = refusal(() => f.run(save(1, `${base}\n- ${again}`), owner, stored))
+    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_RULE_REPEATED', status: 409, details: { repeated: [{ added: again, existing: rule }] } })
+    expect(refused.message).toContain(`"${rule}"`)
+    expect(refused.message).toMatch(/change that line/i)
+    expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 1 })
+  })
+
+  it('refuses the same rule word for word', () => {
+    const f = fixture()
+    expect(refusal(() => f.run(save(1, `${base}\n- ${rule}`), owner, stored))).toMatchObject({ code: 'INSTRUCTIONS_RULE_REPEATED' })
+  })
+
+  it('saves a rule changed in substance, and a line reworded in place', () => {
+    const f = fixture()
+    const changed = f.run(save(1, `${base}\n- Every phone app task runs on Tony\'s Mac first, its Engineer but not its Tester (owner, 5 Nov).`), owner, stored)
+    expect(changed.result).toMatchObject({ revision: 2 })
+    const f2 = fixture()
+    expect(f2.run(save(1, base.replace('Every phone app task runs', 'Each phone app task runs')), owner, stored).result).toMatchObject({ revision: 2 })
+  })
+})
+
+// River, 11-05 (review of #3202): saves the server makes itself meet the repeat refusal too. The daily tidy is an
+// instructions.save, checked like any; an older client's rule.set appends one Routing line and must not add a repeat either.
+describe('server-made instruction saves and the repeat refusal', () => {
+  const doc = '# Doc\n\n## Routing\n\n- Reviews run on Opus at high effort for every task.\n- Phone tasks run on Tony\'s Mac first.\n'
+  const stored = { instructions: { revision: 1, text: doc, at: 500 } }
+  const set = (text: string): Command => ({ type: 'rule.set', rule: { kind: 'preferIdle' }, text })
+
+  it('refuses an older client\'s routing line the document already has, quoting it, and saves a new one', () => {
+    const f = fixture()
+    let refused: { code: string; message: string } | undefined
+    try { f.run(set('reviews run on Opus at high effort, for every task!'), owner, stored) } catch (error) { refused = error as typeof refused }
+    expect(refused).toMatchObject({ code: 'INSTRUCTIONS_RULE_REPEATED' })
+    expect(refused!.message).toContain('"Reviews run on Opus at high effort for every task."')
+    expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 1 })
+    expect(f.run(set('Docs tasks run on Haiku first.'), owner, stored).result).toMatchObject({ revision: 2 })
+  })
+
+  it('saves a tidy that merges two copies of a line into one', () => {
+    const f = fixture()
+    const twice = `${doc}- Phone tasks run on Tony's Mac first.\n`
+    const effects = f.run({ type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: doc, summary: 'Tidied', tidy: true } as Command, owner,
+      { instructions: { revision: 1, text: twice, at: 500 } })
+    expect(effects.result).toMatchObject({ revision: 2 })
+  })
+})
+
 describe('PM notes', () => {
   const note = (text: string, extra: Partial<Extract<Command, { type: 'note.add' }>> = {}): Command =>
     ({ type: 'note.add', projectId: 'lead', text, askedBy: 'owner', ...extra })

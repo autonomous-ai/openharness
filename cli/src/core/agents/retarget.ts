@@ -172,7 +172,8 @@ export function createAgentRetargeter({
     const target: LaunchSource = {
       gridLaunch: grid,
       codexHome: session.codexHome,
-      ...(grid ? {} : { subscriptionModel: remembered }),
+      // Home, the model it was launched with too: it outranks the remembered one (lib/launchOverrides.ts, task #3449).
+      ...(grid ? {} : { subscriptionModel: remembered, ...(session.launchModel ? { launchModel: session.launchModel } : {}) }),
     }
     const inspected = await launchOverridesDeps.native?.(session.engine, session, { id: session.agentId, current })
     if (!current()) return changed()
