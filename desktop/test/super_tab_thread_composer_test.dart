@@ -621,7 +621,9 @@ void main() {
       },
     );
 
-    testThread('returning to a chat reads its thread only once', (tester) async {
+    testThread('returning to a chat reads its thread only once', (
+      tester,
+    ) async {
       final server = threaded();
       final c = await openThread(tester, server);
       await c.select('offline');
