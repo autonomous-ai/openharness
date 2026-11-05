@@ -889,3 +889,23 @@ describe('a verdict at a pull request head', () => {
     for (const head of ['abc', A.slice(0, 7), A.slice(0, 39), 'not-a-sha!', 'g'.repeat(40), 'a'.repeat(41)]) expect(() => check(f.task, true, head)).toThrow()
   })
 })
+
+// Review of #3218 (Ledger), Important 4: a failure for a head the pull request has moved past asks for no changes.
+describe('a failure at an old head', () => {
+  it('does not hold its Reviewer\'s step waiting for a revision', () => {
+    const f = stepsFixture()
+    const PR = 'https://github.com/acme/app/pull/7'
+    const A = 'aaaaaaa1111111111111111111111111111111aa', B = 'bbbbbbb2222222222222222222222222222222bb'
+    const id = f.step('Review')
+    const rev = f.add('rev', id)
+    f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
+    f.run({ type: 'conversation.agent', conversationId: f.task, agentId: rev, present: true, lead: false })
+    Object.assign(f.group(f.task), { pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: B, patch: 'p2', at: 1 } } })
+    const fail = (head: string) => f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
+      checkId: f.group(f.task).checks[0]!.id, passed: false, evidence: 'Drops the session', head } as Command, f.as(rev))
+    fail(A)
+    expect(f.group(id).assignment).not.toHaveProperty('changesRequestedAt')
+    fail(B)
+    expect(f.group(id).assignment!.changesRequestedAt).toBe(f.now)
+  })
+})

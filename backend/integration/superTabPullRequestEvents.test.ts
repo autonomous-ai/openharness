@@ -199,7 +199,7 @@ describe('pull request events', () => {
       await f.execute({ type: 'work.check', conversationId: f.task, assignmentId: f.assignment, checkId: taskCheck, passed: true, evidence: 'Reads right', head: HEAD } as Command, host, reviewer)
       await f.execute({ type: 'work.check', conversationId: step, assignmentId: stepWork, checkId: stepCheck, passed: true, evidence: 'Signs in', head: HEAD } as Command, host, tester)
       const read = async () => [(await group(f.task)).checks[0]!, (await group(step)).checks[0]!]
-      return { f, HEAD2, HEAD3, read }
+      return { f, HEAD2, HEAD3, step, read }
     }
 
     it('counts at its head, and its patch is read once a head', async () => {
@@ -230,6 +230,43 @@ describe('pull request events', () => {
         expect(check.passedBy).toBeNull()
         expect(check.verdicts!.at(-1)).toMatchObject({ head: HEAD, stale: HEAD3 })
       }
+    })
+
+    // Review of #3218 (Ledger), Important 1: an Engineer sets its task done before the PM merges it, and a done review step goes
+    // dormant after a quiet day; a push then must still stop their verdicts counting.
+    it('a new commit makes it stale on a done task, and on a dormant step', async () => {
+      const { f, HEAD3, step, read } = await reviewed()
+      await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'done', result: `Ready to merge ${f.PR}` }, host, f.worker)
+      await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: step }, data: { dormant: true } })
+      f.pulls.set(f.PR, f.pull({ head: HEAD3 }))
+      await f.pass()
+      for (const check of await read()) {
+        expect(check.passedBy).toBeNull()
+        expect(check.verdicts!.at(-1)).toMatchObject({ head: HEAD, stale: HEAD3 })
+      }
+      // Nothing is posted to an Engineer whose task is done.
+      expect(await f.told()).toEqual([])
+    })
+
+    // Review of #3218 (Ledger), Important 5: a patch GitHub could not give is told in the pass's line, and read again later.
+    it('a patch it could not read is counted in the pass line, and read again after a while', async () => {
+      const { f, read } = await reviewed()
+      const NEXT = 'eeeeeee5555555eeeeeee5555555eeeeeee55555'
+      const warn = vi.spyOn(logger, 'warn')
+      try {
+        f.pulls.set(f.PR, f.pull({ head: NEXT }))
+        await f.pass()
+        const line = warn.mock.calls.find(call => call[0] === '[swarm-pr-events] pass')?.[1] as { unpatched?: number } | undefined
+        expect(line?.unpatched).toBeGreaterThanOrEqual(1)
+      } finally { warn.mockRestore() }
+      // GitHub answers later with the reviewed patch: the head's patch is learned and the verdicts count again.
+      f.patches.set(NEXT, 'p1')
+      await f.pass()
+      expect(f.patchReads.filter(r => r.endsWith(NEXT))).toHaveLength(1)
+      f.clock.advance(15 * MINUTE)
+      await f.pass()
+      expect(f.patchReads.filter(r => r.endsWith(NEXT))).toHaveLength(2)
+      for (const check of await read()) expect(check.passedBy).not.toBeNull()
     })
 
     it('a head whose patch cannot be read counts only verdicts at that very head', async () => {

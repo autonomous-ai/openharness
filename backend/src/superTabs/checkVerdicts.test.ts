@@ -3,7 +3,7 @@
  * request's own patch is the same (a plain rebase, or a main merge that leaves the PR's diff unchanged).
  */
 import { describe, expect, it } from 'vitest'
-import { deriveCheck, recordCheckVerdict, refreshChecks, verdictCounts, type PullRequestHeads } from './checkVerdicts.js'
+import { HEADS_KEPT, deriveCheck, keepHead, recordCheckVerdict, refreshChecks, verdictCounts, type PullRequestHeads } from './checkVerdicts.js'
 import type { Check, CheckVerdict } from './model.js'
 
 const PR = 'https://github.com/acme/app/pull/7'
@@ -36,11 +36,23 @@ describe('a verdict at a head', () => {
     expect(verdictCounts(verdict('r', true, A, 'p1'), at(B, 'p1'))).toBe(true)
   })
 
-  it('counts while no head is watched for its pull request', () => {
+  it('counts while the task has no watched head', () => {
     expect(verdictCounts(verdict('r', true, A, 'p1'), undefined)).toBe(true)
-    expect(verdictCounts(verdict('r', true, A, 'p1'), { 'https://github.com/acme/app/pull/8': { head: B, patch: 'p2', at: 1 } })).toBe(true)
     expect(verdictCounts(verdict('r', true, undefined), undefined)).toBe(true)
     expect(verdictCounts(verdict('r', true, undefined), {})).toBe(true)
+  })
+
+  // Review of #3218 (Ledger), Important 2 and 6: once the task's pull requests are watched, a verdict whose own one has no head
+  // (not read yet, or dropped from the kept heads) is unverified, never valid for every head.
+  it('does not count on a pull request with no watched head while another of the task has one', () => {
+    expect(verdictCounts(verdict('r', true, A, 'p1'), { 'https://github.com/acme/app/pull/8': { head: A, patch: 'p1', at: 1 } })).toBe(false)
+  })
+
+  it('naming a head before the task linked a pull request, counts only at that head once one is watched', () => {
+    const early: CheckVerdict = { by: 'r', passed: true, evidence: '', at: 1, head: A }
+    expect(verdictCounts(early, undefined)).toBe(true)
+    expect(verdictCounts(early, at(A, 'p1'))).toBe(true)
+    expect(verdictCounts(early, at(B, 'p2'))).toBe(false)
   })
 
   // Security review of #3218 (Warden2), Important 3: a verdict naming no head was given the head watched last, which a push
@@ -109,5 +121,24 @@ describe('a new head', () => {
     const changed = refreshChecks([c, other], PR, { head: A, patch: 'p1', at: 1 }, at(B, 'p2'))
     expect(changed).toEqual([c])
     expect(c.passedBy).toBeNull()
+  })
+})
+
+// Review of #3218 (Ledger), Important 6: a task keeps the heads of the pull requests it links, at most HEADS_KEPT of them.
+describe('the heads a task keeps', () => {
+  const head = (n: number) => ({ head: n.toString(16).padStart(40, '0'), patch: null, at: n })
+  const url = (n: number) => `https://github.com/acme/app/pull/${n}`
+
+  it('keeps only pull requests it still links', () => {
+    expect(Object.keys(keepHead({ [url(1)]: head(1), [url(2)]: head(2) }, url(3), head(3), [url(2), url(3)]))).toEqual([url(2), url(3)])
+  })
+
+  it('keeps at most HEADS_KEPT, the most recently read', () => {
+    let heads: PullRequestHeads = {}
+    const links = Array.from({ length: HEADS_KEPT + 5 }, (_, i) => url(i + 1))
+    for (let n = 1; n <= HEADS_KEPT + 5; n++) heads = keepHead(heads, url(n), head(n), links)
+    expect(Object.keys(heads)).toHaveLength(HEADS_KEPT)
+    expect(heads[url(1)]).toBeUndefined()
+    expect(heads[url(HEADS_KEPT + 5)]).toBeDefined()
   })
 })
