@@ -59,7 +59,7 @@ import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, F
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { instructionsChange } from './instructionsDiff.js'
 import { BUILT_IN_HEADING } from './pmSchedule.js'
-import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, type TaskPriority } from './taskPriority.js'
+import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -2265,7 +2265,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (task.id === project.leadConversationId || task.kind || task.audience || task.step) {
         fail('PRIORITY_TASK_ONLY', 'Only a task has a priority: name a task, not a chat or a step.', 400)
       }
-      const previous: TaskPriority = task.priority ?? DEFAULT_PRIORITY
+      // A task from before priorities reads as its title marks it, as every client shows it.
+      const previous: TaskPriority = task.priority ?? titlePriority(task.title) ?? DEFAULT_PRIORITY
       task.priority = command.priority
       if (previous === command.priority) break
       const name = actor.kind === 'person' ? shownNameOf(state, actor.userId) ?? 'Someone'

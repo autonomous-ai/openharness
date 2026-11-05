@@ -21,6 +21,20 @@ export function proposalPriority(value: unknown): TaskPriority {
   return value === 'high' ? 'P1' : value === 'low' ? 'P3' : 'P2'
 }
 
+const LEADING = /^\s*URGENT\b\s*:?\s*/i
+const TRAILING = /\s*\((?:[^()]*,\s*)?(urgent|high)(?:\s+priority)?\)\s*$/i
+
+/** A task from before priorities by its title, as every client reads it (Desktop backlog.dart superTabTitlePriority): a
+ *  leading URGENT or a closing "(urgent)" is P0, a closing "(high)" or "(Name, high)" P1. A marker with no title beside it
+ *  marks nothing. */
+export function titlePriority(title: string): TaskPriority | null {
+  const leading = LEADING.exec(title)
+  if (leading && title.length > leading[0].length) return 'P0'
+  const trailing = TRAILING.exec(title)
+  if (trailing && trailing.index > 0) return trailing[1]!.toLowerCase() === 'urgent' ? 'P0' : 'P1'
+  return null
+}
+
 /** The line a change writes into its task: who changed it, to what and from what. */
 export function priorityLine(actorName: string, next: TaskPriority, previous: TaskPriority): string {
   const meaning = PRIORITY_MEANING[next]
