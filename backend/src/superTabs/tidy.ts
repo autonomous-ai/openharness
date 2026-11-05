@@ -1,9 +1,10 @@
 import { checksOpenWork, isStep, taskEnded } from './steps.js'
 import { isBuddy } from './buddies.js'
+import { isCrew } from './crew.js'
 import { expiredModelRequests, unservedBuddyModels } from './buddyModel.js'
 import { agentDisplayName } from './agentNames.js'
 import { githubRepository, type GitHubRepository } from '../github/repository.js'
-import { activeWork, appendPullRequestUrls, stableId, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { activeWork, occupiesAgent, appendPullRequestUrls, stableId, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, canReadGroup, groupProject, ledProject, projectsOf } from './projects.js'
 import { toLead } from './terminal.js'
 
@@ -20,7 +21,7 @@ export const SWITCH_UNCLAIMED_MS = 2 * 60_000
 const time = (value: string | undefined) => value === undefined ? undefined : Date.parse(value)
 
 /** The loaded groups an agent belongs to or worked in. */
-const groupsOf = (state: SuperTabState, target: Agent): Conversation[] =>
+export const groupsOf = (state: SuperTabState, target: Agent): Conversation[] =>
   state.conversations.filter(c => c.agentIds.includes(target.id) || c.assignment?.agentId === target.id)
 
 /** When the agent last had anything to do: its start, its coordinator's keep, its own progress, or a message in one of its
@@ -28,7 +29,7 @@ const groupsOf = (state: SuperTabState, target: Agent): Conversation[] =>
  *  groups, whose messages are about others' work: it is idle from its start or keep (Swarm autonomous-harness, 2026-10-29:
  *  one sat idle 18+ minutes, its time renewed by every message in a busy chat). One a person added by hand has no start of
  *  record, so its groups' messages count, from the one it joined in. Undefined when nothing tells when. */
-function idleSince(target: Agent, groups: Conversation[]): number | undefined {
+export function idleSince(target: Agent, groups: Conversation[]): number | undefined {
   const worked = !!target.lostTask || groups.some(g => g.assignment?.agentId === target.id) || !target.startedSession
   const seen = [time(target.startedSession?.createdAt), target.keptAt, ...(worked ? groups : []).flatMap(g => [time(g.lastActivityAt),
     ...g.assignment?.agentId === target.id ? [g.assignment.progressAt, g.assignment.lost?.at] : []])]
@@ -47,7 +48,7 @@ function waitingToResume(state: SuperTabState, target: Agent): boolean {
 
 /**
  * Tells the project's coordinator, once per idle spell, of every agent of the project with no open task for IDLE_NOTICE_MS:
- * not a Buddy (it waits for its person) nor the coordinator, not stopping nor kept (a keep answers the notice until the agent
+ * not a Buddy (it waits for its person), crew (it stands by between tasks, crew.ts) nor the coordinator, not stopping nor kept (a keep answers the notice until the agent
  * is assigned again, which clears it, and finishes that work), with no delivery waiting for it (`busy`), not
  * waiting to resume after a usage limit, and in no loaded group with active work. One row in the coordinator's chat, to it
  * alone (model.ts NOTICE_READERS `idle`); the agent's `idleNoticedAt` records the spell, so the next poll says nothing until
@@ -60,10 +61,12 @@ export function idleNotices(state: SuperTabState, projectId: string, now: number
   if (!project || !coordinator) return []
   const rows: MessageDraft[] = []
   for (const target of state.agents) {
-    if (target.id === coordinator.id || isBuddy(target) || target.workDecision === 'stop' || target.workDecision === 'keep' || busy.has(target.id)
+    if (target.id === coordinator.id || isBuddy(target) || isCrew(target) || target.workDecision === 'stop' || target.workDecision === 'keep' || busy.has(target.id)
       || agentProjectId(state, target) !== projectId || waitingToResume(state, target)) continue
     const groups = groupsOf(state, target)
-    if (groups.some(activeWork)) continue
+    // Its own work in its hands, or a member of a task whose work is going (a Reviewer or a Tester linked to it). Its own task
+    // handed over (task #3399) leaves it free, so the coordinator hears it is idle.
+    if (groups.some(c => c.assignment?.agentId === target.id ? occupiesAgent(c) : activeWork(c))) continue
     // A Reviewer or Tester, by what it worked on: the instructions keep it while the work it checked is open (Ken,
     // 2026-11-02: "Tester has had no open task" twice in 8 minutes, nothing for the PM to do), and no longer.
     if (checksOpenWork(state, groups, target.id)) continue

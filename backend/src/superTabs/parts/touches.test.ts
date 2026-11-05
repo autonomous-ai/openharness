@@ -3,6 +3,8 @@ import { applyCommand, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor } from '../model.js'
 import { touchesFor } from './touches.js'
 
+const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
+
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const config = { engine: 'codex', model: 'm', effort: 'high', contextWindow: null, engineVersion: null }
 
@@ -97,7 +99,7 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     const f = swarm()
     const invited = f.run({ type: 'invite.create', email: 'peer@example.com', role: 'collaborator', conversationId: 'lead' }).effects.result.inviteId as string
     f.run({ type: 'invite.accept', inviteId: invited }, { kind: 'person', userId: 'peer', email: 'peer@example.com' })
-    const opened = f.run({ type: 'conversation.create', title: 'R', brief: 'Do it', checks: [{ description: 'Done', independent: false }], requesterId: 'peer' },
+    const opened = f.run({ type: 'conversation.create', title: 'R', brief: 'Do it', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'peer' },
       f.agentActor(f.lead))
     expect(has(opened.touches, 'member', 'peer')).toBe(true)
     const id = opened.effects.result.conversationId as string
@@ -108,7 +110,7 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
 
   it('makes a priority change meet a change of who is PM on the project\'s chat (task #3117)', () => {
     const f = swarm()
-    const id = f.run({ type: 'conversation.create', title: 'R', brief: 'Do it', checks: [] }, f.agentActor(f.lead)).effects.result.conversationId as string
+    const id = f.run({ type: 'conversation.create', title: 'R', brief: 'Do it', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'owner' }, f.agentActor(f.lead)).effects.result.conversationId as string
     const changed = f.run({ type: 'work.priority', conversationId: id, priority: 'P0' }, f.agentActor(f.lead))
     expect(has(changed.touches, 'group', 'lead')).toBe(true)
   })
@@ -116,7 +118,7 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
   it('makes an answer to waiting work meet a change to whom it waits on', () => {
     const f = swarm(), a = f.group('A')
     f.run({ type: 'conversation.requester', conversationId: a.id, personId: 'owner' })
-    f.run({ type: 'work.status', conversationId: a.id, assignmentId: a.assignmentId, status: 'needs_human', result: 'Flag?' }, f.agentActor(a.worker))
+    f.run({ type: 'work.status', conversationId: a.id, assignmentId: a.assignmentId, status: 'needs_human', hold: HOLD, result: 'Flag?' }, f.agentActor(a.worker))
     const answer = f.run({ type: 'message.send', conversationId: a.id, text: 'Flag.', replyTo: null, recipientIds: [] }, f.agentActor(f.lead))
     expect(has(answer.touches, 'member', 'owner')).toBe(true)
   })

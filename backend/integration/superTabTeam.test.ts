@@ -640,7 +640,7 @@ describe('a teammate\'s work and the machines that take it', () => {
     const refused = { code: 'TEAM_ACCOUNT_REQUIRED', message: NO_TEAM_ACCOUNT }
     await expect(run(f.tab, post([volunteer]), owner, f.lead)).rejects.toMatchObject(refused)
     await expect(run(f.tab, post([]), person, volunteer)).rejects.toMatchObject(refused)
-    await expect(run(f.tab, { type: 'conversation.create', title: 'Its own task', brief: 'Do it', checks: [] }, person, volunteer)).rejects.toMatchObject(refused)
+    await expect(run(f.tab, { type: 'conversation.create', title: 'Its own task', brief: 'Do it', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: person.sub }, person, volunteer)).rejects.toMatchObject(refused)
     const task = (await store.read(owner, f.tab)).state.conversations.find(c => c.id === f.teamGroup)!
     expect(task.agentIds).not.toContain(volunteer)
     // The agent on the person's Team machine is named into another task of the owner's project.
@@ -722,7 +722,7 @@ describe('a teammate\'s work and the machines that take it', () => {
     await store.observeMachine(person, f.tab, 'personal-mac', reading(generation))
     expect((await rosterRows(store, person, 'personal-mac')).find(r => r.tabId === f.tab && r.agent.id === old)).toMatchObject({ stopRequested: false })
     expect(await assignmentRows(store, person, 'personal-mac')).toContainEqual({ tabId: f.tab, assignmentId: 'assigned-before', harnessId: 'before-release' })
-    await run(f.tab, { type: 'work.status', conversationId: f.teamGroup, assignmentId: 'assigned-before', status: 'blocked', result: 'Needs a token.' }, person, old)
+    await run(f.tab, { type: 'work.status', conversationId: f.teamGroup, assignmentId: 'assigned-before', status: 'blocked', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Needs a token.' }, person, old)
     await run(f.tab, { type: 'message.send', conversationId: f.teamGroup, text: 'Here it is.', replyTo: null, recipientIds: [old] })
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: old } })).toBeGreaterThan(0)
     await run(f.tab, { type: 'work.cancel', conversationId: f.teamGroup, assignmentId: 'assigned-before', reason: 'Moving it to the Team machine.' })
@@ -1261,7 +1261,7 @@ describe('a message from an agent of another account (audit M3)', () => {
     expect(answer).not.toHaveProperty('otherAccount')
     expect(answer.quotedOtherAccount).toEqual([asked.id])
     // A reply to the Lead's reply quotes the Lead's, and its thread is the Team agent's.
-    const again = await said(f, 'On it.', f.lead, { agent: f.helper, user: owner }, relayed.id)
+    const again = await said(f, 'On it, rebasing now.', f.lead, { agent: f.helper, user: owner }, relayed.id)
     expect((await claimed(f, owner, f.lead, again.id)).quotedOtherAccount).toEqual([asked.id])
   })
   it('names no quoted message from the same account, nor a person\'s', async () => {
@@ -1270,7 +1270,7 @@ describe('a message from an agent of another account (audit M3)', () => {
     const reply = await said(f, 'Agreed.', f.lead, { agent: f.helper, user: owner }, own.id)
     expect(await claimed(f, owner, f.lead, reply.id)).not.toHaveProperty('quotedOtherAccount')
     const person = await said(f, 'From the owner, quoted.', f.lead)
-    const answer = await said(f, 'Will do.', f.helper, { agent: f.lead, user: owner }, person.id)
+    const answer = await said(f, 'Will do, after the rebase.', f.helper, { agent: f.lead, user: owner }, person.id)
     expect(await claimed(f, owner, f.helper, answer.id)).not.toHaveProperty('quotedOtherAccount')
   })
 

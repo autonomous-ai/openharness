@@ -13,8 +13,8 @@ const _question = 'Should a reminder clear when it is opened?';
 
 /// Three messages in the Lead conversation, the last an agent's question,
 /// read to the end.
-ConversationServer _chat() {
-  final server = ConversationServer();
+ConversationServer _chat({bool threads = false}) {
+  final server = ConversationServer()..threads = threads;
   server.append('Planning the reminders');
   server.append('Draft PR is up');
   server.append(_question);
@@ -30,8 +30,12 @@ void main() {
   late SuperTabController c;
   late List<String> arrived;
 
-  Future<void> show(WidgetTester tester, ConversationServer server) async {
-    await tester.binding.setSurfaceSize(const Size(1200, 900));
+  Future<void> show(
+    WidgetTester tester,
+    ConversationServer server, {
+    double width = 1200,
+  }) async {
+    await tester.binding.setSurfaceSize(Size(width, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     c = server.controller();
     arrived = [];
@@ -287,4 +291,58 @@ void main() {
     ]);
     expect(arrived, ['reminder-message-2']);
   });
+
+  // A due reminder of a top-level message opened the chat at it and also an
+  // empty Thread pane rooted at it: the message showed twice, under 1080 px
+  // the drawer covered the chat, and a thread read mark was sent (Diego,
+  // 2026-11-05). The backend gives every top-level message its own id as its
+  // thread, so only a reply (`threadReply`) has a thread to open.
+  for (final width in [1200.0, 1000.0]) {
+    testWidgets('a reminder of a top-level message opens no thread, at '
+        '${width.round()} px', (tester) async {
+      final server = _chat(threads: true);
+      server.remindElsewhere(
+        'message-3',
+        clock.now().add(const Duration(minutes: 20)),
+      );
+      await show(tester, server, width: width);
+      await tester.pump(const Duration(minutes: 20, seconds: 1));
+      await tester.pumpAndSettle();
+      await openActivity(tester);
+      await tester.tap(reminderRow('message-3'));
+      await tester.pumpAndSettle();
+
+      expect(c.selectedId, 'lead');
+      expect(c.openedThread, isNull);
+      expect(find.byKey(const ValueKey('super-thread-panel')), findsNothing);
+      expect(server.threadMarkPosts, isEmpty);
+      expect(find.text(_question).hitTestable(), findsOneWidget);
+    });
+  }
+
+  for (final width in [1200.0, 1000.0]) {
+    testWidgets('a reminder of a reply that lives only in its thread opens '
+        'the thread at that reply, at ${width.round()} px', (tester) async {
+      final server = _chat(threads: true);
+      server.append('Only in the thread');
+      server.messages.last
+        ..['thread'] = 'message-2'
+        ..['alsoInChat'] = false;
+      server.remindElsewhere(
+        'message-4',
+        clock.now().add(const Duration(minutes: 20)),
+      );
+      await show(tester, server, width: width);
+      await tester.pump(const Duration(minutes: 20, seconds: 1));
+      await tester.pumpAndSettle();
+      await openActivity(tester);
+      await tester.tap(reminderRow('message-4'));
+      await tester.pumpAndSettle();
+
+      expect(c.selectedId, 'lead');
+      expect(c.openedThread, (conversationId: 'lead', root: 'message-2'));
+      expect(find.byKey(const ValueKey('super-thread-panel')), findsOneWidget);
+      expect(find.text('Only in the thread').hitTestable(), findsOneWidget);
+    });
+  }
 }

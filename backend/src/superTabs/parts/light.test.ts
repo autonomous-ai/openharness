@@ -8,15 +8,15 @@ import { FINISHED, GROUP_FIELDS } from './light.js'
  *  here, and the test below until light.ts either projects it or names it as unread by reads (review of #1745). */
 const assignment: Required<Assignment> = {
   id: 'w', agentId: 'a', status: 'working', configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null },
-  execution: { machineId: 'm', harnessId: 'h', machineOwnerId: 'o' }, result: null, recordingProgress: { at: 1, revision: 1 }, leaseUntil: 1, progressAt: 1, askedOf: 'p', reviewFoundAt: 1, changesRequestedAt: 1, toldEngineerAt: 1,
-  handoffs: 1, verdicts: [{ by: 'agent:r', passed: true, handoff: 1, review: 'g' }], lost: { reason: 'r', at: 1 },
+  execution: { machineId: 'm', harnessId: 'h', machineOwnerId: 'o' }, result: null, recordingProgress: { at: 1, revision: 1 }, leaseUntil: 1, progressAt: 1, askedOf: 'p', hold: { kind: 'requester' }, reviewFoundAt: 1, changesRequestedAt: 1, toldEngineerAt: 1,
+  reopened: { at: 1, why: 'r' }, handoffs: 1, verdicts: [{ by: 'agent:r', passed: true, handoff: 1, review: 'g' }], lost: { reason: 'r', at: 1 },
 }
 const conversation: Required<Conversation> = {
   id: 'g', kind: 'leads', projectId: 'p', number: 1, title: 't', leadId: null, agentIds: [], archived: false, brief: '',
   task: { goal: '', changes: '', constraints: '', owns: [] }, reviewOf: 'r', teamWritten: true, teamWrittenBy: { kind: 'assigned' }, step: 'Review', reviewStamp: { assignmentId: 'w', handoff: 1 }, checks: [], assignment, lastMessageSequence: 0, lastMainSequence: 0, lastPersonSequence: 0, heardAt: 0, pullRequestUrls: [], pullRequestEvents: {}, cards: {},
   messageSeq: 0, reportSeq: 0, dormant: false, lastActivityAt: '', audience: { people: [] }, lostAttempt: { id: 'w', agentId: 'a' }, reactionSeq: 0,
   requesterId: 'p', ledger: {}, proposals: [], buddyName: 'Sparky', buddySessions: [], buddyDownTold: true, liveness: { state: 'quiet', why: 'silent', since: 1 }, leadAction: { kind: 'post', at: 1 },
-  stepUp: { attempt: 2, floor: 2, reason: 'r', at: 1, carry: '' }, queueRank: 1.5, notBefore: '2026-12-04', priority: 'P0',
+  stepUp: { attempt: 2, floor: 2, reason: 'r', at: 1, carry: '' }, queueRank: 1.5, notBefore: '2026-12-04', hold: { kind: 'requester' }, priority: 'P0', owed: [], pulse: {} as never,
 }
 
 describe('the light conversation projection (parts/light.ts)', () => {

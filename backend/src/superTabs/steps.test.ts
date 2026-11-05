@@ -13,6 +13,8 @@ import { reportedAs } from './projectUpdates.js'
 import { idleNotices } from './tidy.js'
 import { QUIET_RUNNING_MS, sweepForLead, sweepLiveness } from './liveness.js'
 
+const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
+
 describe('opening a step', () => {
   it('opens on a task of its project, numbered, its opener in the task', () => {
     const f = stepsFixture()
@@ -259,7 +261,7 @@ describe('a step closes with its task', () => {
 
   it('cancelling an unassigned task closes its steps', () => {
     const f = stepsFixture()
-    const other = f.run({ type: 'conversation.create', title: 'Docs', brief: 'Write docs.', checks: [] }, f.as(f.lead)).result.conversationId as string
+    const other = f.run({ type: 'conversation.create', title: 'Docs', brief: 'Write docs.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
     const id = f.step('Review', f.as(f.lead), other)
     f.run({ type: 'work.cancel', conversationId: other, assignmentId: 'current', reason: 'Not needed' } as Command, f.as(f.lead))
     expect(f.group(other).archived).toBe(true)
@@ -284,7 +286,7 @@ describe('who hears a step', () => {
     const rev = f.add('rev', id)
     f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
     const status = (status: string, result: string | null = 'note', on = id, by = rev) =>
-      f.run({ type: 'work.status', conversationId: on, assignmentId: f.group(on).assignment!.id, status, result } as Command, f.as(by)).messages
+      f.run({ type: 'work.status', conversationId: on, assignmentId: f.group(on).assignment!.id, status, result, ...(status === 'blocked' || status === 'needs_human' ? { hold: HOLD } : {}) } as Command, f.as(by)).messages
     const post = (on: string, by = rev) =>
       f.run({ type: 'message.send', conversationId: on, text: 'Two findings.', replyTo: null, recipientIds: [] } as Command, f.as(by)).messages
     return { f, id, rev, status, post }
@@ -509,7 +511,7 @@ describe('the PM is not told what a step\'s agent says to its task', () => {
     const rev = f.add('rev', id)
     f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
     f.run({ type: 'work.status', conversationId: id, assignmentId: f.group(id).assignment!.id, status: 'done', result: 'Passed' } as Command, f.as(rev))
-    const other = f.run({ type: 'conversation.create', title: 'Fix logout', brief: 'Sign out works.', checks: [] }, f.as(f.lead)).result.conversationId as string
+    const other = f.run({ type: 'conversation.create', title: 'Fix logout', brief: 'Sign out works.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
     const dev2 = f.add('dev2', other)
     f.run({ type: 'work.assign', conversationId: other, agentId: dev2 }, f.as(f.lead))
     const second = f.step('Review', f.as(dev2), other)

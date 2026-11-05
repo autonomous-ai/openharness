@@ -1,6 +1,7 @@
 import 'identity.dart' show superTabPersonName;
 import 'live_card_model.dart';
 import 'profile_model.dart';
+import 'pulse_model.dart';
 
 export 'profile_model.dart';
 
@@ -203,6 +204,22 @@ class SuperTabAgent {
           decision,
         _ => null,
       },
+      crewRole = switch (row['crew']) {
+        {'role': final String role} when role.isNotEmpty => role,
+        _ => null,
+      },
+      crewLane = switch (row['crew']) {
+        {'lane': final String lane} => lane,
+        _ => null,
+      },
+      crewAsleep = row['asleep'] != null,
+      crewAsleepSince = switch (row['asleep']) {
+        {'since': final num since} => DateTime.fromMillisecondsSinceEpoch(
+          since.toInt(),
+        ),
+        _ => null,
+      },
+      crewMoving = row['movedTo'] != null,
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
 
@@ -256,6 +273,23 @@ class SuperTabAgent {
   final String? workDecision;
 
   static const _workDecisions = {'awaiting', 'keep', 'stop'};
+
+  /// Its role in its project's crew, the agents the Swarm keeps alive (backend crew.ts, task #3397), as the desktop's model
+  /// reads it; null when not crew.
+  final String? crewRole;
+
+  /// The lane a crew member works in (backend, cli, desktop, mobile or docs); null for none.
+  final String? crewLane;
+
+  /// A crew member put to sleep on purpose (task #3398): its session is closed and nothing reopens it.
+  final bool crewAsleep;
+
+  /// Since when it sleeps (backend crewKeep.ts `asleep.since`), as the desktop's model reads it (task #3412). Null when
+  /// awake, or when the server sent no time.
+  final DateTime? crewAsleepSince;
+
+  /// A crew member on its way to another machine (backend `movedTo`, task #3398), as the desktop's model reads it.
+  final bool crewMoving;
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;
@@ -698,6 +732,7 @@ class SuperTabSnapshot {
       autoJoin = row['autoJoin'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
+      pulses = SuperTabPulse.readAll(row['pulse']),
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
       activityDigest = row['activityDigest'] as String?,
@@ -812,6 +847,14 @@ class SuperTabSnapshot {
   /// Which tags wait, as a digest that moves when they change though the
   /// count may not; null from a backend before it (superTabs/mentions.ts).
   final String? mentionsDigest;
+
+  /// Each project's board pulse by project id (backend superTabs/pulse.ts,
+  /// read `derived.pulse`); empty from a server before it.
+  final Map<String, SuperTabPulse> pulses;
+
+  /// [projectId]'s board pulse; null where the server sent none, and the
+  /// board draws no strip.
+  SuperTabPulse? pulseOf(String projectId) => pulses[projectId];
 
   /// Decisions asked of the reader and not yet answered, Swarm-wide; 0 from a
   /// backend before decisions (backend superTabs/decisions.ts).

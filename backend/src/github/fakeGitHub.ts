@@ -31,6 +31,8 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   /** A pull request's reviews and conversation comments, by `owner/name#number`, lower case. */
   const reviews = new Map<string, Array<{ id: number; user: { login: string }; author_association?: string; state: string; body: string; html_url: string }>>()
   const comments = new Map<string, Array<{ id: number; user: { login: string }; author_association?: string; body: string; html_url: string }>>()
+  /** A pull request's changed files, by `owner/name#number`, lower case, as GET /pulls/{n}/files lists them (task #3401). */
+  const files = new Map<string, Array<{ filename: string; status: string; previous_filename?: string }>>()
   /** Workflow runs by `owner/name`, lower case: each run's status and its jobs' statuses and runner labels. */
   const actions = new Map<string, Array<{ id: number; status: string; jobs: Array<{ status: string; labels: string[] }> }>>()
   /** Each installation's accepted permissions, by installation id, as GET /app/installations/{id} answers them. An
@@ -145,6 +147,13 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
         return head[2] === 'check-runs' ? tagged({ total_count: checkRuns.get(key)?.length ?? 0, check_runs: checkRuns.get(key) ?? [] })
           : tagged({ total_count: checkSuites.get(key)?.length ?? 0, check_suites: checkSuites.get(key) ?? [] })
       }
+      const changed = /^\/pulls\/(\d+)\/files$/.exec(repoPath[3] ?? '')
+      if (changed) {
+        if (control.pullsStatus !== 200) return json(control.pullsStatus, { message: 'Server Error' })
+        const all = files.get(`${repoKey}#${changed[1]}`) ?? []
+        const size = Number(url.searchParams.get('per_page') ?? 30), page = Number(url.searchParams.get('page') ?? 1)
+        return json(200, all.slice((page - 1) * size, page * size))
+      }
       const talk = /^\/(pulls|issues)\/(\d+)\/(reviews|comments)$/.exec(repoPath[3] ?? '')
       if (talk) {
         // Oldest first, a page at a time, with a Link to the last page as GitHub sends it.
@@ -159,7 +168,7 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
     }
     return json(404, { message: 'Not Found' })
   }) as typeof globalThis.fetch
-  return { fetch, calls, grants, installed, owners, renamed, protection, pulls, checkRuns, checkSuites, reviews, comments, revoked, issued, control, actions, permissions }
+  return { fetch, calls, grants, installed, owners, renamed, protection, pulls, checkRuns, checkSuites, reviews, comments, files, revoked, issued, control, actions, permissions }
 }
 
 /** A configured app talking to [github]. */
