@@ -41,7 +41,7 @@ export function cleanMainMergeOf(sides: MergeSides): string | null {
   const ours = paths(sides.prSide)
   if ([...paths(sides.mainSide)].some(path => ours.has(path))) return null
   // The merge changes exactly main's files, each as main has it.
-  if (sides.mergeSide.length !== sides.mainSide.length) return null
+  if (sides.mergeSide.length !== sides.mainSide.length || new Set(sides.mergeSide.map(f => f.filename)).size !== sides.mergeSide.length) return null
   const main = new Map(sides.mainSide.map(f => [f.filename, as(f)]))
   return sides.mergeSide.every(f => main.get(f.filename) === as(f)) && main.size === sides.mainSide.length ? parent : null
 }

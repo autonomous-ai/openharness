@@ -715,8 +715,8 @@ export class GitHubApp {
 
   /** What the head [head] of pull request [number] is, to judge whether it is git's own merge of its reviewed head and main
    *  (superTabs/mergeCarry.ts, task #3553), read with a token of [PULL_PATCH_PERMISSIONS]: its parents (GET /git/commits); for
-   *  a two-parent head, whether its second parent is on the branch the pull request merges into (GET /compare/{it}...{branch}:
-   *  identical or ahead), and the files of the three comparisons of fixed commits, each GET /compare/{a}...{b} from their merge
+   *  a two-parent head, whether its second parent is on the branch the pull request merges into (GET /compare/{it}...{tip},
+   *  the base commit the same answer names: identical or ahead), and the files of the three comparisons of fixed commits, each GET /compare/{a}...{b} from their merge
    *  base: main's side (first parent to second), the pull request's (second to first) and the merge (first parent to head). Null
    *  unless the pull request still names [head], when GitHub cannot say, or when a side gives as many files as GitHub ever
    *  gives ([COMPARE_FILES_MAX]), as it may have left some out. With the branch from the same answer as the pull request. */
@@ -731,9 +731,11 @@ export class GitHubApp {
     try {
       const pull = await this.call('GET', `${base}/pulls/${number}`, `Bearer ${token}`)
       if (pull.status !== 200) return null
-      const named = pull.body as { head?: { sha?: unknown }; base?: { ref?: unknown } }
-      const at = sha(named.head?.sha), branch = typeof named.base?.ref === 'string' ? named.base.ref : ''
-      if (!at || !branch || at !== head.toLowerCase()) return null
+      const named = pull.body as { head?: { sha?: unknown }; base?: { sha?: unknown; ref?: unknown } }
+      // The base as a commit, from the same answer (security review of #3284, Important 1): a branch name a tag of the same
+      // name could shadow is never compared against.
+      const at = sha(named.head?.sha), tip = sha(named.base?.sha), branch = typeof named.base?.ref === 'string' ? named.base.ref : ''
+      if (!at || !tip || !branch || at !== head.toLowerCase()) return null
       const commit = await this.call('GET', `${base}/git/commits/${at}`, `Bearer ${token}`)
       const listed = commit.status === 200 ? (commit.body as { parents?: unknown }).parents : undefined
       if (!Array.isArray(listed)) return null
@@ -742,7 +744,7 @@ export class GitHubApp {
       const none: MergeSides = { parents: parents as string[], onBase: false, prSide: [], mainSide: [], mergeSide: [] }
       if (parents.length !== 2) return { base: branch, sides: none }
       const [parent, merged] = parents as [string, string]
-      const onBranch = await this.call('GET', `${base}/compare/${merged}...${encodeURIComponent(branch)}?per_page=1`, `Bearer ${token}`)
+      const onBranch = await this.call('GET', `${base}/compare/${merged}...${tip}?per_page=1`, `Bearer ${token}`)
       const status = onBranch.status === 200 ? (onBranch.body as { status?: unknown }).status : undefined
       if (status !== 'identical' && status !== 'ahead') return { base: branch, sides: none }
       const [mainSide, prSide, mergeSide] = [await files(parent, merged), await files(merged, parent), await files(parent, at)]

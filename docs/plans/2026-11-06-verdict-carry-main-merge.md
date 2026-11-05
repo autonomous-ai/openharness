@@ -12,8 +12,10 @@ hand-resolved line, or any other commit, still needs a reviewer.
   head is git's own merge of another head and main (`reader.merge`). The answer is computed by the server from GitHub,
   never taken from the pull request.
 - **What GitHub is asked** (`github/app.ts mainMergeSides`, read-only token): the pull request (it must still name the
-  head; its base branch), the head's parents (`GET /git/commits`), whether the second parent is on the base branch
-  (`GET /compare/{second}...{branch}` is identical or ahead), and three comparisons of fixed commits. Main's side runs from
+  head; its base branch and base commit), the head's parents (`GET /git/commits`), whether the second parent is on the base
+  branch (`GET /compare/{second}...{base commit}` is identical or ahead), and three comparisons of fixed commits. It
+  compares against the commit, never the branch name, which a tag of the same name could shadow (security review,
+  Important 1). Main's side runs from
   the first parent to the second. The pull request's side runs from the second to the first. The merge side runs from the
   first parent to the head. A side at GitHub's file cap (300) answers nothing.
 - **The judge** (`superTabs/mergeCarry.ts cleanMainMergeOf`, pure): the head carries its first parent only when all of
@@ -21,7 +23,7 @@ hand-resolved line, or any other commit, still needs a reviewer.
   - It has exactly two parents, and the second is on the base branch.
   - Main changed something.
   - No path (a rename's old name included) was changed on both sides.
-  - The merge changes exactly main's files, each with main's blob, status and old name.
+  - The merge changes exactly main's files, each with main's blob, status and old name, and no file is listed twice.
 
   Then every path of the head holds the reviewed blob or main's, which is git's own merge. A hand-resolved line or an extra
   change is another blob or another file.
