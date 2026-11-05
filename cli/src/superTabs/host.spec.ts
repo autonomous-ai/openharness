@@ -1133,6 +1133,28 @@ describe('Super Tab native delivery handoff', () => {
         expect(prompt).toContain('> Hawthorn3: Not yet')
         expect(prompt).toContain('In a thread Hawthorn3 started')
       })
+      // Review 1 of #3114 (ENGINEERING.md section 4): a later delivery in a task the PM already had one in reads its messages
+      // beside the Swarm read, so it waits on one read in a row, as before #3114.
+      it('reads a known task\'s messages beside the Swarm read', async () => {
+        const { t } = led()
+        const host = t.open({ contextWaitMs: 300 })
+        await host.tick(); t.event('queued'); t.event('delivered'); await host.tick()
+        expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+        let asked = () => {}
+        const pageAsked = new Promise<void>(resolve => { asked = resolve })
+        const inner = vi.mocked(t.call).getMockImplementation()!
+        vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+          if (/\/conversations\/g12\/messages\?asAgentId=agent&before=/.test(path)) asked()
+          // The Swarm read answers only once the page was asked for: read one after the other, it never answers in time.
+          if (/\/api\/super-tabs\/tab\/(parts|changes)/.test(path)) await Promise.race([pageAsked, new Promise(resolve => setTimeout(resolve, 1_000))])
+          return inner(method, path, body)
+        })
+        t.send()
+        await host.tick()
+        const prompt = vi.mocked(t.core.turns.deliver).mock.calls[1]![1] as string
+        expect(prompt).toContain('Task state: review, Hawthorn3;')
+        expect(prompt).toContain('> Hawthorn3: Ready to batch.')
+      })
       it('still goes with its state line when the page read fails', async () => {
         const { t } = led({}, { latest: () => { throw new Error('offline') } })
         const prompt = await delivered(t)
