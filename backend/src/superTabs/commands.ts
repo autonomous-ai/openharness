@@ -2423,8 +2423,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const startGroup = conversation(state, command.request.conversationId)
       marking(startGroup, () => applyPushOrigin(state, startGroup, context.pushOrigin))
       const written = teamWrittenTask(state, startGroup)
-      // Named the Team account's entry itself, which its owner's choice keeps teammates' work off (task #3060).
-      const ownEntry = ownAccountTeamEntry(state, named.machineId, home, written)
+      // Named the Team account's entry itself, which its owner's choice keeps teammates' work off (task #3060). A branch GitHub
+      // cannot place runs only in a Team account (below), so it counts as Team-written here (security review 2 of #3081).
+      const ownEntry = ownAccountTeamEntry(state, named.machineId, home, written || context.pushOrigin === 'unknown')
       if (ownEntry) failOwnAccountTeamEntry(ownEntry)
       const moved = teamStartRequest(state, named, home, context.teamAccountsIdle, context.teamMachines, written)
       // Moved to the Mac's Team account: the starter is told why in one line (task #2806).
