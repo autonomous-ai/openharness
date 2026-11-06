@@ -203,6 +203,7 @@ void main() {
       expect(f.commands.single, {
         'type': 'task.approve',
         'conversationId': 'new',
+        'suggestedAgentId': '0540',
       });
     });
   }
@@ -221,6 +222,7 @@ void main() {
     expect(f.commands.single, {
       'type': 'task.approve',
       'conversationId': 'new',
+      'suggestedAgentId': '0540',
     });
     expect(find.text('Task new'), findsOneWidget);
   });
