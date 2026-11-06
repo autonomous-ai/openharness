@@ -16,8 +16,8 @@
  * Once: a project is marked (`instructionsBase`) when it is on the base, so a later save is never rewritten. A project made
  * after the move starts on the base already (commands.ts project.create).
  *
- * Only the Swarm that asked (review of #3300, Critical): anh Dee's "ALL OF THEM" is his Swarm's projects. Another team's
- * document is theirs; moving it needs an explicit ruling from Dee or Ken, which adds its id to REBASE_SWARMS.
+ * Only the Swarm that asked (review of #3300, Critical): anh Dee's "ALL OF THEM" is this Swarm's projects. Another team's
+ * document is theirs; moving it needs an explicit ruling from Dee or Ken, which adds it to REBASE_SWARMS with who asked.
  *
  * Rollback: each project's previous revision is in its History; restoring it is an ordinary save of that text (Desktop's
  * Instructions history, or instructions.save), and the mark keeps this job from moving it again.
@@ -39,8 +39,11 @@ import { sleeper } from './dropLegacyJob.js'
 type Transaction = Prisma.TransactionClient
 const TRANSACTION = { maxWait: 5_000, timeout: 60_000 }
 export { BASE_VERSION }
-/** The Swarms this job moves: autonomous.ai, whose owner (anh Dee) asked for it in task #3600. */
-export const REBASE_SWARMS: readonly string[] = ['c51479bd73b59e58176ad9e4']
+/** A Swarm this job moves, and the member who asked for it, recorded as the History's asker. */
+export interface RebaseSwarm { tabId: string; askedBy: string }
+/** autonomous.ai, where anh Dee (a collaborator; the Swarm's owner is ken15) asked for it in task #3600 (review round 2 of
+ *  #3300: never the owner by default, who did not ask). */
+export const REBASE_SWARMS: readonly RebaseSwarm[] = [{ tabId: 'c51479bd73b59e58176ad9e4', askedBy: '6a8fe4fcf1a6b5972eed0103' }]
 export const REBASE_SUMMARY = 'Moved onto the new base: the process is built into Harness; every person\'s rule is kept word for word in People notes.'
 /** Between two passes while any project is held back or any Swarm failed or waits for its split. */
 export const RETRY_MS = 3_600_000
@@ -66,14 +69,14 @@ export interface RebaseOptions {
   now?: () => number
   /** The document builder; tests pass a faulty one to prove the job's own check holds the project back. */
   build?: (before: string) => RebasedDocument
-  /** The Swarms to move: REBASE_SWARMS unless a test names its own. */
-  swarms?: readonly string[]
+  /** The Swarms to move and who asked: REBASE_SWARMS unless a test names its own. */
+  swarms?: readonly RebaseSwarm[]
 }
 
 /** Whether nothing is left to move: every project of every Swarm on the base. */
 export const rebaseDone = (report: RebaseReport): boolean => !report.held.length && !report.failed.length && !report.skipped.length
 
-async function rebaseSwarm(tx: Transaction, tabId: string, now: number, build: (before: string) => RebasedDocument, report: RebaseReport): Promise<void> {
+async function rebaseSwarm(tx: Transaction, { tabId, askedBy }: RebaseSwarm, now: number, build: (before: string) => RebasedDocument, report: RebaseReport): Promise<void> {
   const parts = await loadAll(tx, tabId)
   const state = reassemble(parts) as SuperTabState
   const projects = projectsOf(state)
@@ -94,8 +97,8 @@ async function rebaseSwarm(tx: Transaction, tabId: string, now: number, build: (
     }
     if (Buffer.byteLength(text) > MAX_INSTRUCTIONS_BYTES) { held.push({ tabId, projectId: project.id, why: 'its people\'s rules alone pass 64 KB' }); continue }
     marked.add(project.id)
-    // Asked by the Swarm's owner, who asked for the move (anh Dee), never the project's owner (review of #3300).
-    if (text !== before) writes.push({ projectId: project.id, askedBy: state.ownerId, revision, before, text, rules: carried.length })
+    // Asked by the member named for this Swarm (anh Dee), never its owner or a project's owner (review rounds 1 and 2 of #3300).
+    if (text !== before) writes.push({ projectId: project.id, askedBy, revision, before, text, rules: carried.length })
   }
   if (marked.size) {
     const written = new Map(writes.map(w => [w.projectId, w]))
@@ -122,15 +125,15 @@ async function rebaseSwarm(tx: Transaction, tabId: string, now: number, build: (
  *  server (a test or staging database) has nothing to move. */
 export async function rebaseAll(db: PrismaClient, { now = Date.now, build = before => rebasedDocument(before), swarms = REBASE_SWARMS }: RebaseOptions = {}): Promise<RebaseReport> {
   const report: RebaseReport = { swarms: 0, written: [], unchanged: 0, held: [], failed: [], skipped: [] }
-  for (const id of swarms) {
-    const row = await db.superTab.findUnique({ where: { id }, select: { id: true, format: true } })
+  for (const swarm of swarms) {
+    const row = await db.superTab.findUnique({ where: { id: swarm.tabId }, select: { id: true, format: true } })
     if (!row) continue
     if (row.format !== 2) { report.skipped.push(row.id); continue }
     report.swarms++
     // A Swarm's own pass is all or nothing: a failure leaves its documents as they were, and its report rows out.
     const own: RebaseReport = { ...report, written: [], unchanged: 0, held: [] }
     try {
-      await swarmTransaction(db, tx => rebaseSwarm(tx, row.id, now(), build, own), TRANSACTION)
+      await swarmTransaction(db, tx => rebaseSwarm(tx, swarm, now(), build, own), TRANSACTION)
       report.written.push(...own.written)
       report.unchanged += own.unchanged
       report.held.push(...own.held)

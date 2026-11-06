@@ -30,7 +30,8 @@ a rule is held back, unwritten, and logged as an error every hourly pass.
 - Each PM is told through the new revision and hash, as for any save (the CLI host's "instructions changed" notice).
 - A document stays within 64 KB; the size budget is not enforced here (openharness keeps ~22 KB of rules; later saves may
   only shrink People notes, ruleGuard.ts refuseOverBudget).
-- Only the Swarm that asked (autonomous.ai, REBASE_SWARMS), asked by its owner (anh Dee): another team's document is moved only on
+- Only the Swarm that asked (autonomous.ai, REBASE_SWARMS), recorded as asked by anh Dee (a collaborator there; the owner is
+  ken15, who did not ask): another team's document is moved only on
   an explicit ruling from Dee or Ken (review of #3300, Critical).
 - A Swarm on the base starts each new project on the base, marked (commands.ts project.create): one way to start a project.
 - At most 24 hourly passes; then the job gives up on what is left, saying so as an error.
@@ -46,7 +47,7 @@ a rule is held back, unwritten, and logged as an error every hourly pass.
   History, and the mark keeps the job from moving it again. A project already at 50 revisions drops its oldest, never the
   one before the move.
 - Audience: nothing new is exposed; the History is read by who reads the project.
-- Identity: written by the Swarm (`system`), asked by the project's owner (the Swarm owner for a project nobody owns).
+- Identity: written by the Swarm (`system`), asked by the member REBASE_SWARMS names for the Swarm (anh Dee), never its owner.
 - Failure: a held project or failed Swarm is logged as an error every pass, with why; nothing is written for it.
 - Platforms: server only.
 
