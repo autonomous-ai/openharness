@@ -12,10 +12,10 @@ const task = { goal: words, changes: 'Persist drafts', constraints: 'No sign-in'
 function fixture(board = true) {
   const f = fullSwarm(NOW)
   f.state.projects![0]!.boardMode = board
-  const candidate = f.add('candidate', f.done), other = f.add('other-candidate', f.done)
+  const candidate = f.add('candidate', f.web), other = f.add('other-candidate', f.web)
   let seq = 0
-  const pm: Actor = { kind: 'agent', agentId: f.lead, machineOwnerId: 'unrelated-machine-owner' }
-  const buddy: Actor = { kind: 'agent', agentId: f.buddy, machineOwnerId: 'unrelated-machine-owner' }
+  const pm: Actor = { kind: 'agent', agentId: f.lead, machineOwnerId: `${owner.userId}-machine` }
+  const buddy: Actor = { kind: 'agent', agentId: f.buddy, machineOwnerId: `${owner.userId}-machine` }
   const run = (value: unknown, actor: Actor = peer, context: Partial<CommandContext> = {}) => {
     const effects = applyCommand(f.state, actor, commandSchema.parse(value), { now: NOW, operationId: `approval-${++seq}`, ...context })
     f.edit(s => Object.assign(s, effects.state))
