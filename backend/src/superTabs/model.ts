@@ -15,6 +15,8 @@ import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProjec
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person {
+  /** Own future task decisions; absent keeps Auto approve. */
+  approvalMode?: import('./taskApproval.js').ApprovalMode
   id: string
   email: string
   role: Role
@@ -389,6 +391,8 @@ export function renderWorkTask(task: WorkTask): string {
 }
 
 export interface Conversation {
+  /** Person decision, separate from execution status for old clients. */
+  taskApproval?: import('./taskApproval.js').TaskApproval
   id: string
   /** The removed Swarm-wide Leads conversation, still stored in an older Swarm (leadsRemoved), a person's Buddy chat in a
    *  project (buddies.ts), or their one Buddy chat for the whole Swarm, with no project (`swarm-buddy`, buddies.ts
@@ -456,6 +460,11 @@ export interface Conversation {
   /** Each linked pull request's check state as the PR watch last read it, `green`, `red` or `running` (pullRequestEvents.ts
    *  checksStateOf, task #3827): what the board's Done cards say. Written only when it changes; absent until the watch reads one. */
   pullRequestChecks?: Record<string, import('./pullRequestEvents.js').ChecksState>
+  /** The people who posted here, newest last, at most four (stuck.ts noteWriter, task #3915): whom a stuck line tags. */
+  writers?: string[]
+  /** The stuck line this task's people were told, until it is fixed (stuck.ts, task #3915): its reason's key, the line, whom it
+   *  tagged and what its fix says. */
+  stuck?: { key: string; messageId: string; tagged: string[]; fixed: string }
   /** Its steps and reviews (groups whose reviewOf is this one), newest last, at most 200 (production's most was 14): what a new
    *  pull request head re-derives the checks of, dormant ones included (#3394). Empty from a task's start; absent on a task
    *  from before, whose PR watch looks them up once (pullRequestEvents.ts listedSteps). */
@@ -805,6 +814,8 @@ export const NOTICE_READERS = {
   'notice-digest': 'recipients',
   // An agent's tag, ask or line to a person, routed to the PM instead (crewNeeds.ts): the PM's alone. Never gathered.
   'crew-need': 'recipients',
+  // A person's decision wakes the task's PM; people read the decision in Tasks.
+  'task-approval': 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
   system: 'people',
   // A save of the project's instructions was posted in the project chat until #3132 (Dee and Ken, 11-05): the rows stored

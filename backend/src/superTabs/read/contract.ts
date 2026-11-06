@@ -169,6 +169,8 @@ interface ReadMeta {
 
 /** GET /api/super-tabs/:tabId/parts[?asAgentId=] */
 export interface FirstLoad extends ReadMeta {
+  /** Own active Tasks; absent for agent readers and older servers. */
+  personalTasks?: import('./personalTasks.js').PersonalTasks
   tabId: string
   githubApp?: true
   /** This backend opens a task's steps (`conversation.create` with `step`, task steps design); absent on an older one. */
@@ -200,6 +202,8 @@ export interface MachineReading { key: string; version: number; receivedAt: numb
 /** GET /api/super-tabs/:tabId/machine-readings[?asAgentId=]: every machine the reader sees, whole, for the route and the machine panel. */
 export interface MachineReadings { format: number; serverTime: number; machines: LivePart<MachineView>[] }
 export interface ChangesDelta extends ReadMeta {
+  /** Only summaries changed since this response’s existing cursor. */
+  personalTasks?: import('./personalTasks.js').PersonalTasks
   reload: false
   head: LivePart<HeadView> | null
   members: PartChange<MemberView>[]
