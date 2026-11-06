@@ -30,16 +30,21 @@ a rule is held back, unwritten, and logged as an error every hourly pass.
 - Each PM is told through the new revision and hash, as for any save (the CLI host's "instructions changed" notice).
 - A document stays within 64 KB; the size budget is not enforced here (openharness keeps ~22 KB of rules; later saves may
   only shrink People notes, ruleGuard.ts refuseOverBudget).
-- Every Swarm on the server (Birch's stated default; River did not limit it).
+- Only the Swarm that asked (autonomous.ai, REBASE_SWARMS), asked by its owner (anh Dee): another team's document is moved only on
+  an explicit ruling from Dee or Ken (review of #3300, Critical).
+- A Swarm on the base starts each new project on the base, marked (commands.ts project.create): one way to start a project.
+- At most 24 hourly passes; then the job gives up on what is left, saying so as an error.
 
 ## Design
 
 - Growth: one revision per project, once; revisions stay capped at 50 per project (instructionsStore.ts).
 - Concurrency: one Swarm per transaction, head version guarded: a command in between wins and the Swarm is retried next pass.
-- Read cost: one pass per worker start, then hourly only while something is held back; a marked project costs no read.
+- Read cost: one Swarm read per pass; one pass per worker start, then hourly (a day at most) only while something is held back.
 - Scale: 10x Swarms is 10x passes of one transaction each; the pass log's counts warn first.
 - Compatibility: `instructionsBase` is a new optional project field; old readers ignore it.
-- Migration + rollback: this is the migration; rollback is each project's previous revision in the History.
+- Migration + rollback: this is the migration; rollback is an ordinary save of each project's previous revision from its
+  History, and the mark keeps the job from moving it again. A project already at 50 revisions drops its oldest, never the
+  one before the move.
 - Audience: nothing new is exposed; the History is read by who reads the project.
 - Identity: written by the Swarm (`system`), asked by the project's owner (the Swarm owner for a project nobody owns).
 - Failure: a held project or failed Swarm is logged as an error every pass, with why; nothing is written for it.

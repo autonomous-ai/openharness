@@ -14,7 +14,13 @@
  * host compares, so each PM is told the instructions changed and reads them again, as for any save.
  *
  * Once: a project is marked (`instructionsBase`) when it is on the base, so a later save is never rewritten. A project made
- * after the release starts on the template and moves on the next pass.
+ * after the move starts on the base already (commands.ts project.create).
+ *
+ * Only the Swarm that asked (review of #3300, Critical): anh Dee's "ALL OF THEM" is his Swarm's projects. Another team's
+ * document is theirs; moving it needs an explicit ruling from Dee or Ken, which adds its id to REBASE_SWARMS.
+ *
+ * Rollback: each project's previous revision is in its History; restoring it is an ordinary save of that text (Desktop's
+ * Instructions history, or instructions.save), and the mark keeps this job from moving it again.
  */
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { clock, guardedWrite, loadAll, reassemble } from '../parts/index.js'
@@ -26,17 +32,20 @@ import { INSTRUCTIONS_TEMPLATE } from '../instructionsTemplate.js'
 import { instructionsId, writeInstructions } from '../instructionsStore.js'
 import { droppedRules } from '../instructionsDiff.js'
 import { droppedLines } from '../ruleGuard.js'
-import { rebasedDocument, type RebasedDocument } from '../instructionsRebase.js'
+import { BASE_VERSION, rebasedDocument, type RebasedDocument } from '../instructionsRebase.js'
 import { logger } from '../../utils/logger.js'
 import { sleeper } from './dropLegacyJob.js'
 
 type Transaction = Prisma.TransactionClient
 const TRANSACTION = { maxWait: 5_000, timeout: 60_000 }
-/** The base a project is on once this job moved it (SwarmProject.instructionsBase). */
-export const BASE_VERSION = 1
+export { BASE_VERSION }
+/** The Swarms this job moves: autonomous.ai, whose owner (anh Dee) asked for it in task #3600. */
+export const REBASE_SWARMS: readonly string[] = ['c51479bd73b59e58176ad9e4']
 export const REBASE_SUMMARY = 'Moved onto the new base: the process is built into Harness; every person\'s rule is kept word for word in People notes.'
 /** Between two passes while any project is held back or any Swarm failed or waits for its split. */
 export const RETRY_MS = 3_600_000
+/** Passes before the job gives up on what it could not move, saying so: a day of hourly tries. */
+export const MAX_PASSES = 24
 /** Lets a starting worker finish its own startup first. */
 export const START_DELAY_MS = 60_000
 
@@ -57,6 +66,8 @@ export interface RebaseOptions {
   now?: () => number
   /** The document builder; tests pass a faulty one to prove the job's own check holds the project back. */
   build?: (before: string) => RebasedDocument
+  /** The Swarms to move: REBASE_SWARMS unless a test names its own. */
+  swarms?: readonly string[]
 }
 
 /** Whether nothing is left to move: every project of every Swarm on the base. */
@@ -83,7 +94,8 @@ async function rebaseSwarm(tx: Transaction, tabId: string, now: number, build: (
     }
     if (Buffer.byteLength(text) > MAX_INSTRUCTIONS_BYTES) { held.push({ tabId, projectId: project.id, why: 'its people\'s rules alone pass 64 KB' }); continue }
     marked.add(project.id)
-    if (text !== before) writes.push({ projectId: project.id, askedBy: project.ownerId || state.ownerId, revision, before, text, rules: carried.length })
+    // Asked by the Swarm's owner, who asked for the move (anh Dee), never the project's owner (review of #3300).
+    if (text !== before) writes.push({ projectId: project.id, askedBy: state.ownerId, revision, before, text, rules: carried.length })
   }
   if (marked.size) {
     const written = new Map(writes.map(w => [w.projectId, w]))
@@ -106,11 +118,13 @@ async function rebaseSwarm(tx: Transaction, tabId: string, now: number, build: (
   report.held.push(...held)
 }
 
-/** One pass over every Swarm: each project not on the base yet is moved, or held back and said why. */
-export async function rebaseAll(db: PrismaClient, { now = Date.now, build = before => rebasedDocument(before) }: RebaseOptions = {}): Promise<RebaseReport> {
+/** One pass over the named Swarms: each project not on the base yet is moved, or held back and said why. A Swarm not on this
+ *  server (a test or staging database) has nothing to move. */
+export async function rebaseAll(db: PrismaClient, { now = Date.now, build = before => rebasedDocument(before), swarms = REBASE_SWARMS }: RebaseOptions = {}): Promise<RebaseReport> {
   const report: RebaseReport = { swarms: 0, written: [], unchanged: 0, held: [], failed: [], skipped: [] }
-  const rows = await db.superTab.findMany({ select: { id: true, format: true }, orderBy: { id: 'asc' } })
-  for (const row of rows) {
+  for (const id of swarms) {
+    const row = await db.superTab.findUnique({ where: { id }, select: { id: true, format: true } })
+    if (!row) continue
     if (row.format !== 2) { report.skipped.push(row.id); continue }
     report.swarms++
     // A Swarm's own pass is all or nothing: a failure leaves its documents as they were, and its report rows out.
@@ -127,30 +141,40 @@ export async function rebaseAll(db: PrismaClient, { now = Date.now, build = befo
   // Said loudly, each pass: a project held back keeps its old document, and its PM works against old process text, until
   // someone fixes it (backend AGENTS.md rule 4).
   for (const held of report.held) {
-    logger.error(`[instructions-rebase] project held back: ${held.why}. It keeps its old instructions until this is fixed; tried again every hour.`,
+    logger.error(`[instructions-rebase] project held back: ${held.why}. It keeps its old instructions until this is fixed; tried again every hour, a day at most.`,
       { tabId: held.tabId, projectId: held.projectId, ...held.rules ? { rules: held.rules.length } : {} })
   }
   for (const failed of report.failed) logger.error('[instructions-rebase] Swarm not moved; tried again every hour.', failed)
   return report
 }
 
-/** Starts the move in the background after [delayMs], a pass every hour until nothing is left; the returned function stops it. */
+/** Passes until nothing is left to move, at most [passes], [wait]ing RETRY_MS between; then it gives up on what is left,
+ *  saying so as an error. Returns the last pass's report (null when stopped before one). */
+export async function rebaseUntilDone(db: PrismaClient, { passes = MAX_PASSES, wait = sleeper(), signal, ...options }: RebaseOptions & {
+  passes?: number; wait?: (ms: number) => Promise<void>; signal?: AbortSignal } = {}): Promise<RebaseReport | null> {
+  let report: RebaseReport | null = null
+  for (let pass = 1; pass <= passes && !signal?.aborted; pass++) {
+    try {
+      report = await rebaseAll(db, options)
+      logger.info('[instructions-rebase] pass', { pass, swarms: report.swarms, written: report.written.length, unchanged: report.unchanged,
+        held: report.held.length, failed: report.failed.length, skipped: report.skipped.length })
+      if (rebaseDone(report)) return report
+    } catch (error) {
+      logger.error('[instructions-rebase] pass failed', { pass, error: error instanceof Error ? error.message : String(error) })
+    }
+    if (pass < passes) await wait(RETRY_MS)
+  }
+  if (!signal?.aborted) {
+    logger.error(`[instructions-rebase] gave up after ${passes} passes: what is left keeps its old instructions until someone fixes it and restarts the worker.`,
+      { held: report?.held.map(h => ({ tabId: h.tabId, projectId: h.projectId, why: h.why })) ?? [], failed: report?.failed ?? [], skipped: report?.skipped ?? [] })
+  }
+  return report
+}
+
+/** Starts the move in the background after [delayMs]; the returned function stops it. */
 export function startInstructionsRebase(db: PrismaClient, delayMs = START_DELAY_MS): () => void {
   const control = new AbortController()
   const wait = sleeper(control.signal)
-  void (async () => {
-    await wait(delayMs)
-    while (!control.signal.aborted) {
-      try {
-        const report = await rebaseAll(db)
-        logger.info('[instructions-rebase] pass', { swarms: report.swarms, written: report.written.length, unchanged: report.unchanged,
-          held: report.held.length, failed: report.failed.length, skipped: report.skipped.length })
-        if (rebaseDone(report)) return
-      } catch (error) {
-        logger.error('[instructions-rebase] pass failed; tried again every hour.', { error: error instanceof Error ? error.message : String(error) })
-      }
-      await wait(RETRY_MS)
-    }
-  })()
+  void wait(delayMs).then(() => rebaseUntilDone(db, { wait, signal: control.signal }))
   return () => control.abort()
 }

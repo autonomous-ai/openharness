@@ -148,9 +148,13 @@ describe('every project on the new base, once, by itself', () => {
   // Review of #3300, Critical: Dee's "ALL OF THEM" is this Swarm's projects. Another team's Swarm is never touched.
   it('moves only the Swarm that asked for it, as asked by its owner, and leaves every other Swarm as it was', async () => {
     expect(REBASE_SWARMS).toEqual(['c51479bd73b59e58176ad9e4'])
-    const ours = await swarm('c51479bd73b59e58176ad9e4')
+    const ours = await swarm()
     const theirs = await swarm()
-    const report = await rebaseAll(db, { now: () => now })
+    // By default it reads only the Swarm that asked, which is none of these: nothing on the server is scanned or written.
+    const none = await rebaseAll(db, { now: () => now })
+    expect(none).toMatchObject({ swarms: 0, written: [], held: [], failed: [], skipped: [] })
+    expect(rebaseDone(none)).toBe(true)
+    const report = await rebaseAll(db, { now: () => now, swarms: [ours.tab] })
     expect(report.swarms).toBe(1)
     expect(report.written.map(w => w.tabId)).toEqual([ours.tab, ours.tab])
     expect((await projects(theirs.tab)).map(p => [p.instructionsRevision, p.instructionsBase])).toEqual([[2, undefined], [1, undefined]])

@@ -148,14 +148,14 @@ describe('a new project', () => {
     if (moved) Object.assign(projectsOf(state)[0]!, { instructionsBase: BASE_VERSION })
     const effects = applyCommand(state, { kind: 'person', userId: 'owner', email: 'owner@example.com' },
       { type: 'project.create', name: 'App', visibility: 'public', brief: '' }, { now: 1000, operationId: 'op-1' })
-    return { effects, project: projectsOf(effects.state).find(p => p.id === 'op-1')! }
+    return { effects, project: projectsOf(effects.state).find(p => p.id === effects.result.projectId)! }
   }
 
   it('starts on the base, marked, in a Swarm whose projects moved onto it', () => {
     const { effects, project } = create(true)
     expect(BASE_DOCUMENT).toBe(rebasedDocument(INSTRUCTIONS_TEMPLATE).text)
     expect(project).toMatchObject({ instructionsRevision: 1, instructionsHash: instructionsHash(BASE_DOCUMENT), instructionsBase: BASE_VERSION })
-    expect(effects.instructions).toMatchObject({ projectId: 'op-1', revision: 1, text: BASE_DOCUMENT })
+    expect(effects.instructions).toMatchObject({ projectId: project.id, revision: 1, text: BASE_DOCUMENT })
   })
 
   it('starts on the template, unmarked, in any other Swarm', () => {

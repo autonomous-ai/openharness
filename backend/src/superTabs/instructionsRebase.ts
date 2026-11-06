@@ -8,6 +8,7 @@
  * refused, never written.
  */
 import { attributedRules, droppedRules, type AttributedRule, type DroppedRule } from './instructionsDiff.js'
+import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 
 export const REBASED_INTRO = `# Project instructions
 
@@ -133,3 +134,9 @@ export function rebasedDocument(before: string, facts = ''): RebasedDocument {
   const text = `${parts.join('\n\n')}\n`
   return { text, carried: attributedRules(before), lost: droppedRules(before, text) }
 }
+
+/** The base a project is on once moved (SwarmProject.instructionsBase): migration/rebase.ts moves a project onto it once. */
+export const BASE_VERSION = 1
+/** What a new project of a Swarm on the base starts as (commands.ts project.create): the template's document moved, so a
+ *  project made after the move and one moved by it read alike. */
+export const BASE_DOCUMENT = rebasedDocument(INSTRUCTIONS_TEMPLATE).text

@@ -74,6 +74,7 @@ import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROP
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { repeatedRules } from './instructionsDiff.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
+import { BASE_DOCUMENT, BASE_VERSION } from './instructionsRebase.js'
 import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
 import { contractRefusal, missingContract } from './taskContract.js'
 import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
@@ -1881,9 +1882,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (projects.length >= 100) fail('PROJECTS_FULL', 'A swarm can have up to 100 projects.')
       const leadConversationId = `project-${operationId}`
       // It starts on a copy of the built-in instructions as revision 1, the team's own to change (design, The built-in template).
+      // In a Swarm whose projects moved onto the base (#3600), on the base, marked: one way to start a project (review of #3300).
+      const onBase = projects.some(p => (p.instructionsBase ?? 0) >= BASE_VERSION)
+      const first = onBase ? { instructionsRevision: 1, instructionsHash: instructionsHash(BASE_DOCUMENT), instructionsBase: BASE_VERSION } : FIRST_INSTRUCTIONS
       projects.push({ id: operationId, name: command.name, ownerId: actor.userId, ownerGeneration: person(state, actor.userId).generation, leadConversationId,
-        visibility: command.visibility, members: [], updateMinutes: 5, skillMode: 'default', ...FIRST_INSTRUCTIONS })
-      effects.instructions = { projectId: operationId, revision: 1, hash: FIRST_INSTRUCTIONS.instructionsHash, text: INSTRUCTIONS_TEMPLATE,
+        visibility: command.visibility, members: [], updateMinutes: 5, skillMode: 'default', ...first })
+      effects.instructions = { projectId: operationId, revision: 1, hash: first.instructionsHash, text: onBase ? BASE_DOCUMENT : INSTRUCTIONS_TEMPLATE,
         summary: FIRST_SUMMARY, writtenBy: { kind: 'person', id: actor.userId }, askedBy: actor.userId, at: context.now }
       state.conversations.push({ id: leadConversationId, projectId: operationId, title: 'Lead', leadId: null,
         agentIds: [], archived: false, brief: command.brief, checks: [], assignment: null, lastMessageSequence: 0 })
