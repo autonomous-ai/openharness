@@ -115,6 +115,15 @@ describe('relaunch helpers', () => {
     expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'claude', expect.objectContaining({ dsh: null, agent: null, startedBy: null, gridLaunch: grid }), 'a1', expect.any(Function), undefined)
   })
 
+  it('carries the row\'s launch flags into the build, so restart, restore and retarget all apply them', async () => {
+    const { deps, helpers } = setup()
+    await helpers.relaunchOverrides(session({ launchArgs: ['--chrome'] }))
+    expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'claude', expect.objectContaining({ launchArgs: ['--chrome'] }), 'a1', expect.any(Function), undefined)
+    // A retarget's source does not carry them; the row's still do.
+    await helpers.relaunchOverrides(session({ launchArgs: ['--chrome'] }), { gridLaunch: null } as never)
+    expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'claude', expect.objectContaining({ launchArgs: ['--chrome'] }), 'a1', expect.any(Function), undefined)
+  })
+
   it('keeps who started it from the row, so a harness another agent started keeps its pull request line', async () => {
     const { deps, helpers } = setup()
     const grid = { networkId: 'grid-1', networkName: 'Home grid' }

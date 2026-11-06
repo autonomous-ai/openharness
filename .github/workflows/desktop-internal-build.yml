@@ -80,6 +80,9 @@ jobs:
           fetch-depth: 0   # release-desktop.sh reads every tag and checks HEAD is on the branch
           sparse-checkout: |
             /desktop/scripts/release-desktop.sh
+            /scripts/release-window.sh
+            /scripts/release-window.py
+            /scripts/release-window.json
             /.github/workflows/release-desktop.yml
           sparse-checkout-cone-mode: false
 

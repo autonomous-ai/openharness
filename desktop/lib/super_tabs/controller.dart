@@ -463,6 +463,20 @@ class SuperTabController extends ChangeNotifier {
     return _uploadErrors[conversationId];
   }
 
+  /// Takes the last action's refusal for a caller that says it in its own place, the instructions panel's Save (task
+  /// #3652): no composer says it after. An action whose answer was lost keeps it, since every composer waits on it
+  /// with Retry.
+  String? takeOperationError() {
+    final failure = operationError;
+    if (failure == null || _pending != null) return failure;
+    operationError = null;
+    operationErrorCode = null;
+    _operationErrorFor = null;
+    _operationErrorRoot = null;
+    _changed();
+    return failure;
+  }
+
   /// The thread the last failed reply was going to: the thread of the message
   /// it answers, or that message itself, as the backend files a reply. Null
   /// when the failure was not a reply.
@@ -2256,10 +2270,12 @@ class SuperTabController extends ChangeNotifier {
   bool hasNewer(String id) => _newer.contains(id);
 
   /// Brings [id]'s newest messages: when more are waiting than reads
-  /// brought, the latest page replaces what is held; otherwise what came
-  /// after it is read. Its own read: one already under way may have asked
-  /// for less (the rows held below a reader scrolled up).
-  Future<void> showLatest(String id) async {
+  /// brought, or [replace] asks it, the latest page replaces what is held;
+  /// otherwise what came after it is read. Its own read: one already under
+  /// way may have asked for less (the rows held below a reader scrolled up).
+  /// [replace] is Jump to latest from far up (task #3630): the rows read back
+  /// go, and earlier history is read again from the latest page.
+  Future<void> showLatest(String id, {bool replace = false}) async {
     _readingBack.remove(id);
     for (
       var under = _reading[(id, false)];
@@ -2269,7 +2285,7 @@ class SuperTabController extends ChangeNotifier {
       await under;
     }
     if (_disposed) return;
-    if (_newer.contains(id)) _latestWanted.add(id);
+    if (replace || _newer.contains(id)) _latestWanted.add(id);
     await _readMessages(id);
   }
 

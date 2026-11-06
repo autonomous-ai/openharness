@@ -184,6 +184,12 @@ export interface RegisteredSession {
    */
   launchModel?: LaunchModel
   /**
+   * Extra command-line words an owner asked for on this agent (`agent_restart`'s `launchArgs`, lib/launchArgs.ts),
+   * appended to every relaunch so they hold across a restart, a reboot and a daemon update until cleared. Never an
+   * empty array: clearing deletes the field. Absent for an agent with none.
+   */
+  launchArgs?: string[]
+  /**
    * The conversation this agent was in on its own login when a fresh move took it onto a grid
    * (`agent_retarget` with `fresh`: a conversation too long for the grid model's window). The way
    * home reopens it instead of the grid's, and forgets it once home. Absent when there is none.
@@ -686,7 +692,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, ...rest } = row
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
@@ -694,12 +700,14 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Read as load() reads it: a stopped harness an older CLI saved names its Swarm role in the wire's values (lead, dev,
   // review), and is kept as this release keeps it (project instructions, phase 4).
   const swarmSkill = parseSwarmSkill(rawSwarmSkill)
+  const launchArgs = storedLaunchArgs(rawLaunchArgs)
   return {
     ...rest,
     ...(externalResume ? { externalResume } : {}),
     ...(scmLaunch ? { scmLaunch } : {}),
     ...(launchModel ? { launchModel } : {}),
     ...(swarmSkill ? { swarmSkill } : {}),
+    ...(launchArgs ? { launchArgs } : {}),
     ...(normalizedClosePlan(rawClosePlan) ? { closePlan: normalizedClosePlan(rawClosePlan)! } : {}),
     schemaVersion: 2,
     active,
@@ -740,6 +748,11 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
  */
 export function parentAgentIdOf(value: unknown): string | null {
   return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value) ? value : null
+}
+
+/** Only a non-empty array of strings is a saved flag list; anything else on disk is dropped, never launched with. */
+function storedLaunchArgs(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.length > 0 && value.every(w => typeof w === 'string') ? [...value] : undefined
 }
 
 /** `parentAgentId` as a row keeps it: only beside `startedBy: 'agent'`, and only an agent id. */
@@ -1384,6 +1397,7 @@ class Registry {
           ...(rawGridLaunch !== undefined ? { gridLaunch: rawGridLaunch } : {}),
           ...(rawGridLaunch ? { gridWebSearch: normalizedGridWebSearch(raw?.gridWebSearch) } : {}),
           ...(rawScmLaunch ? { scmLaunch: rawScmLaunch } : {}),
+          ...(storedLaunchArgs(raw.launchArgs) ? { launchArgs: storedLaunchArgs(raw.launchArgs) } : {}),
           ...(storedLaunchModel((raw as { launchModel?: unknown }).launchModel) ? { launchModel: storedLaunchModel((raw as { launchModel?: unknown }).launchModel) } : {}),
           // ⚠️ Rehydrated EXPLICITLY, like every field above it. A row is rebuilt from this list on
           // load, so a field added to the type and the setter but not to this list is written to
@@ -2079,6 +2093,8 @@ class Registry {
       // And the model it launches with, for the same reason: a hook bind that forgot it reopened a Product Manager on its
       // engine's own default (task #3395).
       ...(existing?.launchModel ? { launchModel: existing.launchModel } : {}),
+      // And the owner's extra launch flags: a hook bind that forgot them would drop them at the first relaunch.
+      ...(existing?.launchArgs ? { launchArgs: existing.launchArgs } : {}),
       // And for the conversation a fresh move left: the grid's first hook would otherwise forget the way home.
       ...(existing?.subscriptionSessionId ? { subscriptionSessionId: existing.subscriptionSessionId } : {}),
       defaultName: existing?.defaultName,
@@ -2282,6 +2298,7 @@ class Registry {
     entry.grid = null
     entry.subscriptionModel = null
     delete entry.launchModel
+    delete entry.launchArgs
     entry.model = null
     entry.title = null
     entry.touchedAt = Date.now()
@@ -2593,6 +2610,17 @@ class Registry {
     const stored = storedLaunchModel(launchModel)
     if (stored) session.launchModel = stored
     else delete session.launchModel
+    session.touchedAt = Date.now()
+    this.save()
+    return true
+  }
+
+  /** Save the extra launch words [agentId] relaunches with (RegisteredSession.launchArgs); an empty list removes them. */
+  setLaunchArgs(agentId: string, args: string[]): boolean {
+    const session = this.agents.get(agentId)
+    if (!session) return false
+    if (args.length) session.launchArgs = [...args]
+    else delete session.launchArgs
     session.touchedAt = Date.now()
     this.save()
     return true

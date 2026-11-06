@@ -121,7 +121,7 @@ import { MAX_PROPOSALS, proposalQuestion, proposalTitle, REASK_DAYS, reflectionM
 import { readEvidence, recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByAnswer, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
-import { OVERDUE_PER_PASS, overdueDecisions } from './overdueDecisions.js'
+import { OVERDUE_PER_PASS, overdueDecisions, dueDefaultDecisions } from './overdueDecisions.js'
 import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
@@ -1472,38 +1472,48 @@ export class SuperTabStore {
     })
   }
 
-  /**
-   * Leaves to the PM every decision asked at least 24 hours ago that its person still has not answered (spec: Diego,
-   * 2026-11-04, a decision left a day goes to the PM). Runs as the person through the same pipeline as their own delegate, with
-   * the store-only `overdue` context, so a person answering in the same second wins (DECISION_ANSWERED) and a repeat replays.
-   * Every pass reads the waiting decisions asked 24 hours to 8 days ago, 500 at most, oldest first. No cursor: a row that failed or
-   * missed the cap is read again next pass until it is 8 days old, and a person answering takes it out of the index range.
-   */
+  /** Applies explicit due recommendations first, then legacy 24-hour defaults, at most 500 per pass. Each answer uses
+   * the same access-checked transaction and conditional write as a person's answer. Explicit deadlines have no age cutoff;
+   * legacy retries keep their 8-day reach. Failed rows remain waiting and the next minute retries them. */
   async leaveOverdueDecisions(now: number, limit = OVERDUE_PER_PASS): Promise<{ answered: number; skipped: number; failed: number }> {
-    const rows = await overdueDecisions(this.db, now, limit)
+    // Reserve legacy capacity even when the explicit queue is full; let explicit work use any unused share.
+    const legacyWaiting = await overdueDecisions(this.db, now, limit)
+    const reserved = Math.min(legacyWaiting.length, Math.max(1, Math.floor(limit / 2)))
+    const due = reserved < limit ? await dueDefaultDecisions(this.db, now, limit - reserved) : []
+    const legacy = legacyWaiting.slice(0, limit - due.length)
+    const rows = [...due.map(row => ({ ...row, defaulted: true })), ...legacy.map(row => ({ ...row, defaulted: false }))]
     const result = { answered: 0, skipped: 0, failed: 0 }
     const tabs = new Map<string, AuthUser['autonomousEnv'] | null>()
     const codes = new Set<string>()
+    const withdrawDefault = async (row: typeof rows[number]) => {
+      if (!row.defaulted) return
+      // A person can answer meanwhile; never overwrite that answer. Closed rows leave the next indexed due range.
+      await this.db.superTabDecision.updateMany({ where: { id: row.id, tabId: row.tabId,
+        OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] }, data: { answeredAt: new Date(now), withdrawn: true } })
+    }
     for (const row of rows) {
       try {
         if (!tabs.has(row.tabId)) tabs.set(row.tabId, (await this.db.superTab.findUnique({ where: { id: row.tabId }, select: { autonomousEnv: true } }))?.autonomousEnv as AuthUser['autonomousEnv'] | undefined ?? null)
         const autonomousEnv = tabs.get(row.tabId)
         const person = await this.db.user.findUnique({ where: { id: row.personId }, select: { email: true } })
-        if (!autonomousEnv || !person) { result.skipped++; continue }
+        if (!autonomousEnv || !person) { await withdrawDefault(row); result.skipped++; continue }
         const user: AuthUser = { sub: row.personId, email: person.email, autonomousEnv, role: 'user' }
-        await this.executeOnce(user, row.tabId, { operationId: `overdue-decision-${row.id}`, command: { type: 'decision.answer', decisionId: row.id, delegate: true } },
-          undefined, undefined, false, { overdue: true })
+        await this.executeOnce(user, row.tabId, { operationId: `${row.defaulted ? 'default' : 'overdue'}-decision-${row.id}`, command: { type: 'decision.answer', decisionId: row.id, delegate: true } },
+          undefined, undefined, false, row.defaulted ? { defaulted: true } : { overdue: true })
         result.answered++
       } catch (error) {
         const code = error instanceof SuperTabError ? error.code : 'unknown'
         // Answered meanwhile, a recommendation out of range, or the person or Swarm gone: nothing for the sweep to do.
-        if (code === 'DECISION_ANSWERED' || code === 'INVALID_DECISION' || code === 'NOT_FOUND' || code === 'WORKSPACE_ACCESS_REVOKED') { result.skipped++; continue }
+        if (code === 'DECISION_ANSWERED' || code === 'INVALID_DECISION' || code === 'NOT_FOUND' || code === 'WORKSPACE_ACCESS_REVOKED' || code === 'FORBIDDEN' || code === 'READ_ONLY') {
+          try { await withdrawDefault(row) } catch { result.failed++; codes.add('DEFAULT_WITHDRAW_FAILED'); continue }
+          result.skipped++; continue
+        }
         result.failed++
         codes.add(code)
       }
     }
     // One loud line a pass (backend/AGENTS.md rule 4): codes only, never ids or emails.
-    if (result.failed > 0) logger.error('[swarm-sweeps] overdue decisions failed: they stay waiting and every pass tries them again until answered or 8 days old', { failed: result.failed, codes: [...codes] })
+    if (result.failed > 0) logger.error('[swarm-sweeps] overdue decisions failed: they stay waiting and every pass tries them again until answered (legacy questions stop at 8 days old)', { failed: result.failed, codes: [...codes] })
     return result
   }
 
@@ -1698,16 +1708,16 @@ export class SuperTabStore {
     }
   }
 
-  /** [only]: what the store alone may give a command: `overdue` for decision.answer (leaveOverdueDecisions), `movedTo` for
+  /** [only]: what the store alone may give a command: `overdue`/`defaulted` for decision.answer (leaveOverdueDecisions), `movedTo` for
    *  machine.moved (computerSignedIn). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
+    workspaceLeave = false, only: { overdue?: boolean; defaulted?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([this.pushOriginFor(user, tabId, command),
       this.repositoryReachFor(user, tabId, command), this.pullRequestFilesFor(user, tabId, command), this.pullRequestMergesFor(user, tabId, command)])
     let ended: WorkHold[] = [], started: WorkHold[] = []
-    // Whether the Swarm, as this write leaves it, has a crew: only then may the write start a dispatch pass (dispatchSoon).
-    let crewed = false
+    // With only PMs and Buddies, no dispatch pass can hand out work.
+    let hasWorkers = false
     const done = await transaction(this.db, async tx => {
       // A retried attempt starts again: only the attempt that commits says which tasks ended or started.
       ended = []
@@ -1810,7 +1820,8 @@ export class SuperTabStore {
       }
       if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed' && command.type !== 'machine.cleaned') author(original, actor)
       const context: CommandContext = { operationId, now: this.now(), ...(leavingDeleted ? { workspaceLeave: true as const } : {}),
-        ...(only.overdue && command.type === 'decision.answer' ? { overdue: true as const } : {}) }
+        ...(only.overdue && command.type === 'decision.answer' ? { overdue: true as const } : {}),
+        ...(only.defaulted && command.type === 'decision.answer' ? { defaulted: true as const } : {}) }
       if (command.type === 'machine.moved' && only.movedTo && actor.kind === 'person') {
         context.computerMove = await this.computerMove(tx, original, actor.userId, command.machineId, only.movedTo)
       }
@@ -2021,7 +2032,7 @@ export class SuperTabStore {
         : command.type === 'work.assign' || command.type === 'agent.start' ? command.routeDecisionId : undefined
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
       const effects = applyCommand(original, actor, command, context)
-      crewed = effects.state.agents.some(a => !!a.crew)
+      hasWorkers = effects.state.agents.some(a => !isBuddy(a) && !ledProject(effects.state, a.id))
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source, message.recipients))
       for (const group of effects.state.conversations) {
@@ -2349,8 +2360,8 @@ export class SuperTabStore {
     })
     this.endWork(tabId, ended)
     this.startWork(tabId, started)
-    // A write that may free a crew member or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
-    if (crewed && freesOrOpens(command)) this.dispatchSoon(tabId)
+    // A write that may free a worker or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
+    if (hasWorkers && freesOrOpens(command)) this.dispatchSoon(tabId)
     return done
   }
 
@@ -2373,7 +2384,7 @@ export class SuperTabStore {
     if (!pm || !task || !project || pm.workDecision === 'stop' || ledProject(state, agentId)?.id !== project.id) {
       return pmRefused(new SuperTabError('NOT_FOUND', 'This Super Tab is unavailable.', 404))
     }
-    // The pick as this write's state has it: the member still free and in the crew, the task still its candidate (open, its
+    // The pick as this write's state has it: the worker still free, the task still its candidate (open, its
     // day come, its lane or pin, not the one it just lost). What moved since the pass read is refused, and the next pass decides.
     const assigned = command.type === 'work.assign' ? command.agentId : undefined
     const now = this.now(), member = freeCrew(state, project.id, DISPATCH_RULES, now).find(a => a.id === assigned)
@@ -4906,7 +4917,7 @@ export class SuperTabStore {
       if (!fresh.length) return 'empty'
       await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
       await writeDecisions(tx, tabId, askDecisions(state, chat, project.ownerId, fresh.map(proposalQuestion),
-        { operationId: id, askerAgentId: lead.id, assignmentId: null, kind: REFLECTION_DECISION }), now)
+        { now, operationId: id, askerAgentId: lead.id, assignmentId: null, kind: REFLECTION_DECISION }), now)
       return 'posted'
     })
   }
