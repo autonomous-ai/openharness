@@ -3538,17 +3538,6 @@ class _SuperTabViewState extends State<SuperTabView>
     ],
   );
 
-  /// The Buddy pane's icon at the Tasks bar's end, while that pane is hidden.
-  List<Widget> _boardTrailing() => [
-    if (_rightHidden)
-      AppIconButton(
-        key: const ValueKey('super-pane-right-toggle'),
-        icon: AppIcons.panelRightOpen,
-        tooltip: 'Show your Buddy',
-        onPressed: () => _togglePane(left: false),
-      ),
-  ];
-
   /// Board and Chat (Ken's review of the spec): the project's Board first, its chat a tab away while projects still
   /// talk to their PM there.
   Widget _projectTabs(SuperTabProject project, {required bool board}) => Row(
@@ -3661,7 +3650,6 @@ class _SuperTabViewState extends State<SuperTabView>
       },
       onOpenMessage: (id, messageId) => unawaited(_openMessage(id, messageId)),
       barLeading: boardProject == null ? null : _boardHeader(project),
-      barTrailing: boardProject == null ? const [] : _boardTrailing(),
     );
   }
 

@@ -40,7 +40,6 @@ class SuperTabTasksView extends StatefulWidget {
     this.storage,
     this.now = DateTime.now,
     this.barLeading,
-    this.barTrailing = const [],
   });
 
   final SuperTabController controller;
@@ -67,9 +66,6 @@ class SuperTabTasksView extends StatefulWidget {
   /// The Board page's header (its rail icon, the project's name, Board and
   /// Chat), drawn in place of the bar's title so the page keeps one row.
   final Widget? barLeading;
-
-  /// Icons at the bar's end: the Buddy pane's, while that pane is hidden.
-  final List<Widget> barTrailing;
 
   /// A Board column's width: about a card and a half of title per line, so
   /// five fit a wide window and a narrow one scrolls sideways (task #2948).
@@ -264,7 +260,6 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     mine: _mine,
     moveError: _moveError,
     leading: widget.barLeading,
-    trailing: widget.barTrailing,
     onLayout: (layout) => _choose(layout: layout),
     onMine: () => _choose(mine: !_mine),
     onQuery: (query) => setState(() => _query = query),
