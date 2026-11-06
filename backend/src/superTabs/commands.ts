@@ -95,7 +95,7 @@ const STEPS_LISTED = 200
 function listStep(task: Conversation, id: string): void {
   if (task.stepIds) task.stepIds = [...task.stepIds, id].slice(-STEPS_LISTED)
 }
-/** A route override's reason when its agent gave none: following another candidate needs none (project instructions). */
+/** A route override's reason when its agent gave none, on a decision whose chosen candidate was not a pick (a person's choice, or an older record). */
 const NO_REASON = 'No reason given.'
 /** What a pick-less route's only candidate is chosen for, when its start gives no reason (task #2901). */
 const ONLY_CANDIDATE = 'Only candidate that can run this task.'
@@ -190,6 +190,8 @@ const task = z.object({
   requires: z.object({ machines: z.array(id).min(1).max(20).optional(), devices: z.array(path).min(1).max(20).optional(),
     access: z.array(accessName).min(1).max(20).optional() }).strict()
     .refine(r => r.machines || r.devices || r.access, 'Require at least one machine, device or access.').optional(),
+  /** model.ts WorkTask.strength: `strong` for big, hard or risky work, which the crew's dispatch hands only to a member on Opus or Astra (#3576). */
+  strength: z.enum(['standard', 'strong']).optional(),
   /** model.ts ReviewPlan: what its reviews check first, and 2 for two independent reviews, said in its brief (#2382). */
   review: z.object({ focus: z.string().trim().min(1).max(2000).optional(), reviews: z.union([z.literal(1), z.literal(2)]).optional() }).strict()
     .refine(r => r.focus !== undefined || r.reviews !== undefined, 'Give the review a focus or a number of reviews.').optional(),
@@ -1350,7 +1352,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     return decision
   }
   /** The candidate a start or assignment should match, and whether it does. Following another needs no reason (project
-   *  instructions, phase 4: the route is advice); it is still recorded as an override, with the reason when one is given.
+   *  instructions, phase 4: the route is advice); it is still recorded as an override. A route that picked (task #3576) asks for the
+   *  reason when the start or assignment leaves its pick.
    *  A route that names no pick (task #2901, Ken 2026-11-04) leaves the choice to the coordinator, by the project's Routing
    *  instructions: until a person or an earlier start chose, the start or assignment gives the rule that chose it, and the
    *  candidate it matches, any of them, is recorded and said in the route row the released apps draw. */
@@ -1381,6 +1384,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     const expected = decision.record.candidates.find(c => c.id === chosenId)!
     const matched = matches(expected, decision)
+    // The route picked by the Routing order (task #3576): another candidate is chosen for a reason (urgency, context, a machine the work needs).
+    if (!matched && !reasonText && chosenId === decision.record.pick) {
+      fail('ROUTE_REASON_REQUIRED', `This route picked ${expected.title}. Start or assign it, or send, as overrideReason, why another candidate is better (urgency, context, a machine the work needs; "idle" is not a reason).`)
+    }
     const override: RouteOverride | undefined = matched ? undefined : { by: 'lead', actorKey: actorKey(actor), reason: reasonText ?? NO_REASON }
     // A record with a pick keeps it as the choice; one without keeps the candidate chosen in the final, for the route history.
     final(matched && decision.record.pick === undefined ? { candidateId: chosenId } : {}, override)
