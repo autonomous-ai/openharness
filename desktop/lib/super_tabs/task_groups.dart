@@ -174,7 +174,7 @@ SuperTabTaskPlace? superTabTaskPlaceOf(
     final shipped = task.shippedAt;
     final old = shipped == null
         ? task.closed
-        : now.difference(shipped) > superTabBacklogShippedWindow;
+        : now.difference(shipped) > superTabShippedWindow;
     if (old) return null;
     return merged
         ? at(
