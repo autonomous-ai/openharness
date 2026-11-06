@@ -201,6 +201,10 @@ describe('crewKeep: machine rules apply to moves, read from the project rules re
     const reviewer = fixture(pools())
     ;(reviewer.ada as Agent & { crew?: unknown }).crew = { role: 'Reviewer', at: 1, by: 'owner' }
     expect(crewKeep(reviewer.state, NOW, noReviews)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'other' })])
+    // Any role the review steps take as a Reviewer's (reviewerPick.ts), not only one starting with the word.
+    const security = fixture(pools())
+    ;(security.ada as Agent & { crew?: unknown }).crew = { role: 'Security reviewer', at: 1, by: 'owner' }
+    expect(crewKeep(security.state, NOW, noReviews)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'other' })])
     const engineer = fixture(pools())
     expect(crewKeep(engineer.state, NOW, noReviews)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'local-codex' })])
   })
