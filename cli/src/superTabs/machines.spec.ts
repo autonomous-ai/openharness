@@ -411,7 +411,7 @@ describe('contributed machine executor', () => {
     const withEngines = (f: ReturnType<typeof fixture>) => {
       const usage = f.request.getMockImplementation()!
       f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe'
-        ? { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true }, { engine: 'cursor', installed: true }] }
+        ? { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true }] }
         : usage(type, ...rest as []))
     }
     const probes = (f: ReturnType<typeof fixture>) => f.request.mock.calls.filter(c => c[0] === 'engines_probe')
@@ -420,7 +420,7 @@ describe('contributed machine executor', () => {
       const f = fixture()
       withEngines(f)
       await f.machine.tick()
-      expect(f.request).toHaveBeenCalledWith('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000)
+      expect(f.request).toHaveBeenCalledWith('engines_probe', { engines: expect.arrayContaining(['claude', 'codex', 'cursor', 'hermes', 'copilot']), accounts: true }, 30_000)
       // An engine that says nothing about its sign-in is unknown, never signed out.
       expect(readings(f)[0]!.readiness).toEqual({ engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }] })
       f.advance(); await f.machine.tick()
@@ -430,6 +430,39 @@ describe('contributed machine executor', () => {
       f.step(10 * 60_000); await f.machine.tick()
       expect(probes(f)).toHaveLength(2)
     })
+
+    it.each([true, false, null])('reports another installed engine account as %s, without copying secrets or unknown engine names', async signedIn => {
+      const f = fixture()
+      const usage = f.request.getMockImplementation()!
+      f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe'
+        ? { engines: [
+          { engine: 'cursor', installed: true, signedIn, token: 'test-secret' },
+          { engine: 'hermes', installed: false, signedIn: true },
+          { engine: 'copilot', installed: true, signedIn: 'test-secret' },
+          { engine: 'terminal', installed: true, signedIn: true },
+          { engine: 'invented', installed: true, signedIn: true },
+        ] } : usage(type, ...rest as []))
+      await f.machine.tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([
+        { engine: 'cursor', installed: true, signedIn },
+        { engine: 'hermes', installed: null, signedIn: null },
+        { engine: 'copilot', installed: true, signedIn: null },
+      ])
+    })
+
+    it.each([null, { ok: true }, { ok: false, claudeOnly: true, reason: RELAY_REASONS.ownerSignIn }])(
+      'never uses the owner relay for another pane engine (%j)', async health => {
+        const f = fixture({}, () => null, () => true)
+        const usage = f.request.getMockImplementation()!
+        f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe'
+          ? { engines: [{ engine: 'cursor', installed: true, signedIn: false }, { engine: 'copilot', installed: true, signedIn: true }] }
+          : usage(type, ...rest as []))
+        const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth: async () => health } as never)
+        await machine.tick()
+        expect(readings(f)[0]!.readiness?.engines).toEqual([
+          { engine: 'cursor', installed: true, signedIn: false }, { engine: 'copilot', installed: true, signedIn: true },
+        ])
+      })
 
     it('reads a Harness Team account\'s engine it has not signed in as ready when its owner\'s relay is there', async () => {
       const f = fixture({}, () => null, () => true)
