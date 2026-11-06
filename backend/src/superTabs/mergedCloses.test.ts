@@ -1,7 +1,7 @@
 // Task #3510 (anh Dee's Swarm redesign): a recorded merge closes a task whose builder is gone, so a released builder no longer
 // leaves its merged task in review for good; a live builder still closes its own task.
 import { describe, expect, it } from 'vitest'
-import { appendPullRequestUrls } from './model.js'
+import { appendCodePullRequestUrls, appendPullRequestUrls } from './model.js'
 import { stepsFixture } from './steps.test-support.js'
 
 const PR = 'https://github.com/acme/app/pull/7'
@@ -105,5 +105,63 @@ describe('a recorded merge closes a task whose builder is gone (#3510)', () => {
     const effects = f.merge()
     expect(f.group(f.task).assignment).toMatchObject({ status: 'done', result: `Merged ${PR}` })
     expect(effects.closedAssignment).toBeUndefined()
+  })
+})
+
+// Task #3574: seven merged tasks stayed lost on the board. A builder that is lost before its Ready line has no result naming its
+// pull request; the pull request its own posts named (the code list) is still the task's own, so its merge closes the task.
+describe('a merged task ends done whatever happened to its builder (#3574)', () => {
+  /** A task whose builder posted its pull request (the store lists it as the task's code) but never wrote a Ready line naming it. */
+  function postedFixture() {
+    const f = mergedFixture()
+    f.group(f.task).assignment!.result = 'Working on it'
+    appendPullRequestUrls(f.group(f.task), [PR])
+    appendCodePullRequestUrls(f.group(f.task), [PR])
+    return f
+  }
+
+  it('closes a lost attempt, whose result names no pull request, when its merge is recorded', () => {
+    const f = postedFixture()
+    f.group(f.task).assignment!.status = 'lost'
+    const effects = f.merge()
+    expect(f.group(f.task).assignment).toMatchObject({ id: f.assignment, status: 'done' })
+    expect(f.group(f.task).assignment!.result).toContain(PR)
+    expect(effects.closedAssignment).toEqual({ assignmentId: f.assignment, outcome: 'done' })
+  })
+
+  it('closes a task whose merge was already recorded when it is recorded again after its attempt was lost', () => {
+    const f = postedFixture()
+    f.merge()
+    expect(f.group(f.task).assignment).toMatchObject({ status: 'working' })
+    f.group(f.task).assignment!.status = 'lost'
+    const effects = f.merge()
+    expect(f.group(f.task).assignment).toMatchObject({ id: f.assignment, status: 'done' })
+    expect(effects.closedAssignment).toEqual({ assignmentId: f.assignment, outcome: 'done' })
+  })
+
+  it('closes a stopped attempt the same way', () => {
+    const f = postedFixture()
+    f.group(f.task).assignment!.status = 'stopped'
+    f.merge()
+    expect(f.group(f.task).assignment).toMatchObject({ status: 'done' })
+  })
+
+  it('lets the closed task be archived, where a lost one was refused', () => {
+    const f = postedFixture()
+    f.group(f.task).assignment!.status = 'lost'
+    expect(() => f.run({ type: 'conversation.archive', conversationId: f.task, archived: true }, f.as(f.lead))).toThrow(/did not finish/)
+    f.merge()
+    f.run({ type: 'conversation.archive', conversationId: f.task, archived: true }, f.as(f.lead))
+    expect(f.group(f.task).archived).toBe(true)
+  })
+
+  // The ownership Aster's review asked for still holds: a pull request only the merge record linked never closes a task.
+  it('still closes nothing for a pull request only a merge record linked, however often it is recorded', () => {
+    const f = postedFixture()
+    const other = { type: 'conversation.merged' as const, conversationId: f.task, pullRequestUrl: 'https://github.com/acme/app/pull/99' }
+    f.group(f.task).assignment!.status = 'lost'
+    f.run(other, f.as(f.lead))
+    f.run(other, f.as(f.lead))
+    expect(f.group(f.task).assignment).toMatchObject({ status: 'lost' })
   })
 })
