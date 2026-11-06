@@ -71,6 +71,7 @@ describe('a stuck task', () => {
     const g = f.group()
     // As the PR watch sees it: the task links its pull request, read at its head with a check failed.
     g.pullRequestUrls = [PR]
+    g.codePullRequestUrls = [PR]
     g.pullRequestHeads = { [PR]: { head: HEAD, patch: null, at: NOW } }
     g.pullRequestChecks = { [PR]: 'red' }
     const first = stuckAlerts(f.state, NOW)
@@ -108,6 +109,7 @@ describe('a stuck task', () => {
   it('with red checks while its Engineer is still working, says nothing', () => {
     const f = fixture()
     f.group().pullRequestUrls = [PR]
+    f.group().codePullRequestUrls = [PR]
     f.group().pullRequestChecks = { [PR]: 'red' }
     expect(stuckAlerts(f.state, NOW).rows).toEqual([])
   })

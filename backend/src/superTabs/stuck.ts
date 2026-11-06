@@ -10,7 +10,7 @@
 import { agentDisplayName } from './agentNames.js'
 import { isBuddyChat } from './buddies.js'
 import { MAX_MENTIONS } from './mentions.js'
-import { isLeads, stableId, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { codePullRequests, isLeads, stableId, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { canReadGroup, projectsOf } from './projects.js'
 import { stepName, stepsOf } from './steps.js'
 
@@ -54,8 +54,9 @@ export function stuckOf(state: SuperTabState, task: Conversation, now: number): 
       return { key: `start:${step.id}:${step.assignment.id}`, text: `Stuck: the ${name} step's agent could not start again.`, fixed: `the ${name} step has an agent again` }
     }
   }
-  // Red at its head while its Engineer says it is ready: in review or done, or reopened by that red and not picked up yet.
-  const url = task.pullRequestUrls?.at(-1)
+  // Red at its head while its Engineer says it is ready: in review or done, or reopened by that red and not picked up yet. Only its
+  // own code's newest pull request: a task also links others' that its brief or a result names (review of #3431).
+  const url = codePullRequests(task).at(-1)
   const ready = assignment.status === 'review' || assignment.status === 'done' || !!assignment.reopened
   if (url && ready && task.pullRequestChecks?.[url] === 'red') {
     const head = task.pullRequestHeads?.[url]?.head
