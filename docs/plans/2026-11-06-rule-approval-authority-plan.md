@@ -14,7 +14,7 @@
 
 - Only a person's own message since the last instruction save counts; never an agent, Buddy relay, old message or another project's message.
 - Explicit account links use IDs; similar display names cannot add an unrelated account.
-- Only the project owner or its currently configured top decider may change this authority section, directly or through the PM quoting their existing validated message. Other rules edits retain existing access.
+- Only the project owner or its currently configured top decider may change this authority section, acting directly as a person; the PM may not change authority by quoting a message. Other rules edits retain existing access.
 - An older client omitting the new field preserves the current authority. Explicit null disables it through the same protected edit.
 - First PR body line: Requested by dee through Harness.
 - No production writes, secrets, sign-outs, dependency installs or CLI core changes. Temp files only in mktemp -d folders.
@@ -81,3 +81,12 @@
 - Task 2: authority/instructions/commands/policy tests 523/523 before the extra collision regression; real-store instructions/project-rules tests 30/30 after restoring Buddy refusal order. The first combined run hit an ephemeral Mongo port collision and exposed that Buddy refusal-order regression; the retry passed after the access check reused authorizeCommandAccess.
 - Collision follow-up: authority/instructions/commands tests 499/499 (including all 10 authority cases); the real-store authority/index-plan case passes; typecheck clean. Review-table/steps tests 27/27; merge-train/release importers 105/105.
 - No collection/index changes, backfill or production writes. Production read-only environment absent on this Team machine; no production counts or latency measurements claimed.
+
+### Security review repair: Only direct people change approval authority
+
+**Files:** commands.ts, policy.test.ts, superTabProjectRules.test.ts.
+**Interfaces:** rules.set retains its existing message-based PM flow for ordinary rules. Changing instructionApprovals requires the actor to be the project owner or current top decider, acting directly.
+
+- [ ] Commit and observe failing tests for the PM quoting either the owner or current decider to replace the decider, relink accounts or disable authority; cover real-store refusal and unchanged revision.
+- [ ] Require a direct person actor for authority changes, preserving direct owner/decider edits and omitted or unchanged authority on ordinary PM saves.
+- [ ] Run affected tests, real-store policy integrations and typecheck; record red/green and obtain both security reviews at the final head.

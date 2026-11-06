@@ -453,6 +453,26 @@ describe('who changes the rules', () => {
     expect(effects.messages).toEqual([])
   })
 
+  it.each(['owner', 'peer'])('refuses authority changes through the PM quoting %s, while allowing that person directly', id => {
+    const f = fixture()
+    f.invite()
+    const lead = f.add('lead', 'lead', true)
+    const authority = { topDeciderId: 'peer', people: [{ name: 'Ken', accountIds: ['owner'] }] }
+    const current = { revision: 1, rules: { ...copy(), instructionApprovals: authority } }
+    const context = { projectRules: current, askedIn: personAsked(id) }
+    for (const instructionApprovals of [null, { ...authority, topDeciderId: 'owner' },
+      { ...authority, people: [{ name: 'Ken', accountIds: ['owner', 'peer'] }] }]) {
+      expect(code(() => f.run(set(1, { ...later(), instructionApprovals }, asked('lead')), as(lead), context)))
+        .toBe('RULES_APPROVAL_EDITOR_REQUIRED')
+    }
+    // The PM may still make ordinary edits with either omitted or unchanged authority.
+    for (const rules of [later(), { ...later(), instructionApprovals: authority }]) {
+      expect(f.run(set(1, rules, asked('lead')), as(lead), context).projectRules?.rules.instructionApprovals).toEqual(authority)
+    }
+    expect(f.run(set(1, { ...later(), instructionApprovals: null }), id === 'owner' ? owner : peer, { projectRules: current })
+      .projectRules?.rules.instructionApprovals).toBeNull()
+  })
+
   it('refuses every other agent, the PM of another project and a Buddy', () => {
     const f = fixture()
     f.invite()

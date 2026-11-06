@@ -198,6 +198,19 @@ describe('a project\'s rules record', () => {
     expect((await currentRules(db, tab, 'lead')).rules).toMatchObject({ instructionApprovals: null })
   })
 
+  it('refuses authority changes from the PM even when quoting the owner or current decider', async () => {
+    const { tab, lead } = await swarm()
+    const authority = { topDeciderId: peer.sub, people: [{ name: 'Ken', accountIds: [owner.sub] }] }
+    await run(tab, set(0, { ...rules('10:00'), instructionApprovals: authority }))
+    for (const user of [owner, peer]) {
+      const ask = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'An ordinary project message.', replyTo: null, recipientIds: [] }, user)
+      expect(await refusal(run(tab, set(1, { ...rules('11:00'), instructionApprovals: null },
+        { askedIn: { conversationId: 'lead', messageId: String(ask.result.messageId) } }), host, lead)))
+        .toMatchObject({ code: 'RULES_APPROVAL_EDITOR_REQUIRED' })
+    }
+    expect(await currentRules(db, tab, 'lead')).toMatchObject({ revision: 1, rules: { instructionApprovals: authority } })
+  })
+
   it('keeps one of two saves on the same revision, refusing the other', async () => {
     const { tab } = await swarm()
     const outcomes = await Promise.allSettled([run(tab, set(0, rules('10:00'))), run(tab, set(0, rules('11:00')), peer)])
