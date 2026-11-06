@@ -3315,6 +3315,33 @@ class SuperTabController extends ChangeNotifier {
         : operationError ?? 'Another change is on its way. Try again.';
   }
 
+  /// Proposes work to [projectId] from its Board (#3817 `proposal.create`), for a person with or without a Buddy.
+  /// Null when done, else the server's sentence (what is missing, or who may set P0).
+  Future<String?> propose(
+    String projectId, {
+    required String title,
+    required String goal,
+    required String why,
+    required String doneWhen,
+    required SuperTabTaskPriority priority,
+  }) async {
+    final done = await command({
+      'type': 'proposal.create',
+      'projectId': projectId,
+      'title': title,
+      // What the person wrote is the proposal's words: its goal.
+      'text': goal,
+      'goal': goal,
+      'why': why,
+      'doneWhen': doneWhen,
+      'evidence': <String>[],
+      'priority': priority.badge,
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
   /// Answers the question [questionId] the PM asked the reader on the card [conversationId] (#3817). Null when done,
   /// else the server's sentence.
   Future<String?> answerQuestion(

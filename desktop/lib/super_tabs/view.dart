@@ -67,6 +67,7 @@ import 'identity.dart' show superTabMachineName;
 import 'identity_card.dart';
 import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
+import 'proposal_form.dart';
 import 'backlog.dart'
     show
         SuperTabTaskPriority,
@@ -3545,6 +3546,14 @@ class _SuperTabViewState extends State<SuperTabView>
         const SizedBox(width: 12),
         _projectTabs(project, board: true),
         const Spacer(),
+        // Propose straight from the Board (#3820), on a project that works from proposals.
+        if (project.boardMode && c.canWrite)
+          TextButton.icon(
+            key: const ValueKey('super-board-new-proposal'),
+            onPressed: () => unawaited(showNewProposal(context, c, project)),
+            icon: const Icon(AppIcons.plus, size: 16),
+            label: const Text('New proposal'),
+          ),
         if (_rightHidden)
           AppIconButton(
             key: const ValueKey('super-pane-right-toggle'),

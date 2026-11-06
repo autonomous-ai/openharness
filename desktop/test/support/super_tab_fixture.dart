@@ -1766,6 +1766,30 @@ class ConversationServer {
                 )['priority'] =
             command['priority'];
         revision++;
+      } else if (command['type'] == 'proposal.create') {
+        // As #3817 makes it: a card of its own, in Proposals until the PM decides.
+        final id = 'proposal-${(state['conversations'] as List).length}';
+        (state['conversations'] as List).add({
+          ...conversationFixture(id, command['title'] as String),
+          'projectId': command['projectId'],
+          'agentIds': <String>[],
+          'priority': command['priority'],
+          'proposal': {
+            'version': 1,
+            'text': command['text'],
+            'goal': command['goal'],
+            'why': command['why'],
+            'doneWhen': command['doneWhen'],
+            'evidence': command['evidence'],
+            'createdAt': DateTime.now().millisecondsSinceEpoch,
+            'senders': [
+              {'personId': Zone.current[_reader] as String? ?? 'owner'},
+            ],
+            'questions': <dynamic>[],
+          },
+        });
+        output['conversationId'] = id;
+        revision++;
       } else if (command['type'] == 'proposal.answer') {
         // As #3817 records it: the question's answer, by the person asked.
         final card = (state['conversations'] as List)
