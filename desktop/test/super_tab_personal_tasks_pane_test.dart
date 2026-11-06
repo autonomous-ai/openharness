@@ -542,4 +542,31 @@ void main() {
       );
     });
   });
+
+  testWidgets('while a change is sent, Approve and Reject are disabled', (
+    t,
+  ) async {
+    await mount(t);
+    f.hold = Completer<void>();
+    await t.tap(inCard('new', find.text('Approve')));
+    await t.pump();
+    for (final id in ['new', 'old']) {
+      expect(
+        t.widget<FilledButton>(inCard(id, find.byType(FilledButton))).onPressed,
+        isNull,
+      );
+      expect(
+        t.widget<TextButton>(inCard(id, find.byType(TextButton))).onPressed,
+        isNull,
+      );
+    }
+    f.hold!.complete();
+    await t.pumpAndSettle();
+    expect(
+      t
+          .widget<FilledButton>(inCard('old', find.byType(FilledButton)))
+          .onPressed,
+      isNotNull,
+    );
+  });
 }
