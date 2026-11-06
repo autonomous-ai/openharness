@@ -1267,9 +1267,7 @@ export interface SwarmCard { id: string; name: string; count: number; leads: Swa
   personal?: true }
 /** A Lead's last message, for its card; `chatId` when it is the last message of the chat on the round dial's face, and
  *  `buddy` when that face is a swarmBuddy dial's (`CardChat` 'buddy'), so each dial takes only the recaps it asked for. */
-export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string; buddy?: true
-  /** The root of the thread this recap is of, when the face was in one: a dial never takes it for the main chat's. */
-  thread?: string }
+export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string; buddy?: true }
 /** A project's places to chat (designs 2026-10-28-round-dial-swarm-chat and 2026-10-29-round-dial-pm-buddy): its Lead
  *  conversation, the reader's Buddy chat, and a group. A dial without swarmBuddy calls the Buddy chat `pm`, where the PM's
  *  private lines land since Buddies replaced Chat with PM; a swarmBuddy dial calls it `buddy` and hears the Buddy there. */
@@ -1277,10 +1275,7 @@ export type ChatKind = 'lead' | 'pm' | 'group' | 'buddy'
 /** The chat on a project's face on the round dial: the Lead's, unless the window has the project's Buddy chat or a group
  *  open (or a swarmBuddy dial's side says the Buddy's). `working` only for a working group, `since` from one of its agents'
  *  turn here. */
-export interface SwarmChat { kind: ChatKind; id: string; name: string; working: boolean; since?: number
-  /** While the face is in a thread (the app's, or the one the dial's words started): its root, its title (first line, 80 bytes)
-   *  and, when the read gives it, its reply count. Sent only to a dial that speaks swarmThread. */
-  thread?: { root: string; title: string; replies?: number } }
+export interface SwarmChat { kind: ChatKind; id: string; name: string; working: boolean; since?: number }
 /** The newest tag of the reader's in the project since the baseline, the dial's alert: in its Lead conversation (`lead`), the
  *  reader's Buddy chat or a Chat with PM (`pm`), or a task chat (`group`, #2965); or the newest message the reader's Buddy
  *  wrote in its chat (`buddy`, the quiet one). `thread`: the root of the thread it is in, when it is in that thread only; such
@@ -1303,11 +1298,7 @@ export type CardSide = 'pm' | 'buddy'
 export type CardChat = boolean | 'buddy'
 /** What became of words spoken on a device for a Lead: posted, not a Lead here (`said` false, so the turn goes as before), or
  *  refused by the backend with its code and message, which must never become a terminal turn instead. */
-/** `thread`: set when the post started the dial's thread (spec 2026-11-03-dial-thread-face), so the window opens it. */
-export type SaidOnCard = { said: true; thread?: { tabId: string; conversationId: string; root: string } } | { said: false; refused?: { code: string; message: string } }
-/** How words for a Lead relate to the dial's thread (a swarmThread dial only): `thread` is the root of the thread on its face when
- *  they were spoken, null for none, and the post is held to it; `threaded`: they were spoken from the face, so they may start one. */
-export interface SayOptions { thread?: string | null; threaded?: boolean }
+export type SaidOnCard = { said: true } | { said: false; refused?: { code: string; message: string } }
 /** The conversation the window has open in a Swarm tab. */
 /** `fromDevice`: the window moved there because a device picked it (a dial's swipe to the next project), so the move is
  *  that device's own and keeps the side it keeps (spec 2026-10-29-round-dial-pm-buddy, newest wins). */
