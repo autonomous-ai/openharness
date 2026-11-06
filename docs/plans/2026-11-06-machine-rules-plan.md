@@ -25,8 +25,11 @@ applies it where it hands out work:
   away machine);
 - lane dispatch (dispatch.ts `candidatesFor`) skips what a rule refuses, and leaves a first-machine lane's task to a free
   member there while one takes it;
-- the route (cli/src/superTabs/routeCommand.ts) reads the record it may already read (`GET …/projects/:id/rules`), leaves
-  out each candidate a rule refuses with its why, and ranks a lane's first machine first in step 1 of the order.
+- the crew keeper's moves (crewKeep.ts) read each crew project's rules, as their comment waited for;
+- the route (cli/src/superTabs/routeCommand.ts) reads the rules alone (`GET …/projects/:id/machine-rules`, new: the newest
+  revision by one indexed read, never the 50-revision history), leaves out each candidate a rule refuses with its why, and
+  ranks a lane's first machine first in step 1 of the order (routePick.ts). A no-Reviewer rule refuses reviews only: a Test
+  step is not a review.
 
 **Tech Stack:** TypeScript backend and CLI, vitest.
 
@@ -42,10 +45,12 @@ applies it where it hands out work:
 - growth: at most 50 machine rules per project, inside the record's 16 KB, kept with its 50 revisions (policyStore.ts).
 - concurrency: rules.set's revision check, as today; starts and assignments read the current revision in their transaction.
 - read cost: `agent.start` and `work.assign` add one indexed read of the newest revision (as `conversation.create` does);
-  dispatch reads it once per project per pass, as today; the route one rules read, beside its other reads.
+  dispatch reads it once per project per pass, as today; the crew sweep one per crew project, only when a member needs a
+  machine; the route one indexed read of the newest revision, beside its other reads.
 - scale: 10x starts is 10x one indexed row read; the warn line is the start's p95.
 - compatibility: the backend ships first. An older CLI route does not read the rules and still lists a refused candidate;
-  the server refuses its start with the why. An older client saving the record without `machines` keeps them.
+  the server refuses its start with the why. An older client saving the record without `machines` keeps them. This CLI
+  against an older backend gets a 404 for the rules read: it says the instructions' Machines rules still apply.
 - migration + rollback: none; a record without `machines` has none. Rolled back after a save with `machines`, the older
   strict schema reads that revision as invalid (`RULES_INVALID`) until someone saves the rules again without them (its repair
   path): so nobody saves machine rules until this backend has stayed out a day. Stated in the PR.
@@ -64,30 +69,31 @@ applies it where it hands out work:
 
 **Files:** backend/src/superTabs/{policy.ts, crewRules.ts, commands.ts}, policy.test.ts, commands.test.ts
 
-- [ ] Test: the record accepts each of the four kinds and refuses a bad one (time, zone, engine); a save without `machines`
+- [x] Test: the record accepts each of the four kinds and refuses a bad one (time, zone, engine); a save without `machines`
   keeps the current ones; one with `[]` clears them.
-- [ ] Watch it fail; commit. Code; watch it pass; commit.
+- [x] Watch it fail; commit. Code; watch it pass; commit.
 
 ## Task 2: why a machine refuses work, and where a lane goes first
 
 **Files:** backend/src/superTabs/{machineRules.ts, crewKeep.ts}, machineRules.test.ts
 
-- [ ] Test per rule: away inside and outside its window and day, in its zone; an engine refused; a review refused; the cap
-  a lane's first machines.
-- [ ] Watch it fail; commit. Code; watch it pass; commit.
+- [x] Test per rule: away inside and outside its window and day, in its zone; an engine refused; a review refused; a lane's
+  first machines.
+- [x] Watch it fail; commit. Code; watch it pass; commit.
 
 ## Task 3: starts, assignments and dispatch follow the rules
 
 **Files:** backend/src/superTabs/{commands.ts, store.ts, dispatch.ts}, machineRules.commands.test.ts, dispatch.test.ts
 
-- [ ] Test: each rule refuses the start or assignment it names, with its why; dispatch skips it; a phone task waits for the
+- [x] Test: each rule refuses the start or assignment it names, with its why; dispatch skips it; a phone task waits for the
   phone machine's free member and goes to another only when none is free.
-- [ ] Watch it fail; commit. Code; watch it pass; commit.
+- [x] Watch it fail; commit. Code; watch it pass; commit.
 
 ## Task 4: the route's candidates follow the rules (CLI; the PM kept it in this task, 11-06)
 
-**Files:** cli/src/superTabs/{routeCommand.ts, routePick.ts}, routeCommand.spec.ts, routePick.spec.ts
+**Files:** backend/src/{routes/superTabs.ts, superTabs/store.ts} (the machine-rules read), integration/superTabProjectRules.test.ts;
+cli/src/superTabs/{machineRules.ts, service.ts, routeCommand.ts, routePick.ts}, routeCommand.spec.ts, serviceReads.spec.ts
 
-- [ ] Test: each rule leaves out the candidate it refuses, with its why; the lane's first machine is picked over an equal
+- [x] Test: each rule leaves out the candidate it refuses, with its why; the lane's first machine is picked over an equal
   other; a rules read that fails leaves the candidates as before and says so.
-- [ ] Watch it fail; commit. Code; watch it pass; commit.
+- [x] Watch it fail; commit. Code; watch it pass; commit.
