@@ -4,6 +4,7 @@
  * whose saved pullRequestLine compatibility field is still true. */
 import { env } from '../config/env.js'
 import { agentInstructionArgs, launchContract, type AttributionPlace } from '../engines/launches.js'
+import { joinedSettings } from '../engines/kit/statusLine.js'
 import { readAgentSettings } from './agentSettings.js'
 
 /** The line: short and plain, as the engines' own are, and linked to Harness's site. */
@@ -41,11 +42,14 @@ export function agentLaunchArgs(engine: string, _startedBy: StartedBy | null | u
 /**
  * [args] with every appended system prompt joined into one, for an engine that takes Harness's instructions that way:
  * a grid launch and a store harness append their own (lib/gridWebMcp.ts, the DSH's `contextArgs`), and an engine that
- * keeps only the last of a repeated flag would drop the others.
+ * keeps only the last of a repeated flag would drop the others. Every settings object too, for the same reason: a Swarm's
+ * shell guard (lib/agentShellGuard.ts) and Harness's status line (engines/kit/statusLine.ts) are each one.
  */
-export function joinedInstructions(engine: string, args: readonly string[]): string[] {
+export function joinedInstructions(engine: string, given: readonly string[]): string[] {
+  const settings = launchContract(engine)?.statusLine
+  const args = settings ? joinedSettings(settings.args[0]!, given) : [...given]
   const told = launchContract(engine)?.harnessInstructions
-  if (told?.kind !== 'append') return [...args]
+  if (told?.kind !== 'append') return args
   const flag = told.args[0]
   const texts: string[] = []
   const rest: string[] = []

@@ -34,6 +34,8 @@ vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), b
 // The account the gate runs under does not decide these launches: a Harness Team account is refused by prepareBuddyFolder before any
 // launch, which lib/swarmSkills.spec.ts tests on its own. These Buddies are their owner's, so the boundary is fixed to "not a Team account".
 vi.mock('../team/config.js', async (original) => ({ ...await original<object>(), isTeamAccount: () => false }))
+// Harness's status line rides every Claude launch beside what these pin (engines/claude/statusLine.spec.ts, the launch golden).
+vi.mock('../engines/kit/statusLine.js', async (original) => ({ ...await original<object>(), statusLineSetting: () => null }))
 vi.mock('../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
