@@ -2316,8 +2316,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                   controller: _taskText,
                   focusNode: _taskFocus,
                   canRequestFocus: box.takesTask,
-                  // As tall as what is typed, with the options under it.
-                  minLines: 1,
+                  // Three rows to start, growing to seven as it is typed
+                  // (anh Dee, 11-07, #4196; #2947 had cut it to one).
+                  minLines: 3,
                   maxLines: 7,
                   textInputAction: TextInputAction.send,
                   readOnly: box.locked || !box.takesTask,
