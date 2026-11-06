@@ -31,6 +31,7 @@ import { fcmSender } from '../src/push/fcm.js'
 import { registerPushDevice } from '../src/push/devices.js'
 import { quietRepeats } from '../src/push/repeats.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { quotaReset } from './holds.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -453,7 +454,7 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
     const s = await scene()
     const state = (await store.read(owner, s.tabId)).state as unknown as SuperTabState
     const assignmentId = state.conversations.find(c => c.id === s.web)!.assignment!.id
-    const notices = await pushed(() => run(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: new Date(Date.now() + 86_400_000).toISOString() },
+    const notices = await pushed(() => run(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: quotaReset(),
       result: 'Ship it behind a flag?', ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } } as Command,
     owner, s.worker))
     expect(notices.map(n => [n.personId, n.key.split(':')[0], n.title, n.link.includes('/decision/'), n.quiet === true]))

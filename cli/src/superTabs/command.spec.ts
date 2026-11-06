@@ -6,6 +6,10 @@ import type { Where } from '../agentClient/daemon.js'
 import { SWARM_TOOLS_SKILL } from '../lib/swarmTools.js'
 const where = { port: 14001, dataDir: '/fixture', machineId: 'machine' }
 const prefix = ['--tab', 'tab', '--agent', 'agent']
+/** The service's answer for a proposal's files (service.ts proposalTarget) from a fixture's Swarm state: the chat named, the
+ *  calling agent's record, and the projects' chats. */
+const proposalTarget = (state: { agents?: Array<Record<string, unknown>>; conversations?: Array<Record<string, unknown>>; projects?: Array<Record<string, unknown>> },
+  conversationId: unknown) => ({ chat: state.conversations?.find(c => c.id === conversationId) ?? null, self: state.agents?.[0] ?? null, projects: state.projects ?? [] })
 it('keeps an explicit stable receipt for agent messages and arbitrary work commands', () => {
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1'], where).payload).toMatchObject({ action: 'command', operationId: 'op-1', command: { type: 'message.send', conversationId: 'lead', text: 'Ready' } })
   expect(parseSuperTabArgs([...prefix, 'command', 'op-2', '{"type":"work.assign"}'], where).payload).toMatchObject({ command: { type: 'work.assign' } })
@@ -320,6 +324,71 @@ it('parses propose with up to 5 --attach files, always as a proposal', () => {
     expect(() => parseSuperTabArgs([...prefix, 'propose', 'op-1', json, ...tail], where)).toThrow('harness super-tab')
   }
 })
+// Huy 11-06 (#3872): every Buddy proposal with a file was refused before upload, "Name your own chat". The upload read its chat,
+// its record and the projects' chats from `status`, which a Buddy gets as a task summary with none of them. It reads them from
+// the read made for it, as the service answers a Buddy.
+it('sends a Buddy\'s proposal with a file, its status being the task summary a Buddy reads', async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-'))
+  try {
+    writeFileSync(join(folder, 'shot.png'), Buffer.from([1, 2, 3]))
+    const calls: Array<Record<string, unknown>> = []
+    const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
+      if (type === 'agents_list') return { agents: [{ id: 'buddy-harness', engine: 'claude', status: 'active', tmuxPane: '%7', project: { cwd: folder } }] }
+      calls.push(payload)
+      if (payload.action === 'status') return { ok: true, value: { lastChangedAt: 1, summary: { tasks: [] } } }
+      if (payload.action === 'proposalTarget') return { ok: true, value: { chat: { id: 'chat', projectId: 'p', kind: 'buddy' }, self: { id: 'buddy' },
+        projects: [{ id: 'p', leadConversationId: 'lead' }] } }
+      if (payload.step === 'sent') return { ok: true, value: { agentId: 'buddy', attachmentIds: null } }
+      return { ok: true, value: { revision: 9, result: { messageId: 'm' } } }
+    })
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ success: true, data: { attachment: { id: 'f1' } } }), { status: 200 }))
+    const deps = { where: () => where, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print: vi.fn(), pane: '%7',
+      fetch: fetch as unknown as typeof globalThis.fetch }
+    const json = JSON.stringify({ conversationId: 'chat', ownerMessageId: 'ask', goal: 'G', scope: 'S', priority: 'normal' })
+    expect(await superTabCommand([...prefix, 'propose', 'op', json, '--attach', join(folder, 'shot.png')], deps)).toBe(0)
+    expect(calls.find(c => c.action === 'proposalTarget')).toMatchObject({ conversationId: 'chat' })
+    expect(calls.at(-1)).toMatchObject({ operationId: 'op', command: { type: 'buddy.propose', attachmentIds: ['f1'] } })
+  } finally { rmSync(folder, { recursive: true, force: true }) }
+})
+
+// Linuxtest4 on #3402: the Buddy's own record was looked up by its terminal's id, not its Swarm id, so a project session's project
+// was never read: leaving the project out was refused, and naming another sent that project's PM a file. The read answers for
+// the asking agent alone, so its record is the caller's.
+it('sends a project session\'s file to its own project only, its terminal id not being its Swarm id', async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const folder = mkdtempSync(join(tmpdir(), 'buddy-session-'))
+  try {
+    writeFileSync(join(folder, 'shot.png'), Buffer.from([1, 2, 3]))
+    const calls: Array<Record<string, unknown>> = []
+    const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
+      if (type === 'agents_list') return { agents: [{ id: 'session-harness', engine: 'claude', status: 'active', tmuxPane: '%7', project: { cwd: folder } }] }
+      calls.push(payload)
+      if (payload.action === 'proposalTarget') return { ok: true, value: { chat: { id: 'chat', kind: 'swarm-buddy' },
+        self: { id: 'buddy-swarm-id', buddySession: { projectId: 'p-web' } },
+        projects: [{ id: 'p-web', leadConversationId: 'web-chat' }, { id: 'p-secret', leadConversationId: 'secret-chat' }] } }
+      if (payload.step === 'sent') return { ok: true, value: { agentId: 'buddy-swarm-id', attachmentIds: null } }
+      return { ok: true, value: { revision: 9, result: { messageId: 'm' } } }
+    })
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ success: true, data: { attachment: { id: 'f1' } } }), { status: 200 }))
+    const deps = { where: () => where, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print: vi.fn(), pane: '%7',
+      fetch: fetch as unknown as typeof globalThis.fetch }
+    const propose = (projectId?: string) => superTabCommand([...prefix, 'propose', 'op', JSON.stringify({ conversationId: 'chat', ownerMessageId: 'ask',
+      ...(projectId ? { projectId } : {}), goal: 'G', scope: 'S', priority: 'normal' }), '--attach', join(folder, 'shot.png')], deps)
+    expect(await propose()).toBe(0)
+    expect(calls.filter(c => c.step === 'sent')).toEqual([expect.objectContaining({ conversationId: 'web-chat' })])
+    calls.length = 0
+    fetch.mockClear()
+    expect(await propose('p-secret')).toBe(1)
+    expect(JSON.parse(deps.print.mock.calls.at(-1)![0]).error).toContain('leave the project out')
+    expect(fetch).not.toHaveBeenCalled()
+  } finally { rmSync(folder, { recursive: true, force: true }) }
+})
+
 it('attaches to a proposal only files inside the Buddy\'s own folder, uploaded to its chat, beside the files its owner sent', async () => {
   const { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync, rmSync } = await import('node:fs')
   const { join } = await import('node:path')
@@ -344,8 +413,8 @@ it('attaches to a proposal only files inside the Buddy\'s own folder, uploaded t
     const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
       if (type === 'agents_list') return { agents: frames }
       calls.push(payload)
-      if (payload.action === 'status') return { ok: true, value: { state: { projects: [{ id: 'p', leadConversationId: 'lead' }],
-        conversations: [{ id: 'lead', projectId: 'p' }, { id: 'chat', projectId: 'p', kind: 'buddy' }] } } }
+      if (payload.action === 'proposalTarget') return { ok: true, value: proposalTarget({ projects: [{ id: 'p', leadConversationId: 'lead' }],
+        conversations: [{ id: 'lead', projectId: 'p' }, { id: 'chat', projectId: 'p', kind: 'buddy' }] }, payload.conversationId) }
       if (payload.step === 'sent') return { ok: true, value: { agentId: 'buddy', attachmentIds: null } }
       return { ok: true, value: { revision: 9, result: { messageId: 'm' } } }
     })
@@ -393,7 +462,7 @@ it('attaches to a proposal only files inside the Buddy\'s own folder, uploaded t
     request.mockImplementation(async (type: string, payload: Record<string, unknown> = {}) => {
       if (type === 'agents_list') return { agents: frames }
       calls.push(payload)
-      if (payload.action === 'status') return { ok: true, value: { state: { projects: [{ id: 'p', leadConversationId: 'lead' }], conversations: [{ id: 'chat', projectId: 'p' }] } } }
+      if (payload.action === 'proposalTarget') return { ok: true, value: proposalTarget({ projects: [{ id: 'p', leadConversationId: 'lead' }], conversations: [{ id: 'chat', projectId: 'p' }] }, payload.conversationId) }
       if (payload.step === 'sent') return { ok: true, value: { agentId: 'buddy', attachmentIds: ['owner-log', 'f1', 'f2'] } }
       return { ok: true, value: { revision: 9, result: { messageId: 'm' } } }
     })
@@ -422,8 +491,8 @@ it('sends a one Buddy\'s proposal file only from the named project\'s folder, an
     const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
       if (type === 'agents_list') return { agents: frames }
       if (payload.step === 'sent') { seen.push(String(payload.conversationId)); return { ok: true, value: { agentId: 'buddy', attachmentIds: null } } }
-      if (payload.action === 'status') return { ok: true, value: { state: { agents: [agent], conversations: [{ id: 'chat', kind: 'swarm-buddy' }],
-        projects: [{ id: 'p-web', leadConversationId: 'web-chat' }, { id: 'p-secret', leadConversationId: 'secret-chat' }, { id: 'p-away', leadConversationId: 'away-chat' }] } } }
+      if (payload.action === 'proposalTarget') return { ok: true, value: proposalTarget({ agents: [agent], conversations: [{ id: 'chat', kind: 'swarm-buddy' }],
+        projects: [{ id: 'p-web', leadConversationId: 'web-chat' }, { id: 'p-secret', leadConversationId: 'secret-chat' }, { id: 'p-away', leadConversationId: 'away-chat' }] }, payload.conversationId) }
       return { ok: true, value: { revision: 9, result: { messageId: 'm' } } }
     })
     const sent: string[] = []
@@ -470,7 +539,7 @@ it('sends a proposal file\'s bytes as they were when checked, even if the path t
     const frames = [{ id: 'buddy-harness', engine: 'claude', status: 'active', tmuxPane: '%7', project: { cwd: folder } }]
     const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
       if (type === 'agents_list') return { agents: frames }
-      if (payload.action === 'status') return { ok: true, value: { state: { projects: [{ id: 'p', leadConversationId: 'lead' }], conversations: [{ id: 'chat', projectId: 'p' }] } } }
+      if (payload.action === 'proposalTarget') return { ok: true, value: proposalTarget({ projects: [{ id: 'p', leadConversationId: 'lead' }], conversations: [{ id: 'chat', projectId: 'p' }] }, payload.conversationId) }
       if (payload.step === 'sent') {
         // After the check, before the upload: the checked name now points outside.
         unlinkSync(join(folder, 'plan.md'))
