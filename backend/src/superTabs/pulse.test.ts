@@ -10,6 +10,7 @@ import { sweepForLead } from './liveness.js'
 import { projectsOf } from './projects.js'
 import { recordPulse, storedPulse } from './pulse.js'
 import { owner, stepsFixture } from './steps.test-support.js'
+import { owedLines } from './inbox.js'
 
 const MINUTE = 60_000
 /** What a task an agent opens must say (commands.ts): at least one check, with a priority and who asked. */
@@ -28,7 +29,7 @@ function setup() {
     return effects.result.messageId as string
   }
   const owed = (on = 'lead') => (f.group(on).owed ?? []).map(ask => ask.id)
-  const react = (by: string, on: string, messageId: string, emoji: string) => f.run({ type: 'message.react', conversationId: on, messageId, emoji, on: true } as Command,
+  const react = (by: string, on: string, messageId: string, emoji: string, add = true) => f.run({ type: 'message.react', conversationId: on, messageId, emoji, on: add } as Command,
     f.as(by), { reaction: { messageId, reacted: false } })
   const request = (id: string) => ({ id, conversationId: 'lead', replyTo: null, source: null, author: person })
   const taskFrom = (ask: string) => f.run({ type: 'conversation.create', title: 'From the ask', brief: 'Do it.', checks: DONE_WHEN, priority: 'P2', requestMessageId: ask } as Command,
@@ -79,18 +80,24 @@ describe('what the PM owes', () => {
     expect(owed()).toEqual([first])
   })
 
-  it('is settled by the PM\'s verdict reaction, never by eyes', () => {
+  it.each(['thumbs_up', 'tada', 'heart', 'laugh', 'eyes', 'check', 'rocket'])('is settled by the PM’s %s reaction without needing words', emoji => {
     const { f, post, owed, react } = setup()
-    const ask = post(null, 'lead', 'Please merge #12.')
-    react(f.lead, 'lead', ask, 'eyes')
-    expect(owed()).toEqual([ask])
-    react(f.lead, 'lead', ask, 'check')
+    const ask = post(null, 'lead', 'The PM has more tabs than my browser 😂')
+    react(f.lead, 'lead', ask, emoji)
     expect(owed()).toEqual([])
-    for (const emoji of ['thumbs_up', 'rocket', 'tada']) {
-      const next = post(null, 'lead', `Another ${emoji}.`)
-      react(f.lead, 'lead', next, emoji)
-      expect(owed()).toEqual([])
-    }
+    const project = projectsOf(f.state)[0]!
+    expect(owedLines(f.state, project, f.now)).toEqual([])
+    expect(storedPulse(f.state, project)!.asks.count).toBe(0)
+  })
+
+  it('lets the PM decide a question needs only a reaction, without settling its thread siblings', () => {
+    const { f, post, owed, react } = setup()
+    const ask = post(null, 'lead', 'Are we collecting tabs now?')
+    const sibling = post(null, 'lead', 'And a second message.', { reply: ask })
+    react(f.lead, 'lead', ask, 'eyes', false)
+    expect(owed()).toEqual([ask, sibling])
+    react(f.lead, 'lead', ask, 'eyes')
+    expect(owed()).toEqual([sibling])
   })
 
   it('is settled by a task the PM opens from it', () => {

@@ -2072,6 +2072,30 @@ describe('Super Tabs on a real Mongo replica set', () => {
       .rejects.toMatchObject({ code: 'INVALID_ANSWER' })
   })
 
+  it('a PM reaction settles the joke and question in durable owed state without an extra reply', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const sent = async (text: string) => String((await run(tab, { type: 'message.send', conversationId: 'lead', text,
+      replyTo: null, recipientIds: [lead] }, peer)).result.messageId)
+    const joke = await sent('The PM has more tabs than my browser 😂')
+    const question = await sent('Are we collecting tabs now?')
+    const react = (messageId: string, emoji: string, on = true, as = lead) => run(tab,
+      { type: 'message.react', conversationId: 'lead', messageId, emoji, on } as Command, host, as)
+    const owed = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!.owed?.map(a => a.id) ?? []
+    expect(await owed()).toEqual([joke, question])
+    await run(tab, { type: 'message.react', conversationId: 'lead', messageId: joke, emoji: 'laugh', on: true }, peer)
+    await react(joke, 'laugh', false)
+    expect(await owed()).toEqual([joke, question])
+    await react(joke, 'laugh')
+    expect(await owed()).toEqual([question])
+    await react(question, 'eyes')
+    await react(question, 'eyes')
+    const restarted = new SuperTabStore(db)
+    const chat = (await restarted.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!
+    expect(chat.owed ?? []).toEqual([])
+    expect(chat.pulse!.asks.count).toBe(0)
+  })
+
   // Task #3391: acknowledging is a reaction, not a post, so a reaction settles the recipient's delivery as an answer does.
   it('closes the reacting agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
     const { tab, lead } = await fixture()
