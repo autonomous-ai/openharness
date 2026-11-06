@@ -24,7 +24,8 @@ through Harness).
   and its agents leave; posts there are then refused (store.ts: an archived conversation is not written).
 - **Atomic:** the check and the delete are one write. A message written meanwhile changes the same conversation part, so the
   two writes conflict and the command runs again on the new state, which archives instead. So does an instructions save (it
-  changes the project's part) and a rules save (tested landing during the close).
+  changes the project's part) and a rules save, by anyone, which guards on the project's Lead chat (parts/touches.ts) that the close and a delete write
+  (tested with another person saving the first rules during a close and during a delete).
 - **Idempotent:** Desktop sends it under one operation id from every computer: the receipt replays the first answer
   (`result.outcome`: `deleted` or `archived`).
 
