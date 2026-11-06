@@ -109,7 +109,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     // The conversation it leads: the chat its host rebuilds its start prompt from when it switches it (cli leadSwitchRequest.ts).
     // A field of its own: an older host reads leadsConversationId as "only this conversation's deliveries" (cli host.ts).
     ledConversationId: ledProject(state, target.id)?.leadConversationId ?? null,
-    ...(isSwarmBuddy(target) && !target.buddySession ? { buddyConversationId: buddyEngineChat(target) } : {}),
+    ...(isSwarmBuddy(target) && !target.buddySession ? { buddyConversationId: buddyEngineChat(state, target) } : {}),
     stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
     observers: lookups.people.filter(p => p.id !== user.sub && canWatchAgent(state, { kind: 'person', userId: p.id, email: p.email }, target, closed))
       .map(p => ({ email: p.email, userId: p.id })),

@@ -1,18 +1,24 @@
 /** A person's explicit engine switch keeps their Buddy's identity and private chat. The host uses the same durable handoff
  * as Change agent; a backend request alone never changes the engine the Buddy is recorded as running. */
-import { isSwarmBuddy, swarmBuddyChatId } from './buddies.js'
+import { buddyChatOf, buddyChatsOf, defaultBuddy, isSwarmBuddy, swarmBuddyChatId } from './buddies.js'
+import { mainBuddyOf } from './buddySessions.js'
 import { machineOffline } from './machines.js'
 import { fail, person, type Actor, type Agent, type SuperTabState } from './model.js'
 
 export const BUDDY_ENGINE_CAPABILITY = 'buddyEngine'
 export const buddyEngineName = (engine: string): string => engine === 'claude' ? 'Claude Code' : engine === 'codex' ? 'Codex' : engine
-export const buddyEngineChat = (buddy: Agent): string => swarmBuddyChatId({ id: buddy.buddyOf!.personId, generation: buddy.buddyOf!.generation })
+export const buddyEngineChat = (state: SuperTabState, buddy: Agent): string => buddyChatOf(state, buddy)?.id
+  ?? swarmBuddyChatId({ id: buddy.buddyOf!.personId, generation: buddy.buddyOf!.generation })
 
-export function askBuddyEngine(state: SuperTabState, actor: Actor, engine: string, id: string, now: number): void {
+export function askBuddyEngine(state: SuperTabState, actor: Actor, engine: string, id: string, now: number, conversationId?: string): void {
   if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person switches their own Buddy.', 403)
   const me = person(state, actor.userId)
-  const buddy = state.agents.find(a => isSwarmBuddy(a) && !a.buddySession && a.buddyOf!.personId === me.id && a.buddyOf!.generation === me.generation)
-    ?? fail('NO_BUDDY', 'You have no Buddy running.', 404)
+  const chat = conversationId ? buddyChatsOf(state, me).find(c => c.id === conversationId)
+    ?? fail('NOT_FOUND', 'This conversation is unavailable.', 404) : undefined
+  const buddy = (chat ? mainBuddyOf(state, chat) : defaultBuddy(state, me.id)) ?? fail('NO_BUDDY', 'You have no Buddy running.', 404)
+  if (!isSwarmBuddy(buddy) || buddy.buddyOf!.personId !== me.id || buddy.buddyOf!.generation !== me.generation) {
+    fail('NO_BUDDY', 'You have no Buddy running.', 404)
+  }
   if (buddy.switchRequest || buddy.switchLanded || buddy.modelRequest) fail('BUDDY_SWITCHING', 'Your Buddy is already switching.', 409)
   const pool = state.machines?.find(m => m.machineId === buddy.machineId && m.contributorId === me.id && !m.removal && !m.hostMachineId)
   if (!pool || buddy.machineOwnerId !== me.id || pool.observation?.sessionKind === 'team') {

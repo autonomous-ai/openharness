@@ -361,7 +361,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   // A person ends a thread session of their own Buddy chat (buddySessions.ts): `ended` from their app, `idle` and `stopped` from
   // their machine's host, which acts as them. Idempotent: a thread with no session is told so and nothing changes.
   // The person's own Buddy onto a model the Swarm's grid serves now, or back to their subscription (null): buddyModel.ts.
-  z.object({ type: z.literal('buddy.engine'), engine: swarmEngine }).strict(),
+  z.object({ type: z.literal('buddy.engine'), engine: swarmEngine, conversationId: id.optional() }).strict(),
   // `conversationId`: which of the person's Buddies, by its chat (task #3818); without it, their default.
   z.object({ type: z.literal('buddy.model'), gridModel: z.string().trim().min(1).max(200).nullable(), conversationId: id.optional() }).strict(),
   // What the Buddy's machine reports once it carried the request out: `fresh` when the conversation was too long for the model.
@@ -810,7 +810,7 @@ function dropClosing(state: SuperTabState, keep: (request: NonNullable<SuperTabS
 /** What may name a person's one Buddy chat: posts, reactions, proposals, naming the Buddy and ending a session. */
 const SWARM_BUDDY_CHAT_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'message.edit', 'message.delete', 'buddy.propose', 'buddy.rename', 'buddy.sessionEnd',
   // Which of a person's several Buddies (task #3818).
-  'buddy.create', 'buddy.remove', 'buddy.default', 'buddy.model'])
+  'buddy.create', 'buddy.remove', 'buddy.default', 'buddy.model', 'buddy.engine'])
 
 export function authorizeCommandAccess(state: SuperTabState, actor: Actor, command: Command, context: Partial<CommandContext> = {}) {
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
@@ -3217,7 +3217,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       renameBuddy(state, actor, readConversation(state, actor, command.conversationId), command.name, context.buddyNames)
       break
     case 'buddy.engine':
-      askBuddyEngine(state, actor, command.engine, operationId, context.now)
+      askBuddyEngine(state, actor, command.engine, operationId, context.now, command.conversationId)
       break
     case 'buddy.model':
       askBuddyModel(state, actor, command.gridModel, operationId, context.now, command.conversationId)
@@ -3731,7 +3731,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         delete target.switchLanded
         const engine = buddyEngineName(target.configuration.engine)
         const error = command.error?.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/[.\s]+$/, '')
-        effects.messages.push({ id: operationId, conversationId: buddyEngineChat(target), author: sender, replyTo: null, recipients: [], source: SYSTEM_ROW,
+        effects.messages.push({ id: operationId, conversationId: buddyEngineChat(state, target), author: sender, replyTo: null, recipients: [], source: SYSTEM_ROW,
           text: moved ? `Your Buddy now runs on ${engine}.`
             : `Couldn't switch your Buddy: ${error || 'it failed'}. ${command.down ? `It has not come back on ${engine} yet; its machine keeps trying.` : `It is back on ${engine}.`}` })
         break

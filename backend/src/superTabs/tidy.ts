@@ -108,7 +108,7 @@ export function staleSwitches(state: SuperTabState, now: number): MessageDraft[]
   const rows: MessageDraft[] = []
   for (const pm of state.agents) {
     const request = pm.switchRequest, project = request && ledProject(state, pm.id)
-    const chat = isSwarmBuddy(pm) && !pm.buddySession ? buddyEngineChat(pm) : project?.leadConversationId
+    const chat = isSwarmBuddy(pm) && !pm.buddySession ? buddyEngineChat(state, pm) : project?.leadConversationId
     if (!request || !chat) continue
     if (!switchExpired(request, now)) continue
     delete pm.switchRequest

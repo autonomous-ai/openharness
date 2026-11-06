@@ -44,7 +44,7 @@
 
 **Files:** `backend/src/superTabs/buddies.ts`, new `buddyEngine.ts` and `buddyEngine.test.ts`, `commands.ts`, `buddyModel.ts`, `tidy.ts`, `terminal.ts`, `read/hostRows.ts`; focused tests of their callers.
 
-**Interfaces:** `buddy.engine {engine}` writes the existing `Agent.switchRequest` with default profile, owner and operation id. Host rows expose `buddyConversationId`. Existing `agent.switchClaim`, `agent.rebind`, and `agent.switchResult` settle only the requested Buddy switch. `buddyEngine` is the new host capability.
+**Interfaces:** `buddy.engine {engine, conversationId?}` selects the named owned Buddy chat, or the default Buddy for older clients, and writes the existing `Agent.switchRequest` with default profile, owner and operation id. Host rows expose that Buddy’s actual `buddyConversationId`; result, failure and expiry lines stay in the same chat when the person has several Buddies. Existing `agent.switchClaim`, `agent.rebind`, and `agent.switchResult` settle only the requested Buddy switch. `buddyEngine` is the new host capability.
 
 - [x] Commit failing caller-level tests for owner-only admission, signed-in/fresh/capable host, mutual exclusion, rebind preserving chat, duplicate/stale results, expiry and limit notice.
 - [x] Run the new tests and record their expected failures.
@@ -66,7 +66,7 @@
 
 **Files:** new `desktop/lib/super_tabs/buddy_engine.dart`, `buddy_model.dart`, `buddies.dart`, `controller.dart`, `model.dart`; new `desktop/test/super_tab_buddy_engine_test.dart`, screenshot test and existing Buddy test support.
 
-**Interfaces:** `switchBuddyEngine(String engine)` submits Task 1's command. Offers come from a fresh machine `observation.readiness.engines` with installed/signedIn both true. `switchRequest` drives pending text and disables model changes.
+**Interfaces:** `switchBuddyEngine(String engine, {String? conversationId})` submits Task 1's command for the selected chat on snapshots advertising several Buddies (`buddyCap`); older snapshots keep the no-id command. Offers come from a fresh machine `observation.readiness.engines` with installed/signedIn both true. `switchRequest` drives pending text and disables model changes.
 
 - [x] Commit failing widget tests with memory store/fake sign-in for selecting Codex, hidden signed-out/unknown/stale engines, pending state, command refusal and limit-action menu.
 - [x] Run them and record the expected failures.
