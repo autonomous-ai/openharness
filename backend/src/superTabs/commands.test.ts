@@ -2127,8 +2127,9 @@ describe('any agent of the project', () => {
     it('posts a top-level line and a thread reply there, joins nothing, and reaches the coordinator only by name (#2963)', () => {
       const { f, engineer, reviewer, chat } = working()
       const members = [...chat().agentIds]
-      const asked = f.run(post('Can someone check the login bug?')).messages[0]!
       for (const agentId of [engineer, reviewer]) {
+        // Each routing case has a fresh ask: main chat now permits two posts per ask (#3598).
+        const asked = f.run(post('Can someone check the login bug?')).messages[0]!
         const line = f.run(post('I am on it.'), actorOf(agentId)).messages.at(-1)!
         expect(line).toMatchObject({ conversationId: 'lead', author: { kind: 'agent', id: agentId }, replyTo: null, recipients: [] })
         const reply = f.run(post('Found it: the token expired.', asked.id), actorOf(agentId),

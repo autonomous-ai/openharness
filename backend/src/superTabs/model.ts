@@ -430,6 +430,9 @@ export interface Conversation {
    *  #3554): those its brief, title, assignment's result, checks' evidence and merge record name, never links in posts. [] from
    *  its creation; absent on a conversation from before, which reads what it recorded instead (codePullRequests). */
   codePullRequestUrls?: string[]
+  /** 'server' on a step the server opened for a handed task (commands.ts openReviewSteps, task #3602): an agent's step of its
+   *  kind is then refused as a double. Absent on a step an agent or a person opened, and on older ones. */
+  openedBy?: 'server'
   /** When its brief was last set (conversation.create, work.define): a person's rule moved into this task leaves the
    *  instructions only for a pull request GitHub says merged after it (ruleGuard.ts rulePlaces, #3463). No command writes
    *  it otherwise. Absent on a task from before. */
@@ -512,6 +515,8 @@ export interface Conversation {
   /** The PM's answers here (answers.ts): each message it answered, where and by which message, at most MAX_ANSWERED, so a
    *  second `answer` is refused with where the first is. Bookkeeping: never sent to readers. */
   answered?: import('./answers.js').AnsweredAsk[]
+  /** Project-chat post limits: at most 50 asks, no text; bookkeeping hidden from readers (chatLimits.ts). */
+  chatLimits?: import('./chatLimits.js').ChatLimits
   /** On a project's chat: its project's pulse as last worked out (pulse.ts recordPulse), which every read sends in `derived`. */
   pulse?: import('./pulse.js').Pulse
 }
@@ -1150,6 +1155,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // A read never hands out the cleanup records it just applied (read/hostRows.ts delivers them to the machine's host).
   delete visible.machineCleanups
   delete visible.parkedConversations
+  for (const group of visible.conversations) delete group.chatLimits
   numberConversations(visible)
   delete visible.retiredConversationNumber
   delete visible.groupCounter

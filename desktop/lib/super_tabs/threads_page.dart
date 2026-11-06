@@ -365,10 +365,11 @@ class _ThreadCardState extends State<_ThreadCard> {
         ),
       ];
     }
-    final shown = card.replies.length > 2
+    // Expanded (Show N more replies, task #3619): every reply, in the card.
+    final shown = !card.expanded && card.replies.length > 2
         ? card.replies.sublist(card.replies.length - 2)
         : card.replies;
-    final hidden = card.count - shown.length;
+    final hidden = card.expanded ? 0 : card.count - shown.length;
     final fresh = attention.isNew(t)
         ? attention.newCount(t).clamp(0, shown.length)
         : 0;
@@ -387,17 +388,30 @@ class _ThreadCardState extends State<_ThreadCard> {
             ),
           ],
         ),
-      if (hidden > 0)
+      if (hidden > 0) ...[
+        if (card.olderFailed)
+          Text(
+            SuperTabThreadCards.olderFailedText,
+            key: ValueKey('super-thread-card-older-failed:$_key'),
+            style: DesktopChrome.control(),
+          ),
         Align(
           alignment: Alignment.centerLeft,
           child: TextButton(
             key: ValueKey('super-thread-card-more:$_key'),
-            onPressed: () => widget.onOpenThread(t.conversationId, t.rootId),
+            onPressed: card.loadingOlder
+                ? null
+                : () => unawaited(widget.cards.expand(t)),
             child: Text(
-              hidden == 1 ? 'Show 1 more reply' : 'Show $hidden more replies',
+              card.loadingOlder
+                  ? 'Loading replies…'
+                  : hidden == 1
+                  ? 'Show 1 more reply'
+                  : 'Show $hidden more replies',
             ),
           ),
         ),
+      ],
       for (final (index, reply) in shown.indexed) ...[
         if (fresh > 0 && index == shown.length - fresh) _newLine(),
         widget.message(reply),

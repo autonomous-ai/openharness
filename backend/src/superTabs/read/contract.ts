@@ -37,7 +37,7 @@ export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' |
 export interface Audience { people: Array<{ id: string; generation: string }> }
 /** A conversation with its own message counter (`lastMessageSequence` and message sequences compare within one group).
  *  `dormant` is set only on a dormant group fetched on demand; `audience` only on a private conversation. */
-export type GroupView = Omit<Conversation, 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'> & {
+export type GroupView = Omit<Conversation, 'chatLimits' | 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'> & {
   /** A task's lane, as the crew dispatch hands it out (dispatch.ts laneOf: its PM's, else its owned paths'), null when no
    *  lane owns its paths; absent on a chat or a step. From the group alone, so a change read's changed tasks keep every lane's
    *  count whole on the reader's side (task #3400). Absent from an older backend. */
@@ -226,6 +226,8 @@ export interface CommandReply {
 export interface SwarmList {
   /** `workspaceId` names its Workspace (null before the migration); a Swarm whose Workspace the person left is not listed. */
   tabs: Array<{ id: string; name: string; ownerId: string; workspaceId: string | null; paused: boolean; lastChangedAt: number | null
+    /** Only on the reader's own Personal Swarm. */
+    personal?: true
     /** With `?mentions=1`: the person's waiting tags in the Swarm and their digest, as the Swarm's own state counts them (a
      *  Swarm whose count cannot be told here has neither). */
     mentionsWaiting?: number; mentionsDigest?: string }>
