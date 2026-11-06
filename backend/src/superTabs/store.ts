@@ -1549,12 +1549,23 @@ export class SuperTabStore {
   }
 
   /**
+   * The Swarm as [command]'s reader may read it, loaded once for all of the command's reads outside its transaction (push
+   * origin, repository reach, review files), on the first that needs it (task #3661): each loaded it in its own transaction
+   * before, so an assignment loaded the Swarm three times and a Ready four, and Ken's scan on v1.4.20 put POST commands p95 at
+   * 683 ms. A refusal is each read's as before: it reads nothing.
+   */
+  private preReader(user: AuthUser, tabId: string, command: Command): () => Promise<SuperTabState> {
+    let loading: Promise<SuperTabState> | undefined
+    return () => loading ??= transaction(this.db, async tx => (await this.load(tx, user, tabId, namedFor(command))).state)
+  }
+
+  /**
    * Who pushed the pull requests of the task a work.assign or a Ready for review is about (github/pushOrigin.ts, audit H2).
    * Read outside the command's transaction, as GitHub may take seconds, so it can only ever add a mark. Undefined when there is
    * nothing to read, or this reader cannot read that task: the command then refuses as it would. `pulls` are the pull requests
    * it read (none for a branch): a clean read clears only a mark it covered (teamWritten.ts applyPushOrigin, #3304).
    */
-  private async pushOriginFor(user: AuthUser, tabId: string, command: unknown): Promise<{ origin: PushOrigin; pulls: string[]; task?: { origin: PushOrigin; pulls: string[] } } | undefined> {
+  private async pushOriginFor(user: AuthUser, tabId: string, command: unknown, preRead: () => Promise<SuperTabState>): Promise<{ origin: PushOrigin; pulls: string[]; task?: { origin: PushOrigin; pulls: string[] } } | undefined> {
     const hook = this.hooks.pushOrigin
     const asked = command as { type?: unknown; conversationId?: unknown; status?: unknown; result?: unknown; present?: unknown; projectId?: unknown; branchRef?: unknown;
       request?: { branchRef?: unknown; conversationId?: unknown } } | null
@@ -1564,18 +1575,18 @@ export class SuperTabStore {
     try {
       if (typeof ref === 'string' && this.hooks.branchPushOrigin) {
         const branch = ref.replace(/^refs\/(heads|remotes\/origin)\//, '')
-        const repositoryUrl = await transaction(this.db, async tx => {
-          const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+        const repositoryUrl = await (async () => {
+          const state = await preRead()
           if (asked.type === 'lead.start') return projectsOf(state).find(p => p.id === asked.projectId)?.repository?.repositoryUrl ?? null
           const group = state.conversations.find(c => c.id === asked.request?.conversationId)
           return group ? groupProject(state, group).repository?.repositoryUrl ?? null : undefined
-        })
+        })()
         return repositoryUrl === undefined ? undefined : { origin: await this.hooks.branchPushOrigin(repositoryUrl, branch), pulls: [] }
       }
       const reads = asked.type === 'work.assign' || asked.type === 'work.teamWritten' || (asked.type === 'conversation.agent' && asked.present === true) || (asked.type === 'work.status' && asked.status === 'review')
       if (!hook || typeof asked.conversationId !== 'string' || !reads) return undefined
-      const facts = await transaction(this.db, async tx => {
-        const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+      const facts = await (async () => {
+        const state = await preRead()
         const group = state.conversations.find(c => c.id === asked.conversationId)
         if (!group) return null
         const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
@@ -1587,7 +1598,7 @@ export class SuperTabStore {
         // A step's own pull requests (its brief, its agent's results) are read apart: they mark the step, not its task.
         const stepOnly = task ? [...new Set([...codeOf(group), ...named])].filter(url => !own.includes(url)) : []
         return { repositoryUrl, own, stepOnly, step: !!group.reviewOf }
-      })
+      })()
       if (!facts) return undefined
       // Only what the reader reads covers a mark: the project's own repository's pull requests (pushOrigin.ts projectPushOrigin),
       // which answers clean for none of them (security review 2 of #3304).
@@ -1616,7 +1627,7 @@ export class SuperTabStore {
    * #3266), read outside the command's transaction as GitHub may take seconds. It can only refuse earlier than the machine
    * would: undefined, refusing nothing, when there is nothing to read or the read fails.
    */
-  private async repositoryReachFor(user: AuthUser, tabId: string, command: unknown): Promise<RepositoryReach | undefined> {
+  private async repositoryReachFor(user: AuthUser, tabId: string, command: unknown, preRead: () => Promise<SuperTabState>): Promise<RepositoryReach | undefined> {
     const hook = this.hooks.repositoryReach
     const asked = command as { type?: unknown; conversationId?: unknown; request?: { conversationId?: unknown } } | null
     // A task's Ready assigns its review steps (task #3401), so it reads the reach as an assignment does.
@@ -1624,11 +1635,11 @@ export class SuperTabStore {
     const conversationId = asked?.type === 'agent.start' ? asked.request?.conversationId : assigns ? asked!.conversationId : undefined
     if (!hook || typeof conversationId !== 'string') return undefined
     try {
-      const project = await transaction(this.db, async tx => {
-        const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+      const project = await (async () => {
+        const state = await preRead()
         const group = state.conversations.find(c => c.id === conversationId)
         return group ? groupProject(state, group) : undefined
-      })
+      })()
       const repositoryUrl = project?.repository?.repositoryUrl
       if (!project || !repositoryUrl || !githubRepository(repositoryUrl)) return undefined
       return await hook(user.autonomousEnv, tabId, project.id, repositoryUrl)
@@ -1643,21 +1654,21 @@ export class SuperTabStore {
    * transaction as GitHub may take seconds, as pushOriginFor reads. Undefined for a step's Ready, a task naming no pull
    * request, or no hook: no step opens then. A read that throws gives files null: the strictest steps open, never none.
    */
-  private async pullRequestFilesFor(user: AuthUser, tabId: string, command: unknown): Promise<PullRequestFilesRead | undefined> {
+  private async pullRequestFilesFor(user: AuthUser, tabId: string, command: unknown, preRead: () => Promise<SuperTabState>): Promise<PullRequestFilesRead | undefined> {
     const hook = this.hooks.pullRequestFiles
     const asked = command as { type?: unknown; conversationId?: unknown; status?: unknown; result?: unknown } | null
     if (!hook || asked?.type !== 'work.status' || asked.status !== 'review' || typeof asked.conversationId !== 'string') return undefined
     let facts: { repositoryUrl: string | null; urls: string[] } | null = null
     try {
-      facts = await transaction(this.db, async tx => {
-        const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+      facts = await (async () => {
+        const state = await preRead()
         const group = state.conversations.find(c => c.id === asked.conversationId)
         if (!group || group.reviewOf) return null
         const repositoryUrl = groupProject(state, group).repository?.repositoryUrl ?? null
         const urls = [...group.pullRequestUrls ?? [], ...[typeof asked.result === 'string' ? asked.result : '', group.brief]
           .flatMap(text => text ? pullRequestsIn(text, repositoryUrl) : [])]
         return { repositoryUrl, urls: [...new Set(urls)] }
-      })
+      })()
       if (!facts?.urls.length) return undefined
       return await hook(facts.repositoryUrl, facts.urls) ?? undefined
     } catch (error) {
@@ -1703,8 +1714,10 @@ export class SuperTabStore {
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
     const { operationId, command } = operationSchema.parse(input)
-    const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([this.pushOriginFor(user, tabId, command),
-      this.repositoryReachFor(user, tabId, command), this.pullRequestFilesFor(user, tabId, command), this.pullRequestMergesFor(user, tabId, command)])
+    // The pre-reads share one load of the Swarm, taken only if one needs it (task #3661).
+    const preRead = this.preReader(user, tabId, command)
+    const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([this.pushOriginFor(user, tabId, command, preRead),
+      this.repositoryReachFor(user, tabId, command, preRead), this.pullRequestFilesFor(user, tabId, command, preRead), this.pullRequestMergesFor(user, tabId, command)])
     let ended: WorkHold[] = [], started: WorkHold[] = []
     // With only PMs and Buddies, no dispatch pass can hand out work.
     let hasWorkers = false
