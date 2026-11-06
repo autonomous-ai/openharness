@@ -1616,7 +1616,10 @@ describe('several Buddies', () => {
     const second = add(f, { name: 'Research' })
     expect(refusal(() => f.run({ type: 'buddy.default', conversationId: second.chat } as Command, owner))?.code).toBe('NOT_FOUND')
     expect(refusal(() => f.run({ type: 'buddy.remove', conversationId: second.chat } as Command, owner))?.code).toBe('NOT_FOUND')
-    expect(refusal(() => f.run({ type: 'buddy.default', conversationId: second.chat } as Command, agentActor(f.pm)))?.code).toBe('BUDDY_PERSON')
+    // An agent: one that cannot read the chat is told it is not there; the Buddy itself may not pick for its person either.
+    expect(refusal(() => f.run({ type: 'buddy.default', conversationId: second.chat } as Command, agentActor(f.pm)))?.code).toBe('NOT_FOUND')
+    expect(refusal(() => f.run({ type: 'buddy.default', conversationId: second.chat } as Command, agentActor(second.agentId)))).not.toBeNull()
+    expect(defaultBuddyChat(f.state, f.state.people.find(p => p.id === 'peer')!).id).toBe(peerSwarmChat)
     expect(refusal(() => f.run({ type: 'buddy.default', conversationId: f.group } as Command, peer))?.code).toBe('NOT_FOUND')
     expect(refusal(() => f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', conversationId: f.group } as Command, peer, host))?.code).toBe('NOT_FOUND')
   })
