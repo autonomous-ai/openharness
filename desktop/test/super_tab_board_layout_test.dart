@@ -198,7 +198,7 @@ void main() {
     await end(tester, c);
   });
 
-  testWidgets('each side pane hides and shows, and a new view starts as it '
+  testWidgets('the left rail hides and shows, and a new view starts as it '
       'was left', (tester) async {
     final store = _Memory();
     final (c, _) = await show(tester, store: store);
@@ -208,23 +208,33 @@ void main() {
     await tester.tap(_key('super-pane-left-toggle'));
     await _settle(tester);
     expect(_key('super-group-lead'), findsNothing, reason: 'left rail hidden');
-    await tester.tap(_key('super-pane-right-toggle'));
-    await _settle(tester);
-    expect(_key('super-board-chat'), findsNothing, reason: 'Buddy hidden');
     expect(_key('super-tasks-lead'), findsOneWidget);
     await end(tester, c);
 
-    // A new view: the project's Board opens as the panes were left.
+    // A new view: the project's Board opens as the rail was left.
     final (again, _) = await show(tester, store: store);
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
     expect(_key('super-tasks-lead'), findsOneWidget);
     expect(_key('super-group-lead'), findsNothing, reason: 'still hidden');
-    expect(_key('super-board-chat'), findsNothing, reason: 'still hidden');
     await tester.tap(_key('super-pane-left-toggle'));
     await _settle(tester);
     expect(_key('super-group-lead'), findsOneWidget);
     await end(tester, again);
+  });
+
+  // anh Dee's fixed layout (#3863): with Show your Buddy gone, a Buddy pane that could hide would never come back.
+  // Nothing hides it, and a hidden state saved by an earlier build is not read (review of #3398).
+  testWidgets('the Buddy pane always shows, with no hide button, even when '
+      'an earlier build saved it hidden', (tester) async {
+    final store = _Memory()..values['swarm_right_pane_hidden'] = '1';
+    final (c, _) = await show(tester, store: store);
+    await tester.tap(_key('super-group-lead'));
+    await _settle(tester);
+    expect(_key('super-board-chat'), findsOneWidget);
+    expect(_key('super-pane-right-toggle'), findsNothing);
+    expect(find.byTooltip('Hide your Buddy'), findsNothing);
+    await end(tester, c);
   });
 
   testWidgets('the Buddy pane beside the Board has its options: Remove is '
@@ -252,8 +262,6 @@ void main() {
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
     await tester.tap(_key('super-pane-left-toggle'));
-    await _settle(tester);
-    await tester.tap(_key('super-pane-right-toggle'));
     await _settle(tester);
     final row = tester.getCenter(_key('super-pane-left-toggle')).dy;
     for (final key in [
