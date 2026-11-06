@@ -17,18 +17,20 @@ ConversationServer weeklySwarm() {
   final server = humansSwarm();
   server.leaderboard!['allProjects'] = true;
   server.leaderboard!['people'] = [
-    for (final (id, rank, shipped, accepted, unblocked, points, agents, streak) in [
-      ('peer', 1, 6, 8, 3, 29, 3, 6),
-      ('tony', 2, 2, 4, 0, 10, 1, 2),
-      ('owner', 3, 1, 8, 4, 15, 1, 1),
-      ('scholes', 4, 0, 2, 2, 4, 1, 0),
-      ('diego', 5, 0, 1, 1, 2, 1, 0),
-      ('huy', 6, 0, 0, 0, 0, 1, 0),
-      ('maximilian.alexander.longname', 6, 0, 0, 0, 0, 0, 0),
-    ])
+    for (final (id, rank, shipped, accepted, unblocked, points, agents, streak)
+        in [
+          ('peer', 1, 6, 8, 3, 29, 3, 6),
+          ('tony', 2, 2, 4, 0, 10, 1, 2),
+          ('owner', 3, 1, 8, 4, 15, 1, 1),
+          ('scholes', 4, 0, 2, 2, 4, 1, 0),
+          ('diego', 5, 0, 1, 1, 2, 1, 0),
+          ('huy', 6, 0, 0, 0, 0, 1, 0),
+          ('maximilian.alexander.longname', 6, 0, 0, 0, 0, 0, 0),
+        ])
       {
         'personId': id,
-        'displayName': {'peer': 'Dee', 'owner': 'Ken', 'tony': 'Tony'}[id] ?? id,
+        'displayName':
+            {'peer': 'Dee', 'owner': 'Ken', 'tony': 'Tony'}[id] ?? id,
         'rank': rank,
         'points': points,
         'shipped': {'count': shipped},
@@ -165,9 +167,9 @@ void main() {
     final c = await showBoard(tester, server);
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-      expect(c.snapshot!.projects, isEmpty);
-      expect(server.leaderboardReads, isEmpty);
-      expect(find.text('No projects to show yet.'), findsOneWidget);
+    expect(c.snapshot!.projects, isEmpty);
+    expect(server.leaderboardReads, isEmpty);
+    expect(find.text('No projects to show yet.'), findsOneWidget);
   });
 
   testWidgets(
