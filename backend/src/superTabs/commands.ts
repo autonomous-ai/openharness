@@ -2615,7 +2615,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const pmInstead = routesToPm(state, actor, group)
       if (pmInstead) {
         command.questions.forEach((q, i) => crewNeed(group, pmInstead, { personIds: [command.personId], conversationId: group.id,
-          question: q.question, options: q.options, recommended: q.recommended }, q.question, stableId(operationId, 'crew-need', String(i))))
+          question: q.question, options: q.options, recommended: q.recommended, ...q.defaultAt ? { defaultAt: q.defaultAt } : {} }, q.question, stableId(operationId, 'crew-need', String(i))))
         result.decisionIds = []
         break
       }
@@ -4161,7 +4161,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${askedName}.`
         // A needs_human for the PM is its crew need: on this row when the row reaches the PM, else on a row of its own there.
         const need = pmInstead ? { personIds: command.ask ? [command.ask.personId] : [], conversationId: group.id,
-          ...command.result ? { question: command.result } : {}, ...command.ask ? { options: command.ask.options, recommended: command.ask.recommended } : {} } : null
+          ...command.result ? { question: command.result } : {}, ...command.ask ? { options: command.ask.options, recommended: command.ask.recommended, ...command.ask.defaultAt ? { defaultAt: command.ask.defaultAt } : {} } : {} } : null
         const onRow = need && pmInstead && actor.kind === 'agent' && recipients.includes(pmInstead)
           ? { crewNeed: { agentId: actor.agentId, ...need, messageId: operationId } } : {}
         // The status set, on the row: a Done waits for the coordinator's next digest, what needs someone does not (store.ts writeMessages).

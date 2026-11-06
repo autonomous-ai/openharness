@@ -26,7 +26,8 @@ export const MAX_OPEN_DECISIONS = 20
 const line = (max: number) => z.string().trim().min(1).max(max)
 /** What a question offers besides itself: 2–5 distinct options, the index of the recommended one, and what an answer unblocks. */
 export const decisionChoices = z.object({ options: z.array(line(200)).min(2).max(5).refine(o => new Set(o).size === o.length, 'Give distinct options.'),
-  recommended: z.number().int().min(0), unblocks: line(300) }).strict()
+  recommended: z.number().int().min(0), unblocks: line(300),
+  defaultAt: z.string().datetime({ offset: true }).transform(value => new Date(value).toISOString()).optional() }).strict()
 export const decisionQuestion = decisionChoices.extend({ question: line(1000) }).strict()
 type Question = z.infer<typeof decisionQuestion>
 
@@ -46,6 +47,7 @@ export interface DecisionTarget {
   id: string; personId: string; conversationId: string; projectId: string; askerAgentId: string; question: string; options: string[]
   /** The option Let PM decide takes; a row whose index is not one of its options has none. */
   recommended: number; answeredAt: number | null
+  defaultAt?: number | null
   /** When it was asked, and the task whose needs_human asked it: the leaderboard credits the answer (leaderboard/record.ts). */
   createdAt: number; assignmentId: string | null
   kind?: string | null
@@ -213,8 +215,8 @@ export function workEnded(before: SuperTabState, after: SuperTabState): string[]
 
 /** What makes an ask a repeat: the same asker, task, person, conversation, question, options, recommendation and what it
  *  unblocks. Another asker, another task or other options with the same text is a decision of its own (review of #1753). */
-const repeatKey = (d: Pick<DecisionDraft, 'askerAgentId' | 'assignmentId' | 'personId' | 'conversationId' | 'question' | 'options' | 'recommended' | 'unblocks'>) =>
-  JSON.stringify([d.askerAgentId, d.assignmentId ?? null, d.personId, d.conversationId, d.question, d.options, d.recommended, d.unblocks])
+const repeatKey = (d: Pick<DecisionDraft, 'askerAgentId' | 'assignmentId' | 'personId' | 'conversationId' | 'question' | 'options' | 'recommended' | 'unblocks'> & { defaultAt?: string | Date | null }) =>
+  JSON.stringify([d.askerAgentId, d.assignmentId ?? null, d.personId, d.conversationId, d.question, d.options, d.recommended, d.unblocks, d.defaultAt ? new Date(d.defaultAt).toISOString() : null])
 
 /** Writes the questions asked and returns the decision each one is: an open decision that this ask exactly repeats is that
  *  decision again, not a second one. New ones beyond MAX_OPEN_DECISIONS from this asker to this person are refused, and
@@ -233,7 +235,7 @@ export async function writeDecisions(tx: Tx, tabId: string, drafts: DecisionDraf
     if (asked + fresh.length > MAX_OPEN_DECISIONS) {
       fail('DECISIONS_FULL', `${asked} decisions you asked this person are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`)
     }
-    await tx.superTabDecision.createMany({ data: fresh.map(d => ({ ...d, tabId, createdAt: new Date(now) })) })
+    await tx.superTabDecision.createMany({ data: fresh.map(d => ({ ...d, defaultAt: d.defaultAt ? new Date(d.defaultAt) : undefined, tabId, createdAt: new Date(now) })) })
     await tx.superTabDecision.deleteMany({ where: { tabId, answeredAt: { lt: new Date(now - LEDGER_WEEKS * WEEK_MS) } } })
   }
   return drafts.map(d => held.get(repeatKey(d)) ?? d.id)
@@ -274,8 +276,8 @@ export async function expireReflections(tx: Tx, tabId: string, projectId: string
 export async function readAskedDecision(tx: Tx, tabId: string, id: string): Promise<DecisionTarget | undefined> {
   const row = await tx.superTabDecision.findFirst({ where: { id, tabId },
     select: { id: true, personId: true, conversationId: true, projectId: true, askerAgentId: true, question: true, options: true, recommended: true,
-      answeredAt: true, createdAt: true, assignmentId: true, kind: true, withdrawn: true } })
-  return row ? { ...row, answeredAt: row.answeredAt?.getTime() ?? null, createdAt: row.createdAt.getTime(), assignmentId: row.assignmentId ?? null,
+      answeredAt: true, defaultAt: true, createdAt: true, assignmentId: true, kind: true, withdrawn: true } })
+  return row ? { ...row, answeredAt: row.answeredAt?.getTime() ?? null, defaultAt: row.defaultAt?.getTime() ?? null, createdAt: row.createdAt.getTime(), assignmentId: row.assignmentId ?? null,
     withdrawn: row.withdrawn === true } : undefined
 }
 
@@ -398,7 +400,7 @@ export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState,
       askerAgentId: row.askerAgentId, askerName: asker?.displayName ?? asker?.name ?? 'Agent',
       question: row.question, options: row.options, recommended: row.recommended, unblocks: row.unblocks,
       createdAt: row.createdAt, answeredAt: row.answeredAt ?? null, choice: row.choice ?? null, note: row.note ?? null,
-      delegated: row.delegated === true, overdue: row.overdue === true,
+      delegated: row.delegated === true, overdue: row.overdue === true, defaultAt: row.defaultAt ?? null, defaulted: row.defaulted === true,
       // What the 24-hour sweep can take: the sweep skips a reflection and a recommended option that is not one of the options.
       pmTakesOver: row.kind !== REFLECTION_DECISION && row.recommended >= 0 && row.recommended < row.options.length,
       // A typed answer (no option) reads as its words.
