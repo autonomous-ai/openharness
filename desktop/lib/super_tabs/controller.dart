@@ -453,7 +453,7 @@ class SuperTabController extends ChangeNotifier {
     try {
       final page = await request(
         'GET',
-        '$_path/personal-tasks?before=${Uri.encodeQueryComponent(cursor)}',
+        '$_path/personal-tasks?before=${Uri.encodeComponent(cursor)}',
       );
       if (_disposed || !identical(parts, _parts)) return true;
       if (parts.personalTasks.applyOlder(page, from: cursor)) _changed();
