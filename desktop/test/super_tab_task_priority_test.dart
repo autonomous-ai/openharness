@@ -182,7 +182,7 @@ void main() {
         'preview',
         'third',
       ]);
-      expect(_cardsIn(tester, 'working'), ['crash', 'tag']);
+      expect(_cardsIn(tester, 'working'), ['crash', 'test-copy', 'tag']);
       // The badge leads the caption, which keeps its words.
       expect(
         tester.getTopLeft(_in(_card('crash'), 'P0')).dx,

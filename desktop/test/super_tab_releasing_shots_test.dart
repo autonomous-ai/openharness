@@ -15,7 +15,7 @@ final shots = Platform.environment['SUPER_TAB_RELEASING_SHOTS'];
 final _now = DateTime(2026, 11, 5, 12);
 
 /// The board as the PR shows it (Dee, task #3452): merged tasks waiting on
-/// their release sit in Waiting, with their parts; released ones, and merges
+/// their release sit in Merged, with their parts; released ones, and merges
 /// from before the server kept a release list, stay in Shipped.
 void main() {
   setUpAll(() => loadCaptureFonts(shots));
@@ -102,7 +102,13 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.textContaining('merged, releasing'), findsNWidgets(3));
+      for (final words in [
+        'waiting for Desktop, CLI',
+        'waiting for a release',
+        'waiting for Backend',
+      ]) {
+        expect(find.textContaining(words), findsOneWidget, reason: words);
+      }
       expect(tester.takeException(), isNull);
       await captureWindow(tester, shots, 'releasing-board-${brightness.name}');
     });
