@@ -487,7 +487,9 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'proposal.close': ['reason'],
   'work.define': ['brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.review.focus', 'checks[].description'],
   'work.assign': ['overrideReason'],
-  'work.status': ['result'],
+  // A needs_human question's options and what it unblocks reach a person's decision (security review 1 of #3310).
+  'work.status': ['result', 'ask.options[]', 'ask.unblocks'],
+  'decision.ask': ['questions[].question', 'questions[].options[]', 'questions[].unblocks'],
   'work.cancel': ['reason'],
   'work.check': ['evidence'],
   'project.create': ['name', 'brief'],
@@ -511,12 +513,12 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
 const AGENT_TEXT: Partial<Record<Command['type'], readonly string[]>> = {
   'message.send': ['text'],
   'message.edit': ['text'],
-  'work.status': ['result'],
+  'work.status': WORDS['work.status']!,
   'work.check': ['evidence'],
   'conversation.create': WORDS['conversation.create']!,
   'work.define': WORDS['work.define']!,
   'person.tell': ['text'],
-  'decision.ask': ['questions[].question', 'questions[].options[]', 'questions[].unblocks'],
+  'decision.ask': WORDS['decision.ask']!,
 }
 
 /** The strings at [paths] in [command] (WORDS' path shape: dotted keys, `[]` for each item of a list). */
