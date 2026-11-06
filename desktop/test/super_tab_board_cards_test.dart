@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_activity_lists_test.dart' show swarm;
@@ -130,13 +131,13 @@ void main() {
       ],
     );
     expect(inColumn('proposals', 'pin'), findsOneWidget);
-    expect(
-      find.descendant(
-        of: _key('super-task-card-pin'),
-        matching: find.textContaining('tuan'),
-      ),
-      findsOneWidget,
+    // Who proposed it is the card's requester avatar, as a tile names no one in text (#3869).
+    final proposer = find.descendant(
+      of: _key('super-task-card-pin'),
+      matching: _key('super-card-requester'),
     );
+    expect(proposer, findsOneWidget);
+    expect(tester.widget<SuperTabAvatar>(proposer).identity, 'person:tuan');
     expect(note(tester, 'pin'), isNull);
     await end(tester, c);
   });
