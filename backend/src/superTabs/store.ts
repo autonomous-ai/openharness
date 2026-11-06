@@ -67,7 +67,7 @@ import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
 import { currentRules, deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
-import { SEED_RULES } from './policy.js'
+import { SEED_RULES, type MachineRule } from './policy.js'
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, FIRST_SUMMARY, liveNotes, MAX_REVISIONS } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
@@ -4173,8 +4173,17 @@ export class SuperTabStore {
    *  under the same checks an agent.start meets, Team-account facts read once per sweep. */
   private async crewDeps(tx: Transaction, state: SuperTabState, now: number): Promise<CrewDeps> {
     const teamMachines = await this.teamMachines(tx, state), otherWorkspaceMachines = await this.otherWorkspaceMachines(tx, state)
-    // No machine rules until the project rules record is on main (River, 11-05): then they come from it, never from source.
-    return { machineRules: [], admits: (machineId, agent) => {
+    // Each project's machine rules from its record (machineRules.ts): one indexed read per project of the Swarm, only in a
+    // sweep where a member needs a machine. A record that does not pass the schema holds none, as for a start.
+    const rules = new Map<string, readonly MachineRule[]>()
+    for (const project of projectsOf(state)) {
+      rules.set(project.id, await currentRules(tx, state.id, project.id).then(r => r.rules.machines ?? [], (error: unknown) => {
+        if (!(error instanceof SuperTabError) || error.code !== 'RULES_INVALID') throw error
+        logger.warn('[swarm-machine-rules] record invalid; no machine rule applied', { tabId: state.id, command: 'crew.move' })
+        return []
+      }))
+    }
+    return { machineRules: projectId => rules.get(projectId) ?? [], admits: (machineId, agent) => {
       const pool = state.machines?.find(m => m.machineId === machineId)
       const request = pool && crewMoveRequest(state, agent, pool)
       if (!request) return false

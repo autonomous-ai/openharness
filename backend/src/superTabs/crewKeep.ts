@@ -27,8 +27,8 @@ export type CrewAction =
  *  admitMachineStart, with the store's Team-account facts). */
 export interface CrewDeps {
   admits(machineId: string, agent: Agent): boolean
-  /** The project's machine rules from its rules record (policy.ts machines). */
-  machineRules?: readonly MachineRule[]
+  /** A project's machine rules, from its rules record (policy.ts machines). */
+  machineRules?(projectId: string): readonly MachineRule[]
 }
 
 /** Whether [agent] is crew (#3397's `crew` record), read without its type until that change lands. */
@@ -94,6 +94,8 @@ export function fallbacks(state: SuperTabState, agent: Agent, now: number, deps:
   const from = standingPool(state, agent.machineId)
   const team = teamOnly(state, agent), kind = onTeamAccount(state, agent)
   const engine = agent.configuration.engine
+  const projectId = agentProjectId(state, agent)
+  const rules = projectId ? deps.machineRules?.(projectId) ?? [] : []
   const weekly = (pool: ContributedMachine) => quotaOf(state, pool, engine, now)?.windows.find(w => w.name === 'weekly')
   const working = (pool: ContributedMachine) => state.agents.filter(a => a.machineId === pool.machineId && hasWork(state, a)).length
   const key = (pool: ContributedMachine): Array<number | string> => {
@@ -106,7 +108,7 @@ export function fallbacks(state: SuperTabState, agent: Agent, now: number, deps:
     // member never brings its own-account work into one. A machine that just refused its start waits.
     .filter(pool => pool.machineId !== agent.machineId && !pool.buddyOnly && standingPool(state, pool.machineId) && (!team || teamAccountPool(pool))
       && teamAccountPool(pool) === kind && !(agent.crewMoveRefused?.machineId === pool.machineId && now - agent.crewMoveRefused.at < MOVE_REFUSED_WAIT_MS)
-      && !machineRuleRefusal(deps.machineRules ?? [], { machineId: pool.machineId, engine, review: false }, now) && !crewTrouble(state, pool, engine, now) && deps.admits(pool.machineId, agent))
+      && !machineRuleRefusal(rules, { machineId: pool.machineId, engine, review: false }, now) && !crewTrouble(state, pool, engine, now) && deps.admits(pool.machineId, agent))
     .map(pool => ({ pool, key: key(pool) }))
     .sort((a, b) => { for (let i = 0; i < a.key.length; i++) if (a.key[i] !== b.key[i]) return a.key[i]! < b.key[i]! ? -1 : 1; return 0 })
     .map(entry => entry.pool)
