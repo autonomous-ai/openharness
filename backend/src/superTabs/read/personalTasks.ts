@@ -76,7 +76,7 @@ function summary(part: Part, reader: Reader): PersonalTask | 'gone' | null {
     : group.assignment?.status ?? (group.proposal && !['accept', 'reshape'].includes(group.proposal.decision?.kind ?? '') ? 'proposal' : 'planned')
   const pullRequestUrl = group.pullRequestUrls?.at(-1)
   return { id: group.id, version: part.version, at: activityAt(part as Part<GroupData>), projectId: project.id, projectName: project.name,
-    title: group.title, status, suggested: !group.assignment && !!approval?.suggestedAgentId, canApprove: approval?.state === 'proposal',
+    title: group.title, status, suggested: !group.assignment && !!approval?.suggestedAgentId, canApprove: approval?.state === 'proposal' && asked,
     agent: agent ? { id: agent.id, name: agent.displayName ?? agent.name, ...agent.avatar ? { avatar: agent.avatar } : {} } : null,
     requester: asker ? { id: asker.id, ...askerName ? { name: askerName } : {}, ...asker.avatar ? { avatar: asker.avatar } : {} } : null,
     ...pullRequestUrl ? { pullRequestUrl } : {}, ...approval?.reason ? { reason: approval.reason } : {} }
