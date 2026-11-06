@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -215,6 +217,81 @@ void main() {
     final c = await show(tester, server);
     expect(chatScroll(tester).position.extentAfter, lessThan(40));
     expect(reads, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+  testWidgets('Jump to latest from far up drops the rows read back and holds '
+      'the newest page, with older history still there to read (#3630)', (
+    tester,
+  ) async {
+    final c = await show(tester, chat(1500));
+    await scrollFarUp(tester, 15);
+    expect(c.messages('lead').length, 1500);
+
+    await tester.tap(find.byKey(jump));
+    for (var frame = 0; frame < 30; frame++) {
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(visibleRows(tester), greaterThan(0), reason: 'frame $frame');
+    }
+    await tester.pumpAndSettle();
+
+    expect(find.text(text(1500)), findsOneWidget);
+    expect(chatScroll(tester).position.extentAfter, lessThan(40));
+    expect(c.messages('lead').length, lessThanOrEqualTo(100));
+    expect(c.messages('lead').last.text, text(1500));
+    expect(c.hasOlder('lead'), isTrue);
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('while the newest page is on its way, the rows read back stay '
+      'on screen (#3630)', (tester) async {
+    final server = chat(1500);
+    final c = await show(tester, server);
+    await scrollFarUp(tester, 15);
+    final latest = <String>[];
+    server.onRead = (path) {
+      if (!path.contains('before=') && !path.contains('after=')) {
+        latest.add(path);
+      }
+    };
+    server.holdReads = Completer<void>();
+
+    await tester.tap(find.byKey(jump));
+    for (var frame = 0; frame < 30; frame++) {
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(visibleRows(tester), greaterThan(0), reason: 'frame $frame');
+    }
+    expect(latest, isNotEmpty, reason: 'the latest page is asked for');
+    final hold = server.holdReads!;
+    server.holdReads = null;
+    hold.complete();
+    for (var frame = 0; frame < 30; frame++) {
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(visibleRows(tester), greaterThan(0), reason: 'after, $frame');
+    }
+    await tester.pumpAndSettle();
+    expect(find.text(text(1500)), findsOneWidget);
+    expect(c.messages('lead').length, lessThanOrEqualTo(100));
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('Jump to latest from near the end reads nothing (#3630)', (
+    tester,
+  ) async {
+    final server = chat(400);
+    final c = await show(tester, server);
+    final scroll = chatScroll(tester);
+    scroll.jumpTo(scroll.position.maxScrollExtent - 1500);
+    await tester.pumpAndSettle();
+    final reads = <String>[];
+    server.onRead = reads.add;
+    expect(find.byKey(jump), findsOneWidget);
+    await tester.tap(find.byKey(jump));
+    await tester.pumpAndSettle();
+    expect(reads, isEmpty);
+    expect(chatScroll(tester).position.extentAfter, lessThan(40));
     await tester.pumpWidget(const SizedBox());
     await c.flush();
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
