@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Daemon } from '../agentClient/daemon.js'
 import { markBuddyOwner, writeBuddyAccount } from '../lib/buddyGuard.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { processCoreApi } from '../services/processCoreApi.js'
 import { FIXTURE, readFixture } from './fixtures/read/index.js'
 import { LeadSwitchRequests, profileSignedIn, switchChangeId, type SwitchRow } from './leadSwitchRequest.js'
 
@@ -63,7 +64,7 @@ function setup(options: { claim?: boolean; home?: string | null; team?: boolean;
   const switches = new LeadSwitchRequests(core, 'm1', { now: () => clock.now, home: () => home, signedIn: async () => options.signedIn !== false,
     open: async () => daemon, profiles: profiles as never, team: () => options.team === true,
     readHandoff: () => 'Earlier project state.' })
-  return { switches, calls, posted, daemon, profiles, operationIds, home, dataDir, clock, reopen: () => { live = true } }
+  return { core, switches, calls, posted, daemon, profiles, operationIds, home, dataDir, clock, reopen: () => { live = true } }
 }
 
 describe('a PM host carrying out a switch the Swarm asked for', () => {
@@ -396,10 +397,34 @@ const buddySetup = (options: Parameters<typeof setup>[0] = {}) => {
   const t = setup({ home: 'default', ...options, old: { engine: 'claude', swarmSkill: { role: 'buddy', key: 'swarm-buddy', mode: 'orchestration' }, ...options.old } })
   markBuddyOwner('work', 'owner', t.dataDir)
   writeBuddyAccount('owner', t.dataDir)
+  vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'owner', email: 'owner@example.com' })
   return t
 }
 
 describe('a Buddy engine handoff', () => {
+  it.each(['owner', 'other', null])('checks the core account through the service process API (%s)', async accountId => {
+    const t = buddySetup()
+    const core = processCoreApi(t.dataDir, 'superTabs', {
+      live: () => [t.core.agents.byAgent('h1')!],
+      ask: async (query, payload) => {
+        if (query === 'account') return accountId ? { accountId, email: `${accountId}@example.com` } : {}
+        if (query === 'backend') return t.core.account.backend(String(payload.method), String(payload.path), payload.body)
+        throw new Error(`Unexpected query ${query}`)
+      },
+    })
+    const switches = new LeadSwitchRequests(core, 'm1', {
+      now: () => NOW, open: async () => t.daemon, profiles: (() => 'default') as never, signedIn: async () => true,
+    })
+    await switches.serve(buddyRow())
+    if (accountId === 'owner') {
+      expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare', 'agent_close', 'agent_create', 'agent_handoff_complete'])
+      expect(t.calls[2][1]).toMatchObject({ engine: 'codex', cwd: '/work', swarmRole: 'buddy' })
+    } else {
+      expect(t.calls).toEqual([])
+      expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false })
+    }
+  })
+
   it('switches Claude Code to Codex in its folder as a Buddy in the same private chat, without PM authority', async () => {
     const t = buddySetup()
     await t.switches.serve(buddyRow())
