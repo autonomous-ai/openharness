@@ -5,7 +5,6 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../core/local_key_value_store.dart';
-import '../shared/theme/app_theme.dart' as grid;
 import '../state/pane_arrangement.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/pane_resize_handle.dart';
@@ -21,6 +20,8 @@ class SuperTabPaneLayout extends StatefulWidget {
     this.right,
     this.storage,
     this.rightDefault = rightWidth,
+    this.rightMinimum = rightWidth,
+    this.rightShare,
     this.over,
   });
 
@@ -33,6 +34,17 @@ class SuperTabPaneLayout extends StatefulWidget {
   /// takes its own line under the box, in full (11-03). [rightWidth] stays
   /// the narrowest the pane goes.
   static const threadWidth = 340.0;
+
+  /// The Board's floor: the room it keeps while text scaling widens the
+  /// side panes.
+  static const boardFloor = 280.0;
+
+  /// Under this the centre pane has no room for a header, let alone cards.
+  static const _centerFloor = 160.0;
+
+  /// The Board's chat: a third of the window, never narrower than this.
+  static const boardChatMinimum = 420.0;
+  static const boardChatShare = 1 / 3;
 
   /// The roster drawer's share of a narrow window at most. On a phone it filled the screen, leaving no
   /// veil to tap, so closing it was hard (owner, 2026-10-23).
@@ -52,6 +64,14 @@ class SuperTabPaneLayout extends StatefulWidget {
   /// width, saved, wins): [threadWidth] while it shows a thread.
   final double rightDefault;
 
+  /// The narrowest the right pane goes, before text scaling: the Board's chat
+  /// is the main interface and keeps [boardChatMinimum] (Dee, task #3863).
+  final double rightMinimum;
+
+  /// With no width chosen, the right pane takes this share of the window (at
+  /// least [rightMinimum]) instead of [rightDefault].
+  final double? rightShare;
+
   /// Drawn over the left and centre panes, leaving the right one as it is:
   /// the picture viewer beside an open thread, as in Slack (Huy, 11-04).
   final Widget? over;
@@ -61,6 +81,7 @@ class SuperTabPaneLayout extends StatefulWidget {
 }
 
 class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
+  static const _leftBase = 180.0;
   double _left = SuperTabPaneLayout.leftWidth;
   // Null until a person sets it, or it is restored: the right pane then
   // takes the widget's default for what it shows.
@@ -132,19 +153,42 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
       final scale = MediaQuery.textScalerOf(context);
       final hasLeft = widget.left != null, hasRight = widget.right != null;
       final centerMin = math.min(scale.scale(360), width);
-      final leftMin = hasLeft ? scale.scale(180) : 0.0;
-      final rightMin = hasRight ? scale.scale(280) : 0.0;
-      double limit(double value, double floor, double ceiling) => value
-          .clamp(math.min(floor, ceiling), math.max(0, ceiling))
-          .toDouble();
+      // Text scaling widens the side panes only while the Board keeps its
+      // floor: the chat's scaled minimum gives back first, down to its own
+      // 420, then projects, down to 180 (reviews of #3863). The centre then
+      // yields before either side pane: a side's minimum wins over the room
+      // the centre's own preference asks for.
+      var leftMin = hasLeft ? scale.scale(_leftBase) : 0.0;
+      var rightMin = hasRight ? scale.scale(widget.rightMinimum) : 0.0;
+      var short =
+          leftMin +
+          rightMin +
+          math.min(SuperTabPaneLayout.boardFloor, width) -
+          width;
+      if (hasRight && short > 0) {
+        final give = math.min(short, rightMin - widget.rightMinimum);
+        rightMin -= give;
+        short -= give;
+      }
+      if (hasLeft && short > 0) {
+        leftMin -= math.min(short, leftMin - _leftBase);
+      }
+      double limit(double value, double floor, double ceiling) =>
+          value.clamp(floor, math.max(floor, ceiling)).toDouble();
       final left = hasLeft
-          ? limit(_left, leftMin, width - centerMin - rightMin)
+          ? math.min(width, limit(_left, leftMin, width - centerMin - rightMin))
           : 0.0;
       final right = hasRight
-          ? limit(
-              _right ?? widget.rightDefault,
-              rightMin,
-              width - centerMin - left,
+          ? math.min(
+              width - left,
+              limit(
+                _right ??
+                    (widget.rightShare == null
+                        ? widget.rightDefault
+                        : math.max(rightMin, width * widget.rightShare!)),
+                rightMin,
+                width - centerMin - left,
+              ),
             )
           : 0.0;
       final arrangement = PaneArrangement([
@@ -165,7 +209,11 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
                 ),
               Expanded(
                 key: const ValueKey('super-center-pane'),
-                child: widget.center,
+                // A centre squeezed under what any Board needs draws
+                // nothing rather than overflowing into its neighbours.
+                child: width - left - right < SuperTabPaneLayout._centerFloor
+                    ? const SizedBox.shrink()
+                    : widget.center,
               ),
               if (hasRight)
                 SizedBox(
