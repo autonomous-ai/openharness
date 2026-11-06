@@ -382,6 +382,7 @@ class SuperTabConversation {
       buddyName = row['buddyName'] as String?,
       buddyDefault = row['buddyDefault'] == true,
       paused = SuperTabPause.read(row['paused']),
+      proposal = SuperTabProposalCard.read(row['proposal']),
       buddySessions = List.unmodifiable(
         (row['buddySessions'] is List ? row['buddySessions'] as List : const [])
             .whereType<Map>()
@@ -474,6 +475,10 @@ class SuperTabConversation {
 
   /// While its task is paused (#3819, a project on the Board): who paused it, when and why; null otherwise.
   final SuperTabPause? paused;
+
+  /// The proposal this card began as, with the PM's decision and its questions (#3817, a project on the Board);
+  /// null for a card that was never a proposal, and from an older backend.
+  final SuperTabProposalCard? proposal;
 
   /// A Buddy chat's thread sessions, live or starting (at most 3); empty on
   /// every other conversation and from older backends.
@@ -683,6 +688,130 @@ class SuperTabProject {
   /// sign-in made of it (task #3374); null when none was asked, and from a
   /// backend before it.
   final SuperTabRepositoryCreation? repositoryCreation;
+}
+
+DateTime? _epoch(Object? value) =>
+    value is num ? DateTime.fromMillisecondsSinceEpoch(value.toInt()) : null;
+
+String? _words(Object? value) =>
+    value is String && value.trim().isNotEmpty ? value : null;
+
+/// A Board card's proposal (#3817): what was proposed and by whom, the PM's decision, and its questions.
+class SuperTabProposalCard {
+  SuperTabProposalCard._(Map row)
+    : text = _words(row['text']) ?? '',
+      goal = _words(row['goal']),
+      why = _words(row['why']),
+      doneWhen = _words(row['doneWhen']),
+      createdAt = _epoch(row['createdAt']),
+      senderIds = List.unmodifiable([
+        for (final sender in row['senders'] as List? ?? const [])
+          if (sender is Map && sender['personId'] is String)
+            sender['personId'] as String,
+      ]),
+      decision = SuperTabProposalDecision.read(row['decision']),
+      questions = List.unmodifiable([
+        for (final q in row['questions'] as List? ?? const [])
+          ?SuperTabProposalQuestion.read(q),
+      ]),
+      mergedInto = _words(row['mergedInto']),
+      overdue = row['overdue'] == true;
+
+  static SuperTabProposalCard? read(Object? value) =>
+      value is Map ? SuperTabProposalCard._(value) : null;
+
+  final String text;
+  final String? goal, why, doneWhen;
+  final DateTime? createdAt;
+
+  /// The people who agreed to it, first the one who proposed it.
+  final List<String> senderIds;
+  final SuperTabProposalDecision? decision;
+  final List<SuperTabProposalQuestion> questions;
+
+  /// The card it was merged into as a duplicate: it is no longer on the Board.
+  final String? mergedInto;
+
+  /// Waiting on the PM longer than the project's limit (spec Design, Failure).
+  final bool overdue;
+
+  /// The question still waiting for its answer, if any.
+  SuperTabProposalQuestion? get openQuestion =>
+      questions.where((q) => !q.answered).firstOrNull;
+
+  /// Whether it became a task: accepted, or reshaped into the version the PM will do.
+  bool get becameTask => switch (decision?.kind) {
+    'accept' || 'reshape' => true,
+    _ => false,
+  };
+}
+
+/// The PM's decision on a proposal: `accept`, `reshape`, `later` (until [revisitAt]) or `no`, with its reason.
+class SuperTabProposalDecision {
+  const SuperTabProposalDecision({
+    required this.kind,
+    this.reason,
+    this.revisitAt,
+  });
+
+  static SuperTabProposalDecision? read(Object? value) {
+    if (value is! Map) return null;
+    final kind = value['kind'];
+    if (kind is! String ||
+        !const {'accept', 'reshape', 'later', 'no'}.contains(kind))
+      return null;
+    return SuperTabProposalDecision(
+      kind: kind,
+      reason: _words(value['reason']),
+      revisitAt: _epoch(value['revisitAt']),
+    );
+  }
+
+  final String kind;
+  final String? reason;
+  final DateTime? revisitAt;
+}
+
+/// A question the PM asked on a card, of one person, with the answer it takes by [deadline] if none comes.
+class SuperTabProposalQuestion {
+  const SuperTabProposalQuestion({
+    required this.id,
+    required this.personId,
+    required this.question,
+    required this.defaultAnswer,
+    required this.deadline,
+    required this.answered,
+    this.requiresConsent = false,
+  });
+
+  static SuperTabProposalQuestion? read(Object? value) {
+    if (value is! Map) return null;
+    final (id, person, question) = (
+      value['id'],
+      value['personId'],
+      value['question'],
+    );
+    final deadline = _epoch(value['deadline']);
+    if (id is! String ||
+        person is! String ||
+        question is! String ||
+        deadline == null) {
+      return null;
+    }
+    return SuperTabProposalQuestion(
+      id: id,
+      personId: person,
+      question: question,
+      defaultAnswer: _words(value['defaultAnswer']) ?? '',
+      deadline: deadline,
+      answered: value['answer'] is Map,
+      requiresConsent: value['requiresConsent'] == true,
+    );
+  }
+
+  final String id, personId, question, defaultAnswer;
+  final DateTime deadline;
+  final bool answered, requiresConsent;
 }
 
 /// A paused task (#3819): who paused it, when, and the reason they gave, if any.

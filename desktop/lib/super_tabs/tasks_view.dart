@@ -396,7 +396,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         (task.assignment?['status'] == 'needs_human' ||
             task.liveness?['why'] == 'person');
     return [
-      ?_person(task.requesterId),
+      // A proposal's card names who proposed it (#3817).
+      ?_person(task.requesterId ?? task.proposal?.senderIds.firstOrNull),
       if (agentId is String && snapshot != null)
         if (agent.isNotEmpty)
           agent
@@ -405,6 +406,57 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       if (entry.needsYou) 'Needs you',
       if (!waitingOnReader) ?entry.state,
     ].join(' · ');
+  }
+
+  /// A Board card's second line (#3820), on a project on the Board only: who paused it, else the question it waits
+  /// on with its default and time, else the PM's decision and its reason.
+  String? _note(SuperTabTaskEntry entry, DateTime now) {
+    final task = entry.task;
+    if (task == null || !widget.project.boardMode) return null;
+    String reasoned(String head, String? reason) =>
+        reason == null ? head : '$head: $reason';
+    if (task.paused case final paused?) {
+      return reasoned(
+        'Paused by ${_person(paused.by) ?? 'someone'}',
+        paused.reason,
+      );
+    }
+    final proposal = task.proposal;
+    if (proposal == null) return null;
+    if (proposal.openQuestion case final q?) {
+      final who = q.personId == widget.controller.accountId
+          ? 'you'
+          : _person(q.personId) ?? 'someone';
+      return 'Asks $who: ${q.question} '
+          'If no answer by ${_when(q.deadline, now)}: ${q.defaultAnswer}';
+    }
+    final decision = proposal.decision;
+    if (decision == null) return null;
+    return reasoned(switch (decision.kind) {
+      'accept' => 'Accepted',
+      'reshape' => 'Reshaped',
+      'later' => switch (decision.revisitAt) {
+        final at? => 'Later, ${_day(at)}',
+        null => 'Later',
+      },
+      _ => 'No',
+    }, decision.reason);
+  }
+
+  static const _monthNames = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', //
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+
+  static String _day(DateTime at) => '${_monthNames[at.month - 1]} ${at.day}';
+
+  /// A deadline as the card says it: its time today, else its day and time.
+  static String _when(DateTime at, DateTime now) {
+    final time =
+        '${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
+    final today =
+        at.year == now.year && at.month == now.month && at.day == now.day;
+    return today ? time : '${_day(at)}, $time';
   }
 
   HarnessActivity _activity(SuperTabTaskEntry entry) {
@@ -468,6 +520,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       // however long, never cut off (task #3452).
       captionLines: task != null && superTabTaskReleasing(task) ? null : 1,
       tile: !list,
+      note: _note(entry, now),
+      noteKey: ValueKey('super-task-card-note-$id'),
       selected: id == widget.selectedId,
       onOpen: () =>
           task == null ? widget.onOpenProposal(id) : widget.onOpenTask(task.id),

@@ -37,9 +37,15 @@ class SuperTabTaskCard extends StatefulWidget {
     this.tile = false,
     this.selected = false,
     this.trailing,
+    this.note,
+    this.noteKey,
   });
 
   final String title, caption;
+
+  /// A second quiet line on a Board card (#3820): the PM's decision, an open question, or a pause; null for none.
+  final String? note;
+  final Key? noteKey;
   final bool needsYou, unread;
   final HarnessActivity activity;
   final VoidCallback onOpen;
@@ -94,6 +100,7 @@ class _SuperTabTaskCardState extends State<SuperTabTaskCard> {
         ?w.lane,
         if (w.priority case final priority?) 'Priority ${priority.badge}',
         w.caption,
+        ?w.note,
         if (!w.needsYou)
           switch (w.activity) {
             HarnessActivity.starting => 'Queued',
@@ -192,6 +199,17 @@ class _SuperTabTaskCardState extends State<SuperTabTaskCard> {
                   ),
                 ),
               ],
+            ),
+          ),
+        if (w.note case final note?)
+          Padding(
+            padding: const EdgeInsets.only(top: grid.AppDesktop.menuInset),
+            child: Text(
+              note,
+              key: w.noteKey,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.metadata(),
             ),
           ),
       ],

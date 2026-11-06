@@ -133,7 +133,7 @@ void main() {
     expect(
       find.descendant(
         of: _key('super-task-card-pin'),
-        matching: find.textContaining('Tuan'),
+        matching: find.textContaining('tuan'),
       ),
       findsOneWidget,
     );
@@ -239,7 +239,7 @@ void main() {
     );
     expect(
       note(tester, 'theirs'),
-      'Asks Tuan: Pin per person or for everyone? '
+      'Asks tuan: Pin per person or for everyone? '
       'If no answer by 15:00: For everyone',
     );
     expect(
@@ -265,7 +265,7 @@ void main() {
         },
       ],
     );
-    expect(note(tester, 'held'), 'Paused by Tuan: Waiting for 1.3.84');
+    expect(note(tester, 'held'), 'Paused by tuan: Waiting for 1.3.84');
     await end(tester, c);
   });
 
