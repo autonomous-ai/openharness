@@ -436,6 +436,8 @@ describe('a Buddy engine handoff', () => {
     vi.stubEnv('CODEX_HOME', t.home)
     vi.stubEnv('CLAUDE_CONFIG_DIR', t.home)
     const config = join(t.home, engine === 'codex' ? 'config.toml' : '.claude.json')
+    // The daemon has installed Codex's hooks in this config before it can serve a signed-in engine switch.
+    if (engine === 'codex') writeFileSync(config, '')
     const request = vi.mocked(t.daemon.request).getMockImplementation()!
     vi.mocked(t.daemon.request).mockImplementation(async (type, payload, timeout) => {
       if (type === 'agent_close') {
@@ -453,8 +455,10 @@ describe('a Buddy engine handoff', () => {
   it('leaves a project Buddy folder to its own trust question', async () => {
     const t = buddySetup()
     vi.stubEnv('CODEX_HOME', t.home)
+    const config = join(t.home, 'config.toml')
+    writeFileSync(config, '')
     await t.switches.serve(buddyRow({}, { agent: { ...buddyRow().agent, buddyScope: undefined } }))
-    expect(existsSync(join(t.home, 'config.toml'))).toBe(false)
+    expect(readFileSync(config, 'utf8')).toBe('')
   })
 
   it('switches Claude Code to Codex in its folder as a Buddy in the same private chat, without PM authority', async () => {
@@ -481,8 +485,11 @@ describe('a Buddy engine handoff', () => {
       expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false })
     })
 
-  it('rechecks the owner after an awaited handoff before closing the original Buddy', async () => {
+  it('rechecks the owner after an awaited handoff before trusting the folder or closing the original Buddy', async () => {
     const t = buddySetup()
+    vi.stubEnv('CODEX_HOME', t.home)
+    const config = join(t.home, 'config.toml')
+    writeFileSync(config, '')
     const request = vi.mocked(t.daemon.request).getMockImplementation()!
     vi.mocked(t.daemon.request).mockImplementation(async (type, payload, timeout) => {
       const reply = await request(type, payload, timeout)
@@ -492,6 +499,7 @@ describe('a Buddy engine handoff', () => {
     await t.switches.serve(buddyRow())
     expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare'])
     expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false })
+    expect(readFileSync(config, 'utf8')).toBe('')
   })
 
   it('does not create twice across duplicate polls or a restarted host, and accepts a late successful rebind', async () => {

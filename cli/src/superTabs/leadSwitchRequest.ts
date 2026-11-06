@@ -18,6 +18,7 @@ import { profileHome } from '../lib/claudeProfiles.js'
 import { defaultCodexHome } from '../lib/codexProfiles.js'
 import { permissionModeApproves, permissionModeFlags } from '../lib/engineLaunch.js'
 import { parseSwarmSkill, wireRole } from '../lib/swarmSkills.js'
+import { trustBuddyHome } from './buddyHome.js'
 import { leadSwitchOf, leadSwitching, SWITCH_ADOPT_MS, switchWithin } from './leadSwitch.js'
 import { githubPromptLine, LAUNCH_MODEL_REFUSALS, leadPrompt } from './start.js'
 import { pmEngineHome } from './teamDaemon.js'
@@ -203,6 +204,11 @@ export class LeadSwitchRequests {
         return undefined
       }
       if (buddy && !await buddyOwnerCurrent()) return { ok: false, error: 'the Buddy owner or session could not be verified on this computer' }
+      if (buddy && row.agent.buddyScope === 'swarm') {
+        // The same Harness-owned home was trusted for the source engine; the target otherwise waits in a hidden pane.
+        await trustBuddyHome(old.cwd, engine)
+        if (!await buddyOwnerCurrent()) return { ok: false, error: 'the Buddy owner or session could not be verified on this computer' }
+      }
       const closed = await daemon.request('agent_close', { agentId, sessionId: old.sessionId ?? '', createdAt: new Date(old.registeredAt).toISOString(), mode: 'now', changeId }, 60_000)
       if (closed.error || closed.closed !== true) return { ok: false, error: NO_STOP }
       run.closed = true
