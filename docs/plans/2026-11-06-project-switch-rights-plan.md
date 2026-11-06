@@ -43,7 +43,7 @@ today.
 6. **Switch-on migration**, at the boundary agreed with Fir (#3817):
    - `project.boardMode on` hands each unanswered ask in the project chat, oldest first, to Fir's pure
      `importLegacyProposal(state, project, ask, now)`, with `ask = {messageId, conversationId, personId, text, at}`.
-   - It then clears those asks.
+   - It clears only the asks the helper turned into cards (Fir, 11-06). Until the helper is wired, the asks stay.
    - `legacyAsks(state, project)` builds that list and is tested here.
    - Whichever of #3817 and #3819 merges second wires the call.
 7. **The board read** that returns only what changed is the existing changes feed (`GET /:tabId/changes?cursor`,
@@ -138,6 +138,6 @@ boardRights.test.ts, dispatch.test.ts.
 
 **Files:** boardRights.ts (legacyAsks), commands.ts (project.boardMode), boardRights.test.ts.
 
-- [ ] Failing test: switching on lists every unanswered ask, oldest first, in the agreed shape, and clears them; switching
-  on again adds nothing.
+- [ ] Failing test: switching on lists every unanswered ask, oldest first, in the agreed shape, and keeps each one until a card
+  is made for it; switching on again adds nothing.
 - [ ] Code (wiring to #3817's importLegacyProposal by whichever merges second).
