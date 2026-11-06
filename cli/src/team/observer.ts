@@ -6,9 +6,14 @@ import { TEAM_SIGNED_OUT_DETAIL, TeamPrivacyObserver, runPrivacyCheck, writeTeam
 
 let observer: TeamPrivacyObserver | null = null
 
+/** This computer's Team config, or none under a test run: the machines spec, run in a Team account, rewrote that machine's
+ *  real status file to signed-out (Linuxtest2, daniel-pc, #3684), as a service spec once wrote to /Users/Shared
+ *  (team/relay.ts). Production never has VITEST set. */
+export const teamConfigHere = (): TeamConfig | null => process.env.VITEST ? null : readTeamConfig()
+
 export function teamPrivacyObserver(): PrivacyObservation | null {
   observer ??= new TeamPrivacyObserver({
-    config: () => readTeamConfig(),
+    config: teamConfigHere,
     user: () => userInfo().username,
     teamSession: () => readAuthSession()?.kind === 'team',
     check: (config) => runPrivacyCheck(config),
@@ -33,7 +38,7 @@ export interface TeamSignedOutDeps {
  * nothing in the owner's own daemon, and never a throw: the stop goes on either way.
  */
 export function recordTeamSignedOut(deps: TeamSignedOutDeps = {
-  config: () => readTeamConfig(), user: () => userInfo().username, writeStatus: writeTeamStatus, now: () => Date.now(),
+  config: teamConfigHere, user: () => userInfo().username, writeStatus: writeTeamStatus, now: () => Date.now(),
 }): void {
   try {
     const config = deps.config()
