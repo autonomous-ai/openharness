@@ -757,9 +757,8 @@ class SuperTabProposalDecision {
   static SuperTabProposalDecision? read(Object? value) {
     if (value is! Map) return null;
     final kind = value['kind'];
-    if (kind is! String ||
-        !const {'accept', 'reshape', 'later', 'no'}.contains(kind))
-      return null;
+    const kinds = {'accept', 'reshape', 'later', 'no'};
+    if (kind is! String || !kinds.contains(kind)) return null;
     return SuperTabProposalDecision(
       kind: kind,
       reason: _words(value['reason']),
