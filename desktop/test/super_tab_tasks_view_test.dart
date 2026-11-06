@@ -1014,6 +1014,11 @@ void main() {
     final stuck = line('stuck-done', 'waiting to merge for 1 h 30 min');
     expect(stuck, findsOneWidget);
     expect(tester.widget<Text>(stuck).style?.color, grid.AppPalette.warn);
+    // How long it has waited is what the column is for: never cut off.
+    expect(
+      tester.renderObject<RenderParagraph>(stuck).didExceedMaxLines,
+      isFalse,
+    );
     expect(line('no-code', 'Done'), findsOneWidget);
     expect(_cardsIn(tester, 'shipped'), ['sender']);
     await _close(tester, c);
