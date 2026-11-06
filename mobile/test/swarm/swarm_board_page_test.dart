@@ -1,15 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness_mobile/core/local_key_value_store.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
-import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart';
+import 'swarm_board_fixture.dart';
 import 'swarm_fixture.dart';
 
 /// A project opens on its Board (task #3821): six columns as tabs with
@@ -18,128 +19,11 @@ import 'swarm_fixture.dart';
 void main() {
   final dormant = '/api/super-tabs/$tab/groups?dormant=1&projectId=$project';
   final proposals = '/api/super-tabs/$tab/proposals?projectId=$project';
-  const pr = 'https://github.com/autonomous-ai/openharness/pull/12';
-  final yesterday = DateTime.now().subtract(const Duration(days: 1));
 
   /// One Swarm whose project Mobile has work in every column: Nova on 2156,
   /// Juno's 2160 waiting on the viewer, 2170 nobody took, 2171 done and still
   /// to merge, 2172 merged and releasing, and 2173 shipped yesterday (closed,
   /// so only the closed-work read has it); and one open proposal.
-  FakeSwarm backend({bool proposalsFail = false, bool closedFail = false}) {
-    final fake = FakeSwarm();
-    fake.routes['/api/super-tabs/list'] = (_) => {
-      'tabs': [
-        {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
-      ],
-      'next': null,
-    };
-    Map<String, dynamic> task(
-      String id,
-      int number,
-      String title, {
-      String? status,
-      String? worker,
-      bool merged = false,
-      bool linked = false,
-      List<String>? releasing,
-      String? priority,
-    }) => {
-      ...groupData(
-        id,
-        title: title,
-        number: number,
-        agentIds: ['agent-lead', ?worker],
-        status: status,
-        workerId: worker,
-        lastMessageSequence: number,
-      ),
-      'priority': ?priority,
-      if (linked || merged) 'pullRequestUrls': [pr],
-      if (linked || merged)
-        'cards': {
-          'pullRequests': [
-            {'url': pr, 'messageId': 'm-$id', if (merged) 'mergedAt': 1},
-          ],
-        },
-      'releasing': ?releasing,
-    };
-    fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
-      agents: [
-        agent('agent-lead', name: 'Lead', displayName: 'River'),
-        agent('agent-builder', displayName: 'Nova'),
-        agent('agent-juno', displayName: 'Juno'),
-      ],
-      groups: [
-        task(
-          'g1',
-          2156,
-          'Buddy chat header',
-          status: 'working',
-          worker: 'agent-builder',
-          priority: 'P1',
-        ),
-        task(
-          'g2',
-          2160,
-          'Saved views cache',
-          status: 'needs_human',
-          worker: 'agent-juno',
-        ),
-        task('g3', 2170, 'Dark theme for the board'),
-        task('g4', 2171, 'Phone Board', status: 'done', linked: true),
-        task(
-          'g5',
-          2172,
-          'Release notes',
-          status: 'done',
-          merged: true,
-          releasing: ['desktop'],
-        ),
-      ],
-    );
-    fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
-    fake.routes[dormant] = (_) => closedFail
-        ? throw SuperTabFailure('INTERNAL', 'Oops', statusCode: 500)
-        : {
-            'groups': [
-              {
-                'key': 'g6',
-                'version': 5,
-                'changedAt': DateTime.now().millisecondsSinceEpoch,
-                'data': {
-                  ...task(
-                    'g6',
-                    2173,
-                    'Shipped last night',
-                    status: 'done',
-                    merged: true,
-                  ),
-                  'dormant': true,
-                  'shippedAt': yesterday.millisecondsSinceEpoch,
-                  'released': {
-                    'at': 1,
-                    'tags': ['v1.3.84_desktop'],
-                  },
-                },
-              },
-            ],
-            'next': null,
-          };
-    fake.routes[proposals] = (_) => proposalsFail
-        ? throw SuperTabFailure('INTERNAL', 'Oops', statusCode: 500)
-        : {
-            'proposals': [
-              {
-                'messageId': 'prop-1',
-                'title': 'Show the Board on the phone',
-                'personId': me,
-                'priority': 'P1',
-                'at': 5,
-              },
-            ],
-          };
-    return fake;
-  }
 
   Future<SwarmHost> pump(WidgetTester tester, FakeSwarm fake) async {
     final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
@@ -193,7 +77,7 @@ void main() {
   testWidgets('a project opens on its Board, with its chat one tap away', (
     tester,
   ) async {
-    await pump(tester, backend());
+    await pump(tester, boardBackend());
 
     expect(key('swarm-project-tab-board'), findsOneWidget);
     expect(key('swarm-project-tab-chat'), findsOneWidget);
@@ -207,8 +91,29 @@ void main() {
     expect(key('swarm-board'), findsNothing);
   });
 
+  testWidgets(
+    'a link or a notice to the project\'s chat opens on its Chat tab, the Board one tap away',
+    (tester) async {
+      await pump(tester, boardBackend());
+
+      unawaited(
+        Navigator.of(tester.element(key('swarm-board')))
+            .push(swarmChatRoute(swarmId: tab, conversationId: leadChat)),
+      );
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-project-chat-$leadChat'), findsOneWidget);
+      expect(key('swarm-board'), findsNothing);
+
+      await tester.tap(key('swarm-project-tab-board'));
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-board'), findsOneWidget);
+    },
+  );
+
   testWidgets('the six columns are tabs with their counts', (tester) async {
-    await pump(tester, backend());
+    await pump(tester, boardBackend());
 
     for (final (name, label, n) in [
       ('proposal', 'Proposal', '1'),
@@ -231,7 +136,7 @@ void main() {
     'it opens on Working, and a column tab shows that column\'s cards',
     (tester) async {
       roomForSixTabs(tester);
-      await pump(tester, backend());
+      await pump(tester, boardBackend());
 
       expect(card('g1'), findsOneWidget);
       expect(card('g2'), findsOneWidget);
@@ -252,7 +157,7 @@ void main() {
   );
 
   testWidgets('a swipe moves to the next column', (tester) async {
-    await pump(tester, backend());
+    await pump(tester, boardBackend());
 
     await tester.fling(key('swarm-board-pages'), const Offset(-400, 0), 1500);
     await tester.pumpAndSettle();
@@ -264,7 +169,7 @@ void main() {
     'a card has its title, one quiet line, and a mark when it waits on the viewer',
     (tester) async {
       roomForSixTabs(tester);
-      await pump(tester, backend());
+      await pump(tester, boardBackend());
 
       expect(
         find.descendant(
@@ -332,7 +237,7 @@ void main() {
   testWidgets(
     'the Needs you bar counts what waits on the viewer and opens Activity',
     (tester) async {
-      await pump(tester, backend());
+      await pump(tester, boardBackend());
 
       expect(
         find.descendant(
@@ -359,7 +264,7 @@ void main() {
   testWidgets('a project with nothing waiting shows no Needs you bar', (
     tester,
   ) async {
-    final fake = backend();
+    final fake = boardBackend();
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
       groups: [groupData('g1', title: 'Quiet', number: 1, status: 'working')],
     );
@@ -372,7 +277,7 @@ void main() {
     'a tap on a task card opens its chat; a tap on a proposal opens the project chat',
     (tester) async {
       roomForSixTabs(tester);
-      await pump(tester, backend());
+      await pump(tester, boardBackend());
 
       await tester.tap(card('g1'));
       await tester.pumpAndSettle();
@@ -393,7 +298,7 @@ void main() {
 
   testWidgets('an empty column says what it holds', (tester) async {
     roomForSixTabs(tester);
-    final fake = backend();
+    final fake = boardBackend();
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
     fake.routes[proposals] = (_) => {'proposals': <Object>[]};
     fake.routes[dormant] = (_) => {'groups': <Object>[], 'next': null};
@@ -408,7 +313,7 @@ void main() {
     'a read that failed is said in its column, and the others still show',
     (tester) async {
       roomForSixTabs(tester);
-      await pump(tester, backend(proposalsFail: true, closedFail: true));
+      await pump(tester, boardBackend(proposalsFail: true, closedFail: true));
 
       expect(card('g1'), findsOneWidget);
       await tapColumn(tester, 'proposal');
