@@ -248,6 +248,22 @@ describe('the pulse on the read', () => {
     expect(Object.keys(owners.derived.pulse ?? {})).toHaveLength(2)
   })
 
+  // Task #3827: the board's Merged cards say when the next release is due. The server records it on the project's release list
+  // (never sent whole) and the read sends only that: a time per component, for the projects the reader sees.
+  it('sends each visible project\'s next release times, and nothing else of its release list', () => {
+    const { s } = scene()
+    s.edit(state => {
+      state.projects!.find(p => p.name === 'Pilot')!.releases = { pending: [], nextAt: { desktop: 0, backend: NOW + 60 * MINUTE } }
+    })
+    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
+    const view = readerView(parts, peer, NOW, { teamMachines: [] })
+    const pilot = view.parts.head.data.projects!.find(p => p.name === 'Pilot')!
+    expect(view.derived.releaseTimes).toEqual({ [pilot.id]: { desktop: 0, backend: NOW + 60 * MINUTE } })
+    expect(pilot).not.toHaveProperty('releases')
+    const other = view.parts.head.data.projects!.find(p => p.name !== 'Pilot')
+    if (other) expect(view.derived.releaseTimes).not.toHaveProperty(other.id)
+  })
+
   // River, on ReviewPulse2's review of #3209: the pulse's lists name conversations, so a reader gets only those they read; a
   // Buddy reads only its person's own, so it gets the counts alone (they are its project's totals, which it may read).
   it('names only conversations the reader may read: a Buddy gets the counts without the lists', () => {

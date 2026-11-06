@@ -71,6 +71,7 @@ const conversation: Required<Conversation> = {
   priority: 'P0',
   projectId: 'p',
   proposals: [],
+  pullRequestChecks: {},
   pullRequestEvents: {},
   pullRequestHeads: {},
   pullRequestUrls: [],
