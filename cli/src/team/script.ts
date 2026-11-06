@@ -345,7 +345,9 @@ export const SENTINEL_TEXT = 'Harness Team privacy check. The Harness Team accou
  */
 const signInStep = (mintEnv: string): string[] => [
   'no_sign_in=',
-  'if [ "$SIGN_IN" = always ] || [ ! -s "$TEAM_SESSION" ] || grep -q \'"signedOut"\' "$TEAM_SESSION" 2>/dev/null; then',
+  // Read as the Team account, as every step touches its home: it could make the file a link anywhere (security review 1
+  // of #3331). A special file there can still hold this read up to admin.ts's limit; only that account's own repair waits.
+  'if [ "$SIGN_IN" = always ] || [ ! -s "$TEAM_SESSION" ] || as_team /usr/bin/grep -q \'"signedOut"\' "$TEAM_SESSION" 2>/dev/null; then',
   `  if minted=$(as_owner /usr/bin/env ${mintEnv ? `${mintEnv} ` : ''}"$OWNER_NODE" "$OWNER_CLI" team __handoff); then`,
   // Its last line: a warning the CLI printed first must not become part of the code.
   '    code=$(printf \'%s\\n\' "$minted" | tail -n 1)',
