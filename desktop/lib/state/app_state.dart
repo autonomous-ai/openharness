@@ -198,10 +198,19 @@ class RestartAgentResult {
   final bool resumed;
   final bool retryable;
 
+  /// The daemon restarted without the requested launch flags and said nothing of them: it is older
+  /// than the field. Never set by a status check, which does not echo them.
+  final bool launchArgsIgnored;
+
+  /// The daemon refused the requested launch flags (`INVALID_LAUNCH_ARGS`); [error] is its detail.
+  final bool launchArgsRefused;
+
   const RestartAgentResult({
     this.error,
     this.resumed = true,
     this.retryable = true,
+    this.launchArgsIgnored = false,
+    this.launchArgsRefused = false,
   });
 }
 
@@ -18210,6 +18219,7 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String agentId, {
     AgentRestartAttempt? attempt,
+    String? launchArgs,
   }) {
     final operation = attempt ?? restartAttempt(machineId, agentId);
     if (operation.result case final result? when result.error == null) {
@@ -18217,7 +18227,7 @@ class AppNotifier extends ChangeNotifier {
     }
     if (operation.pending case final pending?) return pending;
     late final Future<RestartAgentResult> request;
-    request = _runAgentRestart(machineId, agentId, operation)
+    request = _runAgentRestart(machineId, agentId, operation, launchArgs)
         .then((result) {
           operation.result = result;
           return result;
@@ -18234,6 +18244,7 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String agentId,
     AgentRestartAttempt attempt,
+    String? launchArgs,
   ) async {
     final machine = attempt._machine;
     if (machine == null) {
@@ -18313,6 +18324,7 @@ class AppNotifier extends ChangeNotifier {
         ProductFlow.resumeRecovery,
       );
     }
+    final sendsLaunchArgs = launchArgs != null && !checking && !resuming;
     RestartAgentResult refused(String code, Object? detail) {
       attempt._awaitingConfirmation = false;
       if (resuming && code == 'AGENT_BUSY') {
@@ -18328,6 +18340,7 @@ class AppNotifier extends ChangeNotifier {
       _measurementResumes.remove(measurementKey)?.call(ProductOutcome.failed);
       return RestartAgentResult(
         error: _restartFailure(code, detail, resuming: resuming),
+        launchArgsRefused: code == 'INVALID_LAUNCH_ARGS',
       );
     }
 
@@ -18344,7 +18357,11 @@ class AppNotifier extends ChangeNotifier {
             : resuming
             ? 'agent_resume'
             : 'agent_restart',
-        payload: {'creationId': attempt._id, if (!checking) 'agentId': agentId},
+        payload: {
+          'creationId': attempt._id,
+          if (!checking) 'agentId': agentId,
+          if (sendsLaunchArgs) 'launchArgs': launchArgs,
+        },
       );
       if (checking &&
           resuming &&
@@ -18479,6 +18496,8 @@ class AppNotifier extends ChangeNotifier {
     }
     return RestartAgentResult(
       resumed: result['resumed'] is bool ? result['resumed'] as bool : true,
+      // Only a fresh restart is echoed; a status check never carries the words.
+      launchArgsIgnored: sendsLaunchArgs && result['launchArgs'] == null,
     );
   }
 
