@@ -66,7 +66,7 @@ import { recordClosing, sessionClosed } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
-import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, okayedWords, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalBrief, proposalSentText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyCapOf, buddyCapRefusal, buddyChatId, buddyChatsOf, buddyCount, defaultBuddyChat, dropBuddyChat, MAX_BUDDY_CAP, openNewBuddyChat, setDefaultBuddy, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, okayedWords, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalBrief, proposalSentText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
@@ -228,6 +228,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('swarm.delete'), name: z.string().max(160) }).strict(),
   z.object({ type: z.literal('swarm.restore') }).strict(),
   z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSaveSchema.nullable() }).strict(),
+  // The most Buddies a person may have in this Swarm (buddies.ts BUDDY_CAP), set by its owner (task #3818).
+  z.object({ type: z.literal('tab.buddyCap'), cap: z.number().int().min(1).max(MAX_BUDDY_CAP) }).strict(),
   z.object({ type: z.literal('tab.tidy'), enabled: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.set'), projectId: id.optional(), rule: ruleSchema, text: ruleTextSchema, askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.remove'), projectId: id.optional(), ruleId: id, askedIn: askedInSchema.optional() }).strict(),
@@ -335,7 +337,10 @@ export const commandSchema = z.discriminatedUnion('type', [
     scope: z.string().trim().min(1).max(4000), priority: z.enum(['low', 'normal', 'high']),
     attachmentIds: z.array(id).max(MAX_PROPOSAL_ATTACHMENTS, `Attach at most ${MAX_PROPOSAL_ATTACHMENTS} files to a proposal.`).optional() }).strict(),
   // Without `projectId`, the person's one Buddy (Dee, 10-31); an older app names a project, and removes that same one Buddy.
-  z.object({ type: z.literal('buddy.remove'), projectId: id.optional() }).strict(),
+  // `conversationId`: which of the person's Buddies, by its chat (task #3818); without it, their default.
+  z.object({ type: z.literal('buddy.remove'), projectId: id.optional(), conversationId: id.optional() }).strict(),
+  // The person's default Buddy, by its chat (task #3818): their lines and what is asked of them go to it.
+  z.object({ type: z.literal('buddy.default'), conversationId: id }).strict(),
   // A Buddy's proposal closed by hand, with its reason: out of the open proposals, posting nothing (River 11-04, task #2926).
   z.object({ type: z.literal('proposal.close'), projectId: id, messageId: id, reason: z.string().trim().min(1).max(200) }).strict(),
   // A person's one Buddy chat in the Swarm, opened before any Buddy is (buddies.ts openSwarmBuddyChat); with `projectId`, their
@@ -358,8 +363,11 @@ export const commandSchema = z.discriminatedUnion('type', [
   // engines): it is recorded Buddy-only (machines.ts ContributedMachine.buddyOnly). Ignored for a machine already listed.
   // Without `projectId`, the person's one Buddy for the Swarm (Dee, 10-31); an older app's Start names a project, and adds that
   // same one Buddy.
+  // Several Buddies (task #3818): `name` and no `conversationId` adds a new one in its own chat, within the Swarm's cap;
+  // `conversationId` starts that one of the person's Buddies again; neither, the default, as before.
   z.object({ type: z.literal('buddy.create'), projectId: id.optional(), machineId: id, engine: swarmEngine, model: z.string().trim().min(1).max(200).optional(),
-    setup: z.object({ name: title, cwd: path, engines: z.array(swarmEngine).min(1).max(2) }).strict().optional() }).strict(),
+    setup: z.object({ name: title, cwd: path, engines: z.array(swarmEngine).min(1).max(2) }).strict().optional(),
+    name: z.string().max(200).optional(), conversationId: id.optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration,
     startedSession: z.object({ sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
@@ -788,7 +796,9 @@ function dropClosing(state: SuperTabState, keep: (request: NonNullable<SuperTabS
 /** Also checked before returning an idempotent receipt: a retry does not retain
  * access after the person has been removed from a private project. */
 /** What may name a person's one Buddy chat: posts, reactions, proposals, naming the Buddy and ending a session. */
-const SWARM_BUDDY_CHAT_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'message.edit', 'message.delete', 'buddy.propose', 'buddy.rename', 'buddy.sessionEnd'])
+const SWARM_BUDDY_CHAT_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'message.edit', 'message.delete', 'buddy.propose', 'buddy.rename', 'buddy.sessionEnd',
+  // Which of a person's several Buddies (task #3818).
+  'buddy.create', 'buddy.remove', 'buddy.default'])
 
 export function authorizeCommandAccess(state: SuperTabState, actor: Actor, command: Command, context: Partial<CommandContext> = {}) {
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
@@ -804,7 +814,8 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
   if (buddy) requireBuddyCommand(buddy, command, state.conversations)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
-  if ('conversationId' in command && command.type !== 'invite.create') {
+  // A Buddy command names a chat only to pick one of the person's Buddies (task #3818): without one, it names none.
+  if ('conversationId' in command && command.conversationId && command.type !== 'invite.create') {
     const group = readConversation(state, actor, command.conversationId)
     // A person's one Buddy chat is for talking with their Buddy: no task, member or archive there (Dee, 10-31).
     if (isSwarmBuddyChat(group) && !SWARM_BUDDY_CHAT_COMMANDS.has(command.type)) fail('BUDDY_CHAT_ONLY', 'Your Buddy chat is for talking with your Buddy.', 403)
@@ -2523,6 +2534,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Super Tab owner can change its routing policy.', 403)
       ignored()
       break
+    case 'tab.buddyCap':
+      if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Swarm\'s owner sets how many Buddies each person may have.', 403)
+      state.buddyCap = command.cap
+      break
     case 'rule.set': {
       // An older CLI's rule: its words become one more line of the project's Routing, saved as any change to the instructions
       // (project instructions, phase 4, decision 3). The rule itself is kept nowhere.
@@ -3074,13 +3089,26 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Without a project, the person's one Buddy; with one (an older app), the Buddy of their older chat there, never the one
       // Buddy (spec: Older apps).
       const project = command.projectId ? readProject(state, actor, command.projectId) : undefined
-      const chatId = project ? buddyChatId(project.id, me) : swarmBuddyChatId(me)
+      // Which of their Buddies (task #3818): the one whose chat is named, one of their own; else their default.
+      const chosen = project ? undefined : command.conversationId
+        ? buddyChatsOf(state, me).find(c => c.id === command.conversationId) ?? fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+        : defaultBuddyChat(state, me)
+      const chatId = project ? buddyChatId(project.id, me) : chosen!.id
       const target = state.agents.find(a => a.buddyOf?.personId === me.id && !a.buddySession && state.conversations.some(c => c.id === chatId && c.agentIds.includes(a.id)))
       const starting = state.starts?.filter(s => s.request.conversationId === chatId && !s.harnessId && !s.error) ?? []
       if (!target && !starting.length) fail('NOT_FOUND', project ? 'You have no Buddy in this project.' : 'You have no Buddy.', 404)
       for (const start of starting) start.error = 'Removed by its owner before it started.'
-      // Its session closes; its chat stays, and adding a Buddy again reopens it.
+      // Its session closes. The main chat stays, and adding a Buddy again reopens it; another Buddy's chat is archived, and a
+      // removed default passes to the oldest Buddy left (buddies.ts dropBuddyChat).
       if (target) removeAgent(target)
+      if (chosen) dropBuddyChat(state, me, chosen)
+      break
+    }
+    case 'buddy.default': {
+      if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person picks their own default Buddy.', 403)
+      const me = person(state, actor.userId)
+      const chat = buddyChatsOf(state, me).find(c => c.id === command.conversationId) ?? fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+      setDefaultBuddy(state, me, chat)
       break
     }
     case 'buddy.chat': {
@@ -3145,10 +3173,21 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // One Buddy per person per Swarm (Dee, 10-31). An older app's Start names a project it reads: it adds that same one Buddy.
       if (command.projectId) readProject(state, actor, command.projectId)
       const me = person(state, actor.userId)
-      const chatId = swarmBuddyChatId(me)
+      // Which Buddy (task #3818): one of the person's own, by its chat; a new one, named, in the main chat while no Buddy is there,
+      // else in a chat of its own, within the Swarm's cap; neither, the default, as before several.
+      const own = buddyChatsOf(state, me)
+      const occupied = (chat: Conversation) => state.agents.some(a => isSwarmBuddy(a) && a.buddyOf!.personId === me.id && !a.buddySession && chat.agentIds.includes(a.id))
+        || !!state.starts?.some(s => s.request.conversationId === chat.id && !s.request.buddySession && !s.harnessId && !s.error)
+      const main = own.find(c => c.id === swarmBuddyChatId(me))
+      const picked = command.conversationId ? own.find(c => c.id === command.conversationId) ?? fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+        : command.name === undefined ? defaultBuddyChat(state, me) : main && !occupied(main) ? main : undefined
+      if (!picked && buddyCount(state, me) >= buddyCapOf(state)) fail('BUDDY_CAP', buddyCapRefusal(buddyCapOf(state)), 409)
+      const chat = picked ?? (main ? openNewBuddyChat(state, me, stableId('buddy', 'swarm', me.id, me.generation, operationId)) : openSwarmBuddyChat(state, me))
+      const chatId = chat.id
+      if (command.name !== undefined) renameBuddy(state, actor, chat, command.name, context.buddyNames)
       // A down Buddy is replaced (Desktop's Start again, review of #1992): its session closes in this same command, so a
       // start refused below leaves it as it was. A running or starting one is kept.
-      const existing = state.agents.find(a => isSwarmBuddy(a) && a.buddyOf!.personId === me.id && !a.buddySession)
+      const existing = state.agents.find(a => isSwarmBuddy(a) && a.buddyOf!.personId === me.id && !a.buddySession && chat.agentIds.includes(a.id))
       if ((existing && !downSince(state, existing, context.now))
         || state.starts?.some(s => s.request.conversationId === chatId && !s.request.buddySession && !s.harnessId && !s.error)) {
         fail('BUDDY_EXISTS', 'You already have a Buddy. Remove it to add another.')
@@ -3158,8 +3197,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Found by the agent, never by its chat, which may be quiet and not loaded here: every main Buddy of theirs that is not the
       // one Buddy is an older chat's.
       for (const old of state.agents.filter(a => a.buddyOf?.personId === me.id && !isSwarmBuddy(a) && !a.buddySession)) removeAgent(old)
+      // Only an older project chat's start: another of their Buddies' (task #3818) keeps starting.
       for (const start of state.starts ?? []) {
-        if (start.request.buddyOf?.personId === me.id && start.request.conversationId !== chatId && !start.harnessId && !start.error) start.error = 'Your Buddy is now one for the whole Swarm.'
+        if (start.request.buddyOf?.personId === me.id && !state.conversations.some(c => c.id === start.request.conversationId && isSwarmBuddyChat(c))
+          && !start.harnessId && !start.error) start.error = 'Your Buddy is now one for the whole Swarm.'
       }
       const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose a machine shared with the contributor.', 403)
       // Like a Lead, a Buddy runs only on its owner's own machine, in their own account, for Claude and Codex alike: never a
@@ -3183,7 +3224,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A slot for its person's Buddy there and its sessions: it takes nothing else.
       if (pool.buddyOnly) pool.maxAgents = machineSlots(state, pool) + 1
       const contributor = person(state, grant.contributorId)
-      const chat = openSwarmBuddyChat(state, me)
       const named = chosenBuddyName(state, chat, me, context.buddyNames)
       // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,

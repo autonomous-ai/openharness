@@ -36,6 +36,8 @@ const conversation: Required<Conversation> = {
   audience: { people: [] },
   brief: '',
   briefAt: 1,
+  buddyChats: ['other'],
+  buddyDefault: true,
   buddyDownTold: true,
   buddyName: 'Sparky',
   buddySessions: [],
