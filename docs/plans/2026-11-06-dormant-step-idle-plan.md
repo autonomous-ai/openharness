@@ -35,10 +35,10 @@
 - Consumes: `SuperTabState.conversations` and loaded groups held by an agent.
 - Preserves: `checksOpenWork(state, groups, agentId): boolean`; `taskEnded` and all callers retain their signatures.
 
-- [ ] Add `reports a step-only Reviewer idle once its done task sleeps`: a legacy role agent assigned only a finished Review step receives one idle row at 25 hours with the parent absent. Loaded done/cancelled controls produce the same row; tidying off does not suppress it.
-- [ ] Add configured Reviewer/Tester controls: absent finished parent reaches routine keep handling without a stop.
-- [ ] Add open-parent and missing-parent archive controls; own-task Engineer control remains unchanged.
-- [ ] Commit tests and run `npm --prefix backend test -- src/superTabs/tidy.test.ts`; observe absent-parent cases fail because no idle decision occurs.
-- [ ] In `checksOpenWork`, only consider a parent still open if it is loaded and `taskEnded` is false. Explain why idle can infer absence while archive cannot.
-- [ ] Run tidy, steps, sweeps, liveness and commands unit tests plus backend typecheck. Full backend and four Super Tab integration shards run in ready PR CI.
-- [ ] Commit production fix, push, record red/green evidence, mark ready and request the independent review through task status.
+- [x] Add `reports a step-only Reviewer idle once its done task sleeps`: a legacy role agent assigned only a finished Review step receives one idle row at 25 hours with the parent absent. Loaded done/cancelled controls produce the same row; tidying off does not suppress it.
+- [x] Add configured Reviewer/Tester controls: absent finished parent reaches routine keep handling without a stop.
+- [x] Add open-parent and missing-parent archive controls; own-task Engineer control remains unchanged.
+- [x] Commit tests and run `npm --prefix backend test -- src/superTabs/tidy.test.ts`; observe absent-parent cases fail because no idle decision occurs.
+- [x] In `checksOpenWork`, only consider a parent still open if it is loaded and `taskEnded` is false. Explain why idle can infer absence while archive cannot.
+- [x] Run tidy, steps, sweeps, liveness and commands unit tests plus backend typecheck. Full backend and four Super Tab integration shards run in ready PR CI.
+- [x] Commit production fix, push, record red/green evidence, mark ready and request the independent review through task status (handoff actions follow this commit).
