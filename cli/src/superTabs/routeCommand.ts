@@ -10,7 +10,8 @@ import { START_DEADLINE_MS, START_WINDOW_MS } from './reservations.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
 import { withPmAccounts } from './pmAccounts.js'
-import { accountOf, API_BUILDERS, bytes, machineBrief, catalogFrom, catalogRow, choose, decide, gridStrength, parseAssessment, OLD_RECORD_MAX, quotaBrief, quotaLine, quotaOf2, recentStartNotes, UNRATED, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type Shown, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, bytes, machineBrief, catalogFrom, catalogRow, choose, decideByOrder, gridStrength, parseAssessment, OLD_RECORD_MAX, quotaBrief, quotaLine, quotaOf2, recentStartNotes, UNRATED, recordOf, repoMatch, repositoryKey, type Assessment, type Catalog, type CatalogModel, type RecordShape, type Commitment, type Excluded, type Shown, type HeldModel, type MemberFrame, type Probe, type TaskFolder } from './route.js'
+import { pickByOrder } from './routePick.js'
 import { makePlugins, ROUTE_PLUGIN_MAKERS, type PluginMaker } from './routePlugins.js'
 import { CI_HOLD_OPENING, CI_RETRY_MINUTES, heavyOfStart, MACHINE_FIT_MAKER } from './machineFit.js'
 import { stat } from 'node:fs/promises'
@@ -522,7 +523,9 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   if ('error' in choice) return { ...choice, ...(skipped.length ? { warnings: skipped } : {}), leftOut: leftOut(choice.excluded, []),
     ...required.machines || required.devices.length ? { waiting: true, detail: WAITING } : {},
     ...ciHeld ? { waiting: true, retryAfterMinutes: CI_RETRY_MINUTES, detail: ciHeld.reason.slice(MACHINE_FIT_MAKER.name.length + 2) } : {} }
-  const verdict = decide(choice)
+  // The pick by the project's Routing order (routePick.ts, task #3576): the recorded candidate that start or assignment follows.
+  const verdict = decideByOrder(choice, pickByOrder({ shown: choice.shown, catalog, assessment: { ...assessment, ended: endedAttempts(group, attempts) }, now,
+    conversationId: input.conversationId }))
   const operationId = `route-${newId()}`
   // The rows recorded are the rows offered: the agent choosing assigns by a recorded candidate.
   let offered = choice.shown
@@ -563,6 +566,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const shownRows = offered
   return {
     ok: true, ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : { unrecorded: true }),
+    ...(verdict.pick ? { pick: { id: verdict.pick, title: shownRows.find(s => s.id === verdict.pick)?.title }, reasons: verdict.reasons } : {}),
     ...(instructions ? { instructions } : { instructionsUnreadable: true }),
     via: verdict.via, p: verdict.p, why: verdict.why,
     candidates: shownRows.map(publicOf),
@@ -571,17 +575,20 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
       ...(catalog.models.length ? [] : [CATALOG_UNREADABLE]),
       ...(choice.shown.some(p => p.kind === 'member' && p.terminalUnverified) ? ["A member's terminal could not be verified from its machine's snapshot. Check it before assignment."] : []),
       ...(choice.short ? [choice.short] : []), ...skipped],
-    next: nextOf(shownRows, input.conversationId, typeof routeDecisionId === 'string' ? routeDecisionId : undefined, !!instructions, assessment.needs),
+    next: nextOf(shownRows, input.conversationId, typeof routeDecisionId === 'string' ? routeDecisionId : undefined, !!instructions, assessment.needs, verdict.pick),
   }
 }
 
 /** How to act on the route: the candidates are in no order of merit (task #2901), so it names none. A member is assigned, a new
  *  agent started, each with the chosen row's own fields; RULE is the Routing rule that chose it, which the backend asks for
  *  with a decision that has no pick, and the start or assignment records the candidate it matches. */
-function nextOf(rows: Shown[], conversationId: string, routeDecisionId: string | undefined, instructions: boolean, needs: Assessment['needs']): string {
+function nextOf(rows: Shown[], conversationId: string, routeDecisionId: string | undefined, instructions: boolean, needs: Assessment['needs'], pick?: string): string {
   // Said once and short (task #3294): it rode on every route, 467 a day in one PM's context.
-  const choose = 'Not ranked: listed by machine name. Choose one by the project\'s Routing instructions (Order and quota), and give the rule that chose it as overrideReason.'
-  const decided = routeDecisionId ? { routeDecisionId, overrideReason: 'RULE' } : {}
+  const choose = pick
+    ? `Use the pick (${pick}), chosen by the project's Routing order: start or assign it as listed, with no overrideReason. `
+      + 'For another candidate, give the reason as overrideReason (urgency, context, a machine the work needs; "idle" is not one).'
+    : 'Not ranked: listed by machine name. Choose one by the project\'s Routing instructions (Order and quota), and give the rule that chose it as overrideReason.'
+  const decided = routeDecisionId ? pick ? { routeDecisionId } : { routeDecisionId, overrideReason: 'RULE' } : {}
   const assign = `Assign a member: command OPERATION_ID ${JSON.stringify({ type: 'work.assign', conversationId, agentId: 'AGENT', ...decided })}`
   // No fixed role name: NAME and ROLE are the agent's to fill from the project's instructions. A backend without instructions
   // takes no roleName (it came with them, phase 2).
@@ -590,7 +597,7 @@ function nextOf(rows: Shown[], conversationId: string, routeDecisionId: string |
     machineId: 'MACHINE', engine: 'ENGINE', model: 'MODEL', effort: 'EFFORT', ...decided })}, then assign it${routeDecisionId ? ' with the same routeDecisionId' : ''}. `
     + 'MACHINE is its machine\'s machineId, CWD the cwd its machine names or else the answer\'s; ENGINE, MODEL and EFFORT its line\'s; a grid line takes its gridModel and gridName in place of model and effort. '
     + `NAME is the agent's name${instructions ? ', ROLE its role in the instructions' : ''}. It starts from the default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" for another.`
-  const rule = routeDecisionId ? ' RULE: the Routing rule that chose it.' : ''
+  const rule = routeDecisionId && !pick ? ' RULE: the Routing rule that chose it.' : ''
   return [choose, ...(rows.some(r => r.kind === 'member') ? [assign] : []), ...(rows.some(r => r.kind === 'new') ? [start] : [])].join(' ') + rule
 }
 
@@ -869,7 +876,7 @@ export function routingSection(text: string): string | null {
 export function routeAnswer(answer: Json, options: { fullInstructions?: boolean; instructionsRead?: number } = {}): Json {
   const { instructions, candidates, leftOut: out, excluded, warnings, p, why, ...rest } = answer
   // An unranked route's why is its next's first sentence; the record keeps it whole.
-  const printed: Json = { ...rest, ...(p === null || p === undefined ? {} : { p }), ...(why === undefined || answer.via === 'instructions' ? {} : { why }) }
+  const printed: Json = { ...rest, ...(p === null || p === undefined ? {} : { p }), ...(why === undefined || answer.via === 'instructions' || answer.via === 'order' ? {} : { why }) }
   const written = instructions && typeof instructions === 'object' ? object(instructions) : null
   if (written) {
     const notes = Array.isArray(written.notes) ? written.notes.map(n => String(object(n).text ?? n)) : []
