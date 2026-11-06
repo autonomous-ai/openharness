@@ -86,6 +86,7 @@ static struct {
     question_t q;
     agent_t agents[MAX_PROJECTS]; hit_t hits[24];
     ht_rect_t caption_arc;
+    ht_rect_t recap_card;
 } s;
 static ht_gesture_t gesture;
 static ht_character_t character;
@@ -229,7 +230,7 @@ swarm_parts = {
     # with the last `swarms` list it keeps beside it
     'swarms_apply': source[source.index('// The last `swarms` list as it came'):source.index('void ui_swarms_replace(')],
 }
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'swarm_core', 'swarm_voice_id', 'voice_lead', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'mix_black', 'face_buddy_disc', 'face_buddy_ring', 'companion_box', 'notice_badge', 'pill2', 'swarm_pair', 'render_swarm_pick', 'face_buddy_avatar', 'render_buddy_empty', 'thread_line', 'thread_rest', 'face_thread', 'render_swarm_face', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'swarms_apply', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'swarm_core', 'swarm_voice_id', 'voice_lead', 'tabs_open', 'face_hold', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'mix_black', 'face_buddy_disc', 'face_buddy_ring', 'companion_box', 'notice_badge', 'pill2', 'swarm_pair', 'render_swarm_pick', 'face_buddy_avatar', 'render_buddy_empty', 'thread_line', 'thread_rest', 'face_thread', 'render_swarm_face', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'swarms_apply', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += swarm_parts[name] if name in swarm_parts else function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
@@ -319,7 +320,7 @@ code += 'static bool audio_client_active(void);\n' + function('ui_boot_pressed')
 code += r'''
 static ht_scene_t scene;
 static void scene_take(void) {
-    ht_scene_clear(&scene, BG); s.hit_count = 0; s.notice_frame = 0;
+    ht_scene_clear(&scene, BG); s.hit_count = 0; s.notice_frame = 0; s.recap_card = (ht_rect_t){0};
     if (s.view == OTA) render_brand(&scene);
     else if (s.view == DRAFT) render_draft(&scene);
     else if (s.view == DRAFT_OPTIONS) render_draft_options(&scene);
@@ -2645,16 +2646,29 @@ static bool pick_pill(void) {
     }
     return false;
 }
+// Diego (2026-11-06): in a Swarm, a hold on the recap opens Personal | Team; the name keeps opening the project list.
+static void hold_at(int x, int y) {
+    fake_ms += 1000; habitat_touch(true, x, y, fake_ms); surface_tick(fake_ms + 700);
+    habitat_touch(false, x, y, fake_ms + 760); scene_take();
+}
+static void hold_recap(void) {
+    ui_supertab_recap(sw.tab, sw.lead, "c0", "", "Tests green on all three boards.", 1792560000u, false); scene_take();
+    ht_rect_t c = s.recap_card; assert(c.w && c.h);
+    hold_at(c.x + c.w / 2, c.y + c.h / 2);
+}
 static void swarm_pick_checks(const char *dir) {
-    // The title opens the picker: "Swarm" on the top arc, one pill, the Swarm on the face (Team) filled.
+    // The name opens the project list (PANES), even with a Personal and a Team card.
     pick_setup(true, 1, "s1");
-    fake_ms += 1000; tap(fake_ms, 233, 30);
+    fake_ms += 1000; tap(fake_ms, 233, 30); assert(s.view == AGENTS);
+    dispatch((action_t){.kind = A_HOME}); scene_take();
+    // A hold on the recap opens the picker: "Swarm" on the top arc, one pill, the Swarm on the face (Team) filled.
+    hold_recap();
     assert(s.view == SWARM_PICK && scene_says("Swarm") && scene_says("Personal") && scene_says("Team") && pick_pill() && pick_half() == 1);
     portrait(dir, "pick-team");
     // Personal by a thumb's press (drifting, held): the Personal card's first Lead on the face, the desktop told as for a tab pick.
     thumb(183, 233, 14, 10, 500);
     assert(s.view == HOME && !strcmp(sw.tab, "sp") && !strcmp(sw.lead, "P0") && wire_has(0, "select sp P0"));
-    fake_ms += 1000; tap(fake_ms, 233, 30);
+    hold_recap();
     assert(s.view == SWARM_PICK && pick_half() == 0);
     portrait(dir, "pick-personal");
     // The filled half only returns, unchanged and silent.
@@ -2663,30 +2677,34 @@ static void swarm_pick_checks(const char *dir) {
     // Team goes to the last non-Personal card shown, else the first in list order.
     pick_setup(true, 2, "s3");
     swarm_enter(ht_supertabs_find(&swarm, "sp"), NULL, true); scene_take();
-    fake_ms += 1000; tap(fake_ms, 233, 30); assert(s.view == SWARM_PICK);
+    hold_recap(); assert(s.view == SWARM_PICK);
     fake_ms += 1000; tap(fake_ms, 283, 233);
     assert(s.view == HOME && !strcmp(sw.tab, "s3") && !strcmp(sw.lead, "B0") && wire_has(0, "select s3 B0"));
     pick_setup(true, 2, "sp");
-    fake_ms += 1000; tap(fake_ms, 233, 30); assert(s.view == SWARM_PICK);
+    hold_recap(); assert(s.view == SWARM_PICK);
     fake_ms += 1000; tap(fake_ms, 283, 233);
     assert(s.view == HOME && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "A0"));
     // Idle: 5 s with no touch returns to the same Lead and side, and sends no select or side frame.
     pick_setup(true, 1, "s1");
-    fake_ms += 1000; tap(fake_ms, 233, 30); assert(s.view == SWARM_PICK);
+    hold_recap(); assert(s.view == SWARM_PICK);
     swarm_sent = 0; fake_ms += 4000; surface_tick(fake_ms); assert(s.view == SWARM_PICK);
     fake_ms += 1000; surface_tick(fake_ms); scene_take();
     assert(s.view == HOME && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "A0") && no_side_since(0));   // (a recap retry may still go out with time)
     // A finger held down past the idle deadline does not make the wake 1 ms on every pass (the picker waits for the lift).
     pick_setup(true, 1, "s1");
-    fake_ms += 1000; tap(fake_ms, 233, 30); assert(s.view == SWARM_PICK && s.pick_until);
+    hold_recap(); assert(s.view == SWARM_PICK && s.pick_until);
     sw.retried = true;   // the recap's own 5 s retry is not under test
     s.touch_down = true; fake_ms = s.pick_until + 500; assert(habitat_next_wake_ms() > 1); s.touch_down = false;
     assert(habitat_next_wake_ms() == 1);   // and once lifted the deadline is due
-    // No picker without both a Personal card and another: the name keeps opening PANES.
+    // No picker without both a Personal card and another: the hold opens the tabs, as on any face.
     pick_setup(true, 0, "sp");
-    fake_ms += 1000; tap(fake_ms, 233, 30); assert(s.view == AGENTS);
+    hold_recap(); assert(s.view == TABS);
     pick_setup(false, 2, "s1");
-    fake_ms += 1000; tap(fake_ms, 233, 30); assert(s.view == AGENTS);
+    hold_recap(); assert(s.view == TABS);
+    // A hold off the recap (on the pet) opens the tabs too.
+    pick_setup(true, 1, "s1");
+    ui_supertab_recap(sw.tab, sw.lead, "c0", "", "Tests green.", 1792560000u, false); scene_take();
+    hold_at(233, 110); assert(s.view == TABS);
 }
 static void swarm_pair_checks(const char *dir) {
     // Drawn: 180 x 44 at y 388, "PM" lit, no side dots, no lower-arc hint, no unread bell.
