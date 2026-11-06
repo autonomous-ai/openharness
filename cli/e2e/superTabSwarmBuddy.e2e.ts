@@ -25,6 +25,7 @@ afterEach(async () => {
 it.skipIf(isTeamDaemon())('releases an idle Buddy session and wakes the same conversation on its person’s message', async () => {
   const backend = await FakeBackend.start(); relay = backend
   backend.addMachine(ME)
+  backend.me = { id: ME.account, email: ME.email }
   // As a real engine does: it asks about a folder it has no answer for, in a terminal no Swarm view shows.
   const d = await signedInDaemon(backend, ME, { ANTHROPIC_API_KEY: 'fixture-only' }, undefined, true); daemon = d
   writeFileSync(join(d.env.HOME!, '.claude.json'), '{}')
