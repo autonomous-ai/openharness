@@ -43,6 +43,16 @@ describe('configured instruction approval authority', () => {
     expect(() => f.check([row('yes', 'ken-b')], ['yes'], null)).toThrow(/rules people gave/)
   })
 
+  it('does not add an unrelated exact display-name match when resolving a linked account attribution', () => {
+    const f = fixture()
+    f.state.people.find(p => p.id === 'stranger')!.name = 'ken-a'
+    const attributed = before.replace('(Ken,', '(ken-a,')
+    const check = (id: string) => allowedDrops(f.state, f.project, attributed, after, { kind: 'agent', id: 'pm' },
+      ['yes'], [row('yes', id)], 500, {}, authority)
+    expect(() => check('stranger')).toThrow(/rules people gave/)
+    expect([...check('ken-b').told.keys()]).toEqual(['ken-b'])
+  })
+
   it.each([
     ['agent', row('yes', 'dee', { author: { kind: 'agent', id: 'dee', name: 'dee' } })],
     ['Buddy relay', row('yes', 'dee', { source: true })],
