@@ -11,6 +11,7 @@ import { until, type IsolatedDaemon } from './harness/daemon.js'
 import { FakeBackend } from './harness/fakeBackend.js'
 import { signedInDaemon } from './harness/fleet.js'
 import { overOldRoutes } from './harness/swarmReads.js'
+import { isTeamDaemon } from '../src/superTabs/teamDaemon.js'
 
 const TAB = 'buddy-tab'
 const ME = { machineId: 'd3'.repeat(16), computerId: 'one-buddy-fixture', name: 'Buddy fixture', token: 'fixture-buddy-token', account: 'person', email: 'person@example.com' }
@@ -21,7 +22,8 @@ afterEach(async () => {
   await relay?.close(); relay = undefined
 })
 
-it('starts in its own folder, then sleeps and resumes the same Buddy conversation', async () => {
+// A Buddy is forbidden on a Team OS account even in an isolated daemon; this native flow needs an owner's account.
+it.skipIf(isTeamDaemon())('starts in its own folder, then sleeps and resumes the same Buddy conversation', async () => {
   const backend = await FakeBackend.start(); relay = backend
   backend.addMachine(ME)
   // As a real engine does: it asks about a folder it has no answer for, in a terminal no Swarm view shows.
@@ -32,7 +34,7 @@ it('starts in its own folder, then sleeps and resumes the same Buddy conversatio
   git('init', '-q'); writeFileSync(join(project, 'README.md'), 'fixture\n'); git('add', '.'); git('commit', '-qm', 'fixture')
   const cwd = join(d.env.HOME!, 'harnesses', 'swarms', TAB)
   const pool = { machineId: ME.machineId, generation: 'grant-1', cwd, scope: 'swarm', engines: ['claude'], maxAgents: 2, paused: false }
-  const start: Record<string, any> = { id: 'start-buddy', poolGeneration: 'grant-1', creationId: 'super-start-buddy', dispatched: false, harnessId: null, error: null,
+  const start: Record<string, any> = { id: 'start-buddy', poolGeneration: 'grant-1', creationId: 'super-start-buddy', machineOwnerId: 'person', contributorId: 'person', hostGrant: null, dispatched: false, harnessId: null, error: null,
     request: { conversationId: 'buddy-chat', machineId: ME.machineId, engine: 'claude', name: "person's Buddy", cwd: `${cwd}/.buddy-person`, worktree: false,
       requirements: { memoryBytes: 0, diskBytes: 1, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false },
       buddyOf: { personId: 'person', generation: 'g' }, buddyScope: 'swarm', buddyProjects: [{ id: 'p1', name: 'API', cwd: project }] } }
