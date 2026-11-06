@@ -94,6 +94,11 @@ void main() {
         _key('super-proposal-done'),
         'A pinned card sits first in its column',
       );
+      // #3817 asks for one to five pieces of evidence: one per line.
+      await tester.enterText(
+        _key('super-proposal-evidence'),
+        'https://example.com/long-board.png\n\nTuan asked for it on 11-06',
+      );
     }
     await tester.pump();
   }
@@ -125,11 +130,34 @@ void main() {
         'goal': 'Pinned cards stay on top',
         'why': 'Long boards hide what matters',
         'doneWhen': 'A pinned card sits first in its column',
-        'evidence': <String>[],
+        'evidence': [
+          'https://example.com/long-board.png',
+          'Tuan asked for it on 11-06',
+        ],
         'priority': 'P1',
       },
     ]);
     expect(_key('super-proposal-send'), findsNothing, reason: 'closed');
+    await end(tester, c);
+  });
+
+  testWidgets('evidence is asked for, one to five lines, as #3817 takes it', (
+    tester,
+  ) async {
+    final (c, _) = await show(tester);
+    await tester.tap(_key('super-board-new-proposal'));
+    await _settle(tester);
+    await fill(tester);
+    await tester.enterText(_key('super-proposal-evidence'), '  \n ');
+    await tester.pump();
+    expect(sendEnabled(tester), isFalse, reason: 'no evidence');
+    await tester.enterText(
+      _key('super-proposal-evidence'),
+      [for (var i = 1; i <= 6; i++) 'Log $i'].join('\n'),
+    );
+    await tester.pump();
+    expect(sendEnabled(tester), isFalse, reason: 'six lines');
+    expect(find.textContaining('At most 5'), findsOneWidget);
     await end(tester, c);
   });
 

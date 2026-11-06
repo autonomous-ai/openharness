@@ -1822,7 +1822,19 @@ class ConversationServer {
         project['canChat'] = granted.toList();
         revision++;
       } else if (command['type'] == 'proposal.create') {
-        // As #3817 makes it: a card of its own, in Proposals until the PM decides.
+        // As #3817 makes it: a card of its own, in Proposals until the PM decides. Its schema (proposalCards.ts
+        // proposalFields) takes one to five non-empty pieces of evidence, as this checks.
+        final evidence = command['evidence'];
+        if (evidence is! List ||
+            evidence.isEmpty ||
+            evidence.length > 5 ||
+            evidence.any((e) => e is! String || e.trim().isEmpty)) {
+          throw const SuperTabFailure(
+            'VALIDATION_ERROR',
+            'evidence: Array must contain at least 1 element(s)',
+            statusCode: 400,
+          );
+        }
         final id = 'proposal-${(state['conversations'] as List).length}';
         (state['conversations'] as List).add({
           ...conversationFixture(id, command['title'] as String),
