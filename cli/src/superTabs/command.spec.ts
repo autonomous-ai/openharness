@@ -354,6 +354,41 @@ it('sends a Buddy\'s proposal with a file, its status being the task summary a B
   } finally { rmSync(folder, { recursive: true, force: true }) }
 })
 
+// Linuxtest4 on #3402: the Buddy's own record was looked up by its terminal's id, not its Swarm id, so a project session's project
+// was never read: leaving the project out was refused, and naming another sent that project's PM a file. The read answers for
+// the asking agent alone, so its record is the caller's.
+it('sends a project session\'s file to its own project only, its terminal id not being its Swarm id', async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const folder = mkdtempSync(join(tmpdir(), 'buddy-session-'))
+  try {
+    writeFileSync(join(folder, 'shot.png'), Buffer.from([1, 2, 3]))
+    const calls: Array<Record<string, unknown>> = []
+    const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
+      if (type === 'agents_list') return { agents: [{ id: 'session-harness', engine: 'claude', status: 'active', tmuxPane: '%7', project: { cwd: folder } }] }
+      calls.push(payload)
+      if (payload.action === 'proposalTarget') return { ok: true, value: { chat: { id: 'chat', kind: 'swarm-buddy' },
+        self: { id: 'buddy-swarm-id', buddySession: { projectId: 'p-web' } },
+        projects: [{ id: 'p-web', leadConversationId: 'web-chat' }, { id: 'p-secret', leadConversationId: 'secret-chat' }] } }
+      if (payload.step === 'sent') return { ok: true, value: { agentId: 'buddy-swarm-id', attachmentIds: null } }
+      return { ok: true, value: { revision: 9, result: { messageId: 'm' } } }
+    })
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ success: true, data: { attachment: { id: 'f1' } } }), { status: 200 }))
+    const deps = { where: () => where, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print: vi.fn(), pane: '%7',
+      fetch: fetch as unknown as typeof globalThis.fetch }
+    const propose = (projectId?: string) => superTabCommand([...prefix, 'propose', 'op', JSON.stringify({ conversationId: 'chat', ownerMessageId: 'ask',
+      ...(projectId ? { projectId } : {}), goal: 'G', scope: 'S', priority: 'normal' }), '--attach', join(folder, 'shot.png')], deps)
+    expect(await propose()).toBe(0)
+    expect(calls.filter(c => c.step === 'sent')).toEqual([expect.objectContaining({ conversationId: 'web-chat' })])
+    calls.length = 0
+    fetch.mockClear()
+    expect(await propose('p-secret')).toBe(1)
+    expect(JSON.parse(deps.print.mock.calls.at(-1)![0]).error).toContain('leave the project out')
+    expect(fetch).not.toHaveBeenCalled()
+  } finally { rmSync(folder, { recursive: true, force: true }) }
+})
+
 it('attaches to a proposal only files inside the Buddy\'s own folder, uploaded to its chat, beside the files its owner sent', async () => {
   const { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync, rmSync } = await import('node:fs')
   const { join } = await import('node:path')
