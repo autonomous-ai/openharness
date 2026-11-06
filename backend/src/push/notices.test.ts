@@ -170,6 +170,14 @@ describe('phoneNotices: who rings (task #3607, Tony 2026-11-06)', () => {
       tags: [{ id: 't1', personId: owner.userId, conversationId: web, messageId: 'm1' }] }, [reply, tagging])).toEqual([])
   })
 
+  it('the server\'s "no reviewer can start" tag is an agent\'s tag: it tells Activity and the badge, no ring', () => {
+    // reviewCapacity.ts writes it as the agent that asked for review, with source kind `review-capacity`, tagging the
+    // people who can add a machine. Tony's rule has no ring for an agent's tag that is not a decision or an approval.
+    const { state, web, worker } = scene()
+    const line = draft({ id: 'm1', conversationId: web, author: asAgent(worker), mentions: [owner.userId], source: { kind: 'review-capacity', engine: 'any', cause: 'none' } as never })
+    expect(phoneNotices('tab', state, { replies: [], tags: [{ id: 't1', personId: owner.userId, conversationId: web, messageId: 'm1' }] }, [line])).toEqual([])
+  })
+
   it('a decision an agent asks of a person still rings, however the asking agent words it', () => {
     const { state, web, worker } = scene()
     const [notice] = phoneNotices('tab', state, { replies: [], tags: [], decisions: [{ id: 'd1', personId: owner.userId, conversationId: web, askerAgentId: worker }] }, [])
