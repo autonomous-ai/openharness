@@ -52,6 +52,22 @@ describe('a person\'s one Buddy\'s folder', () => {
     }
   })
 
+  // The reported machine (tuan.dev, 11-06): Claude Code never ran, so there is no .claude.json to extend and its trust question
+  // was asked in a terminal nobody sees.
+  it('trusts the folder alone on a computer where Claude Code never ran', async () => {
+    const claude = root(), home = join(root(), 'home')
+    mkdirSync(home)
+    const moved = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = claude
+    try {
+      await trustBuddyHome(home, 'claude')
+      const saved = JSON.parse(readFileSync(join(claude, '.claude.json'), 'utf8')).projects as Record<string, { hasTrustDialogAccepted: boolean }>
+      expect(saved).toEqual({ [home]: { allowedTools: [], hasTrustDialogAccepted: true } })
+    } finally {
+      if (moved === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = moved
+    }
+  })
+
   it('holds a worktree of each project checkout on this machine, each its own project\'s, and names the ones not here', async () => {
     const r = root(), web = checkout(r, 'web-src'), app = checkout(r, 'app-src'), home = join(r, 'home')
     const result = await prepareBuddyHome(home, [{ id: 'web', name: 'Web', cwd: web }, { id: 'app', name: 'App', cwd: app },
