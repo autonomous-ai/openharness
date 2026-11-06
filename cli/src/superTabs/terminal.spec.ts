@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
@@ -657,7 +659,10 @@ describe('opening a Swarm Codex folder restricted after start or resume', () => 
   const restricted = fixture('codex-0165-open-restricted')
   it.each(['fresh start', 'resume'])('continues a fake Codex %s without granting trust', async () => {
     let capture = restricted
-    const savedTrust = 'untrusted'
+    const home = mkdtempSync(join(tmpdir(), 'codex-restricted-'))
+    const config = join(home, 'config.toml')
+    const savedConfig = '[projects."/worktree"]\ntrust_level = "untrusted"\n'
+    writeFileSync(config, savedConfig)
     const t = setup({ engine: 'codex', screen: () => ({ ok: true, text: capture,
       hold: capture === restricted ? 'trust_open' : null }) })
     // Fake Codex waits for the highlighted restricted choice; no other key or stale screen opens it.
@@ -669,7 +674,8 @@ describe('opening a Swarm Codex folder restricted after start or resume', () => 
     })
     await t.host.tick([row()])
     expect(capture).toBe('› Ask Codex to do anything')
-    expect(savedTrust).toBe('untrusted')
+    expect(readFileSync(config, 'utf8')).toBe(savedConfig)
+    rmSync(home, { recursive: true, force: true })
     t.wait(180_000); await t.host.tick([row()])
     expect(t.alerts()).toEqual([])
   })
