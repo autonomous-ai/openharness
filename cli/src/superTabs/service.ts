@@ -99,7 +99,7 @@ const HELP = {
     model: 'opus', effort: 'high', routeDecisionId: 'DECISION' },
   command: `command OPERATION_ID JSON: ${COMMAND_ABOUT} The JSON is one argument: when it holds quotes, put - in its place and send it on stdin (command OPERATION_ID - <<'JSON' … JSON). ${COMMAND_RULES}`,
   commands: [
-    { type: 'project.report', projectId: 'PROJECT', through: { GROUP: 214031 }, text: 'The whole status card, one short line per active task; it replaces the last one and posts nothing. Use null when the card is still right.' },
+    { type: 'project.report', projectId: 'PROJECT', through: { GROUP: 214031 }, text: 'Your own lines for the status card only (the Swarm writes the line of every active task): they follow the Swarm's lines, replace your last ones and post nothing. Use null to leave them as they are.' },
     { type: 'project.repository', projectId: 'PROJECT', repositoryUrl: 'https://github.com/OWNER/REPOSITORY' },
     // The morning digest, at a person's local time; time null turns it off.
     { type: 'project.digest', projectId: 'PROJECT', time: '08:00', timeZone: 'Asia/Ho_Chi_Minh' },

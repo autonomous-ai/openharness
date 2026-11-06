@@ -103,7 +103,7 @@ export function cardText(lines: readonly CardLine[], extra?: string | null, more
   for (const line of lines) {
     const text = `${line.text} Since ${clock(line.since)} UTC.`
     // Keep room for the "N more tasks." line, which is at most this long.
-    if (used + text.length + 1 + 24 > room && shown.length < lines.length) break
+    if (used + text.length + 1 + 24 > room) break
     shown.push(text)
     used += text.length + 1
   }

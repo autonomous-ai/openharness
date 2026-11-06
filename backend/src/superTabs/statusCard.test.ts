@@ -89,6 +89,18 @@ describe('the status card the server writes (#3593)', () => {
     expect(f.text()).toContain('Freeze starts Friday.')
   })
 
+  it('does not show a card saved before the server wrote it beside the server\'s lines', () => {
+    const f = cardFixture()
+    // The coordinator's whole card of an earlier release: stored with no mark that it is its own lines.
+    projectOf(f.state, 'lead').status = { text: 'Old whole card: #1 Fix login working.', at: new Date(0).toISOString(), by: f.lead }
+    f.run({ type: 'message.send', conversationId: 'lead', text: 'tick', replyTo: null, recipientIds: [] })
+    expect(f.text()).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Jules. Since 00:00 UTC.')
+    // Its next report is its own lines.
+    f.run({ type: 'project.report', projectId: 'lead', through: {}, text: 'Freeze starts Friday.' }, f.as(f.lead))
+    expect(f.text()!.endsWith('\nFreeze starts Friday.')).toBe(true)
+    expect(f.text()).not.toContain('Old whole card')
+  })
+
   it('keeps the card within its limit, naming how many tasks the last line leaves out', () => {
     const lines = Array.from({ length: 200 }, (_, i) => ({ id: `t${i}`, text: `#${i} "A task with a title that takes room": working. Waits on: nothing. Owner: Jules.`, since: 0 }))
     const text = cardText(lines, 'Extra line.')

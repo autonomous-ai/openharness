@@ -1853,7 +1853,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Without text the report only acknowledges, and the card stays.
       if (command.text) {
         mutableProjects(state)
-        projectOf(state, project.id).status = { text: command.text, at: new Date(context.now).toISOString(), by: (actor as Extract<Actor, { kind: 'agent' }>).agentId }
+        projectOf(state, project.id).status = { text: command.text, at: new Date(context.now).toISOString(), by: (actor as Extract<Actor, { kind: 'agent' }>).agentId, own: true }
       }
       break
     }

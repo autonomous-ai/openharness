@@ -51,7 +51,7 @@ describe('changes since a cursor (design 4.4)', () => {
   // that sent only the chat would leave Desktop and web on the old card until something else moved the head.
   it('sends the head with a project chat\'s change that carries the status card, so a live reader sees it move', () => {
     const { s, parts } = scene()
-    const lead = parts.head.data.projects![0]!.leadConversationId
+    const lead = parts.head.data!.projects![0]!.leadConversationId
     const changed = [write(parts, 'groups', lead, p => { (p.data as { card?: object }).card = { lines: [{ id: s.web, text: '#1 "Web": working. Waits on: nothing. Owner: Ada.', since: NOW }] } })]
     const received = receive(parts, changed, owner)
     expect(received.head).not.toBeNull()

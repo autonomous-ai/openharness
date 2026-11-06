@@ -17,7 +17,8 @@ import { revokeNativeContexts } from '../src/superTabs/native.js'
 import { stableId, type MessageDraft, type SuperTabState } from '../src/superTabs/model.js'
 import { logger } from '../src/utils/logger.js'
 import { wantSchedule } from './noDefaultDigest.test-support.js'
-import { SCHEDULE_SLOT_MS, scheduleSlot } from '../src/superTabs/pmSchedule.js'
+import { SCHEDULE_SLOT_MS, scheduleRequest, scheduleSlot } from '../src/superTabs/pmSchedule.js'
+import { plan, profiled, reads } from './plans.test-support.js'
 
 // Ken, 2026-11-04 (docs/plans/2026-11-04-pm-built-in-schedule-design.md): the coordinator's poll wakes it every 30 minutes for
 // the built-in schedule when the sweep has something to do, in one message per poll. A fresh loopback replica set, created here.
@@ -286,5 +287,26 @@ describe('the daily tidy on the coordinator\'s poll', () => {
     f.clock.now = night(4)
     await f.poll()
     expect(await tidies(f.tab)).toHaveLength(2)
+  })
+})
+
+// A kept message's deliveries were read by message id alone: a scan of all 43 k deliveries, 440 ms inside this write transaction, 21 times
+// a day (Atlas slow log, 2026-11-04). The path is the Lead's poll keeping a message already stored; this wake is one (the update request
+// that used to carry this check is gone, task #3593).
+describe('a poll keeping a message already stored', () => {
+  it('reads its deliveries by Swarm and message, examining only those', async () => {
+    const f = await swarm({ fresh: true })
+    wantSchedule()
+    await unassigned(f)
+    f.clock.now += DUE
+    const { state } = await f.timed.read(host, f.tab, undefined, f.lead)
+    const { draft } = scheduleRequest(state, state.agents.find(a => a.id === f.lead)!, f.clock.now)!
+    await db.superTabMessage.create({ data: { id: draft.id, tabId: f.tab, conversationId: draft.conversationId, sequence: 1, text: draft.text, replyTo: null, recipientIds: draft.recipients,
+      mentions: [], thread: draft.id, source: draft.source as object, author: draft.author as object } })
+    const entries = await profiled(db, () => f.poll())
+    const rows = reads(entries, 'SuperTabDelivery', ['messageId'], ['agentId'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, messageId: 1/)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
   })
 })

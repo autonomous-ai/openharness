@@ -1169,7 +1169,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
         // The server's lines, then the coordinator's own (statusCard.ts); the stored status text is only the latter.
         const lines = chat.card
         if (!lines?.lines.length) return p
-        return { ...p, status: { text: cardText(lines.lines, p.status?.text, lines.more), at: new Date(Math.max(...lines.lines.map(l => l.since))).toISOString(), by: p.status?.by ?? chat.leadId ?? '' } }
+        return { ...p, status: { text: cardText(lines.lines, p.status?.own ? p.status.text : null, lines.more), at: new Date(Math.max(...lines.lines.map(l => l.since))).toISOString(), by: p.status?.by ?? chat.leadId ?? '' } }
       }
       if (p.status === undefined) return p
       const { status: _status, ...rest } = p

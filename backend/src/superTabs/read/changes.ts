@@ -51,6 +51,9 @@ export function changesFor(view: ReaderView, changed: Part[], actor: Actor, ligh
         else if (groupReadable(part.data as Conversation)) {
           const group = part.data as Conversation
           out.groups.push(envelope(part, visibleGroupView(buddy ? groupForBuddy(group) : group, visibleAgents, seenMachines)))
+          // A project chat that carries the status card (statusCard.ts): readers get its lines in the head's project, so a change of the
+          // chat resends the head, or a live reader keeps the old card until something else moves the head (task #3593).
+          if (group.card && !out.head) out.head = seen.head
         }
         break
       }
