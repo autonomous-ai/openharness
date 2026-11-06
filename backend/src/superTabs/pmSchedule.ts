@@ -6,6 +6,7 @@ import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 import { taskLiveness } from './liveness.js'
 import { archivable } from './tidy.js'
 import { processLines, unconfirmedNote } from './processNotes.js'
+import { switched } from './boardRights.js'
 
 // Every project's coordinator runs the same built-in schedule, woken by the Swarm on its own poll instead of a timer of its
 // own (Ken, 2026-11-04; docs/plans/2026-11-04-pm-built-in-schedule-design.md): a Codex PM may have no timer, and a restart
@@ -85,6 +86,15 @@ What people teach you:
 - A person telling you again something they already taught you is a repeat: fix what you did against it, and save it only
   if it is missing. Count repeats by person, and give the day's count in your nightly reflection, or in the next morning
   digest when the project has no reflection.`
+
+/** The built-in text's inbox line, which a project switched to the Board way of working drops (task #3819): its PM answers no
+ *  one in the chat, and nothing is owed to it there. */
+const INBOX_LINE = '- Answer each person\'s message once, in its place. Your inbox lists every unanswered message until it is answered.\n'
+if (!PM_SCHEDULE_TEXT.includes(INBOX_LINE)) throw new Error('pmSchedule.ts: the built-in text lost its inbox line; update INBOX_LINE')
+const BOARD_SCHEDULE_TEXT = PM_SCHEDULE_TEXT.replace(INBOX_LINE, '')
+
+/** The built-in text [project]'s coordinator reads: without the inbox line once it is switched (boardRights.ts). */
+export const pmScheduleText = (project: Pick<SwarmProject, 'boardMode'>): string => switched(project) ? BOARD_SCHEDULE_TEXT : PM_SCHEDULE_TEXT
 
 /** The schedule's clock: slot n starts at n * 30 minutes, in UTC. */
 export const SCHEDULE_SLOT_MS = 30 * 60_000

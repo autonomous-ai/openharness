@@ -10,6 +10,7 @@ import { digestIsDue, noticeLine } from './noticeDigest.js'
 import { TURN_END_WAIT_MS } from './turnEnd.js'
 import { ledProject, type SwarmProject } from './projects.js'
 import { noteLines } from './processNotes.js'
+import { switched } from './boardRights.js'
 import { swarmUsernames } from './usernames.js'
 
 /** What a host reports (machines.ts `capabilities`) when it sends its PM's turn with the PM's delivery list read (cli
@@ -78,6 +79,8 @@ const MINUTE = 60_000
  *  then a header and one line per ask, oldest first. None when nothing is owed. */
 export function owedLines(state: SuperTabState, project: SwarmProject, now: number): string[] {
   const process = noteLines(project)
+  // A project switched to the Board way of working owes its PM no chat messages (boardRights.ts, task #3819).
+  if (switched(project)) return process
   const asks = state.conversations.filter(c => !c.archived && c.owed && (c.projectId ?? 'lead') === project.id)
     .flatMap(c => c.owed!.map(ask => ({ ...ask, conversationId: c.id }))).sort((a, b) => a.at - b.at)
   if (!asks.length) return process
