@@ -424,6 +424,19 @@ describe('a Buddy engine handoff', () => {
       expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false })
     })
 
+  it('rechecks the owner after an awaited handoff before closing the original Buddy', async () => {
+    const t = buddySetup()
+    const request = vi.mocked(t.daemon.request).getMockImplementation()!
+    vi.mocked(t.daemon.request).mockImplementation(async (type, payload, timeout) => {
+      const reply = await request(type, payload, timeout)
+      if (type === 'agent_handoff_prepare') writeBuddyAccount('other', t.dataDir)
+      return reply
+    })
+    await t.switches.serve(buddyRow())
+    expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare'])
+    expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false })
+  })
+
   it('does not create twice across duplicate polls or a restarted host, and accepts a late successful rebind', async () => {
     const t = buddySetup({ createTimesOut: true })
     await t.switches.serve(buddyRow())
