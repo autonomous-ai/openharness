@@ -611,8 +611,8 @@ class SwarmReader extends ChangeNotifier {
 
   /// Reads [projectId]'s open proposals once its chat has moved since the last
   /// read; joins a read under way. A failed read keeps what was shown and is
-  /// tried again when the chat next moves.
-  Future<void> readProposals(String projectId) {
+  /// tried again when the chat next moves, or at once for a person's [retry].
+  Future<void> readProposals(String projectId, {bool retry = false}) {
     final project = snapshot?.projectById(projectId);
     if (_disposed || accessRevoked || project == null) return Future.value();
     final at =
@@ -620,10 +620,10 @@ class SwarmReader extends ChangeNotifier {
             .conversation(project.leadConversationId)
             ?.lastMessageSequence ??
         0;
-    if (_proposalsAt[projectId] == at) return Future.value();
+    if (!retry && _proposalsAt[projectId] == at) return Future.value();
     if (_proposalReads[projectId] case final reading?) return reading;
     final last = _proposalsReadAt[projectId];
-    final wait = last == null
+    final wait = retry || last == null
         ? Duration.zero
         : _proposalsEvery - clock.now().difference(last);
     if (wait > Duration.zero) {
