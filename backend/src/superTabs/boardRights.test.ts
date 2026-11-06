@@ -210,6 +210,19 @@ describe('pause and resume', () => {
     expect(() => f.run({ type: 'work.pause', conversationId: id, paused: false }, member)).toThrow(expect.objectContaining({ code: 'PAUSE_FORBIDDEN' }))
   })
 
+  // Readycheck's review: a hand assignment, or a start into the task, went past the pause.
+  it('refuses assigning or starting an agent on a paused task, whoever asks', () => {
+    const f = boardFixture()
+    const id = task(f)
+    f.run({ type: 'work.pause', conversationId: id, paused: true }, projectOwner)
+    for (const actor of [projectOwner, f.asAgent(f.pm)]) {
+      expect(() => f.run({ type: 'work.assign', conversationId: id, agentId: f.worker }, actor), JSON.stringify(actor))
+        .toThrow(expect.objectContaining({ code: 'TASK_PAUSED' }))
+    }
+    expect(() => f.run({ type: 'agent.start', request: { conversationId: id, machineId: 'machine', engine: 'claude', name: 'Helper', cwd: '/repo', worktree: true } } as Command))
+      .toThrow(expect.objectContaining({ code: 'TASK_PAUSED' }))
+  })
+
   it('keeps a paused task from being handed out or chased, until it is resumed', () => {
     const f = boardFixture()
     const id = task(f)
@@ -240,7 +253,8 @@ describe('the PM text in a switched project', () => {
     expect(PM_SCHEDULE_TEXT).toMatch(INBOX_LINE)
     expect(text).not.toMatch(INBOX_LINE)
     expect(text).toContain('Keep a standing crew')
-    expect(owedLines(f.state, f.project(), 1000).join('\n')).not.toMatch(/Owed asks/)
+    // The ask from before the switch stays until its card exists (legacyAsks); a new one is never owed.
+    expect(owedLines(f.state, f.project(), 1000).join('\n')).toMatch(/before this project switched/)
     const before = f.state.conversations.find(c => c.id === f.app.conversationId)!.owed?.length ?? 0
     ask()
     expect(f.state.conversations.find(c => c.id === f.app.conversationId)!.owed?.length ?? 0).toBe(before)
@@ -259,5 +273,11 @@ describe('switching a project on', () => {
     f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
     // No card is made here yet (#3817 makes them): the asks stay, so nothing is dropped.
     expect(legacyAsks(f.state, f.project()).map(a => a.messageId)).toEqual([first, second])
+    // Readycheck's review: until their cards exist, the PM still sees them, while a message after the switch owes nothing.
+    const owed = owedLines(f.state, f.project(), 1000).join('\n')
+    expect(owed).toContain(first)
+    expect(owed).toContain(second)
+    const after = ask('After the switch', granted)
+    expect(owedLines(f.state, f.project(), 1000).join('\n')).not.toContain(after)
   })
 })
