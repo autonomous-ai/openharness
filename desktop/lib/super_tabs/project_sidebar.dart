@@ -66,6 +66,7 @@ class ProjectSidebar extends StatelessWidget {
     this.compact = false,
     this.board = false,
     this.onNewAgent,
+    this.onOpenAgentChat,
   });
   final SuperTabController controller;
 
@@ -78,6 +79,9 @@ class ProjectSidebar extends StatelessWidget {
   /// + New agent's choice, Regular or PM (Swarm v3, task #4118): the creation flow takes it from here. Without it the
   /// section has no + .
   final ValueChanged<SuperTabAgentKind>? onNewAgent;
+
+  /// Opens the chat of an agent chosen in My agents in the middle; [onSelect] when not given.
+  final ValueChanged<String>? onOpenAgentChat;
   final ValueChanged<String> onSelect;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
@@ -649,7 +653,7 @@ class ProjectSidebar extends StatelessWidget {
       selected:
           chat != null && !_paneCovered && controller.selectedId == chat.id,
       unread: chat != null && controller.unreadShown(chat),
-      onTap: chat == null ? null : () => onSelect(chat.id),
+      onTap: chat == null ? null : () => (onOpenAgentChat ?? onSelect)(chat.id),
     );
   }
 

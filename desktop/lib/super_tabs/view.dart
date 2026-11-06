@@ -62,6 +62,7 @@ import 'crew_panel.dart';
 import 'instructions_panel.dart';
 import 'project_rules.dart';
 import 'model.dart';
+import 'my_agents.dart';
 import 'agent_details.dart';
 import 'identity.dart' show superTabMachineName;
 import 'identity_card.dart';
@@ -135,6 +136,7 @@ class SuperTabView extends StatefulWidget {
     this.terminalsVisible = false,
     this.app,
     this.onNewProject,
+    this.rightPane,
     this.onNewSwarm,
     this.onChooseAgentTerminal,
     this.linkSwarms,
@@ -164,6 +166,11 @@ class SuperTabView extends StatefulWidget {
   final bool terminalsVisible;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
+
+  /// The Desktop's right pane (Swarm v3's Tasks, task #4119): always shown, never collapsing, in the pane layout's right
+  /// slot. Given, the chat of the selected agent or project is in the middle; without it the right pane keeps the Board's
+  /// chat as before.
+  final Widget Function(BuildContext context)? rightPane;
 
   /// The existing New Swarm, for the Swarm dropdown atop the left bar; none
   /// without it.
@@ -226,6 +233,7 @@ class _SuperTabViewState extends State<SuperTabView>
       _page = null;
       _showManage = _showTasks = _showPullRequests = false;
       _boardProjectId = project.id;
+      _agentChatId = null;
     });
     _showBuddy(project);
     _closeSidebar();
@@ -234,6 +242,23 @@ class _SuperTabViewState extends State<SuperTabView>
   /// A project's own chat is open and no Board is: its Chat view, with the
   /// header's Members, Terminals and Tasks icons, as before the fixed
   /// layout. Its Tasks icon opens the Board with projects and the Buddy.
+  /// The chat the reader chose in My agents (Swarm v3, task #4118), shown in the middle while it stays the selected one.
+  String? _agentChatId;
+
+  /// Opens the chat of an agent chosen in My agents in the middle: the Board closes and the chat takes its place.
+  void _openAgentChat(String id) {
+    c.leaveDevices();
+    widget.onCloseTerminal?.call();
+    setState(() {
+      _page = null;
+      _showManage = _showTasks = _showPullRequests = false;
+      _boardProjectId = null;
+      _agentChatId = id;
+    });
+    c.select(id);
+    _closeSidebar();
+  }
+
   bool get _projectChatOnly {
     final group = c.selected;
     return _boardProjectId == null &&
@@ -2074,6 +2099,8 @@ class _SuperTabViewState extends State<SuperTabView>
     compact: _phone,
     app: widget.app,
     onNewProject: widget.onNewProject,
+    onNewAgent: _newAgent,
+    onOpenAgentChat: _openAgentChat,
     onNewSwarm: widget.onNewSwarm,
     page: _pageShown,
     places: SuperTabPlaces.of(c),
@@ -2103,6 +2130,22 @@ class _SuperTabViewState extends State<SuperTabView>
     },
     onOpenBuddyChat: (projectId) => unawaited(_openBuddyChat(projectId)),
   );
+
+  /// + New agent's choice (Swarm v3, task #4118): a PM names and starts a project, so New project opens; a Regular agent
+  /// starts from the open chat's creation flow until the v3 creation flow (#4116) replaces it.
+  void _newAgent(SuperTabAgentKind kind) {
+    switch (kind) {
+      case SuperTabAgentKind.pm:
+        widget.onNewProject?.call();
+      case SuperTabAgentKind.regular:
+        final group =
+            c.selected ??
+            c.snapshot?.conversation(
+              c.snapshot?.projects.firstOrNull?.leadConversationId ?? '',
+            );
+        if (group != null) widget.onAddAgent(group);
+    }
+  }
 
   /// Opens the reader's Buddy chat in [projectId] in front of Notifications,
   /// pull requests and a terminal, opening it on the server when they have
@@ -3593,8 +3636,61 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The project's chat in the middle, as before the Board: the Chat tab. Its
   /// Tasks icon brings the Board back with projects and the Buddy.
   void _openProjectChat(SuperTabProject project) {
-    setState(() => _boardProjectId = null);
+    setState(() {
+      _boardProjectId = null;
+      _agentChatId = null;
+    });
     unawaited(c.select(project.leadConversationId));
+  }
+
+  /// The chat of the selected agent or project in the middle (Swarm v3, task #4118): a project's chat keeps its Board and
+  /// Chat tabs above it, any other chat is named.
+  Widget _middleChat(Widget chat) {
+    final group = c.selected;
+    final project = group == null
+        ? null
+        : c.snapshot?.projects
+              .where((p) => p.leadConversationId == group.id)
+              .firstOrNull;
+    return Column(
+      key: const ValueKey('super-middle-chat'),
+      children: [
+        SizedBox(
+          height: 44,
+          child: Row(
+            children: [
+              const SizedBox(width: 12),
+              if (project != null) ...[
+                Flexible(
+                  child: Text(
+                    project.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.heading(),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                _projectTabs(project, board: false),
+              ] else
+                Expanded(
+                  child: Text(
+                    group?.isBuddyChat == true
+                        ? 'Your Buddy'
+                        : group?.label ?? '',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.control().copyWith(
+                      fontWeight: grid.AppFont.semibold,
+                    ),
+                  ),
+                ),
+              const SizedBox(width: 8),
+            ],
+          ),
+        ),
+        Expanded(child: chat),
+      ],
+    );
   }
 
   /// The right pane beside the Board: the selected chat, flat, under a small header that goes back to the Buddy.
@@ -6076,9 +6172,13 @@ class _SuperTabViewState extends State<SuperTabView>
       if (thread != null) _rosterOpen = false;
       // Desktop reserves both side panes even before a project is selected.
       // Other navigation surfaces keep their existing place in the middle.
+      final agentChat =
+          widget.board && _agentChatId != null && c.selectedId == _agentChatId;
+      // The chat is in the middle, by the reader's choice of an agent or once the right pane is the Tasks slot.
+      final chatInMiddle = agentChat || widget.rightPane != null;
       final boardLayout =
           widget.board &&
-          !_projectChatOnly &&
+          (!_projectChatOnly || chatInMiddle) &&
           thread == null &&
           !_rosterOpen &&
           !_manageVisible &&
@@ -6171,7 +6271,10 @@ class _SuperTabViewState extends State<SuperTabView>
                 right: !wide
                     ? null
                     : boardLayout
-                    ? _boardChat(chat)
+                    ? widget.rightPane?.call(context) ??
+                          (agentChat
+                              ? const SizedBox.expand()
+                              : _boardChat(chat))
                     : thread ??
                           (_rosterOpen
                               ? roster
@@ -6192,7 +6295,9 @@ class _SuperTabViewState extends State<SuperTabView>
                 // Over the chat, beside an open thread, as in Slack.
                 over: wide ? viewer : null,
                 center: boardLayout && boardProject == null
-                    ? const SizedBox.shrink()
+                    ? (chatInMiddle
+                          ? _middleChat(chat)
+                          : const SizedBox.shrink())
                     : Column(
                         children: [
                           if (boardProject != null)
