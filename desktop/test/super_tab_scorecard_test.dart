@@ -70,6 +70,19 @@ void main() {
       expect(scorecardRows.first.cell(null), '–');
     });
 
+    test('PM first answer shows median and slowest, with gaps on older days', () {
+      String cell(String key, Map<String, dynamic> figures) => scorecardRows
+          .firstWhere((r) => r.key == key)
+          .cell(SuperTabScorecardDay.fromJson(_day('2026-11-05', figures)));
+      final figures = {
+        'pmAnswer': {'count': 3, 'medianSeconds': 30, 'slowestSeconds': 90},
+      };
+      expect(cell('pmAnswerMedian', figures), '30s');
+      expect(cell('pmAnswerSlowest', figures), '1m30');
+      expect(cell('pmAnswerMedian', {}), '–');
+      expect(cell('pmAnswerSlowest', {'pmAnswer': {'count': 0}}), '–');
+    });
+
     // Task #3462: crew wake and move times, as median · slowest.
     test('crew wake and move times as median and slowest', () {
       expect(scorecardSeconds(null), '–');
@@ -327,6 +340,7 @@ void main() {
                   'ackPosts': f[11],
                   // Crew times start with #3462: older days show "–".
                   if (on == '2026-11-05') ...{
+                    'pmAnswer': {'count': 18, 'medianSeconds': 30, 'slowestSeconds': 90},
                     'crewWake': {
                       'count': 4,
                       'medianSeconds': 14,
