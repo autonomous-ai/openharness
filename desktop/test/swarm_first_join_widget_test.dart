@@ -66,6 +66,7 @@ void main() {
           (post) => (post['command'] as Map)['type'] == 'buddy.create',
         );
         expect(starts, hasLength(1));
+        expect(f.app.activeSwarm.superTabId, tabId);
         expect(starts.single['command'], containsPair('engine', 'claude'));
         expect(starts.single['command'], containsPair('machineId', 'm'));
         expect(
