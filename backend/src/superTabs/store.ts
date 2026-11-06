@@ -67,7 +67,7 @@ import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
 import { currentRules, deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
-import { SEED_RULES, validMachineRules, type MachineRule } from './policy.js'
+import { SEED_RULES, validMachineRules, type MachineRule, type ProjectRules } from './policy.js'
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, FIRST_SUMMARY, liveNotes, MAX_REVISIONS } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
@@ -716,6 +716,16 @@ async function machineRulesOf(tx: Transaction, tabId: string, projectId: string)
   const stored = read?.rules.machines
   if (Array.isArray(stored) && stored.length !== rules.length) logger.warn('[swarm-machine-rules] a rule failed its schema and is not applied', { tabId, projectId })
   return rules
+}
+
+/** [projectId]'s release window for its PM's built-in text (pmSchedule.ts), from its newest rules revision: the seed's for a
+ *  record that does not pass the schema, said in the log, so the PM still reads its instructions. One indexed read. */
+async function releaseWindowOf(tx: Transaction, tabId: string, projectId: string): Promise<ProjectRules['releaseWindow']> {
+  return (await currentRules(tx, tabId, projectId).catch((error: unknown) => {
+    if (!(error instanceof SuperTabError) || error.code !== 'RULES_INVALID') throw error
+    logger.warn('[swarm-pm-text] rules record invalid; the seed release window is shown', { tabId, projectId })
+    return { revision: 0, rules: SEED_RULES }
+  })).rules.releaseWindow
 }
 
 export class SuperTabStore {
@@ -3345,7 +3355,7 @@ export class SuperTabStore {
       const coordinator = actor.kind === 'agent' && ledProject(state, actor.agentId)?.id === project.id
       return { projectId, revision, hash: stored ? stored.hash : FIRST_INSTRUCTIONS.instructionsHash, text: stored?.text ?? INSTRUCTIONS_TEMPLATE, template: !stored,
         coordinatorName: coordinatorNameOf(project), notesRevision: project.notesRevision ?? 0, ...(notes ? { notes } : {}),
-        ...(coordinator ? { builtIn: pmScheduleText(project) } : {}) }
+        ...(coordinator ? { builtIn: pmScheduleText(state, project, await releaseWindowOf(tx, tabId, projectId)) } : {}) }
     })
   }
 
