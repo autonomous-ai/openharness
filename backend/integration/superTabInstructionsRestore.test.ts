@@ -64,11 +64,11 @@ afterAll(async () => {
 /** A Swarm whose first project has BEFORE at revision 2 and the first run's result at revision 3: only what a person's name guards,
  *  written as the Swarm (the move's own record) and marked on the base. The move itself now refuses such a document (rebase.ts), so
  *  this writes what the first run wrote, as it did. */
-async function moved(id: string = randomUUID()) {
+async function moved(id: string = randomUUID(), document: string = BEFORE) {
   const tab = (await store.create(owner, id, 'Pilot')).id
   await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })
-  await run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: BEFORE, summary: 'Our process.' })
-  await run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 2, text: rebase(BEFORE, '', 'rules').text, summary: REBASE_SUMMARY })
+  await run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: document, summary: 'Our process.' })
+  await run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 2, text: rebase(document, '', 'rules').text, summary: REBASE_SUMMARY })
   await db.superTabInstructionsRevision.update({ where: { id: revisionId(tab, 'lead', 3) }, data: { writtenByKind: 'system', writtenBy: 'rebase', askedBy: DEE } })
   const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${tab}:head` } })
   const data = head.data as unknown as { projects: Array<Record<string, unknown>> }
@@ -141,6 +141,34 @@ describe('the lines the first move lost, given back', () => {
     // Told once: a second pass adds no second note.
     await restoreAll(db, { now: () => now, swarms: swarms(tab) })
     expect(await db.superTabPmNote.count({ where: { tabId: tab, projectId: 'lead' } })).toBe(1)
+  })
+
+  // Review round 3 of #3327 (Rowan): the daily tidy trims lines the move had kept (an unnamed sub-bullet of a rule), so the restore must
+  // not demand every line of the old document, or such a project is held for good and gets nothing back.
+  it('gives a project the move\'s lost lines though its own later save dropped a line the move had kept, and does not hold it', async () => {
+    const nested = `# Project instructions
+
+## Rules for every agent
+
+- Never run a test that signs the Mac out of the real CLI.
+
+## Roles
+
+- Owns the product (Dee, 2026-11-03). Its mission:
+  - Tell the PM what you want.
+`
+    const tab = await moved(undefined, nested)
+    // The move kept the rule and its sub-bullet; the PM's tidy then dropped the unnamed sub-bullet.
+    const kept = (await store.instructions(owner, tab, 'lead')).text
+    expect(kept).toContain('Tell the PM what you want.')
+    await run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 3, text: kept.replace(/^.*Tell the PM what you want\..*\n/m, ''), summary: 'The daily tidy.' })
+    const report = await restoreAll(db, { now: () => now, swarms: swarms(tab) })
+    expect(report.held).toEqual([])
+    expect(report.restored).toEqual([expect.objectContaining({ projectId: 'lead', lines: ['Never run a test that signs the Mac out of the real CLI.'] })])
+    const after = (await store.instructions(owner, tab, 'lead')).text
+    expect(after).toContain('Never run a test that signs the Mac out of the real CLI.')
+    // What its own save dropped stays dropped.
+    expect(after).not.toContain('Tell the PM what you want.')
   })
 
   it('does nothing for a project that lost nothing, and touches only the Swarm named', async () => {
