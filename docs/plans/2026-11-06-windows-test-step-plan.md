@@ -32,11 +32,11 @@
 
 **Interfaces:** Preserve `reviewPlan(files, rules): PlannedStep[]` and `stepBrief(step, task): string`. Windows plans have `os: 'windows'`; existing `reviewerCandidates(..., os)` and assignment authorization remain the routing boundary.
 
-- [ ] Commit failing planner cases for desktop/lib, desktop/windows and CLI process/paths/Buddy/setup/daemon code; assert one Windows step, exclusions and custom-rule deduplication.
-- [ ] Commit failing command cases proving Windows assignment, independent Tester selection, missing-seat behavior, repeated Ready and OS-safe reuse. Brief must carry the recording requirements.
-- [ ] Run `npm --prefix backend test -- src/superTabs/reviewTable.test.ts src/superTabs/reviewSteps.test.ts` and record behavioral failures before production changes.
-- [ ] Implement the minimal Windows path classification and extra step, Windows brief, and OS-safe reuse of named test steps. Keep existing Mac/Linux names and requirements.
-- [ ] Run those files plus direct importer tests (`commands`, `dispatch`, `reviewerPick`, `teamWritten`, `mergeTrain`) and `npm --prefix backend run typecheck`; inspect every failure.
+- [x] Commit failing planner cases for desktop/lib, desktop/windows and CLI process/paths/Buddy/setup/daemon code; assert one Windows step, exclusions and custom-rule deduplication.
+- [x] Commit failing command cases proving Windows assignment, independent Tester selection, missing-seat behavior, repeated Ready and OS-safe reuse. Brief must carry the recording requirements.
+- [x] Run `npm --prefix backend test -- src/superTabs/reviewTable.test.ts src/superTabs/reviewSteps.test.ts` and record behavioral failures before production changes.
+- [x] Implement the minimal Windows path classification and extra step, Windows brief, and OS-safe reuse of named test steps. Keep existing Mac/Linux names and requirements.
+- [x] Run those files plus direct importer tests (`commands`, `dispatch`, `reviewerPick`, `teamWritten`) and `npm --prefix backend run typecheck`; inspect every failure.
 - [ ] Commit/push the passing change, record red/green evidence in the PR, mark Ready and record the acceptance check at the full head on main. Independent review runs while CI runs.
 
 ## Task 2: Keep Windows routing after a lost Tester
@@ -45,7 +45,7 @@
 
 **Interfaces:** Lost-step recovery passes the named test step's OS to the existing `reviewerCandidates` filter. Ordinary tasks and unnamed steps retain their current routing.
 
-- [ ] Commit a failing dispatch test: a lost `Test on Windows` step passes over a Mac Tester for a Windows Tester, or waits if none is available.
-- [ ] Observe the wrong-Mac assignment before the fix with the focused dispatch test.
-- [ ] Pass the named step OS through recovery, then run dispatch, reviewerPick, reviewSteps, reviewTable, commands and teamWritten tests and typecheck.
+- [x] Commit a failing dispatch test: a lost `Test on Windows` step passes over a Mac Tester for a Windows Tester, or waits if none is available.
+- [x] Observe the wrong-Mac assignment before the fix with the focused dispatch test.
+- [x] Pass the named step OS through recovery, then run dispatch, reviewerPick, reviewSteps, reviewTable, commands and teamWritten tests and typecheck.
 - [ ] Commit/push and include this red/green evidence with Task 1 before Ready.

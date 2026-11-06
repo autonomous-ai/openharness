@@ -17,6 +17,7 @@ import { FAILED, type PullRequestWatch } from './pullRequestEvents.js'
 import { roleNameOf } from './instructions.js'
 import { reviewerCandidates } from './reviewerPick.js'
 import { stepName } from './steps.js'
+import { osesIn } from './reviewTable.js'
 
 const HOUR_MS = 3_600_000
 
@@ -171,7 +172,7 @@ export function candidatesFor(state: SuperTabState, member: Agent, rules: Dispat
     const kind = /test/i.test(stepName(step)) ? 'test' : /security/i.test(stepName(step)) ? 'security' : 'review'
     const latest = task.pullRequestUrls?.at(-1)
     const head = latest ? task.pullRequestHeads?.[latest]?.head ?? null : null
-    return reviewerCandidates(state, task, kind, head, now).some(a => a.id === member.id)
+    return reviewerCandidates(state, task, kind, head, now, kind === 'test' ? osesIn([stepName(step)])[0] : undefined).some(a => a.id === member.id)
   })
   const lane = open.filter(g => !g.reviewOf && !pinned.includes(g) && !(pinOf(g) && members.has(pinOf(g)!.agentId)) && !lostByIt(g)
     // Ordinary workers recover work; new tasks still need the PM's route or a standing crew lane.
