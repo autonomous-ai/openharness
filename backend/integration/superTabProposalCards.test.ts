@@ -89,7 +89,12 @@ describe('durable proposal cards', () => {
     const row = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, conversationId: low, agentId: f.pm } })
     await db.superTabDelivery.createMany({ data: Array.from({ length: 105 }, (_, i) => ({ ...row, id: randomUUID(), createdAt: new Date(f.clock.now - i - 1000) })) })
     const urgent = await f.create(owner, 'P0')
-    for (let i = 0; i < 2; i++) expect((await f.store.deliveries(owner, f.tab, f.pm))[0]?.conversationId).toBe(urgent)
+    const prof = await profiled(db, async () => expect((await f.store.deliveries(owner, f.tab, f.pm))[0]?.conversationId).toBe(urgent))
+    const priority = plan(reads(prof, 'SuperTabDelivery', ['inputPriority']))
+    expect(priority).toEqual([expect.objectContaining({ plan: 'IXSCAN { tabId: 1, agentId: 1, status: 1, inputPriority: 1, createdAt: 1 }' })])
+    expect(priority[0]!.docsExamined).toBeLessThanOrEqual(110)
+    console.info('Proposal priority read:', priority)
+    expect((await f.store.deliveries(owner, f.tab, f.pm))[0]?.conversationId).toBe(urgent)
   })
 
   it('withholds queued ordinary chat after switching and still delivers a proposal', async () => {

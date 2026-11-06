@@ -532,7 +532,7 @@ export interface Polled {
    *  it loaded: while all three are unchanged, a held delivery is answered without loading the Swarm (deliveries). The
    *  grants of the agent and of the agents that sent what it allowed, by agent id, are checked again on every such answer:
    *  they rest on Workspaces, machines and shares, which no Swarm write records. */
-  open?: { stamp: number; seen: string[]; allowed: string[]; swarm: SwarmGrant; grants: Record<string, AgentGrant> }
+  open?: { prioritized?: boolean; stamp: number; seen: string[]; allowed: string[]; swarm: SwarmGrant; grants: Record<string, AgentGrant> }
 }
 
 /** Where `deliveries` remembers each caller's last full poll. Either call may throw: the poll then runs in full. */
@@ -961,13 +961,15 @@ export class SuperTabStore {
     const project = projectsOf(state).find(p => p.id === projectId)!
     const asks = legacyAsks(state, project).slice(0, 100)
     if (!asks.length) return []
-    const rows = await tx.superTabMessage.findMany({ where: { tabId: state.id, id: { in: asks.map(a => a.messageId) } },
-      select: { id: true, conversationId: true, author: true, text: true, source: true, deletedAt: true } })
+    const rows = await readBy(tx, 'SuperTabMessage', 'id', [
+      { $match: { tabId: state.id, _id: { $in: asks.map(a => a.messageId) }, deletedAt: null } },
+      { $project: { _id: 0, id: '$_id', conversationId: 1, author: 1, text: 1, source: 1 } },
+    ]) as unknown as Array<{ id: string; conversationId: string; author: Author; text: string; source?: unknown }>
     return asks.flatMap(ask => {
       const row = rows.find(r => r.id === ask.messageId), sender = row?.author as unknown as Author | undefined
       const group = state.conversations.find(c => c.id === ask.conversationId)
       const member = state.people.find(p => p.id === ask.personId)
-      if (!row || row.deletedAt || row.source || !row.text.trim() || row.text.length > 32000 || row.conversationId !== ask.conversationId
+      if (!row || row.source || !row.text.trim() || row.text.length > 32000 || row.conversationId !== ask.conversationId
         || !sender || sender.kind !== 'person' || sender.id !== ask.personId || sender.membershipGeneration !== member?.generation
         || !group || group.kind || group.audience || !canReadGroup(state, { kind: 'person', userId: ask.personId, email: '' }, group)) return []
       return [{ ...ask, text: row.text, generation: member!.generation }]
@@ -3506,7 +3508,7 @@ export class SuperTabStore {
         const forInbox = gathersForInbox(state, target, message)
         const gathered = (gatheredMessage(state, message) && !!ledProject(state, recipient)) || forInbox
         deliveries.push({ id: stableId(message.id, recipient), tabId,
-          conversationId: message.conversationId, messageId: message.id, agentId: recipient, machineId: target.machineId,
+          conversationId: message.conversationId, messageId: message.id, inputPriority: group.proposal ? Number((group.priority ?? 'P2').slice(1)) : 1, agentId: recipient, machineId: target.machineId,
           machineOwnerId: target.machineOwnerId,
           assignmentId: activeWork(group) && group.assignment?.agentId === recipient ? group.assignment.id : null,
           membershipGeneration: target.membershipGeneration, authorKind: message.author.kind,
@@ -4539,7 +4541,7 @@ export class SuperTabStore {
     // whose gathered rows are due (inboxDue) skips the fast answer, by one indexed read.
     const releasing = turn !== undefined && inboxDue(await agentGatheredDeliveries(this.db, tabId, agentId, NOTICE_DIGEST_MAX), this.now(), turn)
     if (!releasing && last !== undefined && this.now() - last.at < SWEEP_EVERY_MS) {
-      const open = await openDeliveries(this.db, tabId, agentId)
+      const open = await openDeliveries(this.db, tabId, agentId, last.open?.prioritized)
       if (!open.length) return []
       // A held delivery stays open for as long as its host cannot type it, possibly hours, polled each second (Diego, 10-28):
       // the same open deliveries at the same main stamp are allowed as the full poll found them. Anything a Swarm write
@@ -4553,7 +4555,7 @@ export class SuperTabStore {
     const view = await this.view([tabId]), stamp = view.mainStamp(tabId)
     const { open, allowed, state } = await this.fullDeliveries(user, tabId, agentId, view, turn)
     await this.polls.set(key, { at: this.now(), ...open.length && stamp !== undefined
-      ? { open: { stamp, seen: open.map(d => d.id), allowed: allowed.map(d => d.id), ...grantsOf(state, agentId, allowed) } } : {} })
+      ? { open: { prioritized: !!ledProject(state, agentId)?.boardMode, stamp, seen: open.map(d => d.id), allowed: allowed.map(d => d.id), ...grantsOf(state, agentId, allowed) } } : {} })
       .catch(pollMemoryFailed)
     return allowed.map(d => withTurnEnd(d, this.now()))
   }
@@ -4794,11 +4796,12 @@ export class SuperTabStore {
 
   /** The agent's open deliveries, and those of them its Swarm still lets reach it. */
   private async allowedDeliveries(tx: Transaction, state: SuperTabState, tabId: string, agentId: string) {
-    const open = await openDeliveries(tx, tabId, agentId)
+    const open = await openDeliveries(tx, tabId, agentId, !!ledProject(state, agentId)?.boardMode)
     // One bounded primary-key batch, rather than a source lookup for every queued PM input or private Buddy notice.
     const needsSources = !!ledProject(state, agentId)?.boardMode || open.some(d => isBuddyChat(state.conversations.find(c => c.id === d.conversationId) ?? { kind: undefined } as Conversation))
-    const sources = needsSources && open.length ? new Map((await tx.superTabMessage.findMany({ where: { id: { in: open.map(d => d.messageId) } },
-      select: { id: true, source: true } })).map(m => [m.id, m.source])) : null
+    const sources = needsSources && open.length ? new Map((await readBy(tx, 'SuperTabMessage', 'id', [
+      { $match: { tabId, _id: { $in: open.map(d => d.messageId) } } }, { $project: { _id: 1, source: 1 } },
+    ])).map(m => [m._id as string, m.source ?? null])) : null
     const allowed: SuperTabDelivery[] = []
     for (const delivery of open) {
       if (this.deliveryAllowed(state, delivery) && await this.senderAllowed(tx, state, delivery, sources?.get(delivery.messageId) ?? (sources ? null : undefined))) allowed.push(delivery)
