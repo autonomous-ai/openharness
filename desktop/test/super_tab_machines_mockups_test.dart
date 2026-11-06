@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
@@ -61,11 +62,14 @@ Future<SuperTabController> mount(
     MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.light),
       home: Scaffold(
-        body: SuperTabMachines(
-          controller: c,
-          onAddAgent: (_) {},
-          manage: true,
-          ticks: false,
+        body: ListenableBuilder(
+          listenable: c,
+          builder: (context, _) => SuperTabMachines(
+            controller: c,
+            onAddAgent: (_) {},
+            manage: true,
+            ticks: false,
+          ),
         ),
       ),
     ),
@@ -227,7 +231,52 @@ void main() {
     server.revision++;
     await tester.runAsync(c.refresh);
     await tester.pump();
-    expect(find.text('MacBooks-MacBook-Pro · dee'), findsOneWidget);
+    expect(
+      tester.widget<Text>(key('super-machine-name-build')).data,
+      'MacBooks-MacBook-Pro · dee',
+    );
     expect(find.text('MacBooks-MacBook-Pro · diego'), findsOneWidget);
   });
+  testWidgets('loading uses the real 56pt machine row height', (tester) async {
+    final c = ConversationServer().controller();
+    addTearDown(c.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabMachines(
+            controller: c,
+            onAddAgent: (_) {},
+            manage: true,
+            ticks: false,
+          ),
+        ),
+      ),
+    );
+    expect(tester.getSize(key('machines-loading-row-0')).height, 56);
+  });
+
+  testWidgets(
+    'keyboard reaches a machine with a visible focus ring and expands it',
+    (tester) async {
+      final c = await mount(tester);
+      var reached = false;
+      for (var i = 0; i < 16; i++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+        final target = FocusManager.instance.primaryFocus?.context
+            ?.findAncestorWidgetOfExactType<InkWell>();
+        if (target?.key == const ValueKey('super-machine-mine')) {
+          reached = true;
+          break;
+        }
+      }
+      expect(reached, isTrue);
+      final material = tester.widget<Material>(key('machines-surface-mine'));
+      expect((material.shape as RoundedRectangleBorder).side.width, 2);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(c.isMachineExpanded('mine'), isTrue);
+      await c.flush();
+    },
+  );
 }
