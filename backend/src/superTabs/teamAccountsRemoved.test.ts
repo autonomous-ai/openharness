@@ -119,6 +119,14 @@ describe('with Team accounts removed', () => {
     expect(refusal(() => f.assign(own))).toBeNull()
   })
 
+  // Security review 1 of #3446: reading a project is not enough to work in it; a viewer's agent takes none of its work.
+  it('gives no task to the agent of a person who is only a viewer', () => {
+    const f = swarm()
+    const own = f.member('mates-own', 'mate-mac', 'mate')
+    f.state.people.find(p => p.id === 'mate')!.role = 'viewer'
+    expect(refusal(() => f.assign(own))).toMatchObject({ code: 'READ_ONLY' })
+  })
+
   it('lets only the project owner\'s own agent take over a task a Team agent wrote', () => {
     const f = swarm()
     const mates = f.member('mates-own', 'mate-mac', 'mate'), owners = f.member('owners-own', 'owner-mac', 'owner')
