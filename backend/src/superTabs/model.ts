@@ -427,6 +427,9 @@ export interface Conversation {
    *  #3554): those its brief, title, assignment's result, checks' evidence and merge record name, never links in posts. [] from
    *  its creation; absent on a conversation from before, which reads what it recorded instead (codePullRequests). */
   codePullRequestUrls?: string[]
+  /** 'server' on a step the server opened for a handed task (commands.ts openReviewSteps, task #3602): an agent's step of its
+   *  kind is then refused as a double. Absent on a step an agent or a person opened, and on older ones. */
+  openedBy?: 'server'
   /** When its brief was last set (conversation.create, work.define): a person's rule moved into this task leaves the
    *  instructions only for a pull request GitHub says merged after it (ruleGuard.ts rulePlaces, #3463). No command writes
    *  it otherwise. Absent on a task from before. */
