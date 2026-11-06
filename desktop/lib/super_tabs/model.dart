@@ -231,8 +231,8 @@ class SuperTabAgent {
   /// while it waits at a prompt in its terminal, gone once that is answered.
   final List<String> alerting;
 
-  /// A Product Manager's switch to another engine or account that is asked for
-  /// and not yet done (backend `switchRequest`); null otherwise.
+  /// A Product Manager or Buddy's engine switch that is asked for and not yet
+  /// done (backend `switchRequest`); null otherwise.
   final Map<String, dynamic>? switchRequest;
 
   /// The model on the Swarm's grid it runs on; null on its own subscription

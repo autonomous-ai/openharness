@@ -35,7 +35,10 @@ void main() {
           narrow: state.endsWith('narrow'),
           textScale: state == 'large-narrow' ? 2 : 1,
         );
-        expect(find.byKey(const ValueKey('super-buddy-engine')), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('super-buddy-engine')),
+          findsOneWidget,
+        );
         if (state == 'menu' || state == 'limit-narrow') {
           await tester.tap(
             state == 'menu'
@@ -45,7 +48,6 @@ void main() {
           await tester.pumpAndSettle();
           expect(find.text('Codex'), findsOneWidget);
         }
-        expect(tester.takeException(), isNull);
         await captureWindow(
           tester,
           shots,

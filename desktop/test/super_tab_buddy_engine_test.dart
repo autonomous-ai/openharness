@@ -160,7 +160,10 @@ void main() {
   testWidgets('header selectors scale their text once at 200 percent', (
     tester,
   ) async {
-    final label = find.descendant(of: picker, matching: find.text('Claude Code'));
+    final label = find.descendant(
+      of: picker,
+      matching: find.text('Claude Code'),
+    );
     final normal = await showBuddyEngine(tester, buddyEngineSwarm());
     final normalHeight = tester.getRect(label).height;
     await closeBuddyEngine(tester, normal);
@@ -181,7 +184,7 @@ void main() {
         final c = await showBuddyEngine(tester, server, narrow: narrow);
         final notice = find.byKey(const ValueKey('super-buddy-engine-limit'));
         expect(notice, findsOneWidget);
-        expect(find.text('Subscription limit reached.'), findsOneWidget);
+        expect(find.text('Limit reached.'), findsOneWidget);
         final action = find.descendant(
           of: notice,
           matching: find.text('Switch engine'),
