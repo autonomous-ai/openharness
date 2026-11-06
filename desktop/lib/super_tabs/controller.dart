@@ -3304,9 +3304,11 @@ class SuperTabController extends ChangeNotifier {
   /// Pauses [taskId], or resumes it (#3819, a project on the Board): the server lets its project's owner, the Swarm's
   /// owner and its decider do it. Null when done, else the server's sentence.
   Future<String?> setTaskPaused(String taskId, {required bool paused}) async {
+    // One command both ways: `work.resume` resumes lost work (#3819).
     final done = await command({
-      'type': paused ? 'work.pause' : 'work.resume',
+      'type': 'work.pause',
       'conversationId': taskId,
+      'paused': paused,
     });
     return done != null
         ? null
