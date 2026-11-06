@@ -437,8 +437,9 @@ class SwarmMachineLocalModels extends StatelessWidget {
         ));
       }
     }
-    // Whoever serves a model sees whose Buddy runs on it (Desktop `local_models.dart`; PRODUCT.md, Contribution:
-    // seen), from the Buddies every member's read carries.
+    // Whoever serves a model sees whose Buddy runs on it (Desktop
+    // `local_models.dart`; AGENTS.md, contributed capacity: seen), from the
+    // Buddies every member's read carries.
     String? usedBy(String model) {
       final people = {
         for (final a in snapshot.agents)

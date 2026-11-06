@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { lstat, readdir, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -20,6 +20,7 @@ import { readAuthSession } from '../lib/authSession.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
 import { git, sweepOne, WorktreeKept } from '../lib/worktreeSweep.js'
 import { projectsRoot } from '../lib/projectFolder.js'
+import { agentFolderEmpty, removableAgentFolder } from './agentFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { teamPrivacyObserver } from '../team/observer.js'
 import { teamRelayed } from '../team/relay.js'
@@ -80,7 +81,8 @@ const POOLS_FRESH_MS = 2_000
 
 /** The worktrees this machine's Swarm starts made, by tab: what a removal may delete besides the tab's Swarm folders. */
 export const swarmWorktreesFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `swarm-worktrees-${machineId}.json`)
-type SwarmWorktree = { tabId: string; startId: string; harnessId: string; source: string; path: string }
+/** `kind: 'agent-folder'`: a folder Harness made for an agent whose start named a temporary one (agentFolder.ts, #3713). */
+type SwarmWorktree = { tabId: string; startId: string; harnessId: string; source: string; path: string; kind?: 'agent-folder' }
 function readWorktrees(file: string): SwarmWorktree[] {
   let saved: unknown
   try { saved = JSON.parse(readFileSync(file, 'utf8')) } catch { return [] }
@@ -1133,6 +1135,7 @@ export class ContributedMachines {
     // Diego, 10-30: a folder deleted by hand kept its record for good, and every later stop tried it again. Only a folder
     // that is not there drops it; one that cannot be read for any other reason keeps it. Nothing on disk is touched.
     if (await folderGone(record.path)) return writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
+    if (record.kind === 'agent-folder') return this.removeAgentFolder(file, record, mine)
     if (!await swarmWorktree(record.path, record.source, record.startId)) {
       // The record no longer proves this belongs to Harness. Keep it; never loosen the proof to recover it.
       if (await folderGone(record.path)) return writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
@@ -1154,13 +1157,30 @@ export class ContributedMachines {
     writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
   }
 
-  /** A removal deletes only what is provably the Swarm's: the record says which worktree each start made. */
+  /** An agent's own folder (#3713), only when it is still the one Harness made and marked in its agent-home folder, and no
+   *  session, live or paused, works in it: it holds nothing but that agent's own work. A record that no longer proves that
+   *  is kept, its folder untouched; the log names no path. */
+  private async removeAgentFolder(file: string, record: SwarmWorktree, mine: (w: SwarmWorktree) => boolean): Promise<void> {
+    if (!removableAgentFolder(record.path, projectsRoot())) { this.log('Kept an agent folder: AGENT_FOLDER_UNPROVEN'); return }
+    const used = this.core.agents.live().some(a => !!a.cwd && within(record.path, a.cwd))
+      || this.core.agents.all().some(a => a.agentId !== record.harnessId && !!a.cwd && within(record.path, a.cwd))
+    if (used) return
+    // The agent's work is never deleted with its folder (security review of #3341): one that holds any is kept, with its
+    // record, for its person, as a worktree with uncommitted changes is.
+    if (!agentFolderEmpty(record.path)) { this.log('Kept an agent folder: AGENT_FOLDER_HAS_WORK'); return }
+    try { rmSync(record.path, { recursive: true, force: true }) } catch { this.log('Kept an agent folder: AGENT_FOLDER_REMOVAL_FAILED'); return }
+    writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
+  }
+
+  /** A removal deletes only what is provably the Swarm's: the record says which worktree, or agent folder, each start made. */
   private recordWorktree(tabId: string, startId: string, harnessId: string, request: Record<string, unknown>) {
     const path = this.core.agents.byAgent(harnessId)?.cwd
-    if (request.worktree !== true || typeof request.cwd !== 'string' || !path) return
+    const agentFolder = request.worktree !== true && !!path && removableAgentFolder(path, projectsRoot())
+    if ((request.worktree !== true && !agentFolder) || typeof request.cwd !== 'string' || !path) return
     try {
       const file = swarmWorktreesFile(this.core.dataDir, this.machineId), worktrees = readWorktrees(file)
-      if (!worktrees.some(w => w.tabId === tabId && w.startId === startId)) writeWorktrees(file, [...worktrees, { tabId, startId, harnessId, source: request.cwd, path }])
+      if (!worktrees.some(w => w.tabId === tabId && w.startId === startId)) writeWorktrees(file, [...worktrees, { tabId, startId, harnessId,
+        source: request.cwd, path, ...(agentFolder ? { kind: 'agent-folder' as const } : {}) }])
     } catch (error) { this.log(`Could not record the worktree of Swarm start ${startId}: ${error instanceof Error ? error.message : String(error)}`) }
   }
   private log(message: string) { (this.deps.log ?? (line => console.warn(`[super-tabs] ${line}`)))(message) }

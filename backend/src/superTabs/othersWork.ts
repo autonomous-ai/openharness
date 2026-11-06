@@ -1,5 +1,5 @@
 /**
- * A machine's owner hears when someone else's work starts on it (contributor view, #2444; PRODUCT.md Contribution, Seen:
+ * A machine's owner hears when someone else's work starts on it (contributor view, #2444; AGENTS.md, contributed capacity: seen:
  * "their quota is never drained without them knowing"). Once per machine per leaderboard week, in their own Buddy chat, in
  * the server's words; the person card shows the rest. Someone else's work is what Lent counts (leaderboard/lent.ts): a
  * task its machine's contributor did not ask for, never a PM's or a private chat's.

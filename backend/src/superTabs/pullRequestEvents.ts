@@ -49,7 +49,7 @@ const quoted = (body: string) => {
 }
 const REVIEWED: Record<string, string> = { CHANGES_REQUESTED: 'asked for changes on', APPROVED: 'approved' }
 /** Whose words reach the Engineer: the repository's own people. Anyone can comment on a public pull request, and the line
- *  reaches an agent as its Lead's, so anyone else's text stays on GitHub behind the link (ENGINEERING.md 7, review of #2750). */
+ *  reaches an agent as its Lead's, so anyone else's text stays on GitHub behind the link (AGENTS.md standard 7, review of #2750). */
 const QUOTED = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
 const said = (association: string, body: string, url: string) => {
   if (!body.trim()) return `. ${url}`
@@ -127,7 +127,7 @@ export interface PullRequestReader {
 const PULL = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/([1-9][0-9]*)$/
 /** A task quiet this long is not watched: its Engineer is not waiting on its pull request. */
 export const WATCH_QUIET_MS = 7 * 24 * 3_600_000
-/** The most tasks a pass reads, the most recently active first (ENGINEERING.md 4: no read grows without a bound). */
+/** The most tasks a pass reads, the most recently active first (AGENTS.md standard 4: no read grows without a bound). */
 export const WATCH_GROUPS = 200
 /** The most done tasks a pass also reads for their heads (#3394): done before the PM merges, their verdicts must still go
  *  stale on a push, however long the pull request stays open. Production had 31 with links, 11 quiet over a week, of 51
@@ -190,7 +190,7 @@ export function appPullRequestWatch(app: GitHubApp): PullRequestReader {
  * One pass: open tasks (not steps) active in the last [WATCH_QUIET_MS] that link a pull request, at most [limit] of them, the
  * most recently active first, have each open one read once, and what is new goes to its Engineer (store.ts
  * pullRequestSeen). One group's failure is logged and skips that group alone. A pass that posted, or could not read a pull
- * request, says so in one line: the measure of this feature (ENGINEERING.md 6 and 8). The messages posted.
+ * request, says so in one line: the measure of this feature (AGENTS.md standards 6 and 8). The messages posted.
  */
 export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen' | 'pullRequestHeadsWatched'>, reader: PullRequestReader, now: number,
   limit = WATCH_GROUPS, doneLimit = WATCH_DONE_GROUPS): Promise<number> {
