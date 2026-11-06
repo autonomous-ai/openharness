@@ -15694,25 +15694,15 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// What every connected REMOTE machine's agent accounts have spent, asked in
-  /// parallel and read there with that machine's own credentials (`usage_read`).
-  ///
-  /// This computer's own accounts are not asked here — the app reads those
-  /// directly, the Keychain included. A remote machine may be signed in to a
-  /// different subscription, and a rate limit belongs to an account rather than
-  /// a computer, so the only honest way to show that one is to ask the machine
-  /// that holds it.
-  ///
-  /// ⚠️ **A machine whose CLI predates `usage_read` does not refuse it — it goes
-  /// silent.** The frame reaches it as an E2EE envelope it does not know to
-  /// open, so the requestId inside is never read and nothing replies. That is a
-  /// timeout, not an `UNSUPPORTED`, which is why this asks with a short one and
-  /// treats every failure alike: a machine that cannot say has nothing to add,
-  /// and it must never hold up the figures of the ones that can.
+  /// through their own CLI rate-limit reports. This computer uses the same
+  /// transport: Desktop never opens a vendor credential or usage endpoint.
   Future<List<MachineUsage>> readRemoteUsage() async {
     final remotes = [
       for (final machine in machineStates.values)
-        if (!machine.isLocalMachine &&
-            machine.connectionStatus == ConnectionStatus.connected)
+        if (machine.connectionStatus == ConnectionStatus.connected &&
+            !machine.needsLink &&
+            !machine.belongsToOtherAccount &&
+            !machine.machine.isTeamAccount)
           machine,
     ];
     final answers = await Future.wait([
@@ -15946,6 +15936,7 @@ class AppNotifier extends ChangeNotifier {
       if (readings.isEmpty) return null;
       return MachineUsage(
         machineName: machine.machine.displayName,
+        isLocal: machine.isLocalMachine,
         readings: readings,
       );
     } catch (_) {

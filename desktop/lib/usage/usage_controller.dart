@@ -36,9 +36,8 @@ class UsageController extends ChangeNotifier {
 
   final List<UsageSource> _sources;
 
-  /// Asks every connected remote machine what ITS accounts have spent
-  /// (`AppNotifier.readRemoteUsage`). Null reads this computer only — every
-  /// test, and anything that has no machines to ask.
+  /// Asks connected computers for their CLI reports, including this computer.
+  /// Null leaves only explicitly injected sources (used by tests).
   final Future<List<MachineUsage>> Function()? remote;
 
   List<MachineUsage> _remote = const [];
@@ -73,6 +72,8 @@ class UsageController extends ChangeNotifier {
   /// Every provider's reading, in the order the sources were given.
   List<ProviderUsage> get readings => [
     for (final source in _sources) _readings[source.provider]!,
+    for (final machine in _remote.where((machine) => machine.isLocal))
+      ...machine.readings,
   ];
 
   /// The providers with figures worth printing on the rail.
@@ -84,7 +85,10 @@ class UsageController extends ChangeNotifier {
   /// One figure per ACCOUNT, this computer's first — see [groupUsageAccounts].
   ///
   /// [readings] stays this computer's alone; this is the grouped view.
-  List<UsageAccount> get accounts => groupUsageAccounts(readings, _remote);
+  List<UsageAccount> get accounts => groupUsageAccounts(
+    readings,
+    _remote.where((machine) => !machine.isLocal).toList(),
+  );
 
   /// Whether the rail has anything at all to say — figures, or a reason there
   /// are none. False only before the first cycle resolves.
