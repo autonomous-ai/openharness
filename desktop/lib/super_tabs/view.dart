@@ -3512,41 +3512,42 @@ class _SuperTabViewState extends State<SuperTabView>
     ),
   );
 
-  /// Above the Board: the left rail's icon, the project's name, and the Buddy pane's icon while it is hidden.
-  Widget _boardHeader(SuperTabProject project) => SizedBox(
-    height: 44,
-    child: Row(
-      children: [
-        const SizedBox(width: 8),
-        AppIconButton(
-          key: const ValueKey('super-pane-left-toggle'),
-          icon: _leftHidden ? AppIcons.panelLeftOpen : AppIcons.panelLeftClose,
-          tooltip: _leftHidden ? 'Show sidebar' : 'Hide sidebar',
-          onPressed: () => _togglePane(left: true),
+  /// The Board page's header, drawn as the start of the Tasks bar so the page
+  /// has one row above its lanes (Huy, 2026-11-06): the left rail's icon, the
+  /// project's name, and Board and Chat.
+  Widget _boardHeader(SuperTabProject project) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      AppIconButton(
+        key: const ValueKey('super-pane-left-toggle'),
+        icon: _leftHidden ? AppIcons.panelLeftOpen : AppIcons.panelLeftClose,
+        tooltip: _leftHidden ? 'Show sidebar' : 'Hide sidebar',
+        onPressed: () => _togglePane(left: true),
+      ),
+      const SizedBox(width: 8),
+      Flexible(
+        child: Text(
+          project.name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: DesktopChrome.heading(),
         ),
-        const SizedBox(width: 8),
-        Flexible(
-          child: Text(
-            project.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: DesktopChrome.heading(),
-          ),
-        ),
-        const SizedBox(width: 12),
-        _projectTabs(project, board: true),
-        const Spacer(),
-        if (_rightHidden)
-          AppIconButton(
-            key: const ValueKey('super-pane-right-toggle'),
-            icon: AppIcons.panelRightOpen,
-            tooltip: 'Show your Buddy',
-            onPressed: () => _togglePane(left: false),
-          ),
-        const SizedBox(width: 8),
-      ],
-    ),
+      ),
+      const SizedBox(width: 12),
+      _projectTabs(project, board: true),
+    ],
   );
+
+  /// The Buddy pane's icon at the Tasks bar's end, while that pane is hidden.
+  List<Widget> _boardTrailing() => [
+    if (_rightHidden)
+      AppIconButton(
+        key: const ValueKey('super-pane-right-toggle'),
+        icon: AppIcons.panelRightOpen,
+        tooltip: 'Show your Buddy',
+        onPressed: () => _togglePane(left: false),
+      ),
+  ];
 
   /// Board and Chat (Ken's review of the spec): the project's Board first, its chat a tab away while projects still
   /// talk to their PM there.
@@ -3617,6 +3618,9 @@ class _SuperTabViewState extends State<SuperTabView>
                   ),
                 ),
               ),
+              // Rename, Restart and Remove, as the full chat's ⋮ has them:
+              // beside the Board this is the only way to them (Huy, 11-06).
+              if (onBuddy) _options(group!),
               AppIconButton(
                 key: const ValueKey('super-pane-right-toggle'),
                 icon: AppIcons.panelRightClose,
@@ -3656,6 +3660,8 @@ class _SuperTabViewState extends State<SuperTabView>
         _openThreadFromList(project.leadConversationId, id);
       },
       onOpenMessage: (id, messageId) => unawaited(_openMessage(id, messageId)),
+      barLeading: boardProject == null ? null : _boardHeader(project),
+      barTrailing: boardProject == null ? const [] : _boardTrailing(),
     );
   }
 
@@ -5986,9 +5992,7 @@ class _SuperTabViewState extends State<SuperTabView>
                 over: wide ? viewer : null,
                 center: Column(
                   children: [
-                    if (boardProject != null)
-                      _boardHeader(c.snapshot!.projectById(boardProject)!)
-                    else ...[
+                    if (boardProject == null) ...[
                       if (widget.board &&
                           !_manageVisible &&
                           !_notificationsVisible &&

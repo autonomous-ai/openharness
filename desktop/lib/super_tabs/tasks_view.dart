@@ -18,6 +18,7 @@ import 'member_groups.dart';
 import 'model.dart';
 import 'pulse_strip.dart';
 import 'task_card.dart';
+import 'tasks_bar.dart';
 import 'task_groups.dart';
 import 'zone_time.dart';
 
@@ -38,6 +39,8 @@ class SuperTabTasksView extends StatefulWidget {
     this.selectedId,
     this.storage,
     this.now = DateTime.now,
+    this.barLeading,
+    this.barTrailing = const [],
   });
 
   final SuperTabController controller;
@@ -61,6 +64,13 @@ class SuperTabTasksView extends StatefulWidget {
   final LocalKeyValueStore? storage;
   final DateTime Function() now;
 
+  /// The Board page's header (its rail icon, the project's name, Board and
+  /// Chat), drawn in place of the bar's title so the page keeps one row.
+  final Widget? barLeading;
+
+  /// Icons at the bar's end: the Buddy pane's, while that pane is hidden.
+  final List<Widget> barTrailing;
+
   /// A Board column's width: about a card and a half of title per line, so
   /// five fit a wide window and a narrow one scrolls sideways (task #2948).
   static const columnWidth = 280.0;
@@ -72,11 +82,8 @@ class SuperTabTasksView extends StatefulWidget {
   State<SuperTabTasksView> createState() => _SuperTabTasksViewState();
 }
 
-/// How the Tasks view lays its cards out, kept by its name.
-enum _Layout { board, list, members }
-
 class _SuperTabTasksViewState extends State<SuperTabTasksView> {
-  var _layout = _Layout.board;
+  var _layout = SuperTabTasksLayout.board;
   bool _mine = false;
   String _query = '';
 
@@ -130,10 +137,10 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       if (saved is! Map) return;
       setState(() {
         _layout =
-            _Layout.values
+            SuperTabTasksLayout.values
                 .where((l) => l.name == saved['layout'])
                 .firstOrNull ??
-            _Layout.board;
+            SuperTabTasksLayout.board;
         _mine = saved['mine'] == true;
       });
     } on FormatException {
@@ -142,7 +149,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     }
   }
 
-  void _choose({_Layout? layout, bool? mine}) {
+  void _choose({SuperTabTasksLayout? layout, bool? mine}) {
     setState(() {
       _layout = layout ?? _layout;
       _mine = mine ?? _mine;
@@ -211,7 +218,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _bar(context),
+        _bar(),
         // What waits for the PM and who works (task #3384); none from a
         // server before it.
         if (pulse != null)
@@ -233,7 +240,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
           ),
         Expanded(
           // Members draws the crew, free or not, though no task is open.
-          child: _layout == _Layout.members
+          child: _layout == SuperTabTasksLayout.members
               ? _membersView(project, board, now)
               : empty
               ? Center(
@@ -242,7 +249,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
                     style: DesktopChrome.control(color: DesktopChrome.muted),
                   ),
                 )
-              : _layout == _Layout.list
+              : _layout == SuperTabTasksLayout.list
               ? _listView(shown, now)
               : _boardView(shown, now),
         ),
@@ -250,84 +257,19 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     );
   }
 
-  /// The view's own bar: Board, List or Members, Mine and Search, nothing
-  /// else.
-  Widget _bar(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(
-      grid.AppDesktop.groupGap,
-      grid.AppDesktop.controlGap,
-      grid.AppDesktop.groupGap,
-      grid.AppDesktop.controlGap,
-    ),
-    child: Row(
-      children: [
-        Text('Tasks', style: DesktopChrome.text(medium: true)),
-        if (_moveError case final error?) ...[
-          const SizedBox(width: grid.AppDesktop.groupGap),
-          Flexible(
-            child: Text(
-              error,
-              key: const ValueKey('super-tasks-move-error'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.metadata(),
-            ),
-          ),
-        ],
-        const Spacer(),
-        DesktopPill(
-          key: const ValueKey('super-tasks-layout-board'),
-          label: 'Board',
-          selected: _layout == _Layout.board,
-          onPressed: () => _choose(layout: _Layout.board),
-        ),
-        const SizedBox(width: grid.AppDesktop.listRowGap),
-        DesktopPill(
-          key: const ValueKey('super-tasks-layout-list'),
-          label: 'List',
-          selected: _layout == _Layout.list,
-          onPressed: () => _choose(layout: _Layout.list),
-        ),
-        const SizedBox(width: grid.AppDesktop.listRowGap),
-        DesktopPill(
-          key: const ValueKey('super-tasks-layout-members'),
-          label: 'Members',
-          selected: _layout == _Layout.members,
-          tooltip: 'Tasks by crew member',
-          onPressed: () => _choose(layout: _Layout.members),
-        ),
-        const SizedBox(width: grid.AppDesktop.groupGap),
-        DesktopPill(
-          key: const ValueKey('super-tasks-mine'),
-          label: 'Mine',
-          selected: _mine,
-          tooltip: 'Only the tasks you asked for',
-          onPressed: () => _choose(mine: !_mine),
-        ),
-        const SizedBox(width: grid.AppDesktop.controlGap),
-        SizedBox(
-          width: _searchWidth,
-          child: TextField(
-            key: const ValueKey('super-tasks-search'),
-            onChanged: (query) => setState(() => _query = query.trim()),
-            textInputAction: TextInputAction.search,
-            style: grid.kFieldTextStyle,
-            decoration: InputDecoration(
-              hintText: 'Search',
-              isDense: true,
-              prefixIcon: Icon(
-                AppIcons.search,
-                size: grid.kFieldIconSize,
-                color: grid.AppPalette.textFaint,
-              ),
-            ),
-          ),
-        ),
-      ],
-    ),
+  /// The view's own bar: Board, List or Members, Mine and Search, with the
+  /// page's own header and icons when the Board page hands them over.
+  Widget _bar() => SuperTabTasksBar(
+    layout: _layout,
+    mine: _mine,
+    moveError: _moveError,
+    leading: widget.barLeading,
+    trailing: widget.barTrailing,
+    onLayout: (layout) => _choose(layout: layout),
+    onMine: () => _choose(mine: !_mine),
+    onQuery: (query) => setState(() => _query = query),
   );
 
-  static const _searchWidth = 220.0;
   static const _columnGap = grid.AppDesktop.groupGap;
 
   Widget _heading(SuperTabTaskColumn column, int count, {bool? folded}) {

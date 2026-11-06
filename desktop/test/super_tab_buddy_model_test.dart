@@ -186,8 +186,8 @@ void main() {
   final picker = find.byKey(const ValueKey('super-buddy-model'));
   Finder inPicker(Finder f) => find.descendant(of: picker, matching: f);
   Finder row(String label) => find.widgetWithText(AppMenuItem, label);
-  const rest =
-      'Claude on Kens-MacBook · reads all your projects · only you can read this chat';
+  // The line names where the Buddy runs; the rest shows on hover.
+  const rest = 'Claude on Kens-MacBook';
   const footer =
       'What your Buddy reads and writes goes to the machine or API that serves the model you pick.';
 

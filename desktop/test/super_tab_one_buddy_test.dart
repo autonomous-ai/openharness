@@ -175,8 +175,16 @@ void main() {
         await tester.tap(buddyRow);
         await tester.pumpAndSettle();
         expect(c.selectedId, 'swarm-buddy-peer');
-        // Its chat says it reads every project, and only its person reads it.
-        expect(find.textContaining('reads all your projects'), findsOneWidget);
+        // Its chat says it reads every project, and only its person reads
+        // it: on hover, under the line that names where it runs.
+        expect(
+          find.byWidgetPredicate(
+            (w) =>
+                w is Tooltip &&
+                (w.message ?? '').contains('reads all your projects'),
+          ),
+          findsOneWidget,
+        );
         await close(tester, c);
       },
     );

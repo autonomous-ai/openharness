@@ -584,6 +584,9 @@ class SuperTabBuddyBar extends StatelessWidget {
   /// removed.
   static const _heldSwitchReach = 100;
 
+  /// How long the pointer rests on the line before its detail shows.
+  static const _detailWait = Duration(milliseconds: 400);
+
   /// Whether [agent]'s last switch failed because it must be started again:
   /// its newest system line in this chat says so, and no switch is under way.
   /// Its machine writes that line as the Buddy itself, so a later line (a
@@ -670,12 +673,19 @@ class SuperTabBuddyBar extends StatelessWidget {
     final project = c.snapshot!.projects
         .where((p) => p.id == chat.projectId)
         .firstOrNull;
-    final access = agent.machineOwnerId == c.accountId
+    final mine = agent.machineOwnerId == c.accountId;
+    final access = mine
         ? 'only you can read this chat'
         : '${buddyPersonName(c, agent.machineOwnerId)} can see its terminal';
-    final where = [
+    final place = [
       '${buddyEngineName(agent.engine)} on $machine',
       if (project != null) '#${project.name}',
+    ];
+    // The line says where the Buddy runs; the rest shows on hover (Huy,
+    // 2026-11-06). Another person who can see its terminal always shows.
+    final where = [...place, if (!mine) access].join(' · ');
+    final detail = [
+      ...place,
       // The one Buddy for the whole Swarm (spec 2026-10-31-one-buddy-per-swarm).
       if (chat.isSwarmBuddyChat) 'reads all your projects',
       access,
@@ -693,11 +703,16 @@ class SuperTabBuddyBar extends StatelessWidget {
           // The one Buddy switches between its person's subscription and a
           // model shared in the Swarm (task #2354); a project's Buddy cannot.
           if (chat.isSwarmBuddyChat)
-            BuddyModelLine(
-              controller: c,
-              agent: agent,
-              machine: machine,
-              rest: where,
+            Tooltip(
+              key: const ValueKey('super-buddy-detail'),
+              message: detail,
+              waitDuration: _detailWait,
+              child: BuddyModelLine(
+                controller: c,
+                agent: agent,
+                machine: machine,
+                rest: where,
+              ),
             )
           else if (project?.isPrivate == true)
             Text.rich(
@@ -721,7 +736,12 @@ class SuperTabBuddyBar extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             )
           else
-            Text(where, style: DesktopChrome.metadata()),
+            Tooltip(
+              key: const ValueKey('super-buddy-detail'),
+              message: detail,
+              waitDuration: _detailWait,
+              child: Text(where, style: DesktopChrome.metadata()),
+            ),
           if (offer)
             Row(
               key: const ValueKey('super-buddy-start-again'),

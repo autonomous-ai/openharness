@@ -62,7 +62,14 @@ void chatEdgeTests({ChatEdgeShot? shot}) {
           ),
         );
         await tester.pumpAndSettle();
-        expect(find.textContaining('reads all your projects'), findsOneWidget);
+        expect(
+          find.byWidgetPredicate(
+            (w) =>
+                w is Tooltip &&
+                (w.message ?? '').contains('reads all your projects'),
+          ),
+          findsOneWidget,
+        );
 
         // Read back part way, so a message straddles the top of the list.
         final list = find.byKey(

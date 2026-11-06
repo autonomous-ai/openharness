@@ -964,8 +964,10 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('Wren · Your Buddy'), findsOneWidget);
+        // Where it runs on the line; who reads the chat on hover.
+        expect(find.text('Claude on Kens-MacBook · #Pilot'), findsOneWidget);
         expect(
-          find.text(
+          find.byTooltip(
             'Claude on Kens-MacBook · #Pilot · only you can read this chat',
           ),
           findsOneWidget,

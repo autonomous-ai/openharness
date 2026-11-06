@@ -34,32 +34,50 @@ Future<void> _settle(WidgetTester tester) async {
 
 Finder _key(String k) => find.byKey(ValueKey(k));
 
+/// The Board's Swarm: project lead with its chat, a task with a card, and the
+/// owner's Buddy chat there; with [buddy], a Buddy running in it.
+ConversationServer boardSwarm({bool buddy = false}) {
+  final server = swarm();
+  server.append('The project chat line nobody should see');
+  final conversations = (server.state['conversations'] as List)
+      .cast<Map<String, dynamic>>();
+  conversations.add({
+    ...conversationFixture('buddy-owner-lead', 'Buddy'),
+    'kind': 'buddy',
+    'projectId': 'lead',
+    'buddyOwnerId': 'owner',
+    'agentIds': <String>[if (buddy) 'wren'],
+  });
+  if (buddy) {
+    (server.state['agents'] as List).add({
+      'id': 'wren',
+      'name': 'Wren',
+      'projectId': 'lead',
+      'buddyOf': {'personId': 'owner', 'generation': 'fixture'},
+      'machineId': 'studio',
+      'harnessId': 'h-wren',
+      'contributorId': 'owner',
+      'machineOwnerId': 'owner',
+      'confidential': true,
+      'configuration': {'engine': 'claude', 'model': 'default'},
+    });
+  }
+  conversations.firstWhere((g) => g['id'] == 'offline')
+    ..['number'] = 42
+    ..['assignment'] = {'id': 'a1', 'agentId': 'kestrel', 'status': 'working'};
+  server.append('Working on the fix.', conversationId: 'offline');
+  return server;
+}
+
 void main() {
   Future<(SuperTabController, ConversationServer)> show(
     WidgetTester tester, {
     LocalKeyValueStore? store,
+    bool buddy = false,
   }) async {
     await tester.binding.setSurfaceSize(const Size(1500, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final server = swarm();
-    server.append('The project chat line nobody should see');
-    final conversations = (server.state['conversations'] as List)
-        .cast<Map<String, dynamic>>();
-    conversations.add({
-      ...conversationFixture('buddy-owner-lead', 'Buddy'),
-      'kind': 'buddy',
-      'projectId': 'lead',
-      'buddyOwnerId': 'owner',
-      'agentIds': <String>[],
-    });
-    conversations.firstWhere((g) => g['id'] == 'offline')
-      ..['number'] = 42
-      ..['assignment'] = {
-        'id': 'a1',
-        'agentId': 'kestrel',
-        'status': 'working',
-      };
-    server.append('Working on the fix.', conversationId: 'offline');
+    final server = boardSwarm(buddy: buddy);
     final c = server.controller(
       account: 'owner',
       initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
@@ -123,8 +141,9 @@ void main() {
   testWidgets("a card's chat is flat: its thread replies show inline, in time "
       'order, with no thread line', (tester) async {
     final (c, server) = await show(tester);
-    final root = server.messages
-        .lastWhere((m) => m['conversationId'] == 'offline')['id'] as String;
+    final root =
+        server.messages.lastWhere((m) => m['conversationId'] == 'offline')['id']
+            as String;
     server.append('A reply in its thread.', conversationId: 'offline');
     server.messages.last['thread'] = root;
     await tester.runAsync(c.refresh);
@@ -156,7 +175,10 @@ void main() {
     await tester.tap(_key('super-board-tab-chat'));
     await _settle(tester);
     expect(c.selectedId, 'lead');
-    expect(find.text('The project chat line nobody should see'), findsOneWidget);
+    expect(
+      find.text('The project chat line nobody should see'),
+      findsOneWidget,
+    );
     expect(_key('super-tasks-lead'), findsNothing);
     await tester.tap(_key('super-board-tab-board'));
     await _settle(tester);
@@ -203,5 +225,52 @@ void main() {
     await _settle(tester);
     expect(_key('super-group-lead'), findsOneWidget);
     await end(tester, again);
+  });
+
+  testWidgets('the Buddy pane beside the Board has its options: Remove is '
+      'one menu away (Huy, 2026-11-06)', (tester) async {
+    final (c, _) = await show(tester, buddy: true);
+    await tester.tap(_key('super-group-lead'));
+    await _settle(tester);
+    final options = find.descendant(
+      of: _key('super-board-chat'),
+      matching: find.byTooltip('Buddy options'),
+    );
+    expect(options, findsOneWidget);
+    await tester.tap(options);
+    await _settle(tester);
+    expect(find.text('Remove Buddy'), findsOneWidget);
+    expect(find.text('Restart Buddy…'), findsOneWidget);
+    expect(find.text('Rename Buddy…'), findsOneWidget);
+    await end(tester, c);
+  });
+
+  testWidgets('with room, the Board has one row above its lanes: the header, '
+      'the layout, Mine, Search and the Buddy icon (Huy, 2026-11-06)', (
+    tester,
+  ) async {
+    final (c, _) = await show(tester);
+    await tester.tap(_key('super-group-lead'));
+    await _settle(tester);
+    await tester.tap(_key('super-pane-left-toggle'));
+    await _settle(tester);
+    await tester.tap(_key('super-pane-right-toggle'));
+    await _settle(tester);
+    final row = tester.getCenter(_key('super-pane-left-toggle')).dy;
+    for (final key in [
+      'super-tasks-layout',
+      'super-tasks-mine',
+      'super-tasks-search',
+      'super-pane-right-toggle',
+      'super-board-tab-board',
+    ]) {
+      expect(
+        tester.getCenter(_key(key)).dy,
+        moreOrLessEquals(row),
+        reason: key,
+      );
+    }
+    expect(find.text('Tasks'), findsNothing, reason: 'the header names it');
+    await end(tester, c);
   });
 }
