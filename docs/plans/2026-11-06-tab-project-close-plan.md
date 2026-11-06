@@ -17,11 +17,14 @@ through Harness).
   marker stored, and covers tab projects made before. A repo project (`personal-repo-`, or any with a repository), another
   Swarm, another person, or an agent: refused, in the words a missing project gets.
 - **Empty:** every conversation of the project, dormant ones loaded (the command names its project, as `project.delete`
-  does), has `lastMessageSequence` 0. Then it is deleted exactly as `project.delete` deletes (its agents, starts, machines'
+  does), has `lastMessageSequence` 0, its instructions are still the built-in first revision, and it has no rules record (read
+  in the same write; unreadable counts as written). What the person wrote without a message is theirs (security review 2,
+  Phonecheck2). Then it is deleted exactly as `project.delete` deletes (its agents, starts, machines'
   lists). Otherwise the project is marked `archived: true` and each of its conversations archived, its Lead chat included,
   and its agents leave; posts there are then refused (store.ts: an archived conversation is not written).
 - **Atomic:** the check and the delete are one write. A message written meanwhile changes the same conversation part, so the
-  two writes conflict and the command runs again on the new state, which archives instead.
+  two writes conflict and the command runs again on the new state, which archives instead. So does an instructions save (it
+  changes the project's part) and a rules save (tested landing during the close).
 - **Idempotent:** Desktop sends it under one operation id from every computer: the receipt replays the first answer
   (`result.outcome`: `deleted` or `archived`).
 
