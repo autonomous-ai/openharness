@@ -33,6 +33,21 @@ function fixture() {
 }
 
 describe('a handed task opens its review steps', () => {
+  // Task #3964 (review of PR #3436): the Ready that hands out review steps follows the project's machine rules too.
+  it('hands no review step to a Reviewer on a machine where no Reviewer runs, and gives it to one elsewhere', () => {
+    const rules = { projectRules: { revision: 1, rules: { ...SEED_RULES, machines: [{ machineIds: ['host'], why: 'Its Codex defaults to a local model', noReviews: true as const }] } } }
+    const alone = fixture()
+    alone.add('rev-local', alone.task, 'Reviewer')
+    alone.ready(['docs/a.md'], 'abc1234', true, rules)
+    expect(alone.steps()).toEqual([{ name: 'Review', agent: null, status: null }])
+    const f = fixture()
+    f.add('rev-local', f.task, 'Reviewer')
+    const elsewhere = f.run({ type: 'agent.add', conversationId: f.task, machineId: 'other', harnessId: 'rev-other', name: 'rev-other', configuration: opus,
+      lead: false, roleName: 'Reviewer' } as Command, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
+    f.ready(['docs/a.md'], 'abc1234', true, rules)
+    expect(f.steps()).toEqual([{ name: 'Review', agent: elsewhere, status: 'working' }])
+  })
+
   it('a pull request touching sign-in code opens two security reviews, each to a different free Reviewer, never the Engineer', () => {
     const f = fixture()
     const a = f.add('rev-a', f.task, 'Reviewer'), b = f.add('rev-b', f.task, 'Reviewer')
@@ -48,6 +63,36 @@ describe('a handed task opens its review steps', () => {
     // Task #3540: the verdict it asks for counts only at the head and base it names (#3394).
     expect(step.brief).toContain('at the pull request head (whole commit id) and base branch you read')
     expect(step.checks).toHaveLength(1)
+  })
+
+  it('puts each PR history result in both security briefs and refreshes active and finished steps', () => {
+    const f = fixture()
+    f.add('rev-a', f.task, 'Reviewer'); f.add('rev-b', f.task, 'Reviewer')
+    const head = 'a'.repeat(40), next = 'b'.repeat(40)
+    const history = (head: string, productionLines: number) => ({ head, planFirst: 'pass' as const, testBeforeCode: 'pass' as const,
+      productionLines, totalLines: productionLines + 7, commits: 3, merges: 0, missingTests: [] })
+    const ready = (at: string, lines: number) => f.ready(['backend/src/routes/auth.ts'], at, true, { pullRequestFiles: {
+      urls: [PR], head: at, files: ['backend/src/routes/auth.ts'], heads: [{ url: PR, head: at, base: 'main', history: history(at, lines) }] } })
+    ready(head, 12)
+    const [first, second] = stepsOf(f.state, f.task)
+    for (const step of [first!, second!]) {
+      expect(step.brief).toContain('Plan first: pass')
+      expect(step.brief).toContain('Test before code: pass')
+      expect(step.brief).toContain('12 production lines')
+      expect(step.brief).toContain('does not prove a test failed')
+    }
+    first!.brief += '\nKeep this manual instruction.'
+    f.run({ type: 'work.status', conversationId: first!.id, assignmentId: first!.assignment!.id, status: 'done', result: 'No' } as Command, f.as(first!.assignment!.agentId))
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'Fixing' } as Command, f.as(f.dev))
+    ready(next, 30)
+    expect(stepsOf(f.state, f.task).find(s => s.id === first!.id)!.brief).toContain('Keep this manual instruction.')
+    for (const step of stepsOf(f.state, f.task)) {
+      expect(step.brief).toContain('30 production lines')
+      expect(step.brief).not.toContain('12 production lines')
+      expect(step.brief).toContain(next)
+      expect(step.brief).not.toContain(head)
+      expect(step.brief!.match(/PR history checks/g)).toHaveLength(1)
+    }
   })
 
   it('a docs pull request opens one read', () => {
