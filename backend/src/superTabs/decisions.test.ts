@@ -130,6 +130,22 @@ describe('explicit decision deadlines', () => {
     expect(needs.messages.find(m => m.source?.crewNeed)?.source?.crewNeed).toMatchObject({ defaultAt, recommended: 1 })
   })
 
+  it('requires 15 minutes for a person to see the ask, including needs-human and PM-routed asks', () => {
+    const at = (ms: number) => new Date(ms).toISOString()
+    for (const delta of [-1, 0, 15 * 60_000 - 1]) {
+      const s = swarm()
+      expect(() => s.run({ type: 'decision.ask', conversationId: s.group, personId: 'peer', questions: [{ ...question('Ship when?'), defaultAt: at(1000 + delta) }] }, asAgent(s.lead)))
+        .toThrow(expect.objectContaining({ code: 'INVALID_DECISION' }))
+      expect(() => s.run({ type: 'decision.ask', conversationId: s.group, personId: 'peer', questions: [{ ...question('Ship when?'), defaultAt: at(1000 + delta) }] }, asAgent(s.worker)))
+        .toThrow(expect.objectContaining({ code: 'INVALID_DECISION' }))
+      expect(() => s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'needs_human', hold: HOLD, result: 'Ship when?',
+        ask: { personId: 'peer', options: ['Today', 'Tomorrow'], recommended: 0, unblocks: 'Release', defaultAt: at(1000 + delta) } }, asAgent(s.worker)))
+        .toThrow(expect.objectContaining({ code: 'INVALID_DECISION' }))
+    }
+    const s = swarm()
+    expect(() => s.run({ type: 'decision.ask', conversationId: s.group, personId: 'peer', questions: [{ ...question('Ship when?'), defaultAt: at(1000 + 15 * 60_000) }] }, asAgent(s.lead))).not.toThrow()
+  })
+
   it('refuses an invalid deadline and keeps deadline-free legacy callers valid', () => {
     const s = swarm()
     const send = (at?: string) => ({ type: 'decision.ask', conversationId: s.group, personId: 'peer',

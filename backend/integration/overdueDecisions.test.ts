@@ -132,6 +132,19 @@ describe('timed recommendation defaults', () => {
     for (const id of [withdrawn, reflection]) expect((await f.row(id)).answeredAt).toBeNull()
   })
 
+  it('withdraws permanently unavailable due rows so they cannot starve fresh or legacy questions', async () => {
+    const f = await swarm()
+    const gone = [await f.ask(HOUR, at(-3)), await f.ask(HOUR, at(-2))]
+    for (const id of gone) await db.superTabDecision.update({ where: { id }, data: { personId: '400000000000000000000099' } })
+    const due = await f.ask(HOUR, at(0)), legacy = await f.ask(25 * HOUR)
+    // A small cap models a full queue of permanently unanswerable rows. Legacy work gets its share immediately.
+    await f.store.leaveOverdueDecisions(NOW, 2)
+    expect((await f.row(legacy)).overdue).toBe(true)
+    for (let i = 0; i < 2; i++) await f.store.leaveOverdueDecisions(NOW, 2)
+    for (const id of gone) expect(await f.row(id)).toMatchObject({ withdrawn: true, answeredAt: new Date(NOW), choice: null })
+    expect((await f.row(due)).defaulted).toBe(true)
+  })
+
   it('uses the deadline index without scanning future, legacy or answered noise', async () => {
     const f = await swarm()
     for (let i = 0; i < 10; i++) await f.ask(HOUR, at(HOUR + i))
