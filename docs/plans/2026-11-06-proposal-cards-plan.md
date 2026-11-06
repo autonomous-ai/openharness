@@ -16,22 +16,22 @@
 - Identity is the consenting person and membership generation plus sending Buddy id, never the machine owner. Preserve existing exact-word consent and attachment checks.
 - Every current member, including viewers, may propose and answer questions addressed to them. Only the current project PM decides, asks or merges. Only entitled people originate P0/hotfix proposals.
 - Decisions and answers are recorded once. A late answer is visible but does not replace an applied answer/default. Explicit person consent never defaults.
-- Use indexed bounded reads, existing changed-part delivery and per-card transaction guards; no whole-Board polling.
+- Use indexed bounded reads, existing changed-part delivery and per-card transaction guards (plus existing head guard for shared rights); no whole-Board polling.
 - Run affected unit/importer tests locally. Full backend and four integration shards run in PR CI. Never touch a real CLI sign-in.
 - Before Ready, record failing-test commits and observed red/green evidence in a PR comment. Require two independent security reviews.
 
 ## Design
 
 - **Growth:** Each card has at most 20 questions and 50 proposers/merged cards; refuse overflow rather than discard history. Proposal text fields and evidence are bounded. Full discussion/decision history uses existing message rows, never an unbounded embedded log. Declined and merged cards are archived/history immediately; shipped cards retain the existing seven-day Board/history policy. Card history remains until project/Swarm deletion, as existing tasks do.
-- **Concurrency:** Version-guard the card, both cards of a merge and its flattened merged sources, the current membership and project/coordinator rights. Existing operation receipts make retries once-only. Revisit clears the current Later decision but its message remains in history.
-- **Read cost:** Single named-card lookups use the existing unique key index; bounded merged source lookups use that same index. PM gets new proposal/answer messages through existing deliveries, in priority order. Existing part changes expose metadata to clients. Due work uses a bounded `proposalDueAt` range, including dormant cards; no scan of cards or messages.
+- **Concurrency:** Version-guard the card, both cards of a merge and its flattened merged sources, the current membership and project/coordinator rights. Existing operation receipts make retries once-only. Revisit clears the current Later decision but its message remains in history. Proposal commands retain the existing Swarm head guard to serialize project rights with membership changes; timer writes guard changed cards and the relevant current members/coordinator.
+- **Read cost:** Single named-card lookups use the existing unique key index; bounded merged source lookups use that same index. PM gets new proposal/answer messages through existing deliveries, in priority order. Optional `SuperTabDelivery.inputPriority` plus `[tabId,agentId,status,inputPriority,createdAt]` supports the first 100 prioritized rows even beyond an old backlog; union with the oldest 100 supports old rows without that field. Filter current rights before returning at most 100 inputs; source authorization reads up to 200 message ids in one primary-key batch. Existing part changes expose metadata to clients. Due work uses a bounded `proposalDueAt` range, including dormant cards; no scan of cards or messages.
 - **Scale:** Bounds stay fixed at ten times the people. Record counts and decision/answer wait durations without content or ids. Pending proposals carry a due time; the owner sees an overdue mark on the card and a needs-you notice. The indexed worker batch and elapsed metrics expose lag.
-- **Compatibility:** Extend JSON metadata/commands; existing clients ignore optional metadata. No new conversation kind. Legacy buddy.propose keeps its old schema/meaning unless the destination is switched; switched proposals must supply why/doneWhen/evidence. Rollout switch is owned by #3819.
-- **Migration/rollback:** Export `importLegacyProposal(state, project, ask, now)` where ask is `{messageId,conversationId,personId,text,at}`. Stable project/message-derived card id is idempotent; migration must load that id before writing and clear the old ask only after creating it. It preserves original words as a legacy proposal and does not fabricate consent or missing details. #3819 wires the helper when both changes are available. Reverting the switch leaves cards intact; reverting the backend leaves optional data readable and the due index harmless.
+- **Compatibility:** Extend JSON metadata/commands; existing clients ignore optional metadata. No new conversation kind. Legacy buddy.propose keeps its old schema/meaning unless the destination is switched; switched proposals must supply why/doneWhen/evidence. Rollout switch is owned by #3819. Switching back restores ordinary chat and old proposal creation; decisions, answers and clocks for already stored cards continue so rollback does not strand questions.
+- **Migration/rollback:** Export `importLegacyProposal(state, project, ask, now)` where ask is `{messageId,conversationId,personId,text,at,generation?}`. Stable project/message-derived card id is idempotent; migration must load that id before writing and clear the old ask only after creating it. It preserves original words as a legacy proposal and does not fabricate consent or missing details. The store wires it to #3819’s switch and worker: read at most 100 still-owed originals by message id, verify their original author generation, public project audience and unchanged words, and leave missing/inaccessible asks owed. No invented author/body or message-body read from the snapshot. Reverting the switch leaves cards intact; reverting the backend leaves optional data readable and the due index harmless.
 - **Audience/identity:** Current project membership checked before receipt replay and before application; merged proposers retain generation-bound identities. Buddy answers require the sender identity on that card (or its person's current default after removal) and a question to that person; no arbitrary card posting or foreign-project reads. Viewer exceptions apply only to these commands.
 - **Failure:** Named refusals for missing inputs, stale membership, duplicate decisions/answers, bounds and unavailable Buddy routing. At the proposal deadline mark overdue and notify the current owner, once. Explicit-consent deadlines mark overdue without answering. Worker failures use existing logged retry behavior.
 - **Platforms:** Server-only Linux runtime; contract consumed by Desktop macOS/Windows/Linux, web, iOS and Android. No process or UI changes.
-- **Storage/index scope:** The single optional due-time column/index in backend/prisma/schema.prisma supports this task's timed questions; all domain code remains under backend/src/superTabs. No new collection or production data write in implementation.
+- **Storage/index scope:** Optional `SwarmGroup.proposalDueAt` and `[deleted,proposalDueAt,tabId,key]` support dormant timers; optional `SuperTabDelivery.inputPriority` and its index support bounded urgent delivery. Both use existing collection lifecycles (card history retained; delivery TTL unchanged). These columns/indexes in backend/prisma/schema.prisma are the only storage additions; all domain code remains under backend/src/superTabs. No new collection or production data write in implementation.
 
 ## Review Focus
 
@@ -47,10 +47,10 @@
 
 **Interfaces:** `ProposalRecord` on `Conversation.proposal`; `proposal.create {projectId,title,text,goal,why,doneWhen,evidence,priority}` for people; extend `buddy.propose` with why/doneWhen/evidence and P0–P3/hotfix priorities on switched projects only. `importLegacyProposal(state,project,ask,now): string` and `legacyProposalId(projectId,messageId): string`. New card ids are stable from command operation ids. `boardMode?: true` is shared with #3819.
 
-- [ ] Write/commit tests that create a card as a member/viewer, preserve consenting Buddy identity/exact words, reject incomplete and unauthorized/private/P0 proposals, and preserve legacy output when not switched. Assert no task dispatch before acceptance. Test stable legacy import without inventing structured content.
-- [ ] Run `cd backend && npm test -- src/superTabs/proposalCards.test.ts`; observe feature failures.
-- [ ] Implement schema/domain and command integration with bounded metadata and the existing task card/change feed. Use the shared owner/top-decider P0 rule from #3819 when available; keep its identical semantics otherwise.
-- [ ] Run that test and affected Buddy/queue/dispatch/light tests, then typecheck; commit fix and push.
+- [x] Write/commit tests that create a card as a member/viewer, preserve consenting Buddy identity/exact words, reject incomplete and unauthorized/private/P0 proposals, and preserve legacy output when not switched. Assert no task dispatch before acceptance. Test stable legacy import without inventing structured content.
+- [x] Run `cd backend && npm test -- src/superTabs/proposalCards.test.ts`; observe feature failures.
+- [x] Implement schema/domain and command integration with bounded metadata and the existing task card/change feed. Use the shared owner/top-decider P0 rule from #3819 when available; keep its identical semantics otherwise.
+- [x] Run that test and affected Buddy/queue/dispatch/light tests, then typecheck; commit fix and push.
 
 ## Task 2: Decisions, scoped questions and duplicate merge
 
@@ -58,10 +58,10 @@
 
 **Interfaces:** `proposal.decide {conversationId,decision:accept|reshape|later|no,reason,task?,checks?,revisitAt?}`; accept/reshape require the accepted task contract and checks. `proposal.ask {conversationId,personId,question,defaultAnswer,deadline,requiresConsent?}`; `proposal.answer {conversationId,questionId,text}`; `proposal.merge {conversationId,intoConversationId,reason}`. `applyProposalCommand` mutates the transaction state and returns MessageDrafts/result. Use #3818's `buddyFor(state,person,senderBuddyId)` for notices and generation-safe fallback.
 
-- [ ] Write/commit tests for all four decisions/reasons, same-card task conversion, duplicate decision refusal, PM-only rights, own-card Buddy answers, viewer answers, removed sender fallback, late/second answers, merge attribution/cycle/cross-project/overflow guards and notifications to every proposer.
-- [ ] Run focused tests; observe red.
-- [ ] Implement command handlers, narrow Buddy exception, per-card/member/coordinator guards and notices only for decided/needs-you/shipped. Store full history in card messages; flatten duplicate links in one bounded transaction.
-- [ ] Run focused tests and affected authorization/Buddy/news/touches tests, typecheck; commit fix and push.
+- [x] Write/commit tests for all four decisions/reasons, same-card task conversion, duplicate decision refusal, PM-only rights, own-card Buddy answers, viewer answers, removed sender fallback, late/second answers, merge attribution/cycle/cross-project/overflow guards and notifications to every proposer.
+- [x] Run focused tests; observe red.
+- [x] Implement command handlers, narrow Buddy exception, per-card/member/coordinator guards and notices only for decided/needs-you/shipped. Store full history in card messages; flatten duplicate links in one bounded transaction.
+- [x] Run focused tests and affected authorization/Buddy/news/touches tests, typecheck; commit fix and push.
 
 ## Task 3: Timers, persistence and PM delivery boundary
 
@@ -69,13 +69,26 @@
 
 **Interfaces:** `proposalDueAt(record): number|null`; `advanceProposalCards(state,now): MessageDraft[]`; bounded `dueProposalCards(db,now,limit)` by the due index. Worker loads due cards/chats by named ids. Store commandGroups loads source/canonical/merged/Buddy chats by id, including dormant. PM input policy accepts proposal roots, answers and server notices only when switched; recheck on claim and viewer sender policy. Extend existing privacy-safe metrics with proposal event/wait values.
 
-- [ ] Write/commit tests for default-at-deadline exactly once, explicit consent, answer/expiry conflict, Later reentry, overdue owner notice, due cards after long inactivity/dormancy, persistence/delta visibility, revoked rights on receipt replay and delivery, ordinary chat suppressed only when switched, priority delivery ordering and index explain bounds.
-- [ ] Run focused unit/integration files; observe red.
-- [ ] Implement the timer and command/delivery loading paths with bounded indexed reads; maintain the due column on every card write. Keep existing worker and transaction retry behavior.
-- [ ] Run focused unit/importer tests and specific real-store integrations plus typecheck; record query explain and same-workload before/after cost. Commit fix and push.
+- [x] Write/commit tests for default-at-deadline exactly once, explicit consent, answer/expiry conflict, Later reentry, overdue owner notice, due cards after long inactivity/dormancy, persistence/delta visibility, revoked rights on receipt replay and delivery, ordinary chat suppressed only when switched, priority delivery ordering and index explain bounds.
+- [x] Run focused unit/integration files; observe red.
+- [x] Implement the timer and command/delivery loading paths with bounded indexed reads; maintain the due column on every card write. Keep existing worker and transaction retry behavior.
+- [x] Run focused unit/importer tests and specific real-store integrations plus typecheck; record query explain and same-workload before/after cost. Commit fix and push.
 
 ## Finish
 
-- [ ] Wire/test #3819 migration boundary once both helpers exist, without dropping asks. Keep dependency changes explicit in the PR.
-- [ ] Add red/green, validation/platform/index evidence in the PR; mark ready; preserve head during CI/review.
+- [x] Wire/test #3819 migration boundary once both helpers exist, without dropping asks. Keep dependency changes explicit in the PR.
+- [x] Add red/green, validation/platform/index evidence in the PR; mark ready; preserve head during CI/review.
 - [ ] Set task review status with exact head and PR. Two different security Reviewers independently review rights/legacy isolation. Fix Important/Critical findings test first; set done once reviews pass, with exact revision/evidence.
+
+## Implementation evidence
+
+- Task 1: tests `fe18324f4` failed 8/passed 4 before implementation `69a280f03`; 179 affected units and typecheck passed after.
+- Task 2: tests `637980493` failed 10/passed 12 before `78dd776e8`; 600 affected units and typecheck passed after.
+- Task 3: `751db914b` failed 5/passed 22 units; `6c18e1b20` failed 1/passed 2 integrations. Additional viewer/manual assignment, shipped-notice, notice-delivery and metric failures precede implementation `cedb46698`.
+- Shared switch migration: `3dc6c014a` failed 1/passed 6 integrations before `f2d9499ec`; all 7 passed after. P0 past 100-row backlog: `0fcaefdd3` failed 1/passed 7 before `fefb7acca`. Undecided manual start: `ed3159124` failed 1/passed 31 units before `58da9b468`.
+- Merged main at `b9c1a79c0`, #3819 at `34aae323d`, #3818 at `f5960398b`. Combined affected verification: 776 units in 16 files, 9 real-store checks in 2 files, and typecheck passed. The new multiple-Buddy overlap then had 2 observed behavior failures at `896fba119` (quiet card unavailable; overdue notice sent to wrong chat), fixed by `1555a55c5`.
+- Due query explain uses covered `IXSCAN { deleted: 1, proposalDueAt: 1, tabId: 1, key: 1 }`. Priority backlog read uses its intended index: 100 keys/docs/rows returned from 107 waiting rows.
+- Same workload, isolated Mongo, 100 source authorizations: per-row baseline 100 queries / 49.588 ms; primary-key batch 1 query / 1.167 ms, 100 keys/docs/returned. This is a source-read comparison, not a full-request latency claim.
+- Production statistics could not be collected: this Team environment has no read-only production environment file. Release owner must collect collection/index sizes and CPU/latency before/after the authorized schema release; no production writes performed here.
+
+- Final overlap verification at `1555a55c5`: 66 real-store checks across proposal cards, command loading and Swarm Buddy flows; 169 focused proposal/Buddy units; typecheck passed. Full component suites and all four integration shards remain PR CI responsibilities.
