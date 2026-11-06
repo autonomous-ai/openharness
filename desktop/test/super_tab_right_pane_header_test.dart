@@ -16,21 +16,41 @@ Finder key(String value) => find.byKey(ValueKey(value));
 
 void main() {
   setUpAll(() => loadCaptureFonts(shots));
-  testWidgets('a secondary Buddy subscription cannot switch the first Buddy', (tester) async {
+  testWidgets('a secondary Buddy subscription cannot switch the first Buddy', (
+    tester,
+  ) async {
     final server = swarm();
     server.state['agents'] = <Map<String, dynamic>>[
-      for (final id in ['first', 'second']) {
-        'id': id, 'name': id, 'machineId': 'mac', 'harnessId': id,
-        'contributorId': 'owner', 'buddyOf': {'personId': 'owner'},
-        'buddyScope': 'swarm', 'configuration': {'engine': 'claude'},
-      },
+      for (final id in ['first', 'second'])
+        {
+          'id': id,
+          'name': id,
+          'machineId': 'mac',
+          'harnessId': id,
+          'contributorId': 'owner',
+          'buddyOf': {'personId': 'owner'},
+          'buddyScope': 'swarm',
+          'configuration': {'engine': 'claude'},
+        },
     ];
     final c = server.controller(account: 'owner');
     await tester.runAsync(c.refresh);
-    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SizedBox(width: 280,
-      child: BuddyModelLine(controller: c,
-        agent: c.snapshot!.agents.firstWhere((a) => a.id == 'second'),
-        machine: 'Mac', rest: 'Claude · Mac', compact: true)))));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 280,
+            child: BuddyModelLine(
+              controller: c,
+              agent: c.snapshot!.agents.firstWhere((a) => a.id == 'second'),
+              machine: 'Mac',
+              rest: 'Claude · Mac',
+              compact: true,
+            ),
+          ),
+        ),
+      ),
+    );
     await tester.tap(find.text('Your subscription'));
     await tester.pumpAndSettle();
     expect(find.text('SHARED IN THIS SWARM'), findsNothing);

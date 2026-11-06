@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -8,13 +10,20 @@ import 'package:harness/super_tabs/view.dart';
 import 'super_tab_activity_lists_test.dart' show swarm;
 import 'super_tab_right_pane_row_test.dart' show buddy;
 import 'support/memory_key_value_store.dart';
+import 'support/capture.dart';
+import 'support/super_tab_fixture.dart';
 
 Finder key(String value) => find.byKey(ValueKey(value));
 
+final shots = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
+
 void main() {
+  setUpAll(() => loadCaptureFonts(shots));
   Future<SuperTabController> show(
     WidgetTester tester, {
     ValueChanged<SuperTabAgent>? terminal,
+    Brightness brightness = Brightness.light,
+    int cards = 0,
   }) async {
     await tester.binding.setSurfaceSize(const Size(1800, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -46,6 +55,20 @@ void main() {
         'configuration': {'engine': 'claude'},
       });
     }
+    for (var i = 0; i < cards; i++) {
+      (server.state['conversations'] as List).add(<String, dynamic>{
+        ...conversationFixture('chat-$i', 'Conversation $i'),
+        'projectId': 'lead',
+        'lastMessageSequence': 2,
+        'lastMainSequence': 2,
+      });
+    }
+    server.append('Here is the plan.', conversationId: 'plan', agent: true);
+    server.messages.last['author'] = {
+      'kind': 'agent',
+      'id': 'buddy-plan',
+      'name': 'plan',
+    };
     final c = server.controller(
       account: 'owner',
       initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
@@ -53,7 +76,7 @@ void main() {
     await tester.runAsync(c.refresh);
     await tester.pumpWidget(
       MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.light),
+        theme: grid.buildAppTheme(brightness: brightness),
         home: Scaffold(
           body: SuperTabView(
             controller: c,
@@ -121,7 +144,31 @@ void main() {
       await tester.tap(key('super-buddy-menu-terminal'));
       await tester.pumpAndSettle();
       expect(opened, ['buddy-plan', 'buddy-code']);
+      await tester.tap(key('super-buddy-tab-plan'));
+      await tester.runAsync(() => c.loadMessages('plan'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('plan').last);
+      await tester.pumpAndSettle();
+      expect(opened, ['buddy-plan', 'buddy-code', 'buddy-plan']);
       await end(tester, c);
     },
   );
+  for (final brightness in Brightness.values) {
+    testWidgets('Board avatar row screenshot in ${brightness.name}', (
+      tester,
+    ) async {
+      if (shots == null) return;
+      final c = await show(tester, brightness: brightness, cards: 8);
+      for (var i = 0; i < 8; i++) {
+        await tester.runAsync(() => c.select('chat-$i'));
+        await tester.pump();
+      }
+      await tester.runAsync(() => c.select('plan'));
+      await tester.pumpAndSettle();
+      expect(key('super-chat-overflow'), findsOneWidget);
+      expect(key('super-chat-unread-chat-0'), findsOneWidget);
+      await captureWindow(tester, shots, 'avatar-row-board-${brightness.name}');
+      await end(tester, c);
+    });
+  }
 }
