@@ -46,3 +46,14 @@ export function recordTeamSignedOut(deps: TeamSignedOutDeps = {
     deps.writeStatus(config.statusFile, { signIn: { state: 'signed-out', at: deps.now(), detail: TEAM_SIGNED_OUT_DETAIL } })
   } catch { /* the stop goes on; the next start writes it */ }
 }
+
+/**
+ * A revoke in order (core/main.ts `onRevoked`): [mark] signs the session out on disk, then [record] says so in the status file.
+ * Written together, an observer that ran while the mark waited for the refresh lock read the session as live and healed the
+ * status to signed-in (security review 2 of #3331): once marked, every observer reads it signed out. Recorded even when
+ * marking failed, as the stop goes on either way.
+ */
+export async function afterRevoke(mark: () => Promise<void>, record: () => void = () => recordTeamSignedOut()): Promise<void> {
+  await mark().catch(() => {})
+  record()
+}

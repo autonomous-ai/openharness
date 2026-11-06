@@ -3239,12 +3239,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     swarmDoors?.cards.reset()
     // Marked before the stop: the core that comes back must read it as signed out. The mark waits for a
     // refresh another process has under way, so that refresh's save cannot write over it.
-    // In a Harness Team account, its status file says so too, before the stop for good: the owner's card reads it there
-    // and offers Sign in again (#3684). Loaded only now; it writes nothing in an owner's own daemon.
-    const recorded = import('../team/observer.js').then(({ recordTeamSignedOut }) => recordTeamSignedOut(), () => {})
-    const marked = markSignedOut('revoked')
+    const mark = () => markSignedOut('revoked')
       .catch((error: unknown) => console.log(`[cli] could not mark the sign-in signed out (${error instanceof Error ? error.message : String(error)})`))
-    void Promise.all([recorded, marked]).finally(() => void shutdown('revoked'))
+    // In a Harness Team account, its status file says so too, once the mark is on disk and before the stop for good: the
+    // owner's card reads it there and offers Sign in again (#3684). Loaded only now; it writes nothing in an owner's own daemon.
+    void import('../team/observer.js').then(({ afterRevoke }) => afterRevoke(mark), () => mark())
+      .finally(() => void shutdown('revoked'))
   }
 
   // Mirror the machine's display name to disk so `harness status` (a separate process) can print it.
