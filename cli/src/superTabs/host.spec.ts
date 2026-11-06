@@ -995,6 +995,22 @@ describe('Super Tab native delivery handoff', () => {
       expect(prompt).toContain('In task #12 "Fix login" (conversation g12).\nYou are assigned task #12 "Fix login" (working).\n')
       expect(prompt.indexOf('You are assigned')).toBeLessThan(prompt.indexOf('Message message from'))
     })
+    // Task #3747 (anh Dee, 11-06: "i don't know which one you reply to which"): in a project that answers people in threads,
+    // a person's message is answered in its thread, and the rules say so; an agent's, and other projects', as before.
+    it('says --reply-to for a person\'s main-chat message in a project that answers in threads', async () => {
+      const THREADED = { ...SWARM, projects: [{ ...SWARM.projects[0], answersInThread: true }] }
+      const person = { kind: 'person', id: 'p1', name: 'Dee' }
+      const line = (prompt: string) => prompt.split('\n').find(l => l.startsWith('Reply there: '))!
+      const threaded = await delivered(wired({ author: person, text: 'Is login fixed?', thread: 'message' }, {}, () => THREADED).t)
+      expect(line(threaded)).toMatch(/ --reply-to 'message'$/)
+      expect(threaded).toContain('Answer every person\'s message in its own thread (--reply-to)')
+      expect(threaded).not.toContain('answered right below it (--answers)')
+      const agent = await delivered(wired({ author: { kind: 'agent', id: 'a0000000000000000000000b', name: 'Birch' }, text: 'Which branch is it on?', thread: 'message' }, {}, () => THREADED).t)
+      expect(line(agent)).toMatch(/ --answers 'message' --to 'a0000000000000000000000b'$/)
+      const plain = await delivered(wired({ author: person, text: 'Is login fixed?', thread: 'message' }).t)
+      expect(line(plain)).toMatch(/ --answers 'message'$/)
+      expect(plain).toContain('A message in the main chat is answered right below it (--answers)')
+    })
     // Task #3057 (Ken, 11-05): the reply line carried --to <sender>, and agents copied --to the PM into their own task, so
     // 29 of 55 acknowledgements still reached it. In its own task or step a coordinator's message gets the plain form.
     describe('the reply line to the coordinator in the reader\'s own task (#3057)', () => {
