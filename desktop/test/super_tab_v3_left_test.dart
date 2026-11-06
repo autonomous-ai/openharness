@@ -246,12 +246,18 @@ void main() {
     testWidgets('opening an agent opens its chat: a PM\'s project chat, a '
         'Regular agent\'s task', (tester) async {
       final selected = <String>[];
-      await show(tester, agents: mine, setup: agents, selected: selected);
+      final c = await show(
+        tester,
+        agents: mine,
+        setup: agents,
+        selected: selected,
+      );
       await tester.tap(key('super-agent-orion'));
       await tester.pump();
       await tester.tap(key('super-agent-kestrel'));
       await tester.pump();
       expect(selected, ['lead', 'offline']);
+      await tester.runAsync(c.flush);
     });
 
     testWidgets('an agent with no chat yet opens nothing and says why', (

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../state/app_state.dart';
@@ -17,6 +18,7 @@ import 'attention.dart';
 import 'controller.dart';
 import 'buddies.dart';
 import 'model.dart';
+import 'my_agents.dart';
 import 'personal_projects.dart' show PersonalProjects;
 import 'places.dart';
 import 'buddy_rows.dart';
@@ -26,6 +28,7 @@ import 'project_github.dart';
 import 'private_project_lock.dart';
 import '../widgets/laid_out_list.dart';
 import 'swarm_type.dart';
+import 'detail_dialog.dart';
 
 /// The reader's one Buddy for the whole Swarm, listed first among the projects
 /// as a channel (Dee, 10-31).
@@ -62,6 +65,7 @@ class ProjectSidebar extends StatelessWidget {
     this.onOpenBuddyChat,
     this.compact = false,
     this.board = false,
+    this.onNewAgent,
   });
   final SuperTabController controller;
 
@@ -70,6 +74,10 @@ class ProjectSidebar extends StatelessWidget {
 
   /// Desktop's Board layout (anh Dee, task #3787): no Threads row and no Buddy entry, the Buddy being the right pane.
   final bool board;
+
+  /// + New agent's choice, Regular or PM (Swarm v3, task #4118): the creation flow takes it from here. Without it the
+  /// section has no + .
+  final ValueChanged<SuperTabAgentKind>? onNewAgent;
   final ValueChanged<String> onSelect;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
@@ -594,6 +602,101 @@ class ProjectSidebar extends StatelessWidget {
     );
   }
 
+  /// My agents (Swarm v3, task #4118): the person's Buddy first, then the agents they brought, each with its face and name,
+  /// a crown after a PM's, the name bold while its chat has unread, and + New agent in the heading.
+  List<Widget> _myAgents(
+    BuildContext context,
+    SuperTabSnapshot? snapshot,
+    _SidebarReading reading,
+  ) {
+    if (snapshot == null) return const [];
+    final mine = [
+      for (final agent in superTabMyAgents(snapshot, controller.accountId))
+        if (agent.buddyOf == null) agent,
+    ];
+    return [
+      SuperTabSectionHeading(
+        key: const ValueKey('project-sidebar-agents'),
+        'My agents',
+        titleStyle: _headingStyle,
+        onAdd: controller.canWrite && onNewAgent != null
+            ? () => unawaited(_newAgent(context))
+            : null,
+        addTooltip: 'New agent',
+        endInset: 0,
+      ),
+      if (controller.oneBuddy)
+        ?_swarmBuddyRow()
+      else
+        ..._buddies([...snapshot.projects], reading),
+      for (final agent in mine) _agentRow(snapshot, agent),
+      const SizedBox(height: 16),
+    ];
+  }
+
+  Widget _agentRow(SuperTabSnapshot snapshot, SuperTabAgent agent) {
+    final chat = superTabAgentChat(snapshot, agent);
+    final name = snapshot.agentName(agent.id, fallback: agent.name);
+    return SuperTabBuddyRow(
+      key: ValueKey('super-agent-${agent.id}'),
+      agentId: agent.id,
+      name: name,
+      tooltip: chat == null ? '$name · no chat yet' : name,
+      crownKey: snapshot.isLead(agent.id)
+          ? ValueKey('super-agent-crown-${agent.id}')
+          : null,
+      status: _buddyMark(agent),
+      selected:
+          chat != null && !_paneCovered && controller.selectedId == chat.id,
+      unread: chat != null && controller.unreadShown(chat),
+      onTap: chat == null ? null : () => onSelect(chat.id),
+    );
+  }
+
+  /// + New agent: Regular or PM, and the creation flow takes the choice.
+  Future<void> _newAgent(BuildContext context) async {
+    final kind = await showAppDialog<SuperTabAgentKind>(
+      context: context,
+      builder: (context) => SuperTabDetailDialog(
+        title: 'New agent',
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final (kind, title, detail) in const [
+              (
+                SuperTabAgentKind.regular,
+                'Regular',
+                'Works on the tasks it is given, in any project.',
+              ),
+              (
+                SuperTabAgentKind.pm,
+                'PM',
+                'Names and starts a project, and directs its crew.',
+              ),
+            ])
+              InkWell(
+                key: ValueKey('super-new-agent-${kind.name}'),
+                onTap: () => Navigator.of(context).pop(kind),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: grid.AppDesktop.listRowGap,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title, style: DesktopChrome.control()),
+                      Text(detail, style: DesktopChrome.metadata()),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (kind != null) onNewAgent?.call(kind);
+  }
+
   /// The Buddy's activity mark, drawn as the Agents list draws an agent's.
   Widget? _buddyMark(SuperTabAgent agent) {
     final app = this.app;
@@ -763,6 +866,7 @@ class ProjectSidebar extends StatelessWidget {
                     ),
                 ],
                 const SizedBox(height: 20),
+                if (board) ..._myAgents(context, snapshot, reading),
                 SuperTabSectionHeading(
                   key: const ValueKey('project-sidebar-projects'),
                   'Projects',
