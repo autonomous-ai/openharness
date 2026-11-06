@@ -317,12 +317,14 @@ class _ThreadCardState extends State<_ThreadCard> {
           ),
         ),
         if (attention.followSupported)
-          quietDecisionAction(
-            key: ValueKey('super-thread-card-unfollow:$_key'),
-            label: 'Unfollow',
-            onPressed: attention.following.contains(_key)
-                ? null
-                : () => unawaited(attention.setFollow(t, false)),
+          SelectionContainer.disabled(
+            child: quietDecisionAction(
+              key: ValueKey('super-thread-card-unfollow:$_key'),
+              label: 'Unfollow',
+              onPressed: attention.following.contains(_key)
+                  ? null
+                  : () => unawaited(attention.setFollow(t, false)),
+            ),
           ),
       ],
     );
@@ -399,19 +401,21 @@ class _ThreadCardState extends State<_ThreadCard> {
             key: ValueKey('super-thread-card-older-failed:$_key'),
             style: DesktopChrome.control(),
           ),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton(
-            key: ValueKey('super-thread-card-more:$_key'),
-            onPressed: card.loadingOlder
-                ? null
-                : () => unawaited(widget.cards.expand(t)),
-            child: Text(
-              card.loadingOlder
-                  ? 'Loading replies…'
-                  : hidden == 1
-                  ? 'Show 1 more reply'
-                  : 'Show $hidden more replies',
+        SelectionContainer.disabled(
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              key: ValueKey('super-thread-card-more:$_key'),
+              onPressed: card.loadingOlder
+                  ? null
+                  : () => unawaited(widget.cards.expand(t)),
+              child: Text(
+                card.loadingOlder
+                    ? 'Loading replies…'
+                    : hidden == 1
+                    ? 'Show 1 more reply'
+                    : 'Show $hidden more replies',
+              ),
             ),
           ),
         ),
@@ -485,7 +489,9 @@ class _ThreadCardState extends State<_ThreadCard> {
                 children: [
                   ..._messages(card),
                   const SizedBox(height: grid.AppDesktop.controlGap),
-                  _replyBox(),
+                  // What was said is selectable; the card's controls are not
+                  // (task #3751), as the chat's composer is outside its selection.
+                  SelectionContainer.disabled(child: _replyBox()),
                   if (_alsoOffered)
                     Padding(
                       padding: const EdgeInsets.only(
@@ -493,14 +499,16 @@ class _ThreadCardState extends State<_ThreadCard> {
                       ),
                       child: Align(
                         alignment: Alignment.centerLeft,
-                        child: SuperTabComposerToggle(
-                          key: ValueKey('super-thread-card-also:$_key'),
-                          on: _alsoSend,
-                          label: _alsoLabel,
-                          hint: '$_alsoLabel as well as this thread',
-                          onChanged: _writable
-                              ? (on) => setState(() => _alsoSend = on)
-                              : null,
+                        child: SelectionContainer.disabled(
+                          child: SuperTabComposerToggle(
+                            key: ValueKey('super-thread-card-also:$_key'),
+                            on: _alsoSend,
+                            label: _alsoLabel,
+                            hint: '$_alsoLabel as well as this thread',
+                            onChanged: _writable
+                                ? (on) => setState(() => _alsoSend = on)
+                                : null,
+                          ),
                         ),
                       ),
                     ),
