@@ -56,6 +56,28 @@ const legacyDispatch = (value: unknown): unknown => {
   return { ...old, dispatch: SEED_DISPATCH, ...Array.isArray(old.lanes) && old.lanes.length === 0 ? { lanes: SEED_LANES } : {} }
 }
 
+/** A machine by its id, as the Swarm's Machines list names it: a Mac and its Harness Team account are two ids. */
+const machineId = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/, 'A machine id.')
+/** A machine rule its owners gave (project instructions, Routing › Machines; task #3964): kept here by machine id, never in
+ *  source, since people's machines and hours stay out of this public repository (River, 11-05). Each says why, in the words
+ *  people read, and at least one of: when the machine is away, the engines no agent runs there with, that no Reviewer runs
+ *  there, or the lanes whose work goes there first. machineRules.ts applies them. */
+const machineRuleSchema = z.object({
+  machineIds: z.array(machineId).min(1).max(20),
+  why: line(200),
+  /** On these weekdays (0 Sunday … 6 Saturday), between these local times, in its owner's time zone: nothing starts there. */
+  away: z.object({
+    days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+    windows: z.array(z.tuple([clock, clock]).refine(([from, to]) => from < to, 'An away window ends after it starts, the same day.')).min(1).max(6),
+    timeZone,
+  }).strict().optional(),
+  noEngines: z.array(z.enum(['claude', 'codex'])).min(1).max(2).optional(),
+  noReviews: z.literal(true).optional(),
+  /** Work of these lanes goes to this machine first, while an agent there takes it. */
+  first: z.object({ lanes: z.array(line(80)).min(1).max(MAX_LIST) }).strict().optional(),
+}).strict().refine(rule => !!(rule.away || rule.noEngines || rule.noReviews || rule.first),
+  'A machine rule says when the machine is away, which engines or Reviewers it refuses, or which lanes go there first.')
+
 export const projectRulesSchema = z.preprocess(legacyDispatch, z.object({
   /** When releases go out, in a local time of day; the end comes after the start, the same day. */
   releaseWindow: z.object({ start: clock, end: clock, timeZone }).strict()
@@ -85,8 +107,13 @@ export const projectRulesSchema = z.preprocess(legacyDispatch, z.object({
   dispatch: dispatchSchema,
   /** Lanes of work and the paths each owns. */
   lanes: distinct(z.object({ name: line(80), owns: z.array(line(400)).max(MAX_LIST) }).strict(), lane => lane.name, 'lane'),
+  /** The project's machine rules. Absent on a record from before them: none apply. */
+  machines: z.array(machineRuleSchema).max(MAX_LIST).optional(),
 }).strict().refine(rules => Buffer.byteLength(JSON.stringify(rules)) <= MAX_RULES_BYTES,
   `Project rules are at most ${MAX_RULES_BYTES / 1024} KB.`)
+  // A lane a machine rule names is one the record has, or the rule would never apply.
+  .refine(rules => (rules.machines ?? []).every(rule => (rule.first?.lanes ?? []).every(name =>
+    rules.lanes.some(lane => lane.name.toLowerCase() === name.toLowerCase()))), 'A machine rule names a lane this record has.')
   // The backend pause is a part of the release window (review of #3216): outside it, there is no release to pause.
   .refine(rules => {
     const pause = rules.releasePace.backendPause
@@ -94,6 +121,7 @@ export const projectRulesSchema = z.preprocess(legacyDispatch, z.object({
   }, 'The backend pause falls inside the release window.'))
 
 export type ProjectRules = z.infer<typeof projectRulesSchema>
+export type MachineRule = z.infer<typeof machineRuleSchema>
 
 /** [value] frozen all the way down: the seed is shared, so no reader may change it. */
 function deepFreeze<T>(value: T): T {
