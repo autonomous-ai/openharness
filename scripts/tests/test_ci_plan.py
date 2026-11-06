@@ -856,7 +856,11 @@ class VerifyReuseTests(ReuseFixture):
             with self.subTest(source=source):
                 main, plan = self.docs_fixture_reuse(source, suite, code)
                 self.assertEqual(list(plan["reused"]), [suite])
-                self.assertEqual(list(planner.verify_reuse(self.root, self.receipt(plan), main, self.evidence)), [suite])
+                try:
+                    verified = planner.verify_reuse(self.root, self.receipt(plan), main, self.evidence)
+                except ValueError as error:
+                    self.fail(f"fixture path must not refuse reuse: {error}")
+                self.assertEqual(list(verified), [suite])
 
     def test_an_actual_docs_read_in_a_fixture_source_still_refuses_reuse(self):
         for source, suite, code in [
