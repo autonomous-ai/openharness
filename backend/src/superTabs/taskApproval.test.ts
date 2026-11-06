@@ -143,6 +143,15 @@ describe('personal approval enforced before work', () => {
     f.runCommand({ type: 'work.assign', conversationId: card.id, agentId: f.candidate }, f.pm)
     expect(f.card(card.id).assignment?.agentId).toBe(f.candidate)
   })
+  it('cannot merge an approved Review proposal and lose its chosen agent or requester', () => {
+    const f = fixture(); f.mode('review'); f.propose()
+    const card = f.state.conversations.find(c => c.proposal)!
+    f.runCommand({ type: 'task.suggest', conversationId: card.id, agentId: f.candidate })
+    f.runCommand({ type: 'task.approve', conversationId: card.id })
+    const target = f.runCommand({ type: 'proposal.create', projectId: 'lead', title: 'Other', text: 'Other', goal: 'Other', why: 'Other',
+      doneWhen: 'Other', evidence: ['Reproduction'], priority: 'P2' }, owner).result.conversationId
+    expect(() => f.runCommand({ type: 'proposal.merge', conversationId: card.id, intoConversationId: target, reason: 'Same' }, f.pm)).toThrow()
+  })
   it('guards the person and selected agent against concurrent changes, and keeps approval in light loads', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
     f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate })
