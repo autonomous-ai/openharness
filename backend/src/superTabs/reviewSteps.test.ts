@@ -130,7 +130,7 @@ describe('a handed task opens its review steps', () => {
     const f = fixture()
     f.add('rev-a', f.task, 'Reviewer'); f.add('rev-b', f.task, 'Reviewer'); f.add('tst', f.task, 'Tester')
     f.ready(['backend/src/routes/auth.ts', 'desktop/lib/a.dart'])
-    expect(f.steps().map(s => s.name)).toEqual(['Security review 1', 'Security review 2', 'Test'])
+    expect(f.steps().map(s => s.name)).toEqual(['Security review 1', 'Security review 2', 'Test', 'Test on Windows'])
     const open = (step: string) => () => f.run({ type: 'conversation.create', title: step, reviewOf: f.task, step, brief: 'Read it.', checks: [] } as Command, f.as(f.dev))
     for (const step of ['Security review', 'Test']) {
       expect(open(step), step).toThrow(expect.objectContaining({ code: 'STEP_OPEN' }))
@@ -212,7 +212,7 @@ describe('a handed task opens its review steps', () => {
     expect(step?.brief).toContain('signed build')
     expect(step?.brief).toContain("person's Windows session")
     // A second Ready must not duplicate or move the active Windows step.
-    f.run({ type: 'work.status', conversationId: f.task, assignmentId: 'current', status: 'working', result: 'CI rerun' }, f.as(f.dev))
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'CI rerun' }, f.as(f.dev))
     f.ready([file])
     expect(stepsOf(f.state, f.task).filter(s => s.step === 'Test on Windows').map(s => [s.id, s.assignment?.agentId])).toEqual([[step!.id, win]])
   })
@@ -243,7 +243,7 @@ describe('a handed task opens its review steps', () => {
     f.ready(['desktop/lib/view.dart'], 'abc1234', true, { projectRules: { revision: 1, rules: onlyWindows } })
     const step = stepsOf(f.state, f.task).find(s => s.step === 'Test on Windows')
     expect(step?.assignment?.agentId).toBe(win)
-    f.run({ type: 'work.status', conversationId: f.task, assignmentId: 'current', status: 'working', result: 'More changes' }, f.as(f.dev))
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'More changes' }, f.as(f.dev))
     f.ready(['desktop/lib/view.dart'], 'def5678')
     expect(stepsOf(f.state, f.task).filter(s => s.step === 'Test on Windows').map(s => s.id)).toEqual([step!.id])
     expect(f.steps().find(s => s.name === 'Test')?.agent).toBe(mac)
