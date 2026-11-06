@@ -54,14 +54,17 @@ export class AgentRestartCoordinator {
   }
   forget(agentId: string): void { this.revisions.delete(agentId) }
   operation(agentId: string): string | undefined { return this.jobs.get(agentId)?.operation }
-  private readonly jobs = new Map<string, { operation: string; cancelled: boolean; result: Promise<RestartAgentReply> }>()
+  private readonly jobs = new Map<string, { operation: string; variant: string; cancelled: boolean; result: Promise<RestartAgentReply> }>()
 
-  run(agentId: string, restart: (current: () => boolean) => Promise<RestartAgentReply>, operation = 'restart'): Promise<RestartAgentReply> {
+  /** [variant] tells apart two asks of the same operation that must not share one launch: the launch words a restart
+   *  was given. Only the same variant joins a running one; any other is refused, never answered by a launch that did
+   *  not carry its words. */
+  run(agentId: string, restart: (current: () => boolean) => Promise<RestartAgentReply>, operation = 'restart', variant = ''): Promise<RestartAgentReply> {
     const existing = this.jobs.get(agentId)
-    if (existing) return existing.operation === operation ? existing.result
+    if (existing) return existing.operation === operation && existing.variant === variant ? existing.result
       : Promise.resolve({ ok: false, error: 'AGENT_BUSY', detail: 'Another lifecycle operation is changing this harness.' })
     if (this.revisions.has(agentId)) this.revisions.set(agentId, ++this.sequence)
-    const job = { operation, cancelled: false, result: null! as Promise<RestartAgentReply> }
+    const job = { operation, variant, cancelled: false, result: null! as Promise<RestartAgentReply> }
     const current = () => !job.cancelled && this.jobs.get(agentId) === job
     job.result = Promise.resolve().then(async () => {
       if (!current()) return { ok: false, error: 'AGENT_CHANGED' } as const

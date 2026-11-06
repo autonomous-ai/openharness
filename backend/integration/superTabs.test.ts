@@ -4394,7 +4394,7 @@ describe('Lead mentions', () => {
     expect(rest).toEqual([])
     expect(mention).toEqual({ id: expect.any(String), projectId: 'lead', projectName: 'Pilot', conversationId: group, conversationTitle: 'Copy review',
       // The picked tag the text did not say opens it, as the server stores it (mentions.ts withTags).
-      messageId, leadId: lead, leadName: expect.any(String), text: `@peer ${text}`.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null,
+      messageId, leadId: lead, leadName: expect.any(String), leadKind: 'agent', text: `@peer ${text}`.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null,
       threadId: null, messageSequence: expect.any(Number) })
     // Where the tagged message is in its chat, as its page numbers it: Desktop clears the red number once read past it.
     const page = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/conversations/${group}/messages`, headers: { authorization: `Bearer ${peer.sub}` } })
@@ -4460,7 +4460,8 @@ describe('Lead mentions', () => {
     const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Peer, see above.', replyTo: null, recipientIds: [],
       mentions: [peer.sub] })).result.messageId as string
     const mention = (await list(tab, peer, 'waiting')).find(m => m.messageId === messageId)
-    expect(mention).toEqual(expect.objectContaining({ leadId: owner.sub, leadName: 'boss', text: '@peer Peer, see above.' }))
+    // Who tagged, by kind: the phone rings for a person's tag and not for an agent's (task #3607).
+    expect(mention).toEqual(expect.objectContaining({ leadId: owner.sub, leadName: 'boss', leadKind: 'person', text: '@peer Peer, see above.' }))
     expect(JSON.stringify(mention)).not.toContain(owner.email)
   })
 

@@ -94,6 +94,8 @@ export type AgentFrame = {
   codexHome: string | null
   /** The Claude profile folder (CLAUDE_CONFIG_DIR) this agent launched against; absent or null for the default account. */
   claudeHome?: string | null
+  /** The extra launch words the owner saved for this agent (`agent_restart`'s `launchArgs`); absent when it has none. */
+  launchArgs?: string[]
   /** The workspace as its SCM describes it, with `kind` (`git`, or `none` for a folder no SCM claims);
    *  every other field is exactly what `agentProject` reports (scm/types.ts). */
   project: ScmDescription | null
@@ -267,6 +269,7 @@ export async function agentFrame(
     // `grid: null` is above.
     codexHome: s.codexHome ?? null,
     claudeHome: s.claudeHome ?? null,
+    ...(s.launchArgs?.length ? { launchArgs: [...s.launchArgs] } : {}),
     project,
     gitContext,
     // All five are real answers when null, for the reason the module doc gives: a frame that omits

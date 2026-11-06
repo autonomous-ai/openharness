@@ -572,6 +572,10 @@ class Agent {
   /// agent that runs on a computer (docs/design/2026-10-11-cloud-agents.md).
   final AgentCloud? cloud;
 
+  /// Extra launch flags saved on the machine for this agent (a Buddy's `--chrome`), as words.
+  /// Empty from an older daemon or an agent with none.
+  final List<String> launchArgs;
+
   bool get isCloud => cloud != null;
 
   const Agent({
@@ -626,6 +630,7 @@ class Agent {
     this.bypassPermission,
     this.namedAgent,
     this.cloud,
+    this.launchArgs = const [],
   });
 
   bool get isStopped => status == 'stopped';
@@ -819,6 +824,9 @@ class Agent {
           : null,
       namedAgent: _safeNamedAgent(j['namedAgent']),
       cloud: j['location'] == 'cloud' ? AgentCloud.fromJson(j['cloud']) : null,
+      launchArgs: j['launchArgs'] is List
+          ? [for (final w in j['launchArgs'] as List) if (w is String) w]
+          : const [],
     );
   }
 
@@ -881,6 +889,7 @@ class Agent {
     bypassPermission: bypassPermission,
     namedAgent: namedAgent,
     cloud: cloud,
+    launchArgs: launchArgs,
   );
 
   /// A mode id as `PERMISSION_MODES` spells them (`acceptEdits`, `readOnly`):
