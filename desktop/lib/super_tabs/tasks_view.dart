@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -61,9 +62,11 @@ class SuperTabTasksView extends StatefulWidget {
   final LocalKeyValueStore? storage;
   final DateTime Function() now;
 
-  /// A Board column's width: about a card and a half of title per line, so
-  /// five fit a wide window and a narrow one scrolls sideways (task #2948).
+  /// A Members column's width: about a card and a half of title per line (task #2948).
   static const columnWidth = 280.0;
+
+  /// The least a Board column takes (task #3869): the columns share the pane's width, and below this the Board scrolls.
+  static const minColumnWidth = 240.0;
 
   static String storageKey(String accountId) =>
       'super-tab-tasks-view/$accountId';
@@ -92,6 +95,15 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   /// goes back.
   bool _droppedOnNextUp = false;
   final _nextUpKey = GlobalKey();
+
+  /// The Board's sideways scroll, shared with its scrollbar.
+  final _boardScroll = ScrollController();
+
+  @override
+  void dispose() {
+    _boardScroll.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -482,33 +494,50 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     );
   }
 
-  /// The Board: each column a neutral panel of a fixed width (Huy, task
-  /// #2948), side by side in one row that scrolls sideways when the window is
-  /// narrower than all five; each column scrolls its own cards.
+  /// The Board: each column a neutral panel, all of one width that shares the
+  /// pane (task #3869), never under [SuperTabTasksView.minColumnWidth]. Below
+  /// it the row scrolls sideways under a scrollbar that stays in view, which a
+  /// mouse drags; a trackpad swipe and shift with the wheel scroll it too. Each
+  /// column scrolls its own cards.
   Widget _boardView(
     Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> shown,
     DateTime now,
-  ) => SingleChildScrollView(
-    key: const ValueKey('super-tasks-board'),
-    scrollDirection: Axis.horizontal,
-    padding: const EdgeInsets.only(
-      left: grid.AppDesktop.groupGap,
-      right: grid.AppDesktop.groupGap,
-      bottom: grid.AppDesktop.groupGap,
-    ),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (final column in SuperTabTaskColumn.values) ...[
-          if (column != SuperTabTaskColumn.values.first)
-            const SizedBox(width: _columnGap),
-          SizedBox(
-            width: SuperTabTasksView.columnWidth,
-            child: _panel(column, shown[column]!, now),
+  ) => LayoutBuilder(
+    builder: (context, box) {
+      const edge = grid.AppDesktop.groupGap;
+      final count = SuperTabTaskColumn.values.length;
+      final share =
+          (box.maxWidth - 2 * edge - (count - 1) * _columnGap) / count;
+      final width = math.max(SuperTabTasksView.minColumnWidth, share);
+      return Scrollbar(
+        key: const ValueKey('super-tasks-board-scrollbar'),
+        controller: _boardScroll,
+        thumbVisibility: share < SuperTabTasksView.minColumnWidth,
+        child: SingleChildScrollView(
+          key: const ValueKey('super-tasks-board'),
+          controller: _boardScroll,
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.only(
+            left: edge,
+            right: edge,
+            bottom: grid.AppDesktop.groupGap,
           ),
-        ],
-      ],
-    ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final column in SuperTabTaskColumn.values) ...[
+                if (column != SuperTabTaskColumn.values.first)
+                  const SizedBox(width: _columnGap),
+                SizedBox(
+                  width: width,
+                  child: _panel(column, shown[column]!, now),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    },
   );
 
   /// A lane's tint, as Trello's lists (anh Dee, task #3787): a step off the

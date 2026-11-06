@@ -264,7 +264,7 @@ void main() {
     await _close(tester, c);
   });
 
-  testWidgets('each column is a 280-wide tinted lane, rounded 12, with no rim '
+  testWidgets('each column is a tinted lane as wide as the board gives it, rounded 12, with no rim '
       'or shadow (task #3787)', (tester) async {
     final c = await _show(tester, tasksServer());
     for (final name in [
@@ -275,7 +275,12 @@ void main() {
       'merged',
       'shipped',
     ]) {
-      expect(tester.getSize(_column(name)).width, 280, reason: name);
+      // 1400 is under six minimums, so each takes the least a column does (task #3869).
+      expect(
+        tester.getSize(_column(name)).width,
+        SuperTabTasksView.minColumnWidth,
+        reason: name,
+      );
       final panel = tester.widget<DecoratedBox>(_column(name));
       final decoration = panel.decoration as BoxDecoration;
       // A step off the page, as Trello's lists: darker under white cards in
@@ -373,9 +378,9 @@ void main() {
           tasksServer(),
           size: const Size(900, 900),
         );
-        final bar = find.descendant(
-          of: find.byKey(const ValueKey('super-tasks-board-scrollbar')),
-          matching: find.byType(RawScrollbar),
+        final bar = find.byWidgetPredicate(
+          (w) => w is RawScrollbar,
+          description: 'the Board\'s scrollbar',
         );
         expect(bar, findsOneWidget);
         expect(tester.widget<RawScrollbar>(bar).thumbVisibility, isTrue);
