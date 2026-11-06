@@ -170,7 +170,7 @@ function split(text: string, nested: string[]): Simple[] {
     else if (redirect) { targets.push(word); redirect = false }
     else {
       // Only leading shell assignments and export declarations set values; an echo argument never does.
-      const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s.exec(word)
+      const assignment = word.includes('=') && /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s.exec(word)
       if (assignment && words.every((value) => value === 'export' || /^[A-Za-z_][A-Za-z0-9_]*=/.test(value))) {
         if (/[$`]/.test(assignment[2])) variables.delete(assignment[1])
         else variables.set(assignment[1], assignment[2])
@@ -229,14 +229,14 @@ function split(text: string, nested: string[]): Simple[] {
         if (text[i] === '\\' && '"\\$`\n'.includes(text[i + 1] ?? '')) { word += text[i + 1]; i += 2; continue }
         const sub = substitution(text, i)
         if (sub) { nested.push(sub.inner); word += text.slice(i, sub.end); i = sub.end; continue }
-        const variable = variableAt(i)
+        const variable = text[i] === '$' && variables.size ? variableAt(i) : null
         if (variable) { word += variable.value; i = variable.end; continue }
         word += text[i]; i++
       }
       i++
       continue
     }
-    const variable = variableAt(i)
+    const variable = text[i] === '$' && variables.size ? variableAt(i) : null
     if (variable) { word += variable.value; inWord = true; i = variable.end; continue }
     const sub = substitution(text, i)
     if (sub) { nested.push(sub.inner); word += text.slice(i, sub.end); inWord = true; i = sub.end; continue }
