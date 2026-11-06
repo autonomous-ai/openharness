@@ -33,7 +33,7 @@ export const groupsOf = (state: SuperTabState, target: Agent): Conversation[] =>
  *  a person is chatting with is never idle (hieule, 11-06, task #3816). Undefined when nothing tells when. */
 export function idleSince(target: Agent, groups: Conversation[]): number | undefined {
   const worked = !!target.lostTask || groups.some(g => g.assignment?.agentId === target.id) || !target.startedSession
-  const seen = [time(target.startedSession?.createdAt), target.keptAt, ...groups.map(g => g.talkedAt?.[target.id]),
+  const seen = [time(target.startedSession?.createdAt), target.keptAt, ...groups.flatMap(g => [g.talkedAt?.[target.id]?.person, g.talkedAt?.[target.id]?.answer]),
     ...(worked ? groups : []).flatMap(g => [time(g.lastActivityAt),
     ...g.assignment?.agentId === target.id ? [g.assignment.progressAt, g.assignment.lost?.at] : []])]
     .filter((t): t is number => t !== undefined && Number.isFinite(t))

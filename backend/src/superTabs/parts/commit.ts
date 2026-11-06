@@ -104,16 +104,20 @@ function toCoordinator(state: SuperTabState, group: Conversation, message: Messa
 /** How long a chat remembers that a person talked with an agent there: well past the 15 minutes an idle agent waits. */
 export const TALKED_KEEP_MS = 60 * 60_000
 
-/** Who a person talked with in [group] (task #3816): each agent a person's message reaches, and that agent again when it posts
- *  here after one, which is its answer. Who wrote and whom it reached, never the words; a system row or notice marks nobody.
- *  Entries older than TALKED_KEEP_MS go on this write, so the map holds only the last hour's agents. */
+/** Who a person talked with in [group] (task #3816): each agent a person's message reaches (`person`), and that agent's first
+ *  post to people after it (`answer`): a post to no agent, once per person's message, so an agent never keeps itself or another
+ *  agent from idling (review of #3389). Who wrote and whom it reached, never the words; a system row or notice marks nobody.
+ *  Entries older than TALKED_KEEP_MS go first, before this message is read, so an old one never comes back. */
 function markTalked(group: Conversation, message: MessageDraft, now: number): void {
-  if (message.source) return
-  const talked = message.author.kind === 'person' ? message.recipients
-    : message.author.kind === 'agent' && group.talkedAt?.[message.author.id] !== undefined ? [message.author.id] : []
-  if (!talked.length) return
-  const kept = Object.entries(group.talkedAt ?? {}).filter(([, at]) => now - at <= TALKED_KEEP_MS)
-  group.talkedAt = Object.fromEntries([...kept, ...talked.map(id => [id, now] as const)])
+  if (message.source || !group.talkedAt && message.author.kind !== 'person') return
+  const talked = Object.fromEntries(Object.entries(group.talkedAt ?? {})
+    .filter(([, at]) => now - Math.max(at.person, at.answer ?? 0) <= TALKED_KEEP_MS))
+  if (message.author.kind === 'person') for (const id of message.recipients) talked[id] = { person: now }
+  else if (message.author.kind === 'agent' && !message.recipients.length) {
+    const entry = talked[message.author.id]
+    if (entry && (entry.answer === undefined || entry.answer < entry.person)) talked[message.author.id] = { ...entry, answer: now }
+  }
+  if (group.talkedAt || Object.keys(talked).length) group.talkedAt = talked
 }
 
 /**

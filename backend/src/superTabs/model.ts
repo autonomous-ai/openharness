@@ -421,10 +421,10 @@ export interface Conversation {
    *  reaching the coordinator in another chat of the project (parts/commit.ts). The built-in wake asks the coordinator to save
    *  what it was taught only after one (pmSchedule.ts; task #3022). Absent until then. */
   heardAt?: number
-  /** When a person last talked with each agent here, by agent id (parts/commit.ts): a person's message that reached it, or its
-   *  own post after one. An agent a person is chatting with is never idle (tidy.ts idleSince, task #3816). Ids and times only,
-   *  the last hour; hidden from readers. Absent until a person talks with an agent here. */
-  talkedAt?: Record<string, number>
+  /** When a person last talked with each agent here, by agent id (parts/commit.ts): `person`, their last message that reached
+   *  it; `answer`, its own post to people after that one. An agent a person is chatting with is never idle (tidy.ts idleSince,
+   *  task #3816). Ids and times only, the last hour; hidden from readers. Absent until a person talks with an agent here. */
+  talkedAt?: Record<string, { person: number; answer?: number }>
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
   /** The pull requests its own code is in, which GitHub's push read covers for its Team-written mark (teamWritten.ts, task
