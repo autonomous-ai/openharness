@@ -1,6 +1,7 @@
+import { legacyAsks } from './boardRights.js'
 import { canReadProject } from './projects.js'
 import { proposalMeasures, proposalMessageMeasures } from './proposalMetrics.js'
-import { advanceProposalCards, pmAcceptsMessage } from './proposalCards.js'
+import { advanceProposalCards, pmAcceptsMessage, legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk } from './proposalCards.js'
 import { defaultBuddy } from './buddies.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { applyCrewKeep, crewMoveRequest, crewNeedsMachine, type CrewDeps } from './crewKeep.js'
@@ -955,6 +956,24 @@ export class SuperTabStore {
     return { row, parts, state }
   }
 
+  /** Only named, still-owed originals; deleted text, a former membership or a private audience never becomes a public card. */
+  private async legacyProposalBodies(tx: Transaction, state: SuperTabState, projectId: string): Promise<LegacyProposalAsk[]> {
+    const project = projectsOf(state).find(p => p.id === projectId)!
+    const asks = legacyAsks(state, project).slice(0, 100)
+    if (!asks.length) return []
+    const rows = await tx.superTabMessage.findMany({ where: { tabId: state.id, id: { in: asks.map(a => a.messageId) } },
+      select: { id: true, conversationId: true, author: true, text: true, source: true, deletedAt: true } })
+    return asks.flatMap(ask => {
+      const row = rows.find(r => r.id === ask.messageId), sender = row?.author as unknown as Author | undefined
+      const group = state.conversations.find(c => c.id === ask.conversationId)
+      const member = state.people.find(p => p.id === ask.personId)
+      if (!row || row.deletedAt || row.source || !row.text.trim() || row.text.length > 32000 || row.conversationId !== ask.conversationId
+        || !sender || sender.kind !== 'person' || sender.id !== ask.personId || sender.membershipGeneration !== member?.generation
+        || !group || group.kind || group.audience || !canReadGroup(state, { kind: 'person', userId: ask.personId, email: '' }, group)) return []
+      return [{ ...ask, text: row.text, generation: member!.generation }]
+    })
+  }
+
   private async proposalNoticeParts(tx: Transaction, loaded: Loaded): Promise<Loaded> {
     const groupIds: string[] = loaded.state.conversations.map(c => c.id), agentIds: string[] = []
     for (const card of loaded.state.conversations) {
@@ -1050,6 +1069,10 @@ export class SuperTabStore {
         buddyChat(command.projectId, row.author.id)
         swarmChat(row.author.id)
       }
+    }
+    if (command.type === 'project.boardMode' && command.on) {
+      const project = projectsOf(state).find(p => p.id === command.projectId)
+      if (project) groupIds.push(...legacyAsks(state, project).slice(0, 100).map(a => legacyProposalId(project.id, a.messageId)))
     }
     if (command.type === 'proposal.merge') {
       groupIds.push(command.intoConversationId)
@@ -2069,6 +2092,7 @@ export class SuperTabStore {
       const decisionId = command.type === 'route.override' || command.type === 'route.modelResult' ? command.decisionId
         : command.type === 'work.assign' || command.type === 'agent.start' ? command.routeDecisionId : undefined
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
+      if (command.type === 'project.boardMode' && command.on) context.legacyProposals = await this.legacyProposalBodies(tx, original, command.projectId)
       const effects = applyCommand(original, actor, command, context)
       hasWorkers = effects.state.agents.some(a => !isBuddy(a) && !ledProject(effects.state, a.id))
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
@@ -5334,12 +5358,20 @@ export class SuperTabStore {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       if (!row || row.deletedAt || row.format !== 2) return 0
       let loaded = await loadRow(tx, requireParts(row), { groupIds: dueCards })
+      const migration = new Map<string, LegacyProposalAsk[]>()
+      for (const project of projectsOf(loaded.state).filter(p => p.boardMode)) {
+        const bodies = await this.legacyProposalBodies(tx, loaded.state, project.id)
+        if (bodies.length) migration.set(project.id, bodies)
+      }
+      if (migration.size) loaded = await this.ensure(tx, loaded, { groupIds: [...dueCards,
+        ...[...migration].flatMap(([id, bodies]) => bodies.map(a => legacyProposalId(id, a.messageId)))] })
       loaded = await this.proposalNoticeParts(tx, loaded)
       // A task its sweep may lose says Stuck in its project chat's thread (taskLine.ts endedReply, task #2693).
       const chats = taskLineChats(loaded.state)
-      if (chats.length) loaded = await this.ensure(tx, loaded, { groupIds: chats })
+      if (chats.length) loaded = await this.ensure(tx, loaded, { groupIds: [...loaded.state.conversations.map(c => c.id), ...chats] })
       const state = cloneData(loaded.state), now = this.now()
       const written = [...sweepForLead(state, now), ...advanceProposalCards(state, now)]
+      for (const [id, bodies] of migration) written.push(...migrateLegacyProposals(state, projectsOf(state).find(p => p.id === id)!, bodies, now))
       // What waits for each agent: an agent with a delivery open is not idle. Only loaded groups' active work keeps an agent
       // from being idle (project instructions, phase 4).
       const projects = projectsOf(state).filter(p => state.conversations.find(c => c.id === p.leadConversationId)?.leadId)

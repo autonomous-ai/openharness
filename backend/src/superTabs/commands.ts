@@ -1,4 +1,4 @@
-import { pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalRoot } from './proposalCards.js'
+import { migrateLegacyProposals, type LegacyProposalAsk, pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalRoot } from './proposalCards.js'
 import { pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
 import { applyPushOrigin, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import { crewMoveFailed, takeOverCrewMember, wakeCrewMember } from './crewKeep.js'
@@ -555,6 +555,8 @@ export function withoutCredentials(command: Command, removed: CredentialKind[]):
 /** A message row a group names as its proposal, as the store loads it. */
 interface ProposalRow { id: string; conversationId: string; author: Author; source: Record<string, unknown> | null }
 export interface CommandContext {
+  /** Indexed original bodies verified by the store for the staged Board handover. */
+  legacyProposals?: LegacyProposalAsk[]
   operationId: string
   now: number
   /** For a terminal request: its agent's session is confidential in some Swarm, read by the store (confidential.ts). */
@@ -2105,7 +2107,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'project.boardMode': {
       const project = boardOwned(command.projectId)
-      if (command.on) project.boardMode = true
+      if (command.on) {
+        project.boardMode = true
+        effects.messages.push(...migrateLegacyProposals(state, project, context.legacyProposals ?? [], context.now))
+      }
       else delete project.boardMode
       break
     }

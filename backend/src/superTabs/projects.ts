@@ -31,9 +31,6 @@ export function withRoleDefaults<T extends { engine: string; model?: string; eff
 export const MAX_ROLES = 20
 export const roleVersion = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 16)
 export interface SwarmProject {
-  /** Phase 2 proposal/Board workflow, opted into by the project owner (#3819). */
-  boardMode?: true
-  decider?: string
   id: string
   name: string
   /** The owner's id; '' for a private project whose owner left with no member left to take it (settleOwners): nobody's. */
