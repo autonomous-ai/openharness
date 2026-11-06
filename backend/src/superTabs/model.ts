@@ -147,6 +147,9 @@ export interface Agent {
   buddyScope?: 'swarm'
   /** A Regular agent (agent.new, task #4116): in no project but its active task's (projects.ts agentProjectId). */
   regular?: true
+  /** The private project a Regular agent first worked in: its one conversation holds that project's content, so it takes tasks
+   *  only there from then on (projects.ts regularMayWorkIn; security review 2 of #4116). Set at its assignment, never cleared. */
+  privateProjectId?: string
   /** A Buddy that reads one project and writes into it (Dee, 10-31): a project session, or the one Buddy's session in an older
    *  project chat. Its host never widens its reads beyond its folder (cli buddyGuard wide mode), which could hold another
    *  project's clone. */

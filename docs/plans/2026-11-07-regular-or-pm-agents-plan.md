@@ -24,7 +24,8 @@ starts a project; a Regular agent is in no project, and the task it is given dec
     person's home folder, as a Swarm Buddy does.
 - **A Regular agent's project** (projects.ts): `agentProjectId` is its active task's project, else none. While idle it is seen
   only by its person, itself, and the PM of a project its person reads; such a PM may give it a task there (sameProject). It
-  works in one project at a time.
+  works in one project at a time. Its one conversation keeps what it learned, so once it has worked in a private project it
+  takes tasks only there (`privateProjectId`, set at that assignment; security review 2). Public work moves on freely.
 - **An agent chat** is read and written by its person, at the membership it was opened in, and by their own agent in it.
   Nobody else reads it: not the Swarm's owner, a project's owner or PM, or another agent (projects.ts readsAgentChat).
 - **The host:** a Regular start is listed apart (`regularStarts`, read/hostRows.ts), so an older host never launches it as a
@@ -63,6 +64,7 @@ starts a project; a Regular agent is in no project, and the task it is given dec
 
 - Nobody but its person and their agent reads an agent chat.
 - A Regular agent never takes a task in a project its person cannot read, and never two projects at once.
+- A Regular agent that worked in a private project never takes another project's task.
 - `agent.new` never runs on another person's computer, a shared machine or a Team account.
 
 ## Tasks (all test first)

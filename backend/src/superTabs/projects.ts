@@ -425,7 +425,7 @@ export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent):
     if (actor.kind === 'person') return actor.userId === target.contributorId
     if (actor.agentId === target.id) return true
     const led = ledProject(state, actor.agentId)
-    return !!led && personReadsProject(state, target.contributorId, led)
+    return !!led && regularMayWorkIn(state, target, led)
   }
   return canReadProject(state, actor, projectOf(state, agentProjectId(state, target)))
 }
@@ -605,16 +605,19 @@ export function readAgent(state: SuperTabState, actor: Actor, agentId: string): 
 
 /** A terminal contains its session's entire history. Joining another project's
  * chat must never expose that history to a different audience. */
-/** Whether person [personId] reads [project]: a Regular agent of theirs works only where they could read it themselves. */
-function personReadsProject(state: SuperTabState, personId: string, project: SwarmProject): boolean {
-  const member = state.people.find(p => p.id === personId)
+/** Whether Regular agent [target] may take a task in [project]: its person reads it (it works only where they could read it
+ *  themselves), and, once it has worked in a private project, it is that one: its one conversation holds that project's
+ *  content, which no other project's members may hear from it (security review 2 of #4116). Public work moves on freely. */
+function regularMayWorkIn(state: SuperTabState, target: Agent, project: SwarmProject): boolean {
+  const member = state.people.find(p => p.id === target.contributorId)
   return !!member && canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)
+    && (!target.privateProjectId || target.privateProjectId === project.id)
 }
 
 export function sameProject(state: SuperTabState, group: Conversation, target: Agent): void {
   const project = groupProject(state, group)
   // An idle Regular agent takes its task's project, if its person reads it (task #4116); a busy one stays in its task's.
-  if (target.regular && agentProjectId(state, target) === NO_PROJECT && personReadsProject(state, target.contributorId, project)) return
+  if (target.regular && agentProjectId(state, target) === NO_PROJECT && regularMayWorkIn(state, target, project)) return
   if (agentProjectId(state, target) !== project.id) {
     fail('PROJECT_SESSION', 'Start a separate agent for another project. This terminal belongs to its original project.')
   }

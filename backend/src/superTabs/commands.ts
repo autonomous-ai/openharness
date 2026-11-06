@@ -1858,6 +1858,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** [worker] takes [group]'s work as assignment [assignmentId], after assignRefusal let it: what work.assign writes, and its
    *  brief to the worker. */
   const assignTo = (group: Conversation, worker: Agent, assignmentId: string) => {
+    // A Regular agent's conversation keeps a private project's content: from its first task there, it works only there.
+    if (worker.regular && !worker.privateProjectId) {
+      const home = groupProject(state, group)
+      if (home.visibility === 'private') worker.privateProjectId = home.id
+    }
     // The PR ref is fetchable on another machine; a local worktree path is not. The previous agent's free-text result stays
     // in its own status message, where deliveries retain its attribution and cross-account warning.
     const recovery = group.assignment?.status === 'lost' ? [
