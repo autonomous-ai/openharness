@@ -86,3 +86,24 @@ describe('an agent with a task in the project, in its project chat', () => {
     expect(above[0]!.docsExamined).toBeLessThanOrEqual(20)
   })
 })
+
+
+describe('project chat limits under transactional writes', () => {
+  it('counts a retry once and serializes competing second posts', async () => {
+    const { tab, engineer } = await working()
+    await run(tab, post('Please fix login.'))
+    const envelope = { operationId: randomUUID(), command: post('I can fix login.') }
+    const first = await store.execute(host, tab, envelope, engineer)
+    const retry = await store.execute(host, tab, envelope, engineer)
+    expect(retry.result.messageId).toBe(first.result.messageId)
+    const results = await Promise.allSettled([
+      run(tab, post('Login now works offline.'), host, engineer),
+      run(tab, post('Expired tokens work again.'), host, engineer),
+    ])
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
+    expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { code: 'CHAT_MAIN_LIMIT' } })
+    const rows = (await store.messages(owner, tab, 'lead', {})).messages
+    expect(rows.filter(m => m.author.kind === 'agent' && !m.source)).toHaveLength(2)
+    expect((await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')).not.toHaveProperty('chatLimits')
+  })
+})

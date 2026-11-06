@@ -63,3 +63,66 @@ describe('project chat content limits', () => {
       .toThrow(expect.objectContaining({ code: 'CHAT_STATUS' }))
   })
 })
+
+describe('two main posts per ask', () => {
+  it('shares the budget across agents and directs the third post to the thread', () => {
+    const { f, send, ask } = setup()
+    ask()
+    send('I can fix login.')
+    send('Login now works offline.', { by: f.dev })
+    expect(() => send('The fix also handles expired tokens.')).toThrow(expect.objectContaining({ code: 'CHAT_MAIN_LIMIT', message: expect.stringMatching(/two|2/i) }))
+  })
+
+  it('gives a new top-level person ask its own budget, without resetting an older linked ask', () => {
+    const { send, ask } = setup()
+    const first = ask()
+    send('I can fix login.')
+    send('Login now works offline.')
+    ask()
+    expect(() => send('I can fix logout too.')).not.toThrow()
+    expect(() => send('The old fix also handles expired tokens.', { reply: first, extra: { answers: first.id } }))
+      .toThrow(expect.objectContaining({ code: 'CHAT_MAIN_LIMIT' }))
+  })
+
+  it('allows thread followups but counts replies mirrored into main', () => {
+    const { send, ask } = setup()
+    const question = ask()
+    send('I can fix login.')
+    send('Login works offline now.', { reply: question, extra: { replyTo: question.id, alsoSend: true } })
+    expect(() => send('Expired tokens work too.', { reply: question, extra: { replyTo: question.id } })).not.toThrow()
+    expect(() => send('The mobile build also has the fix.', { reply: question, extra: { replyTo: question.id, alsoSend: true } }))
+      .toThrow(expect.objectContaining({ code: 'CHAT_MAIN_LIMIT' }))
+  })
+
+  it('does not let a thread person followup reset its root main budget', () => {
+    const { send, ask } = setup()
+    const question = ask()
+    send('I can fix login.')
+    send('Login now works offline.')
+    send('Does it work on phones?', { person: true, reply: question, extra: { replyTo: question.id } })
+    expect(() => send('Yes, on phones too.')).toThrow(expect.objectContaining({ code: 'CHAT_MAIN_LIMIT' }))
+  })
+
+  it('never limits person posts, task posts or agent-only notices', () => {
+    const { f, send, ask } = setup()
+    ask()
+    send('I can fix login.')
+    send('Login now works offline.')
+    for (let i = 0; i < 3; i++) {
+      expect(() => send(`Person followup ${i}`, { person: true })).not.toThrow()
+      expect(() => send(`Task detail ${i}`, { group: f.task, by: f.dev })).not.toThrow()
+      expect(() => send(`Private note ${i}`, { extra: { agentOnly: true, recipientIds: [f.lead] } })).not.toThrow()
+    }
+  })
+
+  it('cannot reopen an evicted ask after 50 newer asks, and does not expose its ledger', async () => {
+    const { f, send, ask } = setup()
+    const first = ask()
+    send('I can fix login.')
+    send('Login now works offline.')
+    for (let i = 0; i < 50; i++) { f.tick(1); ask() }
+    expect(() => send('An old result.', { reply: first, extra: { answers: first.id } })).toThrow(expect.objectContaining({ code: 'CHAT_ASK_CLOSED' }))
+    const { groupView } = await import('./read/views.js')
+    expect(groupView(f.group('lead'), new Set())).not.toHaveProperty('chatLimits')
+  })
+})
