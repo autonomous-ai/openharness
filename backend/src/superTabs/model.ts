@@ -15,6 +15,8 @@ import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProjec
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person {
+  /** Own future task decisions; absent keeps Auto approve. */
+  approvalMode?: import('./taskApproval.js').ApprovalMode
   id: string
   email: string
   role: Role
@@ -290,7 +292,10 @@ export interface PullRequestHead { head: string; patch: string | null; at: numbe
   base?: string
   /** The heads whose verdicts this one carries, newest first, at most CARRIES_KEPT: it is git's own merge of the first and
    *  main, the first of the next, and so on (mergeCarry.ts, task #3553). Absent on any other head. */
-  carries?: string[] }
+  carries?: string[]
+  /** Set by the PR watch once GitHub shows the pull request closed (merged or not): a task's checks never count at it while
+   *  another linked pull request is open (checkVerdicts.ts checkedPullRequest, task #3953). Cleared when it is open again. */
+  closed?: true }
 export interface Assignment {
   id: string
   agentId: string
@@ -382,6 +387,8 @@ export function renderWorkTask(task: WorkTask): string {
 }
 
 export interface Conversation {
+  /** Person decision, separate from execution status for old clients. */
+  taskApproval?: import('./taskApproval.js').TaskApproval
   id: string
   /** The removed Swarm-wide Leads conversation, still stored in an older Swarm (leadsRemoved), a person's Buddy chat in a
    *  project (buddies.ts), or their one Buddy chat for the whole Swarm, with no project (`swarm-buddy`, buddies.ts
@@ -434,6 +441,9 @@ export interface Conversation {
    *  #3554): those its brief, title, assignment's result, checks' evidence and merge record name, never links in posts. [] from
    *  its creation; absent on a conversation from before, which reads what it recorded instead (codePullRequests). */
   codePullRequestUrls?: string[]
+  /** Pull requests the PM or the task's Engineer unlinked from it, newest last, at most UNLINKS_KEPT: the task's history of
+   *  them, and what keeps a later post's link from linking one again (commands.ts conversation.unlink, task #3953). */
+  unlinkedPullRequests?: Array<{ url: string; by: string; reason: string; at: number }>
   /** 'server' on a step the server opened for a handed task (commands.ts openReviewSteps, task #3602): an agent's step of its
    *  kind is then refused as a double. Absent on a step an agent or a person opened, and on older ones. */
   openedBy?: 'server'
@@ -449,6 +459,11 @@ export interface Conversation {
   /** Each linked pull request's check state as the PR watch last read it, `green`, `red` or `running` (pullRequestEvents.ts
    *  checksStateOf, task #3827): what the board's Done cards say. Written only when it changes; absent until the watch reads one. */
   pullRequestChecks?: Record<string, import('./pullRequestEvents.js').ChecksState>
+  /** The people who posted here, newest last, at most four (stuck.ts noteWriter, task #3915): whom a stuck line tags. */
+  writers?: string[]
+  /** The stuck line this task's people were told, until it is fixed (stuck.ts, task #3915): its reason's key, the line, whom it
+   *  tagged and what its fix says. */
+  stuck?: { key: string; messageId: string; tagged: string[]; fixed: string }
   /** Its steps and reviews (groups whose reviewOf is this one), newest last, at most 200 (production's most was 14): what a new
    *  pull request head re-derives the checks of, dormant ones included (#3394). Empty from a task's start; absent on a task
    *  from before, whose PR watch looks them up once (pullRequestEvents.ts listedSteps). */
@@ -582,14 +597,19 @@ export const codePullRequests = (group: Pick<Conversation, 'codePullRequestUrls'
 export function appendCodePullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
   if (group.codePullRequestUrls === undefined) return
   const urls = new Set(group.codePullRequestUrls.flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
-  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) urls.add(url)
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) if (!unlinked(group, url)) urls.add(url)
   group.codePullRequestUrls = [...urls]
 }
+
+/** The most unlinked pull requests a task remembers. */
+export const UNLINKS_KEPT = 50
+/** Whether [url] was unlinked from [group]: no later text links it again. */
+const unlinked = (group: Pick<Conversation, 'unlinkedPullRequests'>, url: string): boolean => !!group.unlinkedPullRequests?.some(entry => entry.url === url)
 
 /** Adds the pull request links of [texts] to [group] and corrects the ones it holds, by the project's [repositoryUrl]. */
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
   const urls = new Set((group.pullRequestUrls ?? []).flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
-  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) urls.add(url)
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) if (!unlinked(group, url)) urls.add(url)
   group.pullRequestUrls = [...urls]
 }
 export interface Invitation {
@@ -798,6 +818,8 @@ export const NOTICE_READERS = {
   'notice-digest': 'recipients',
   // An agent's tag, ask or line to a person, routed to the PM instead (crewNeeds.ts): the PM's alone. Never gathered.
   'crew-need': 'recipients',
+  // A person's decision wakes the task's PM; people read the decision in Tasks.
+  'task-approval': 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
   system: 'people',
   // A save of the project's instructions was posted in the project chat until #3132 (Dee and Ken, 11-05): the rows stored
