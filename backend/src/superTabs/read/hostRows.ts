@@ -134,12 +134,15 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
     && (!s.harnessId || !s.poolSettled) && !s.error)
   // A host from before Buddies reads only `starts`, and would launch a Buddy as a Builder: it never sees one. Nor a Product
   // Manager (leadStart.ts), which goes only to a host that said it starts one.
-  const starts = pending.filter(s => !s.request.buddyOf && !s.request.leadFor), buddyStarts = pending.filter(s => s.request.buddyOf)
+  // Nor a Regular agent (commands.ts agent.new, task #4116), which an older host would launch in a project folder it lacks.
+  const starts = pending.filter(s => !s.request.buddyOf && !s.request.leadFor && !s.request.regular), buddyStarts = pending.filter(s => s.request.buddyOf)
+  const regularStarts = pending.filter(s => s.request.regular)
   const leadStarts = pending.filter(s => s.request.leadFor)
   const buddyChats = new Set(buddyStarts.map(s => s.request.conversationId))
   const reservations = (state.harnessReservations ?? []).filter(r => r.machineId === machineId)
   const removedHere = (state.removedSessions ?? []).filter(r => r.machineId === machineId).map(r => r.harnessId)
   return { tabId, paused: state.paused, machine: contribution, starts, ...(buddyStarts.length ? { buddyStarts } : {}), ...(leadStarts.length ? { leadStarts } : {}),
+    ...(regularStarts.length ? { regularStarts } : {}),
     ...(contribution.scope === 'swarm' ? { projects: projectsOf(state).filter(p => pending.some(s => startProject(state, s.request)?.id === p.id))
       .map(p => ({ id: p.id, leadConversationId: p.leadConversationId, repository: p.repository,
         // A private conversation is chat only and never runs work here, so its id stays with its audience; a Buddy chat whose

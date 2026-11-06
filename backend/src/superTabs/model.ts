@@ -147,6 +147,11 @@ export interface Agent {
   /** A Buddy that reads every project its person reads (buddies.ts; Dee, 10-31): the main Buddy of a Swarm Buddy chat, or a
    *  plain session there. It has no project and writes nowhere but its own chat. A project session has its project instead. */
   buddyScope?: 'swarm'
+  /** A Regular agent (agent.new, task #4116): in no project but its active task's (projects.ts agentProjectId). */
+  regular?: true
+  /** The private project a Regular agent first worked in: its one conversation holds that project's content, so it takes tasks
+   *  only there from then on (projects.ts regularMayWorkIn; security review 2 of #4116). Set at its assignment, never cleared. */
+  privateProjectId?: string
   /** A Buddy that reads one project and writes into it (Dee, 10-31): a project session, or the one Buddy's session in an older
    *  project chat. Its host never widens its reads beyond its folder (cli buddyGuard wide mode), which could hold another
    *  project's clone. */
@@ -199,6 +204,8 @@ export interface AgentStartRequest {
   buddyOf?: { personId: string; generation: string }
   /** A Swarm-wide Buddy's start (Agent.buddyScope), written by buddy.create or message.send alone. */
   buddyScope?: 'swarm'
+  /** A Regular agent's start (agent.new, task #4116): in its person's own chat, in no project's folder. Written by the server alone. */
+  regular?: true
   /** A one-project Buddy's start (Agent.buddyNarrow), written by message.send alone. */
   buddyNarrow?: true
   /** The person's messages in an older project chat its start waits on, delivered when it joins (ids only). */
@@ -292,7 +299,10 @@ export interface PullRequestHead { head: string; patch: string | null; at: numbe
   base?: string
   /** The heads whose verdicts this one carries, newest first, at most CARRIES_KEPT: it is git's own merge of the first and
    *  main, the first of the next, and so on (mergeCarry.ts, task #3553). Absent on any other head. */
-  carries?: string[] }
+  carries?: string[]
+  /** Set by the PR watch once GitHub shows the pull request closed (merged or not): a task's checks never count at it while
+   *  another linked pull request is open (checkVerdicts.ts checkedPullRequest, task #3953). Cleared when it is open again. */
+  closed?: true }
 export interface Assignment {
   id: string
   agentId: string
@@ -391,7 +401,7 @@ export interface Conversation {
    *  project (buddies.ts), or their one Buddy chat for the whole Swarm, with no project (`swarm-buddy`, buddies.ts
    *  openSwarmBuddyChat; Dee, 10-31): a kind of its own, so an older release parks it unread (parkLaterConversations) instead
    *  of reading it as a project's. Absent on every other conversation. */
-  kind?: 'leads' | 'buddy' | 'swarm-buddy'
+  kind?: 'leads' | 'buddy' | 'swarm-buddy' | 'agent-chat'
   projectId?: string
   /** Stable, tab-local workgroup reference. Lead has no number. */
   number?: number
@@ -438,6 +448,9 @@ export interface Conversation {
    *  #3554): those its brief, title, assignment's result, checks' evidence and merge record name, never links in posts. [] from
    *  its creation; absent on a conversation from before, which reads what it recorded instead (codePullRequests). */
   codePullRequestUrls?: string[]
+  /** Pull requests the PM or the task's Engineer unlinked from it, newest last, at most UNLINKS_KEPT: the task's history of
+   *  them, and what keeps a later post's link from linking one again (commands.ts conversation.unlink, task #3953). */
+  unlinkedPullRequests?: Array<{ url: string; by: string; reason: string; at: number }>
   /** 'server' on a step the server opened for a handed task (commands.ts openReviewSteps, task #3602): an agent's step of its
    *  kind is then refused as a double. Absent on a step an agent or a person opened, and on older ones. */
   openedBy?: 'server'
@@ -591,14 +604,19 @@ export const codePullRequests = (group: Pick<Conversation, 'codePullRequestUrls'
 export function appendCodePullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
   if (group.codePullRequestUrls === undefined) return
   const urls = new Set(group.codePullRequestUrls.flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
-  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) urls.add(url)
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) if (!unlinked(group, url)) urls.add(url)
   group.codePullRequestUrls = [...urls]
 }
+
+/** The most unlinked pull requests a task remembers. */
+export const UNLINKS_KEPT = 50
+/** Whether [url] was unlinked from [group]: no later text links it again. */
+const unlinked = (group: Pick<Conversation, 'unlinkedPullRequests'>, url: string): boolean => !!group.unlinkedPullRequests?.some(entry => entry.url === url)
 
 /** Adds the pull request links of [texts] to [group] and corrects the ones it holds, by the project's [repositoryUrl]. */
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
   const urls = new Set((group.pullRequestUrls ?? []).flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
-  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) urls.add(url)
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) if (!unlinked(group, url)) urls.add(url)
   group.pullRequestUrls = [...urls]
 }
 export interface Invitation {
@@ -1019,7 +1037,7 @@ export function conversation(state: SuperTabState, id: string): Conversation {
 
 export const isLeads = (group: Conversation): boolean => group.kind === 'leads'
 
-const KNOWN_KINDS: Record<NonNullable<Conversation['kind']>, true> = { leads: true, buddy: true, 'swarm-buddy': true }
+const KNOWN_KINDS: Record<NonNullable<Conversation['kind']>, true> = { leads: true, buddy: true, 'swarm-buddy': true, 'agent-chat': true }
 /** Conversation kinds this release knows; one of another kind is kept aside unchanged (parkLaterConversations, parts/shape.ts). */
 export const knownKind = (group: Pick<Conversation, 'kind'>): boolean => group.kind == null || Object.hasOwn(KNOWN_KINDS, group.kind)
 /** During a rolling deploy the previous release reads what the next one wrote. A conversation kind it does not know
