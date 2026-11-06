@@ -80,6 +80,24 @@ describe('personal approval enforced before work', () => {
     expect(approved.messages.some(m => m.recipients.includes(f.other))).toBe(false)
     expect(approved.messages.some(m => m.recipients.includes(f.candidate))).toBe(false)
   })
+  it('approves only the agent the person was shown: a suggestion changed since is refused and approves nothing (task #4217)', () => {
+    const f = fixture(); f.mode('review'); const id = f.create()
+    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate }, f.pm)
+    // The person saw the candidate; the PM suggests another before their tap lands.
+    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.other }, f.pm)
+    for (const agentId of [f.candidate, null]) {
+      expect(() => f.runCommand({ type: 'task.approve', conversationId: id, suggestedAgentId: agentId })).toThrow(expect.objectContaining({ code: 'TASK_SUGGESTION_CHANGED' }))
+      expect(f.card(id).taskApproval).toMatchObject({ state: 'proposal', suggestedAgentId: f.other })
+    }
+    f.runCommand({ type: 'task.approve', conversationId: id, suggestedAgentId: f.other })
+    expect(f.card(id).taskApproval).toMatchObject({ state: 'approved', suggestedAgentId: f.other })
+    // With no agent suggested, the approval names none.
+    const plain = f.create()
+    expect(() => f.runCommand({ type: 'task.approve', conversationId: plain, suggestedAgentId: f.other })).toThrow(expect.objectContaining({ code: 'TASK_SUGGESTION_CHANGED' }))
+    f.runCommand({ type: 'task.approve', conversationId: plain, suggestedAgentId: null })
+    expect(f.card(plain).taskApproval?.state).toBe('approved')
+  })
+
   it('refuses another person, PM or Buddy approval and old membership authority before receipt replay', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
     for (const actor of [owner, outsider, f.pm, f.buddyActor]) for (const type of ['task.approve', 'task.reject'])
