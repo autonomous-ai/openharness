@@ -750,12 +750,12 @@ export function parentAgentIdOf(value: unknown): string | null {
   return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value) ? value : null
 }
 
-/** `parentAgentId` as a row keeps it: only beside `startedBy: 'agent'`, and only an agent id. */
 /** Only a non-empty array of strings is a saved flag list; anything else on disk is dropped, never launched with. */
 function storedLaunchArgs(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.length > 0 && value.every(w => typeof w === 'string') ? [...value] : undefined
 }
 
+/** `parentAgentId` as a row keeps it: only beside `startedBy: 'agent'`, and only an agent id. */
 function normalizedParent(startedBy: unknown, value: unknown): { parentAgentId: string } | Record<string, never> {
   const parentAgentId = startedBy === 'agent' ? parentAgentIdOf(value) : null
   return parentAgentId ? { parentAgentId } : {}
