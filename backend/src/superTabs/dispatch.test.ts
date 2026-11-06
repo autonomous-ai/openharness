@@ -311,14 +311,25 @@ describe('the crew\'s clocks: 2 hours without progress tells the member, 3 hours
     const api = s.task('Api', ['backend/src/a.ts'])
     s.run({ type: 'work.assign', conversationId: api, agentId: s.ids.Ash! }, s.as(s.pm))
     /** The liveness sweep at [now], with the machine reporting every session running and busy on screen till then. */
-    const sweep = (now: number) => {
+    const sweep = (now: number, rules = DISPATCH_RULES) => {
       s.state.machines = [{ machineId: 'host', name: 'Mac', observation: { runningHarnessIds: s.state.agents.map(a => a.harnessId),
         stoppedHarnessIds: [], receivedAt: now, harnessProgress: Object.fromEntries(s.state.agents.map(a => [a.harnessId, now])) } }] as never
-      return sweepLiveness(s.state, now)
+      return sweepLiveness(s.state, now, () => rules)
     }
     const lines = (rows: MessageDraft[]) => rows.filter(r => r.conversationId === api && r.recipients.includes(s.ids.Ash!)).map(r => r.text)
     return { ...s, api, sweep, lines, get state() { return s.state } }
   }
+
+  it('uses a project’s own progress thresholds and names them in notices', () => {
+    const s = working()
+    const rules = { ...DISPATCH_RULES, nudgeAfterMs: 60_000, returnAfterMs: 120_000 }
+    expect(s.lines(s.sweep(AT + 59_999, rules))).toEqual([])
+    expect(s.lines(s.sweep(AT + 60_000, rules))).toEqual([
+      'No progress on this task for 1 minute. Post where it stands, or set it blocked with why; at 2 minutes it goes back to the backend lane.',
+    ])
+    s.sweep(AT + 120_000, rules)
+    expect(s.group(s.api).assignment).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 2 minutes: back in the backend lane' } })
+  })
 
   it.each([true, false])('tells the worker once at 2 hours, reset only after progress (crew: %s)', crew => {
     const s = working(crew)

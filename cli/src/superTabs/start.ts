@@ -10,11 +10,13 @@ import { permissionModeFlags } from '../lib/engineLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, wireRole, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
+import { agentFolderFor, prepareAgentFolder, temporaryFolder } from './agentFolder.js'
 import { BUDDY_COPIES_FILE, BUDDY_HOMES, buddyProjectsOf, prepareBuddyHome, trustBuddyHome } from './buddyHome.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { join as joinPath } from 'node:path'
 import { markBuddyOwner } from '../lib/buddyGuard.js'
+import { engineAccount } from '../lib/engineAccount.js'
 import { codexModelNotOffered, NO_PM_RELAY, offeredCodexModels, teamRelayed } from '../team/relay.js'
 
 type Json = Record<string, unknown>
@@ -103,6 +105,9 @@ function projectSessionPrompt(tabId: string, chat: string, thread: string, mode:
 /** Why a thread session that is not Claude Code's never starts. */
 /** Why a Buddy start launched nothing on this machine: the server's own words (backend buddyContract.ts BUDDY_OWN_MACHINE_REFUSAL). */
 export const BUDDY_NOT_OWN_MACHINE = 'A Buddy runs only on your own machine. Pick one of yours.'
+/** Why a Claude Code Buddy start launched nothing: its engine would stop on its sign-in screen, in a terminal no Swarm view shows
+ *  (task #3737). The person signs in to Claude Code on that computer and starts the Buddy again. */
+export const BUDDY_CLAUDE_SIGNED_OUT = 'Sign in to Claude Code on this computer first'
 
 /**
  * Whether this machine may launch the Buddy a start names (Ken, 11-04, task #2832): a Buddy runs with its owner's full rights,
@@ -374,6 +379,13 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: BUDDY_NOT_OWN_MACHINE } }))
         return { error: 'START_FAILED', startId, detail: BUDDY_NOT_OWN_MACHINE }
       }
+      // Claude Code that is not signed in on this computer asks to be, on a screen nobody sees, and the Buddy's chat goes quiet. A
+      // grid Buddy runs on the grid's key instead, and a computer that cannot say (null) refuses nothing (lib/engineAccount.ts).
+      if (request.buddyOf !== undefined && request.engine === 'claude' && request.gridModel === undefined && request.gridName === undefined
+        && (await engineAccount('claude', { lastUsed: false })).signedIn === false) {
+        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: BUDDY_CLAUDE_SIGNED_OUT } }))
+        return { error: 'START_FAILED', startId, detail: BUDDY_CLAUDE_SIGNED_OUT }
+      }
       const resources = await inspectCapacity(target, request)
       if (resources.capacity.error === 'GUEST_NOT_ALLOWED') return {
         error: 'CONTRIBUTION_REQUIRED', startId,
@@ -428,6 +440,16 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       if (buddy && (homeFolder || request.worktree)) markBuddyOwner(worktreeFolderName(`super-tab/${startId}`), String(object(request.buddyOf).personId))
       const home = homeFolder ? await prepareBuddyHome(homeFolder, buddyProjectsOf(request)) : null
       if (homeFolder) await trustBuddyHome(homeFolder, request.engine)
+      // A start that works in the folder it names, when that folder is a temporary one: a scratchpad, which Claude Code asks
+      // about on every run and nobody answers (computer's Dee, Scholes 11-06, #3713). The agent gets a permanent folder of its
+      // own, made, marked and trusted here, and removed when it stops (agentFolder.ts, machines.ts).
+      const agentFolder = !homeFolder && request.worktree !== true && typeof request.cwd === 'string' && temporaryFolder(request.cwd)
+        ? agentFolderFor(projectsRoot(), startId) : null
+      // A folder there Harness did not make is refused, and so is the start: it never runs, or trusts, in someone else's folder.
+      if (agentFolder) {
+        try { await prepareAgentFolder(agentFolder, request.engine) }
+        catch { return { error: 'START_FAILED', startId, detail: 'This agent\'s folder could not be made safely on this machine.' } }
+      }
       // A project's Product Manager (backend leadStart.ts): the Lead of its project's conversation once it runs.
       const lead = !buddy && !!request.leadFor && typeof request.leadFor === 'object'
       const handoffNote = lead && typeof request.handoffNote === 'string' && request.handoffNote.length <= 32_000
@@ -460,7 +482,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
           : home ? swarmBuddyPrompt(String(input.tabId), String(request.conversationId), home, mode)
           : buddyPrompt(String(input.tabId), String(request.conversationId), mode))
           : `${lead ? leadPrompt(String(input.tabId), String(request.conversationId), roleName) : workerPrompt(String(input.tabId), String(request.conversationId), roleName)}${github ? ` ${githubPromptLine()}` : ''}${handoffPrompt}`,
-        ...(homeFolder ? { cwd: homeFolder } : request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
+        ...(homeFolder ? { cwd: homeFolder } : agentFolder ? { cwd: agentFolder } : request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
           // No branch named: the repository's default branch, fetched, not the host checkout's old HEAD.
           ...(request.branchRef ? { branchRef: request.branchRef } : { branchBase: 'default' }) } : { cwd: request.cwd }),
       }

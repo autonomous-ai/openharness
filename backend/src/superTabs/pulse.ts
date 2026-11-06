@@ -11,6 +11,7 @@ import { isBuddy, isBuddyChat } from './buddies.js'
 import { heldView, type HeldReason } from './heldReason.js'
 import { isLeads, type Author, type Conversation, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject, type SwarmProject } from './projects.js'
+import { unconfirmedNote } from './processNotes.js'
 
 /** One person's message to the PM not settled yet: its id, who wrote it, when, and the root of the thread it is in (its own
  *  id for a top-level message). */
@@ -99,6 +100,8 @@ export interface Pulse {
   lost: { count: number; since: number | null; conversationIds: string[] }
   held: { count: number; withoutReason: number; list: Array<{ conversationId: string; reason: string | null }> }
   idleSince: number | null
+  /** The what-changed note for PMs its PM has not confirmed (processNotes.ts, task #3581), so the board shows who has not. */
+  process: { noteId: string } | null
   redAt: { asks: number | null; idle: number | null; lost: number | null; held: number | null }
   limits: PulseLimits
 }
@@ -252,6 +255,7 @@ export function projectPulse(state: SuperTabState, project: SwarmProject, now: n
     lost: { count: counts.lost.length, since: lostAt, conversationIds: counts.lost.map(l => l.id).slice(0, PULSE_LIST_MAX) },
     held: { count: counts.held.length, withoutReason, list: counts.held.slice(0, PULSE_LIST_MAX) },
     idleSince,
+    process: (note => note ? { noteId: note.id } : null)(unconfirmedNote(project)),
     redAt: {
       asks: oldest ? oldest.at + limits.askMinutes * MINUTE : null,
       idle: idleSince === null ? null : idleSince + limits.idleMinutes * MINUTE,

@@ -331,7 +331,11 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   static const _columnGap = grid.AppDesktop.groupGap;
 
   Widget _heading(SuperTabTaskColumn column, int count, {bool? folded}) {
-    final style = DesktopChrome.control(medium: true);
+    // A Board lane's name is its bold title, as Trello's (task #3787).
+    final style = folded == null
+        ? DesktopChrome.control(color: DesktopChrome.foreground)
+              .copyWith(fontWeight: grid.AppFont.semibold)
+        : DesktopChrome.control(medium: true);
     final row = Row(
       children: [
         if (folded != null)
@@ -433,7 +437,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     return HarnessActivity.working;
   }
 
-  /// [entry]'s card; [lane] leads its caption (Members' Unassigned).
+  /// [entry]'s card; [lane] is its label (Members' Unassigned), else its
+  /// task's hand-out lane.
   Widget _card(
     SuperTabTaskEntry entry,
     DateTime now, {
@@ -449,16 +454,28 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       title: task == null
           ? entry.proposal!.title
           : superTabTitlePriority(task.title).title,
-      caption: [?lane, if (caption.isNotEmpty) caption].join(' · '),
+      caption: list
+          ? [?lane, if (caption.isNotEmpty) caption].join(' · ')
+          : caption,
+      // A tile wears its lane as a label on top (task #3787).
+      lane: list ? null : lane ?? task?.handOutLane,
       priority: superTabEntryPriority(entry),
       needsYou: entry.needsYou,
       unread: task != null && widget.controller.unreadShown(task),
       activity: _activity(entry),
       titleLines: list ? 1 : 3,
-      // A merged task's release parts are what the card is for: they wrap
-      // however long, never cut off (task #3452).
-      captionLines: task != null && superTabTaskReleasing(task) ? null : 1,
+      // What a merged task waits on, and how long a done one has waited, are
+      // what the card is for: they wrap however long, never cut off (tasks
+      // #3452, #3812).
+      captionLines:
+          task != null &&
+              (superTabTaskReleasing(task) ||
+                  task.assignment?['status'] == 'done' &&
+                      !superTabTaskShipped(task))
+          ? null
+          : 1,
       tile: !list,
+      warn: task != null && superTabMergeOverdue(task, now),
       selected: id == widget.selectedId,
       onOpen: () =>
           task == null ? widget.onOpenProposal(id) : widget.onOpenTask(task.id),
@@ -494,26 +511,43 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     ),
   );
 
-  /// One column of the Board or of Members: card material with its hairline
-  /// rim at the card radius, and no shadow, which is for floating content
-  /// only; [heading] over [body], which fills the rest.
+  /// A lane's tint, as Trello's lists (anh Dee, task #3787): a step off the
+  /// page, darker in light under white cards and darker in dark under lifted
+  /// ones, with no rim or shadow.
+  static Color get _laneFill =>
+      grid.AppTheme.pick(grid.AppSurface.wellFill, grid.AppPalette.panelBg);
+
+  /// Inside a lane, around its cards: inside the scroll view, so a card's
+  /// shadow is never cut at the lane's edge.
+  static const _laneInset = EdgeInsets.fromLTRB(
+    grid.AppDesktop.controlGap,
+    grid.AppDesktop.listRowGap,
+    grid.AppDesktop.controlGap,
+    0,
+  );
+
+  /// One column of the Board or of Members: a tinted lane at the card radius
+  /// ([_laneFill]); [heading] over [body], which fills the rest.
   Widget _framed(Key key, Widget heading, Widget body) => DecoratedBox(
     key: key,
     decoration: BoxDecoration(
-      color: grid.AppCard.base,
+      color: _laneFill,
       borderRadius: BorderRadius.circular(grid.AppCard.radius),
-      border: Border.all(color: grid.AppCard.hair),
     ),
-    child: Padding(
-      padding: const EdgeInsets.all(grid.AppDesktop.controlGap),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          heading,
-          const SizedBox(height: grid.AppDesktop.listRowGap),
-          Expanded(child: body),
-        ],
-      ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            SuperTabTaskCard.tilePadding,
+            grid.AppDesktop.controlGap,
+            SuperTabTaskCard.tilePadding,
+            grid.AppDesktop.listRowGap,
+          ),
+          child: heading,
+        ),
+        Expanded(child: body),
+      ],
     ),
   );
 
@@ -541,6 +575,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         : column == SuperTabTaskColumn.nextUp
         ? _nextUp(entries, now)
         : LaidOutListView.builder(
+            padding: _laneInset,
             itemCount: entries.length,
             itemBuilder: (context, i) => Padding(
               padding: const EdgeInsets.only(
@@ -584,6 +619,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         key,
         heading,
         LaidOutListView.builder(
+          padding: _laneInset,
           itemCount: rows.length,
           itemBuilder: (context, i) => rows[i],
         ),
@@ -803,6 +839,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
             (Offset.zero & box.size).contains(event.localPosition);
       },
       child: ReorderableListView.builder(
+        padding: _laneInset,
         buildDefaultDragHandles: false,
         itemCount: ordered.length,
         onReorderItem: (from, to) {

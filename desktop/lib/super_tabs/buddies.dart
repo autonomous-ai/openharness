@@ -579,8 +579,9 @@ class SuperTabBuddyBar extends StatelessWidget {
       "Couldn't switch your Buddy: Start your Buddy again to switch its model";
 
   /// How far back the bar looks for that line: one page of the chat. The read
-  /// runs on every build, so it is bounded (ENGINEERING.md 4); a refusal under
-  /// more newer messages than this offers nothing, and nothing is removed.
+  /// runs on every build, so it is bounded (AGENTS.md standard 4); a refusal
+  /// under more newer messages than this offers nothing, and nothing is
+  /// removed.
   static const _heldSwitchReach = 100;
 
   /// Whether [agent]'s last switch failed because it must be started again:
@@ -886,7 +887,11 @@ class _BuddyStartState extends State<_BuddyStart> {
           if (machines.isEmpty)
             BuddyNoMachine(machines: machines)
           else
-            Row(
+            // Wraps in a narrow pane: the Buddy chat beside the Board is about 300 px wide (task #3787).
+            Wrap(
+              spacing: grid.AppDesktop.controlGap,
+              runSpacing: grid.AppDesktop.controlGap,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 BuddyMachineField(
                   key: const ValueKey('super-buddy-start-machine'),
@@ -902,7 +907,6 @@ class _BuddyStartState extends State<_BuddyStart> {
                     });
                   },
                 ),
-                const SizedBox(width: 8),
                 SizedBox(
                   width: 120,
                   child: AppSelectField<String>(
@@ -920,7 +924,6 @@ class _BuddyStartState extends State<_BuddyStart> {
                     },
                   ),
                 ),
-                const SizedBox(width: 8),
                 FilledButton(
                   onPressed: busy || machine == null || keptBlock != null
                       ? null

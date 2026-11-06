@@ -208,7 +208,7 @@ describe('what the PM owes, once it reacted', () => {
   })
 })
 
-// Review of #3213 (Wren, Important 2; ENGINEERING.md 4: a timer that wakes while nothing changed is a defect): a Swarm whose
+// Review of #3213 (Wren, Important 2; AGENTS.md standard 4: a timer that wakes while nothing changed is a defect): a Swarm whose
 // groups show no new activity is checked every few minutes, not every 30 s.
 describe('the worker\'s pass on a quiet Swarm', () => {
   it('checks a Swarm again at once when its activity moved, and otherwise only every QUIET_CHECK_MS', async () => {

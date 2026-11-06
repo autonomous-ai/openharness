@@ -262,7 +262,7 @@ describe('the read-mark sweep where the expiry is refused (superTabs/readMarks.t
   })
 })
 
-// Dee, #1891; ENGINEERING.md 4 and the MongoDB query skill: the minute's pull request watch reads open tasks through the finished
+// Dee, #1891; AGENTS.md standard 4 and the MongoDB query skill: the minute's pull request watch reads open tasks through the finished
 // mark's index, equality on its first two fields and the activity range last, newest first and capped.
 describe('the pull request watch', () => {
   it('reads the open tasks active this week by the finished mark index, the newest first, capped', async () => {
