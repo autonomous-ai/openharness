@@ -76,6 +76,41 @@ describe('durable proposal cards', () => {
     expect(delivered.some(d => d.messageId === decision.id)).toBe(true)
   })
 
+  it('keeps a dormant card loaded when its person has a dormant default Buddy chat', async () => {
+    const f = await fixture()
+    await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'], maxAgents: 4 } })
+    const second = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', name: 'Research' })
+    await f.execute({ type: 'buddy.default', conversationId: second.result.conversationId })
+    const id = await f.create(owner)
+    for (const key of [id, String(second.result.conversationId)]) {
+      const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key } } })
+      await db.swarmGroup.update({ where: { id: row.id }, data: { dormant: true, version: { increment: 1 },
+        data: { ...(row.data as object), dormant: true } } })
+    }
+    await f.execute({ type: 'proposal.decide', conversationId: id, decision: 'no', reason: 'Outside positioning' }, owner, f.pm)
+    expect((await f.card(id)).proposal!.decision).toMatchObject({ kind: 'no', reason: 'Outside positioning' })
+    const notices = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: String(second.result.conversationId) } })
+    expect(notices.some(m => (m.source as { moment?: string } | null)?.moment === 'decided')).toBe(true)
+  })
+
+  it('routes a dormant proposal overdue notice to the dormant default Buddy chat', async () => {
+    const f = await fixture()
+    await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'], maxAgents: 4 } })
+    const second = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', name: 'Research' })
+    await f.execute({ type: 'buddy.default', conversationId: second.result.conversationId })
+    const id = await f.create(owner)
+    for (const key of [id, String(second.result.conversationId)]) {
+      const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key } } })
+      await db.swarmGroup.update({ where: { id: row.id }, data: { dormant: true, version: { increment: 1 },
+        data: { ...(row.data as object), dormant: true } } })
+    }
+    f.clock.now += 31 * 60_000
+    await runTimeCheckPass(db, f.store, f.clock.now)
+    expect((await f.card(id)).proposal!.overdue).toBe(true)
+    const notices = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: String(second.result.conversationId) } })
+    expect(notices.some(m => (m.source as { kind?: string } | null)?.kind === 'proposal-overdue')).toBe(true)
+  })
+
   it('delivers urgent proposals first on both a full poll and its fast repeat', async () => {
     const f = await fixture(), low = await f.create(), urgent = await f.create(owner, 'P0')
     for (let i = 0; i < 2; i++) {

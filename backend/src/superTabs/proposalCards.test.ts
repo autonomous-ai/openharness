@@ -231,6 +231,25 @@ describe('PM decisions and card questions', () => {
       { kind: 'agent', agentId: f.buddy, machineOwnerId: `${owner.userId}-machine` })).toThrow(expect.objectContaining({ code: 'PROPOSAL_CONSENT_REQUIRED' }))
   })
 
+  it('allows the current default to answer after the sending Buddy is removed, but not while it remains', async () => {
+    const { openSwarmBuddyChat } = await import('./buddies.js')
+    const f = fixture(), id = f.create().result.conversationId
+    const member = f.state.people.find(p => p.id === peer.userId)!
+    const chat = openSwarmBuddyChat(f.state, member)
+    const original = f.state.agents.find(a => a.id === f.buddy)!
+    const fallback = { ...original, id: 'fallback', harnessId: 'fallback', buddyScope: 'swarm' as const }
+    f.state.agents.push(fallback)
+    chat.agentIds.push(fallback.id)
+    f.card(id).proposal!.senders[0]!.buddyId = f.buddy
+    const qid = f.run(ask(id), f.pm).result.questionId
+    const answer = { type: 'proposal.answer', conversationId: id, questionId: qid, text: 'Seven days' }
+    const actor: Actor = { kind: 'agent', agentId: fallback.id, machineOwnerId: fallback.machineOwnerId }
+    expect(() => f.run(answer, actor)).toThrow(expect.objectContaining({ code: 'PROPOSAL_ANSWER_FORBIDDEN' }))
+    f.state.agents = f.state.agents.filter(a => a.id !== f.buddy)
+    f.run(answer, actor)
+    expect(f.card(id).proposal!.questions[0]!.answer?.by).toBe(fallback.id)
+  })
+
   it('merges duplicates into one card, preserving attribution and notifying every proposer', () => {
     const f = fixture(), first = f.create().result.conversationId, second = f.create(outsider).result.conversationId
     const merged = f.run({ type: 'proposal.merge', conversationId: second, intoConversationId: first, reason: 'Same reconnect loss' }, f.pm)
