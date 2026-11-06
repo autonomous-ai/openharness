@@ -89,7 +89,7 @@ import { activeMachineKeysOf } from '../lib/deviceKeyLog.js'
 import { commitParts, indexesOf, machineContentChanged, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
-import { pullRequestEvents, type PullRequestWatch } from './pullRequestEvents.js'
+import { pullRequestEvents, readPullRequestsNow, type PullRequestReader, type PullRequestWatch, type TaskHeads } from './pullRequestEvents.js'
 import { deriveCheck, keepHead, refreshChecks, watchedLinks } from './checkVerdicts.js'
 import { reopenOnEvents } from './handed.js'
 import type { TrainTask } from './mergeTrain/plan.js'
@@ -428,6 +428,9 @@ export interface SuperTabStoreHooks {
    *  instructions save that may drop a person's rule kept in a code task (ruleMoves.ts, task #3463). Absent with no GitHub App:
    *  such a line then stays. */
   pullRequestMerges?: (autonomousEnv: string, tabId: string, projectId: string, pullRequestUrls: string[]) => Promise<Record<string, number | null>>
+  /** A reader of pull requests as the minute PR watch reads them (pullRequestEvents.ts appPullRequestWatch), for a verdict naming
+   *  a head the record does not have and for a Ready, which read the head now (task #3628). Absent with no GitHub App. */
+  pullRequestReader?: () => PullRequestReader
   /** The same for a branch a start names: its open pull request's answer, clean for the default branch, unknown with no pull request. */
   branchPushOrigin?: (repositoryUrl: string | null, branch: string) => Promise<PushOrigin>
   /** Whether the Harness GitHub App reaches a project's GitHub repository for this Swarm (github/projectAccess.ts), read before
@@ -1704,7 +1707,8 @@ export class SuperTabStore {
     workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([this.pushOriginFor(user, tabId, command),
-      this.repositoryReachFor(user, tabId, command), this.pullRequestFilesFor(user, tabId, command), this.pullRequestMergesFor(user, tabId, command)])
+      this.repositoryReachFor(user, tabId, command), this.pullRequestFilesFor(user, tabId, command), this.pullRequestMergesFor(user, tabId, command),
+      this.verdictHeadRead(user, tabId, command)])
     let ended: WorkHold[] = [], started: WorkHold[] = []
     // With only PMs and Buddies, no dispatch pass can hand out work.
     let hasWorkers = false
@@ -2351,7 +2355,69 @@ export class SuperTabStore {
     this.startWork(tabId, started)
     // A write that may free a worker or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
     if (hasWorkers && freesOrOpens(command)) this.dispatchSoon(tabId)
+    // A task's Ready records its pull request's head as GitHub has it now, for the Reviewers it hands over to (task #3628).
+    if (command.type === 'work.status' && command.status === 'review') await this.readyHeadRead(user, tabId, command)
     return done
+  }
+
+  /**
+   * Before a work.check naming a head (or base) its pull request's record does not have, that pull request's head as GitHub has
+   * it now, recorded as the PR watch records it (task #3628): the verdict is then judged on it. On #3561 a Yes at the real head
+   * did not count, twice, while the minute's pass had not read the push. A head the record has, carried ones too, reads nothing:
+   * the record never moves but to the head GitHub gives, so a verdict at an older head still counts at none.
+   */
+  private async verdictHeadRead(user: AuthUser, tabId: string, command: Command): Promise<void> {
+    if (!this.hooks.pullRequestReader || command.type !== 'work.check' || !command.head) return
+    const { head, base } = command
+    await this.headsReadNow(user, tabId, command, (state) => {
+      const group = state.conversations.find(c => c.id === command.conversationId)
+      const task = group?.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : group
+      const urls = task?.pullRequestUrls ?? [], heads = task?.pullRequestHeads
+      // The pull request the command records the verdict on (commands.ts work.check).
+      const url = urls.findLast(u => heads?.[u]) ?? urls.at(-1)
+      const known = url ? heads?.[url] : undefined
+      const same = (sha: string) => sha.toLowerCase() === head.toLowerCase()
+      if (!task || !url || (known && (same(known.head) || known.carries?.some(same)) && (base === undefined || base === known.base))) return null
+      return { task, urls: [url] }
+    }, [command.conversationId])
+  }
+
+  /** After a task's Ready, the heads of the pull requests it names that the task links, else its newest link (task #3628). */
+  private async readyHeadRead(user: AuthUser, tabId: string, command: Extract<Command, { type: 'work.status' }>): Promise<void> {
+    if (!this.hooks.pullRequestReader) return
+    await this.headsReadNow(user, tabId, command, (state) => {
+      const task = state.conversations.find(c => c.id === command.conversationId)
+      if (!task || task.reviewOf || !task.pullRequestUrls?.length) return null
+      const linked = watchedLinks(task.pullRequestUrls)
+      const named = typeof command.result === 'string' ? pullRequestsIn(command.result, groupProject(state, task).repository?.repositoryUrl ?? null) : []
+      const urls = linked.filter(url => named.includes(url))
+      return { task, urls: urls.length ? urls : linked.slice(-1) }
+    }, [])
+  }
+
+  /** [pick]'s pull requests of a task read from GitHub now and recorded (pullRequestEvents.ts readPullRequestsNow), outside any
+   *  command's transaction, as GitHub may take seconds. A failure leaves the record as it was and is logged: the command is
+   *  judged on the record then, as before. [groups]: the command's groups whose task, when they are a step, is loaded too. */
+  private async headsReadNow(user: AuthUser, tabId: string, command: Command,
+    pick: (state: SuperTabState) => { task: Conversation; urls: string[] } | null, groups: string[]): Promise<void> {
+    let picked: { task: TaskHeads; urls: string[] } | null = null
+    try {
+      picked = await transaction(this.db, async tx => {
+        const loaded = await this.load(tx, user, tabId, namedFor(command))
+        // A step's task may be dormant: loaded by its id.
+        const reviewOf = groups.map(id => loaded.state.conversations.find(c => c.id === id)?.reviewOf).filter((id): id is string => !!id)
+        const { state } = reviewOf.length ? await this.ensure(tx, loaded, { groupIds: [...groups, ...reviewOf] }) : loaded
+        const chosen = pick(state)
+        return chosen && chosen.urls.length ? { task: { key: chosen.task.id, heads: chosen.task.pullRequestHeads ?? null,
+          steps: chosen.task.stepIds ?? null }, urls: chosen.urls } : null
+      })
+      if (!picked) return
+      const unread = await readPullRequestsNow(this.db, this, this.hooks.pullRequestReader!(), tabId, picked.task, picked.urls, this.now())
+      if (unread.length) logger.warn('[swarm-pr-head] not read', { tabId, group: picked.task.key, pulls: unread.length })
+    } catch (error) {
+      if (error instanceof SuperTabError) return
+      logger.warn('[swarm-pr-head] not read', { tabId, group: picked?.task.key, error: error instanceof Error ? error.message : String(error) })
+    }
   }
 
   /**
