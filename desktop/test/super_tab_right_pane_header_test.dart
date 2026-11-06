@@ -107,7 +107,7 @@ void main() {
         await tester.pumpWidget(
           MaterialApp(
             debugShowCheckedModeBanner: false,
-          theme: grid.buildAppTheme(brightness: brightness),
+            theme: grid.buildAppTheme(brightness: brightness),
             home: Scaffold(
               body: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,

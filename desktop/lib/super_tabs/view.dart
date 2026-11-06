@@ -2963,17 +2963,21 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// The reader's own chat with their Buddy.
   bool _isBuddyChat(SuperTabConversation group) =>
-      c.buddyChat(group.projectId)?.id == group.id;
+      group.isBuddyChat && group.buddyOwnerId == c.accountId;
 
   /// The name of the reader's Buddy that [group] is the chat with: the name
   /// they chose while it has none (removed, or starting), else "your Buddy".
   /// Null when [group] is no Buddy chat of the reader's.
   String? _buddyName(SuperTabConversation? group) {
     if (group == null || !_isBuddyChat(group)) return null;
-    final agent = c.buddy(group.projectId);
-    return agent == null
-        ? group.buddyName ?? 'your Buddy'
-        : c.snapshot!.agentName(agent.id, fallback: agent.name);
+    final agent = c.buddy(
+      group.projectId,
+      conversationId: group.agentIds.isEmpty ? null : group.id,
+    );
+    return group.buddyName ??
+        (agent == null
+            ? group.buddyName ?? 'your Buddy'
+            : c.snapshot!.agentName(agent.id, fallback: agent.name));
   }
 
   /// The open conversation's name, or what the pane shows instead of one,
@@ -3145,7 +3149,12 @@ class _SuperTabViewState extends State<SuperTabView>
       ? null
       : group.isSwarmBuddyChat
       ? 'Buddy'
-      : c.buddy(group.projectId) == null && group.buddyName == null
+      : c.buddy(
+                  group.projectId,
+                  conversationId: group.agentIds.isEmpty ? null : group.id,
+                ) ==
+                null &&
+            group.buddyName == null
       ? 'Your Buddy'
       : '${_buddyName(group)} · Your Buddy';
 
@@ -4319,15 +4328,35 @@ class _SuperTabViewState extends State<SuperTabView>
               () => unawaited(showRenameBuddy(context, c, group.projectId)),
             ),
           if (editable &&
-              (c.buddy(group.projectId)?.harnessId.isNotEmpty ?? false) &&
-              c.buddy(group.projectId)!.machineId.isNotEmpty)
+              (c
+                      .buddy(
+                        group.projectId,
+                        conversationId: group.agentIds.isEmpty
+                            ? null
+                            : group.id,
+                      )
+                      ?.harnessId
+                      .isNotEmpty ??
+                  false) &&
+              c
+                  .buddy(
+                    group.projectId,
+                    conversationId: group.agentIds.isEmpty ? null : group.id,
+                  )!
+                  .machineId
+                  .isNotEmpty)
             item(
               'Restart Buddy…',
               () => unawaited(
                 showRestartBuddy(context, c, group.projectId, app: widget.app),
               ),
             ),
-          if (editable && c.buddy(group.projectId) != null)
+          if (editable &&
+              c.buddy(
+                    group.projectId,
+                    conversationId: group.agentIds.isEmpty ? null : group.id,
+                  ) !=
+                  null)
             item(
               'Remove Buddy',
               () => unawaited(confirmRemoveBuddy(context, c, group.projectId)),
