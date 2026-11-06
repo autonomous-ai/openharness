@@ -27,7 +27,7 @@ import { endSteps, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from '.
 import { closeMerged } from './mergedTasks.js'
 import { noteWriter } from './stuck.js'
 import { reviewPlan, stepBrief, stepCheck, refreshStepBrief, type PlannedStep, type StepKind } from './reviewTable.js'
-import { builtBy, reviewerCandidates } from './reviewerPick.js'
+import { builtBy, reviewerCandidates, STRENGTH_RULE } from './reviewerPick.js'
 import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
@@ -1912,7 +1912,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
    */
   const openReviewSteps = (task: Conversation, read: NonNullable<CommandContext['pullRequestFiles']>) => {
     const existing = stepsOf(state, task.id).filter(step => !step.archived)
-    const taken = new Set<string>(), unassigned: string[] = []
+    const taken = new Set<string>(), unassigned: Array<{ name: string; kind: StepKind }> = []
     for (const planned of reviewPlan(read.files, context.projectRules?.rules)) {
       const free = (step: Conversation) => !taken.has(step.id)
       let step = existing.find(s => free(s) && stepName(s) === planned.name) ?? existing.find(s => free(s) && stepKind(s) === planned.kind)
@@ -1934,13 +1934,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         try { assignRefusal(target, candidate); return true } catch (error) { if (error instanceof SuperTabError) return false; throw error }
       })
       if (worker) assignTo(step, worker, stableId(operationId, 'review-step-assign', step.id))
-      else unassigned.push(planned.name)
+      else unassigned.push({ name: planned.name, kind: planned.kind })
     }
     const leadId = conversation(state, groupProject(state, task).leadConversationId).leadId
     if (unassigned.length && leadId) {
-      message(task.id, `No free reviewer for ${unassigned.join(', ')} of #${task.number}: no agent of this project is free, never built it, `
-        + 'runs a model at least as strong as its engineer and off the grid, and gave no verdict at this head. The step waits open: start or free one, '
-        + 'and assign it.', [leadId], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(operationId, 'review-unassigned'))
+      // Each step with the rule its pick applied (task #3774): a test's Tester needs a mid-strength model, a review the engineer's.
+      const steps = unassigned.map(step => `${step.name} (${STRENGTH_RULE[step.kind]})`).join('; ')
+      message(task.id, `No free reviewer for ${steps} of #${task.number}: no agent of this project is free in the step's role, never built it, `
+        + 'meets that model rule, and gave no verdict at this head. The step waits open: start or free one, and assign it.', [leadId], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(operationId, 'review-unassigned'))
     }
   }
 
