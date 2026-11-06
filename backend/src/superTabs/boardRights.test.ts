@@ -3,6 +3,9 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type SuperTabState } from './model.js'
 import { projectOf } from './projects.js'
 import { canChat, steers, switched } from './boardRights.js'
+import { openTasks } from './dispatch.js'
+import { sweepDue } from './pmSchedule.js'
+import { holdOf } from './pulse.js'
 
 // Task #3819 (Phase 2 of docs/plans/2026-11-06-buddy-board-final-spec.md, Ken and anh Dee 11-06): a project's owner switches
 // it to the Board way of working; in a switched project writing in its chat is a per-project Can chat right, and priority and
@@ -19,10 +22,12 @@ export function boardFixture() {
     { id: 'c', email: 'c@example.com', role: 'collaborator', generation: 'c1' },
     { id: 'd', email: 'd@example.com', role: 'collaborator', generation: 'd1' })
   let next = 0
+  const posted: Array<{ conversationId: string; text: string; recipients: readonly string[] }> = []
   const run = (command: Command, actor: Actor = projectOwner, context: Partial<CommandContext> = {}) => {
     const effect = applyCommand(state, actor, command, { operationId: `op${next++}`, now: 1000,
       contribution: { machineOwnerId: 'p', contributorId: actor.kind === 'person' ? actor.userId : 'p' }, ...context })
     state = effect.state
+    posted.push(...effect.messages)
     return effect.result as Record<string, unknown>
   }
   const app = run({ type: 'project.create', name: 'App', visibility: 'public', brief: '' }) as { projectId: string; conversationId: string }
@@ -31,7 +36,7 @@ export function boardFixture() {
   const pm = add('pm', true), worker = add('worker', false)
   const project = () => projectOf(state, app.projectId)
   const asAgent = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'p' })
-  return { run, app, pm, worker, project, asAgent, get state(): SuperTabState { return state } }
+  return { run, app, pm, worker, project, asAgent, posted, get state(): SuperTabState { return state } }
 }
 
 describe('a project\'s Board settings', () => {
@@ -172,5 +177,47 @@ describe('priority by role in a switched project', () => {
     const theirs = card(f, 'p')
     set(f, theirs, 'P0', member)
     card(f, 'd', member, 'P0')
+  })
+})
+
+describe('pause and resume', () => {
+  const task = (f: ReturnType<typeof boardFixture>) => f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Card', priority: 'P2',
+    requesterId: 'd', task: { goal: 'Do it', changes: 'It', constraints: 'None', owns: ['x'] }, checks: [{ description: 'Done', independent: false }] }).conversationId as string
+  const group = (f: ReturnType<typeof boardFixture>, id: string) => f.state.conversations.find(c => c.id === id)!
+  const lines = (f: ReturnType<typeof boardFixture>, id: string) => f.posted.filter(m => m.conversationId === id).map(m => m.text)
+
+  it('lets those who steer pause a task, with its reason and a line in it, and resume it', () => {
+    const f = boardFixture()
+    f.run({ type: 'project.decider', projectId: f.app.projectId, personId: 'c' })
+    const id = task(f)
+    f.run({ type: 'work.pause', conversationId: id, reason: 'Wait for the release' }, granted)
+    expect(group(f, id).paused).toMatchObject({ by: 'person:c', at: 1000, reason: 'Wait for the release' })
+    expect(holdOf(group(f, id), '2026-11-06')).toEqual({ reason: expect.stringMatching(/paused/i) })
+    f.run({ type: 'work.resume', conversationId: id }, swarmOwner)
+    expect(group(f, id).paused).toBeUndefined()
+    expect(lines(f, id).join('\n')).toMatch(/paused[\s\S]*Wait for the release[\s\S]*resumed/i)
+  })
+
+  it('refuses a member, the PM and any other agent, in every project', () => {
+    const f = boardFixture()
+    const id = task(f)
+    for (const actor of [member, f.asAgent(f.pm), f.asAgent(f.worker)]) {
+      expect(() => f.run({ type: 'work.pause', conversationId: id }, actor), JSON.stringify(actor))
+        .toThrow(expect.objectContaining({ status: 403 }))
+    }
+    f.run({ type: 'work.pause', conversationId: id }, projectOwner)
+    expect(() => f.run({ type: 'work.resume', conversationId: id }, member)).toThrow(expect.objectContaining({ code: 'PAUSE_FORBIDDEN' }))
+  })
+
+  it('keeps a paused task from being handed out or chased, until it is resumed', () => {
+    const f = boardFixture()
+    const id = task(f)
+    expect(openTasks(f.state, f.app.projectId, 1000).map(g => g.id)).toContain(id)
+    expect(sweepDue(f.state, f.app.projectId, 1000)).toBe(true)
+    f.run({ type: 'work.pause', conversationId: id }, projectOwner)
+    expect(openTasks(f.state, f.app.projectId, 1000).map(g => g.id)).not.toContain(id)
+    expect(sweepDue(f.state, f.app.projectId, 1000)).toBe(false)
+    f.run({ type: 'work.resume', conversationId: id }, projectOwner)
+    expect(openTasks(f.state, f.app.projectId, 1000).map(g => g.id)).toContain(id)
   })
 })
