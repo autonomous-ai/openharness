@@ -6,6 +6,7 @@ import '../../state/harness_activity.dart';
 import '../../shared/theme/app_icons.dart';
 import '../../shared/theme/app_theme.dart';
 import '../../widgets/harness_activity_mark.dart';
+import '../../widgets/laid_out_list.dart';
 import '../../widgets/desktop_chrome.dart';
 import '../controller.dart';
 import '../identity.dart';
@@ -237,7 +238,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
               Expanded(
                 child: tasks!.rows.isEmpty
                     ? const Center(child: Text('No tasks yet'))
-                    : ListView.builder(
+                    : LaidOutListView.builder(
                         itemCount: tasks.rows.length,
                         itemBuilder: (context, index) {
                           final task = tasks.rows[index];
