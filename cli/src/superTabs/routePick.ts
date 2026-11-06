@@ -20,6 +20,9 @@ export const BIG_NEEDS = 5, SMALL_NEEDS = 2
 /** Below this much weekly quota left, an account that runs a PM takes no new work. */
 export const PM_RESERVE = 20
 
+/** Efforts below high, which no agent runs at. */
+const BELOW_HIGH = new Set(['minimal', 'low', 'medium'])
+
 export interface PickInput { shown: readonly Shown[]; catalog: Catalog; assessment: Assessment; now: number; conversationId: string }
 export interface Picked { id: string; reasons: string[] }
 
@@ -40,6 +43,8 @@ export function pickByOrder({ shown, catalog, assessment: a, now, conversationId
   const fits = shown.flatMap((p): Ranked[] => {
     const { left, resetsAt } = weekly(p.quota)
     const follows = p.kind === 'member' && !!p.earlier?.some(e => e.groupId === conversationId)
+    // No agent runs below high effort, and none on Haiku (the Routing order, Models), unless a person named the model.
+    if (!named && !p.gridModel && (BELOW_HIGH.has(p.effort.toLowerCase()) || /haiku/i.test(p.model))) return []
     let need: number
     if (named) need = 0
     else if (p.gridModel) {

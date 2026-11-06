@@ -1013,7 +1013,9 @@ describe('what the route log says about each candidate', () => {
   it('picks the member that worked on this very task before, whatever its account, because the earlier work carries the task\'s id', async () => {
     const decision = { id: 'd6', conversationId: 'g1', title: 'Pick d6', via: 'order', outcome: 'done', assignmentId: 'x', createdAt: '2026-10-19T10:00:00Z',
       final: { kind: 'member', agentId: 'a1' } }
-    const s = scoped(world({ decisions: [decision] }, { id: 'x', agentId: 'a1', status: 'done', result: 'Shipped.' }))
+    // At high effort: the fixture's Sonnet at medium is not a candidate the pick may take.
+    const t = tab(); t.state.agents = [{ ...agents[0], configuration: { engine: 'claude', model: 'sonnet', effort: 'high' } }, agents[1], agents[2]] as never
+    const s = scoped(world({ tab: t, decisions: [decision] }, { id: 'x', agentId: 'a1', status: 'done', result: 'Shipped.' }))
     const answer = await routeTask(input, s, where as never, opener(), () => 'op')
     const pick = (answer.candidates as Array<{ id: string; agentId?: string }>).find(c => c.id === (answer.pick as { id: string }).id)
     expect(pick).toMatchObject({ agentId: 'a1' })
