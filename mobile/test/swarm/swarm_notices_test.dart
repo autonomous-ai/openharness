@@ -865,6 +865,108 @@ void main() {
       );
     });
 
+    // A push of the task's slot is in the notification centre, then the
+    // question is answered elsewhere: the notification goes, and the push's
+    // mark in the slot with it, so the task's next question is told (review of
+    // the first head, task #3607).
+    test('a task whose last question is answered frees its slot: the next '
+        'question of the task sounds, after a push held the slot', () {
+      final notices = _Recording();
+      final told = SwarmTold();
+      final announcer = SwarmAnnouncer(
+        notices,
+        quiet: (_) => false,
+        told: told,
+      );
+      announcer.announce(decisionIn(tab, 'g1', 'd1'));
+      // The server's push for the task's second question replaced it.
+      told.pushesShown([slot, 'decision:d2']);
+      expect(told.pushed(slot), isTrue);
+
+      // d1 is answered on the desktop: two reads miss it.
+      announcer.swarmRead(tab, const []);
+      announcer.swarmRead(tab, const []);
+      expect(notices.cancelled, [slot]);
+      expect(told.pushed(slot), isFalse, reason: 'the push went with it');
+
+      announcer.announce(decisionIn(tab, 'g1', 'd3'));
+      expect(
+        [for (final n in notices.shown) (n.key, n.quiet)],
+        [(slot, false), (slot, false)],
+        reason: 'a new question of the task is told, and sounds',
+      );
+    });
+
+    test('a question only a push shows is followed: answered, the push comes '
+        'down and the slot is free', () {
+      final notices = _Recording();
+      final told = SwarmTold();
+      final announcer = SwarmAnnouncer(
+        notices,
+        quiet: (_) => false,
+        told: told,
+      );
+      // iOS gives the push's slot and its key; the app came back to it.
+      told.pushesShown([slot, 'decision:d1']);
+      announcer.announce(decisionIn(tab, 'g1', 'd1'));
+      expect(notices.shown, isEmpty, reason: 'the push says it already');
+
+      announcer.swarmRead(tab, const []);
+      announcer.swarmRead(tab, const []);
+      expect(notices.cancelled, [slot], reason: 'answered: its push goes');
+      expect(told.pushed(slot), isFalse);
+
+      announcer.announce(decisionIn(tab, 'g1', 'd2'));
+      expect(
+        [for (final n in notices.shown) (n.key, n.quiet)],
+        [(slot, false)],
+      );
+    });
+
+    test('a push the person swiped away does not keep the next question of '
+        'the task quiet', () {
+      final notices = _Recording();
+      final told = SwarmTold();
+      final announcer = SwarmAnnouncer(
+        notices,
+        quiet: (_) => false,
+        told: told,
+      );
+      told.pushesShown([slot, 'decision:d1']);
+      announcer.announce(decisionIn(tab, 'g1', 'd1'));
+      // Swiped; the app reads the centre again on coming back.
+      told.pushesShown(const []);
+
+      announcer.announce(decisionIn(tab, 'g1', 'd2'));
+      expect(
+        [for (final n in notices.shown) (n.key, n.quiet)],
+        [(slot, false)],
+      );
+    });
+
+    test('a followed push-only question answered while another question of '
+        'the task stays leaves the notification up', () {
+      final notices = _Recording();
+      final told = SwarmTold();
+      final announcer = SwarmAnnouncer(
+        notices,
+        quiet: (_) => false,
+        told: told,
+      );
+      told.pushesShown([slot, 'decision:d1']);
+      announcer.announce(decisionIn(tab, 'g1', 'd1'));
+      told.pushesShown(const []);
+      final stays = decisionIn(tab, 'g1', 'd2');
+      announcer.announce(stays);
+
+      announcer.swarmRead(tab, [stays]);
+      announcer.swarmRead(tab, [stays]);
+      expect(notices.cancelled, isEmpty);
+      announcer.swarmRead(tab, const []);
+      announcer.swarmRead(tab, const []);
+      expect(notices.cancelled, [slot]);
+    });
+
     test('answering one of two needs leaves the notification up; answering '
         'both takes it down once', () {
       final notices = _Recording();
