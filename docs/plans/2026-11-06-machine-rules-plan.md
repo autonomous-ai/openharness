@@ -7,7 +7,8 @@
 from text the PM applies by hand (task #3964, part 2 of #3576, requested by ken15 through Harness):
 
 1. a machine is away on some weekdays between some local times: nothing starts or is handed work there then;
-2. phone app work runs on a named machine first, with at most N agents there;
+2. phone app work runs on a named machine first (its "at most 4 agents there" is that machine's own agent limit,
+   which the Swarm already keeps: no second way);
 3. no agent of a named engine runs on a named machine;
 4. no Reviewer runs on a named machine.
 
@@ -25,8 +26,7 @@ applies it where it hands out work:
 - lane dispatch (dispatch.ts `candidatesFor`) skips what a rule refuses, and leaves a first-machine lane's task to a free
   member there while one takes it;
 - the route (cli/src/superTabs/routeCommand.ts) reads the record it may already read (`GET …/projects/:id/rules`), leaves
-  out each candidate a rule refuses with its why, and ranks a lane's first machine first in step 1 of the order (pending the
-  PM's go on the CLI part, asked in the task's chat).
+  out each candidate a rule refuses with its why, and ranks a lane's first machine first in step 1 of the order.
 
 **Tech Stack:** TypeScript backend and CLI, vitest.
 
@@ -57,7 +57,7 @@ applies it where it hands out work:
 ## Review Focus
 
 - A record without `machines`, and an old client's save, behave exactly as before.
-- Away hours in the rule's time zone, including a window that ends at midnight.
+- Away hours in the rule's time zone, on its weekdays only.
 - No path hands out work a rule refuses: start, assign, dispatch.
 
 ## Task 1: the record holds machine rules
@@ -73,7 +73,7 @@ applies it where it hands out work:
 **Files:** backend/src/superTabs/{machineRules.ts, crewKeep.ts}, machineRules.test.ts
 
 - [ ] Test per rule: away inside and outside its window and day, in its zone; an engine refused; a review refused; the cap
-  full; a lane's first machines.
+  a lane's first machines.
 - [ ] Watch it fail; commit. Code; watch it pass; commit.
 
 ## Task 3: starts, assignments and dispatch follow the rules
@@ -84,7 +84,7 @@ applies it where it hands out work:
   phone machine's free member and goes to another only when none is free.
 - [ ] Watch it fail; commit. Code; watch it pass; commit.
 
-## Task 4: the route's candidates follow the rules (CLI, pending the PM's go)
+## Task 4: the route's candidates follow the rules (CLI; the PM kept it in this task, 11-06)
 
 **Files:** cli/src/superTabs/{routeCommand.ts, routePick.ts}, routeCommand.spec.ts, routePick.spec.ts
 
