@@ -32,3 +32,7 @@
 ## Task 4: the backend stores and shows it (backend/src/superTabs)
 - [ ] Failing tests: `agent.startWaiting` sets `waiting` on the start; status and the route show it; settling or failing clears it; the failed start counts like any other.
 - [ ] Implement.
+
+## Task 5 (added by the PM, 11-06): every failure carries its reason; the route skips a faulted machine
+- [ ] Failing tests: `publicReason` tells the creation-folder and clone faults in their fixed words and nothing a host appends (backend `startFailure.test.ts`); the route leaves out a machine whose last start failed on its own storage or clone, naming why, until a start succeeds, its Harness updates, or 30 minutes pass (`faulted` in `routeCommand.ts`).
+- [ ] Implement.
