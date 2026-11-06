@@ -91,14 +91,14 @@ describe('an agent with a task in the project, in its project chat', () => {
 describe('project chat limits under transactional writes', () => {
   it('counts a retry once and serializes competing second posts', async () => {
     const { tab, engineer } = await working()
-    await run(tab, post('Please fix login.'))
-    const envelope = { operationId: randomUUID(), command: post('I can fix login.') }
+    const asked = String((await run(tab, post('Please fix login.'))).result.messageId)
+    const envelope = { operationId: randomUUID(), command: { ...post('I can fix login.'), answers: asked } }
     const first = await store.execute(host, tab, envelope, engineer)
     const retry = await store.execute(host, tab, envelope, engineer)
     expect(retry.result.messageId).toBe(first.result.messageId)
     const results = await Promise.allSettled([
-      run(tab, post('Login now works offline.'), host, engineer),
-      run(tab, post('Expired tokens work again.'), host, engineer),
+      run(tab, { ...post('Login now works offline.', String(first.result.messageId)), alsoSend: true }, host, engineer),
+      run(tab, { ...post('Expired tokens work again.', String(first.result.messageId)), alsoSend: true }, host, engineer),
     ])
     expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
     expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { code: 'CHAT_MAIN_LIMIT' } })

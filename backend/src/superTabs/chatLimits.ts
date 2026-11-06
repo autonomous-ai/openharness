@@ -37,7 +37,6 @@ export interface ChatAsk {
 }
 export interface ChatLimits {
   asks: ChatAsk[]
-  latest?: string
   /** Evicted asks cannot become new asks again. Timestamp ties close conservatively; retained IDs always win. */
   closedThrough?: number
 }
@@ -53,24 +52,22 @@ function remember(group: Conversation, id: string, at: number): ChatAsk {
   return ask
 }
 
-export function recordChatAsk(group: Conversation, id: string, at: number, root: string | null): void {
+export function recordChatAsk(group: Conversation, id: string, at: number): void {
   remember(group, id, at)
-  if (!root) group.chatLimits!.latest = id
 }
 
 function closedAsk(): never {
   fail('CHAT_ASK_CLOSED', 'This older ask’s main-chat budget is closed. Continue the discussion under its existing response in the thread.', 409)
 }
 
-/** Returns the main-budget owner, or null for thread-only posts and announcements before any person ask is recorded. */
+/** Returns the main-budget owner, or null for thread-only posts and unlinked announcements. */
 export function requireChatPost(group: Conversation, command: Send, reply: Reply): string | null {
-  if (!inMainChat(command, reply)) return null
+  if (!inMainChat(command, reply) || !(command.replyTo || command.answers)) return null
   const ledger = group.chatLimits
   const linked = command.replyTo || command.answers ? reply : undefined
   const personAsk = linked?.author.kind === 'person' ? linked : undefined
-  let askId = personAsk ? personAsk.thread ?? personAsk.id
+  const askId = personAsk ? personAsk.thread ?? personAsk.id
     : linked ? ledger?.asks.find(ask => ask.main.includes(linked.id))?.id ?? linked.thread : undefined
-  askId ??= ledger?.latest
   if (!askId) return null
   let ask = ledger?.asks.find(ask => ask.id === askId)
   if (!ask && personAsk && askId === personAsk.id && (ledger?.closedThrough === undefined || personAsk.createdAt > ledger.closedThrough)) {
@@ -85,9 +82,9 @@ export function recordChatPost(group: Conversation, askId: string | null, messag
   if (askId) group.chatLimits!.asks.find(ask => ask.id === askId)!.main.push(messageId)
 }
 
-/** Explicit answer links and a direct response to a person are answers; replies to an agent response are discussion. */
+/** Explicit answer links and person replies mirrored into main are answers; plain thread replies are discussion. */
 export function requireChatAnswer(group: Conversation, command: Send, reply: Reply): string | null {
-  if (!reply || reply.agentOnly || !(command.answers || command.answer || (command.replyTo && reply.author.kind === 'person'))) return null
+  if (!reply || reply.agentOnly || !(command.answers || command.answer || (command.replyTo && inMainChat(command, reply) && reply.author.kind === 'person'))) return null
   let ask = group.chatLimits?.asks.find(ask => ask.id === reply.id)
   requireUnanswered(group, reply.id, ask?.answer)
   if (!ask) {

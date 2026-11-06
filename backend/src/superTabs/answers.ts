@@ -4,7 +4,7 @@
  * it in the main chat. The PM's answers are recorded on the conversation (`Conversation.answered`), by `answer` or by any post
  * that settles an owed ask (pulse.ts), and a second `answer` to the same message is refused with where the first one is. A
  * plain post in a task/private chat is never refused by this helper. Project chats extend this to every agent and explicit
- * answer link or direct person reply (chatLimits.ts, task #3598).
+ * answer link or person reply mirrored into main (chatLimits.ts, task #3598).
  */
 import type { CommandContext } from './commands.js'
 import { fail, type Conversation, type SuperTabState } from './model.js'

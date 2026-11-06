@@ -3903,7 +3903,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const root = command.replyTo && context.reply && !context.reply.agentOnly ? context.reply.thread ?? context.reply.id : null
         if (actor.kind === 'person') {
           owe(state, group, { id: sent.id, author: sent.author, recipients, thread: root, source: sent.source }, context.now)
-          if (isProjectChat(state, group)) recordChatAsk(group, sent.id, context.now, root)
+          if (isProjectChat(state, group)) recordChatAsk(group, sent.id, context.now)
         }
         else {
           const owedBefore = group.owed ?? []

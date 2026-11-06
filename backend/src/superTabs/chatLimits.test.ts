@@ -138,7 +138,7 @@ describe('one answer across main and thread', () => {
   it.each(['main', 'thread'] as const)('refuses a plain second answer after the first in %s, even by another agent', place => {
     const { f, send, ask } = setup()
     const question = ask()
-    const first = send('Login works offline.', { by: f.dev, reply: question,
+    const first = send('Login works offline.', { by: f.dev,
       extra: place === 'main' ? { answers: question.id } : { answers: question.id, answer: true }, reply: place === 'main' ? question : { ...question, thread: 'topic-root' } })
     const messageId = first.result.messageId
     for (const extra of [{ answers: question.id }, { replyTo: question.id, alsoSend: true }]) {
