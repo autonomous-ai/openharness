@@ -1,3 +1,4 @@
+import { AGENT_FOLDER_MARK, agentFolderFor } from './agentFolder.js'
 import { RELAY_REASONS } from './relayHealth.js'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -2190,6 +2191,56 @@ describe('removed machine cleanup', () => {
     expect(readFileSync(join(m.ownWorktree, 'unpushed.txt'), 'utf8')).toBe('work')
   })
 
+  // #3713: an agent whose start named a temporary folder ran in a folder Harness made for it (agentFolder.ts); its stop
+  // removes it, and only it: a folder of Harness's agent-home, with its mark, that no session works in.
+  describe('a stopped agent\'s own folder', () => {
+    const agentFolder = (m: ReturnType<typeof machine>, startId: string, marked = true) => {
+      const folder = agentFolderFor(join(m.home, 'harnesses'), startId)
+      mkdirSync(folder, { recursive: true })
+      writeFileSync(join(folder, 'notes.md'), 'the agent\'s work')
+      if (marked) writeFileSync(join(folder, AGENT_FOLDER_MARK), '')
+      return folder
+    }
+
+    // Security review of #3341 (Readycheck): a stop deleted the agent's work with its folder. Only an empty one goes.
+    it('keeps the folder, with its record, while it holds the agent\'s work', async () => {
+      const m = machine()
+      m.setLive([])
+      const folder = agentFolder(m, 'with-work')
+      addRecord(m, { tabId: 'tab', startId: 'with-work', harnessId: 'h-work', source: folder, path: folder, kind: 'agent-folder' })
+      await m.open().removeStoppedWorktree('tab', 'h-work')
+      expect(readFileSync(join(folder, 'notes.md'), 'utf8')).toBe('the agent\'s work')
+      expect(startIds(m)).toContain('with-work')
+    })
+
+    it('goes with its record once no session works in it and it holds nothing of the agent\'s', async () => {
+      const m = machine()
+      const folder = agentFolder(m, 'agent-start')
+      rmSync(join(folder, 'notes.md'))
+      addRecord(m, { tabId: 'tab', startId: 'agent-start', harnessId: 'h-agent', source: folder, path: folder, kind: 'agent-folder' })
+      m.setLive([session('h-agent', join(folder, 'sub'), 'agent')])
+      await m.open().removeStoppedWorktree('tab', 'h-agent')
+      expect(existsSync(folder)).toBe(true)
+      m.setLive([])
+      await m.open().removeStoppedWorktree('tab', 'h-agent')
+      expect(existsSync(folder)).toBe(false)
+      expect(startIds(m)).not.toContain('agent-start')
+    })
+
+    it('is kept, with its record, when it is not one Harness marked as an agent\'s, wherever its record says it is', async () => {
+      const m = machine()
+      m.setLive([])
+      const unmarked = agentFolder(m, 'unmarked', false)
+      addRecord(m, { tabId: 'tab', startId: 'unmarked', harnessId: 'h-unmarked', source: unmarked, path: unmarked, kind: 'agent-folder' })
+      addRecord(m, { tabId: 'tab', startId: 'own', harnessId: 'h-own', source: m.own, path: m.own, kind: 'agent-folder' })
+      await m.open().removeStoppedWorktree('tab', 'h-unmarked')
+      await m.open().removeStoppedWorktree('tab', 'h-own')
+      expect(readFileSync(join(unmarked, 'notes.md'), 'utf8')).toBe('the agent\'s work')
+      expect(existsSync(m.own)).toBe(true)
+      expect(startIds(m)).toEqual(expect.arrayContaining(['unmarked', 'own']))
+    })
+  })
+
   // #2284: a folder whose .git proof disappeared is kept with its record and logged without its path.
   it('keeps and logs a recorded worktree whose .git proof file is missing without exposing its path', async () => {
     const m = machine()
@@ -2906,11 +2957,12 @@ describe('a launched start whose engine stops on a screen', () => {
   /** Two passes, 16 s apart: a screen fails a start only when two reads in a row show it the same (security review 1 of #3063). */
   const twice = async (f: ReturnType<typeof fixture>) => { await f.machine.tick(); f.advance(); await f.machine.tick() }
 
-  it('opens a Team-written Codex start\'s untrusted checkout restricted, with Enter on that exact screen alone', async () => {
-    const { f, screen, inputIfScreen, failures } = launched(RESTRICTED, 'trust_open')
+  it.each(['0165', '0166'])('opens a Team-written Codex %s start\'s untrusted checkout restricted, with Enter on that exact screen alone', async version => {
+    const restricted = screens(`codex-${version}-open-restricted`)
+    const { f, screen, inputIfScreen, failures } = launched(restricted, 'trust_open')
     await f.machine.tick()
     expect(screen).toHaveBeenCalledWith('launched', 0)
-    expect(inputIfScreen).toHaveBeenCalledWith('launched', ['Enter'], RESTRICTED)
+    expect(inputIfScreen).toHaveBeenCalledWith('launched', ['Enter'], restricted)
     expect(failures()).toEqual([])
   })
 
@@ -3011,5 +3063,70 @@ describe('a launched start whose engine stops on a screen', () => {
     screen.mockResolvedValueOnce({ ok: true, text: `${TRUST}\n  drawing…`, hold: 'trust_open' })
     await twice(f)
     expect(failures()).toEqual([])
+  })
+})
+
+
+describe('fresh Buddy idle proof (#3824)', () => {
+  const posts = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && c[2].includes('/machines/')).map(c => c[3] as Record<string, unknown>)
+  function buddies() {
+    const f = fixture()
+    Object.assign(f.pool, { buddySleepWanted: true, starts: [], harnessIds: ['idle', 'busy', 'unknown', 'worker'] })
+    f.core.agents.byAgent = vi.fn(id => ({ agentId: id, swarmSkill: { role: id === 'worker' ? 'worker' : 'buddy' } }) as never)
+    f.core.agents.activity = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, id === 'idle' ? 'idle' : id === 'busy' ? 'working' : 'unknown']))) as never
+    return f
+  }
+  it('reports explicit idle alone in one bounded activity batch', async () => {
+    const f = buddies()
+    await f.machine.tick()
+    expect(posts(f)[0]).toHaveProperty('idleBuddyHarnessIds', ['idle'])
+    expect(f.core.agents.activity).toHaveBeenCalledTimes(1)
+    expect(f.core.agents.activity).toHaveBeenCalledWith(['idle', 'busy', 'unknown'])
+  })
+  it('reads every Buddy past the core’s 64-session activity limit in bounded batches', async () => {
+    const f = buddies(), ids = Array.from({ length: 100 }, (_, i) => `buddy-${i}`)
+    Object.assign(f.pool, { harnessIds: ids })
+    f.core.agents.activity = vi.fn(async (batch: string[]) => Object.fromEntries(batch.slice(0, 64).map(id => [id, 'idle']))) as never
+    await f.machine.tick()
+    expect(posts(f)[0]).toHaveProperty('idleBuddyHarnessIds', ids)
+    expect(vi.mocked(f.core.agents.activity).mock.calls.map(([batch]) => batch.length)).toEqual([64, 36])
+    // The report already checked these sessions; idle proof adds no per-session core round trips.
+    expect(f.core.agents.stopped).toHaveBeenCalledTimes(ids.length)
+  })
+  it('does not ask for activity or send proof without the server request or running Buddies', async () => {
+    const older = buddies()
+    Object.assign(older.pool, { buddySleepWanted: undefined })
+    await older.machine.tick()
+    expect(posts(older)[0]).not.toHaveProperty('idleBuddyHarnessIds')
+    expect(older.core.agents.activity).not.toHaveBeenCalled()
+    const workers = fixture()
+    Object.assign(workers.pool, { buddySleepWanted: true })
+    await workers.machine.tick()
+    expect(workers.core.agents.activity).not.toHaveBeenCalled()
+  })
+  it('never refreshes idle proof with an unchanged heartbeat', async () => {
+    const f = buddies()
+    f.pool.starts = [{ id: 'start', dispatched: false }]
+    let finish!: () => void
+    f.start.mockImplementation(() => new Promise(resolve => { finish = () => resolve({ ok: true }) }))
+    const pass = f.machine.tick()
+    await vi.waitFor(() => expect(f.start).toHaveBeenCalled())
+    try {
+      f.step(15_000)
+      f.machine.beat()
+      await vi.waitFor(() => expect(posts(f)).toHaveLength(2))
+      expect(posts(f)[0]).toHaveProperty('idleBuddyHarnessIds', ['idle'])
+      expect(posts(f)[1]).not.toHaveProperty('idleBuddyHarnessIds')
+      expect(f.core.agents.activity).toHaveBeenCalledTimes(1)
+    } finally { finish(); await pass }
+  })
+  it('shares one activity read across Swarms on the same machine', async () => {
+    const f = buddies(), original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => path.includes('/hosts/host/changes')
+      ? hostForm([], { pools: [f.pool, { ...f.pool, tabId: 'other' }] }) : original(core, method, path, body))
+    await f.machine.tick()
+    expect(posts(f)).toHaveLength(2)
+    expect(posts(f).every(p => (p.idleBuddyHarnessIds as string[])?.join() === 'idle')).toBe(true)
+    expect(f.core.agents.activity).toHaveBeenCalledTimes(1)
   })
 })

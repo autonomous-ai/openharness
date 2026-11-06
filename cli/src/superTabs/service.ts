@@ -536,7 +536,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The devices' (core/devicesLink.ts): a Harness Pro that shows the Swarm cards is attached or gone, wants a Lead's recap, or
         // has one open. They read the account's Swarms as the person, and need no agent.
         // Only this computer's own devices ask: an account owner on another machine does not make this one read the Swarms.
-        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay' || payload.action === 'cardWorker' || payload.action === 'cardSide' || payload.action === 'cardThreadLeave') {
+        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay' || payload.action === 'cardWorker') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
           // A round dial that speaks swarmChat asks for the chat on its face (design 2026-10-28-round-dial-swarm-chat), and one
           // that speaks swarmBuddy for the face on the side it keeps ('buddy', spec 2026-10-29-round-dial-pm-buddy).
@@ -545,36 +545,21 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             const include = Array.isArray(payload.include) ? payload.include.filter(cardId) : []
             const asked = payload.focus && typeof payload.focus === 'object' ? payload.focus as Record<string, unknown> : {}
             const focus = cardId(asked.tabId) && cardId(asked.conversationId)
-              ? { tabId: asked.tabId, conversationId: asked.conversationId, ...(cardId(asked.threadRoot) ? { threadRoot: asked.threadRoot } : {}),
-                ...(asked.fromDevice === true ? { fromDevice: true as const } : {}) } : null
+              ? { tabId: asked.tabId, conversationId: asked.conversationId } : null
             cards().want(payload.on === true, include, focus)
             return { ok: true }
           }
           if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId, chat) }
           if (payload.action === 'cardSay' && cardId(payload.harnessId) && typeof payload.text === 'string' && payload.text.trim() && payload.text.length <= 32_000) {
-            // `threaded`: the dial speaks swarmThread and the words came from its face; `thread`: the root of the thread on the face
-            // then (null: none), which the words are held to.
-            const options = { ...(payload.threaded === true ? { threaded: true } : {}),
-              ...(payload.thread === null || cardId(payload.thread) ? { thread: payload.thread } : {}) }
             const pinned: [chatId?: string, reviewed?: boolean] = !cardId(payload.chatId) ? []
               : payload.reviewed === true ? [payload.chatId, true] : [payload.chatId]
-            const result = Object.keys(options).length
-              ? await cards().say(payload.harnessId, payload.text.trim(), chat, cardId(payload.chatId) ? payload.chatId : undefined, cardId(payload.chatId) && payload.reviewed === true, options)
-              : await cards().say(payload.harnessId, payload.text.trim(), chat, ...pinned)
+            const result = await cards().say(payload.harnessId, payload.text.trim(), chat, ...pinned)
             // A refusal travels with its code and message, which the dial shows instead of typing the words anywhere.
-            return { ok: true, said: result.said, ...(!result.said && result.refused ? { refused: result.refused } : {}), ...(result.said && result.thread ? { thread: result.thread } : {}) }
+            return { ok: true, said: result.said, ...(!result.said && result.refused ? { refused: result.refused } : {}) }
           }
           // A card's failure from another computer: whether its agent is a Swarm's Builder or Reviewer, from the Swarms read last.
           if (payload.action === 'cardWorker' && identifier(payload.machineId) && identifier(payload.harnessId)) {
             return { ok: true, worker: cards().worker(payload.machineId, payload.harnessId) }
-          }
-          if (payload.action === 'cardThreadLeave' && cardId(payload.tabId) && cardId(payload.leadId)) {
-            const left = cards().threadLeave(payload.tabId, payload.leadId, chat)
-            return { ok: true, ...(left ? { conversationId: left.conversationId } : {}) }
-          }
-          if (payload.action === 'cardSide' && cardId(payload.tabId) && (payload.side === 'pm' || payload.side === 'buddy')) {
-            cards().side(payload.tabId, payload.side)
-            return { ok: true }
           }
           if (payload.action === 'cardOpen' && cardId(payload.session) && cardId(payload.tabId) && (payload.leadId === null || cardId(payload.leadId))) {
             cards().open(payload.session, payload.tabId, payload.leadId, chat)
@@ -659,6 +644,21 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // One per Buddy on this machine; a machine runs a few at most, so a small cap only guards against a leak.
           for (const oldest of buddySince.keys()) { if (buddySince.size <= 64) break; buddySince.delete(oldest) }
           return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary } }
+        }
+        // A proposal's files (command.ts proposalFiles, #3872): the chat they go up to and the project PM's chat it names. A Buddy's
+        // status is a task summary with none of them, so every Buddy proposal with a file was refused. Only what the upload reads,
+        // from this agent's own read: the chat when it reads that chat, its own record, and each project's id and chat.
+        if (payload.action === 'proposalTarget') {
+          if (!identifier(payload.conversationId)) return { error: 'INVALID_REQUEST' }
+          const { state } = await swarm()
+          const chat = list(state.conversations).find(c => c.id === payload.conversationId)
+          const self = list(state.agents).find(a => a.id === agentId)
+          const session = object(self?.buddySession).projectId
+          return { ok: true, value: {
+            chat: chat ? { id: chat.id, ...typeof chat.kind === 'string' ? { kind: chat.kind } : {}, ...typeof chat.projectId === 'string' ? { projectId: chat.projectId } : {} } : null,
+            self: self ? { id: self.id, ...typeof self.projectId === 'string' ? { projectId: self.projectId } : {}, ...typeof session === 'string' ? { buddySession: { projectId: session } } : {} } : null,
+            projects: list(state.projects).map(p => ({ id: p.id, leadConversationId: p.leadConversationId })),
+          } }
         }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {
@@ -768,6 +768,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             }
             throw error
           }
+        }
+        // The project's machine rules alone, for the route (backend machine-rules read, task #3964).
+        if (payload.action === 'machineRules') {
+          if (!identifier(payload.projectId)) return { error: 'INVALID_REQUEST' }
+          return { ok: true, value: await backend(core, 'GET', `${path}/projects/${encodeURIComponent(String(payload.projectId))}/machine-rules?${identity}`) }
         }
         if (payload.action === 'decisions' && (payload.state === 'open' || payload.state === 'answered')) {
           return { ok: true, value: await backend(core, 'GET', `${path}/decisions?state=${payload.state}&${identity}`) }

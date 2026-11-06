@@ -489,15 +489,20 @@ async function proposalFiles(paths: string[], operationId: string, command: Reco
   const caller = callerOf(frames, deps.pane, String(daemon.machineId))
   const folder = frames.find(f => f.id === caller?.agentId)?.project?.cwd
   if (!folder) throw new Error('Attach files to a proposal from your Buddy\'s own terminal.')
-  const state = object(object((await scoped({ action: 'status' })).value).state)
-  const chat = (Array.isArray(state.conversations) ? state.conversations : []).map(object).find(c => c.id === target.conversationId)
+  // Read for the upload (service.ts proposalTarget): a Buddy's status is a task summary with no chats, so reading it here refused
+  // every Buddy proposal with a file (Huy 11-06, #3872).
+  const read = object((await scoped({ action: 'proposalTarget', conversationId: target.conversationId })).value)
+  const projects = Array.isArray(read.projects) ? read.projects.map(object) : []
+  const chat = read.chat && object(read.chat).id === target.conversationId ? object(read.chat) : undefined
   // A person's one Buddy chat has no project (Dee, 10-31): a project session proposes into its own project, and the Swarm-wide
   // Buddy into the one its JSON names (Scholes, 11-02), with only that project's files: its folder holds every project's.
-  const self = (Array.isArray(state.agents) ? state.agents : []).map(object).find(a => a.id === caller?.agentId)
+  // The read answers for the asking agent alone: its record is the caller's, under its Swarm id, not the terminal's id the pane
+  // names (Linuxtest4 on #3402: matched by that id, a session's project was never read, and another project's PM got its file).
+  const self = read.self ? object(read.self) : undefined
   const session = object(self?.buddySession).projectId
   const wide = chat?.kind === 'swarm-buddy' && typeof session !== 'string'
   const projectId = wide ? command.projectId : chat?.kind === 'swarm-buddy' ? session : chat?.projectId
-  const home = (Array.isArray(state.projects) ? state.projects : []).map(object).find(p => p.id === projectId)?.leadConversationId
+  const home = projects.find(p => p.id === projectId)?.leadConversationId
   // Refused here too, before any upload: the backend would refuse it and leave the file behind.
   if (!wide && command.projectId && command.projectId !== projectId) throw new Error('A session sends only to its own project\'s PM: leave the project out.')
   if (typeof home !== 'string') throw new Error(wide ? 'Name the project to send this to, from your status.' : 'Name your own chat: a proposal comes from there.')

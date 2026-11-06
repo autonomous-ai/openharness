@@ -77,6 +77,7 @@ class SuperTabMention implements SwarmAskItem {
       conversationTitle = row['conversationTitle'] as String? ?? '',
       messageId = row['messageId'] as String,
       leadName = row['leadName'] as String? ?? 'Lead',
+      leadKind = row['leadKind'] as String?,
       text = row['text'] as String? ?? '',
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
       resolvedBy = row['resolvedBy'] as String?,
@@ -87,6 +88,14 @@ class SuperTabMention implements SwarmAskItem {
   final String projectId, messageId, leadName, text;
   @override
   final DateTime? createdAt;
+
+  /// Who tagged, by kind: `person` or `agent`; null from a backend before it
+  /// (task #3607).
+  final String? leadKind;
+
+  /// Whether an agent tagged, not a person: such a tag is badge and Activity
+  /// only, never a notice. Unknown (an older backend) is told, as before.
+  bool get taggedByAgent => leadKind == 'agent';
 
   /// `reply` or `done` once it moved to Earlier; null while it waits.
   final String? resolvedBy;

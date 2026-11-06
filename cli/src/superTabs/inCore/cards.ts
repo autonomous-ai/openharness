@@ -35,8 +35,6 @@ const BUDDY_NOTICE_CHATS: ReadonlySet<string> = new Set(['buddy'])
 /** Desktop's pattern is the 15 half bits of a 5×5 grid (superTabs/buddyAvatar.ts). */
 const MAX_CELLS = 0x7fff
 const COLOR = /^#[0-9a-f]{6}$/
-/** The dial's thread title: the first line, at most 80 bytes (the cards service cuts it; checked again here). */
-const THREAD_TITLE_BYTES = 80
 /** A notice's thread root, cut to this: kept when longer than the dial holds, so no face matches it and the dial beeps. */
 const THREAD_ROOT_BYTES = 128
 /** The Pro keeps an id in 48 bytes with its NUL. */
@@ -61,11 +59,7 @@ function chatIn(value: unknown): SwarmChat | null {
   const chat = object(value)
   if (typeof chat.kind !== 'string' || !CHATS.has(chat.kind) || !id(chat.id) || typeof chat.name !== 'string' || typeof chat.working !== 'boolean') return null
   if (chat.since !== undefined && !whole(chat.since)) return null
-  // The thread the face is in (spec 2026-11-03-dial-thread-face); one that is not sound is left out and the chat is kept.
-  const thread = object(chat.thread)
-  const inThread = id(thread.root) && typeof thread.title === 'string'
-  return { kind: chat.kind as SwarmChat['kind'], id: chat.id, name: cut(chat.name, NAME_BYTES), working: chat.working, ...(chat.since === undefined ? {} : { since: chat.since }),
-    ...(inThread ? { thread: { root: thread.root as string, title: cut(thread.title as string, THREAD_TITLE_BYTES), ...(whole(thread.replies) ? { replies: thread.replies } : {}) } } : {}) }
+  return { kind: chat.kind as SwarmChat['kind'], id: chat.id, name: cut(chat.name, NAME_BYTES), working: chat.working, ...(chat.since === undefined ? {} : { since: chat.since }) }
 }
 
 /** A Lead's notice from one of `chats`, checked and cut; null when it is not one, and the Lead goes on without it. */
@@ -74,8 +68,12 @@ function noticeIn(value: unknown, chats: ReadonlySet<string>): LeadNotice | null
   if (typeof notice.chat !== 'string' || !chats.has(notice.chat) || !id(notice.chatId) || !id(notice.id) || typeof notice.text !== 'string' || !whole(notice.at)) return null
   // A reply inside a thread names its root (#2463): without it the desktop and the dial read it by opening the chat.
   const thread = typeof notice.thread === 'string' && notice.thread ? cut(notice.thread, THREAD_ROOT_BYTES) : undefined
+  // A decision asked of the reader is heard by a swarmNeedsYou dial alone, and any other keeps the tag it covers
+  // (cableSession): without the mark and the tag the devices sent every dial the decision (Diego's dial, 2026-11-06).
+  const decision = notice.decision === true
+  const tag = decision && notice.tag !== undefined ? noticeIn({ ...object(notice.tag), decision: undefined, tag: undefined }, chats) : null
   return { chat: notice.chat as LeadNotice['chat'], chatId: notice.chatId, id: notice.id, text: cut(notice.text, RECAP_BYTES), at: notice.at,
-    ...(thread ? { thread } : {}) }
+    ...(thread ? { thread } : {}), ...(decision ? { decision: true as const } : {}), ...(tag ? { tag } : {}) }
 }
 
 /** The reader's Buddy on a Lead, checked and cut; null when it is not one. */
@@ -125,7 +123,10 @@ function cardIn(value: unknown): SwarmCard | null {
     if (!lead) return null
     leads.push(lead)
   }
-  return { id: card.id, name: cut(card.name, NAME_BYTES), count: card.count, leads, ...(card.side === 'buddy' ? { side: 'buddy' as const } : {}) }
+  // `personal`: the reader's own Personal Swarm, for the round dial's Personal | Team picker. The port rebuilt each card without
+  // it, so no dial ever showed the picker (Diego's dial, 2026-11-06).
+  return { id: card.id, name: cut(card.name, NAME_BYTES), count: card.count, leads,
+    ...(card.personal === true ? { personal: true as const } : {}) }
 }
 
 /** A recap the service sent, checked and cut; null when it is not one. */
@@ -135,7 +136,7 @@ function recapIn(value: unknown): LeadRecap | null {
   // A chat's recap names its chat or is not one: a dial must never show it for another chat.
   if (recap.chatId !== undefined && !id(recap.chatId)) return null
   return { tabId: recap.tabId, leadId: recap.leadId, text: cut(recap.text, RECAP_BYTES), at: recap.at, none: recap.none, ...(recap.chatId === undefined ? {} : { chatId: recap.chatId }),
-    ...(recap.buddy === true ? { buddy: true as const } : {}), ...(id(recap.thread) ? { thread: recap.thread } : {}) }
+    ...(recap.buddy === true ? { buddy: true as const } : {}) }
 }
 
 export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log = (line) => console.log(line) }: SuperTabCardsDeps) {
@@ -143,7 +144,7 @@ export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log =
   let last: SwarmCard[] | null = null
   /** Whether any capable device wants cards, the Swarms to read first, and the conversation the window has open in a Swarm tab. */
   let wanted = false, include: string[] = []
-  let focus: { tabId: string; conversationId: string; threadRoot?: string; fromDevice?: true } | null = null
+  let focus: { tabId: string; conversationId: string } | null = null
   const route = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     try {
       const answer = await request?.(payload)
@@ -158,9 +159,8 @@ export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log =
       const next = on && Array.isArray(swarms) ? [...new Set(swarms.filter(id))].slice(0, MAX_CARDS) : []
       const asked = object(open)
       const nextFocus = on && id(asked.tabId) && id(asked.conversationId)
-        ? { tabId: asked.tabId, conversationId: asked.conversationId, ...(id(asked.threadRoot) ? { threadRoot: asked.threadRoot } : {}),
-          ...(asked.fromDevice === true ? { fromDevice: true as const } : {}) } : null
-      const key = (f: typeof focus) => `${f?.tabId}/${f?.conversationId}/${f?.threadRoot}/${f?.fromDevice === true}`
+        ? { tabId: asked.tabId, conversationId: asked.conversationId } : null
+      const key = (f: typeof focus) => `${f?.tabId}/${f?.conversationId}`
       if (on === wanted && next.join(',') === include.join(',') && key(nextFocus) === key(focus)) return
       wanted = on
       include = next
@@ -203,26 +203,19 @@ export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log =
       swarmCardRecap(recap)
     },
     /** What the devices may ask of the Super Tab service, and nothing else of it: `cardsWanted` is kept here, `cardRecap`,
-     *  `cardOpen`, `cardSay`, `cardSide` and `cardWorker` go to the service; any other action is refused. */
+     *  `cardOpen`, `cardSay` and `cardWorker` go to the service; any other action is refused. */
     ask(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
       if (payload.action === 'cardsWanted') { api.want(payload.on === true, payload.include, payload.focus); return Promise.resolve({ ok: true }) }
       // A round dial that speaks swarmChat asks for the chat on its face, and one that speaks swarmBuddy for the face on its
       // side ('buddy'); without the flag, the request is today's.
       const chat = payload.chat === true || payload.chat === 'buddy' ? { chat: payload.chat } : {}
-      // The side a swarmBuddy dial swiped to.
-      if (payload.action === 'cardSide') {
-        return payload.side === 'pm' || payload.side === 'buddy' ? route({ action: 'cardSide', tabId: payload.tabId, side: payload.side }) : Promise.resolve({ error: 'INVALID_REQUEST' })
-      }
       if (payload.action === 'cardRecap') return route({ action: 'cardRecap', tabId: payload.tabId, leadId: payload.leadId, ...chat })
       // The chat on the dial's face when the words were spoken, which they may be posted in and no other.
       // `reviewed`: the person saw that chat named on the dial and pressed Send.
       if (payload.action === 'cardSay') return route({ action: 'cardSay', harnessId: payload.harnessId, text: payload.text, ...chat,
-        ...(id(payload.chatId) ? { chatId: payload.chatId, ...(payload.reviewed === true ? { reviewed: true } : {}) } : {}),
-        ...(payload.threaded === true ? { threaded: true } : {}), ...(payload.thread === null || id(payload.thread) ? { thread: payload.thread } : {}) })
+        ...(id(payload.chatId) ? { chatId: payload.chatId, ...(payload.reviewed === true ? { reviewed: true } : {}) } : {}), })
       if (payload.action === 'cardOpen') return route({ action: 'cardOpen', session: payload.session, tabId: payload.tabId, leadId: payload.leadId, ...chat })
       // A card's failure from another computer: whether its agent is a Swarm's worker (services/devices.ts asks; it decides).
-      // The dial left the thread on its face: the service forgets it and names the conversation whose thread the window should close.
-      if (payload.action === 'cardThreadLeave') return route({ action: 'cardThreadLeave', tabId: payload.tabId, leadId: payload.leadId, ...chat })
       if (payload.action === 'cardWorker') return route({ action: 'cardWorker', machineId: payload.machineId, harnessId: payload.harnessId })
       return Promise.resolve({ error: 'INVALID_REQUEST' })
     },

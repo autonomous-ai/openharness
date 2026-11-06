@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { lstat, readdir, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -20,6 +20,7 @@ import { readAuthSession } from '../lib/authSession.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
 import { git, sweepOne, WorktreeKept } from '../lib/worktreeSweep.js'
 import { projectsRoot } from '../lib/projectFolder.js'
+import { agentFolderEmpty, removableAgentFolder } from './agentFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { teamPrivacyObserver } from '../team/observer.js'
 import { teamRelayed } from '../team/relay.js'
@@ -80,7 +81,8 @@ const POOLS_FRESH_MS = 2_000
 
 /** The worktrees this machine's Swarm starts made, by tab: what a removal may delete besides the tab's Swarm folders. */
 export const swarmWorktreesFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `swarm-worktrees-${machineId}.json`)
-type SwarmWorktree = { tabId: string; startId: string; harnessId: string; source: string; path: string }
+/** `kind: 'agent-folder'`: a folder Harness made for an agent whose start named a temporary one (agentFolder.ts, #3713). */
+type SwarmWorktree = { tabId: string; startId: string; harnessId: string; source: string; path: string; kind?: 'agent-folder' }
 function readWorktrees(file: string): SwarmWorktree[] {
   let saved: unknown
   try { saved = JSON.parse(readFileSync(file, 'utf8')) } catch { return [] }
@@ -557,6 +559,18 @@ export class ContributedMachines {
       // Every Swarm's reading first, sent in one call (DB roadmap 2.5), then each Swarm's starts.
       const looked: Array<{ row: Record<string, unknown>; pool: Record<string, unknown>; pending: ReturnType<typeof startsOf> }> = []
       const due: Reading[] = []
+      // One activity batch for this machine's Buddies, shared across its Swarms and only on a fresh report (#3824).
+      let buddyActivity: Promise<Record<string, 'working' | 'idle' | 'unknown'>> | undefined
+      const readBuddyActivity = async (): Promise<Record<string, 'working' | 'idle' | 'unknown'>> => {
+        const ids = [...new Set(pools.filter(row => row.buddySleepWanted === true).flatMap(row =>
+          Array.isArray(row.harnessIds) ? row.harnessIds.filter(identifier) : []))]
+          .filter(id => this.core.agents.byAgent(id)?.swarmSkill?.role === 'buddy').slice(0, 1000)
+        // byAgent is the live registry; each pool already checks stopped sessions before it builds its running list.
+        // The core accepts 64 activity IDs per request (core/experimentQueries.ts); more must not remain awake forever.
+        const states: Record<string, 'working' | 'idle' | 'unknown'> = {}
+        for (let offset = 0; offset < ids.length; offset += 64) Object.assign(states, await this.core.agents.activity(ids.slice(offset, offset + 64)))
+        return states
+      }
       // The sessions the idle cleanup closed, read once a pass: only those the backend refuses work (review of #2953).
       const cleaned = began >= this.closedRefusedUntil ? cleanupClosed(this.core.dataDir, began) : new Set<string>()
       for (const row of pools) {
@@ -596,6 +610,7 @@ export class ContributedMachines {
           pending.map(start => start.id).sort(), [...preparing].sort(), refusedStarts.map(r => r.startId).sort(),
           // A privacy result that changes (a home folder opened again) is sent at once, not on the next beat.
           privacy ? [privacy.mode, 'passed' in privacy ? privacy.passed : null, 'item' in privacy ? privacy.item : null] : null,
+          row.buddySleepWanted === true,
           typeof row.localGrid === 'string' ? modelsStamp : null])
         const last = this.published.get(String(row.tabId))
         // A model still starting is read again every pass until the grid lists it, so the panel shows it live at once.
@@ -663,8 +678,14 @@ export class ContributedMachines {
         // every reading with it.
         // Only to a backend that asks for capabilities, as it is new enough to know the field: an older one refuses it.
         const profiles = row.capabilitiesWanted === true && began >= this.profilesRefusedUntil ? await this.profiles(local, engines, allowances) : []
+        const idleBuddies: Record<string, string> | null = row.buddySleepWanted === true
+          ? await (buddyActivity ??= readBuddyActivity().catch(error => {
+            this.log(`Could not read Buddy activity: ${error instanceof Error ? error.name : typeof error}`)
+            return {}
+          })) : null
         const observation = { generation: pool.generation, tools: reportedTools, ...(Object.keys(tokens).length ? { harnessTokens: tokens } : {}),
           ...(Object.keys(quotaReasons).length ? { quotaReasons } : {}),
+          ...(idleBuddies ? { idleBuddyHarnessIds: running.filter(id => idleBuddies[id] === 'idle').slice(0, 1000) } : {}),
           ...(profiles.length ? { profiles } : {}),
           ...(row.capabilitiesWanted === true ? { capabilities: CAPABILITIES } : {}),
           ...(preparing.length ? { preparingStartIds: preparing } : {}),
@@ -908,9 +929,9 @@ export class ContributedMachines {
     return lost
   }
 
-  /** What [beat] sends again for a Swarm: the reading the backend took, without whether folders hold uncommitted work. */
+  /** What [beat] sends again for a Swarm: the reading the backend took, without folder or Buddy idle proof; an unchanged heartbeat cannot vouch for either. */
   private taken(tab: string, body: Record<string, unknown>) {
-    const { harnessUncommitted: _fresh, ...kept } = body
+    const { harnessUncommitted: _fresh, idleBuddyHarnessIds: _idle, ...kept } = body
     this.lastSent.set(tab, { path: `/api/super-tabs/${tab}/machines/${this.machineId}`, body: kept, at: this.deps.now() })
   }
 
@@ -922,7 +943,8 @@ export class ContributedMachines {
    */
   private async sendAlone({ tab, observation, localModels }: Reading, began: number, refused?: SuperTabHostError): Promise<void> {
     const path = `/api/super-tabs/${tab}/machines/${this.machineId}`
-    const { closedHarnessIds: _closed, ...unclosed } = observation
+    const { idleBuddyHarnessIds: _idle, ...withoutIdle } = observation
+    const { closedHarnessIds: _closed, ...unclosed } = withoutIdle
     const { refusedStarts: _refusedStarts, ...unrefused } = unclosed
     const { profiles: _profiles, ...unprofiled } = unrefused
     const { quotaReasons: _reasons, ...unreasoned } = unprofiled
@@ -936,7 +958,7 @@ export class ContributedMachines {
     // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
     const listedOnly = localModels?.some(m => m.starting)
       ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
-    const attempts = [...('closedHarnessIds' in observation ? [observation] : []), ...('refusedStarts' in unclosed ? [unclosed] : []), ...('profiles' in unrefused ? [unrefused] : []), ...('quotaReasons' in unprofiled ? [unprofiled] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
+    const attempts = [...('idleBuddyHarnessIds' in observation ? [observation] : []), ...('closedHarnessIds' in withoutIdle ? [withoutIdle] : []), ...('refusedStarts' in unclosed ? [unclosed] : []), ...('profiles' in unrefused ? [unrefused] : []), ...('quotaReasons' in unprofiled ? [unprofiled] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
       ...('harnessUncommitted' in unprepared ? [unprepared] : []),
       ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
       ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,
@@ -1133,6 +1155,7 @@ export class ContributedMachines {
     // Diego, 10-30: a folder deleted by hand kept its record for good, and every later stop tried it again. Only a folder
     // that is not there drops it; one that cannot be read for any other reason keeps it. Nothing on disk is touched.
     if (await folderGone(record.path)) return writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
+    if (record.kind === 'agent-folder') return this.removeAgentFolder(file, record, mine)
     if (!await swarmWorktree(record.path, record.source, record.startId)) {
       // The record no longer proves this belongs to Harness. Keep it; never loosen the proof to recover it.
       if (await folderGone(record.path)) return writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
@@ -1154,13 +1177,30 @@ export class ContributedMachines {
     writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
   }
 
-  /** A removal deletes only what is provably the Swarm's: the record says which worktree each start made. */
+  /** An agent's own folder (#3713), only when it is still the one Harness made and marked in its agent-home folder, and no
+   *  session, live or paused, works in it: it holds nothing but that agent's own work. A record that no longer proves that
+   *  is kept, its folder untouched; the log names no path. */
+  private async removeAgentFolder(file: string, record: SwarmWorktree, mine: (w: SwarmWorktree) => boolean): Promise<void> {
+    if (!removableAgentFolder(record.path, projectsRoot())) { this.log('Kept an agent folder: AGENT_FOLDER_UNPROVEN'); return }
+    const used = this.core.agents.live().some(a => !!a.cwd && within(record.path, a.cwd))
+      || this.core.agents.all().some(a => a.agentId !== record.harnessId && !!a.cwd && within(record.path, a.cwd))
+    if (used) return
+    // The agent's work is never deleted with its folder (security review of #3341): one that holds any is kept, with its
+    // record, for its person, as a worktree with uncommitted changes is.
+    if (!agentFolderEmpty(record.path)) { this.log('Kept an agent folder: AGENT_FOLDER_HAS_WORK'); return }
+    try { rmSync(record.path, { recursive: true, force: true }) } catch { this.log('Kept an agent folder: AGENT_FOLDER_REMOVAL_FAILED'); return }
+    writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
+  }
+
+  /** A removal deletes only what is provably the Swarm's: the record says which worktree, or agent folder, each start made. */
   private recordWorktree(tabId: string, startId: string, harnessId: string, request: Record<string, unknown>) {
     const path = this.core.agents.byAgent(harnessId)?.cwd
-    if (request.worktree !== true || typeof request.cwd !== 'string' || !path) return
+    const agentFolder = request.worktree !== true && !!path && removableAgentFolder(path, projectsRoot())
+    if ((request.worktree !== true && !agentFolder) || typeof request.cwd !== 'string' || !path) return
     try {
       const file = swarmWorktreesFile(this.core.dataDir, this.machineId), worktrees = readWorktrees(file)
-      if (!worktrees.some(w => w.tabId === tabId && w.startId === startId)) writeWorktrees(file, [...worktrees, { tabId, startId, harnessId, source: request.cwd, path }])
+      if (!worktrees.some(w => w.tabId === tabId && w.startId === startId)) writeWorktrees(file, [...worktrees, { tabId, startId, harnessId,
+        source: request.cwd, path, ...(agentFolder ? { kind: 'agent-folder' as const } : {}) }])
     } catch (error) { this.log(`Could not record the worktree of Swarm start ${startId}: ${error instanceof Error ? error.message : String(error)}`) }
   }
   private log(message: string) { (this.deps.log ?? (line => console.warn(`[super-tabs] ${line}`)))(message) }

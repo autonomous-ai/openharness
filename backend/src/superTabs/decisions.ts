@@ -3,7 +3,7 @@
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: the PM's private lines go
  *  to the person's Buddy chat (buddies.ts). Called inside SuperTabStore's transactions. */
-import { isBuddy, isSwarmBuddy, openBuddyChat, openSwarmBuddyChat } from './buddies.js'
+import { defaultBuddyChat, isBuddy, isSwarmBuddy, openBuddyChat } from './buddies.js'
 import { usernameOf } from './usernames.js'
 import { agentWrittenNameOf } from './personNames.js'
 import { createHash } from 'node:crypto'
@@ -183,7 +183,7 @@ function delegatedLine(state: SuperTabState, projectId: string, leadId: string, 
   const question = asked.question.replace(/\s+/g, ' ')
   const text = `${defaulted ? `Default applied: ${asked.options[choice]!}` : answerText(asked.options[choice]!, true)} — ${question}`
   // In their one Buddy chat, marked with its project (Dee, 10-31), and in their older chat there for older apps.
-  return [{ conversationId: openSwarmBuddyChat(state, to).id, author, text, source: { kind: 'decision-delegated', decisionId: asked.id, projectId }, buddyProject: projectId },
+  return [{ conversationId: defaultBuddyChat(state, to).id, author, text, source: { kind: 'decision-delegated', decisionId: asked.id, projectId }, buddyProject: projectId },
     { conversationId: openBuddyChat(state, projectId, to).id, author, text, source: { kind: 'decision-delegated', decisionId: asked.id } }]
 }
 
