@@ -113,6 +113,7 @@ import 'visible_tick.dart';
 import 'buddy_rows.dart';
 import 'task_groups.dart';
 import 'tasks_view.dart';
+import 'tasks/personal_tasks_pane.dart';
 import 'voice_length.dart';
 import '../widgets/dial_list_scroll.dart';
 import '../widgets/laid_out_list.dart';
@@ -6253,9 +6254,10 @@ class _SuperTabViewState extends State<SuperTabView>
                     ? null
                     : boardLayout
                     ? widget.rightPane?.call(context) ??
-                          (agentChat
-                              ? const SizedBox.expand()
-                              : _boardChat(chat))
+                          SuperTabPersonalTasksPane(
+                            controller: c,
+                            onOpenTask: (id) => unawaited(_openTask(id)),
+                          )
                     : thread ??
                           (_rosterOpen
                               ? roster

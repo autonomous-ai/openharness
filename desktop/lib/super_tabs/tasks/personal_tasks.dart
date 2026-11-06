@@ -66,7 +66,9 @@ class SuperTabPersonalTasks {
   }
 
   Map<String, dynamic> toJson() => {
-    'approvalMode': mode, 'reset': true,
-    'upserts': [for (final row in rows) row.json], 'removed': <String>[],
+    'approvalMode': mode,
+    'reset': true,
+    'upserts': [for (final row in rows) row.json],
+    'removed': <String>[],
   };
 }
