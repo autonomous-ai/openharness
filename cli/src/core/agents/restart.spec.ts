@@ -847,6 +847,48 @@ describe('restarting an agent', () => {
       expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, 'none')
     })
 
+    it.each(['reply', 'throw'] as const)('a failed recovery to the default account stops after one %s', async failure => {
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.mocked(carryClaudeTranscript).mockReturnValueOnce({ transcriptPath: '/t', copied: true })
+        .mockReturnValueOnce({ transcriptPath: '/t', copied: true })
+      vi.mocked(restartAgent).mockImplementationOnce(async (_session, _bypass, deps) => {
+        await deps.prepareResume?.()
+        return { ok: false, detail: 'move failed' }
+      }).mockImplementationOnce(async () => {
+        if (failure === 'throw') throw new Error('private recovery detail')
+        return { ok: false, detail: 'private recovery detail' }
+      })
+      const run = setup(row({ claudeHome: null }), { profileHomes: () => [to],
+        downgradedPermission: vi.fn(async () => ({ bypassPermission: false })) as never })
+      expect(await run.restart('a1', undefined, to)).toMatchObject({ ok: false, error: 'RESTART_FAILED', detail: 'move failed' })
+      expect(restartAgent).toHaveBeenCalledTimes(2)
+      const recovery = vi.mocked(run.deps.paneSwapDeps).mock.calls[1]
+      expect(recovery[2]).toMatchObject({ env: { GRID_KEY: 'k' }, clearEnv: ['CLAUDE_CONFIG_DIR'] })
+      expect(recovery[2]?.env).not.toHaveProperty('CLAUDE_CONFIG_DIR')
+      expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+      expect(warning).toHaveBeenCalledWith('[restart] a1 account move recovery failed')
+      expect(warning.mock.calls.flat().join(' ')).not.toContain('private recovery detail')
+    })
+
+    it.each(['before recovery', 'during recovery'] as const)('does not reactivate a PM stopped %s', async when => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const run = setup(row(), { profileHomes: () => [to] })
+      vi.mocked(restartAgent).mockImplementationOnce(async (_session, _bypass, deps) => {
+        await deps.prepareResume?.()
+        if (when === 'before recovery') { run.state.live = false; throw new Error('cancelled') }
+        return { ok: false, detail: 'move failed' }
+      }).mockImplementationOnce(async () => {
+        run.state.live = false
+        return { ok: true, resumed: true, processIdentity: newProcess }
+      })
+      await run.restart('a1', undefined, to).catch(() => undefined)
+      expect(restartAgent).toHaveBeenCalledTimes(when === 'before recovery' ? 1 : 2)
+      expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+      expect(run.deps.registry.setActive).not.toHaveBeenCalled()
+      // The unused one-shot must not become the next spec's restart.
+      vi.mocked(restartAgent).mockReset().mockResolvedValue({ ok: true, resumed: true, processIdentity: newProcess })
+    })
+
     it('leaves another engine\'s relaunch environment as it is', async () => {
       const run = setup(row({ engine: 'codex', claudeHome: null } as never))
       await run.restart('a1')
