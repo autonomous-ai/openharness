@@ -35,13 +35,36 @@ const body = z.object({
  * it changed, and every few minutes otherwise.
  * Best effort — the invitation is already persisted, and an address with no account has nobody to tell.
  */
-async function tellRecipient(shareId: string): Promise<void> {
+/** How often at most a recipient's apps are told their shares changed (task #3925): told at once, then once more after a burst.
+ *  A Swarm's agent restarts made a share per new agent for each member, and each told every app of theirs to read its shares
+ *  again: harness-shares became the backend's top database cost (Ken's scan, 11-06 16:20 VN). */
+export const SHARES_TOLD_MS = 10_000
+
+/** Tells a recipient's apps their shares changed: at once, then at most once a SHARES_TOLD_MS, with one more at the end of a
+ *  burst so the last change is never lost. Per server process, which a recipient's apps each hear through the bus. */
+function shareListTeller(): (recipientId: string) => Promise<void> {
+  const held = new Map<string, { again: boolean }>()
+  const tell = async (recipientId: string): Promise<void> => {
+    const window = held.get(recipientId)
+    if (window) { window.again = true; return }
+    const next = { again: false }
+    held.set(recipientId, next)
+    setTimeout(() => {
+      held.delete(recipientId)
+      if (next.again) void tell(recipientId).catch(() => {})
+    }, SHARES_TOLD_MS).unref?.()
+    await publishDeviceMachineListChanged(recipientId, { reason: 'harness_shares' })
+  }
+  return tell
+}
+
+async function tellRecipient(shareId: string, tell: (recipientId: string) => Promise<void>): Promise<void> {
   try {
     const share = await prisma.harnessShare.findUnique({ where: { id: shareId } })
     if (!share) return
     const recipient = await prisma.user.findUnique({ where: { email: share.recipientEmail }, select: { id: true } })
     if (recipient) {
-      await publishDeviceMachineListChanged(recipient.id, { reason: 'harness_shares' })
+      await tell(recipient.id)
       logger.info('harness share: told the recipient it changed', { shareId, recipientId: recipient.id })
     }
     // A private link admits the recipient only through this invitation (harnessLinks.ts recipientLink): its viewers check again.
@@ -66,6 +89,7 @@ export async function recipientShare(id: string, user: AuthUser, db: PrismaClien
 }
 
 export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
+  const tellShareList = shareListTeller()
   app.get('/api/harness-shares', async (req, reply) => {
     const shares = await prisma.harnessShare.findMany({ where: {
       recipientEmail: req.user!.email.trim().toLowerCase(), autonomousEnv: req.user!.autonomousEnv,
@@ -138,7 +162,7 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
       if (!existing || existing.revokedAt != null || existing.name !== data.name || existing.engine !== data.engine
         || (existing.superTabId ?? null) !== data.superTabId || existing.ownerPublicKey !== data.ownerPublicKey) {
         await publishShareChanged(req.params.id)
-        await tellRecipient(req.params.id)
+        await tellRecipient(req.params.id, tellShareList)
       }
       sendSuccess(reply, { id: req.params.id })
     },
@@ -157,7 +181,7 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
         return sendError(reply, 'Invitation not found.', 'NOT_FOUND', 404)
       }
       await publishShareChanged(req.params.id)
-      await tellRecipient(req.params.id)
+      await tellRecipient(req.params.id, tellShareList)
       sendSuccess(reply, { removed: true })
     })
 }
