@@ -46,7 +46,9 @@ function fixture() {
   const linux2 = add('linux-tst2', task, 'Tester', 'linux1'), mac2 = add('mac-tst2', task, 'Tester', 'mac1'), win = add('win-tst', task, 'Tester', 'win1')
   const agent = (id: string) => state.agents.find(a => a.id === id)!
   const busy = [linux2, mac2, win].map(id => { const a = agent(id); const was = a.workDecision; a.workDecision = 'stop'; return () => { agent(id).workDecision = was } })
-  state.machines = [machine('mac0', 'macOS'), machine('mac1', 'macOS'), machine('linux1', 'Linux'), machine('win1', 'Windows')] as never
+  const generation = state.people.find(p => p.id === 'owner')!.generation
+  state.machines = [machine('mac0', 'macOS'), machine('mac1', 'macOS'), machine('linux1', 'Linux'), machine('win1', 'Windows')]
+    .map(m => ({ ...m, membershipGeneration: generation })) as never
   run({ type: 'work.status', conversationId: task, assignmentId: state.conversations.find(c => c.id === task)!.assignment!.id, status: 'review',
     result: `Ready: ${PR}` } as Command, as(dev), { pullRequestFiles: { urls: [PR], head: 'abc1234', files: ['cli/src/superTabs/host.ts'] } })
   const step = (name: string) => stepsOf(state, task).find(s => s.step === name)!
@@ -88,5 +90,32 @@ describe('a step named for an OS', () => {
     const plain = f.run({ type: 'conversation.create', title: 'Test', brief: 'Test it.', reviewOf: f.task, step: 'Test',
       checks: [{ description: 'Runs.', independent: true }] }, f.as(f.lead)).result.conversationId as string
     expect(() => f.run({ type: 'work.assign', conversationId: plain, agentId: f.win }, f.as(f.lead))).not.toThrow()
+  })
+
+  const candidate = (id: string, machineId: string) => ({ id, kind: 'new', machineId, engine: 'claude', model: 'opus', effort: 'high',
+    quality: 3, cost: 2, title: `${id} on ${machineId}`, label: `Label ${id}` })
+  const record = (candidates: unknown[]) => ({ assessment: { difficulty: 'low', risk: 'low', why: 'A Linux test.' }, candidates, excluded: [],
+    floor: 2, notes: false, via: 'instructions', p: null, belowFloor: false, why: 'Instructions.' })
+  const requirements = { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }
+
+  it('is routed only to its OS: a Mac or Windows candidate moves to the exclusions with why, and a route with no Linux one is refused', () => {
+    const f = fixture()
+    f.lose()
+    const routed = f.run({ type: 'route.record', conversationId: f.linuxStep.id,
+      decision: record([candidate('c0', 'mac1'), candidate('c1', 'linux1'), candidate('c2', 'win1')]) } as Command)
+    expect(routed.routeDecisions[0]).toMatchObject({ op: 'create', record: { candidates: [{ id: 'c1' }],
+      excluded: [{ title: 'c0 on mac1', reason: expect.stringContaining('runs only on a Linux machine, and mac1 reports macOS') },
+        { title: 'c2 on win1', reason: expect.stringContaining('win1 reports Windows') }] } })
+    expect(() => f.run({ type: 'route.record', conversationId: f.linuxStep.id, decision: record([candidate('c0', 'mac1')]) } as Command))
+      .toThrow(expect.objectContaining({ code: 'STEP_OS' }))
+  })
+
+  it('is refused a new agent started on a machine of another OS', () => {
+    const f = fixture()
+    f.lose()
+    const start = (machineId: string) => () => f.run({ type: 'agent.start', request: { conversationId: f.linuxStep.id, machineId, engine: 'claude',
+      name: 'Tester', cwd: '/swarm/lead', worktree: true, requirements } } as Command, owner, contribution)
+    expect(start('mac1')).toThrow(expect.objectContaining({ code: 'STEP_OS' }))
+    expect(start('linux1')).not.toThrow()
   })
 })
