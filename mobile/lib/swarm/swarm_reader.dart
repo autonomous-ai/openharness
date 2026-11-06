@@ -552,9 +552,18 @@ class SwarmReader extends ChangeNotifier {
   /// then earlier ones until a page ends before [since] or [_shippedPages] are
   /// read. Once, whatever follows: a task that closes later is one the read
   /// holds already. A failed page is logged by its name and flagged, not
-  /// thrown: the Board shows the rest, and asking again reads again.
-  Future<void> loadShipped(String projectId, DateTime since) {
-    if (_disposed || _shippedRead.contains(projectId)) return Future.value();
+  /// thrown: the Board shows the rest, and only a person's [retry] reads again,
+  /// so a failing backend is not asked on every change.
+  Future<void> loadShipped(
+    String projectId,
+    DateTime since, {
+    bool retry = false,
+  }) {
+    if (_disposed ||
+        _shippedRead.contains(projectId) ||
+        (!retry && _shippedFailed.contains(projectId))) {
+      return Future.value();
+    }
     // A block, not an arrow: `remove` returns the very future being completed.
     return _shippedReads[projectId] ??= _loadShipped(projectId, since)
         .whenComplete(() {
