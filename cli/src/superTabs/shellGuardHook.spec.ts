@@ -39,4 +39,12 @@ describe('shell guard hook', () => {
     hookAnswer(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls' }, cwd: '/work/tree' }), (cwd) => { seen.push(cwd); return facts(cwd) })
     expect(seen).toEqual(['/work/tree'])
   })
+
+  it('uses a Codex command workdir when checking a relative worktree removal', () => {
+    const tree = '/work/trees/live'
+    const result = hookAnswer(JSON.stringify({ tool_name: 'exec_command', cwd: '/work/repo',
+      tool_input: { cmd: 'git worktree remove .', workdir: tree } }), cwd => ({ ...facts(cwd),
+      linkedWorktree: path => path === tree, liveCwds: () => [{ pid: 4242, cwd: tree }] }))
+    expect(result).toBe(deny(GUARD_REASONS.liveWorktree(tree, 4242)))
+  })
 })

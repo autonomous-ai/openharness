@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { GUARD_REASONS, shellRefusal, type GuardFacts } from './shellGuard.js'
+import { GUARD_REASONS, fileRefusal, shellRefusal, type GuardFacts } from './shellGuard.js'
 
 /** No filesystem and no live processes: each rule is read from the words alone. */
 const facts = (over: Partial<GuardFacts> = {}): GuardFacts => ({
@@ -71,6 +71,9 @@ describe('shell guard: sudo and system-wide installs', () => {
     'apt install jq',
     'dnf install gcc',
     'port install wget',
+    'pacman -S ripgrep',
+    'pacman -Syu',
+    'pacman -Rns ripgrep',
     'pip install --break-system-packages requests',
     'python3 -m pip install --break-system-packages rich',
     'installer -pkg Thing.pkg -target /',
@@ -93,6 +96,8 @@ describe('shell guard: sudo and system-wide installs', () => {
     'pnpm install',
     'brew list',
     'brew --prefix',
+    'pacman -Qq',
+    'pacman --query ripgrep',
     'pip install -r requirements.txt',
     'python3 -m venv .venv && .venv/bin/pip install rich',
     'cargo install ripgrep --root "$T/tools"',
@@ -159,6 +164,26 @@ describe('shell guard: fixed names in /tmp', () => {
     expect(refused('cat /private/tmp/claude-600/project/tasks/abc.output', { privateFolder: own })).toBeNull()
     expect(refused('tail -5 /tmp/claude-600/x/y.output', { privateFolder: own })).toBeNull()
     expect(refused('cat /private/tmp/claude-501/x/scratchpad/notes.md', { privateFolder: own })).toBe(GUARD_REASONS.fixedTmp)
+  })
+
+  it('checks relative redirections against the command cwd', () => {
+    expect(refused('echo hi > shared.txt', { cwd: '/tmp' })).toBe(GUARD_REASONS.fixedTmp)
+    expect(refused('echo hi > shared.txt')).toBeNull()
+    expect(refused('echo hi', { cwd: '/tmp' })).toBeNull()
+  })
+
+  it('does not treat an escape from a private temporary folder as private', () => {
+    const own = (path: string) => path === '/tmp/private'
+    expect(refused('echo hi > /tmp/private/../shared.txt', { privateFolder: own })).toBe(GUARD_REASONS.fixedTmp)
+    expect(refused('echo hi > ../shared.txt', { cwd: '/tmp/private', privateFolder: own })).toBe(GUARD_REASONS.fixedTmp)
+    expect(refused('echo hi > inside.txt', { cwd: '/tmp/private', privateFolder: own })).toBeNull()
+  })
+
+  it('checks relative file-tool paths before allowing a fixed temporary name', () => {
+    expect(fileRefusal('shared.txt', facts({ cwd: '/tmp' }))).toBe(GUARD_REASONS.fixedTmp)
+    expect(fileRefusal('../shared.txt', facts({ cwd: '/tmp/private', privateFolder: path => path === '/tmp/private' })))
+      .toBe(GUARD_REASONS.fixedTmp)
+    expect(fileRefusal('notes.md', facts())).toBeNull()
   })
 })
 
