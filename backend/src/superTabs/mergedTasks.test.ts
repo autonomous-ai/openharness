@@ -67,6 +67,20 @@ describe('a task with a recorded merge', () => {
     expect(f.open()).not.toContain(f.test)
   })
 
+  // Security review 1 of #3438: a task that ships in two pull requests is merged only once both are.
+  it('with one of its two code pull requests merged, is still handed on and never closed', () => {
+    const f = fixture()
+    const SECOND = 'https://github.com/acme/app/pull/8'
+    const g = f.group(f.task)
+    g.pullRequestUrls = [...g.pullRequestUrls ?? [], SECOND]
+    g.codePullRequestUrls = [...g.codePullRequestUrls ?? [], SECOND]
+    f.merge()
+    f.lose(f.task)
+    expect(f.open()).toContain(f.task)
+    sweepLiveness(f.state, f.now, () => DISPATCH_RULES)
+    expect(f.group(f.task).assignment!.status).toBe('lost')
+  })
+
   it('unmerged, is still handed on when lost, and so is its lost step while it is in review', () => {
     const f = fixture()
     expect(f.open()).toContain(f.test)
