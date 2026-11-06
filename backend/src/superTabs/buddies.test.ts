@@ -1601,7 +1601,10 @@ describe('several Buddies', () => {
     const failed = f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' } as Command, peer, host)
     f.run({ type: 'agent.startFailed', startId: failed.result.startId as string, error: 'It did not launch.' }, peer, host)
     add(f, { name: 'Planning' })
+    const starts = f.state.starts!.length
     expect(refusal(() => f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', conversationId: failed.result.conversationId } as Command, peer, host))?.code).toBe('BUDDY_CAP')
+    // A refusal starts nothing.
+    expect(f.state.starts!.length).toBe(starts)
     // The main chat left empty, with the cap lowered below what is left: neither a new Buddy nor that chat takes one.
     const g = fresh()
     g.run({ type: 'tab.buddyCap', cap: 3 } as Command, owner)
@@ -1612,6 +1615,7 @@ describe('several Buddies', () => {
     g.run({ type: 'tab.buddyCap', cap: 2 } as Command, owner)
     expect(refusal(() => g.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Writing' } as Command, peer, host))?.code).toBe('BUDDY_CAP')
     expect(refusal(() => g.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', conversationId: peerSwarmChat } as Command, peer, host))?.code).toBe('BUDDY_CAP')
+    expect(g.state.starts!.filter(s => !s.harnessId && !s.error)).toEqual([])
   })
 
   it('moves the default, passes it to the oldest left when the default is removed, and archives a removed Buddy\'s chat', () => {
