@@ -1,7 +1,7 @@
 import { AGENT_FOLDER_MARK, agentFolderFor } from './agentFolder.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
@@ -167,7 +167,10 @@ describe('Swarm permission mode', () => {
       expect(result).toMatchObject({ ok: true })
       const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
       expect(payload).toMatchObject({ permissionMode: 'full', bypassPermission: true, swarmRole: 'dev' })
-      const argv = buildEngineCommandArgv(engine, { permissionMode: String(payload.permissionMode) })
+      // On Windows a launch first verifies the flags the engine's startup takes (lib/windows/engineStart.ts); given here as a
+      // verified launch gives them, so this reads the permission flags alone (Window of Tim, #3815).
+      const argv = buildEngineCommandArgv(engine, { permissionMode: String(payload.permissionMode),
+        ...(process.platform === 'win32' ? { native: { startupArgs: [] } as never } : {}) })
       expect(argv).toContain(engine === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox')
     }
   })
@@ -195,7 +198,7 @@ describe('Swarm permission mode', () => {
       expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
       const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
       expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: true })
-      expect(String(payload.codexHome)).toContain(`/${PM_HOMES}/`)
+      expect(String(payload.codexHome)).toContain(`${sep}${PM_HOMES}${sep}`)
       rmSync(dirname(String(payload.codexHome)), { recursive: true, force: true })
     } finally { teamDaemon.value = false }
   })
@@ -871,7 +874,7 @@ describe('which branch a worktree starts from', () => {
   })
   // Scholes, 11-06 (#3713): computer's Dee started in a Claude scratchpad, asked "Do you trust this folder?" on every run.
   it('is a permanent folder Harness makes and marks when the folder named is a temporary one', async () => {
-    const [payload] = await created(request => { request.worktree = false; request.cwd = '/private/tmp/claude-501/-Users-mac/abc/scratchpad' })
+    const [payload] = await created(request => { request.worktree = false; request.cwd = join(tmpdir(), 'claude-501', '-Users-mac', 'abc', 'scratchpad') })
     const folder = agentFolderFor(projectsRoot(), 'start')
     expect(payload).toMatchObject({ cwd: folder })
     expect(existsSync(join(folder, AGENT_FOLDER_MARK))).toBe(true)

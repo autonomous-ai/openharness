@@ -84,7 +84,10 @@ describe('dshShellArgv on Windows', () => {
       // tty"). Harness's Node is a C:\ folder, which Git Bash's PATH cannot hold until cygpath writes it as /c/....
       const home = join(dir, 'home'); const stubs = join(dir, 'stubs'); const runtime = join(dir, 'runtime')
       for (const folder of [home, stubs, runtime]) mkdirSync(folder)
-      writeFileSync(join(home, '.bash_profile'), "alias node='echo winpty-node'\n")
+      // A Mac's /etc/profile puts its own folders (/usr/local/bin) ahead of the PATH it was given, so a Node installed there
+      // would be found by `command -v node` and the fallback never run: empty output on such a Mac. Git Bash on Windows has
+      // no Node on its PATH, so the profile fixes PATH to the stubs, as it was before the login shell ran.
+      writeFileSync(join(home, '.bash_profile'), `alias node='echo winpty-node'\nexport PATH='${stubs}'\n`)
       writeFileSync(join(runtime, 'node'), '#!/bin/sh\necho harness-node\n', { mode: 0o755 })
       writeFileSync(join(stubs, 'cygpath'), `#!/bin/sh\n[ "$1" = -u ] && [ "$2" = -- ] || exit 9\nprintf '%s\\n' "$3" > '${join(dir, 'asked')}'\nprintf '%s\\n' '${runtime}'\n`, { mode: 0o755 })
       const { args } = dshShellArgv('node', { platform: 'win32', gitBash: () => '/bin/bash' })
