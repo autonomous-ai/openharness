@@ -200,7 +200,10 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
   const result = await startOnce(input, scoped, where, open)
   // The host settles its own queued starts.
   if (input.hostDispatch === true) return result
-  return result.queued === true && input.action === 'start' ? watchQueued(result, scoped, pause) : result
+  // A start that names its task is not watched: the server assigns the agent when its host reports it ready and tells the coordinator
+  // if the start fails (backend commands.ts startAssignment, task #3614), so the call returns its receipt at once.
+  if (result.queued === true && input.action === 'start' && object(input.request).assign === undefined) return watchQueued(result, scoped, pause)
+  return result
 }
 
 const WATCH_READS = 10, WATCH_EVERY_MS = 2_000
