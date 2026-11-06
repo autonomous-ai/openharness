@@ -1,6 +1,6 @@
 /**
  * The shell guard's hook (superTabs/shellGuard.ts), which a Swarm agent's engine runs before each tool call
- * (superTabs/shellGuardLaunch.ts). Claude Code and Codex hand it the same JSON on stdin (`tool_name`, `tool_input`, `cwd`)
+ * (lib/agentShellGuard.ts). Claude Code and Codex hand it the same JSON on stdin (`tool_name`, `tool_input`, `cwd`)
  * and read the same answer on stdout: a `PreToolUse` decision of `deny` with its reason, or nothing, which leaves the call
  * to the session's own permissions (the old Buddy guard's shape, __fixtures__/buddy-guard-before-2832.mjs; Codex 0.166's
  * `PreToolUseHookSpecificOutputWire`). It imports nothing but the guard and Node's own modules: it runs at every command.
