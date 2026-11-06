@@ -338,7 +338,7 @@ void main() {
       final queued = [
         task(id: 'q1', number: 1, queueRank: 30),
         task(id: 'q2', number: 2, queueRank: 10),
-        task(id: 'q3', number: 3),
+        task(id: 'q3', number: 20),
       ];
       final b = ids(
         board(

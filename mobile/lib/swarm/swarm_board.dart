@@ -2,6 +2,29 @@ import 'package:collection/collection.dart';
 
 import 'model.dart';
 
+/// A Buddy proposal in a project's chat that its PM has not answered yet, as
+/// the proposals read answers it (backend proposals.ts): not part of the
+/// Swarm's state. Its root message, its title, the person it was sent for, the
+/// priority of the task it asks for (P2 from a server that sends none) and
+/// when it came.
+class SwarmProposal {
+  SwarmProposal.fromJson(Map<String, dynamic> answer)
+    : messageId = answer['messageId'] as String,
+      title = answer['title'] as String? ?? '',
+      personId = answer['personId'] as String?,
+      priority = _priorities.contains(answer['priority'])
+          ? answer['priority'] as String
+          : 'P2',
+      at = DateTime.fromMillisecondsSinceEpoch(
+        (answer['at'] as num? ?? 0).toInt(),
+      );
+  final String messageId, title, priority;
+  final String? personId;
+  final DateTime at;
+}
+
+const _priorities = ['P0', 'P1', 'P2', 'P3'];
+
 /// The columns of a project's Board, in this order (the Task Board table of
 /// docs/plans/2026-11-06-buddy-board-final-spec.md; Desktop's Tasks board,
 /// task #3812): where each ask is on its way from proposal to shipped.
@@ -185,3 +208,93 @@ SwarmBoardPlace? swarmBoardPlaceOf(
     },
   };
 }
+
+/// One card of the Board: a task, or a proposal not yet a task.
+typedef SwarmBoardEntry = ({
+  SuperTabConversation? task,
+  SwarmProposal? proposal,
+  bool needsYou,
+  String? state,
+});
+
+/// [priority] as the server keeps it, P2 when it has none, as an index into
+/// P0 to P3.
+int _priorityOf(String? priority) {
+  final at = _priorities.indexOf(priority ?? 'P2');
+  return at < 0 ? _priorities.indexOf('P2') : at;
+}
+
+int _entryPriority(SwarmBoardEntry entry) => _priorityOf(
+  entry.task == null ? entry.proposal!.priority : entry.task!.priority,
+);
+
+/// Where [task] sits in its project's shared Next up: the rank a person or the
+/// PM gave it, else its number, so a new task joins the bottom.
+double _queueKey(SuperTabConversation task) =>
+    task.queueRank ?? (task.number ?? 0).toDouble();
+
+int _queueOrder(SuperTabConversation a, SuperTabConversation b) =>
+    switch (_queueKey(a).compareTo(_queueKey(b))) {
+      0 => (a.number ?? 0).compareTo(b.number ?? 0),
+      final c => c,
+    };
+
+/// The Board of a project: every column, in order and empty or not, each
+/// listing by priority, P0 first; within a priority what waits on the reader
+/// first, then proposals oldest first, Next up in the shared order, Working,
+/// Done and Merged newest first, and Shipped by when it shipped, newest
+/// first. [tasks] are the project's tasks the reader holds, [waiting] the ids
+/// of those that wait on the reader (the one rule Needs you uses).
+Map<SwarmBoardColumn, List<SwarmBoardEntry>> swarmBoardOf(
+  Iterable<SuperTabConversation> tasks, {
+  required Iterable<SwarmProposal> proposals,
+  required Set<String> waiting,
+  required DateTime now,
+  String? Function(String personId)? personName,
+}) {
+  final board = {
+    for (final column in SwarmBoardColumn.values) column: <SwarmBoardEntry>[],
+  };
+  board[SwarmBoardColumn.proposal]!.addAll([
+    for (final proposal in [...proposals]..sort((a, b) => a.at.compareTo(b.at)))
+      (task: null, proposal: proposal, needsYou: false, state: null),
+  ]);
+  for (final task in tasks) {
+    final place = swarmBoardPlaceOf(
+      task,
+      now: now,
+      needsYou: waiting.contains(task.id),
+      personName: personName,
+    );
+    if (place == null) continue;
+    board[place.column]!.add((
+      task: task,
+      proposal: null,
+      needsYou: place.needsYou,
+      state: place.state,
+    ));
+  }
+  int order(SwarmBoardColumn column, SwarmBoardEntry a, SwarmBoardEntry b) {
+    final priority = _entryPriority(a).compareTo(_entryPriority(b));
+    if (priority != 0) return priority;
+    if (a.needsYou != b.needsYou) return a.needsYou ? -1 : 1;
+    final (x, y) = (a.task, b.task);
+    if (x == null || y == null) return 0;
+    return switch (column) {
+      SwarmBoardColumn.nextUp => _queueOrder(x, y),
+      SwarmBoardColumn.shipped => (y.shippedAt ?? now).compareTo(
+        x.shippedAt ?? now,
+      ),
+      _ => (y.number ?? 0).compareTo(x.number ?? 0),
+    };
+  }
+
+  for (final MapEntry(key: column, value: entries) in board.entries) {
+    mergeSort(entries, compare: (a, b) => order(column, a, b));
+  }
+  return board;
+}
+
+/// How many cards of [board] wait on the reader.
+int swarmBoardNeedingYou(Map<SwarmBoardColumn, List<SwarmBoardEntry>> board) =>
+    board.values.expand((entries) => entries).where((e) => e.needsYou).length;
