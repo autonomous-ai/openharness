@@ -91,7 +91,11 @@ describe('personal Tasks summaries', () => {
     expect(personalTasksFor([did], view, peer)!.upserts).toEqual([expect.objectContaining({ id: row.key, status: 'done', agent: expect.objectContaining({ id: mine.id }) })])
     expect(personalTasksFor([did], view, owner)!.upserts.map(r => r.id)).toEqual([row.key])
     const soon = { ...did, data: { ...did.data, assignment: null, taskApproval: { personId: owner.userId, generation: 'any', state: 'proposal' as const, createdAt: NOW, suggestedAgentId: mine.id } } }
-    expect(personalTasksFor([soon], view, peer)!.upserts).toEqual([expect.objectContaining({ id: row.key, suggested: true, canApprove: true })])
+    // Another person's pending approval that suggests my agent is listed, never as mine to approve (security review 2 of #3465).
+    expect(personalTasksFor([soon], view, peer)!.upserts).toEqual([expect.objectContaining({ id: row.key, suggested: true, canApprove: false })])
+    const generation = s.f.state.people.find(p => p.id === peer.userId)!.generation
+    const mineToApprove = { ...soon, data: { ...soon.data, taskApproval: { ...soon.data.taskApproval, personId: peer.userId, generation } } }
+    expect(personalTasksFor([mineToApprove], view, peer)!.upserts).toEqual([expect.objectContaining({ id: row.key, canApprove: true })])
     expect(personalTasksFor([{ ...did, data: { ...did.data, assignment: work(lent.id) } }], view, peer)).toMatchObject({ upserts: [], removed: [row.key] })
   })
 
