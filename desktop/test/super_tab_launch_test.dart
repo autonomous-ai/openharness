@@ -564,8 +564,10 @@ void main() {
 
   for (final engine in ['claude', 'codex']) {
     for (final kind in ['new Swarm', 'new project', 'member']) {
+      // Swarm v3 (task #4215): a Swarm agent starts with the mode the person
+      // chose in Cmd-N, as any harness does; none is forced.
       test(
-        '$kind launches $engine in full mode without permission choices',
+        '$kind launches $engine in the permission mode the person chose',
         () async {
           final f = SuperTabLaunchFixture();
           await f.app.agentPreference.selectPermissionMode(engine, 'ask');
@@ -583,12 +585,9 @@ void main() {
           );
           expect(
             box.agentSettingsFor(engine).map((o) => o.id),
-            isNot(contains(NewHarnessController.permissionsId)),
+            contains(NewHarnessController.permissionsId),
           );
-          box.advancedOpen = true;
-          expect(box.fields, isNot(contains(NewHarnessField.mode)));
-          box.openLaunchSetting(NewHarnessField.mode);
-          expect(box.field, isNot(NewHarnessField.mode));
+          expect(box.mode, 'ask');
           expect(
             await box.create(),
             NewHarnessOutcome.created,
@@ -597,7 +596,8 @@ void main() {
           final request = f.connection.calls
               .firstWhere((c) => c.$1 == 'agent_create')
               .$2;
-          expect(request['permissionMode'], 'full');
+          expect(request['permissionMode'], 'ask');
+          expect(request['bypassPermission'], isFalse);
           expect(request['swarmRole'], kind == 'member' ? 'dev' : 'lead');
           expect(
             request['swarmSkillMode'],
