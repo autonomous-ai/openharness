@@ -16,10 +16,28 @@ final shots = Platform.environment['SUPER_TAB_WEEKLY_LEADERBOARD_SHOTS'];
 ConversationServer weeklySwarm() {
   final server = humansSwarm();
   server.leaderboard!['allProjects'] = true;
-  for (final row in (server.leaderboard!['people'] as List).cast<Map>()) {
-    row['accepted'] = 8;
-    row['agentsBrought'] = row['personId'] == 'peer' ? 3 : 1;
-  }
+  server.leaderboard!['people'] = [
+    for (final (id, rank, shipped, accepted, unblocked, points, agents, streak) in [
+      ('peer', 1, 6, 8, 3, 29, 3, 6),
+      ('tony', 2, 2, 4, 0, 10, 1, 2),
+      ('owner', 3, 1, 8, 4, 15, 1, 1),
+      ('scholes', 4, 0, 2, 2, 4, 1, 0),
+      ('diego', 5, 0, 1, 1, 2, 1, 0),
+      ('huy', 6, 0, 0, 0, 0, 1, 0),
+      ('maximilian.alexander.longname', 6, 0, 0, 0, 0, 0, 0),
+    ])
+      {
+        'personId': id,
+        'displayName': {'peer': 'Dee', 'owner': 'Ken', 'tony': 'Tony'}[id] ?? id,
+        'rank': rank,
+        'points': points,
+        'shipped': {'count': shipped},
+        'accepted': accepted,
+        'unblocked': {'count': unblocked},
+        'agentsBrought': agents,
+        'streakDays': streak,
+      },
+  ];
   return server;
 }
 
