@@ -14,6 +14,7 @@
 
 - No change to who can read a project; server filters projects, groups and agents before aggregation.
 - Weekly org rank: shipped count descending, then points; equal shipped and points share rank. Points: existing 3 per ship and 1–3 per unblock, plus 1 per accepted task. Accepted means a request's first assignment this week, credited to its requester, consistent with shipped credit. Retries and review steps earn no acceptance credit.
+- Visible agents without a project count before their first task too (v3 Regular agents from #4116); the server remains the visibility gate.
 - Agents brought is the current count of visible, own-account agents contributed by each person, excluding Buddy sessions and Team accounts; it earns no points. No lent column on the weekly page.
 - Light and dark; Desktop tests use memory fixtures and fake sign-in. No release or production writes.
 

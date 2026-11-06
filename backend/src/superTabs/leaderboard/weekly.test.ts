@@ -58,6 +58,15 @@ describe('org-wide weekly team play', () => {
     expect(view.goal.thisWeek.points).toBe(0)
   })
 
+  it('counts a visible agent with no project before its first task, without points', () => {
+    const { state, agent } = fixture()
+    const idle = agent('idle', { projectId: '' })
+    state.agents = [idle, agent('hidden', { projectId: 'other' })]
+    const view = leaderboard({ state, groups: [], machines: [], projectId: 'lead', week: WEEK, now: NOW,
+      allProjects: ['lead'], visibleAgents: [idle] })
+    expect(view.people.find(p => p.personId === 'owner')).toMatchObject({ agentsBrought: 1, points: 0 })
+  })
+
   it('preserves rolling and per-project scoring for existing clients', () => {
     const { state, request } = fixture()
     const args = { state, groups: [request('one')], machines: [], projectId: 'lead', week: WEEK, now: NOW }
