@@ -23,10 +23,6 @@ enum Intern3SwarmStep {
   /// Claude Code signed in on Intern 3, by the person on this phone: the run waits on them here ([awaitingSignIn]).
   signIn,
 
-  /// What Claude Code asks the first time it runs on Intern 3 — its theme, and full mode, which the Buddy runs in — answered
-  /// by the person on this phone rather than on a screen nobody is at: the run waits on them here ([awaitingFirstRun]).
-  firstRun,
-
   /// The person's Buddy: started on Intern 3, or the one already running kept.
   buddy,
 }
@@ -79,14 +75,9 @@ class Intern3Swarm extends ChangeNotifier {
   bool get awaitingSignIn =>
       step == Intern3SwarmStep.signIn && needsSignIn && !_busy && !done;
 
-  /// Claude Code's first-run questions are still to answer on Intern 3 (cli superTabs/contribution.ts `firstRun`): the run
-  /// stops at [Intern3SwarmStep.firstRun] until the person answers them ([answerFirstRun]). A CLI from before says nothing,
-  /// and its Swarm agents pass the screens by themselves.
-  bool needsFirstRun = false;
-
-  /// Waiting on the person to answer Claude Code's first-run questions.
-  bool get awaitingFirstRun =>
-      step == Intern3SwarmStep.firstRun && needsFirstRun && !_busy && !done;
+  /// Claude Code's first-run questions are still to answer on Intern 3 (cli superTabs/contribution.ts `firstRun`): answered
+  /// before the Buddy starts ([_answerFirstRun]). A CLI from before says nothing.
+  bool _needsFirstRun = false;
 
   /// Claude's sign-in page was opened.
   bool signInOpened = false;
@@ -132,8 +123,8 @@ class Intern3Swarm extends ChangeNotifier {
   }
 
   Future<void> run() => _go(() async {
-    // Waiting on the person's sign-in or answers: only they go on from here.
-    if (_reader != null && (needsSignIn || needsFirstRun)) return;
+    // Waiting on the person's sign-in: only it goes on from here.
+    if (_reader != null && needsSignIn) return;
     _at(Intern3SwarmStep.swarm);
     final reader = _reader = await _swarm();
     _at(Intern3SwarmStep.machine);
@@ -142,37 +133,25 @@ class Intern3Swarm extends ChangeNotifier {
       _at(Intern3SwarmStep.signIn);
       return;
     }
-    await _afterSignIn();
+    await _startBuddy();
   });
 
-  /// Signed in: Claude Code's first-run questions next when they are still to answer, else the Buddy.
-  Future<void> _afterSignIn() async {
-    if (needsFirstRun) {
-      _at(Intern3SwarmStep.firstRun);
-      return;
+  /// Claude Code's first-run questions on Intern 3 answered for the person, never shown (owner, 2026-11-06): its theme Dark
+  /// mode, as its screen first offers, and full mode accepted, which a Swarm's agents run in (cli engines/launchPrep.ts
+  /// answerFirstRun). A Harness from before has no such answer: its Buddy's screen asks, as before.
+  Future<void> _answerFirstRun() async {
+    if (!_needsFirstRun) return;
+    try {
+      final answer = await computers.ask(machineId, {
+        'action': 'claudeFirstRun',
+        'theme': 'dark',
+        'acceptFullMode': true,
+      });
+      if (answer['ok'] == true) _needsFirstRun = false;
+    } catch (_) {
+      // Its Buddy's screen asks instead, and the Swarm's own start records the same answers (core/agents/create.ts).
     }
-    await _startBuddy();
   }
-
-  /// The person's answers to Claude Code's first-run questions, recorded on Intern 3 (cli engines/launchPrep.ts
-  /// answerFirstRun): its [theme], and full mode accepted, which its Buddy runs in. Then the Buddy starts.
-  Future<void> answerFirstRun({required String theme}) => _go(() async {
-    final answer = await computers.ask(machineId, {
-      'action': 'claudeFirstRun',
-      'theme': theme,
-      'acceptFullMode': true,
-    });
-    if (answer['ok'] != true) {
-      throw SuperTabFailure(
-        answer['error'] as String? ?? 'FIRST_RUN_UNANSWERED',
-        answer['error'] == 'FIRST_RUN_UNANSWERED'
-            ? 'Claude Code on $machineName did not take the answers. Try again.'
-            : 'Update Harness on $machineName, then try again.',
-      );
-    }
-    needsFirstRun = false;
-    await _startBuddy();
-  });
 
   /// Opens Claude's sign-in for Intern 3: `claude auth login` starts there, and its page comes back for this phone to
   /// open. Null when it did not ([error] says why).
@@ -232,7 +211,7 @@ class Intern3Swarm extends ChangeNotifier {
     }
     _signInId = null;
     needsSignIn = false;
-    await _afterSignIn();
+    await _startBuddy();
   });
 
   /// One question to Intern 3's sign-in; its refusal (a code Claude did not take) throws, and the next page asked for
@@ -258,6 +237,7 @@ class Intern3Swarm extends ChangeNotifier {
   Future<void> _startBuddy() async {
     final reader = _reader!;
     _at(Intern3SwarmStep.buddy);
+    await _answerFirstRun();
     await _buddy(reader, _engine ?? 'claude');
     if (_disposed) return;
     this.reader = reader;
@@ -350,7 +330,7 @@ class Intern3Swarm extends ChangeNotifier {
     // A CLI from before `signedIn` does not say: the Buddy's terminal does.
     needsSignIn = signedIn is List && !signedIn.contains(engine);
     final firstRun = prepared['firstRun'];
-    needsFirstRun = firstRun is List && firstRun.contains(engine);
+    _needsFirstRun = firstRun is List && firstRun.contains(engine);
     final listed = reader.snapshot?.machines.any(
       (m) => m['machineId'] == machineId && m['hostMachineId'] == null,
     );
