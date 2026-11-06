@@ -199,7 +199,14 @@ void main() {
       expect(_kind, findsOneWidget);
       expect(find.descendant(of: _kind, matching: find.text('Member')),
           findsOneWidget);
-      expect(tester.getRect(_kind).left, greaterThan(project.left));
+      final kind = tester.getRect(_kind);
+      expect(
+        kind.top >= project.bottom ||
+            (kind.center.dy - project.center.dy).abs() <= 1 &&
+                kind.left > project.right,
+        isTrue,
+        reason: 'The choice comes after the project, in reading order',
+      );
       await capture(tester, mounted.image, 'new-agent-member-${brightness.name}');
 
       await tester.tap(_kind);
