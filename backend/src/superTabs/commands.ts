@@ -532,6 +532,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'conversation.rename': ['title'],
   'buddy.rename': ['name'],
   'proposal.close': ['reason'],
+  'task.reject': ['reason'],
   'work.define': ['brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'task.review.focus', 'checks[].description'],
   'work.assign': ['overrideReason'],
   'work.status': ['result'],
