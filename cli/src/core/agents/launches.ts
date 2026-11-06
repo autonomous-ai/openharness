@@ -19,6 +19,7 @@ import { folderTrust } from '../../engines/launchPrep.js'
 import type { NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
 import * as opencodeLaunch from '../../engines/launchControl.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types.js'
+import { parseLaunchArgs } from '../../lib/launchArgs.js'
 import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationOutcome, type AgentCreationReceipts, type AgentCreationStatus, type CreationAuthority } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import { engineLabel } from '../../lib/agentNames.js'
@@ -67,6 +68,8 @@ export interface LaunchRequestDeps {
   resumeAgent: () => ResumeAgent | null
   restartAgent: () => RestartAgent | null
   byAgent: (agentId: string) => RegisteredSession | undefined
+  /** Saves an agent's extra launch words on its record; an empty list removes them (registry.setLaunchArgs). */
+  setLaunchArgs: (agentId: string, args: string[]) => boolean
   /** An agent's frame, as the socket builds it for every reply. */
   toProject: (s: RegisteredSession) => Promise<AgentFrame>
   /** Where a new agent on a grid model sends its inference: the models service's to resolve, on this
@@ -84,7 +87,7 @@ export interface LaunchRequestDeps {
 type Reply = (result: Record<string, unknown>) => void
 type CreateInput = Parameters<CreateAgent>[0]
 
-export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, toProject, modelTarget, guestCreate, swarmLaunch, claudeHomeOffered }: LaunchRequestDeps) {
+export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, setLaunchArgs, toProject, modelTarget, guestCreate, swarmLaunch, claudeHomeOffered }: LaunchRequestDeps) {
   const validateInstalled = async (input: CreateInput, known?: ReturnType<typeof installedDsh>): Promise<{ error: string; detail: string } | null> => {
     if (input.dsh) {
       const installed = known ?? installedDsh(input.dsh)
@@ -612,13 +615,31 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (permissionMode !== undefined && byAgent(target)?.permissionMode === 'teamWritten') {
       reply({ error: 'INVALID_PERMISSION_MODE' }); return
     }
-    const invoke = () => permissionMode === undefined ? restart(target) : resumeAgent()!(target, permissionMode)
+    // Extra launch flags only ride a restart of an agent the owner may change, and are checked with the engine's own
+    // refused list before anything is saved or restarted.
+    let launchArgs: string[] | undefined
+    if (payload.launchArgs !== undefined) {
+      if (operation !== 'restart' || typeof payload.launchArgs !== 'string' || byAgent(target)?.permissionMode === 'teamWritten') {
+        reply({ error: 'INVALID_LAUNCH_ARGS' }); return
+      }
+      const known = byAgent(target)
+      if (!known) { reply({ error: 'AGENT_NOT_FOUND' }); return }
+      const parsed = parseLaunchArgs(known.engine, payload.launchArgs)
+      if (!parsed.ok) { reply({ error: 'INVALID_LAUNCH_ARGS', detail: parsed.detail }); return }
+      launchArgs = parsed.args
+    }
+    // Saved inside the invoke, so a receipt that is asked again does not save twice.
+    const invoke = () => {
+      if (launchArgs) setLaunchArgs(target, launchArgs)
+      return permissionMode === undefined ? restart(target) : resumeAgent()!(target, permissionMode)
+    }
+    const echo = launchArgs ? { launchArgs } : {}
     const creationId = payload.creationId
     if (creationId !== undefined) {
       if (!validCreationId(creationId)) { reply({ error: 'INVALID_CREATION_ID' }); return }
       try {
         void receipts.run(creationId, creationFingerprint({ operation, agentId: target,
-          ...(permissionMode === undefined ? {} : { permissionMode }) }), async () => {
+          ...(permissionMode === undefined ? {} : { permissionMode }), ...echo }), async () => {
           const result = await invoke()
           if (result.ok) return { state: 'created', agentId: result.session.agentId, resumed: result.resumed }
           // RESTART_FAILED can follow an unobserved relaunch. Never silently
@@ -627,7 +648,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
           return { state: 'failed', error: result.error, ...(result.reason ? { reason: result.reason } : {}),
             ...(result.detail ? { detail: result.detail.slice(0, 2000) } : {}) }
         }).then(async (status) => {
-          reply({ creationId, ...await creationStatusPayload(status) })
+          reply({ creationId, ...await creationStatusPayload(status), ...echo })
         }).catch(() => reply({ error: 'INTERNAL' }))
       } catch (error) {
         reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
@@ -639,7 +660,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       reply({ error: result.error, ...(result.reason ? { reason: result.reason } : {}), ...(result.detail ? { detail: result.detail } : {}) })
       return
     }
-    reply({ agent: await toProject(result.session), resumed: result.resumed })
+    reply({ agent: await toProject(result.session), resumed: result.resumed, ...echo })
   }
 
   // Fork an agent: a second one with the first one's history — see lib/forkAgent.ts. The reply

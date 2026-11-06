@@ -93,6 +93,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
     byAgent: (id) => known.get(id), toProject: vi.fn(async (s: RegisteredSession) => frameOf(s)),
     modelTarget: resolveNewAgentModel,
     swarmLaunch: SWARM_LAUNCH,
+    setLaunchArgs: vi.fn(() => true),
     ...over,
   }
   const requests = createLaunchRequests(deps)
@@ -1190,6 +1191,53 @@ describe('agent_resume and agent_restart', () => {
     const frameless = setup({ toProject: vi.fn(async () => { throw new Error('no frame') }) })
     await frameless.relaunch('agent_restart', { agentId: 'a1', creationId: CREATION })
     await vi.waitFor(() => expect(frameless.replies).toStrictEqual([{ error: 'INTERNAL' }]))
+  })
+})
+
+describe('agent_restart with launchArgs', () => {
+  it('saves the parsed words before the restart runs and echoes them, directly and through a receipt', async () => {
+    const order: string[] = []
+    const setLaunchArgs = vi.fn(() => { order.push('save'); return true })
+    const restart = vi.fn(async () => { order.push('restart'); return { ok: true as const, session: session('a1'), resumed: false } })
+    const run = setup({ setLaunchArgs }, { restart })
+    expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome' })).toStrictEqual({ agent: { id: 'a1' }, resumed: false, launchArgs: ['--chrome'] })
+    expect(setLaunchArgs).toHaveBeenCalledWith('a1', ['--chrome'])
+    expect(order).toEqual(['save', 'restart'])
+    run.replies.length = 0
+    await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome', creationId: CREATION })
+    await vi.waitFor(() => expect(run.replies).toHaveLength(1))
+    expect(run.replies[0]).toMatchObject({ creationId: CREATION, state: 'created', launchArgs: ['--chrome'] })
+    // The same receipt asked again does not save a second time.
+    await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome', creationId: CREATION })
+    expect(run.replies.at(-1)).toMatchObject({ launchArgs: ['--chrome'] })
+    expect(setLaunchArgs).toHaveBeenCalledTimes(2)
+  })
+
+  it('clears with an empty string and echoes an empty list', async () => {
+    const run = setup()
+    expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '' })).toMatchObject({ launchArgs: [] })
+    expect(run.deps.setLaunchArgs).toHaveBeenCalledWith('a1', [])
+  })
+
+  it('refuses a flag Harness sets, a non-string, a resume, a Team-written agent and an unknown agent, saving and restarting nothing', async () => {
+    const run = setup({ byAgent: (id: string) => id === 'written' ? { ...session('written'), permissionMode: 'teamWritten' } : id === 'a1' ? session('a1') : undefined })
+    expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--model x' }))
+      .toStrictEqual({ error: 'INVALID_LAUNCH_ARGS', detail: '--model is set by Harness and can\'t be added here.' })
+    expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: 5 })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
+    expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--chrome' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
+    expect(await run.relaunch('agent_restart', { agentId: 'written', launchArgs: '--chrome' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
+    expect(await run.relaunch('agent_restart', { agentId: 'gone', launchArgs: '--chrome' })).toStrictEqual({ error: 'AGENT_NOT_FOUND' })
+    expect(run.deps.setLaunchArgs).not.toHaveBeenCalled()
+    expect(run.restart).not.toHaveBeenCalled()
+  })
+
+  it('treats the same receipt with different flags as a different request', async () => {
+    const run = setup()
+    await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome', creationId: CREATION })
+    await vi.waitFor(() => expect(run.replies).toHaveLength(1))
+    await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--other', creationId: CREATION })
+    expect(run.replies.at(-1)).toStrictEqual({ error: 'CREATION_CONFLICT' })
+    expect(run.restart).toHaveBeenCalledOnce()
   })
 })
 
