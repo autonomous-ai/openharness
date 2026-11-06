@@ -2565,7 +2565,7 @@ export class SuperTabStore {
         }
       }
     }
-    // One line a pass that did something (backend/AGENTS.md rule 4; ENGINEERING.md 8): counts, codes, lane loads and how long
+    // One line a pass that did something (backend/AGENTS.md rule 4; AGENTS.md standard 8): counts, codes, lane loads and how long
     // it took, never names or ids but the Swarm's.
     if (out.assigned || Object.keys(out.skipped).length) {
       logger.info('[swarm-dispatch] pass', { tabId, ...out, lanes: load, ms: Math.round(performance.now() - started) })

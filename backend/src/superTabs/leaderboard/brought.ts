@@ -1,5 +1,5 @@
 /**
- * Brought: what a person's machines did for the Swarm (contributor view, #2444; PRODUCT.md Contribution, Seen). Each machine
+ * Brought: what a person's machines did for the Swarm (contributor view, #2444; AGENTS.md, contributed capacity: seen). Each machine
  * they brought that the reader may see, a Mac's Harness Team account folded into its Mac, with the verified requests that
  * shipped on it, its busy time on other people's tasks (lent.ts), and each contributed engine's weekly window. And the
  * period's contributors: people whose machine ran an attempt. Pure, from what the board already holds.
@@ -24,7 +24,7 @@ export function shippedOnMachine(state: SuperTabState, group: Conversation): str
   return shipping.machineId ?? runMachine(state, ledger.runs?.find(r => r.assignmentId === shipping.assignmentId) ?? {})
 }
 
-/** Verified, as far as the server knows (PRODUCT.md north star): shipped with a pull request, and no fix merged after it. */
+/** Verified, as far as the server knows (the PM's north star): shipped with a pull request, and no fix merged after it. */
 export const verified = (group: Conversation): boolean =>
   group.ledger?.shippedAt != null && (group.pullRequestUrls?.length ?? 0) > 0 && group.ledger.fixedAfterMergeAt == null
 
