@@ -23,7 +23,9 @@ export const PM_RESERVE = 20
 /** Efforts below high, which no agent runs at. */
 const BELOW_HIGH = new Set(['minimal', 'low', 'medium'])
 
-export interface PickInput { shown: readonly Shown[]; catalog: Catalog; assessment: Assessment; now: number; conversationId: string }
+/** `first`: the machines the task's lane goes to first by the project's machine rules (machineRules.ts), and why. */
+export interface PickInput { shown: readonly Shown[]; catalog: Catalog; assessment: Assessment; now: number; conversationId: string
+  first?: { machines: ReadonlySet<string>; why: string } }
 export interface Picked { id: string; reasons: string[] }
 
 const kindIs = (a: Assessment, word: string) => new RegExp(`(^|-)${word}(-|$)`).test(a.kind ?? '')
@@ -32,7 +34,7 @@ const span = (ms: number) => ms >= D ? `${Math.round(ms / D)}d` : `${Math.max(1,
 
 interface Ranked { p: Shown; need: number; left: number | null; resetsAt: number | null; follows: boolean }
 
-export function pickByOrder({ shown, catalog, assessment: a, now, conversationId }: PickInput): Picked | null {
+export function pickByOrder({ shown, catalog, assessment: a, now, conversationId, first }: PickInput): Picked | null {
   const tier: Tier | null = tierOf(a)
   const review = kindIs(a, 'review'), test = kindIs(a, 'test')
   const named = !!a.model || !!a.local
@@ -66,8 +68,11 @@ export function pickByOrder({ shown, catalog, assessment: a, now, conversationId
     return r.left >= needs && !(runsPm(r.p) && r.left < PM_RESERVE)
   })
   if (!usable.length) return null
-  const best = Math.min(...usable.map(r => r.need))
-  const pool = usable.filter(r => r.need === best)
+  // The machine the work needs: a lane's first machine, while one there can take it (project's machine rules, task #3964).
+  const there = first ? usable.filter(r => first.machines.has(r.p.machineId)) : []
+  const placed = there.length ? there : usable
+  const best = Math.min(...placed.map(r => r.need))
+  const pool = placed.filter(r => r.need === best)
 
   const unread = (r: Ranked) => r.left === null ? 1 : 0
   const byAccount = (x: Ranked, y: Ranked) => unread(x) - unread(y) || (x.resetsAt ?? Infinity) - (y.resetsAt ?? Infinity) || (y.left ?? 0) - (x.left ?? 0)
@@ -81,7 +86,7 @@ export function pickByOrder({ shown, catalog, assessment: a, now, conversationId
   const reasons = [
     `1. Need: ${win.p.title} ${win.p.gridModel ? 'is a grid model, free, for small work' : tier === null ? 'runs the work (no size given)'
       : win.need === 0 ? `is the ${tier === 'strong' ? (review ? 'strong model a review needs' : 'strong model for big, hard or risky work') : 'model for small work'}`
-        : 'is the closest fit to the model the work needs'}.`,
+        : 'is the closest fit to the model the work needs'}.${there.length ? ` On ${win.p.machineName}, where this lane's work goes first: ${first!.why}.` : ''}`,
     win.p.gridModel || win.p.quota.metered ? '2. Quota: it uses no subscription.'
       : win.left === null ? `2. Quota: weekly unknown; no account with a reading has the ${pct(needs)} the work needs.`
         : `2. Quota: weekly ${pct(win.left)} left${win.resetsAt === null ? '' : `, resets in ${span(Math.max(0, win.resetsAt - now))}`}`

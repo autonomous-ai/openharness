@@ -30,6 +30,7 @@ import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type Rout
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
 import { projectRulesSchema, rulesDiff, rulesEqual, SEED_RULES, type ProjectRules } from './policy.js'
+import { isReview, machineRuleRefusal } from './machineRules.js'
 import { accessRefusal, changeAccess, expireAccess, taskAccess } from './machineAccess.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
@@ -1772,6 +1773,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // A crew member on its way to another machine takes work once there; an asleep one wakes for it, in place (crewKeep.ts),
     // so its session is not closed (assignTo wakes it).
     if (worker.movedTo) fail('CREW_MOVING', `${worker.displayName ?? worker.name} is moving to another machine. Assign it once it has moved.`)
+    // The project's machine rules (machineRules.ts), for an assignment and for the review steps a Ready hands out alike.
+    refuseByMachineRules(context, { machineId: worker.machineId, engine: worker.configuration.engine, review: isReview(group) })
     if (!worker.asleep && sessionClosed(state, worker, context.now)) {
       fail('AGENT_CLOSED', `${worker.displayName ?? worker.name}'s session was closed. Start a new agent for this task.`)
     }
@@ -2249,15 +2252,19 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('RULES_STALE', `The project rules changed since revision ${command.baseRevision}. Merge your change into revision ${current.revision} and save again.`,
           409, { revision: current.revision, rules: current.rules })
       }
-      if (rulesEqual(current.rules, command.rules)) {
+      // A writer that does not know machine rules (an older client) leaves them as they are; one that sends a list sets it.
+      const kept = command.rules.machines === undefined && current.rules.machines ? projectRulesSchema.safeParse({ ...command.rules, machines: current.rules.machines }) : null
+      if (kept && !kept.success) fail('RULES_INVALID', `The project's machine rules do not fit this record: ${kept.error.issues[0]?.message ?? 'invalid'}`, 400)
+      const rules = kept?.data ?? command.rules
+      if (rulesEqual(current.rules, rules)) {
         Object.assign(result, { projectId: project.id, revision: current.revision, unchanged: true })
         break
       }
       const revision = current.revision + 1
-      effects.projectRules = { projectId: project.id, revision, rules: command.rules, diff: rulesDiff(current.rules, command.rules),
+      effects.projectRules = { projectId: project.id, revision, rules, diff: rulesDiff(current.rules, rules),
         summary: command.summary, writtenBy: { kind: sender.kind, id: sender.id }, askedBy, askedIn, at: context.now }
       for (const group of state.conversations) if (!group.kind && !group.audience && !group.reviewOf
-        && (group.projectId ?? 'lead') === project.id) stampLane(group, command.rules.lanes)
+        && (group.projectId ?? 'lead') === project.id) stampLane(group, rules.lanes)
       Object.assign(result, { projectId: project.id, revision })
       break
     }
@@ -3121,6 +3128,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         written ? { ...moved, projectSettings: 'off' } : moved)
       // Before it is queued: a machine that cannot get the app's token for it would fail it, and count that against its engine.
       requireRepositoryReach(state, teamAccountPool(state.machines?.find(m => m.machineId === request.machineId)), grant.machineOwnerId, home, context.repositoryReach)
+      // The project's machine rules (machineRules.ts), on the machine named and the one the start lands on (a Mac's Team account).
+      for (const machineId of new Set([named.machineId, request.machineId])) {
+        refuseByMachineRules(context, { machineId, engine: request.engine, review: isReview(startGroup) })
+      }
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
       if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
@@ -4687,6 +4698,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   for (const draft of effects.messages) tellBuddies(state, draft, draft.replyTo && draft.replyTo === context.reply?.id ? context.reply.threadSource ?? null : null)
   assertUniqueMessageIds(command.type, effects.messages)
   return effects
+}
+
+/** Refuses [work] its project's machine rules refuse now, with the rule's own why. A command whose record was not read
+ *  (none in its context) meets no rule. */
+function refuseByMachineRules(context: CommandContext, work: { machineId: string; engine: string; review: boolean }): void {
+  const why = machineRuleRefusal(context.projectRules?.rules.machines ?? [], work, context.now)
+  if (why) fail('MACHINE_RULE', why, 409)
 }
 
 /** Reject an invalid command result before the store tries to write duplicate message keys. */
