@@ -4,7 +4,7 @@ import { applyCommand, commandSchema, type Command, type CommandContext } from '
 import { createSuperTab, stableId, visibleState, type Actor, type Conversation } from './model.js'
 import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn, wordsOf } from './projects.js'
 import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
-import { buddyChatId, shownBefore, swarmBuddyChatId } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyChatId, shownBefore, swarmBuddyChatId } from './buddies.js'
 import { isRoleName } from './agentNames.js'
 import { sweepLiveness } from './liveness.js'
 import { hostTab } from './read/hostRows.js'
@@ -396,7 +396,28 @@ describe('adding a Buddy', () => {
     const f = fresh()
     const added = addBuddy(f, peer, f.app.projectId, 'peer-mac')
     const start = f.state.starts!.find(s => s.id === added.result.startId)!
-    expect(start.request.requirements).toEqual({ memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false })
+    expect(start.request.requirements).toEqual({ memoryBytes: BUDDY_REQUIREMENTS.memoryBytes, diskBytes: 1024 ** 3, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false })
+  })
+
+  // Task #3738 (tuan.dev, 11-06): a Windows PC with 16 GB and under 2 GB free could not add a Buddy. The requirement is the measured peak
+  // with a margin (buddies.ts BUDDY_PEAK_BYTES), checked here and again by the host from the same start request.
+  it('is admitted on a machine with 1.5 GB free, which the old 2 GB refused, and refused below its need with the amounts (#3738)', () => {
+    const GIB = 1024 ** 3
+    const free = (f: ReturnType<typeof fresh>, bytes: number) => {
+      const pool = f.state.machines!.find(m => m.machineId === 'peer-mac')!
+      // Its owner leaves room to memory (Agents: by memory), so the free memory decides, not a count.
+      pool.agents = 'memory'
+      const resources = pool.observation!.resources
+      resources.memoryTotalBytes = 16 * GIB
+      resources.memoryUsedBytes = 16 * GIB - bytes
+    }
+    const roomy = fresh()
+    free(roomy, 1.5 * GIB)
+    expect(() => addBuddy(roomy, peer, roomy.app.projectId, 'peer-mac')).not.toThrow()
+    const short = fresh()
+    free(short, 1 * GIB)
+    expect(() => addBuddy(short, peer, short.app.projectId, 'peer-mac')).toThrow(
+      'peer\'s Mac is out of free memory: 1 GB free, and a Buddy needs 1.25 GB. Try again when an agent there finishes, or pick another machine.')
   })
 
   it('makes the started agent a Buddy in its owner\'s chat, and says it is ready there', () => {

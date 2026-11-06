@@ -162,10 +162,20 @@ export function chosenBuddyName(state: SuperTabState, chat: Conversation, owner:
   return { name: chat.title, notice: `${was} is taken now; your Buddy starts as ${chat.title}. Rename it from the ⋮ menu.` }
 }
 
-/** What a Buddy asks of its machine: it reads and talks, so the usual agent's share with git to read the project. CPU use is one
- *  momentary sample, so it is not capped, as a routed Builder's start (Diego, 10-30). */
-export const BUDDY_REQUIREMENTS: AgentStartRequest['requirements'] = { memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 100,
-  tools: ['git'], devices: [], quotaRequired: false }
+/** A Buddy's measured memory (task #3738, 11-06). A Buddy is one Claude Code session that reads and talks. Measured on a Mac (macOS
+ *  26.5.1, arm64): the resident memory of the 38 live Claude Code sessions there, from 195 MB to 1,510 MB, median 580 MB and 90th
+ *  percentile 796 MB. The peak a new Buddy needs is that of an ordinary session: 800 MiB. The few sessions near 1.5 GB are
+ *  long-running builders, which a Buddy is not, and a Buddy already running is never refused for what it grows to. Windows: not
+ *  measured here (no Windows machine in this task); the figure below stands until a measurement on one says otherwise. */
+export const BUDDY_PEAK_BYTES = 800 * 1024 ** 2
+/** The margin above that peak a machine must have free before it takes a Buddy, so one never pushes it into swap: 1.6 times. */
+export const BUDDY_MEMORY_MARGIN = 1.6
+
+/** What a Buddy asks of its machine: it reads and talks, so its measured peak with a margin (BUDDY_PEAK_BYTES), and git to read the
+ *  project. CPU use is one momentary sample, so it is not capped, as a routed Builder's start (Diego, 10-30). Checked when it is added
+ *  (admitByRoom) and again by its host at launch, which both read this start request's requirements. */
+export const BUDDY_REQUIREMENTS: AgentStartRequest['requirements'] = { memoryBytes: Math.round(BUDDY_PEAK_BYTES * BUDDY_MEMORY_MARGIN), diskBytes: 1024 ** 3,
+  maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false }
 
 /** The line a Buddy's chat shows once its session joined. */
 export const buddyReady = (name: string): string => `${name} is ready. Tell it what you have in mind.`

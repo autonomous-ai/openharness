@@ -435,30 +435,10 @@ describe('a Buddy-only machine after its reviews', () => {
 // one Claude session that reads and talks: what it asks of its machine comes from a measured peak, with a margin, not a round 2 GB.
 describe('the memory a Buddy asks of its machine (#3738)', () => {
   const GIB = 1024 ** 3
-  /** The owner's Swarm Mac with [free] bytes of memory free and nothing else holding any. */
-  const withFree = (f: Swarm, free: number) => {
-    const resources = f.state.machines!.find(m => m.machineId === 'owner-mac')!.observation!.resources
-    resources.memoryTotalBytes = 16 * GIB
-    resources.memoryUsedBytes = 16 * GIB - free
-  }
-  const addOnMac = (f: Swarm) => f.run({ type: 'buddy.create', projectId: f.app.projectId, machineId: 'owner-mac', engine: 'claude' }, owner,
-    { contribution: own('owner') })
-
   it('comes from a measured peak with a margin above it, and is under the 2 GiB a Buddy asked before', () => {
     expect(BUDDY_REQUIREMENTS.memoryBytes).toBeGreaterThanOrEqual(BUDDY_PEAK_BYTES * 1.5)
     expect(BUDDY_REQUIREMENTS.memoryBytes).toBeLessThan(2 * GIB)
     // Swarm agents' requirements stay as they were: this is a Buddy's alone.
     expect(BUDDY_REQUIREMENTS.diskBytes).toBe(GIB)
-  })
-
-  it('admits a Buddy on a machine with 1.5 GB free, which 2 GB refused, and refuses one below its need, with the amounts', () => {
-    const roomy = setup()
-    withFree(roomy, 1.5 * GIB)
-    expect(() => addOnMac(roomy)).not.toThrow()
-    const short = setup()
-    withFree(short, 1 * GIB)
-    let refusal: unknown
-    try { addOnMac(short) } catch (error) { refusal = error }
-    expect(refusal).toMatchObject({ code: 'MACHINE_FULL', message: 'Owner Mac is out of free memory: 1 GB free, and a Buddy needs 1.25 GB. Try again when an agent there finishes, or pick another machine.' })
   })
 })

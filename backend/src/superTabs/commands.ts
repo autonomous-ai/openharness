@@ -1383,7 +1383,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // Sessions have no count of their own (Scholes, 11-02): idle ones close themselves. The one limit is the machine's, which
       // its owner set to protect it (Lead, 11-02), said in words a person can act on. A Buddy-only machine has none (below).
-      if (!pool.buddyOnly) admitByRoom(state, pool, machineSlots(state, pool), BUDDY_REQUIREMENTS.memoryBytes)
+      if (!pool.buddyOnly) admitByRoom(state, pool, machineSlots(state, pool), BUDDY_REQUIREMENTS.memoryBytes, 'a Buddy')
       const contributor = person(state, main.contributorId)
       // In the one Buddy chat a session works in one project its person reads, or, with none named, as the main Buddy does
       // (spec: The model). A project's own chat has its project.
