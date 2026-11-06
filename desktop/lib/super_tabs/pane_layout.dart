@@ -5,7 +5,6 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../core/local_key_value_store.dart';
-import '../shared/theme/app_theme.dart' as grid;
 import '../state/pane_arrangement.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/pane_resize_handle.dart';
@@ -21,12 +20,16 @@ class SuperTabPaneLayout extends StatefulWidget {
     this.right,
     this.storage,
     this.rightDefault = rightWidth,
+    this.centerMin = centerWidth,
     this.over,
   });
 
   static const storageKey = 'super-tab-pane-widths';
   static const leftWidth = 300.0;
   static const rightWidth = 280.0;
+
+  /// The narrowest the centre pane goes at 1x text: a chat's.
+  static const centerWidth = 360.0;
 
   /// A thread's default width (Scholes, 10-31). Its reply box's Also send
   /// shares the send row with New session only from about 410px; here it
@@ -51,6 +54,10 @@ class SuperTabPaneLayout extends StatefulWidget {
   /// The right pane's width until a person sets one by its divider (that
   /// width, saved, wins): [threadWidth] while it shows a thread.
   final double rightDefault;
+
+  /// The narrowest the centre pane goes at 1x text; the side panes give way
+  /// first. The Board asks for its bar's width (SuperTabTasksBar.minWidth).
+  final double centerMin;
 
   /// Drawn over the left and centre panes, leaving the right one as it is:
   /// the picture viewer beside an open thread, as in Slack (Huy, 11-04).
@@ -131,7 +138,7 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
       final width = constraints.maxWidth;
       final scale = MediaQuery.textScalerOf(context);
       final hasLeft = widget.left != null, hasRight = widget.right != null;
-      final centerMin = math.min(scale.scale(360), width);
+      final centerMin = math.min(scale.scale(widget.centerMin), width);
       final leftMin = hasLeft ? scale.scale(180) : 0.0;
       final rightMin = hasRight ? scale.scale(280) : 0.0;
       double limit(double value, double floor, double ceiling) => value

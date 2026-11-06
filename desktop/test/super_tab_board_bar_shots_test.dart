@@ -66,6 +66,13 @@ void main() {
       expect(find.text('Remove Buddy'), findsOneWidget);
       await captureWindow(tester, shots, 'board-buddy-menu-${brightness.name}');
 
+      // A window too narrow for all three panes: the side panes give way and
+      // the Board keeps its minimum width, its bar unbroken.
+      await tester.tapAt(Offset.zero);
+      await tester.binding.setSurfaceSize(const Size(1100, 800));
+      await settle();
+      await captureWindow(tester, shots, 'board-narrow-${brightness.name}');
+
       await tester.pumpWidget(const SizedBox());
       c.dispose();
       await tester.pump(const Duration(seconds: 5));

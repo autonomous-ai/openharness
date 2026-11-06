@@ -4,6 +4,7 @@ import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart' show SuperTabReplyPreview;
+import 'package:harness/super_tabs/tasks_bar.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_activity_lists_test.dart' show swarm;
@@ -74,8 +75,9 @@ void main() {
     WidgetTester tester, {
     LocalKeyValueStore? store,
     bool buddy = false,
+    Size size = const Size(1500, 900),
   }) async {
-    await tester.binding.setSurfaceSize(const Size(1500, 900));
+    await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final server = boardSwarm(buddy: buddy);
     final c = server.controller(
@@ -278,6 +280,22 @@ void main() {
     }
     expect(find.text('Tasks'), findsNothing, reason: 'the header names it');
     expect(find.byTooltip('Show your Buddy'), findsNothing);
+    await end(tester, c);
+  });
+
+  testWidgets('in a window too narrow for all three panes, the side panes give '
+      'way so the Board keeps its minimum width (Huy, 2026-11-06)', (
+    tester,
+  ) async {
+    // The rail's 300 and the Buddy pane's 280 leave the Board 520 of 1100.
+    final (c, _) = await show(tester, size: const Size(1100, 900));
+    await tester.tap(_key('super-group-lead'));
+    await _settle(tester);
+    expect(
+      tester.getSize(_key('super-tasks-lead')).width,
+      greaterThanOrEqualTo(SuperTabTasksBar.minWidth),
+    );
+    expect(_key('super-board-chat'), findsOneWidget, reason: 'Buddy stays');
     await end(tester, c);
   });
 }

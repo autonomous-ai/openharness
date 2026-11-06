@@ -108,6 +108,7 @@ import 'swarm_type.dart';
 import 'visible_tick.dart';
 import 'buddy_rows.dart';
 import 'task_groups.dart';
+import 'tasks_bar.dart';
 import 'tasks_view.dart';
 import 'voice_length.dart';
 import '../widgets/dial_list_scroll.dart';
@@ -5942,6 +5943,9 @@ class _SuperTabViewState extends State<SuperTabView>
               child: SuperTabPaneLayout(
                 storage: widget.app?.localStore,
                 onLeave: _leaveResize,
+                centerMin: boardProject != null
+                    ? SuperTabTasksBar.minWidth
+                    : SuperTabPaneLayout.centerWidth,
                 left: narrow || (boardProject != null && _leftHidden)
                     ? null
                     : _sidebar(),

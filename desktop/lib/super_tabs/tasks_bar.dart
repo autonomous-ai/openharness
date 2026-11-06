@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 
-import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import '../widgets/desktop_segmented.dart';
+import 'tasks_bar_fields.dart';
 
 /// How the Tasks view lays its cards out, kept by its name.
 enum SuperTabTasksLayout { board, list, members }
@@ -37,7 +37,12 @@ class SuperTabTasksBar extends StatelessWidget {
   /// What stands for the bar's title; the word Tasks without it.
   final Widget? leading;
 
-  static const searchWidth = 220.0;
+  /// The narrowest the Board's centre pane goes, at 1x text, so this bar never
+  /// overflows: the controls' row measured with the system font (Board/List/
+  /// Members 184, Mine 73, Search 220, their gaps 24) and this bar's side
+  /// padding (32), rounded up. The pane layout scales it with the text; the
+  /// side panes give way first (Huy, 2026-11-06).
+  static const minWidth = 540.0;
 
   /// Below this width a [leading] header and the controls no longer share a
   /// row without squeezing the project's name away: the header takes its own.
@@ -54,15 +59,11 @@ class SuperTabTasksBar extends StatelessWidget {
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final header = leading;
-      if (header == null || constraints.maxWidth >= oneRowMinWidth) {
-        return Padding(
-          padding: _padding,
-          child: _row(
-            leading:
-                header ??
-                Text('Tasks', style: DesktopChrome.text(medium: true)),
-          ),
-        );
+      if (header != null && constraints.maxWidth >= oneRowMinWidth) {
+        return Padding(padding: _padding, child: _headerRow(header));
+      }
+      if (header == null) {
+        return Padding(padding: _padding, child: _fittedRow(title: true));
       }
       return Padding(
         padding: _padding,
@@ -71,29 +72,60 @@ class SuperTabTasksBar extends StatelessWidget {
           children: [
             Align(alignment: AlignmentDirectional.centerStart, child: header),
             const SizedBox(height: grid.AppDesktop.controlGap),
-            _row(),
+            _fittedRow(title: false),
           ],
         ),
       );
     },
   );
 
-  Widget _row({Widget? leading}) => Row(
+  /// The Board's one row, with room for all of it ([oneRowMinWidth]).
+  Widget _headerRow(Widget header) => Row(
     children: [
-      if (leading != null) Flexible(child: leading),
-      if (moveError case final error?) ...[
-        const SizedBox(width: grid.AppDesktop.groupGap),
-        Flexible(
-          child: Text(
-            error,
-            key: const ValueKey('super-tasks-move-error'),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: DesktopChrome.metadata(),
-          ),
-        ),
-      ],
+      Flexible(child: header),
+      ..._moveError(),
       const Spacer(),
+      _controls(),
+    ],
+  );
+
+  /// The controls at the row's end, after the word Tasks when [title]. A font
+  /// wider than the one [minWidth] was measured with (another platform's, a
+  /// larger text size) shrinks them a little rather than spilling past the
+  /// pane's edge.
+  Widget _fittedRow({required bool title}) => Row(
+    children: [
+      if (title) Text('Tasks', style: DesktopChrome.text(medium: true)),
+      ..._moveError(),
+      const SizedBox(width: grid.AppDesktop.groupGap),
+      Expanded(
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: AlignmentDirectional.centerEnd,
+          child: _controls(),
+        ),
+      ),
+    ],
+  );
+
+  List<Widget> _moveError() => [
+    if (moveError case final error?) ...[
+      const SizedBox(width: grid.AppDesktop.groupGap),
+      Flexible(
+        child: Text(
+          error,
+          key: const ValueKey('super-tasks-move-error'),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: DesktopChrome.metadata(),
+        ),
+      ),
+    ],
+  ];
+
+  Widget _controls() => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
       DesktopSegmented<SuperTabTasksLayout>(
         key: const ValueKey('super-tasks-layout'),
         selected: layout,
@@ -118,73 +150,9 @@ class SuperTabTasksBar extends StatelessWidget {
         ],
       ),
       const SizedBox(width: grid.AppDesktop.groupGap),
-      _MineFilter(on: mine, onPressed: onMine),
+      SuperTabTasksMine(on: mine, onPressed: onMine),
       const SizedBox(width: grid.AppDesktop.controlGap),
-      _Search(onChanged: onQuery),
+      SuperTabTasksSearch(onChanged: onQuery),
     ],
   );
-}
-
-/// Mine is a filter, not a layout: a check shows while it is on, and it keeps
-/// the bar's rounded-rectangle shape rather than a capsule.
-class _MineFilter extends StatelessWidget {
-  const _MineFilter({required this.on, required this.onPressed});
-
-  final bool on;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) => DesktopPill(
-    key: const ValueKey('super-tasks-mine'),
-    label: 'Mine',
-    icon: on ? AppIcons.check : AppIcons.user,
-    leadingGap: 5,
-    capsule: false,
-    selected: on,
-    tooltip: 'Only the tasks you asked for',
-    onPressed: onPressed,
-  );
-}
-
-/// The bar's search, at a button's height so the row lines up: here it sits
-/// among controls, not at the head of a list column (AppControl.heightField).
-class _Search extends StatelessWidget {
-  const _Search({required this.onChanged});
-
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final height = grid.AppControl.heightScaled;
-    // The theme's field inset beside the text; only the height differs here.
-    final inset =
-        Theme.of(context).inputDecorationTheme.contentPadding
-            ?.resolve(Directionality.of(context))
-            .left ??
-        0;
-    return SizedBox(
-      width: SuperTabTasksBar.searchWidth,
-      child: TextField(
-        key: const ValueKey('super-tasks-search'),
-        onChanged: (query) => onChanged(query.trim()),
-        textInputAction: TextInputAction.search,
-        style: grid.kFieldTextStyle,
-        decoration: InputDecoration(
-          hintText: 'Search',
-          isDense: true,
-          constraints: BoxConstraints(minHeight: height, maxHeight: height),
-          // The theme's own arithmetic, at this height.
-          contentPadding: EdgeInsets.symmetric(
-            horizontal: inset,
-            vertical: (height - grid.AppControl.fontSize * 1.35) / 2,
-          ),
-          prefixIcon: Icon(
-            AppIcons.search,
-            size: grid.kFieldIconSize,
-            color: grid.AppPalette.textFaint,
-          ),
-        ),
-      ),
-    );
-  }
 }
