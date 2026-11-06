@@ -106,6 +106,31 @@ describe('a stuck task', () => {
     expect(stuckAlerts(f.state, NOW + 60_000).rows).toEqual([expect.objectContaining({ text: expect.stringContaining('checks are red on PR #7') })])
   })
 
+  // Security review 1 of #3431: a reason that clears and comes back with the same key (CI red, green on a re-run, red again at the
+  // same head) is a new line with new tags; reusing the first line's id made its tags' ids collide and stopped the time checks.
+  it('told again when the same reason comes back after its fix, in a new line with its own id', () => {
+    const f = fixture()
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group().assignment!.id, status: 'review', result: `Ready: ${PR}` } as Command, f.asAgent(f.worker))
+    const g = f.group()
+    g.pullRequestUrls = [PR]
+    g.codePullRequestUrls = [PR]
+    g.pullRequestHeads = { [PR]: { head: HEAD, patch: null, at: NOW } }
+    const checks = (state: 'red' | 'green') => { f.group().pullRequestChecks = { [PR]: state } }
+    checks('red')
+    const first = lines(stuckAlerts(f.state, NOW).rows, f.task)
+    checks('green')
+    const fixed = lines(stuckAlerts(f.state, NOW + 60_000).rows, f.task)
+    checks('red')
+    const again = lines(stuckAlerts(f.state, NOW + 120_000).rows, f.task)
+    expect(again).toHaveLength(1)
+    expect(again[0]!.mentions).toEqual(['d'])
+    expect(again[0]!.id).not.toBe(first[0]!.id)
+    checks('green')
+    const fixedAgain = lines(stuckAlerts(f.state, NOW + 180_000).rows, f.task)
+    expect(fixedAgain).toHaveLength(1)
+    expect(fixedAgain[0]!.id).not.toBe(fixed[0]!.id)
+  })
+
   it('with red checks while its Engineer is still working, says nothing', () => {
     const f = fixture()
     f.group().pullRequestUrls = [PR]
