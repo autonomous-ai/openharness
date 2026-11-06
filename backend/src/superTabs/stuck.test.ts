@@ -91,6 +91,20 @@ describe('a stuck task', () => {
     expect(stuckAlerts(f.state, NOW + 180_000).rows).toEqual([])
   })
 
+  // Review of #3431: a task links other tasks' pull requests too (its brief, a result); only its own code's checks count.
+  it('reads only its own code pull request, never another task\'s it links', () => {
+    const f = fixture()
+    const OTHER = 'https://github.com/acme/app/pull/9'
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group().assignment!.id, status: 'review', result: `Ready: ${PR}` } as Command, f.asAgent(f.worker))
+    const g = f.group()
+    g.pullRequestUrls = [PR, OTHER]
+    g.codePullRequestUrls = [PR]
+    g.pullRequestChecks = { [PR]: 'green', [OTHER]: 'red' }
+    expect(stuckAlerts(f.state, NOW).rows).toEqual([])
+    f.group().pullRequestChecks = { [PR]: 'red', [OTHER]: 'green' }
+    expect(stuckAlerts(f.state, NOW + 60_000).rows).toEqual([expect.objectContaining({ text: expect.stringContaining('checks are red on PR #7') })])
+  })
+
   it('with red checks while its Engineer is still working, says nothing', () => {
     const f = fixture()
     f.group().pullRequestUrls = [PR]
