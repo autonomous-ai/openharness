@@ -184,9 +184,11 @@ describe('a person\'s one Buddy\'s folder', { timeout: GIT_TIMEOUT }, () => {
     expect(folderName('///', new Set())).toBe('project')
     expect(buddyProjectsOf({ buddyProjects: [{ id: 'a', name: 'A', cwd: '/x' }, { id: '../b', name: 'B', cwd: '/y' }, { id: 'c', name: 'C', cwd: 'relative' }] }))
       .toEqual([{ id: 'a', name: 'A', cwd: '/x' }])
-    // A Windows checkout, on a drive or a share, is as absolute as a POSIX one; a drive-relative one is not (#3815).
+    // A folder is absolute by this machine's own rules (#3815): a drive or a share on Windows; on a Mac or Linux those are
+    // relative names, resolved from the service's folder (Linuxtest2), so only a folder from / is kept there.
     expect(buddyProjectsOf({ buddyProjects: [{ id: 'w', name: 'W', cwd: 'C:\\Users\\me\\web' }, { id: 's', name: 'S', cwd: '\\\\server\\share\\web' },
-      { id: 'd', name: 'D', cwd: 'C:web' }] }).map(p => p.id)).toEqual(['w', 's'])
+      { id: 'd', name: 'D', cwd: 'C:web' }, { id: 'e', name: 'E', cwd: '\\evil' }] }).map(p => p.id))
+      .toEqual(process.platform === 'win32' ? ['w', 's', 'e'] : [])
   })
 })
 
