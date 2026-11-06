@@ -41,7 +41,7 @@ export interface AgentConfiguration {
   engineVersion: string | null
 }
 /** Why a crew member must leave its machine (crewKeep.ts). */
-export type CrewTrouble = 'offline' | 'signed-out' | 'quota' | 'disk'
+export type CrewTrouble = 'offline' | 'signed-out' | 'quota' | 'disk' | 'quota-low' | 'unstable'
 
 export interface Agent {
   id: string
@@ -121,6 +121,9 @@ export interface Agent {
    *  work.assign clears it and the host reopens it in place. `folderDropped` once a cleanup rule removed its folder, so a
    *  wake starts it fresh. Set only by the server. */
   asleep?: { since: number; folderDropped?: boolean }
+  /** When a reading first showed its session gone, in the last hour, at most five (machines.ts recordAgentPresence): a crew member
+   *  that stops three times in an hour is moved, not reopened in place (crewKeep.ts, task #3662). */
+  stops?: number[]
   /** A crew member being moved off a failing machine (crewKeep.ts): its start on [machineId] takes over under the same name;
    *  until then nothing is assigned to it and its old host closes the session. Set only by the server. */
   movedTo?: { machineId: string; startId: string; reason: CrewTrouble; at: number }
