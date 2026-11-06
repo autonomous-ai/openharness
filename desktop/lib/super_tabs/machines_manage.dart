@@ -270,7 +270,6 @@ class _ManageMachineLine extends StatelessWidget {
     final age = view.readingAt == null ? null : now.difference(view.readingAt!);
     final metadata = [
       local ? 'This machine' : view.owner?.shownName ?? 'Owner unavailable',
-      if (local) view.id.length > 8 ? view.id.substring(0, 8) : view.id,
       if (view.problem != null)
         view.problem!
       else if (group != 'online')
@@ -357,8 +356,26 @@ class _ManageMachineLine extends StatelessWidget {
                         ],
                       ],
                     ),
-                    Text(
-                      metadata,
+                    Text.rich(
+                      TextSpan(
+                        text: local ? 'This machine' : metadata,
+                        children: local
+                            ? [
+                                TextSpan(
+                                  text:
+                                      ' · ${view.id.length > 8 ? view.id.substring(0, 8) : view.id}${port == null ? '' : ' · port $port'}',
+                                  style: MachinesStyle.identity(),
+                                ),
+                                if (view.problem != null || group != 'online')
+                                  TextSpan(
+                                    text: metadata.substring(
+                                      'This machine'.length,
+                                    ),
+                                  ),
+                              ]
+                            : null,
+                      ),
+                      key: ValueKey('machines-metadata-${view.id}'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: MachinesStyle.body(),

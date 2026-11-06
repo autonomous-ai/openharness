@@ -71,5 +71,7 @@ abstract final class MachinesStyle {
         color: color ?? label,
         letterSpacing: heading ? .66 : 0,
       );
+  static TextStyle identity() =>
+      grid.AppType.mono().copyWith(fontSize: 13, height: 1.3, color: metadata);
   static const tabular = [FontFeature.tabularFigures()];
 }
