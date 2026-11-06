@@ -32,7 +32,14 @@ Future<SuperTabController> mount(
   addTearDown(tester.view.reset);
   final server = fixture ?? ConversationServer();
   server.state['machines'] = [
-    machine('mine', 'My Mac', 'owner', 0),
+    machine(
+      'mine',
+      width < 500
+          ? 'A very long machine hostname that must truncate without increasing the row height'
+          : 'My Mac',
+      'owner',
+      0,
+    ),
     machine('build', 'Build Box', 'peer', 0),
     machine('sleep', 'Sleeping Mac', 'peer', 25),
     machine('old', 'Old Linux', 'peer', 7200),
@@ -84,6 +91,10 @@ void main() {
     expect(find.text('ASLEEP · 1'), findsOneWidget);
     expect(find.text('OFFLINE · 1'), findsOneWidget);
     expect(find.text('Sorted by status, then name'), findsOneWidget);
+    expect(
+      tester.getTopLeft(key('machines-line-mine')).dy,
+      lessThanOrEqualTo(160),
+    );
   });
 
   testWidgets(
@@ -157,7 +168,7 @@ void main() {
     await tester.tap(key('machines-crew-mine'));
     await tester.pump();
     expect(c.isMachineExpanded('mine'), isTrue);
-    expect(find.text('Crew'), findsOneWidget);
+    expect(key('super-machine-crew-member-mine-0'), findsOneWidget);
   });
 
   testWidgets(
