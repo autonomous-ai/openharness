@@ -90,9 +90,9 @@ const conversation: Required<Conversation> = {
   stepUp: { attempt: 2, floor: 2, reason: 'r', at: 1, carry: '' },
   talkedAt: { w: { person: 1, answer: 2 } },
   task: { goal: '', changes: '', constraints: '', owns: [] },
+  taskApproval: { personId: 'p', generation: 'g', state: 'proposal', createdAt: 1 },
   teamWritten: true,
   teamWrittenBy: { kind: 'assigned' },
-  taskApproval: { personId: 'p', generation: 'g', state: 'proposal', createdAt: 1 },
   title: 't',
 }
 
