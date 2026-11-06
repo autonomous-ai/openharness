@@ -309,6 +309,7 @@ List<SuperTabConversation> superTabQueueOrder(
 Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
   Iterable<SuperTabConversation> tasks, {
   Iterable<SuperTabProposal> proposals = const [],
+  bool boardMode = false,
   required String readerId,
   required DateTime now,
   int Function(SuperTabConversation task)? mentions,
@@ -325,6 +326,21 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
       (task: null, proposal: proposal, needsYou: false, state: null),
   ]);
   for (final task in tasks) {
+    // On the Board (#3817) a proposal is its own card: in Proposals until the PM makes it a task, and marked when
+    // its question waits on the reader. A duplicate merged into another card is not shown.
+    final proposal = boardMode ? task.proposal : null;
+    final asked = proposal?.openQuestion?.personId == readerId;
+    if (proposal != null && proposal.mergedInto != null) continue;
+    if (proposal != null && !proposal.becameTask) {
+      if (task.closed) continue;
+      board[SuperTabTaskColumn.proposals]!.add((
+        task: task,
+        proposal: null,
+        needsYou: asked || (mentions?.call(task) ?? 0) > 0,
+        state: null,
+      ));
+      continue;
+    }
     final place = superTabTaskPlaceOf(
       task,
       readerId: readerId,
@@ -339,7 +355,7 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
     board[place.column]!.add((
       task: task,
       proposal: null,
-      needsYou: place.needsYou,
+      needsYou: place.needsYou || asked,
       state: place.state,
     ));
   }
@@ -401,6 +417,7 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabProjectBoard(
       ],
     ),
     proposals: c.proposalsOf(project.id),
+    boardMode: project.boardMode,
     readerId: c.accountId,
     now: now,
     mentions: (task) => tags.mentionsIn(task.id),
