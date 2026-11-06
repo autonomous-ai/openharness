@@ -1219,16 +1219,56 @@ describe('agent_restart with launchArgs', () => {
     expect(run.deps.setLaunchArgs).toHaveBeenCalledWith('a1', [])
   })
 
-  it('refuses a flag Harness sets, a non-string, a resume, a Team-written agent and an unknown agent, saving and restarting nothing', async () => {
+  it('refuses a flag Harness sets, a non-string, a Team-written agent and an unknown agent, saving and restarting nothing', async () => {
     const run = setup({ byAgent: (id: string) => id === 'written' ? { ...session('written'), permissionMode: 'teamWritten' } : id === 'a1' ? session('a1') : undefined })
     expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--model x' }))
       .toStrictEqual({ error: 'INVALID_LAUNCH_ARGS', detail: '--model is set by Harness and can\'t be added here.' })
     expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: 5 })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
-    expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--chrome' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
     expect(await run.relaunch('agent_restart', { agentId: 'written', launchArgs: '--chrome' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
     expect(await run.relaunch('agent_restart', { agentId: 'gone', launchArgs: '--chrome' })).toStrictEqual({ error: 'AGENT_NOT_FOUND' })
     expect(run.deps.setLaunchArgs).not.toHaveBeenCalled()
     expect(run.restart).not.toHaveBeenCalled()
+  })
+
+  it('takes them on a resume too: validated, saved, echoed and fingerprinted', async () => {
+    const run = setup()
+    expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--chrome' })).toStrictEqual({ agent: { id: 'a1' }, resumed: true, launchArgs: ['--chrome'] })
+    expect(run.deps.setLaunchArgs).toHaveBeenCalledWith('a1', ['--chrome'])
+    expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--model x' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
+    run.replies.length = 0
+    await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--chrome', creationId: CREATION })
+    await vi.waitFor(() => expect(run.replies).toHaveLength(1))
+    await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--other', creationId: CREATION })
+    expect(run.replies.at(-1)).toStrictEqual({ error: 'CREATION_CONFLICT' })
+  })
+
+  // An early refusal stopped nothing, so a reboot must not apply flags the owner saw fail; a failure that may have
+  // replaced the process keeps them.
+  it('puts the previous flags back on an early refusal, directly and through a receipt, and keeps them when the process may be gone', async () => {
+    const withPrevious = (previous: string[] | undefined) => (id: string) => id === 'a1' ? { ...session('a1'), ...(previous ? { launchArgs: previous } : {}) } : undefined
+    const refuse = (error: string) => vi.fn(async () => ({ ok: false as const, error }))
+    const direct = setup({ byAgent: withPrevious(['--old']) }, { restart: refuse('NO_ACTIVE_PROCESS') })
+    await direct.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome' })
+    expect(vi.mocked(direct.deps.setLaunchArgs).mock.calls).toEqual([['a1', ['--chrome']], ['a1', ['--old']]])
+    const none = setup({ byAgent: withPrevious(undefined) }, { resume: refuse('AGENT_BUSY') })
+    await none.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--chrome' })
+    expect(vi.mocked(none.deps.setLaunchArgs).mock.calls).toEqual([['a1', ['--chrome']], ['a1', []]])
+    const receipt = setup({ byAgent: withPrevious(['--old']) }, { restart: refuse('NO_ACTIVE_PROCESS') })
+    await receipt.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome', creationId: CREATION })
+    await vi.waitFor(() => expect(receipt.replies).toHaveLength(1))
+    expect(vi.mocked(receipt.deps.setLaunchArgs).mock.calls).toEqual([['a1', ['--chrome']], ['a1', ['--old']]])
+    for (const error of ['RESTART_FAILED', 'RESUME_UNCONFIRMED']) {
+      for (const creationId of [undefined, CREATION]) {
+        const kept = setup({ byAgent: withPrevious(['--old']) }, { restart: refuse(error) })
+        await kept.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome', ...(creationId ? { creationId } : {}) })
+        await vi.waitFor(() => expect(kept.replies).toHaveLength(1))
+        expect(vi.mocked(kept.deps.setLaunchArgs).mock.calls).toEqual([['a1', ['--chrome']]])
+      }
+    }
+    // No new flags given: nothing was saved, so nothing is put back.
+    const plain = setup({ byAgent: withPrevious(['--old']) }, { restart: refuse('NO_ACTIVE_PROCESS') })
+    await plain.relaunch('agent_restart', { agentId: 'a1' })
+    expect(plain.deps.setLaunchArgs).not.toHaveBeenCalled()
   })
 
   it('treats the same receipt with different flags as a different request', async () => {

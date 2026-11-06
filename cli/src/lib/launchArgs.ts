@@ -61,17 +61,22 @@ export function parseLaunchArgs(engine: AgentEngine, text: string): LaunchArgsRe
   const args = splitWords(text)
   if (!args) return { ok: false, detail: 'Launch flags have an unclosed quote or a trailing backslash.' }
   if (args.length > LAUNCH_ARGS_MAX_WORDS) return { ok: false, detail: `Launch flags can be at most ${LAUNCH_ARGS_MAX_WORDS} words.` }
+  if (args.includes('--')) return { ok: false, detail: `-- is set by Harness and can't be added here.` }
   const refused = engine === 'claude' ? CLAUDE_REFUSED : engine === 'codex' ? CODEX_REFUSED : null
   if (refused) {
     // Checked after unquoting, so `"--model"` is the flag it spells.
     for (const word of args) {
       const flag = word.split('=')[0]!
       if (refused.has(flag)) return { ok: false, detail: `${flag} is set by Harness and can't be added here.` }
+      // `-r<id>` is `-r <id>` to these CLIs: a single-dash word whose first letter is a refused short flag.
+      if (/^-[^-]/.test(word) && refused.has(word.slice(0, 2))) return { ok: false, detail: `${word.slice(0, 2)} is set by Harness and can't be added here.` }
     }
   }
-  // Codex's `resume` and `fork` are subcommands: as the first word they would turn the launch into another one.
-  if (engine === 'codex' && (args[0] === 'resume' || args[0] === 'fork')) {
-    return { ok: false, detail: `${args[0]} is set by Harness and can't be added here.` }
+  // Codex's `resume` and `fork` are subcommands, and Codex reads them after other flags too, so anywhere they would turn
+  // the launch into another one.
+  if (engine === 'codex') {
+    const sub = args.find((word) => word === 'resume' || word === 'fork')
+    if (sub) return { ok: false, detail: `${sub} is set by Harness and can't be added here.` }
   }
   return { ok: true, args }
 }

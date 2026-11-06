@@ -56,11 +56,32 @@ describe('parseLaunchArgs', () => {
     for (const flag of flags) expect(parseLaunchArgs('codex', `${flag}=x`)).toEqual(refusal(flag))
     expect(parseLaunchArgs('codex', 'resume').ok).toBe(false)
     expect(parseLaunchArgs('codex', 'fork --x').ok).toBe(false)
-    expect(parseLaunchArgs('codex', '--search resume')).toEqual({ ok: true, args: ['--search', 'resume'] })
     expect(parseLaunchArgs('codex', '--continue')).toEqual({ ok: true, args: ['--continue'] })
+  })
+
+  it('refuses -- for every engine, since it would make Harness\'s own later arguments positional', () => {
+    for (const engine of ['claude', 'codex', 'opencode'] as const) {
+      expect(parseLaunchArgs(engine, '--chrome -- x').ok).toBe(false)
+    }
+  })
+
+  it('refuses a refused short flag with its value attached, and still allows Codex -c k=v', () => {
+    for (const word of ['-rabc', '-cfoo']) expect(parseLaunchArgs('claude', word).ok).toBe(false)
+    for (const word of ['-mo3', '-sdanger-full-access', '-aon-request', '-pfoo']) expect(parseLaunchArgs('codex', word).ok).toBe(false)
+    expect(parseLaunchArgs('claude', '-mo3').ok).toBe(true)
+    expect(parseLaunchArgs('codex', '-c k=v')).toEqual({ ok: true, args: ['-c', 'k=v'] })
+    expect(parseLaunchArgs('codex', '-cfoo=1').ok).toBe(true)
+    expect(parseLaunchArgs('codex', '--search')).toEqual({ ok: true, args: ['--search'] })
+  })
+
+  it('refuses Codex resume or fork anywhere in the words', () => {
+    expect(parseLaunchArgs('codex', '--search resume').ok).toBe(false)
+    expect(parseLaunchArgs('codex', '-c k=v fork').ok).toBe(false)
+    expect(parseLaunchArgs('claude', '--search resume').ok).toBe(true)
   })
 
   it('applies only the generic rules to other engines', () => {
     expect(parseLaunchArgs('opencode', '--model x')).toEqual({ ok: true, args: ['--model', 'x'] })
+    expect(parseLaunchArgs('opencode', '-rabc')).toEqual({ ok: true, args: ['-rabc'] })
   })
 })

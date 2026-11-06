@@ -615,11 +615,11 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (permissionMode !== undefined && byAgent(target)?.permissionMode === 'teamWritten') {
       reply({ error: 'INVALID_PERMISSION_MODE' }); return
     }
-    // Extra launch flags only ride a restart of an agent the owner may change, and are checked with the engine's own
-    // refused list before anything is saved or restarted.
+    // Extra launch flags ride a restart or a resume of an agent the owner may change, and are checked with the engine's
+    // own refused list before anything is saved or relaunched.
     let launchArgs: string[] | undefined
     if (payload.launchArgs !== undefined) {
-      if (operation !== 'restart' || typeof payload.launchArgs !== 'string' || byAgent(target)?.permissionMode === 'teamWritten') {
+      if (typeof payload.launchArgs !== 'string' || byAgent(target)?.permissionMode === 'teamWritten') {
         reply({ error: 'INVALID_LAUNCH_ARGS' }); return
       }
       const known = byAgent(target)
@@ -628,10 +628,17 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       if (!parsed.ok) { reply({ error: 'INVALID_LAUNCH_ARGS', detail: parsed.detail }); return }
       launchArgs = parsed.args
     }
+    const previous = byAgent(target)?.launchArgs
     // Saved inside the invoke, so a receipt that is asked again does not save twice.
     const invoke = () => {
       if (launchArgs) setLaunchArgs(target, launchArgs)
       return permissionMode === undefined ? restart(target) : resumeAgent()!(target, permissionMode)
+    }
+    // Any refusal before the old process may be gone leaves the previous flags in place, so a reboot never applies flags
+    // the owner saw fail. RESTART_FAILED and RESUME_UNCONFIRMED may follow a replaced process: those keep the new ones.
+    const settle = (result: Awaited<ReturnType<typeof invoke>>) => {
+      if (launchArgs && !result.ok && result.error !== 'RESTART_FAILED' && result.error !== 'RESUME_UNCONFIRMED') setLaunchArgs(target, previous ?? [])
+      return result
     }
     const echo = launchArgs ? { launchArgs } : {}
     const creationId = payload.creationId
@@ -640,7 +647,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       try {
         void receipts.run(creationId, creationFingerprint({ operation, agentId: target,
           ...(permissionMode === undefined ? {} : { permissionMode }), ...echo }), async () => {
-          const result = await invoke()
+          const result = settle(await invoke())
           if (result.ok) return { state: 'created', agentId: result.session.agentId, resumed: result.resumed }
           // RESTART_FAILED can follow an unobserved relaunch. Never silently
           // replace that process again when a caller checks this intent.
@@ -655,7 +662,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       }
       return
     }
-    const result = await invoke()
+    const result = settle(await invoke())
     if (!result.ok) {
       reply({ error: result.error, ...(result.reason ? { reason: result.reason } : {}), ...(result.detail ? { detail: result.detail } : {}) })
       return
