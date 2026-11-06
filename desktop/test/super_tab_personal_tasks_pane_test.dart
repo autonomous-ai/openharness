@@ -181,7 +181,9 @@ void main() {
     expect(f.controller.personalTasks!.mode, 'review');
   });
   for (final mode in ['autoApprove', 'review']) {
-    testWidgets('waiting task stays actionable in $mode with primary Approve', (t) async {
+    testWidgets('waiting task stays actionable in $mode with primary Approve', (
+      t,
+    ) async {
       await mount(t);
       f.mode = mode;
       await f.controller.refresh();
@@ -195,7 +197,10 @@ void main() {
       expect(find.text('Suggested'), findsNothing);
       await t.tap(find.text('Approve'));
       await t.pumpAndSettle();
-      expect(f.commands.single, {'type': 'task.approve', 'conversationId': 'new'});
+      expect(f.commands.single, {
+        'type': 'task.approve',
+        'conversationId': 'new',
+      });
     });
   }
   testWidgets('approve sends once while waiting and keeps the task', (t) async {

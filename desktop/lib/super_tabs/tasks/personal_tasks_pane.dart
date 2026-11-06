@@ -346,12 +346,15 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                                   ),
                                             ),
                                           ),
-                                          if (task.suggested)
+                                          if (pending)
                                             Text(
-                                              'Suggested',
+                                              'Waiting for you',
                                               style: Theme.of(context)
                                                   .textTheme
-                                                  .labelSmall,
+                                                  .bodySmall
+                                                  ?.copyWith(
+                                                    color: DesktopChrome.muted,
+                                                  ),
                                             ),
                                           const SizedBox(width: 8),
                                           _TaskMark(task.status),
@@ -418,7 +421,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                                 : null,
                                             child: const Text('Reject'),
                                           ),
-                                          TextButton(
+                                          FilledButton(
                                             onPressed: enabled
                                                 ? () => _send({
                                                     'type': 'task.approve',
