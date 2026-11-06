@@ -19,7 +19,10 @@ Map<String, dynamic> buddy(String id, String name, {bool first = false}) => {
   if (first) 'buddyDefault': true,
 };
 
-Future<SuperTabController> controller(WidgetTester tester, {int cards = 0}) async {
+Future<SuperTabController> controller(
+  WidgetTester tester, {
+  int cards = 0,
+}) async {
   final server = swarm();
   server.state['swarmBuddy'] = true;
   server.state['buddyCap'] = 5;
@@ -29,8 +32,10 @@ Future<SuperTabController> controller(WidgetTester tester, {int cards = 0}) asyn
   ]);
   for (var i = 0; i < cards; i++) {
     (server.state['conversations'] as List).add(<String, dynamic>{
-      ...conversationFixture('card-$i', 'Card $i'), 'projectId': 'lead',
-      'lastMessageSequence': 2, 'lastMainSequence': 2,
+      ...conversationFixture('card-$i', 'Card $i'),
+      'projectId': 'lead',
+      'lastMessageSequence': 2,
+      'lastMainSequence': 2,
     });
   }
   final c = server.controller(
@@ -101,28 +106,30 @@ void main() {
     await tester.pumpAndSettle();
     expect(key('super-buddy-new-name'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
-      c.dispose();
-      await tester.pump(const Duration(seconds: 1));
-  });
-  testWidgets('unread card avatars overflow after eight and the menu opens the rest', (tester) async {
-    final c = await controller(tester, cards: 8);
-    await showRow(tester, c);
-    for (var i = 0; i < 8; i++) {
-      await tester.runAsync(() => c.select('card-$i'));
-      await tester.pump();
-    }
-    expect(key('super-chat-unread-card-0'), findsOneWidget);
-    // Two pinned Buddies + the original card + eight more = eleven.
-    expect(find.text('+3'), findsOneWidget);
-    expect(key('super-chat-tab-card-7'), findsNothing);
-    await tester.tap(key('super-chat-overflow'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Card 7'));
-    await tester.pumpAndSettle();
-    expect(c.selectedId, 'card-7');
-    await tester.pumpWidget(const SizedBox());
     c.dispose();
     await tester.pump(const Duration(seconds: 1));
   });
-
+  testWidgets(
+    'unread card avatars overflow after eight and the menu opens the rest',
+    (tester) async {
+      final c = await controller(tester, cards: 8);
+      await showRow(tester, c);
+      for (var i = 0; i < 8; i++) {
+        await tester.runAsync(() => c.select('card-$i'));
+        await tester.pump();
+      }
+      expect(key('super-chat-unread-card-0'), findsOneWidget);
+      // Two pinned Buddies + the original card + eight more = eleven.
+      expect(find.text('+3'), findsOneWidget);
+      expect(key('super-chat-tab-card-7'), findsNothing);
+      await tester.tap(key('super-chat-overflow'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Card 7'));
+      await tester.pumpAndSettle();
+      expect(c.selectedId, 'card-7');
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+      await tester.pump(const Duration(seconds: 1));
+    },
+  );
 }

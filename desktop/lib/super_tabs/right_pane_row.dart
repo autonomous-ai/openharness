@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
+import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
 import 'avatar_art.dart';
 import 'buddy_list.dart';
@@ -77,25 +79,68 @@ class _SuperTabRightPaneRowState extends State<SuperTabRightPaneRow> {
         SizedBox(
           key: const ValueKey('super-right-pane-row'),
           height: 48,
-          child: Row(
-            children: [
-              for (final buddy in buddies) _avatar(buddy, buddy: true),
-              if (buddies.isNotEmpty && cards.isNotEmpty)
-                const SizedBox(
-                  key: ValueKey('super-chat-divider'),
-                  height: 24,
-                  child: VerticalDivider(width: 12),
-                ),
-              for (final card in cards) _avatar(card, buddy: false),
-              AppIconButton(
-                key: const ValueKey('super-buddy-new'),
-                icon: AppIcons.plus,
-                tooltip: 'New Buddy',
-                onPressed: c.canWrite
-                    ? () => unawaited(showNewBuddy(context, c, app: widget.app))
-                    : null,
-              ),
-            ],
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final all = [...buddies, ...cards];
+              // Leave room for New Buddy, overflow and the section divider.
+              final count = math.min(
+                8,
+                math.max(0, ((constraints.maxWidth - 92) / 42).floor()),
+              );
+              final shown = all.take(count).toList();
+              final rest = all.skip(count).toList();
+              return Row(
+                children: [
+                  for (final (i, group) in shown.indexed) ...[
+                    if (i == buddies.length && i > 0)
+                      const SizedBox(
+                        key: ValueKey('super-chat-divider'),
+                        height: 24,
+                        child: VerticalDivider(width: 12),
+                      ),
+                    _avatar(group, buddy: group.isBuddyChat),
+                  ],
+                  if (rest.isNotEmpty)
+                    AppDropdown(
+                      width: 260,
+                      children: [
+                        for (final group in rest)
+                          AppMenuItem(
+                            key: ValueKey('super-chat-overflow-${group.id}'),
+                            label: group.buddyName ?? group.label,
+                            selected: group.id == c.selectedId,
+                            note: c.unread(group) ? 'Unread' : null,
+                            onPressed: () => unawaited(c.select(group.id)),
+                            trailing: group.isBuddyChat
+                                ? null
+                                : IconButton(
+                                    tooltip: 'Close ${group.label}',
+                                    iconSize: 14,
+                                    onPressed: () => _close(group.id),
+                                    icon: const Icon(AppIcons.close),
+                                  ),
+                          ),
+                      ],
+                      builder: (context, menu, _) => TextButton(
+                        key: const ValueKey('super-chat-overflow'),
+                        onPressed: () =>
+                            menu.isOpen ? menu.close() : menu.open(),
+                        child: Text('+${rest.length}'),
+                      ),
+                    ),
+                  AppIconButton(
+                    key: const ValueKey('super-buddy-new'),
+                    icon: AppIcons.plus,
+                    tooltip: 'New Buddy',
+                    onPressed: c.canWrite
+                        ? () => unawaited(
+                            showNewBuddy(context, c, app: widget.app),
+                          )
+                        : null,
+                  ),
+                ],
+              );
+            },
           ),
         ),
         if (c.selected?.isBuddyChat == true && c.canWrite)
