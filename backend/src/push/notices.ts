@@ -39,12 +39,19 @@ function linkOf(tabId: string, conversationId: string, messageId: string, thread
  *  (mobile lib/swarm/swarm_notices.dart threadSlot). */
 export const threadSlot = (tabId: string, conversationId: string, threadId: string) => `thread:${tabId}:${conversationId}:${threadId}`
 
+/** The one notification a task's questions share on a phone (task #3607): a decision asked of the person, and the app's own
+ *  "stuck" and "needs you" for the same task, show in this slot, so a later one replaces the earlier (mobile
+ *  lib/swarm/swarm_notices.dart swarmTaskSlot). */
+export const taskSlot = (tabId: string, conversationId: string) => `task:${tabId}:${conversationId}`
+
 /**
  * What one write tells phones (tasks #2905, #3248): a notice for each reply row and tag row it wrote, and each decision it
  * asked, worded and keyed as the phone's own notices are, so the phone shows one or the other, never both. Who is told was
  * decided with the rows (#2954: muted chats and Unfollow write no reply row; a tag always tells); of a reply's rows, only
  * those Tony's rule pushes (PUSHED), and never for a Swarm line in a thread (a row with a source), which stays in Activity.
- * A tag held for a quiet chat is not news yet. Of one ask's decisions to a person, only the first sounds.
+ * Only a person's reply and a person's tag ring (task #3607): an agent's stay in Activity and the badge, whatever they say.
+ * A tag held for a quiet chat is not news yet. Of one ask's decisions to a person, only the first sounds; all of a task's
+ * decisions share one notification slot (taskSlot).
  */
 export function phoneNotices(tabId: string, state: SuperTabState, written: { replies: ReplyRow[]; tags: TagRow[]; decisions?: DecisionRow[] },
   messages: MessageDraft[]): PhoneNotice[] {
@@ -82,7 +89,8 @@ export function phoneNotices(tabId: string, state: SuperTabState, written: { rep
     const first = !asked.has(row.personId)
     asked.add(row.personId)
     return { personId: row.personId, key, title: `${asker?.displayName ?? asker?.name ?? 'Agent'} asks you`, subtitle: project(row.conversationId),
-      body: ANSWER, link: `swarm:${e(tabId)}/${e(row.conversationId)}/decision/${e(row.id)}`, slot: key, ...first ? {} : { quiet: true as const } }
+      body: ANSWER, link: `swarm:${e(tabId)}/${e(row.conversationId)}/decision/${e(row.id)}`, slot: taskSlot(tabId, row.conversationId),
+      ...first ? {} : { quiet: true as const } }
   })
   return [...replies, ...tags, ...decisions]
 }
