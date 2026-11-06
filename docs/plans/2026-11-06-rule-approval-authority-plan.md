@@ -87,6 +87,8 @@
 **Files:** commands.ts, policy.test.ts, superTabProjectRules.test.ts.
 **Interfaces:** rules.set retains its existing message-based PM flow for ordinary rules. Changing instructionApprovals requires the actor to be the project owner or current top decider, acting directly.
 
-- [ ] Commit and observe failing tests for the PM quoting either the owner or current decider to replace the decider, relink accounts or disable authority; cover real-store refusal and unchanged revision.
-- [ ] Require a direct person actor for authority changes, preserving direct owner/decider edits and omitted or unchanged authority on ordinary PM saves.
+- [x] Commit and observe failing tests (`59e2a6133`: two unit failures and real-store save not refused) for the PM quoting either the owner or current decider to replace the decider, relink accounts or disable authority; cover real-store refusal and unchanged revision.
+- [x] Require a direct person actor for authority changes, preserving direct owner/decider edits and omitted or unchanged authority on ordinary PM saves.
 - [ ] Run affected tests, real-store policy integrations and typecheck; record red/green and obtain both security reviews at the final head.
+
+- Repair validation: 471 affected policy/authority/command unit tests, 11 project-rules real-store tests and backend typecheck pass. Two independent final-head confirmations and automatic CI remain pending.

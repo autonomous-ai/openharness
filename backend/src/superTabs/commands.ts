@@ -2256,8 +2256,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const next = command.rules.instructionApprovals === undefined && current.rules.instructionApprovals !== undefined
         ? { ...command.rules, instructionApprovals: current.rules.instructionApprovals } : command.rules
       if (JSON.stringify(current.rules.instructionApprovals ?? null) !== JSON.stringify(next.instructionApprovals ?? null)
-        && askedBy !== project.ownerId && askedBy !== current.rules.instructionApprovals?.topDeciderId) {
-        fail('RULES_APPROVAL_EDITOR_REQUIRED', 'Only the project owner or its current top decider may change who approves instruction rules or link their accounts.', 403)
+        && (actor.kind !== 'person' || (actor.userId !== project.ownerId && actor.userId !== current.rules.instructionApprovals?.topDeciderId))) {
+        fail('RULES_APPROVAL_EDITOR_REQUIRED', 'Only the project owner or its current top decider, acting directly, may change who approves instruction rules or link their accounts.', 403)
       }
       // A writer that does not know machine rules leaves them as they are; one that sends a list sets it.
       const kept = next.machines === undefined && current.rules.machines ? projectRulesSchema.safeParse({ ...next, machines: current.rules.machines }) : null
