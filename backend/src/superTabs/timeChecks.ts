@@ -26,7 +26,8 @@ export async function owedAsk(db: Pick<PrismaClient, 'superTabDelivery'>, tabId:
     { $sort: { createdAt: 1 } },
     { $limit: 1 },
     { $project: { _id: 0, messageId: 1, createdAt: 1 } },
-  ] }) as unknown as Array<{ messageId: string; createdAt: { $date: string } | string }>
+  // Proposal priority must not split the chronological range used to find the oldest unanswered ask.
+  ], options: { hint: { tabId: 1, agentId: 1, status: 1, createdAt: 1 } } }) as unknown as Array<{ messageId: string; createdAt: { $date: string } | string }>
   if (!row) return null
   const at = typeof row.createdAt === 'string' ? row.createdAt : row.createdAt.$date
   return { messageId: row.messageId, since: Date.parse(at) }
