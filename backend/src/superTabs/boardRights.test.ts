@@ -90,3 +90,40 @@ describe('a project\'s Board settings', () => {
     expect(canChat(f.state, project, 'c')).toBe(false)
   })
 })
+
+describe('Can chat in a switched project', () => {
+  const say = (conversationId: string, text = 'Hello') => ({ type: 'message.send', conversationId, text, replyTo: null, recipientIds: [] }) as Command
+  const switchedFixture = () => {
+    const f = boardFixture()
+    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
+    f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'c', granted: true })
+    return f
+  }
+
+  it('lets the owners and the granted write in its chat, and refuses everyone else, whatever the client', () => {
+    const f = switchedFixture()
+    for (const actor of [projectOwner, swarmOwner, granted]) f.run(say(f.app.conversationId), actor)
+    expect(() => f.run(say(f.app.conversationId), member)).toThrow(expect.objectContaining({ code: 'CHAT_NOT_ALLOWED', status: 403 }))
+    // An edit writes too: a member's message from before the switch stays as it was.
+    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: false })
+    const before = f.run(say(f.app.conversationId, 'Before'), member).messageId as string
+    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
+    expect(() => f.run({ type: 'message.edit', conversationId: f.app.conversationId, messageId: before, text: 'After' }, member))
+      .toThrow(expect.objectContaining({ code: 'CHAT_NOT_ALLOWED' }))
+    expect(() => f.run({ type: 'agent.add', conversationId: f.app.conversationId, harnessId: 'h2', machineId: 'machine', name: 'h2', lead: false,
+      configuration, initialMessage: 'Start here' }, member)).toThrow(expect.objectContaining({ code: 'CHAT_NOT_ALLOWED' }))
+  })
+
+  it('leaves agents, and people in a task\'s own chat, writing as today', () => {
+    const f = switchedFixture()
+    f.run(say(f.app.conversationId, 'From the PM'), f.asAgent(f.pm))
+    const task = f.run({ type: 'conversation.create', title: 'Task', priority: 'P2', requesterId: 'd',
+      task: { goal: 'Do it', changes: 'It', constraints: 'None', owns: ['x'] }, checks: [{ description: 'Done', independent: false }] }).conversationId as string
+    f.run(say(task, 'In the card chat'), member)
+  })
+
+  it('changes nothing in a project not switched', () => {
+    const f = boardFixture()
+    f.run(say(f.app.conversationId), member)
+  })
+})
