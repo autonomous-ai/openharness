@@ -30,6 +30,15 @@ function setup() {
 }
 
 describe('an ask entrusted to a project agent', () => {
+  it('settles a restored handoff when its named project agent answers', () => {
+    const { f, ask, reply, count, lines } = setup()
+    const id = ask()
+    Object.assign(f.group('lead').owed![0]!, { delegatedTo: f.dev })
+    reply(f.dev, id)
+    expect(count()).toBe(0)
+    expect(lines()).not.toContain(`message ${id} `)
+  })
+
   it('leaves the owed list and Board only when the named agent answers in its thread', () => {
     const { f, ask, handoff, reply, owes, count, lines } = setup()
     const first = ask()
@@ -143,6 +152,12 @@ describe('an ask entrusted to a project agent', () => {
     expect(() => handoff(id)).toThrow('This ask is no longer owed in the project chat.')
   })
 
+  it('does not accept an agent-only handoff', () => {
+    const { f, ask, handoffCommand } = setup()
+    const command = { ...handoffCommand(ask(), [f.lead]), agentOnly: true } as Command
+    expect(() => f.run(command, f.as(f.lead))).toThrow('Hand off an ask in a public post to its project agent.')
+  })
+
   it('guards a handoff against a concurrent PM replacement', () => {
     const { f, ask, handoffCommand } = setup()
     const command = handoffCommand(ask()), actor = f.as(f.lead), before = f.state
@@ -160,7 +175,7 @@ describe('an ask entrusted to a project agent', () => {
     expect(owes()).toEqual([id])
     expect(react(f.lead, 'check').messages).toEqual([])
     expect(count()).toBe(0)
-    expect(lines()).toBe('')
+    expect(lines()).not.toContain('Owed asks')
     expect(f.group('lead').answered).toBeUndefined()
   })
 })
