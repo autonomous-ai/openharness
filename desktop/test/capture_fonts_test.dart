@@ -8,10 +8,10 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'support/capture.dart';
 
 void main() {
+  setUpAll(() => loadCaptureFonts('capture-enabled'));
   testWidgets('capture fonts draw the plus action instead of a missing glyph', (
     tester,
   ) async {
-    await loadCaptureFonts('capture-enabled');
     final boundaryKey = GlobalKey();
     await tester.pumpWidget(
       Directionality(
