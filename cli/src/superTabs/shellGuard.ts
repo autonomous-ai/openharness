@@ -59,7 +59,7 @@ export function shellRefusal(command: string, facts: GuardFacts): string | null 
 
 /** The guard's answer for a file tool writing [path] (Claude Code's Write, Edit, MultiEdit and NotebookEdit). */
 export function fileRefusal(path: string, facts: GuardFacts): string | null {
-  return tmpPathRefused(path, facts) ? GUARD_REASONS.fixedTmp : null
+  return tmpPathRefused(resolveIn(facts.cwd, path, facts.platform), facts) ? GUARD_REASONS.fixedTmp : null
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -310,7 +310,7 @@ function systemWide({ words }: Simple): boolean {
   if (program === 'yarn') return subcommand(words) === 'global'
   if (program === 'brew') return BREW_CHANGES.has(subcommand(words) ?? '')
   if (SYSTEM_PACKAGES.has(program)) return PACKAGE_CHANGES.has(subcommand(words) ?? '')
-  if (program === 'pacman') return all.slice(1).some((word) => /^-[A-Za-z]*[SRU]/.test(word) || /^--(sync|remove|upgrade)$/.test(word))
+  if (program === 'pacman') return words.slice(1).some((word) => /^-[A-Za-z]*[SRU]/.test(word) || /^--(sync|remove|upgrade)$/.test(word))
   if (program === 'pip' || program === 'pip3' || (/^python[\d.]*$/.test(program) && all.includes('pip'))) {
     return all.includes('install') && all.some((word) => word === '--break-system-packages' || word === '--system')
   }
@@ -352,21 +352,25 @@ function killsByName(commands: Simple[]): boolean {
 
 const TMP_ROOTS = ['/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp']
 /** A path in /tmp inside a word: at its start, or after `=`, `:` or `,` (`--output=/tmp/x`, `PATH=a:/tmp/b`). */
-const TMP_PATH = /(?:^|[=:,])((?:\/private)?(?:\/var)?\/tmp)\/([^/\s"'`;|&<>()]+)/g
+const TMP_PATH = /(?:^|[=:,])((?:\/private)?(?:\/var)?\/tmp\/[^\s"'`;|&<>()]+)/g
 
 /** A word or redirection writing, reading or running a fixed name in /tmp; `mktemp`'s own words are its templates. */
 function fixedTmp({ words, targets }: Simple, facts: GuardFacts): boolean {
   const program = programName(words[0])
-  if (program === 'mktemp') return targets.some((target) => tmpPathRefused(target, facts))
+  if (targets.some((target) => fileRefusal(target, facts) !== null)) return true
+  if (program === 'mktemp') return false
   // `cd /tmp` and then a plain name writes a fixed name there.
   if ((program === 'cd' || program === 'pushd') && words[1] && TMP_ROOTS.includes(words[1].replace(/\/+$/, ''))) return true
-  return [...words, ...targets].some((word) => tmpPathRefused(word, facts))
+  return words.some((word) => tmpPathRefused(word, facts))
 }
 
 /** Whether [word] names a path in /tmp whose top folder is not one only this account can open. */
 function tmpPathRefused(word: string, facts: GuardFacts): boolean {
   for (const match of word.matchAll(TMP_PATH)) {
-    if (!facts.privateFolder(`${match[1]}/${match[2]}`)) return true
+    // Check the destination, not an earlier private component that `..` leaves behind.
+    const path = posix.normalize(match[1])
+    const root = TMP_ROOTS.find(root => path.startsWith(`${root}/`))
+    if (root && !facts.privateFolder(`${root}/${path.slice(root.length + 1).split('/')[0]}`)) return true
   }
   return false
 }

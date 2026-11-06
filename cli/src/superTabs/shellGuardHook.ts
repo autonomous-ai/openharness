@@ -26,8 +26,10 @@ export function guardDecision(call: unknown, factsFor: (cwd: string) => GuardFac
   if (!call || typeof call !== 'object') return null
   const { tool_name: tool, tool_input: input, cwd } = call as Record<string, unknown>
   if (!input || typeof input !== 'object') return null
-  const facts = factsFor(typeof cwd === 'string' && cwd ? cwd : process.cwd())
   const fields = input as Record<string, unknown>
+  const commandCwd = tool === 'exec_command' || tool === 'shell' ? fields.workdir ?? fields.cwd : undefined
+  const facts = factsFor(typeof commandCwd === 'string' && commandCwd ? commandCwd
+    : typeof cwd === 'string' && cwd ? cwd : process.cwd())
   if (typeof tool === 'string' && FILE_TOOLS.has(tool)) {
     const path = fields.file_path ?? fields.notebook_path
     return typeof path === 'string' ? fileRefusal(path, facts) : null
