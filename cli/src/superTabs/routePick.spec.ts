@@ -53,6 +53,17 @@ describe('pickByOrder step 1: what the work needs', () => {
     expect(pick([g], small({ kind: 'review' }))).toBeNull()
   })
 
+  // Review of #3296 (SecReview3293): "nothing below high effort, no Haiku" is a rule of step 1, so a pool of only those names no pick.
+  it('never picks a candidate below high effort or on Haiku, unless a person named the model; with only those, there is no pick', () => {
+    for (const low of ['minimal', 'low', 'medium']) expect(pick([row({ effort: low })])).toBeNull()
+    expect(pick([row({ model: 'haiku', effort: 'high' })])).toBeNull()
+    expect(pick([opus({ effort: 'medium' })], big())).toBeNull()
+    const fine = row({ left: 5, resets: NOW + 6 * D })
+    expect(pick([row({ model: 'haiku' }), row({ effort: 'medium' }), fine])!.id).toBe(fine.id)
+    const haiku = row({ model: 'haiku' })
+    expect(pick([haiku], small({ model: 'haiku' }))!.id).toBe(haiku.id)
+  })
+
   it('a model at the wrong effort comes after one at the tier\'s effort', () => {
     const low = row({ effort: 'medium' }), high = row()
     expect(pick([low, high])!.id).toBe(high.id)
