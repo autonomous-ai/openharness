@@ -102,7 +102,7 @@ describe('an ask entrusted to a project agent', () => {
     reply(otherAgent, id)
     reply(f.dev, otherAsk)
     reply(f.dev, id, { answers: true })
-    reply(f.dev, id, { agentOnly: true })
+    expect(() => reply(f.dev, id, { agentOnly: true })).toThrow('The project chat holds only its coordinator among agents')
     expect(owes()).toEqual([id, otherAsk])
     reply(f.dev, id)
     expect(owes()).toEqual([otherAsk])
