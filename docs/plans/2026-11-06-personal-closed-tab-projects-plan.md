@@ -26,7 +26,7 @@
 - Concurrency: existing per-account/Swarm client serialization; deterministic operations deduplicate across computers. Empty-only deletion must be checked inside the server's write transaction.
 - Read cost: use current mappings/snapshot and authoritative desk state only for candidate cleanup; no per-pane polling.
 - Scale: bounded by desk tabs and 100 projects; project-cap refusal is the warning signal.
-- Compatibility: do not issue unsupported archive commands. The current server has no project archive and refuses archiving a project Lead conversation. Backend prerequisite/scope decision requested from PM before cleanup implementation.
+- Compatibility: do not issue unsupported archive commands. The current server has no project archive and refuses archiving a project Lead conversation. Backend prerequisite is task #3929 (PM decision): integrate its atomic cleanup command once merged, before enabling Desktop cleanup.
 - Migration/rollback: retained mappings identify old tab projects; no repo mappings change. Reverting stops further automatic cleanup; messages must never have been deleted.
 - Audience/identity: existing Personal eligibility checks plus server ownership; signed-in person's account, never host identity.
 - Failure: reuse named, content-free errors and bounded retry backoff; fail closed if desk presence or server safeguards are unavailable.
@@ -46,14 +46,14 @@
 
 **Interfaces:** consume `isDeskId(String)` from `state/desk_sync.dart`; retain `PersonalProjects.sync(SuperTabController)` and pane lookup behavior.
 
-- [ ] Add `a swarm-N tab makes no project before the desk join`: sync no-repo panes in `swarm-1`, assert no project creation; give the tab a real desk ID and assert one project on subsequent sync. Repo panes continue to work before join.
-- [ ] Run that test, observe failure, commit test.
-- [ ] Gate only tab-project creation on real desk identity; update existing fixture tabs to realistic IDs while preserving their human names.
+- [x] Add `a swarm-N tab makes no project before the desk join`: sync no-repo panes in `swarm-1`, assert no project creation; give the tab a real desk ID and assert one project on subsequent sync. Repo panes continue to work before join.
+- [x] Run that test, observe failure, commit test (`7c26058bb`; two creates instead of one).
+- [x] Gate only tab-project creation on real desk identity; update existing fixture tabs to realistic IDs while preserving their human names.
 - [ ] Run the changed file and tests importing `personal_projects.dart`; commit passing implementation.
 
 ### Task 2: Safely retire closed-tab projects
 
-**Files:** same Desktop files and `docs/plans/2026-11-03-personal-tab-projects-plan.md`. Backend changes require PM scope decision first.
+**Files:** same Desktop files and `docs/plans/2026-11-03-personal-tab-projects-plan.md`. Backend prerequisite #3929 is a separate task; integrate its merged contract here.
 
 **Interfaces:** existing `project.delete` is unconditional on message emptiness, and `project.archive` does not exist. Do not use a permissive fixture to pretend these interfaces provide the required safety. Resolve the server contract before implementing this task.
 
