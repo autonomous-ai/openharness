@@ -4,7 +4,8 @@ import { createSuperTab, visibleState, type Actor, type SuperTabState } from './
 import { projectOf } from './projects.js'
 import { canChat, steers, switched } from './boardRights.js'
 import { openTasks } from './dispatch.js'
-import { sweepDue } from './pmSchedule.js'
+import { PM_SCHEDULE_TEXT, pmScheduleText, sweepDue } from './pmSchedule.js'
+import { owedLines } from './inbox.js'
 import { holdOf } from './pulse.js'
 
 // Task #3819 (Phase 2 of docs/plans/2026-11-06-buddy-board-final-spec.md, Ken and anh Dee 11-06): a project's owner switches
@@ -219,5 +220,29 @@ describe('pause and resume', () => {
     expect(sweepDue(f.state, f.app.projectId, 1000)).toBe(false)
     f.run({ type: 'work.pause', conversationId: id, paused: false }, projectOwner)
     expect(openTasks(f.state, f.app.projectId, 1000).map(g => g.id)).toContain(id)
+  })
+})
+
+describe('the PM text in a switched project', () => {
+  const INBOX_LINE = /Answer each person's message once|Your inbox lists every unanswered message/
+
+  it('drops the inbox lines, and a person\'s message there owes the PM nothing', () => {
+    const f = boardFixture()
+    f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'c', granted: true })
+    const ask = () => f.run({ type: 'message.send', conversationId: f.app.conversationId, text: 'Can you look at this?', replyTo: null, recipientIds: [f.pm] }, granted)
+    // Not switched: today's text, and the ask is owed.
+    expect(pmScheduleText(f.project())).toBe(PM_SCHEDULE_TEXT)
+    ask()
+    expect(owedLines(f.state, f.project(), 1000).join('\n')).toMatch(/Owed asks/)
+
+    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
+    const text = pmScheduleText(f.project())
+    expect(PM_SCHEDULE_TEXT).toMatch(INBOX_LINE)
+    expect(text).not.toMatch(INBOX_LINE)
+    expect(text).toContain('Keep a standing crew')
+    expect(owedLines(f.state, f.project(), 1000).join('\n')).not.toMatch(/Owed asks/)
+    const before = f.state.conversations.find(c => c.id === f.app.conversationId)!.owed?.length ?? 0
+    ask()
+    expect(f.state.conversations.find(c => c.id === f.app.conversationId)!.owed?.length ?? 0).toBe(before)
   })
 })
