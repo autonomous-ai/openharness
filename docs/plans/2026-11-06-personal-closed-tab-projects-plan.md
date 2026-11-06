@@ -49,7 +49,9 @@
 - [x] Add `a swarm-N tab makes no project before the desk join`: sync no-repo panes in `swarm-1`, assert no project creation; give the tab a real desk ID and assert one project on subsequent sync. Repo panes continue to work before join.
 - [x] Run that test, observe failure, commit test (`7c26058bb`; two creates instead of one).
 - [x] Gate only tab-project creation on real desk identity; update existing fixture tabs to realistic IDs while preserving their human names.
-- [ ] Run the changed file and tests importing `personal_projects.dart`; commit passing implementation.
+- [x] Run the changed file and tests importing `personal_projects.dart`; commit passing implementation. Four tests in
+  `personal_project_tabs_test.dart`, `super_tab_personal_lead_test.dart` and `super_tab_personal_lead_card_test.dart`
+  named their no-repo tab with an invented id; they now use a 32-hex desk id.
 
 ### Task 2: Safely retire closed-tab projects
 
