@@ -17,7 +17,7 @@ through Harness).
   marker stored, and covers tab projects made before. A repo project (`personal-repo-`, or any with a repository), another
   Swarm, another person, or an agent: refused, in the words a missing project gets.
 - **Empty:** every conversation of the project, dormant ones loaded (the command names its project, as `project.delete`
-  does), has `lastMessageSequence` 0, its instructions are still the built-in first revision, and it has no rules record (read
+  does), has `lastMessageSequence` 0, its instructions are still the built-in first revision, no note was told to its PM, and it has no rules record (read
   in the same write; unreadable counts as written). What the person wrote without a message is theirs (security review 2,
   Phonecheck2). Then it is deleted exactly as `project.delete` deletes (its agents, starts, machines'
   lists). Otherwise the project is marked `archived: true` and each of its conversations archived, its Lead chat included,
