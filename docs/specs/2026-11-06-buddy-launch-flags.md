@@ -45,14 +45,19 @@ His choices:
   - **Restarted:** the dialog closes. The Buddy keeps its conversation.
   - **Refused** (`INVALID_LAUNCH_ARGS`): the dialog stays open with the daemon's message under the field, for example
     "--model is set by Harness and can't be added here.".
-  - **The engine did not start** (the restart's existing failure): the dialog stays open with "The Buddy didn't start with these
-    flags. Fix or clear them and restart." The flags are already saved, so clearing the field and pressing Restart recovers.
+  - **The engine did not start** (the restart's or resume's unconfirmed or `RESTART_FAILED` outcome): the dialog stays open with
+    "The Buddy didn't start with these flags. Fix or clear them and restart." The flags are already saved. Each press of
+    Restart in the dialog is a new intent with its own receipt and always sends the field, so clearing it and pressing Restart
+    recovers.
+  - **Any other failure** (offline, busy, not installed, a lost reply): the dialog stays open with that failure's own text.
+  - **A stopped Buddy:** Restart resumes it with `launchArgs` (`agent_resume`).
   - **Older daemon:** an answer with no `launchArgs` echo means that computer's Harness does not know the field and restarted
     without the flags. The dialog stays open with "Update Harness on <machine name> to use launch flags."
 
 ### Daemon (CLI)
 
-- `agent_restart` takes an optional `launchArgs: string`:
+- `agent_restart` and `agent_resume` take an optional `launchArgs: string` (resume too, so a Buddy that a bad flag left
+  stopped can be brought back with the flags fixed or cleared; review of the first build):
   - Absent: a restart as today, and the saved flags still apply.
   - Present: parse it, validate it, save it on the agent's record (empty clears it), then restart.
 - **Parsing:** split as a POSIX shell would split words: whitespace, single and double quotes, and backslash escapes. No
@@ -69,7 +74,14 @@ His choices:
     - **Codex:** `--model`, `-m`, `--dangerously-bypass-approvals-and-sandbox`, `--ask-for-approval`, `-a`, `--sandbox`,
       `-s`, `--profile`, `-p`, and the words `resume` and `fork` as the first word.
     - **Any other engine:** only the length, word-count and character rules.
-- **Saving:** the record gets `launchArgs?: string[]`, the parsed words. It is never written when empty.
+  - For every engine, the word `--` is refused (it would turn Harness's own later arguments into positional ones).
+  - A refused short flag with its value attached is refused too: a single-dash word whose first letter is a refused short
+    flag (Claude `-r<id>`, Codex `-mo3`, `-sdanger-full-access`).
+  - For Codex, a bare `resume` or `fork` word is refused anywhere, not only first: Codex reads it as its subcommand after
+    other flags too.
+- **Saving:** the record gets `launchArgs?: string[]`, the parsed words. It is never written when empty. When the restart or
+  resume is refused before anything is stopped (for example no live process, the agent busy, the engine not installed), the
+  previous flags are put back, so a reboot never applies flags the owner saw fail.
 - **Applying:** `buildLaunchOverrides` appends `source.launchArgs` after the Swarm's args and before Harness's instructions, so
   the instructions stay last and are still joined as they are today. The first `agent_create` never carries them.
 - **Answer:** a successful restart answers as today plus `launchArgs: string[]`, the words now saved (`[]` when cleared).
