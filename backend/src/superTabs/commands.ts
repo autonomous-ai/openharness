@@ -10,6 +10,7 @@ import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_LANES, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { noteIndex } from './processNotes.js'
+import { ownsBoard, readsProject } from './boardRights.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
 import { z } from 'zod'
@@ -235,6 +236,10 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.rename'), projectId: id, name: title }).strict(),
   z.object({ type: z.literal('project.delete'), projectId: id }).strict(),
   z.object({ type: z.literal('project.sharing'), projectId: id, visibility: z.enum(['public', 'private']), memberIds: z.array(id).max(200) }).strict(),
+  // A project's Board settings (boardRights.ts, task #3819), set by its owner or the Swarm's owner.
+  z.object({ type: z.literal('project.boardMode'), projectId: id, on: z.boolean() }).strict(),
+  z.object({ type: z.literal('project.canChat'), projectId: id, personId: id, granted: z.boolean() }).strict(),
+  z.object({ type: z.literal('project.decider'), projectId: id, personId: id.nullable() }).strict(),
   z.object({ type: z.literal('project.cadence'), projectId: id, minutes: z.union([z.literal(1), z.literal(5), z.literal(15), z.literal(30)]) }).strict(),
   // A project's PM confirms a what-changed note for PMs (processNotes.ts, task #3581).
   z.object({ type: z.literal('process.confirm'), projectId: id, noteId: z.string().trim().min(1).max(80) }).strict(),
@@ -1177,6 +1182,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   }
   /** An agent starts or assigns only what the route chose; a person may still do either by hand. */
   /** A private conversation is chat only (design section 4.8). */
+  /** The project whose Board settings [actor] sets: its owner's or the Swarm owner's (boardRights.ts, task #3819). */
+  const boardOwned = (projectId: string): SwarmProject => {
+    const project = readProject(state, actor, projectId)
+    author(state, actor, true)
+    if (actor.kind !== 'person' || !ownsBoard(state, project, actor.userId)) {
+      fail('PROJECT_OWNER_REQUIRED', 'Only the project owner or the Swarm owner changes how this project works.', 403)
+    }
+    mutableProjects(state)
+    return projectOf(state, projectId)
+  }
+  const personUnknown = (): never => fail('PERSON_UNKNOWN', 'Name a person who reads this project.', 400)
   const chatOnly = (conversationId: string) => {
     if (state.conversations.find(c => c.id === conversationId)?.audience) fail('AUDIENCE_CHAT_ONLY', 'A private conversation is chat only.', 400)
   }
@@ -2049,6 +2065,29 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Whoever no longer reads it loses it from their Buddy in this same write (spec: Access): its sessions in their one Buddy
       // chat end, and its threads and PM lines there hide (buddies.ts hiddenProjectRow).
       endLostProjectSessions(project)
+      break
+    }
+    case 'project.boardMode': {
+      const project = boardOwned(command.projectId)
+      if (command.on) project.boardMode = true
+      else delete project.boardMode
+      break
+    }
+    case 'project.canChat': {
+      const project = boardOwned(command.projectId)
+      if (command.granted && !readsProject(state, project, command.personId)) personUnknown()
+      // An id whose person left matches nothing (boardRights.ts) and drops out here.
+      const kept = (project.canChat ?? []).filter(personId => personId !== command.personId && readsProject(state, project, personId))
+      const next = command.granted ? [...kept, command.personId] : kept
+      if (next.length) project.canChat = next
+      else delete project.canChat
+      break
+    }
+    case 'project.decider': {
+      const project = boardOwned(command.projectId)
+      if (command.personId === null) delete project.decider
+      else if (readsProject(state, project, command.personId)) project.decider = command.personId
+      else personUnknown()
       break
     }
     case 'project.cadence': {
