@@ -59,16 +59,27 @@ function fixture() {
   return { run, invite, add, seat, group, get state() { return state } }
 }
 
-/** Makes [machineId] [contributorId]'s contributed machine used only for agents (`harness team on`), reporting now, so a
- *  teammate's agent there may take another person's project (machines.ts teamWorkCheck). */
-function teamMachine(f: ReturnType<typeof fixture>, contributorId: string, machineId = 'host') {
-  const team = { sessionKind: 'team' as const, privacy: { mode: 'dedicated' as const, seenAt: 1000 } }
+/** Makes [machineId] [contributorId]'s own contributed computer, reporting now, so its agents take any project [contributorId]
+ *  reads, in their own account (machines.ts teamWorkCheck; Swarm v3 has no Team accounts, task #4120). */
+function ownMachine(f: ReturnType<typeof fixture>, contributorId: string, machineId = 'host') {
+  const own = { sessionKind: 'computer' as const }
   const existing = f.state.machines?.find(m => m.machineId === machineId)
-  if (existing) return void Object.assign(existing.observation!, team)
+  if (existing) return void Object.assign(existing.observation!, own)
   f.state.machines = [...(f.state.machines ?? []), { machineId, name: 'Studio', contributorId, membershipGeneration: f.state.people.find(p => p.id === contributorId)!.generation,
-    generation: 'g1', cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, observation: { generation: 'g1', receivedAt: 1000, ...team,
+    generation: 'g1', cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, observation: { generation: 'g1', receivedAt: 1000, ...own,
       resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
         deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] } }]
+}
+
+/** Puts [agentId] on a machine of its own: [contributorId]'s own computer, or with [team] a Harness Team account's entry on it,
+ *  which Swarm v3 gives no new work (task #4120). */
+function placeOn(f: ReturnType<typeof fixture>, agentId: string, contributorId: string, machineId: string, team = false) {
+  if (!f.state.machines?.some(m => m.machineId === machineId)) {
+    ownMachine(f, contributorId, machineId)
+    const pool = f.state.machines!.find(m => m.machineId === machineId)!
+    if (team) Object.assign(pool, { hostMachineId: 'host' }, { observation: { ...pool.observation!, sessionKind: 'team' } })
+  }
+  f.state.agents.find(a => a.id === agentId)!.machineId = machineId
 }
 
 describe('five-part tasks', () => {
@@ -749,7 +760,7 @@ describe('Super Tab collaboration policy', () => {
   it('withdraws a departing contributor and preserves execution identity until the host confirms a stop', () => {
     const f = fixture()
     f.invite()
-    teamMachine(f, 'peer')
+    ownMachine(f, 'peer')
     const group = f.group()
     const worker = f.add('worker', 'peer', group)
     const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
@@ -1939,7 +1950,7 @@ it('lets the Lead stop a worker that never had an assignment, and never a Buddy'
 
 it('allows the contributor to keep a completed worker and refuses another project’s Lead', () => {
   const f = fixture(); f.invite()
-  teamMachine(f, 'peer')
+  ownMachine(f, 'peer')
   f.add('lead', 'owner', 'lead', true)
   const group = f.group(), worker = f.add('worker', 'peer', group)
   const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
@@ -2562,17 +2573,18 @@ describe('role kinds decide nothing', () => {
     const f = fixture()
     f.invite()
     const lead = f.add('lead', 'owner', 'lead', true), group = f.group(), other = f.group()
-    // The teammate's own Mac, not its Harness Team account: another person's work runs there only through one (machines.ts).
-    teamMachine(f, 'peer')
-    const mac = f.state.machines!.find(m => m.machineId === 'host')!
-    mac.observation!.sessionKind = 'computer'
-    mac.teamAccountOnly = true
-    const mate = f.add('mate', 'peer', group)
+    // The teammate's own Mac takes another person's work in their own account; its Harness Team account takes none (task #4120).
+    ownMachine(f, 'peer')
+    const mate = f.add('mate', 'peer', group), own = f.add('own', 'peer', group)
+    placeOn(f, mate, 'peer', 'peer-team', true)
     expect(() => f.run({ type: 'conversation.agent', conversationId: other, agentId: mate, present: true, lead: false }, as(lead)))
-      .toThrow(expect.objectContaining({ code: 'TEAM_ACCOUNT_REQUIRED' }))
+      .toThrow(expect.objectContaining({ code: 'TEAM_ACCOUNTS_REMOVED' }))
     expect(f.state.conversations.find(c => c.id === other)!.agentIds).not.toContain(mate)
-    // The project owner's own agent there: added, and its finished-work decision cleared as an assignment clears it.
+    f.run({ type: 'conversation.agent', conversationId: other, agentId: own, present: true, lead: false }, as(lead))
+    expect(f.state.conversations.find(c => c.id === other)!.agentIds).toContain(own)
+    // The project owner's own agent on their own computer: added, and its finished-work decision cleared as an assignment clears it.
     const mine = f.add('mine', 'owner', group)
+    placeOn(f, mine, 'owner', 'owner-mac')
     f.state.agents.find(a => a.id === mine)!.workDecision = 'awaiting'
     f.run({ type: 'conversation.agent', conversationId: other, agentId: mine, present: true, lead: false }, as(lead))
     expect(f.state.agents.find(a => a.id === mine)).not.toHaveProperty('workDecision')
@@ -2585,19 +2597,19 @@ describe('role kinds decide nothing', () => {
 // The team-access check applies to every agent added to a task (spec, "Kept as access"): one named into it, one that posts
 // into it and one that opens it join it, as conversation.agent adds one (final review of the branch).
 describe('an agent joining a task by a post or by opening it', () => {
-  /** A teammate's agent (mate) on its own Mac, which runs another person's work only through its Harness Team account. */
+  /** A teammate's agent (mate) in its Mac's Harness Team account, which Swarm v3 gives no new work (task #4120), and the project
+   *  owner's own agent (mine) on the owner's own computer. */
   function teammate() {
     const f = fixture()
     f.invite()
     const lead = f.add('lead', 'owner', 'lead', true), group = f.group(), other = f.group()
-    teamMachine(f, 'peer')
-    const mac = f.state.machines!.find(m => m.machineId === 'host')!
-    mac.observation!.sessionKind = 'computer'
-    mac.teamAccountOnly = true
+    ownMachine(f, 'peer')
     const mate = f.add('mate', 'peer', group), mine = f.add('mine', 'owner', group)
+    placeOn(f, mate, 'peer', 'peer-team', true)
+    placeOn(f, mine, 'owner', 'owner-mac')
     return { f, lead, group, other, mate, mine }
   }
-  const refused = expect.objectContaining({ code: 'TEAM_ACCOUNT_REQUIRED' })
+  const refused = expect.objectContaining({ code: 'TEAM_ACCOUNTS_REMOVED' })
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   const post = (conversationId: string, recipientIds: string[] = []) =>
     ({ type: 'message.send', conversationId, text: 'Look at this.', replyTo: null, recipientIds }) as Command
@@ -2622,7 +2634,8 @@ describe('an agent joining a task by a post or by opening it', () => {
   it('checks a person\'s add of a session already in the Swarm as conversation.agent does', () => {
     const { f, other, mate, mine } = teammate()
     const again = (harnessId: string, actor: Extract<Actor, { kind: 'person' }>) => f.run({ type: 'agent.add', conversationId: other,
-      machineId: 'host', harnessId, name: harnessId, configuration: config, lead: false }, actor, { contribution: { machineOwnerId: 'host-owner', contributorId: actor.userId } })
+      machineId: f.state.agents.find(a => a.harnessId === harnessId)!.machineId, harnessId, name: harnessId, configuration: config, lead: false }, actor,
+      { contribution: { machineOwnerId: 'host-owner', contributorId: actor.userId } })
     const members = (id: string) => f.state.conversations.find(c => c.id === id)!.agentIds
     expect(() => again('mate', peer)).toThrow(refused)
     f.state.agents.find(a => a.id === mine)!.workDecision = 'stop'
@@ -3878,7 +3891,7 @@ describe('machine.remove', () => {
     f.state.agents.find(a => a.id === lead)!.machineId = 'elsewhere'
     f.invite()
     contribute(f, 'peer')
-    teamMachine(f, 'peer')
+    ownMachine(f, 'peer')
     const worker = f.add('worker', 'peer', group), owners = f.add('owners', 'owner')
     f.run({ type: 'work.assign', conversationId: group, agentId: worker })
     f.state.rules = [{ id: 'both', projectId: 'lead', rule: { kind: 'machines', machineIds: ['host', 'elsewhere'] }, text: 'Only these two.',
@@ -5065,7 +5078,7 @@ describe('linked tasks', () => {
   // untagged, in its chat. With no coordinator there, people read it, tagging who can fix it.
   it('tells the coordinator once when no machine the project may use can start either engine, and people when there is none', () => {
     const { f, T, E, built } = linked()
-    teamMachine(f, 'owner')
+    ownMachine(f, 'owner')
     f.state.machines![0]!.engines = ['claude', 'codex']
     f.state.machines![0]!.observation!.quotas = [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] },
       { engine: 'codex', known: true, windows: [{ name: 'weekly', usedPercent: 100, resetsAt: null }] }]
@@ -5429,9 +5442,9 @@ describe('lead.switch', () => {
     const f = fixture()
     f.invite()
     const pm = f.add('pm', contributorId, 'lead', true)
-    const team = { sessionKind: 'team' as const, privacy: { mode: 'dedicated' as const, seenAt: 1000 } }
+    // Its person's own computer (Swarm v3 has no Team accounts, task #4120).
     f.state.machines = [{ machineId: 'host', name: 'Studio', contributorId, membershipGeneration: f.state.people.find(p => p.id === contributorId)!.generation,
-      generation: 'g1', cwd: '/repo', engines: ['claude', 'codex'], maxAgents: 2, paused: false, observation: { generation: 'g1', receivedAt: 1000, ...team,
+      generation: 'g1', cwd: '/repo', engines: ['claude', 'codex'], maxAgents: 2, paused: false, observation: { generation: 'g1', receivedAt: 1000, sessionKind: 'computer',
         ...(capabilities ? { capabilities } : {}),
         profiles: [{ engine: 'codex', id: WORK, label: 'Work', leftPercent: 80, resetsAt: null }],
         resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,

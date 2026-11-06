@@ -92,18 +92,20 @@ describe('waking and moving through commands', () => {
 })
 
 describe('a take-over never joins a conversation its new session is barred from (security review of #3229)', () => {
-  it('leaves a Team-written task out when the new session runs in the main account', () => {
+  // Task #4120 (the PM's ruling): only the project owner's own agent may take over Team-written work, as ada is here; another
+  // member's agent stays out (teamWritten.test.ts, closedAgents.test.ts).
+  it('takes a Team-written task back when the new session is the project owner\'s own agent', () => {
     const f = fixture([machine('mac', { signedIn: false }), machine('mini')])
     f.state = run(f.state, { type: 'conversation.create', title: 'Team task', brief: 'b', checks: [] } as Command, 'tw', NOW - 3_600_000)
     const task = f.state.conversations.find(c => c.title === 'Team task')!
     task.agentIds.push(f.ada.id)
-    // Placed by hand, as an older server could have: the take-over itself must still refuse the join.
+    // Placed by hand, as an older server could have: the take-over keeps it, the owner's own agent.
     applyCrewKeep(f.state, NOW, everywhere)
     const start = f.state.starts!.find(s => s.request.crewMoveOf === f.ada.id)!
     f.state.conversations.find(c => c.id === task.id)!.teamWritten = true
     f.state = run(f.state, { type: 'agent.started', startId: start.id, harnessId: 'ada-2', configuration: config } as Command, 'started-tw', NOW + 5000, host)
     const moved = f.state.agents.find(a => a.harnessId === 'ada-2')!
-    expect(f.state.conversations.find(c => c.id === task.id)!.agentIds).not.toContain(moved.id)
+    expect(f.state.conversations.find(c => c.id === task.id)!.agentIds).toContain(moved.id)
     expect(f.state.conversations.find(c => c.id === 'lead')!.agentIds).toContain(moved.id)
   })
 })

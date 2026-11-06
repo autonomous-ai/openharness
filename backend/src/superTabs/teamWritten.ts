@@ -14,13 +14,13 @@ import { codePullRequests, fail, type Agent, type Conversation, type SuperTabSta
 import { groupProject, ledProject, onTeamAccount, teamAccountPool } from './projects.js'
 
 export const TEAM_WRITTEN_WORK = 'TEAM_WRITTEN_WORK'
-export const TEAM_WRITTEN_REASON = 'A Harness Team agent wrote this task\'s code, so it runs only in a Team account, never in the main account. Choose an agent or machine in a Team account.'
+export const TEAM_WRITTEN_REASON = 'A Harness Team agent wrote this task\'s code, so only the project owner\'s own agent, on their own computer, may run it.'
 
 const coordinates = (state: SuperTabState, group: Conversation, worker: Agent): boolean =>
   ledProject(state, worker.id)?.id === groupProject(state, group).id
 
 /** Told to an agent in the main account when a task it works on turns out to be Team-written. */
-export const TEAM_WRITTEN_STOP = 'Stop: GitHub shows a Harness Team agent pushed to this task\'s branch. Do not install, build, test or run it in the main account. Set this step blocked and hand it to an agent in a Team account.'
+export const TEAM_WRITTEN_STOP = 'Stop: GitHub shows a Harness Team agent pushed to this task\'s branch. Do not install, build, test or run it. Set this step blocked: only the project owner\'s own agent may take it.'
 
 /** The task a group's code belongs to: its own, or for a step, the task the step belongs to. */
 const taskOf = (state: SuperTabState, group: Conversation): Conversation | undefined =>
@@ -62,13 +62,25 @@ export function requireTeamWrittenAccount(state: SuperTabState, group: Conversat
   if (barredFromTeamWritten(state, group, worker)) failTeamWritten()
 }
 
-/** Whether [worker] may not join [group]: an agent outside a Team account, in Team-written code, and not its project's coordinator. */
-export const barredFromTeamWritten = (state: SuperTabState, group: Conversation, worker: Agent): boolean =>
-  !coordinates(state, group, worker) && teamWrittenTask(state, group) && !onTeamAccount(state, worker)
+/** Whether [worker] may not join [group], Team-written code: anyone but its project's coordinator, the project owner's own agent
+ *  outside a Team account (Swarm v3 has none left to take it: task #4120, the PM's ruling), and the Team agent already on it,
+ *  which keeps what it holds until it is stopped. */
+export const barredFromTeamWritten = (state: SuperTabState, group: Conversation, worker: Agent, marked = teamWrittenTask(state, group)): boolean =>
+  marked && !coordinates(state, group, worker) && !onTeamAccount(state, worker) && !ownersOwnAgent(state, group, worker)
 
-/** Refuses a start for Team-written code on a machine outside a Team account. */
+/** Whether [worker] is [group]'s project owner's own agent, outside a Team account (task #4120, the PM's ruling). */
+export const ownersOwnAgent = (state: SuperTabState, group: Conversation, worker: Agent): boolean =>
+  worker.contributorId === groupProject(state, group).ownerId && !onTeamAccount(state, worker)
+
+/** Whether [machineId] is [group]'s project owner's own computer: a listed machine they contributed, never a Team account's. */
+export function ownersOwnMachine(state: SuperTabState, group: Conversation, machineId: string): boolean {
+  const pool = state.machines?.find(m => m.machineId === machineId)
+  return !!pool && !teamAccountPool(pool) && pool.contributorId === groupProject(state, group).ownerId
+}
+
+/** Refuses a start for Team-written code anywhere but its project owner's own computer (task #4120, the PM's ruling). */
 export function requireTeamWrittenMachine(state: SuperTabState, group: Conversation, machineId: string): void {
-  if (teamWrittenTask(state, group) && !teamAccountPool(state.machines?.find(m => m.machineId === machineId))) failTeamWritten()
+  if (teamWrittenTask(state, group) && !ownersOwnMachine(state, group, machineId)) failTeamWritten()
 }
 
 export function failTeamWritten(details?: Record<string, unknown>): never {
@@ -88,7 +100,8 @@ export function mainAccountMembers(state: SuperTabState, group: Conversation, ex
   return [task, ...state.conversations.filter(c => c.reviewOf === task.id)].flatMap(c => {
     const agentIds = c.agentIds.filter(id => {
       const member = state.agents.find(a => a.id === id)
-      if (!member || seen.has(id) || onTeamAccount(state, member) || coordinates(state, group, member)) return false
+      // Only those it bars: not a Team agent, the coordinator or the project owner's own agent (barredFromTeamWritten).
+      if (!member || seen.has(id) || !barredFromTeamWritten(state, task, member, true)) return false
       seen.add(id)
       return true
     })
@@ -130,5 +143,5 @@ export function applyPushOrigin(state: SuperTabState, group: Conversation, origi
 
 /** [reason]: why GitHub cannot show it, when that is known (repositoryReach.ts unknownPushReason). */
 export function failPushUnknown(reason?: string | null): never {
-  return fail(TEAM_WRITTEN_WORK, reason ?? 'GitHub could not show who pushed this task\'s code, so it runs only in a Team account for now. Choose an agent in a Team account, or try again in a minute.', 403)
+  return fail(TEAM_WRITTEN_WORK, reason ?? 'GitHub could not show who pushed this task\'s code, so only the project owner\'s own agent may run it for now. Try again in a minute.', 403)
 }

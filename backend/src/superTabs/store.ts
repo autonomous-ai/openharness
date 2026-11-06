@@ -2143,7 +2143,6 @@ export class SuperTabStore {
         context.teamMachines = facts.team
         context.machineVersions = facts.versions
         context.otherWorkspaceMachines = await this.otherWorkspaceMachines(tx, original)
-        if (this.hooks.teamAccountsIdle) context.teamAccountsIdle = true
       }
       if (pushOrigin) Object.assign(context, { pushOrigin: pushOrigin.origin, pushOriginPulls: pushOrigin.pulls, ...pushOrigin.task ? { pushOriginTask: pushOrigin.task } : {} })
       if (repositoryReach) context.repositoryReach = repositoryReach
