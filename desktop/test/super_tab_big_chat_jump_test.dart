@@ -262,7 +262,6 @@ void main() {
       await tester.pump(const Duration(milliseconds: 16));
       expect(visibleRows(tester), greaterThan(0), reason: 'frame $frame');
     }
-    expect(latest, isNotEmpty, reason: 'the latest page is asked for');
     final hold = server.holdReads!;
     server.holdReads = null;
     hold.complete();
@@ -271,6 +270,8 @@ void main() {
       expect(visibleRows(tester), greaterThan(0), reason: 'after, $frame');
     }
     await tester.pumpAndSettle();
+    // The server tells of a read once it answers it.
+    expect(latest, isNotEmpty, reason: 'the latest page is asked for');
     expect(find.text(text(1500)), findsOneWidget);
     expect(c.messages('lead').length, lessThanOrEqualTo(100));
     await tester.pumpWidget(const SizedBox());
