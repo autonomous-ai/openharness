@@ -695,6 +695,33 @@ void main() {
       expect(editorText(tester), 'Draft stays');
     });
 
+    testWidgets(
+      'a refused note delete says why only in the panel (task #3652)',
+      (tester) async {
+        final (server, controller) = await mount(tester, account: 'peer');
+        server.instructions['lead']!['notes'] = [
+          note('n1', 'Keep it short', 'owner', const Duration(hours: 1)),
+        ];
+        await openInstructions(tester);
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('super-note-delete-n1')),
+        );
+        await tester.pumpAndSettle();
+        server.refuse = {'code': 'FORBIDDEN', 'message': 'Not removed: no access.'};
+        await tester.tap(find.byKey(const ValueKey('super-note-delete-n1')));
+        await tester.pumpAndSettle();
+        server.refuse = null;
+        expect(
+          find.descendant(
+            of: find.byType(SuperTabDetailDialog),
+            matching: find.textContaining('Not removed'),
+          ),
+          findsOneWidget,
+        );
+        expect(find.textContaining('Not removed'), findsOneWidget);
+        expect(controller.composerError('lead'), isNull);
+      },
+    );
     testWidgets('a viewer has no Delete', (tester) async {
       final (viewerServer, _) = await mount(tester, account: 'viewer');
       viewerServer.instructions['lead']!['notes'] = [
