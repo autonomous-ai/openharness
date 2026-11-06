@@ -180,6 +180,24 @@ void main() {
     });
     expect(f.controller.personalTasks!.mode, 'review');
   });
+  for (final mode in ['autoApprove', 'review']) {
+    testWidgets('waiting task stays actionable in $mode with primary Approve', (t) async {
+      await mount(t);
+      f.mode = mode;
+      await f.controller.refresh();
+      await t.pump();
+      await t.tap(find.text('Task new'));
+      await t.pump();
+      expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Reject'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Approve'), findsOneWidget);
+      expect(find.text('Waiting for you'), findsNWidgets(2));
+      expect(find.text('Suggested'), findsNothing);
+      await t.tap(find.text('Approve'));
+      await t.pumpAndSettle();
+      expect(f.commands.single, {'type': 'task.approve', 'conversationId': 'new'});
+    });
+  }
   testWidgets('approve sends once while waiting and keeps the task', (t) async {
     await mount(t);
     await t.tap(find.text('Task new'));
