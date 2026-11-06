@@ -3,7 +3,7 @@ import { applyCommand } from './commands.js'
 import { crewKeep, crewNeedsMachine, type CrewDeps } from './crewKeep.js'
 import { config, fixture, GB, machine, NOW, person } from './crewKeep.test-support.js'
 import * as crewRules from './crewRules.js'
-import type { MachineRule } from './crewRules.js'
+import type { MachineRule } from './policy.js'
 import { FOLDER_ASLEEP_MS, MOVE_LOW_DISK_BYTES, MOVE_OFFLINE_MS, MOVE_QUOTA_OUT_MS, SLEEP_IDLE_MS, DISK_FLOOR_BYTES } from './crewRules.js'
 import type { Agent, SuperTabState } from './model.js'
 
