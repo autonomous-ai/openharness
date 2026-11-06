@@ -601,7 +601,12 @@ class ProjectSidebar extends StatelessWidget {
       // Muted, it is greyed and never bold, as every chat (_drawRow).
       unread: chat != null && controller.unreadShown(chat),
       trailing: agent == null ? null : _buddyMark(agent),
-      onTap: chat == null ? () => _openBuddyChat(key) : null,
+      // On the Desktop its chat opens in the middle (Swarm v3, task #4118), like any agent's.
+      onTap: chat == null
+          ? () => _openBuddyChat(key)
+          : board && onOpenAgentChat != null
+          ? () => onOpenAgentChat!(chat.id)
+          : null,
       tappable: chat != null || !busy,
     );
   }
@@ -646,7 +651,7 @@ class ProjectSidebar extends StatelessWidget {
       agentId: agent.id,
       name: name,
       tooltip: chat == null ? '$name · no chat yet' : name,
-      crownKey: snapshot.isLead(agent.id)
+      crownKey: superTabAgentIsPm(snapshot, agent)
           ? ValueKey('super-agent-crown-${agent.id}')
           : null,
       status: _buddyMark(agent),

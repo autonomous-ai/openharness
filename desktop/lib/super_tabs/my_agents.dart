@@ -20,6 +20,11 @@ List<SuperTabAgent> superTabMyAgents(
   });
 }
 
+/// Whether [agent] is a PM, to wear the crown: the backend's kind when it sends one (#4116), else whether it leads a
+/// project, as before.
+bool superTabAgentIsPm(SuperTabSnapshot snapshot, SuperTabAgent agent) =>
+    agent.kind != null ? agent.kind == 'pm' : snapshot.isLead(agent.id);
+
 /// What a new agent is (Swarm v3, task #4118): a Regular agent is tied to no project, the task decides where it works; a PM
 /// names and starts a project.
 enum SuperTabAgentKind { regular, pm }
@@ -30,6 +35,10 @@ SuperTabConversation? superTabAgentChat(
   SuperTabSnapshot snapshot,
   SuperTabAgent agent,
 ) {
+  // The chat the backend names is the one its person talks to it in (#4116); an older backend names none.
+  if (agent.chatId case final id? when snapshot.conversation(id) != null) {
+    return snapshot.conversation(id);
+  }
   if (snapshot.leadProjectForAgent(agent.id) case final project?) {
     return snapshot.conversation(project.leadConversationId);
   }

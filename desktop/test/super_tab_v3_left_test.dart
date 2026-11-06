@@ -601,7 +601,7 @@ void main() {
         tester,
       ) async {
         final selected = <String>[];
-        await show(
+        final c = await show(
           tester,
           agents: [
             {..._agent('zed', 'Zed'), 'kind': 'pm', 'chatId': 'offline'},
@@ -614,6 +614,7 @@ void main() {
         await tester.tap(key('super-agent-zed'));
         await tester.pump();
         expect(selected, ['offline']);
+        await tester.runAsync(c.flush);
       });
 
       testWidgets('its kind wins over the project it once led', (tester) async {

@@ -173,6 +173,8 @@ class SuperTabAgent {
       machineOwnerId =
           row['machineOwnerId'] as String? ?? _text(row, 'contributorId'),
       role = row['role'] as String?,
+      kind = row['kind'] as String?,
+      chatId = row['chatId'] as String?,
       roleId = row['roleId'] as String?,
       roleName = row['roleName'] as String?,
       buddyOf = switch (row['buddyOf']) {
@@ -219,6 +221,10 @@ class SuperTabAgent {
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
+
+  /// What it is and where its person talks to it (Swarm v3, backend #4116): `buddy`, `pm` or `regular`, and the chat it
+  /// has, or none yet. An older backend sends neither.
+  final String? kind, chatId;
 
   /// Set by its contributor or its project's Lead; null draws its pattern.
   final SuperTabAvatarPicture? avatar;
