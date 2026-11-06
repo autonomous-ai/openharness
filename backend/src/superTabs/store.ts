@@ -1117,6 +1117,15 @@ export class SuperTabStore {
       const project = projectsOf(state).find(p => p.id === command.projectId)
       if (project) groupIds.push(...legacyAsks(state, project).slice(0, 100).map(a => legacyProposalId(project.id, a.messageId)))
     }
+    // Legacy proposal mirrors can be archived after conversion. Load the exact mirror even then, so a second
+    // conversion cannot manufacture a fresh task without the original person's decision. Same bounded message-id read
+    // as the proposal context below; a reply's root is still verified by proposalNamed before any command applies.
+    if (command.type === 'conversation.create' && command.proposalMessageId || command.type === 'proposal.close') {
+      const messageId = command.type === 'conversation.create' ? command.proposalMessageId! : command.messageId
+      const row = await tx.superTabMessage.findFirst({ where: { id: messageId, tabId }, select: { id: true, conversationId: true, replyTo: true, source: true } })
+      const project = row && projectsOf(state).find(p => p.leadConversationId === row.conversationId)
+      if (project && row) groupIds.push(legacyProposalId(project.id, !row.source && row.replyTo ? row.replyTo : row.id))
+    }
     if (command.type === 'proposal.merge') {
       groupIds.push(command.intoConversationId)
       const card = state.conversations.find(c => c.id === command.conversationId)

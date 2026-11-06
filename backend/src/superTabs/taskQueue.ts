@@ -17,7 +17,7 @@ export const queueOrder = <T extends Queued>(tasks: readonly T[]): T[] =>
 
 /** The tasks a project's Next up orders: open, never its chat, a Buddy chat, a private chat or a step. */
 export function queueSiblings(state: SuperTabState, project: SwarmProject): Conversation[] {
-  return state.conversations.filter(c => (!c.proposal || ['accept', 'reshape'].includes(c.proposal.decision?.kind ?? '')) && !c.archived && !c.kind && !c.audience && !c.reviewOf && c.id !== project.leadConversationId
+  return state.conversations.filter(c => (!c.taskApproval || c.taskApproval.state === 'approved') && (!c.proposal || ['accept', 'reshape'].includes(c.proposal.decision?.kind ?? '')) && !c.archived && !c.kind && !c.audience && !c.reviewOf && c.id !== project.leadConversationId
     && groupProject(state, c).id === project.id)
 }
 
