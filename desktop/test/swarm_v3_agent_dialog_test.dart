@@ -1,20 +1,28 @@
 import 'dart:async';
+import 'dart:io';
+
+import 'support/capture.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/join/agent_dialog.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 
 Future<void> mount(
   WidgetTester tester, {
   bool bringing = false,
+  Brightness brightness = Brightness.light,
   List<String> engines = const ['claude', 'codex'],
   required SwarmAgentCreate create,
   bool Function()? current,
 }) async {
+  grid.AppTheme.brightness.value = brightness;
+  addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
   await tester.pumpWidget(
     MaterialApp(
-      theme: grid.buildAppTheme(brightness: Brightness.light),
+      debugShowCheckedModeBanner: false,
+      theme: grid.buildAppTheme(brightness: brightness),
       home: Builder(
         builder: (context) => Scaffold(
           body: TextButton(
@@ -38,6 +46,33 @@ Future<void> mount(
 }
 
 void main() {
+  final shots = Platform.environment['HARNESS_V3_JOIN_SHOTS'];
+  setUpAll(() => loadCaptureFonts(shots));
+  for (final brightness in Brightness.values) {
+    testWidgets('new agent forms fit in ${brightness.name}', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1000, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await mount(
+        tester,
+        brightness: brightness,
+        create: (_, _, _, _) async => {'startId': 'one'},
+      );
+      final segments = tester.widget<SegmentedButton<String>>(find.byType(SegmentedButton<String>));
+      expect(segments.style?.foregroundColor?.resolve({WidgetState.selected}), DesktopChrome.onSelection);
+      expect(tester.takeException(), isNull);
+      await captureWindow(tester, shots, 'new-regular-${brightness.name}');
+      await tester.tap(find.text('PM'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('swarm-agent-project')),
+        'My project',
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await captureWindow(tester, shots, 'new-pm-${brightness.name}');
+    });
+  }
+
   testWidgets('bringing an agent picks its engine and makes it the Buddy', (
     tester,
   ) async {
