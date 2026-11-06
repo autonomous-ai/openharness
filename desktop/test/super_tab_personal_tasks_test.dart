@@ -165,7 +165,7 @@ void main() {
     final changed = tasks.applyOlder({
       'upserts': [task('c', 1, 20), task('d', 1, 10), task('a', 1, 5)],
       'olderCursor': null,
-    });
+    }, from: 'c1');
     expect(changed, isTrue);
     expect(tasks.rows.map((r) => r.id), ['a', 'b', 'c', 'd']);
     expect(tasks.rows.first.version, 2);
@@ -179,5 +179,34 @@ void main() {
       SuperTabParts.fromJson(parts.toJson()).personalTasks.olderCursor,
       'c9',
     );
+  });
+  test('an older page read before a reset is dropped', () {
+    final parts = SuperTabParts.firstLoad(
+      recorded('first_load')
+        ..['personalTasks'] = feed(
+          [task('a', 1, 40)],
+          reset: true,
+          olderCursor: 'c1',
+        ),
+    );
+    // The feed resets while the read of the page after 'c1' is out.
+    parts.apply(
+      recorded('changes')
+        ..['personalTasks'] = feed(
+          [task('n', 1, 50)],
+          reset: true,
+          olderCursor: 'c2',
+        ),
+    );
+    final tasks = parts.personalTasks;
+    expect(
+      tasks.applyOlder({
+        'upserts': [task('old', 1, 1)],
+        'olderCursor': null,
+      }, from: 'c1'),
+      isFalse,
+    );
+    expect(tasks.rows.map((r) => r.id), ['n']);
+    expect(tasks.olderCursor, 'c2');
   });
 }
