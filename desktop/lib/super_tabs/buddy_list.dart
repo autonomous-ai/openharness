@@ -11,6 +11,7 @@ import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'buddies.dart';
+import 'buddy_restart.dart';
 import 'buddy_machines.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
@@ -18,19 +19,62 @@ import 'model.dart';
 
 /// Actions for the Buddy selected in the conversation row.
 class SuperTabBuddyMenu extends StatelessWidget {
-  const SuperTabBuddyMenu({super.key, required this.controller, this.app});
+  const SuperTabBuddyMenu({
+    super.key,
+    required this.controller,
+    this.app,
+    this.onOpenTerminal,
+  });
   final SuperTabController controller;
   final AppNotifier? app;
+  final ValueChanged<SuperTabAgent>? onOpenTerminal;
 
   @override
   Widget build(BuildContext context) {
-    final buddies = controller.buddies();
+    final buddies = controller.buddies(
+      controller.oneBuddy ? '' : (controller.selected?.projectId ?? ''),
+    );
     final shown = buddies
         .where((b) => b.id == controller.selectedId)
         .firstOrNull;
+    final agent = shown == null
+        ? null
+        : controller.snapshot?.agents
+              .where((a) => shown.agentIds.contains(a.id) && a.isMainBuddy)
+              .firstOrNull;
+    final openTerminal =
+        agent != null && agent.harnessId.isNotEmpty && onOpenTerminal != null
+        ? () => onOpenTerminal!(agent)
+        : null;
     return shown == null
         ? const SizedBox.shrink()
-        : _menu(context, shown, isDefault: shown.id == buddies.first.id);
+        : Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _name(controller, shown),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.control(),
+                  ),
+                ),
+                TextButton.icon(
+                  key: const ValueKey('super-buddy-open-terminal'),
+                  onPressed: openTerminal,
+                  icon: const Icon(AppIcons.terminal, size: 16),
+                  label: const Text('Open terminal'),
+                ),
+                _menu(
+                  context,
+                  shown,
+                  isDefault: shown.id == buddies.first.id,
+                  openTerminal: openTerminal,
+                ),
+              ],
+            ),
+          );
   }
 
   static String _name(SuperTabController c, SuperTabConversation buddy) =>
@@ -40,6 +84,7 @@ class SuperTabBuddyMenu extends StatelessWidget {
     BuildContext context,
     SuperTabConversation buddy, {
     required bool isDefault,
+    VoidCallback? openTerminal,
   }) {
     final c = controller;
     const key = SuperTabController.kSwarmBuddyKey;
@@ -48,6 +93,11 @@ class SuperTabBuddyMenu extends StatelessWidget {
       consumeOutsideTap: false,
       alignmentOffset: Offset.zero,
       children: [
+        AppMenuItem(
+          key: const ValueKey('super-buddy-menu-terminal'),
+          label: 'Open terminal',
+          onPressed: openTerminal,
+        ),
         if (!isDefault)
           AppMenuItem(
             key: const ValueKey('super-buddy-make-default'),
@@ -59,6 +109,19 @@ class SuperTabBuddyMenu extends StatelessWidget {
           label: 'Rename…',
           onPressed: () => unawaited(
             showRenameBuddy(context, c, key, conversationId: buddy.id),
+          ),
+        ),
+        AppMenuItem(
+          key: const ValueKey('super-buddy-restart'),
+          label: 'Restart…',
+          onPressed: () => unawaited(
+            showRestartBuddy(
+              context,
+              c,
+              key,
+              conversationId: buddy.id,
+              app: app,
+            ),
           ),
         ),
         AppMenuItem(

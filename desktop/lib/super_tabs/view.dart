@@ -67,7 +67,7 @@ import 'identity.dart' show superTabMachineName;
 import 'identity_card.dart';
 import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
-import 'buddy_list.dart';
+import 'right_pane_row.dart';
 import 'project_people.dart';
 import 'proposal_form.dart';
 import 'backlog.dart'
@@ -218,46 +218,8 @@ class _SuperTabViewState extends State<SuperTabView>
   /// the right (anh Dee, task #3787): opening a project shows its Board, not its chat.
   String? _boardProjectId;
 
-  /// The left rail and the Buddy pane, hidden by their icons; remembered ([_paneStore]).
-  bool _leftHidden = false, _rightHidden = false;
-  static const _leftHiddenKey = 'swarm_left_pane_hidden';
-  static const _rightHiddenKey = 'swarm_right_pane_hidden';
   LocalKeyValueStore? get _paneStore =>
       widget.paneStore ?? widget.app?.localStore;
-
-  Future<void> _loadPanes() async {
-    final store = _paneStore;
-    if (store == null) return;
-    try {
-      final left = await store.read(_leftHiddenKey) == '1';
-      final right = await store.read(_rightHiddenKey) == '1';
-      if (!mounted) return;
-      setState(() {
-        _leftHidden = left;
-        _rightHidden = right;
-      });
-    } catch (_) {
-      // Unreadable: both panes show.
-    }
-  }
-
-  void _togglePane({required bool left}) {
-    setState(() {
-      if (left) {
-        _leftHidden = !_leftHidden;
-      } else {
-        _rightHidden = !_rightHidden;
-      }
-    });
-    final store = _paneStore;
-    if (store == null) return;
-    final hidden = left ? _leftHidden : _rightHidden;
-    unawaited(
-      store
-          .write(left ? _leftHiddenKey : _rightHiddenKey, hidden ? '1' : '0')
-          .catchError((Object _) {}),
-    );
-  }
 
   /// Opens [project]'s Board in the middle, with the person's Buddy on the right.
   void _openBoard(SuperTabProject project) {
@@ -440,7 +402,6 @@ class _SuperTabViewState extends State<SuperTabView>
     c.addListener(_changed);
     c.addListener(_holdVoiceAway);
     c.buddyChatOpener = _openBuddyChat;
-    unawaited(_loadPanes());
     SuperTabChatNotices.of(c).chatShown = _chatShown;
     SuperTabPlaces.of(c).addListener(_takePlace);
     _registerDial();
@@ -3535,13 +3496,6 @@ class _SuperTabViewState extends State<SuperTabView>
     child: Row(
       children: [
         const SizedBox(width: 8),
-        AppIconButton(
-          key: const ValueKey('super-pane-left-toggle'),
-          icon: _leftHidden ? AppIcons.panelLeftOpen : AppIcons.panelLeftClose,
-          tooltip: _leftHidden ? 'Show sidebar' : 'Hide sidebar',
-          onPressed: () => _togglePane(left: true),
-        ),
-        const SizedBox(width: 8),
         // The name and its tabs take the room left, so what follows sits at the right edge: a Flexible name beside a
         // Spacer split the free space, and the name's unused half left the controls mid-bar (#3846).
         Expanded(
@@ -3567,13 +3521,6 @@ class _SuperTabViewState extends State<SuperTabView>
             onPressed: () => unawaited(showNewProposal(context, c, project)),
             icon: const Icon(AppIcons.plus, size: 16),
             label: const Text('New proposal'),
-          ),
-        if (_rightHidden)
-          AppIconButton(
-            key: const ValueKey('super-pane-right-toggle'),
-            icon: AppIcons.panelRightOpen,
-            tooltip: 'Show your Buddy',
-            onPressed: () => _togglePane(left: false),
           ),
         const SizedBox(width: 8),
       ],
@@ -3648,38 +3595,26 @@ class _SuperTabViewState extends State<SuperTabView>
     return Column(
       key: const ValueKey('super-board-chat'),
       children: [
-        SizedBox(
-          height: 44,
-          child: Row(
-            children: [
-              const SizedBox(width: 12),
-              if (!onBuddy && project != null)
-                TextButton.icon(
-                  key: const ValueKey('super-board-chat-buddy'),
-                  onPressed: () => _showBuddy(project),
-                  icon: const Icon(AppIcons.arrowLeft, size: 16),
-                  label: const Text('Your Buddy'),
-                ),
-              Expanded(
-                child: Text(
-                  onBuddy ? 'Your Buddy' : (group?.label ?? ''),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.control().copyWith(
-                    fontWeight: grid.AppFont.semibold,
-                  ),
-                ),
-              ),
-              AppIconButton(
-                key: const ValueKey('super-pane-right-toggle'),
-                icon: AppIcons.panelRightClose,
-                tooltip: 'Hide your Buddy',
-                onPressed: () => _togglePane(left: false),
-              ),
-              const SizedBox(width: 8),
-            ],
-          ),
+        SuperTabRightPaneRow(
+          key: ValueKey('super-right-pane-${c.tabId}-${c.accountId}'),
+          controller: c,
+          app: widget.app,
+          storage: _paneStore,
+          onOpenTerminal: widget.onChooseAgentTerminal ?? widget.onOpenTerminal,
         ),
+        if (!onBuddy)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: Text(
+                group?.label ?? '',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: DesktopChrome.control(),
+              ),
+            ),
+          ),
         // Under the header, which the narrow pane has no room left in.
         if (steered != null)
           Padding(
@@ -3710,9 +3645,6 @@ class _SuperTabViewState extends State<SuperTabView>
               style: DesktopChrome.metadata(),
             ),
           ),
-        // Several Buddies (#3818): one tab each over the chat, + New Buddy, and the open one's menu.
-        if (onBuddy && c.snapshot?.buddyCap != null)
-          SuperTabBuddyMenu(controller: c, app: widget.app),
         Expanded(child: chat),
       ],
     );
@@ -6188,22 +6120,21 @@ class _SuperTabViewState extends State<SuperTabView>
               child: SuperTabPaneLayout(
                 storage: widget.app?.localStore,
                 onLeave: _leaveResize,
-                left: narrow || (boardProject != null && _leftHidden)
-                    ? null
-                    : _sidebar(),
+                left: narrow ? null : _sidebar(),
                 // An open thread takes the roster's side, as in Slack.
                 right: !wide
                     ? null
                     : boardProject != null
-                    ? (_rightHidden ? null : _boardChat(chat))
+                    ? _boardChat(chat)
                     : thread ??
                           (_rosterOpen
                               ? roster
                               : chatBeside
                               ? chat
                               : null),
-                rightDefault:
-                    boardProject == null && thread == null && !chatBeside
+                rightDefault: boardProject != null
+                    ? 480
+                    : boardProject == null && thread == null && !chatBeside
                     ? SuperTabPaneLayout.rightWidth
                     : SuperTabPaneLayout.threadWidth,
                 // Over the chat, beside an open thread, as in Slack.

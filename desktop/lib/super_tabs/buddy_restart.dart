@@ -20,6 +20,7 @@ Future<void> showRestartBuddy(
   BuildContext context,
   SuperTabController c,
   String projectId, {
+  String? conversationId,
   AppNotifier? app,
 }) => showAppDialog<void>(
   context: context,
@@ -28,8 +29,14 @@ Future<void> showRestartBuddy(
     return SuperTabDialogScope(
       controller: c,
       projectId: swarm ? null : projectId,
-      conversationId: swarm ? c.buddyChat(projectId)?.id : null,
-      child: _RestartBuddyDialog(controller: c, projectId: projectId, app: app),
+      conversationId:
+          conversationId ?? (swarm ? c.buddyChat(projectId)?.id : null),
+      child: _RestartBuddyDialog(
+        controller: c,
+        projectId: projectId,
+        conversationId: conversationId,
+        app: app,
+      ),
     );
   },
 );
@@ -48,10 +55,12 @@ class _RestartBuddyDialog extends StatefulWidget {
   const _RestartBuddyDialog({
     required this.controller,
     required this.projectId,
+    this.conversationId,
     required this.app,
   });
   final SuperTabController controller;
   final String projectId;
+  final String? conversationId;
   final AppNotifier? app;
 
   @override
@@ -63,7 +72,10 @@ class _RestartBuddyDialogState extends State<_RestartBuddyDialog> {
   AppNotifier? get app => widget.app;
 
   Agent? get _machineAgent {
-    final buddy = c.buddy(widget.projectId);
+    final buddy = c.buddy(
+      widget.projectId,
+      conversationId: widget.conversationId,
+    );
     if (buddy == null) return null;
     return app
         ?.stateOf(buddy.machineId)
@@ -88,7 +100,10 @@ class _RestartBuddyDialogState extends State<_RestartBuddyDialog> {
   }
 
   Future<void> _submit() async {
-    final buddy = c.buddy(widget.projectId);
+    final buddy = c.buddy(
+      widget.projectId,
+      conversationId: widget.conversationId,
+    );
     final app = this.app;
     if (_busy) return;
     if (buddy == null || app == null) {
@@ -136,7 +151,10 @@ class _RestartBuddyDialogState extends State<_RestartBuddyDialog> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final buddy = c.buddy(widget.projectId);
+    final buddy = c.buddy(
+      widget.projectId,
+      conversationId: widget.conversationId,
+    );
     final engine = externalEngineName(
       _machineAgent?.engine ?? buddy?.engine ?? '',
     );

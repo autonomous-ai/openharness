@@ -108,12 +108,13 @@ void main() {
     final (c, _) = await show(tester);
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
+    await tester.ensureVisible(_key('super-task-card-offline'));
     await tester.tap(_key('super-task-card-offline'));
     await _settle(tester);
     expect(c.selectedId, 'offline');
     expect(_key('super-tasks-lead'), findsOneWidget, reason: 'the Board stays');
     expect(find.text('Working on the fix.'), findsOneWidget);
-    await tester.tap(_key('super-board-chat-buddy'));
+    await tester.tap(_key('super-buddy-tab-buddy-owner-lead'));
     await _settle(tester);
     expect(c.selectedId, 'buddy-owner-lead');
     expect(_key('super-tasks-lead'), findsOneWidget);
@@ -123,13 +124,15 @@ void main() {
   testWidgets("a card's chat is flat: its thread replies show inline, in time "
       'order, with no thread line', (tester) async {
     final (c, server) = await show(tester);
-    final root = server.messages
-        .lastWhere((m) => m['conversationId'] == 'offline')['id'] as String;
+    final root =
+        server.messages.lastWhere((m) => m['conversationId'] == 'offline')['id']
+            as String;
     server.append('A reply in its thread.', conversationId: 'offline');
     server.messages.last['thread'] = root;
     await tester.runAsync(c.refresh);
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
+    await tester.ensureVisible(_key('super-task-card-offline'));
     await tester.tap(_key('super-task-card-offline'));
     await _settle(tester);
     // The root, and its quote on the reply below.
@@ -156,7 +159,10 @@ void main() {
     await tester.tap(_key('super-board-tab-chat'));
     await _settle(tester);
     expect(c.selectedId, 'lead');
-    expect(find.text('The project chat line nobody should see'), findsOneWidget);
+    expect(
+      find.text('The project chat line nobody should see'),
+      findsOneWidget,
+    );
     expect(_key('super-tasks-lead'), findsNothing);
     await tester.tap(_key('super-board-tab-board'));
     await _settle(tester);
@@ -176,32 +182,23 @@ void main() {
     await end(tester, c);
   });
 
-  testWidgets('each side pane hides and shows, and a new view starts as it '
-      'was left', (tester) async {
-    final store = _Memory();
-    final (c, _) = await show(tester, store: store);
-    await tester.tap(_key('super-group-lead'));
-    await _settle(tester);
-    expect(_key('super-group-lead'), findsOneWidget);
-    await tester.tap(_key('super-pane-left-toggle'));
-    await _settle(tester);
-    expect(_key('super-group-lead'), findsNothing, reason: 'left rail hidden');
-    await tester.tap(_key('super-pane-right-toggle'));
-    await _settle(tester);
-    expect(_key('super-board-chat'), findsNothing, reason: 'Buddy hidden');
-    expect(_key('super-tasks-lead'), findsOneWidget);
-    await end(tester, c);
-
-    // A new view: the project's Board opens as the panes were left.
-    final (again, _) = await show(tester, store: store);
-    await tester.tap(_key('super-group-lead'));
-    await _settle(tester);
-    expect(_key('super-tasks-lead'), findsOneWidget);
-    expect(_key('super-group-lead'), findsNothing, reason: 'still hidden');
-    expect(_key('super-board-chat'), findsNothing, reason: 'still hidden');
-    await tester.tap(_key('super-pane-left-toggle'));
-    await _settle(tester);
-    expect(_key('super-group-lead'), findsOneWidget);
-    await end(tester, again);
-  });
+  testWidgets(
+    'the side panes remain visible and ignore old hidden preferences',
+    (tester) async {
+      final store = _Memory()
+        ..values.addAll({
+          'swarm_left_pane_hidden': '1',
+          'swarm_right_pane_hidden': '1',
+        });
+      final (c, _) = await show(tester, store: store);
+      await tester.tap(_key('super-group-lead'));
+      await _settle(tester);
+      expect(_key('super-group-lead'), findsOneWidget);
+      expect(_key('super-board-chat'), findsOneWidget);
+      expect(_key('super-tasks-lead'), findsOneWidget);
+      expect(_key('super-pane-left-toggle'), findsNothing);
+      expect(_key('super-pane-right-toggle'), findsNothing);
+      await end(tester, c);
+    },
+  );
 }

@@ -23,10 +23,12 @@ class SuperTabRightPaneRow extends StatefulWidget {
     required this.controller,
     this.app,
     this.storage,
+    this.onOpenTerminal,
   });
   final SuperTabController controller;
   final AppNotifier? app;
   final LocalKeyValueStore? storage;
+  final ValueChanged<SuperTabAgent>? onOpenTerminal;
 
   @override
   State<SuperTabRightPaneRow> createState() => _SuperTabRightPaneRowState();
@@ -161,7 +163,12 @@ class _SuperTabRightPaneRowState extends State<SuperTabRightPaneRow> {
     });
     _save();
     if (c.selectedId == id) {
-      final next = c.buddies().firstOrNull?.id ?? _cards.firstOrNull;
+      final next =
+          c
+              .buddies(c.oneBuddy ? '' : (c.selected?.projectId ?? ''))
+              .firstOrNull
+              ?.id ??
+          _cards.firstOrNull;
       if (next != null) unawaited(c.select(next));
     }
   }
@@ -169,7 +176,7 @@ class _SuperTabRightPaneRowState extends State<SuperTabRightPaneRow> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final buddies = c.buddies();
+    final buddies = c.buddies(c.oneBuddy ? '' : (c.selected?.projectId ?? ''));
     final cards = [
       for (final id in _cards)
         if (c.snapshot?.conversation(id) case final group? when !group.archived)
@@ -230,7 +237,7 @@ class _SuperTabRightPaneRowState extends State<SuperTabRightPaneRow> {
                         child: Text('+${rest.length}'),
                       ),
                     ),
-                  AppIconButton(
+                  if (c.snapshot?.buddyCap != null) AppIconButton(
                     key: const ValueKey('super-buddy-new'),
                     icon: AppIcons.plus,
                     tooltip: 'New Buddy',
@@ -252,7 +259,11 @@ class _SuperTabRightPaneRowState extends State<SuperTabRightPaneRow> {
             style: Theme.of(context).textTheme.bodySmall,
           ),
         if (c.selected?.isBuddyChat == true && c.canWrite)
-          SuperTabBuddyMenu(controller: c, app: widget.app),
+          SuperTabBuddyMenu(
+            controller: c,
+            app: widget.app,
+            onOpenTerminal: widget.onOpenTerminal,
+          ),
       ],
     );
   }

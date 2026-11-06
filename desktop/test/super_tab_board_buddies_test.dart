@@ -115,7 +115,7 @@ void main() {
     expect(
       find.descendant(
         of: _key('super-buddy-tab-b-plan'),
-        matching: find.textContaining('Planning'),
+        matching: find.byTooltip('Planning'),
       ),
       findsOneWidget,
     );

@@ -3185,10 +3185,19 @@ class SuperTabController extends ChangeNotifier {
 
   /// The signed-in person's Buddy in [projectId]; null when they have none.
   /// Its main session only: a thread's own session is never "the Buddy".
-  SuperTabAgent? buddy(String projectId) => snapshot?.agents
+  SuperTabAgent? buddy(String projectId, {String? conversationId}) => snapshot
+      ?.agents
       .where(
         (a) =>
-            a.isMainBuddy && a.buddyOf == accountId && a.projectId == projectId,
+            a.isMainBuddy &&
+            a.buddyOf == accountId &&
+            a.projectId == projectId &&
+            (conversationId == null ||
+                snapshot
+                        ?.conversation(conversationId)
+                        ?.agentIds
+                        .contains(a.id) ==
+                    true),
       )
       .firstOrNull;
 

@@ -88,6 +88,7 @@ void main() {
     await _settle(tester);
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
+    await tester.ensureVisible(_key('super-task-card-offline'));
     await tester.tap(_key('super-task-card-offline'));
     await _settle(tester);
     return (c, server);
