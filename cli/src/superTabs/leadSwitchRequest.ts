@@ -167,15 +167,17 @@ export class LeadSwitchRequests {
     const skill = parseSwarmSkill(old?.swarmSkill), buddy = !!row.agent.buddyOf
     const conversation = buddy ? row.buddyConversationId : row.ledConversationId
     if (!old?.cwd || !skill || !identifier(conversation)) return { ok: false, error: NO_HANDOFF }
-    const buddyOwnerCurrent = () => {
+    const buddyOwnerCurrent = async () => {
       const owner = object(row.agent.buddyOf).personId
-      return this.core.account.signedIn() && identifier(owner) && request.requestedBy === owner
+      // A separate service has no synchronous sign-in state. Ask the core for its account, then check the sign-out mark.
+      const identity = await this.core.account.identity().catch(() => null)
+      return identifier(owner) && identity?.accountId === owner && request.requestedBy === owner
         && buddyOwnerOf(old.cwd!, this.core.dataDir) === owner && signedInAccount(buddyAccountFile(this.core.dataDir)) === owner
     }
     if (buddy) {
       // Check before the handoff stops anything: the launch guard also checks the recorded owner when the new engine starts.
       if (team || skill.role !== 'buddy' || row.agent.buddySession || row.agent.modelRequest || !['claude', 'codex'].includes(engine)
-        || home !== 'default' || run.crossMachine || !buddyOwnerCurrent()) {
+        || home !== 'default' || run.crossMachine || !await buddyOwnerCurrent()) {
         return { ok: false, error: 'the Buddy owner or session could not be verified on this computer' }
       }
     }
@@ -200,7 +202,7 @@ export class LeadSwitchRequests {
           switchId: run.switchId, handoffChangeId: changeId, note })
         return undefined
       }
-      if (buddy && !buddyOwnerCurrent()) return { ok: false, error: 'the Buddy owner or session could not be verified on this computer' }
+      if (buddy && !await buddyOwnerCurrent()) return { ok: false, error: 'the Buddy owner or session could not be verified on this computer' }
       const closed = await daemon.request('agent_close', { agentId, sessionId: old.sessionId ?? '', createdAt: new Date(old.registeredAt).toISOString(), mode: 'now', changeId }, 60_000)
       if (closed.error || closed.closed !== true) return { ok: false, error: NO_STOP }
       run.closed = true
