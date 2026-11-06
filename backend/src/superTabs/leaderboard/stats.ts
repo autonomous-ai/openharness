@@ -45,9 +45,12 @@ export interface LeaderboardInput {
   allProjects?: string[]
   /** People's profile names by id, read with the board (read.ts profileNames); absent ones go by their email. */
   names?: ReadonlyMap<string, string>
+  /** Agents the authenticated reader may see, before presentation redaction. */
+  visibleAgents?: Agent[]
 }
 
-export function leaderboard({ state, groups, machines: visibleMachines, projectId, week, now, period, allProjects, names }: LeaderboardInput): Leaderboard {
+export function leaderboard({ state, groups, machines: visibleMachines, projectId, week, now, period, allProjects, names, visibleAgents = state.agents }: LeaderboardInput): Leaderboard {
+  const weeklyOrg = !!allProjects && !period
   const project = projectOf(state, projectId)
   // The Lead conversation is where plans are approved: its answers count, though nothing there is a request that ships.
   const projectIds = new Set(allProjects ?? [projectId])
@@ -63,6 +66,11 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   const { current, previous } = period ? periodSpans(period, now) : { current: weekSpan(week), previous: weekSpan(week - WEEK_MS) }
   // Each person's records, gathered once: the board scores every player three times (Diego's issue file, 2026-10-27).
   const landedBy = byKey(landed, g => g.requesterId!)
+  const acceptedBy = weeklyOrg ? byKey(requests.filter(g => g.requesterId && firstAssignedAt(g.ledger ?? {}) != null), g => g.requesterId!) : new Map<string, Conversation[]>()
+  const generations = new Map(state.people.map(p => [p.id, p.generation]))
+  const agentsBy = weeklyOrg ? byKey(visibleAgents.filter(a => !a.teamAccount && !a.buddySession
+    && generations.get(a.contributorId) === a.membershipGeneration
+    && (isSwarmBuddy(a) || projectIds.has(agentProjectId(state, a) ?? ''))), a => a.contributorId) : new Map<string, Agent[]>()
   const answersBy = byKey(visible.flatMap(group => (group.ledger?.unblocks ?? []).map(unblock => ({ ...unblock, group }))), u => u.personId)
   const machinesBy = byKey(visibleMachines, m => m.contributorId)
   // Under All projects, whether a board of this reader's already shows the person; a project's board lists only its own.
@@ -76,7 +84,9 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     const lentOf = (m: ContributedMachine) => lentIn(m, span, now, { projects: projectIds, unsplit: sharesBoard(personId) })
     const machines = (machinesBy.get(personId) ?? []).map(m => ({ name: m.name, busyMs: lentOf(m) })).filter(m => m.busyMs > 0)
     const freedMs = sum(answers.map(u => u.waitedMs)), lentMs = sum(machines.map(m => m.busyMs))
-    const points = shippedHere.length * SHIPPED_POINTS + sum(answers.map(unblockPoints)) + Math.floor(lentMs / (LENT_HOURS_PER_POINT * HOUR_MS))
+    const accepted = (acceptedBy.get(personId) ?? []).filter(g => within(firstAssignedAt(g.ledger!)!, span)).length
+    const points = shippedHere.length * SHIPPED_POINTS + sum(answers.map(unblockPoints))
+      + (weeklyOrg ? accepted : Math.floor(lentMs / (LENT_HOURS_PER_POINT * HOUR_MS)))
     const details: PersonDetails = {
       shipped: newest(shippedHere, g => g.ledger!.shippedAt!)
         .map(g => ({ title: g.title, prUrl: g.pullRequestUrls!.at(-1)!, mergedAt: g.ledger!.shippedAt! })),
@@ -88,6 +98,7 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     }
     return {
       points,
+      ...weeklyOrg ? { accepted, agentsBrought: agentsBy.get(personId)?.length ?? 0 } : {},
       shipped: { count: shippedHere.length, medianAskToShipMs: median(askToShip(shippedHere)) },
       unblocked: { count: answers.length, agentMs: freedMs, medianAnswerMs: median(answers.map(u => u.waitedMs)) },
       lent: { machines: machines.length, agentMs: lentMs },
@@ -102,9 +113,11 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   const scored = players.map(p => ({ personId: p.id, email: p.email, displayName: names?.get(p.id)?.trim() || p.email.split('@')[0]!,
     ...score(p.id, current), prevWeekPoints: previous && score(p.id, previous).points,
     streakDays: streak(new Set((landedBy.get(p.id) ?? []).map(g => Math.floor(g.ledger!.shippedAt! / DAY_MS))), today) }))
-    .sort((a, b) => b.points - a.points || a.email.localeCompare(b.email))
+    .sort((a, b) => (weeklyOrg ? b.shipped.count - a.shipped.count : 0) || b.points - a.points || a.email.localeCompare(b.email))
   const people: PersonScore[] = scored.map(({ email: _email, details, ...entry }) => {
-    const rank = 1 + scored.filter(other => other.points > entry.points).length
+    const rank = 1 + scored.filter(other => weeklyOrg
+      ? other.shipped.count > entry.shipped.count || (other.shipped.count === entry.shipped.count && other.points > entry.points)
+      : other.points > entry.points).length
     return { ...entry, rank, medal: entry.points > 0 ? MEDALS[rank - 1] ?? null : null, details }
   })
   const shippedNow = shippedRequests.filter(g => within(g.ledger!.shippedAt!, current))
