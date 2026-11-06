@@ -552,6 +552,9 @@ describe('pull request events', () => {
       f.pulls.set(f.PR, f.pull())
       for (const url of [other, another]) f.pulls.set(url, { ...f.pull({ head: HEAD2 }), url })
       await f.pass()
+      // References were linked after the code PR on the reported task; their watched heads must not win.
+      const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })
+      await db.swarmGroup.update({ where: { id: row.id }, data: { data: { ...row.data as object, pullRequestUrls: [f.PR, other, another] } } })
       const reviewer = await f.add(f.task, 'test-host', 'Reviewer')
       const read = async () => (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === f.task)!
       const checkId = (await read()).checks[0]!.id
