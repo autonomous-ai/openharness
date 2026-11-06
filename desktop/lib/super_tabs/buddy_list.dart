@@ -16,56 +16,21 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
 
-/// The reader's Buddies over the right pane's chat (task #3820, spec "Many Buddies"; #3818): one tab each, the default
-/// first and marked, the open one selected; + New Buddy; and the open one's menu (Make default, Rename, Remove).
-/// Shown only by a server that makes several ([SuperTabSnapshot.buddyCap]).
-class SuperTabBuddyList extends StatelessWidget {
-  const SuperTabBuddyList({super.key, required this.controller, this.app});
-
+/// Actions for the Buddy selected in the conversation row.
+class SuperTabBuddyMenu extends StatelessWidget {
+  const SuperTabBuddyMenu({super.key, required this.controller, this.app});
   final SuperTabController controller;
   final AppNotifier? app;
 
   @override
   Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    final c = controller;
-    final buddies = c.buddies();
-    final open = c.selected;
-    final shown = buddies.where((b) => b.id == open?.id).firstOrNull;
-    return Padding(
-      key: const ValueKey('super-buddy-list'),
-      padding: const EdgeInsetsDirectional.only(
-        start: grid.AppDesktop.controlGap,
-        end: grid.AppDesktop.controlGap,
-        bottom: grid.AppDesktop.listRowGap,
-      ),
-      child: Wrap(
-        spacing: grid.AppDesktop.listRowGap,
-        runSpacing: grid.AppDesktop.listRowGap,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          for (final (i, buddy) in buddies.indexed)
-            ChoiceChip(
-              key: ValueKey('super-buddy-tab-${buddy.id}'),
-              label: Text(
-                i == 0 ? '${_name(c, buddy)} · default' : _name(c, buddy),
-              ),
-              selected: buddy.id == open?.id,
-              onSelected: (_) => unawaited(c.select(buddy.id)),
-            ),
-          TextButton.icon(
-            key: const ValueKey('super-buddy-new'),
-            onPressed: c.canWrite
-                ? () => unawaited(showNewBuddy(context, c, app: app))
-                : null,
-            icon: const Icon(AppIcons.plus, size: 16),
-            label: const Text('New Buddy'),
-          ),
-          if (shown != null && c.canWrite)
-            _menu(context, shown, isDefault: shown.id == buddies.first.id),
-        ],
-      ),
-    );
+    final buddies = controller.buddies();
+    final shown = buddies
+        .where((b) => b.id == controller.selectedId)
+        .firstOrNull;
+    return shown == null
+        ? const SizedBox.shrink()
+        : _menu(context, shown, isDefault: shown.id == buddies.first.id);
   }
 
   static String _name(SuperTabController c, SuperTabConversation buddy) =>

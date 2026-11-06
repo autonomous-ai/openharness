@@ -3712,7 +3712,7 @@ class _SuperTabViewState extends State<SuperTabView>
           ),
         // Several Buddies (#3818): one tab each over the chat, + New Buddy, and the open one's menu.
         if (onBuddy && c.snapshot?.buddyCap != null)
-          SuperTabBuddyList(controller: c, app: widget.app),
+          SuperTabBuddyMenu(controller: c, app: widget.app),
         Expanded(child: chat),
       ],
     );
