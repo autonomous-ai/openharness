@@ -26,11 +26,19 @@ describe("the /desktop download offer", () => {
     expect(document.body).not.toHaveTextContent("no Windows version");
   });
 
-  it("lists Windows among the other downloads on a Mac", () => {
+  it("gives a Mac visitor a Windows download button too, not only a link", () => {
     platform = "macos-arm64";
     render(<DesktopDownload />);
 
-    expect(screen.getByRole("link", { name: "Windows" })).toHaveAttribute("href", "/desktop/download/windows");
+    expect(screen.getByRole("link", { name: "Download for Windows" })).toHaveAttribute("href", "/desktop/download/windows");
+    expect(screen.getByRole("link", { name: "Download for macOS (Apple silicon)" })).toBeInTheDocument();
+  });
+
+  it("keeps the Windows button when the platform is unknown, so a shared link never dead-ends", () => {
+    platform = null;
+    render(<DesktopDownload />);
+
+    expect(screen.getByRole("link", { name: "Download for Windows" })).toHaveAttribute("href", "/desktop/download/windows");
   });
 
   it("names Windows among the computers a phone visitor can open the page on", () => {
