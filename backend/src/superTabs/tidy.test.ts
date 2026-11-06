@@ -155,6 +155,48 @@ describe('idle agents', () => {
     expect(idleNotices(state, 'lead', at + MINUTE, new Set())).toEqual([])
   })
 
+  // The job is a Review step; legacy agents need not have a configured Reviewer role.
+  it('reports a step-only Reviewer idle once its done task sleeps', () => {
+    const review = group({ id: 'r1', reviewOf: 'g1', step: 'Review' })
+    const state = swarm({ groups: [review] })
+    state.tidy = false
+    const rows = idleNotices(state, 'lead', START + 25 * 60 * MINUTE, new Set())
+    expect(rows).toEqual([expect.objectContaining({ source: { kind: 'idle', agentId: 'w' } })])
+    expect(target(state).workDecision).toBe('stop')
+    expect(idleNotices(state, 'lead', START + 26 * 60 * MINUTE, new Set())).toEqual([])
+  })
+
+  it.each(['done', 'cancelled'] as const)('reports the same step-only agent idle with its %s task still loaded', status => {
+    const parent = group({ agentIds: ['L', 'other'], assignment: done({ agentId: 'other', status }) })
+    const state = swarm({ groups: [parent, group({ id: 'r1', reviewOf: 'g1', step: 'Review' })] })
+    expect(idleNotices(state, 'lead', START + 25 * 60 * MINUTE, new Set()))
+      .toEqual([expect.objectContaining({ source: { kind: 'idle', agentId: 'w' } })])
+  })
+
+  it.each(['Reviewer', 'Tester'])('keeps a configured %s once its finished step has an unloaded parent', roleName => {
+    const state = swarm({ agents: [worker({ roleName })], groups: [group({ id: 'r1', reviewOf: 'g1', step: 'Review' })] })
+    expect(idleNotices(state, 'lead', START + 25 * 60 * MINUTE, new Set())).toEqual([])
+    expect(target(state).workDecision).toBe('keep')
+    expect(target(state).releaseId).toBeUndefined()
+  })
+
+  it('keeps a step-only agent while any loaded parent is open', () => {
+    const state = swarm({ groups: [
+      group({ agentIds: ['L', 'other'], assignment: done({ agentId: 'other', status: 'review' }) }),
+      group({ id: 'r1', reviewOf: 'g1', step: 'Review' }),
+      group({ id: 'r2', reviewOf: 'sleeping', step: 'Test' }),
+    ] })
+    expect(idleNotices(state, 'lead', START + 25 * 60 * MINUTE, new Set())).toEqual([])
+    expect(target(state).workDecision).toBeUndefined()
+  })
+
+  it('keeps an Engineer with its own open task and a finished step whose parent is unloaded', () => {
+    const state = swarm({ groups: [group({ assignment: done({ status: 'review' }) }),
+      group({ id: 'r1', reviewOf: 'sleeping', step: 'Review' })] })
+    expect(idleNotices(state, 'lead', START + 25 * 60 * MINUTE, new Set())).toEqual([])
+    expect(target(state).workDecision).toBeUndefined()
+  })
+
   it('does not stop anyone while paused, and does not close a manually shared session', () => {
     const paused = swarm({ groups: [] })
     paused.paused = true
@@ -177,6 +219,17 @@ describe('idle agents', () => {
 
 describe('which finished groups archive', () => {
   const quiet = START + ARCHIVE_QUIET_MS
+
+  it('never archives a finished step whose parent is open or absent from loaded state', () => {
+    const review = group({ id: 'r1', reviewOf: 'g1', step: 'Review' })
+    const state = swarm({ groups: [review] })
+    expect(archivable(state, review, START + 25 * 60 * MINUTE)).toBe(false)
+    const parent = group({ assignment: done({ agentId: 'other', status: 'working' }) })
+    state.conversations.push(parent)
+    expect(archivable(state, review, START + 25 * 60 * MINUTE)).toBe(false)
+    parent.assignment!.status = 'done'
+    expect(archivable(state, review, START + 25 * 60 * MINUTE)).toBe(true)
+  })
   it('is a group whose task is done or cancelled and that has been quiet for 30 minutes', () => {
     const state = swarm()
     expect(archivable(state, state.conversations[1]!, quiet)).toBe(true)
