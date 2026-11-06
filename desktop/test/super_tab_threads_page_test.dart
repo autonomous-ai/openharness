@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/activity.dart';
@@ -253,6 +254,54 @@ void main() {
   // is. It used to open the chat with a Thread pane beside it.
   Finder inCard(String id, Finder f) =>
       find.descendant(of: _key('super-thread-card:lead/$id'), matching: f);
+
+  testWidgets('a card\'s text can be selected and copied, and a tap on its '
+      'title still opens the thread (task #3751)', (tester) async {
+    String? copied;
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copied = (call.arguments as Map)['text'] as String;
+      }
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+    final server = swarm();
+    final id = _thread(
+      server,
+      'Can we copy this?',
+      replies: [('Kestrel', 'Yes, select it.')],
+    );
+    server.followedThreads = {
+      'unread': [],
+      'read': [_followed(server, id)],
+      'more': false,
+    };
+    await withClock(Clock.fixed(_now), () async {
+      final opened = await _show(tester, await _loaded(tester, server));
+      final reply = inCard(id, find.text('Yes, select it.'));
+      expect(reply, findsOneWidget);
+      final region = find.ancestor(
+        of: reply,
+        matching: find.byType(SelectableRegion),
+      );
+      expect(region, findsOneWidget, reason: 'the card text is selectable');
+      tester
+          .state<SelectableRegionState>(region)
+          .selectAll(SelectionChangedCause.keyboard);
+      await tester.pump();
+      Actions.invoke(tester.element(reply), CopySelectionTextIntent.copy);
+      await tester.pump();
+      expect(copied, contains('Yes, select it.'));
+
+      await tester.tap(_key('super-thread-card-title:lead/$id'));
+      await _settle(tester);
+      expect(opened, [('lead', id)]);
+    });
+  });
 
   testWidgets('Show N more replies expands the card with every reply, loading '
       'the older ones, and opens no pane', (tester) async {
