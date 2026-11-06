@@ -287,3 +287,34 @@ describe('a file whose name holds a credential', () => {
     expect(file.name).not.toContain(token())
   })
 })
+
+// Both security reviews of #3310 (ReviewLinnea's Important 1): agents attach logs, so an agent's text file is scanned too, its
+// first megabyte, and refused by kind before it can be sent; a person's file is kept as today.
+describe('a text file whose contents hold a credential', () => {
+  const token = () => ['ghp', 'Ab3Cd5Ef7Gh9Ij1Kl3Mn5Op7Qr9St1Uv3Wx5Yz'].join('_')
+  const log = () => Buffer.from(`npm publish\nauth: ${token()}\nfailed\n`)
+  it('is refused for an agent through the form, and stores nothing', async () => {
+    const f = await swarm()
+    const refused = await f.store.upload(owner, f.tab, 'lead', { name: 'publish.log', mime: 'text/plain', body: Readable.from([log()]) }, f.lead).catch(e => e)
+    expect(refused).toMatchObject({ code: 'SECRET_LIKE', status: 400 })
+    expect(String(refused.message)).not.toContain(token())
+    expect(f.files.objects.size).toBe(0)
+  })
+
+  it('is refused for an agent through the direct link, and its object is deleted', async () => {
+    const f = await swarm()
+    const bytes = log()
+    const { upload } = await f.store.uploadLink(owner, f.tab, 'lead', { name: 'publish.log', mime: 'text/plain', size: bytes.byteLength }, f.lead)
+    expect(await f.files.receive(upload.url, upload.headers, bytes)).toBe(200)
+    const refused = await f.store.completeUpload(owner, f.tab, upload.id, f.lead).catch(e => e)
+    expect(refused).toMatchObject({ code: 'SECRET_LIKE', status: 400 })
+    expect(f.files.objects.size).toBe(0)
+  })
+
+  it('passes an agent\'s ordinary log, and a person\'s file as before', async () => {
+    const f = await swarm()
+    const clean = Buffer.from('Ready for review at c474d81d7ccad7edeaba906169aa577d77e537ea\n')
+    expect((await f.store.upload(owner, f.tab, 'lead', { name: 'ci.log', mime: 'text/plain', body: Readable.from([clean]) }, f.lead)).attachment).toBeTruthy()
+    expect(await f.upload(log(), 'publish.log', 'text/plain')).toBeTruthy()
+  })
+})
