@@ -37,20 +37,23 @@ void main() {
       superTabTaskPlaceOf(task, readerId: 'owner', now: at);
 
   group('the Tasks board', () {
-    test('a merged task still releasing is Waiting, with its parts', () {
-      final p = place(merged(releasing: ['desktop', 'cli']))!;
-      expect(p.column, SuperTabTaskColumn.waiting);
-      expect(p.state, 'merged, releasing (Desktop, CLI)');
-    });
+    test(
+      'a merged task still releasing is Merged, with the parts it waits on',
+      () {
+        final p = place(merged(releasing: ['desktop', 'cli']))!;
+        expect(p.column, SuperTabTaskColumn.merged);
+        expect(p.state, 'waiting for Desktop, CLI');
+      },
+    );
 
     test('each part reads as its name', () {
       expect(
         place(merged(releasing: ['backend', 'web', 'desktop']))!.state,
-        'merged, releasing (backend, Web, Desktop)',
+        'waiting for Backend, Web, Desktop',
       );
     });
 
-    test('a released task is Shipped, with its pull request', () {
+    test('a released task is Shipped, with its version', () {
       final p = place(
         merged(
           released: {
@@ -60,17 +63,31 @@ void main() {
         ),
       )!;
       expect(p.column, SuperTabTaskColumn.shipped);
-      expect(p.state, 'PR #7');
+      expect(p.state, 'Desktop 1.4.2');
     });
 
-    test('a merge from before releases were recorded stays Shipped', () {
-      expect(place(merged())!.column, SuperTabTaskColumn.shipped);
+    test('a task carried by two releases names both versions', () {
+      final p = place(
+        merged(
+          released: {
+            'at': now,
+            'tags': ['v1.4.20_backend', 'v1.3.84_desktop'],
+          },
+        ),
+      )!;
+      expect(p.state, 'Backend 1.4.20, Desktop 1.3.84');
+    });
+
+    test('a merge from before releases were recorded stays Shipped, with its pull request', () {
+      final p = place(merged())!;
+      expect(p.column, SuperTabTaskColumn.shipped);
+      expect(p.state, 'PR #7');
     });
 
     test('a list still empty, before the files are read, is releasing', () {
       final p = place(merged(releasing: []))!;
-      expect(p.column, SuperTabTaskColumn.waiting);
-      expect(p.state, 'merged, releasing');
+      expect(p.column, SuperTabTaskColumn.merged);
+      expect(p.state, 'waiting for a release');
     });
 
     test('the server says it: present means releasing', () {
@@ -81,16 +98,16 @@ void main() {
           'releasing': ['cli'],
         }),
       )!;
-      expect(p.column, SuperTabTaskColumn.waiting);
-      expect(p.state, 'merged, releasing (CLI)');
+      expect(p.column, SuperTabTaskColumn.merged);
+      expect(p.state, 'waiting for CLI');
     });
 
     test('a task merged and closed while releasing still waits', () {
       final p = place(merged(releasing: ['cli'], closed: true))!;
-      expect(p.column, SuperTabTaskColumn.waiting);
+      expect(p.column, SuperTabTaskColumn.merged);
     });
 
-    test('the board lists it under Waiting, not Shipped', () {
+    test('the board lists it under Merged, not Shipped', () {
       final board = superTabTaskBoard(
         [
           merged(releasing: ['desktop']),
@@ -98,7 +115,7 @@ void main() {
         readerId: 'owner',
         now: at,
       );
-      expect(board[SuperTabTaskColumn.waiting], hasLength(1));
+      expect(board[SuperTabTaskColumn.merged], hasLength(1));
       expect(board[SuperTabTaskColumn.shipped], isEmpty);
     });
 

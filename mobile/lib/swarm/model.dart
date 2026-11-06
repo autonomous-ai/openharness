@@ -501,9 +501,10 @@ class SuperTabConversation {
   /// it for its board; the phone carries it as the desktop does).
   final List<String>? releasing;
 
-  /// The release tags that carried it, `v1.3.84_desktop` and the like, once
-  /// the server recorded the release (backend releases.ts `released`): what
-  /// the Board's Shipped names. Empty before, and from an older server.
+  /// The release tags that carried it to people, `v1.3.84_desktop` and the
+  /// like, once the server recorded the release (backend releases.ts
+  /// `released`): what the Board's Shipped names. Empty before, and from an
+  /// older server.
   final List<String> releasedTags;
 
   /// Its place in its project's shared Next up and the day before which it
