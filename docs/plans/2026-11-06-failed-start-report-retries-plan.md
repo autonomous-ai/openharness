@@ -41,8 +41,16 @@
 
 **Interfaces:** Existing ScopedRequest and ContributedMachines.tick remain unchanged. Private report state stores original `{operationId,command}`, endpoint, attempts and nextAt/terminal state. Existing backend rejects with SuperTabHostError; do not change backend semantics.
 
-- [ ] Commit failing tests: NOT_FOUND sends once over many passes with one fixed log; transport/other refusal attempts at 15/30/60/120/240/300-second intervals and repeats at cap; success reaches server once; retries preserve operation id, do not relaunch, and do not log fixture secret text; a second start still runs.
-- [ ] Run `cd cli && npm test -- src/superTabs/machines.spec.ts -t 'failed-start report'`; observe behavior failures before production code.
-- [ ] Intercept only agent.startFailed in the scoped host sender, retain/retry its report directly on later passes, terminally drop NOT_FOUND/accepted reports, prune state alongside feed rows, and use fixed diagnostics. Commit implementation.
-- [ ] Run machines/start/host/cloneTrust affected tests and typecheck; record red/green and same-workload request reduction (including retries at cap), update plan and push.
+- [x] Commit failing tests: NOT_FOUND sends once over many passes with one fixed log; transport/other refusal attempts at 15/30/60/120/240/300-second intervals and repeats at cap; success reaches server once; retries preserve operation id, do not relaunch, and do not log fixture secret text; a second start still runs.
+- [x] Run `cd cli && npm test -- src/superTabs/machines.spec.ts -t 'failed-start report'`; observe behavior failures before production code.
+- [x] Intercept only agent.startFailed in the scoped host sender, retain/retry its report directly on later passes, terminally drop NOT_FOUND/accepted reports, prune state alongside feed rows, and use fixed diagnostics. Commit implementation.
+- [x] Run machines/start/host/cloneTrust affected tests and typecheck; record red/green and same-workload request reduction (including retries at cap), update plan and push.
 - [ ] Add evidence comment, mark ready, record exact head through work.status; keep stable during review/CI. Record done only after required reviews/tests pass.
+
+## Validation evidence
+
+- Plan first: `0a761c925`. Tests `371ca3880` produced five intended failures before `7c075426b`: NOT_FOUND sent 11 times instead of once; all three other-failure cases sent 73 times instead of eight; an accepted real failure was reported six times instead of once.
+- Same 18-minute injected-clock workload (73 host passes, same fixtures): transient report requests 73 → 8, and checkout preparation 73 → 1. The eight attempts occur at 0, 15, 45, 105, 225, 465, 765 and 1065 seconds; final two intervals stay capped at 300 seconds. No native launch is retried for an undispatched failed start. The missing-start workload sends 1 report across 11 passes, with one fixed diagnostic and no server text.
+- Focused regression check after implementation: 5 passed. An affected run caught two existing dispatched-receipt cases; `dce5ccea8` retains their reconciliation instead of treating them as undispatched starts. The seven targeted checks then passed; 410 machine/start/clone-trust checks passed in the broader run.
+- That broader run had one unrelated host acknowledgement test timeout (839 passed / 1 timed out). The test iterated 400 disk-backed retries. `3a9b8eb5a` keeps the expiry assertions and adds a still-retained check at 23 hours, then crosses 24 hours directly; cadence remains checked in its adjacent test. Both expiry cases passed, then all 430 host checks passed. This fixes the source of the timeout rather than retrying it green.
+- CLI typecheck passed after correcting callback narrowing. No real account, daemon, native session or sign-in was used. Full CLI suite runs automatically in PR CI; no local coverage gate applies because core/services/harnessd are unchanged.
