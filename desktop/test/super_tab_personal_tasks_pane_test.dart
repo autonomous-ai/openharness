@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/widgets/harness_activity_mark.dart';
+import 'package:harness/state/harness_activity.dart';
 
 import 'swarm_state_test.dart' show createApp;
 
@@ -114,6 +117,12 @@ void main() {
     );
     expect(find.text('Tasks'), findsOneWidget);
     expect(find.byTooltip('Proposal'), findsNWidgets(2));
+    expect(find.byIcon(AppIcons.circleDashed), findsNWidgets(2));
+    f.rows.first['status'] = 'working';
+    f.rows.first['version'] = 2;
+    await f.controller.refresh();
+    await t.pump();
+    expect(find.byWidgetPredicate((w) => w is ActivityMark && w.activity == HarnessActivity.working), findsOneWidget);
     expect(find.text('Auto approve'), findsOneWidget);
   });
   testWidgets('mode is saved by authenticated command and server read', (
