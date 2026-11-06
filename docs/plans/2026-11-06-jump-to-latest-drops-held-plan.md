@@ -38,8 +38,8 @@ Files: `desktop/lib/super_tabs/controller.dart`, `desktop/lib/super_tabs/view.da
 `desktop/test/super_tab_big_chat_jump_test.dart`.
 Interfaces: `SuperTabController.showLatest(id, {bool replace = false})`.
 
-- [ ] Failing test: a 1,500-message chat scrolled to its start; Jump to latest shows the newest message, every frame
+- [x] Failing test: a 1,500-message chat scrolled to its start; Jump to latest shows the newest message, every frame
       shows rows, and afterwards the chat holds one page (100), not 1,500, with older history still readable.
-- [ ] Failing test: the same with the server slow to answer: rows stay on screen while the page is on its way.
-- [ ] Test (guard): Jump to latest from near the end reads no messages.
-- [ ] Code: `showLatest(replace: true)` asks for the latest page whole; the view calls it when far from the end.
+- [x] Failing test: the same with the server slow to answer: rows stay on screen while the page is on its way.
+- [x] Test (guard): Jump to latest from near the end reads no messages.
+- [x] Code: `showLatest(replace: true)` asks for the latest page whole; the view calls it when far from the end.
