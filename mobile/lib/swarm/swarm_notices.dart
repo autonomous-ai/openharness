@@ -108,7 +108,9 @@ class SwarmAnnouncer {
   /// The needs whose notice is posted and not yet taken down, by need key:
   /// each one's Swarm and the notification it shows in. Several needs of one
   /// task show in one ([swarmTaskSlot]), which stays until the last is gone.
-  final _posted = <String, ({String swarmId, String slot})>{};
+  /// [viaPush]: the server's push shows it, and nothing was posted here; the
+  /// need is followed so that answering it takes the push down.
+  final _posted = <String, ({String swarmId, String slot, bool viaPush})>{};
 
   /// Posted notices whose need the last reads of its Swarm missed: how many
   /// in a row.
@@ -126,14 +128,32 @@ class SwarmAnnouncer {
     // need still counts on the icon ([settle]), but nothing is posted.
     if (need is SwarmMentionNeed && need.mention.taggedByAgent) return;
     if (quiet(need)) return;
-    if (!told.add(need.key)) return;
+    final fresh = told.add(need.key);
     final slot = swarmNotice(need).key;
-    // The server's push for the task shows this notification already.
-    if (told.pushed(slot)) return;
-    // Another need of the task is up: this one replaces it without a sound.
-    final up = _posted.values.any((posted) => posted.slot == slot);
+    // The server's push shows this notification already: nothing is posted,
+    // but the need is followed, so that answering it takes the push down and
+    // frees the slot for the task's next question (review of task #3607). The
+    // push may be the one that told this need ([fresh] false).
+    if (told.pushed(slot)) {
+      _posted.putIfAbsent(
+        need.key,
+        () => (swarmId: need.swarmId, slot: slot, viaPush: true),
+      );
+      _missed.remove(need.key);
+      return;
+    }
+    if (!fresh) return;
+    // Another need of the task is up here: this one replaces it without a
+    // sound. A followed push-only need is not: the person may have swiped it.
+    final up = _posted.values.any(
+      (posted) => posted.slot == slot && !posted.viaPush,
+    );
     final notice = swarmNotice(need, quiet: up);
-    _posted[need.key] = (swarmId: need.swarmId, slot: notice.key);
+    _posted[need.key] = (
+      swarmId: need.swarmId,
+      slot: notice.key,
+      viaPush: false,
+    );
     _missed.remove(need.key);
     unawaited(notices.showSwarm(notice));
   }
@@ -320,8 +340,10 @@ class SwarmAnnouncer {
     final gone = _posted.remove(key);
     _missed.remove(key);
     if (gone == null) return;
-    // The notification goes with the last need that showed in it.
+    // The notification goes with the last need that showed in it, and a push
+    // in it with it: the slot is free for the task's next question.
     if (_posted.values.any((posted) => posted.slot == gone.slot)) return;
+    told.pushGone(gone.slot);
     unawaited(notices.cancelSwarm(gone.slot));
   }
 
