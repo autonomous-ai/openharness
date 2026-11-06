@@ -7,6 +7,7 @@ import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart' show SuperTabReplyPreview;
+import 'package:harness/super_tabs/pane_layout.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_activity_lists_test.dart' show swarm;
@@ -223,6 +224,38 @@ void main() {
   }
 
   for (final brightness in Brightness.values) {
+    for (final (width, chatWidth) in [
+      (1280.0, 426.6666667),
+      (1920.0, 640.0),
+      (2560.0, 853.3333333),
+    ]) {
+      testWidgets(
+        'chat takes a third of the $width window (${brightness.name})',
+        (tester) async {
+          final (c, _) = await show(
+            tester,
+            width: width,
+            brightness: brightness,
+          );
+          await tester.tap(_key('super-group-lead'));
+          await _settle(tester);
+          expect(
+            tester.getSize(_key('super-right-pane')).width,
+            closeTo(chatWidth, 1),
+          );
+          expectFixedPanes(tester);
+          expect(_key('super-tasks-lead'), findsOneWidget);
+          expect(tester.takeException(), isNull);
+          await captureWindow(
+            tester,
+            shots,
+            'fixed-board-${width.toInt()}-${brightness.name}',
+          );
+          await end(tester, c);
+        },
+      );
+    }
+
     testWidgets('both panes return from saved hidden state and stay visible '
         'after remount (${brightness.name})', (tester) async {
       final store = MemoryKeyValueStore()
@@ -314,6 +347,29 @@ void main() {
       await _settle(tester);
       expectFixedPanes(tester);
       expect(_key('super-tasks-lead'), findsOneWidget);
+      expect(tester.getSize(_key('super-right-pane')).width, 420);
+      expect(tester.takeException(), isNull);
+      await end(tester, c);
+    },
+  );
+
+  testWidgets(
+    'chat keeps a comfortable minimum after an old saved width or a resize',
+    (tester) async {
+      final store = MemoryKeyValueStore()
+        ..values[SuperTabPaneLayout.storageKey] =
+            '{"left":300,"right":280,"rightChosen":true}';
+      final (c, _) = await show(tester, store: store);
+      await tester.tap(_key('super-group-lead'));
+      await _settle(tester);
+      expect(tester.getSize(_key('super-right-pane')).width, 420);
+      await tester.drag(_key('super-resize-right'), const Offset(1000, 0));
+      await _settle(tester);
+      expect(tester.getSize(_key('super-right-pane')).width, 420);
+      await tester.binding.setSurfaceSize(const Size(880, 900));
+      await _settle(tester);
+      expect(tester.getSize(_key('super-right-pane')).width, 420);
+      expectFixedPanes(tester);
       expect(tester.takeException(), isNull);
       await end(tester, c);
     },
