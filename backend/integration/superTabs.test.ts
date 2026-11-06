@@ -5587,31 +5587,32 @@ describe('a closed tab\'s Personal project', () => {
     await db.user.upsert({ where: { id: person.sub }, create: { id: person.sub, externalId: `fixture-${person.sub}`, email: person.email,
       autonomousEnv: person.autonomousEnv }, update: {} })
     const tab = (await store.create(person, 'personal-swarm', 'Personal', 'private')).id
+    const tabOperation = `personal-tab-${randomUUID()}`
     const projectId = String((await run(tab, { type: 'project.create', name: 'Untitled tab', visibility: 'private', brief: '' }, person, undefined,
-      `personal-tab-${randomUUID()}`)).result.projectId)
+      tabOperation)).result.projectId)
     const chat = (await store.read(person, tab)).state.projects!.find(p => p.id === projectId)!.leadConversationId
-    return { tab, projectId, chat }
+    return { tab, projectId, chat, tabOperation }
   }
 
   it('archives it when a message lands while it is being closed', async () => {
-    const { tab, projectId, chat } = await personal()
+    const { tab, projectId, chat, tabOperation } = await personal()
     let sent = false
     const raced = new SuperTabStore(beforeFirstWrite(db, async () => {
       if (sent) return
       sent = true
       await run(tab, { type: 'message.send', conversationId: chat, text: 'Written as the tab closed', replyTo: null, recipientIds: [] }, person)
     }))
-    const closed = await raced.execute(person, tab, { operationId: randomUUID(), command: { type: 'project.closeTab', projectId } as Command })
+    const closed = await raced.execute(person, tab, { operationId: randomUUID(), command: { type: 'project.closeTab', projectId, tabOperation } as Command })
     expect(sent).toBe(true)
     expect(closed.result).toMatchObject({ outcome: 'archived' })
     expect((await store.read(person, tab)).state.projects!.find(p => p.id === projectId)).toMatchObject({ archived: true })
   })
 
   it('does its work once under one operation id, from any of the person\'s computers', async () => {
-    const { tab, projectId } = await personal()
+    const { tab, projectId, tabOperation } = await personal()
     const operationId = `close-tab-${randomUUID()}`
-    const first = await store.execute(person, tab, { operationId, command: { type: 'project.closeTab', projectId } as Command })
-    const again = await store.execute(person, tab, { operationId, command: { type: 'project.closeTab', projectId } as Command })
+    const first = await store.execute(person, tab, { operationId, command: { type: 'project.closeTab', projectId, tabOperation } as Command })
+    const again = await store.execute(person, tab, { operationId, command: { type: 'project.closeTab', projectId, tabOperation } as Command })
     expect(first.result).toMatchObject({ outcome: 'deleted' })
     expect(again.result).toEqual(first.result)
     expect((await store.read(person, tab)).state.projects!.some(p => p.id === projectId)).toBe(false)
