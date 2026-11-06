@@ -1,6 +1,7 @@
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/swarm.dart';
 import 'package:harness/super_tabs/join_machine.dart';
 import 'package:harness/ws/ws_conn.dart';
 
@@ -233,7 +234,16 @@ void main() {
     'a Swarm already shown on this computer before the update is left as it is',
     () async {
       final f = _computer();
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      // Restored from the saved layout at launch, as a long-time member's Swarm
+      // is; a Swarm opened in this run is new here (task #3791).
+      f.app.swarms.add(
+        Swarm(
+          id: 'restored',
+          name: 'Pilot',
+          nameIsCustom: true,
+          kind: 'superTab',
+        )..superTabId = tabId,
+      );
       await _discover(f);
       expect(_contributions(f), isEmpty);
       expect(_teamOffers(f), isEmpty);
