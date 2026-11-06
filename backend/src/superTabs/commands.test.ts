@@ -1349,19 +1349,18 @@ describe('decisions linked to work', () => {
     const request = { conversationId: task, machineId: 'machine', engine: 'claude', model: 'opus', effort: 'xhigh', name: 'Builder', cwd: '/repo', worktree: false,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const start = (extra: Record<string, unknown> = {}) => f.run({ type: 'agent.start', request, routeDecisionId: 'd1', ...extra } as Command, f.leadActor, { routeDecision: open({ conversationId: task }), contribution: f.contribution })
-    expect(start().routeDecisions[0]).toMatchObject({ op: 'final', override: { by: 'lead', reason: 'No reason given.' } })
+    expect(() => start()).toThrow(expect.objectContaining({ code: 'ROUTE_REASON_REQUIRED' }))
     const effects = start({ overrideReason: 'Xhigh is needed here.' })
     expect(effects.routeDecisions[0]).toMatchObject({ op: 'final', override: { by: 'lead', reason: 'Xhigh is needed here.' } })
     expect(effects.messages[0]).toMatchObject({ text: 'lead started Builder instead of Title c0. Reason: Xhigh is needed here.',
       source: { kind: 'route-override', decisionId: 'd1', by: 'lead' } })
   })
 
-  it('records a mismatch as the agent\'s override, with its reason when one is given', () => {
+  it('records a mismatch as the agent\'s override, with its reason (required when the route picked)', () => {
     const f = routed()
     f.define('lead')
-    expect(f.run({ type: 'work.assign', conversationId: 'lead', agentId: f.worker, routeDecisionId: 'd1' }, f.leadActor, { routeDecision: open() }).routeDecisions[0])
-      .toMatchObject({ op: 'final', override: { by: 'lead', reason: 'No reason given.' } })
-    f.state.conversations.find(c => c.id === 'lead')!.assignment = null
+    expect(() => f.run({ type: 'work.assign', conversationId: 'lead', agentId: f.worker, routeDecisionId: 'd1' }, f.leadActor, { routeDecision: open() }))
+      .toThrow(expect.objectContaining({ code: 'ROUTE_REASON_REQUIRED' }))
     const effects = f.run({ type: 'work.assign', conversationId: 'lead', agentId: f.worker, routeDecisionId: 'd1', overrideReason: 'This worker already has the context.' }, f.leadActor, { routeDecision: open() })
     expect(effects.routeDecisions[0]).toMatchObject({ op: 'final', override: { by: 'lead', reason: 'This worker already has the context.' } })
     expect(effects.messages.some(m => m.source?.kind === 'route-override')).toBe(true)

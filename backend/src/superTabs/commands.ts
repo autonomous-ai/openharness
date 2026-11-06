@@ -90,7 +90,7 @@ const STEPS_LISTED = 200
 function listStep(task: Conversation, id: string): void {
   if (task.stepIds) task.stepIds = [...task.stepIds, id].slice(-STEPS_LISTED)
 }
-/** A route override's reason when its agent gave none: following another candidate needs none (project instructions). */
+/** A route override's reason when its agent gave none, on a decision whose chosen candidate was not a pick (a person's choice, or an older record). */
 const NO_REASON = 'No reason given.'
 /** What a pick-less route's only candidate is chosen for, when its start gives no reason (task #2901). */
 const ONLY_CANDIDATE = 'Only candidate that can run this task.'
@@ -1308,6 +1308,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     const expected = decision.record.candidates.find(c => c.id === chosenId)!
     const matched = matches(expected, decision)
+    // The route picked by the Routing order (task #3576): another candidate is chosen for a reason (urgency, context, a machine the work needs).
+    if (!matched && !reasonText && chosenId === decision.record.pick) {
+      fail('ROUTE_REASON_REQUIRED', `This route picked ${expected.title}. Start or assign it, or send, as overrideReason, why another candidate is better (urgency, context, a machine the work needs; "idle" is not a reason).`)
+    }
     const override: RouteOverride | undefined = matched ? undefined : { by: 'lead', actorKey: actorKey(actor), reason: reasonText ?? NO_REASON }
     // A record with a pick keeps it as the choice; one without keeps the candidate chosen in the final, for the route history.
     final(matched && decision.record.pick === undefined ? { candidateId: chosenId } : {}, override)
