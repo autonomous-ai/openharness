@@ -138,7 +138,7 @@ describe('the assignment notice a Buddy gets for work its person requested', () 
   it('is one line inside the task, for the Buddy alone: its number, title and status, nothing more', () => {
     const { group, assign, number } = requested()
     expect(notices(assign())).toEqual([expect.objectContaining({ conversationId: group, recipients: ['buddy'], source: { kind: 'agent-only' },
-      text: `News for your owner: #${number} "Offline edits", which they requested, is assigned and working.` })])
+      text: `News for your owner: #${number} "Offline edits", recorded as their request, is assigned and working.` })])
   })
 
   it('is sent once per task: a replacement agent taking the work over is no new news (task #4217)', () => {
@@ -237,7 +237,7 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
     // A release that does not hold the merge says nothing; the one that does tells the Buddy, inside the task, once.
     expect(settle('v1.0.1_backend', [], 5000)).toEqual([])
     expect(settle('v1.0.2_backend', [key], 6000)).toEqual([expect.objectContaining({ conversationId: group, recipients: ['buddy'],
-      source: { kind: 'agent-only' }, text: expect.stringMatching(/^News for your owner: #\d+ "Offline edits", .*shipped\.$/) })])
+      source: { kind: 'agent-only' }, text: `News for your owner: #${find().number} "Offline edits", recorded as their request, shipped.` })])
     expect(settle('v1.0.3_backend', [key], 7000)).toEqual([])
   })
 
