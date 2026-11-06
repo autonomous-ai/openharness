@@ -228,6 +228,17 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
   }
 
+  /// A project's own chat is open and no Board is: its Chat view, with the
+  /// header's Members, Terminals and Tasks icons, as before the fixed
+  /// layout. Its Tasks icon opens the Board with projects and the Buddy.
+  bool get _projectChatOnly {
+    final group = c.selected;
+    return _boardProjectId == null &&
+        group != null &&
+        !group.isBuddyChat &&
+        c.snapshot?.projectById(group.projectId) != null;
+  }
+
   /// Keeps the Board of the project [group] belongs to in the middle, for a
   /// task or project chat opened by a card, a link or a notice; the Buddy's
   /// own chat names no project of its own.
@@ -5841,18 +5852,33 @@ class _SuperTabViewState extends State<SuperTabView>
     builder: (context, constraints) {
       grid.AppTheme.watch(context);
       final terminal = widget.terminal;
-      final narrow =
-          !widget.board &&
-          constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
-      // Wide enough for a right column beside the chat; it shows only an
-      // open thread or Members, closed at rest (Quiet Swarm, 2026-11-02).
-      final wide =
-          widget.board ||
-          constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
       final thread = _threadPanel();
       final viewer = _imageViewer();
       // A thread opened since Members takes its side and closes it.
       if (thread != null) _rosterOpen = false;
+      // Desktop reserves both side panes even before a project is selected.
+      // Other navigation surfaces keep their existing place in the middle.
+      final boardLayout =
+          widget.board &&
+          !_projectChatOnly &&
+          thread == null &&
+          !_rosterOpen &&
+          !_manageVisible &&
+          !_notificationsVisible &&
+          !_devicesVisible &&
+          !_terminalsVisible &&
+          !_showPullRequests &&
+          _pageShown == null;
+      // The fixed layout never drops a side pane; every other surface keeps
+      // its own width rules.
+      final narrow =
+          !boardLayout &&
+          constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
+      // Wide enough for a right column beside the chat; it shows only an
+      // open thread or Members, closed at rest (Quiet Swarm, 2026-11-02).
+      final wide =
+          boardLayout ||
+          constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
       final threadDrawer = thread != null && !wide;
       // A terminal on screen keeps its chat beside it, in the right pane, as
       // a thread sits; a thread or Members takes that side, and a narrow
@@ -5870,18 +5896,6 @@ class _SuperTabViewState extends State<SuperTabView>
         images: () => _images(_shownMessages(c.selectedId)),
         child: _conversation(narrow),
       );
-      // Desktop reserves both side panes even before a project is selected.
-      // Other navigation surfaces keep their existing place in the middle.
-      final boardLayout =
-          widget.board &&
-          thread == null &&
-          !_rosterOpen &&
-          !_manageVisible &&
-          !_notificationsVisible &&
-          !_devicesVisible &&
-          !_terminalsVisible &&
-          !_showPullRequests &&
-          _pageShown == null;
       final boardProject = boardLayout
           ? c.snapshot?.projectById(_boardProjectId ?? '')?.id
           : null;

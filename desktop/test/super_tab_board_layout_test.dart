@@ -390,14 +390,9 @@ void main() {
   // Every way into the Board shows the same three panes (Scholes, task #3863).
   testWidgets('the Tasks icon of a project chat opens the Board with projects, '
       'the wide Buddy chat and the project kept', (tester) async {
-    final (c, server) = await show(tester, width: 1500);
-    // A person lands in the project's own chat with a thread open beside it,
-    // no Board in the middle: that chat's header has the Tasks icon.
-    final root =
-        server.messages.firstWhere((m) => m['conversationId'] == 'lead')['id']
-            as String;
-    c.openThread(root);
-    await _settle(tester);
+    final (c, _) = await show(tester, width: 1500);
+    // A person lands in the project's own chat, no Board open: that Chat
+    // view's header has the Tasks icon.
     expect(c.selectedId, 'lead');
     expect(_key('super-tasks-lead'), findsNothing);
     await tester.tap(_key('super-tasks'));
@@ -439,7 +434,13 @@ void main() {
   for (final (width, scale) in [(880.0, 1.6), (1280.0, 2.0), (1500.0, 1.0)]) {
     testWidgets('the Board yields before the side panes at $width wide, '
         'text ${scale * 100}%', (tester) async {
-      final (c, _) = await show(tester, width: width, textScale: scale);
+      // From the Buddy: the fixed layout's own start, never the Chat view.
+      final (c, _) = await show(
+        tester,
+        width: width,
+        textScale: scale,
+        selected: 'buddy-owner-lead',
+      );
       await tester.tap(_key('super-group-lead'));
       await _settle(tester);
       final left = tester.getSize(_key('super-left-pane')).width;
