@@ -189,3 +189,17 @@ describe('thread discussion after an answer', () => {
     expect(() => send('CI: all checks passed.', { by: f.dev, reply: question, extra: { replyTo: question.id } })).not.toThrow()
   })
 })
+
+
+describe('answer recording at the ledger boundary', () => {
+  it('records a main reply even when its new explicit answer target evicts the root ask', () => {
+    const { f, send, ask } = setup()
+    const question = ask()
+    const first = send('Can the phone build use this fix?', { reply: question, extra: { answers: question.id } })
+    const response = { ...question, id: String(first.result.messageId), author: first.messages[0]!.author }
+    for (let i = 0; i < 49; i++) { f.tick(1); ask() }
+    expect(() => send('Yes, the phone build can use it.', { reply: response, extra: { answers: response.id } })).not.toThrow()
+    expect(() => send('Another main result.', { reply: question, extra: { replyTo: question.id, alsoSend: true } }))
+      .toThrow(expect.objectContaining({ code: 'CHAT_ASK_CLOSED' }))
+  })
+})
