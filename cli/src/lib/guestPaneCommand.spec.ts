@@ -6,68 +6,55 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { GUEST_LAUNCH_ENGINES, GUEST_PANE_BOOTSTRAP, guestPaneCommand } from './guestPaneCommand.js'
 
 const account = { user: 'hg_0123456789ab', home: '/Users/Shared/HarnessGuests/hg_0123456789ab', workspace: '/Users/Shared/HarnessGuests/hg_0123456789ab/work' }
-const relay = 'http://127.0.0.1:41234'
 
 describe('a guest\'s pane', () => {
-  it('runs Claude Code as the guest, on the owner\'s subscription through the relay, with the token only in the environment', () => {
-    const { argv, env } = guestPaneCommand({ account, engine: 'claude', relayUrl: relay, token: 'guest-token', bypassPermission: true, lang: 'vi_VN.UTF-8' })
+  it('runs Claude Code as the guest, through the helper, with only the terminal\'s variables', () => {
+    const { argv, env } = guestPaneCommand({ account, engine: 'claude', bypassPermission: true, lang: 'vi_VN.UTF-8' })
     expect(argv.slice(0, 8)).toEqual(['/bin/sh', '-c', GUEST_PANE_BOOTSTRAP, 'harness-guest', '/usr/local/libexec/harness/guest-helper', account.user, account.workspace, 'claude'])
     expect(argv.slice(8)).toEqual(['sudo', '-n', '/usr/local/libexec/harness/guest-helper', 'run', account.user, '--cwd', account.workspace,
-      '--pass', 'TERM', '--pass', 'COLORTERM', '--pass', 'LANG', '--pass', 'ANTHROPIC_BASE_URL', '--pass', 'ANTHROPIC_AUTH_TOKEN',
-      '--', 'claude', '--dangerously-skip-permissions'])
-    expect(argv.join(' ')).not.toContain('guest-token')
-    expect(env).toEqual({ TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'vi_VN.UTF-8',
-      ANTHROPIC_BASE_URL: `${relay}/claude`, ANTHROPIC_AUTH_TOKEN: 'guest-token' })
+      '--pass', 'TERM', '--pass', 'COLORTERM', '--pass', 'LANG', '--', 'claude', '--dangerously-skip-permissions'])
+    expect(env).toEqual({ TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'vi_VN.UTF-8' })
   })
 
-  it('runs Codex on the relay\'s provider, asking before each command when the guest wants it to', () => {
-    const { argv, env } = guestPaneCommand({ account, engine: 'codex', relayUrl: relay, token: 'guest-token', bypassPermission: false, helperPath: '/opt/helper' })
-    const engine = argv.slice(argv.indexOf('--') + 1)
-    expect(engine[0]).toBe('codex')
-    expect(engine).toContain(`model_providers.harness_owner.base_url="${relay}/codex"`)
-    expect(engine).not.toContain('--dangerously-bypass-approvals-and-sandbox')
+  it('runs Codex asking before each command when the guest wants it to', () => {
+    const { argv, env } = guestPaneCommand({ account, engine: 'codex', bypassPermission: false, helperPath: '/opt/helper' })
+    expect(argv.slice(argv.indexOf('--') + 1)).toEqual(['codex'])
     expect(argv[4]).toBe('/opt/helper')
-    expect(env).toEqual({ TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8', HARNESS_RELAY_TOKEN: 'guest-token' })
-    expect(guestPaneCommand({ account, engine: 'codex', relayUrl: relay, token: 't', bypassPermission: true }).argv.at(-1)).toBe('--dangerously-bypass-approvals-and-sandbox')
+    expect(env).toEqual({ TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' })
+    expect(guestPaneCommand({ account, engine: 'codex', bypassPermission: true }).argv.at(-1)).toBe('--dangerously-bypass-approvals-and-sandbox')
   })
 
   it('starts on the guest\'s first message, which no option can be read from', () => {
     const tail = (prompt: string, engine: 'claude' | 'codex' = 'claude') =>
-      guestPaneCommand({ account, engine, relayUrl: relay, token: 't', bypassPermission: false, prompt }).argv.slice(-2)
+      guestPaneCommand({ account, engine, bypassPermission: false, prompt }).argv.slice(-2)
     expect(tail('Fix the tests')).toEqual(['claude', 'Fix the tests'])
-    expect(tail('Fix the tests', 'codex')).toEqual(['model_providers.harness_owner.supports_websockets=false', 'Fix the tests'])
+    expect(tail('Fix the tests', 'codex')).toEqual(['codex', 'Fix the tests'])
     expect(tail('--settings /tmp/x')).toEqual(['--', '--settings /tmp/x'])
   })
 
   it('starts in a folder the owner shares when it is given one, which the helper checks again', () => {
-    const { argv } = guestPaneCommand({ account, engine: 'claude', relayUrl: relay, token: 't', bypassPermission: false, cwd: '/Users/dee/docs' })
+    const { argv } = guestPaneCommand({ account, engine: 'claude', bypassPermission: false, cwd: '/Users/dee/docs' })
     expect(argv[6]).toBe('/Users/dee/docs')
     expect(argv.slice(argv.indexOf('run'), argv.indexOf('run') + 4)).toEqual(['run', account.user, '--cwd', '/Users/dee/docs'])
   })
 
   it('takes the engine\'s own flags for the mode the guest chose, in place of all or nothing', () => {
-    const { argv } = guestPaneCommand({ account, engine: 'claude', relayUrl: relay, token: 't', bypassPermission: true,
+    const { argv } = guestPaneCommand({ account, engine: 'claude', bypassPermission: true,
       permissionFlags: ['--permission-mode', 'auto'], prompt: 'hi' })
     expect(argv.slice(argv.indexOf('--') + 1)).toEqual(['claude', '--permission-mode', 'auto', 'hi'])
     expect(argv).not.toContain('--dangerously-skip-permissions')
   })
 
-  it('is for the engines whose subscription the relay spends', () => {
+  it('is Claude Code or Codex', () => {
     expect(GUEST_LAUNCH_ENGINES).toEqual(['claude', 'codex'])
   })
 
-  it('is made by the guest\'s own host on Windows: the engine itself, with only the relay\'s variables', () => {
-    const claude = guestPaneCommand({ account, engine: 'claude', relayUrl: relay, token: 'guest-token', bypassPermission: true, platform: 'win32' })
-    // No helper, no `/bin/sh` bootstrap, and the token never on the command line.
-    expect(claude.argv).toEqual(['claude', '--dangerously-skip-permissions'])
-    expect(claude.argv.join(' ')).not.toContain('guest-token')
-    expect(claude.env).toEqual({ ANTHROPIC_BASE_URL: `${relay}/claude`, ANTHROPIC_AUTH_TOKEN: 'guest-token' })
-    const codex = guestPaneCommand({ account, engine: 'codex', relayUrl: relay, token: 'guest-token', bypassPermission: false,
+  it('is made by the guest\'s own host on Windows: the engine itself, with no helper or bootstrap', () => {
+    expect(guestPaneCommand({ account, engine: 'claude', bypassPermission: true, platform: 'win32' }))
+      .toEqual({ argv: ['claude', '--dangerously-skip-permissions'], env: {} })
+    const codex = guestPaneCommand({ account, engine: 'codex', bypassPermission: false,
       permissionFlags: ['--approve-for-me'], prompt: 'Fix the tests', platform: 'win32' })
-    expect(codex.argv[0]).toBe('codex')
-    expect(codex.argv).toContain(`model_providers.harness_owner.base_url="${relay}/codex"`)
-    expect(codex.argv.slice(-2)).toEqual(['--approve-for-me', 'Fix the tests'])
-    expect(codex.env).toEqual({ HARNESS_RELAY_TOKEN: 'guest-token' })
+    expect(codex.argv).toEqual(['codex', '--approve-for-me', 'Fix the tests'])
   })
 })
 

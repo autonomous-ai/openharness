@@ -1,85 +1,70 @@
 import { describe, expect, it, vi } from 'vitest'
 import { GuestHelperError, guestUserFor, type GuestAccounts, type SharedFolder } from '../lib/guestAccounts.js'
 import type { GuestHelperState } from '../lib/guestHelperInstall.js'
-import type { SubscriptionRelay } from '../lib/subscriptionRelay.js'
 import { createGuestLaunches } from './guestLaunches.js'
 
 const KIM = guestUserFor('kim@acme.io')
 const LEE = guestUserFor('lee@acme.io')
 const OLD = guestUserFor('old@acme.io')
 
-// Never a real OS account, helper or relay: each is a fake the test controls.
+// Never a real OS account or helper: each is a fake the test controls.
 function setup(over: {
-  state?: GuestHelperState; ensure?: GuestAccounts['ensureGuest']; relay?: () => Promise<SubscriptionRelay>
+  state?: GuestHelperState; ensure?: GuestAccounts['ensureGuest']
   folders?: SharedFolder[]; share?: GuestAccounts['shareFolders']; guests?: string[]
 } = {}) {
-  const revoked: string[] = []
-  let n = 0
-  const relay: SubscriptionRelay = {
-    port: 41234, url: 'http://127.0.0.1:41234',
-    adoptToken: () => {}, mintToken: vi.fn((guest: string) => `token-${guest}-${++n}`),
-    revoke: vi.fn((guest: string) => { revoked.push(guest) }),
-    close: vi.fn(async () => {}),
-  }
   const accounts = {
     ensureGuest: over.ensure ?? vi.fn(async () => ({ user: KIM, home: `/g/${KIM}`, workspace: `/g/${KIM}/work` })),
     installGuestEngine: vi.fn(), removeGuest: vi.fn(), runCommand: vi.fn(),
     shareFolders: vi.fn(over.share ?? (async () => {})),
     guests: vi.fn(() => over.guests ?? []),
   }
-  const startRelay = vi.fn(over.relay ?? (async () => relay))
   const lines: string[] = []
   const helperState = vi.fn(async () => over.state ?? 'ready')
-  const launches = createGuestLaunches({ accounts: accounts as GuestAccounts, helperState, startRelay, lang: 'en_GB.UTF-8',
+  const launches = createGuestLaunches({ accounts: accounts as GuestAccounts, helperState, lang: 'en_GB.UTF-8',
     helperPath: '/opt/helper', folders: () => over.folders ?? [], log: (line) => { lines.push(line) } })
-  return { launches, relay, accounts, startRelay, revoked, lines, helperState }
+  return { launches, accounts, lines, helperState }
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 const input = { email: 'kim@acme.io', engine: 'claude', bypassPermission: true }
 
 describe('a guest\'s harness, as shared machines builds it', () => {
-  it('runs as the guest\'s own account, in its workspace, on a token of its own; one relay for every harness', async () => {
-    const { launches, accounts, startRelay, lines } = setup()
+  it('runs as the guest\'s own account, in its workspace, with only the terminal\'s variables', async () => {
+    const { launches, accounts, lines } = setup()
     const first = await launches.launch({ ...input, email: ' Kim@Acme.io ' })
     expect(accounts.ensureGuest).toHaveBeenCalledWith('kim@acme.io')
     expect(first).toEqual({ ok: true, workspace: `/g/${KIM}/work`, argv: expect.arrayContaining(['/opt/helper', KIM, 'claude']),
-      env: expect.objectContaining({ ANTHROPIC_AUTH_TOKEN: 'token-kim@acme.io-1', ANTHROPIC_BASE_URL: 'http://127.0.0.1:41234/claude', LANG: 'en_GB.UTF-8' }) })
+      env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_GB.UTF-8' } })
     const second = await launches.launch({ ...input, engine: 'codex', bypassPermission: true, permissionFlags: ['--approve-for-me'], prompt: 'Fix the tests' })
     expect(second.ok && second.argv.slice(-2)).toEqual(['--approve-for-me', 'Fix the tests'])
     expect(second.ok && second.argv.at(-1)).toBe('Fix the tests')
-    expect(second.ok && second.env.HARNESS_RELAY_TOKEN).toBe('token-kim@acme.io-2')
-    expect(startRelay).toHaveBeenCalledTimes(1)
     expect(lines).toEqual([`launch · claude · ${KIM}`, `launch · codex · ${KIM}`])
   })
 
   it('works with the defaults: no log, the machine\'s helper and LANG, no folders', async () => {
-    const relay = { port: 1, url: 'http://127.0.0.1:1', adoptToken: () => {}, mintToken: () => 't', revoke: () => {}, close: async () => {} }
     const shareFolders = vi.fn(async () => {})
     const launches = createGuestLaunches({ accounts: { ensureGuest: async () => ({ user: KIM, home: '/g', workspace: '/g/work' }), shareFolders, guests: () => [KIM] } as unknown as GuestAccounts,
-      helperState: async () => 'ready', startRelay: async () => relay })
+      helperState: async () => 'ready' })
     const launched = await launches.launch({ ...input, bypassPermission: false })
     expect(launched.ok && launched.argv[4]).toBe('/usr/local/libexec/harness/guest-helper')
     expect(launched.ok && launched.env.LANG).toBe('en_US.UTF-8')
     expect(shareFolders).toHaveBeenCalledWith(KIM, [])
     await launches.sync(() => false, [])
-    await launches.stop()
   })
 
   it('on Windows names the guest\'s own host and runs the engine directly, with no owner pane or helper', async () => {
-    const relay = { port: 1, url: 'http://127.0.0.1:1', adoptToken: () => {}, mintToken: () => 't', revoke: () => {}, close: async () => {} }
     const launches = createGuestLaunches({
       accounts: { ensureGuest: async () => ({ user: KIM, home: `C:\\Users\\${KIM}`, workspace: `C:\\Users\\${KIM}\\work` }), shareFolders: async () => {}, guests: () => [KIM] } as unknown as GuestAccounts,
-      helperState: async () => 'ready', startRelay: async () => relay, platform: 'win32',
+      helperState: async () => 'ready', platform: 'win32',
     })
     const launched = await launches.launch(input)
     expect(launched).toEqual({ ok: true, workspace: `C:\\Users\\${KIM}\\work`, argv: ['claude', '--dangerously-skip-permissions'],
-      env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:1/claude', ANTHROPIC_AUTH_TOKEN: 't' }, guestHostUser: KIM })
+      env: {}, guestHostUser: KIM })
     // Every other platform leaves the pane to the owner's backend and the helper.
     expect(await setup().launches.launch(input)).not.toHaveProperty('guestHostUser')
   })
 
-  it('starts nothing for a session whose guest it cannot name, or an engine whose subscription it cannot spend', async () => {
+  it('starts nothing for a session whose guest it cannot name, or an engine it does not start for guests', async () => {
     const { launches, accounts } = setup()
     expect(await launches.launch({ ...input, email: ' ' })).toEqual({ ok: false, error: 'NOT_YOUR_HARNESS', detail: expect.any(String) })
     expect(await launches.launch({ ...input, engine: 'opencode' })).toEqual({ ok: false, error: 'GUEST_ENGINE_UNSUPPORTED', detail: expect.stringMatching(/Claude Code or Codex/) })
@@ -98,17 +83,6 @@ describe('a guest\'s harness, as shared machines builds it', () => {
     expect(await launches.launch(input)).toEqual({ ok: false, error: 'GUEST_INVALID', detail: 'not an email' })
     const odd = setup({ ensure: async () => { throw new Error('boom') } })
     expect(await odd.launches.launch(input)).toEqual({ ok: false, error: 'GUEST_HELPER_FAILED', detail: 'The guest helper failed.' })
-  })
-
-  it('starts the relay again for the next harness when it could not start', async () => {
-    let fails = true
-    const relay = { port: 1, url: 'http://127.0.0.1:1', adoptToken: () => {}, mintToken: () => 't', revoke: () => {}, close: async () => {} }
-    const { launches, startRelay } = setup({ relay: async () => { if (fails) throw new Error('EADDRINUSE'); return relay } })
-    expect(await launches.launch(input)).toEqual({ ok: false, error: 'GUEST_RELAY_FAILED', detail: expect.any(String) })
-    await flush()
-    fails = false
-    expect((await launches.launch(input)).ok).toBe(true)
-    expect(startRelay).toHaveBeenCalledTimes(2)
   })
 
   describe('the owner\'s shared folders', () => {
@@ -156,18 +130,6 @@ describe('a guest\'s harness, as shared machines builds it', () => {
   })
 
   describe('sharing kept true', () => {
-    it('revokes the tokens of whoever sharing no longer names, once', async () => {
-      const { launches, revoked, lines } = setup()
-      await launches.sync(() => false, []) // nothing minted, no relay: nothing to do
-      await launches.launch(input)
-      await launches.launch({ ...input, email: 'lee@acme.io' })
-      await launches.sync((email) => email === 'lee@acme.io', [])
-      await launches.sync((email) => email === 'lee@acme.io', [])
-      await flush()
-      expect(revoked).toEqual(['kim@acme.io'])
-      expect(lines.at(-1)).toBe('revoked · kim@acme.io')
-    })
-
     it('gives every guest still named the owner\'s folders, and takes them from every other account', async () => {
       const folders = [{ path: '/Users/dee/docs', write: false }]
       const { launches, accounts, lines } = setup({ folders, guests: [KIM, LEE, OLD] })
@@ -189,25 +151,6 @@ describe('a guest\'s harness, as shared machines builds it', () => {
     })
   })
 
-  it('closes the relay when it stops; one that never started, or fails as it stops, has nothing to close', async () => {
-    const { launches, relay } = setup()
-    await launches.launch(input)
-    await launches.stop()
-    expect(relay.close).toHaveBeenCalledTimes(1)
-    await launches.stop()
-    const never = setup({ relay: async () => { throw new Error('no') } })
-    await never.launches.launch(input)
-    await never.launches.sync(() => false, [])
-    await never.launches.stop()
-    let fail: (error: Error) => void = () => {}
-    const stopping = setup({ relay: () => new Promise((_resolve, reject) => { fail = reject }) })
-    const launched = stopping.launches.launch(input)
-    await flush()
-    const stopped = stopping.launches.stop()
-    fail(new Error('stopped'))
-    await stopped
-    expect((await launched).ok).toBe(false)
-  })
 })
 
 // No owner subscription relay (anh Dee, 2026-11-07, task #4137): nothing is started or minted for a guest, and its engine

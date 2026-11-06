@@ -12,9 +12,8 @@ import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
 import { PM_HOMES } from './teamDaemon.js'
-const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true, offered: null as null | { slugs: string[]; listed: string[] } }))
+const teamDaemon = vi.hoisted(() => ({ value: false }))
 vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
-vi.mock('../team/relay.js', async (original) => ({ ...await original<object>(), teamRelayed: () => teamDaemon.relayed, offeredCodexModels: async () => teamDaemon.offered }))
 // What this computer's Claude Code reads as: signed in unless a test says otherwise (lib/engineAccount.ts).
 const claudeAccount = vi.hoisted(() => ({ signedIn: true as boolean | null }))
 vi.mock('../lib/engineAccount.js', async (original) => ({ ...await original<object>(), engineAccount: async () => ({ signedIn: claudeAccount.signedIn, lastUsedAt: null }) }))
@@ -692,58 +691,18 @@ it('starts a Codex Product Manager on a Team daemon in an engine home of its own
   teamDaemon.value = false
 })
 
-// Security re-check 3 of #2089: a Codex Product Manager in a Team account starts signed in on the owner's relay, or is
-// refused with why. Its own engine home holds no sign-in, so with no relay it started signed out.
-it('refuses a Codex Product Manager on a Team daemon with no owner relay before anything launches, saying why', async () => {
+// No owner subscription relay (task #4137): a Codex Product Manager and any Codex model start in a Team account as anywhere
+// else, on the account's own sign-in. Nothing is refused for want of a relay or for the owner's list of models.
+it('starts a Codex Product Manager and any Codex model on a Team daemon, on its own sign-in', async () => {
   teamDaemon.value = true
-  teamDaemon.relayed = false
   try {
-    const f = fixture()
-    f.start.request = { ...f.start.request, engine: 'codex', leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } } as typeof f.start.request
-    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'no-relay', request: f.start.request }, f.scoped, where, f.open)
-    const reason = 'The owner\'s subscription relay is not available on this machine, so a Codex Product Manager cannot sign in here.'
-    expect(result).toMatchObject({ error: 'START_FAILED', detail: reason })
-    expect(f.request.mock.calls.map(call => call[0])).not.toContain('agent_create')
-    expect(f.scoped.mock.calls.map(([input]) => (input as { command?: { type?: string; error?: string } }).command)).toContainEqual({ type: 'agent.startFailed', startId: expect.any(String), error: reason })
-    // A Claude Code one, and a Codex worker, are not this check's.
-    for (const request of [{ engine: 'claude', leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } }, { engine: 'codex' }]) {
-      const g = fixture()
-      g.start.request = { ...g.start.request, ...request } as typeof g.start.request
-      await startAgent({ action: 'start', tabId: 'tab', operationId: `other-${request.engine}`, request: g.start.request }, g.scoped, where, g.open)
-      expect(g.request.mock.calls.map(call => call[0])).toContain('agent_create')
+    for (const request of [{ engine: 'codex', leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } }, { engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }]) {
+      const f = fixture()
+      f.start.request = { ...f.start.request, ...request } as typeof f.start.request
+      await startAgent({ action: 'start', tabId: 'tab', operationId: `team-${String(request.model)}`, request: f.start.request }, f.scoped, where, f.open)
+      expect(f.request.mock.calls.map(call => call[0])).toContain('agent_create')
     }
-  } finally { teamDaemon.value = false; teamDaemon.relayed = true }
-})
-
-// Mac Auto, 2026-10-29: a Codex start for gpt-6.1-sol, which its owner's ChatGPT account does not offer, launched and then
-// failed every request. In a Team account on the relay such a start is refused before anything launches, with what is offered.
-it('refuses a Codex start in a Team account for a model its owner is not offered, naming what is', async () => {
-  teamDaemon.value = true
-  teamDaemon.offered = { slugs: ['gpt-6-luna', 'gpt-reserve', 'gpt-5.6-terra'], listed: ['gpt-6-luna', 'gpt-5.6-terra'] }
-  try {
-    const f = fixture()
-    f.start.request = { ...f.start.request, engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' } as typeof f.start.request
-    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'not-offered', request: f.start.request }, f.scoped, where, f.open)
-    const reason = 'This machine\'s ChatGPT account (its owner\'s subscription, used through the owner\'s relay) does not offer gpt-6.1-sol; it offers gpt-6-luna, gpt-5.6-terra.'
-    expect(result).toMatchObject({ error: 'START_FAILED', detail: reason })
-    expect(f.request.mock.calls.map(call => call[0])).not.toContain('agent_create')
-    expect(f.start.error).toBe(reason)
-    // An offered model, the default, a list that cannot be read, Claude Code and a Mac's own daemon all start as before.
-    const starts = async (request: Record<string, unknown>, offered: { slugs: string[]; listed: string[] } | null, team = true) => {
-      teamDaemon.offered = offered
-      teamDaemon.value = team
-      const g = fixture()
-      g.start.request = { ...g.start.request, ...request } as typeof g.start.request
-      await startAgent({ action: 'start', tabId: 'tab', operationId: `ok-${String(request.model)}`, request: g.start.request }, g.scoped, where, g.open)
-      return g.request.mock.calls.map(call => call[0]).includes('agent_create')
-    }
-    const list = { slugs: ['gpt-6-luna'], listed: ['gpt-6-luna'] }
-    expect(await starts({ engine: 'codex', model: 'gpt-6-luna', effort: 'medium' }, list)).toBe(true)
-    expect(await starts({ engine: 'codex', model: 'default', effort: 'default' }, list)).toBe(true)
-    expect(await starts({ engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }, null)).toBe(true)
-    expect(await starts({ engine: 'claude', model: 'sonnet', effort: 'medium' }, list)).toBe(true)
-    expect(await starts({ engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }, list, false)).toBe(true)
-  } finally { teamDaemon.value = false; teamDaemon.offered = null }
+  } finally { teamDaemon.value = false }
 })
 
 describe('the skills of the project the agent joins', () => {

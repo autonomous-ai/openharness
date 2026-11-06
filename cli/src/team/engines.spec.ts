@@ -79,8 +79,8 @@ describe('the team account\'s engines', () => {
     expect(lines).toContain('Or from a terminal on this Mac, as harnessteam:')
     // Windows has no sudo: its sign-in stays the Harness terminal's.
     expect(engineLines(engines({ claude: { installed: true, signedIn: false } }), ago, 'win32').join('\n')).not.toContain('sudo -u')
-    // Why a server reads "not signed in": the subscription is lent through this computer's own daemon while it runs.
-    expect(linux).toContain('when that is not running (harness start, or harness service install), there is nothing to lend')
+    // Nothing is lent: the owner's subscription is never used for the account (task #4137).
+    expect(linux).not.toContain('nothing to lend')
     expect(lines).toContain('    claude                      Claude Code')
     expect(lines).not.toContain('codex login')
     expect(lines).toContain('Your own sign-ins are not copied into the team account')
@@ -92,17 +92,6 @@ describe('the team account\'s engines', () => {
     expect(ready).toContain('(checked 1000s ago)')
     expect(ready).not.toContain('To sign')
     expect(engineLines(undefined, ago)).toEqual(['  engines     ? not reported yet: the team daemon reports them once it runs'])
-    // Not signed in, but its owner's relay is there: nothing to sign in.
-    const relayed = engineLines(engines({ claude: { installed: true, signedIn: false, relayed: true }, codex: { installed: true, signedIn: null, relayed: true } }), ago).join('\n')
-    expect(relayed).toContain('Claude Code ✓ installed · ✓ uses your subscription')
-    expect(relayed).not.toContain('To sign')
-  })
-
-  it('says an engine it has not signed in uses the owner\'s subscription when the owner\'s relay is there', async () => {
-    const result = await checkTeamEngines({ home: '/h', executable: () => true, now: () => 1, relayed: () => true,
-      account: async (engine) => ({ signedIn: engine === 'codex', lastUsedAt: null }) })
-    expect(result.claude).toEqual({ installed: true, signedIn: false, relayed: true })
-    expect(result.codex).toEqual({ installed: true, signedIn: true })
   })
 })
 

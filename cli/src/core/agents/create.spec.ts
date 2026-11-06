@@ -308,28 +308,15 @@ describe('creating an agent', () => {
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.clearEnv).toContain('GH_TOKEN')
   })
 
-  it('in the Harness Team account, points an engine it has not signed in at the owner\'s relay; never one on a grid', async () => {
-    const ownerRelay = vi.fn(async () => ({ env: { HARNESS_RELAY_TOKEN: 't' }, args: ['-c', 'model_provider="harness_owner"'] }))
-    expect(await setup({ ownerRelay }).create(request({ engine: 'codex', cwd: folder() }))).toMatchObject({ ok: true })
-    expect(ownerRelay).toHaveBeenCalledWith('codex')
-    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ HARNESS_RELAY_TOKEN: 't' })
-    expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.extraArgs).toEqual(expect.arrayContaining(['model_provider="harness_owner"']))
-    // No relay there (signed in, or not a team account): the launch is as before.
-    const none = vi.fn(async () => null)
-    await setup({ ownerRelay: none }).create(request({ cwd: folder() }))
-    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env ?? {}).not.toHaveProperty('HARNESS_RELAY_TOKEN')
-    ownerRelay.mockClear()
-    await setup({ ownerRelay }).create(request({ cwd: folder(), grid: { baseUrl: 'https://grid.example/relay/v1', networkName: 'g', model: 'm' } }))
-    expect(ownerRelay).not.toHaveBeenCalled()
-    // A Codex launch in a home of its own (a Swarm Product Manager's): the relay readies, and asks about, that home.
-    await setup({ ownerRelay }).create(request({ engine: 'codex', cwd: folder(), codexHome: '/fixture/pm-home/codex' }))
-    expect(ownerRelay).toHaveBeenCalledWith('codex', '/fixture/pm-home/codex')
-    // A relay that cannot sign that home in refuses the launch with why: no pane is made.
-    vi.mocked(createAndRegisterPane).mockClear()
-    const refused = vi.fn(async () => ({ refused: 'No relay here.' }))
-    expect(await setup({ ownerRelay: refused }).create(request({ engine: 'codex', cwd: folder(), codexHome: '/fixture/pm-home/codex' })))
-      .toEqual({ ok: false, error: 'OWNER_RELAY_UNAVAILABLE', detail: 'No relay here.' })
-    expect(createAndRegisterPane).not.toHaveBeenCalled()
+  // No owner subscription relay (task #4137): Claude Code and Codex, a Product Manager's Codex home among them, launch on their
+  // own settings, with nothing of a relay in the pane's environment or on the engine's command line.
+  it('launches every engine on its own settings: no relay variables or provider', async () => {
+    for (const over of [{ engine: 'claude' }, { engine: 'codex' }, { engine: 'codex', codexHome: '/fixture/pm-home/codex' }]) {
+      expect(await setup().create(request({ cwd: folder(), ...over }))).toMatchObject({ ok: true })
+      const env = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env ?? {}
+      for (const name of ['HARNESS_RELAY_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN']) expect(env).not.toHaveProperty(name)
+      expect((vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.extraArgs ?? []).join(' ')).not.toMatch(/harness_owner/)
+    }
   })
 
   it('launches as before where the GitHub App does not apply, and without a role never asks', async () => {

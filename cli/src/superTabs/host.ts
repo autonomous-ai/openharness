@@ -29,8 +29,7 @@ import { prepareContribution, prepareTeamContribution } from './contribution.js'
 import { homedir, hostname } from 'node:os'
 import { recordsOtherFolder, scrubClaudeSession, type PurgeTarget, type ScrubTold } from './inCore/teamPurge.js'
 import { RebindSender, replacementObservations } from './replacements.js'
-import { TerminalHost, type TerminalRelay } from './terminal.js'
-import { realRelayRecovery } from './relayRecovery.js'
+import { TerminalHost } from './terminal.js'
 import { LimitResume } from './limitResume.js'
 import { CrewKeeper, isCrewRow } from './crew.js'
 import { LeadSwitchRequests, type SwitchRow } from './leadSwitchRequest.js'
@@ -186,8 +185,6 @@ interface HostAgent { tabId: string; agent: { id: string; harnessId: string; mac
   buddySleepManaged?: true; leadsConversationId?: unknown; roleName?: unknown; instructions?: unknown }
 export interface SuperTabHostOptions {
   now?: () => number
-  /** What restarts a Team agent stranded on an old relay grant (relayRecovery.ts), for a spec. */
-  relayRecovery?: TerminalRelay
   write?: (file: string, journal: Journal) => void
   log?: (message: string) => void
   observers?: typeof publishObservers
@@ -683,7 +680,7 @@ export class SuperTabHost {
     this.now = options.now ?? Date.now
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
-    // Through this machine's own daemon socket, as the apps and the relay recovery ask it (relayRecovery.ts): `agent_restart`
+    // Through this machine's own daemon socket, as the apps ask it: `agent_restart`
     // relaunches the agent in its own pane on the same session, so it is never a second one.
     this.restartLead = options.restartLead ?? (async harnessId => {
       const local = await openDaemon({ dataDir: core.dataDir, port: core.daemon.port, machineId })
@@ -693,9 +690,7 @@ export class SuperTabHost {
       } finally { local.close() }
     })
     // Its pickups follow this host's delivery push lease: the server that pushes deliveries also says when a request waits.
-    this.terminal = new TerminalHost(core, machineId, { now: this.now, log: this.log, pushes: () => this.now() < this.pushUntil,
-      // Only a Team daemon reads a relay grant: on any other the recovery sees no grant and does nothing.
-      relay: options.relayRecovery ?? realRelayRecovery(core, machineId, { now: this.now, log: this.log }) })
+    this.terminal = new TerminalHost(core, machineId, { now: this.now, log: this.log, pushes: () => this.now() < this.pushUntil })
     this.limitResume = new LimitResume(core, machineId, { now: this.now, log: this.log,
       owns: async (tabId, assignmentId, harnessId) => (await this.sources.feed.fresh()).assignments
         .some(a => a.tabId === tabId && a.assignmentId === assignmentId && a.harnessId === harnessId) })
