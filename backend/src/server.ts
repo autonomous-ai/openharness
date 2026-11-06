@@ -34,6 +34,7 @@ import { readDelta } from './superTabs/cachedReads.js'
 import { watchGroupIndexes } from './superTabs/parts/indexed.js'
 import { startMessageReadStats } from './superTabs/messageReadStats.js'
 import { startMessageReachStats } from './superTabs/messageReachStats.js'
+import { startCommandStats } from './superTabs/commandStats.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
 import { useSharedRateCounter } from './lib/rateLimit.js'
 import { createRouteRateLimit } from './middlewares/routeRateLimit.js'
@@ -181,6 +182,8 @@ async function start(): Promise<void> {
   const stopMessageReadStats = startMessageReadStats()
   // Every minute: how long messages took to reach their readers, p50/p95 per reader kind (superTabs/messageReachStats.ts).
   const stopMessageReachStats = startMessageReachStats()
+  // Each Swarm command type's time, retries and refusals, every minute (task #3661).
+  const stopCommandStats = startCommandStats()
   // Every minute: how each frame an adapter sends for one viewer reached it, and how many processes each publish woke.
   const stopRelayStats = startRelayStats()
   // Frames for one viewer go to the process holding it (lib/terminalRoute.ts), unless TERMINAL_POD_ROUTES=off.
@@ -281,6 +284,7 @@ async function start(): Promise<void> {
       stopMachineReportLog()
       stopMessageReadStats()
       stopMessageReachStats()
+      stopCommandStats()
       stopRelayStats()
       stopPodRoutes()
       // The database stays connected through the drain, for the requests still being served (lib/prisma.ts).

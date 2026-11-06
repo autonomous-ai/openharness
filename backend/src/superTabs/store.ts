@@ -126,6 +126,7 @@ import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, refl
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { recordMessageReach } from './messageReachStats.js'
+import { recordCommand } from './commandStats.js'
 import { DEFAULT_ROUTING_POLICY, type RoutingPolicy } from './routingPolicy.js'
 import { catalogRead } from './catalog.js'
 import { invitedSwarms } from './invitedSwarms.js'
@@ -1509,8 +1510,11 @@ export class SuperTabStore {
 
   async execute(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     client?: DeclaredClient) {
+    // Its time by type, and its write's attempts, for `commands by type` (commandStats.ts, task #3661).
+    const started = performance.now(), counted = { attempts: 0 }
+    let refused = false
     try {
-      const done = await this.executeOnce(user, tabId, input, asAgentId, hostMachineId)
+      const done = await this.executeOnce(user, tabId, input, asAgentId, hostMachineId, false, { counted })
       // Buddy thread sessions' first warning (spec Design 4): starts, refusals by code and ends by reason, ids only, in the
       // server log that prod watch reads.
       if (input.command?.type === 'message.send' && input.command.newSession && done.result.startId) logger.info('Buddy session started', { tabId, startId: done.result.startId })
@@ -1518,6 +1522,7 @@ export class SuperTabStore {
     } catch (error) {
       // Its code and type, and whose: the Swarm, the agent and the client, never the command's words. A Swarm refusing a machine
       // went unseen (MACHINES_FULL, Ken, 2026-11-04), then 615 refusals in 32 minutes that nobody could attribute (#2675).
+      refused = error instanceof SuperTabError
       if (error instanceof SuperTabError && input.command?.type) {
         logger.warn('Swarm command refused', refusalLogFields(tabId, input.command, error.code, { asAgentId, client, machineId: hostMachineId }))
       }
@@ -1545,6 +1550,8 @@ export class SuperTabStore {
         }
       }
       throw error
+    } finally {
+      recordCommand(typeof input.command?.type === 'string' ? input.command.type : 'other', performance.now() - started, { attempts: counted.attempts, refused })
     }
   }
 
@@ -1710,9 +1717,9 @@ export class SuperTabStore {
   }
 
   /** [only]: what the store alone may give a command: `overdue` for decision.answer (leaveOverdueDecisions), `movedTo` for
-   *  machine.moved (computerSignedIn). */
+   *  machine.moved (computerSignedIn). `counted`: its write's attempts, counted here for `commands by type` (task #3661). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
+    workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string; counted?: { attempts: number } } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     // The pre-reads share one load of the Swarm, taken only if one needs it (task #3661).
     const preRead = this.preReader(user, tabId, command)
@@ -1722,6 +1729,7 @@ export class SuperTabStore {
     // Whether the crew dispatch has a pick after this write: only then does its pass read the whole Swarm (task #3661).
     let dispatches = false
     const done = await transaction(this.db, async tx => {
+      if (only.counted) only.counted.attempts++
       // A retried attempt starts again: only the attempt that commits says which tasks ended or started.
       ended = []
       started = []
