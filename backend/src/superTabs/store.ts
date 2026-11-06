@@ -1910,8 +1910,9 @@ export class SuperTabStore {
       }
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
       // A stale rules save is refused with the newest revision, to merge (policy.ts); null is the seed.
-      if (command.type === 'rules.set') context.projectRules = await readRules(tx, tabId, command.projectId)
+      if (command.type === 'rules.set') context.projectRules = await readRules(tx, tabId, command.projectId, true)
       if (command.type === 'crew.add' || command.type === 'work.lane' || command.type === 'work.define' || command.type === 'conversation.create') {
+        authorizeCommandAccess(original, actor, command)
         const projectId = command.type === 'crew.add' ? agentProjectId(original, agent(original, command.agentId))!
           : command.type === 'conversation.create' ? command.projectId ?? (actor.kind === 'agent' ? agentProjectId(original, agent(original, actor.agentId))! : 'lead')
           : groupProject(original, conversation(original, command.conversationId)).id

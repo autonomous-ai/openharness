@@ -22,14 +22,15 @@ export interface RulesRevision {
   at: Date
 }
 
-/** The project's newest revision, or null when none is saved (the seed, revision 0). One indexed read. */
-export async function readRules(tx: Transaction, tabId: string, projectId: string): Promise<{ revision: number; rules: ProjectRules } | null> {
+/** The project's newest revision, or null when none is saved (the seed, revision 0). One indexed read.
+ * forEdit lets a rules save repair an invalid record; workers always require a valid one. */
+export async function readRules(tx: Transaction, tabId: string, projectId: string, forEdit = false): Promise<{ revision: number; rules: ProjectRules } | null> {
   const row = await tx.superTabProjectRules.findFirst({ where: { tabId, projectId }, orderBy: { revision: 'desc' }, select: { revision: true, rules: true } })
   if (!row) return null
-  // Normalize legacy dispatch and fail closed for invalid saved rules on every command/worker read.
+  // Normalize legacy dispatch; only the repair path may read an invalid saved record.
   const parsed = projectRulesSchema.safeParse(row.rules)
-  if (!parsed.success) throw new Error(`project rules revision ${row.revision} does not pass the schema; save the rules again`)
-  return { revision: row.revision, rules: parsed.data }
+  if (!parsed.success && !forEdit) throw new Error(`project rules revision ${row.revision} does not pass the schema; save the rules again`)
+  return { revision: row.revision, rules: parsed.success ? parsed.data : row.rules as unknown as ProjectRules }
 }
 
 /** The record a project runs on now, for a server worker (the merge train, the release schedule): its newest revision, or
@@ -38,12 +39,16 @@ export async function currentRules(tx: Transaction, tabId: string, projectId: st
   return await readRules(tx, tabId, projectId) ?? { revision: 0, rules: SEED_RULES }
 }
 
-/** Every kept revision, newest first: at most MAX_RULES_REVISIONS rows of the same index. */
+/** Every kept revision, newest first: at most MAX_RULES_REVISIONS rows of the same index.
+ * Invalid history stays readable for repair; no worker runs on it. */
 export async function readRulesHistory(tx: Transaction, tabId: string, projectId: string): Promise<RulesRevision[]> {
   const rows = await tx.superTabProjectRules.findMany({ where: { tabId, projectId }, orderBy: { revision: 'desc' }, take: MAX_RULES_REVISIONS })
-  return rows.map(row => ({ revision: row.revision, rules: projectRulesSchema.parse(row.rules), diff: row.diff as unknown as RulesChange[],
-    summary: row.summary, writtenBy: { kind: row.writtenByKind, id: row.writtenBy }, askedBy: row.askedBy,
-    askedIn: (row.askedIn ?? null) as RulesRevision['askedIn'], at: row.at }))
+  return rows.map(row => {
+    const parsed = projectRulesSchema.safeParse(row.rules)
+    return { revision: row.revision, rules: parsed.success ? parsed.data : row.rules as unknown as ProjectRules, diff: row.diff as unknown as RulesChange[],
+      summary: row.summary, writtenBy: { kind: row.writtenByKind, id: row.writtenBy }, askedBy: row.askedBy,
+      askedIn: (row.askedIn ?? null) as RulesRevision['askedIn'], at: row.at }
+  })
 }
 
 /** The new revision, created (never upserted: a second writer of the same revision meets the taken key and retries into
