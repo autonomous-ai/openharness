@@ -5,7 +5,6 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../core/local_key_value_store.dart';
-import '../shared/theme/app_theme.dart' as grid;
 import '../state/pane_arrangement.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/pane_resize_handle.dart';
