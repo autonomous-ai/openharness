@@ -23,7 +23,12 @@ class TasksFixture {
   bool supported = true, fail = false;
   Completer<void>? hold;
   String mode = 'autoApprove';
-  final rows = [task('old', 1, 10), task('new', 1, 20)];
+  var rows = [task('old', 1, 10), task('new', 1, 20)];
+  String? olderCursor;
+  var olderRows = <Map<String, dynamic>>[];
+  final olderReads = <String>[];
+  Completer<void>? olderHold;
+  bool olderFail = false;
   final commands = <Map<String, dynamic>>[];
   final operations = <String>[];
   late final controller = SuperTabController(
@@ -39,6 +44,12 @@ class TasksFixture {
     request: (method, path, {body}) async {
       if (path.contains('/messages')) {
         return {'messages': <dynamic>[], 'next': null};
+      }
+      if (path.contains('/personal-tasks')) {
+        olderReads.add(path);
+        await olderHold?.future;
+        if (olderFail) throw StateError('fixture private payload');
+        return feed(olderRows, mode: mode);
       }
       if (method == 'POST') {
         operations.add(body!['operationId'] as String);
@@ -76,6 +87,7 @@ class TasksFixture {
           rows,
           reset: path.endsWith('/parts'),
           mode: mode,
+          olderCursor: olderCursor,
         );
       }
       return result;
@@ -383,4 +395,71 @@ void main() {
       expect(find.text('Task new'), findsOneWidget);
     },
   );
+
+  group('older tasks on scroll', () {
+    Future<void> many(WidgetTester t, {String? cursor}) async {
+      f = TasksFixture()
+        ..rows = [for (var i = 0; i < 30; i++) task('t$i', 1, 1000 + i)]
+        ..olderCursor = cursor
+        ..olderRows = [task('older', 1, 5)];
+      addTearDown(() => f.controller.dispose());
+      await f.controller.refresh();
+      await t.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 340,
+              height: 600,
+              child: SuperTabPersonalTasksPane(
+                controller: f.controller,
+                onOpenTask: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    Future<void> toEnd(WidgetTester t) async {
+      await t.drag(find.byType(Scrollable).last, const Offset(0, -10000));
+      await t.pump();
+    }
+
+    testWidgets('reaching the end reads the older page once', (t) async {
+      await many(t, cursor: 'c 1');
+      f.olderHold = Completer<void>();
+      await toEnd(t);
+      await toEnd(t);
+      expect(f.olderReads, [
+        '/api/super-tabs/c51479bd73b59e58176ad9e4/personal-tasks?before=c+1',
+      ]);
+      f.olderHold!.complete();
+      await t.pumpAndSettle();
+      await toEnd(t);
+      expect(find.text('Task older'), findsOneWidget);
+      // The page had no cursor after it: the end was reached, and nothing more is read.
+      expect(f.olderReads.length, 1);
+    });
+
+    testWidgets('a feed without a cursor never reads older pages', (t) async {
+      await many(t);
+      await toEnd(t);
+      expect(f.olderReads, isEmpty);
+    });
+
+    testWidgets('a failed older read says so and retries', (t) async {
+      await many(t, cursor: 'c1');
+      f.olderFail = true;
+      await toEnd(t);
+      await t.pumpAndSettle();
+      expect(find.text('Could not load older tasks.'), findsOneWidget);
+      expect(find.textContaining('fixture private'), findsNothing);
+      f.olderFail = false;
+      await t.tap(find.byKey(const ValueKey('tasks-older-retry')));
+      await t.pumpAndSettle();
+      await toEnd(t);
+      expect(find.text('Task older'), findsOneWidget);
+      expect(f.olderReads.length, 2);
+    });
+  });
 }
