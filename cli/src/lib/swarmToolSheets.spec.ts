@@ -23,6 +23,14 @@ describe('the role tools sheets', () => {
     }
   })
 
+  // Task #3581 (anh Dee, 11-06): lamp's PM did not know the Swarm v2 process. Its sheet says how the crew works.
+  it('explains, in the PM sheet, the crew, lanes and when to start an agent', () => {
+    const pm = sheet('pm')
+    for (const word of ['crew.add', 'role', 'lane', 'backend, cli, desktop, mobile, docs', 'work.lane', 'only to replace a broken one', '`answer GROUP ID', 'process.confirm']) {
+      expect(pm, word).toContain(word)
+    }
+  })
+
   it('holds, in each other sheet, the commands that role uses', () => {
     const common = ['`mine`', '`task GROUP`', '`messages GROUP', '`instructions [PROJECT]`', '`post GROUP TEXT OPERATION_ID', '`react GROUP', '`command OPERATION_ID', 'work.status', 'help tools']
     const more: Record<Exclude<ToolsRole, 'pm'>, string[]> = {
