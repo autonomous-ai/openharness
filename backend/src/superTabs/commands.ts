@@ -2147,7 +2147,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const revision = current.revision + 1
       effects.projectRules = { projectId: project.id, revision, rules: command.rules, diff: rulesDiff(current.rules, command.rules),
         summary: command.summary, writtenBy: { kind: sender.kind, id: sender.id }, askedBy, askedIn, at: context.now }
-      for (const group of state.conversations) if (groupProject(state, group).id === project.id) stampLane(group, command.rules.lanes)
+      for (const group of state.conversations) if (!group.kind && !group.audience && !group.reviewOf
+        && (group.projectId ?? 'lead') === project.id) stampLane(group, command.rules.lanes)
       Object.assign(result, { projectId: project.id, revision })
       break
     }
