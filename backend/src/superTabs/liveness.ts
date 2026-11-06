@@ -16,7 +16,7 @@ import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
 import { isStep } from './steps.js'
 import { endedReply } from './taskLine.js'
-import { crewClock, DISPATCH_RULES, laneOf, nudgeLine, returnReason } from './dispatch.js'
+import { crewClock, DISPATCH_RULES, laneOf, nudgeLine, returnReason, type DispatchLookup } from './dispatch.js'
 import { handed, pickUp, unclaimedAt, unclaimedReason } from './handed.js'
 import { isBuddy } from './buddies.js'
 
@@ -332,7 +332,7 @@ export function unavailableReason(state: SuperTabState, worker: Agent, now: numb
 }
 
 /** Why a worker has lost its task now, or null while it still holds it. */
-function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number, steps: StepIndex): string | null {
+function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number, steps: StepIndex, rulesFor: DispatchLookup): string | null {
   // A handed task waits on its Reviewers and CI, not on its Engineer, which may be down or at work elsewhere (task #3399).
   if (handed(group)) return null
   // A crew member its host is reopening keeps its task for the reopen's grace (crew.ts).
@@ -343,7 +343,9 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
   if (unclaimed) return unclaimed
   if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return null
   // A crew member 3 hours without progress of its own puts its task back in its lane (task #3400), however busy its screen.
-  if (crewClock(group, worker, assignment, now, DISPATCH_RULES) === 'return') return returnReason(laneOf(group, DISPATCH_RULES.lanes))
+  const rules = rulesFor(group.projectId ?? 'lead')
+  if (!rules) return null
+  if (crewClock(group, worker, assignment, now, rules) === 'return') return returnReason(laneOf(group, rules.lanes), rules)
   const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {
     const progress = lastProgress(state, worker, assignment)
@@ -382,12 +384,15 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
 }
 
 /** Every worker 2 hours without progress hears it once in its task, without waiting for the PM (dispatch.ts crewClock). */
-function crewNudges(state: SuperTabState, now: number): MessageDraft[] {
+function crewNudges(state: SuperTabState, now: number, rulesFor: DispatchLookup): MessageDraft[] {
   const workers = new Map(state.agents.filter(a => !isBuddy(a)).map(a => [a.id, a]))
   let leaders: Set<string> | undefined, steps: StepIndex | undefined
   return state.conversations.flatMap(group => {
     const assignment = group.assignment, worker = assignment && workers.get(assignment.agentId)
-    if (!worker || !activeWork(group) || crewClock(group, worker, assignment, now, DISPATCH_RULES) !== 'nudge') return []
+    if (!worker || !activeWork(group)) return []
+    const rules = rulesFor(group.projectId ?? 'lead')
+    if (!rules) return []
+    if (crewClock(group, worker, assignment, now, rules) !== 'nudge') return []
     leaders ??= new Set(state.conversations.flatMap(c => c.leadId ? [c.leadId] : []))
     if (leaders.has(worker.id)) return []
     steps ??= stepIndex(state)
@@ -395,19 +400,19 @@ function crewNudges(state: SuperTabState, now: number): MessageDraft[] {
     if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return []
     assignment.nudgedAt = now
     return [reachable(state, { id: stableId('crew-nudge', assignment.id, String(now)), conversationId: group.id, author: writtenBy(state, leadOf(state, worker) ?? worker),
-      replyTo: null, recipients: [worker.id], text: nudgeLine(laneOf(group, DISPATCH_RULES.lanes)), source: { kind: 'crew-nudge', assignmentId: assignment.id } })]
+      replyTo: null, recipients: [worker.id], text: nudgeLine(laneOf(group, rules.lanes), rules), source: { kind: 'crew-nudge', assignmentId: assignment.id } })]
   })
 }
 
 /** Loses at once the tasks of the workers `which` picks that have a reason now: an agent that just reported a usage limit,
  *  the agents of a machine that just reported. A task lost to that limit resumes at `resumeAt` when its screen said when the
  *  limit resets (the host types into the same session then, cli superTabs/limitResume.ts). */
-export function loseTasks(state: SuperTabState, now: number, which: (worker: Agent) => boolean = () => true, resumeAt?: string): MessageDraft[] {
+export function loseTasks(state: SuperTabState, now: number, which: (worker: Agent) => boolean = () => true, resumeAt?: string, rulesFor: DispatchLookup = () => DISPATCH_RULES): MessageDraft[] {
   const steps = stepIndex(state)
   return workerTasks(state).filter(t => which(t.worker)).flatMap(({ group, assignment, worker }) => {
     // A step that ended with no write to its task, or was lost earlier in this same pass, ends its Engineer's wait first.
     stepsEnded(state, group, now, steps)
-    const reason = lostReason(state, group, worker, assignment, now, steps)
+    const reason = lostReason(state, group, worker, assignment, now, steps, rulesFor)
     return reason ? loseTask(state, group, worker, reason, now, resumeAt && reason === limitReason(worker, now) ? resumeAt : undefined) : []
   })
 }
@@ -446,8 +451,8 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
 
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
  *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
-export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  const drafts = [...loseTasks(state, now), ...crewNudges(state, now), ...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now)]
+export function sweepLiveness(state: SuperTabState, now: number, rulesFor: DispatchLookup = () => DISPATCH_RULES): MessageDraft[] {
+  const drafts = [...loseTasks(state, now, undefined, undefined, rulesFor), ...crewNudges(state, now, rulesFor), ...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now)]
   // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
   dropIdleBuddyMachines(state, now)
   return drafts
@@ -481,8 +486,8 @@ function unpurged(state: SuperTabState, now: number): MessageDraft[] {
 /** The Lead's own time checks: those above, then each task's state, waking the Lead for those that just stalled. Only the
  *  Lead's poll runs them, where the whole active Swarm is loaded and the one they wake is listening: a machine's reading
  *  loads only running work and must write no group (read/host.ts). */
-export function sweepForLead(state: SuperTabState, now: number): MessageDraft[] {
-  const drafts = [...sweepLiveness(state, now), ...recordTaskStates(state, now)]
+export function sweepForLead(state: SuperTabState, now: number, rulesFor: DispatchLookup = () => DISPATCH_RULES): MessageDraft[] {
+  const drafts = [...sweepLiveness(state, now, rulesFor), ...recordTaskStates(state, now)]
   // Where the whole active Swarm is loaded, as for a command: a task lost here may leave Working at 0 (pulse.ts).
   recordPulse(state, now)
   return drafts

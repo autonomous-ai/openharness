@@ -453,6 +453,8 @@ class SuperTabLaunchFixture {
     LocalCliDiscovery? discovery,
     SystemNotifications? systemNotifications,
     Future<String> Function(ProjectFolderRequest request)? prepareFolder,
+    // False: a fresh sign-in, before any Swarm view (or draft) has put the app in Swarm mode.
+    bool swarmMode = true,
   }) {
     connection =
         connectionFactory?.call(store) ??
@@ -479,7 +481,7 @@ class SuperTabLaunchFixture {
       id: 'owner',
       email: 'owner@example.com',
     );
-    app.markSuperTabDraft(app.activeSwarmId);
+    if (swarmMode) app.markSuperTabDraft(app.activeSwarmId);
     addTearDown(dispose);
   }
   final store = MemoryStore();
