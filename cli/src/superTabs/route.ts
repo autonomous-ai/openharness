@@ -208,7 +208,8 @@ function pluginAdjustments<T extends Probe & { fit: Fit }>(ranked: T[], plugins:
 }
 /** What the route says of its candidates: no pick (task #2901). `via` `instructions`: the project's Routing instructions choose;
  *  `only`: one candidate can run. */
-export interface Verdict { via: 'instructions' | 'only'; p: null; why: string }
+/** `order`: the route's pick by the Routing order (routePick.ts, task #3576), with `pick` (a candidate's id) and `reasons`, one per step. */
+export interface Verdict { via: 'instructions' | 'only' | 'order'; p: null; why: string; pick?: string; reasons?: string[] }
 
 const LEVELS: Level[] = ['low', 'medium', 'high']
 const HEAVY_WORK: unknown[] = ['build', 'e2e'] satisfies HeavyWork[]
@@ -700,6 +701,13 @@ export function decide(choice: Choice): Verdict {
     : { via: 'instructions', p: null, why: choice.adjusted ? `${CHOOSE_BY_INSTRUCTIONS} Plug-ins' findings are in each candidate's notes.` : CHOOSE_BY_INSTRUCTIONS }
 }
 
+/** The verdict with the route's pick (task #3576, anh Dee 11-06): the candidate [picked] names, by the Routing order, with its reasons.
+ *  With no pick (nothing has the quota the work needs) or one candidate, the verdict is [decide]'s, as before. */
+export function decideByOrder(choice: Choice, picked: { id: string; reasons: string[] } | null): Verdict {
+  if (!picked || choice.shown.length === 1) return decide(choice)
+  return { via: 'order', p: null, why: cut(picked.reasons.join(' '), 300), pick: picked.id, reasons: picked.reasons }
+}
+
 /** The record in the shape a backend takes: `current` with the job's kind (what attempts are compared by, backend costs/read.ts),
  *  no pick (task #2901) and each candidate's weekly % left and reset in its fit (task #3163: without them quota at route time
  *  could not be measured); `unquoted` the same without them, for a backend from before them; `picked` for a backend from before
@@ -718,7 +726,8 @@ export function recordOf(choice: Choice, verdict: Verdict, a: Assessment, shape:
       ...(s.gridModel && s.gridName ? { gridModel: s.gridModel, gridName: s.gridName } : {}) })),
     excluded: choice.excluded.slice(0, 200).map(e => ({ title: e.title, reason: cut(e.reason, 500) })),
     floor: 1, notes: false,
-    ...(pickless ? { via: verdict.via } : { pick: choice.shown[0]!.id, via: verdict.via === 'only' ? 'only' : 'order' }),
+    ...(verdict.pick && choice.shown.some(c => c.id === verdict.pick) ? { pick: verdict.pick, via: 'order' }
+      : pickless ? { via: verdict.via } : { pick: choice.shown[0]!.id, via: verdict.via === 'only' ? 'only' : 'order' }),
     p: verdict.p, belowFloor: false, why: cut(verdict.why, 300),
   }
 }
