@@ -154,6 +154,29 @@ void main() {
     });
   });
 
+  test('a pull to retry reads the proposals again, though the chat did not move and the minute is not up', () async {
+    final r = rig();
+    var fail = true;
+    r.swarm.routes[proposalsPath] = (_) => fail
+        ? throw SuperTabFailure('INTERNAL', 'Oops', statusCode: 500)
+        : {
+            'proposals': [proposalRow('m1')],
+          };
+    await r.reader.refresh();
+    await r.reader.readProposals(project);
+    expect(r.reader.proposalsFailed(project), isTrue);
+
+    fail = false;
+    await r.reader.readProposals(project);
+    expect(proposalReads(r.swarm), 1, reason: 'asked as before, it waits');
+
+    await r.reader.readProposals(project, retry: true);
+
+    expect(proposalReads(r.swarm), 2);
+    expect(r.reader.proposalsFailed(project), isFalse);
+    expect(r.reader.proposalsOf(project).map((p) => p.messageId), ['m1']);
+  });
+
   group('closed work for Merged and Shipped', () {
     final since = DateTime.fromMillisecondsSinceEpoch(1000);
 
