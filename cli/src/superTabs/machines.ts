@@ -752,7 +752,7 @@ export class ContributedMachines {
             const scoped: ScopedRequest = async input => {
               if (input.action !== 'startStatus' && input.action !== 'command') return { error: 'HOST_UNSUPPORTED', detail: 'A contributed machine reads only its own starts.' }
               if (input.action === 'command' && object(input.command).type === 'agent.startFailed') {
-                await this.reportStartFailure(start.id, path, input)
+                await this.reportStartFailure(String(start.id), path, input)
                 // The host owns this queued report now; the launch path can finish its existing cleanup.
                 return { ok: true, value: {} }
               }
