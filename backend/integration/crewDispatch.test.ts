@@ -265,6 +265,10 @@ describe('the crew dispatch pass', () => {
     await expect(s.execute({ type: 'work.assign', conversationId: s.tasks.Api!, agentId: s.crew.Ash! }, s.pm))
       .rejects.toMatchObject({ code: 'MACHINE_RULE', message: 'This Mac takes no new work for now' })
     await s.execute({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Owner Mac', cwd: '/swarm', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 4 })
+    const generation = (await poolRows(s.store, owner, 'owner-mac')).find(p => p.tabId === s.tab)!.machine.generation
+    await s.store.observeMachine(owner, s.tab, 'owner-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 64e9, memoryUsedBytes: 4e9,
+      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Desktop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+    quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] })
     const request = (engine: string) => ({ conversationId: s.tasks.Api!, machineId: 'owner-mac', engine, name: 'Builder', cwd: '/swarm/lead', worktree: false,
       requirements: { memoryBytes: 1e9, diskBytes: 1e9, maxCpuPercent: 90, tools: [], devices: [], quotaRequired: false } })
     await expect(s.execute({ type: 'agent.start', request: request('claude') })).rejects.toMatchObject({ code: 'MACHINE_RULE' })
