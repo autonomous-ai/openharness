@@ -1018,3 +1018,44 @@ describe('the PM\'s inbox at its turn\'s end', () => {
     expect(inbox).toContain('Ship on Friday or Monday? Options: Friday / Monday (recommended)')
   })
 })
+
+// #3609: receipt means the native session accepted input; listing, claiming and uncertain input do not.
+describe('PM person receipt eyes', () => {
+  it('adds eyes only on confirmed receipt, once, without answering or hiding the owed ask', async () => {
+    const f = await swarm({ capable: true })
+    await f.report()
+    const message = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Is it out?', replyTo: null, recipientIds: [] })).result.messageId)
+    const id = stableId(message, f.lead)
+    const eyes = () => db.superTabReaction.findMany({ where: { tabId: f.tab, messageId: message, emoji: 'eyes' } })
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'receipt' })
+    expect(await eyes()).toEqual([])
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'receipt', receipt: 'unknown', uncertain: true })
+    expect(await eyes()).toEqual([])
+    const before = await f.timed.messages(owner, f.tab, 'lead')
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'receipt', receipt: 'native input', uncertain: false })
+    expect(await eyes()).toEqual([expect.objectContaining({ actorKind: 'agent', actorId: f.lead })])
+    const after = await f.timed.messages(owner, f.tab, 'lead')
+    expect(after.reactionSeq).toBe(before.reactionSeq + 1)
+    expect(after.messages.find(m => m.id === message)?.reactions).toContainEqual({ emoji: 'eyes', count: 1, by: [{ kind: 'agent', id: f.lead }] })
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'receipt', receipt: 'native input', uncertain: false })
+    expect(await eyes()).toHaveLength(1)
+    expect((await f.timed.messages(owner, f.tab, 'lead')).reactionSeq).toBe(after.reactionSeq)
+    expect((await deliveryOf(message, f.lead)).status).toBe('delivered')
+    expect((await deliveryOf(message, f.lead)).answeredAt).toBeNull()
+    const state = await f.timed.read(owner, f.tab)
+    expect(state.state.conversations.find(c => c.id === 'lead')?.owed?.map(a => a.id)).toContain(message)
+  })
+
+  it('does not add eyes for worker receipts or agent-authored input to the PM', async () => {
+    const f = await swarm({ capable: true })
+    await f.report()
+    const person = String((await f.execute({ type: 'message.send', conversationId: f.group, text: 'Check this.', replyTo: null, recipientIds: [f.worker] })).result.messageId)
+    const notice = await f.write({ kind: 'prompt' }, f.lead)
+    for (const [message, agent] of [[person, f.worker], [notice, f.lead]]) {
+      const id = stableId(message!, agent!)
+      await f.timed.delivery(host, f.tab, agent!, id, { type: 'claim', claimId: 'ordinary' })
+      await f.timed.delivery(host, f.tab, agent!, id, { type: 'ack', claimId: 'ordinary', receipt: 'native input', uncertain: false })
+      expect(await db.superTabReaction.findMany({ where: { tabId: f.tab, messageId: message } })).toEqual([])
+    }
+  })
+})
