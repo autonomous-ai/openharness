@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
+import { SEED_RULES, type ProjectRules } from '../src/superTabs/policy.js'
 import { DISPATCH_RETRY_MS, SuperTabStore } from '../src/superTabs/store.js'
 import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import type { Command } from '../src/superTabs/commands.js'
@@ -83,6 +84,60 @@ async function readGroup(tabId: string, groupId: string): Promise<Conversation> 
 }
 
 describe('the crew dispatch pass', () => {
+  const save = (s: Awaited<ReturnType<typeof swarm>>, revision: number, change: Partial<ProjectRules>) => s.execute({
+    type: 'rules.set', projectId: 'lead', baseRevision: revision, rules: { ...structuredClone(SEED_RULES), ...change }, summary: 'Project dispatch policy',
+  })
+
+  it('uses custom lanes for crew, work.lane, stamps and dispatch while another project retains mobile', async () => {
+    const s = await swarm({ Ash: null }, { Board: 'devices/main.c' })
+    await save(s, 0, { lanes: [{ name: 'firmware', owns: ['devices/'] }] })
+    expect((await readGroup(s.tab, s.tasks.Board!)).handOutLane).toBe('firmware')
+    await s.execute({ type: 'crew.add', agentId: s.crew.Ash!, lane: 'Firmware', role: 'Engineer' })
+    await s.execute({ type: 'work.lane', conversationId: s.tasks.Board!, lane: 'FIRMWARE' })
+    expect((await readGroup(s.tab, s.tasks.Board!)).lane).toBe('firmware')
+    await expect(s.execute({ type: 'crew.add', agentId: s.crew.Ash!, lane: 'mobile' })).rejects.toMatchObject({ code: 'LANE_UNKNOWN' })
+    await expect(s.execute({ type: 'work.lane', conversationId: s.tasks.Board!, lane: 'mobile' })).rejects.toMatchObject({ code: 'LANE_UNKNOWN' })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+    expect(await s.holders()).toEqual({ Board: 'Ash' })
+    const other = await swarm({ Birch: 'mobile' }, { Phone: 'mobile/lib/app.dart' })
+    expect(await other.store.dispatchCrew(other.tab)).toMatchObject({ assigned: 1 })
+    expect(await other.holders()).toEqual({ Phone: 'Birch' })
+  })
+
+  it('does not dispatch removed lanes even with old crew marks', async () => {
+    const s = await swarm({ Ash: 'mobile', Birch: null }, { Phone: 'mobile/lib/app.dart' })
+    await s.execute({ type: 'work.lane', conversationId: s.tasks.Phone!, lane: 'mobile' })
+    await save(s, 0, { lanes: [{ name: 'firmware', owns: ['devices/'] }] })
+    expect((await readGroup(s.tab, s.tasks.Phone!)).handOutLane).toBeNull()
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0 })
+    expect(await s.holders()).toEqual({ Phone: null })
+  })
+
+  it('rechecks project lane policy inside an automatic assignment', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    const store = s.store as unknown as { pushOriginFor: (...args: unknown[]) => Promise<unknown> }
+    vi.spyOn(store, 'pushOriginFor').mockImplementationOnce(async () => {
+      await save(s, 0, { lanes: [] })
+      return undefined
+    })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0, skipped: { DISPATCH_STALE: 1 } })
+    expect(await s.holders()).toEqual({ Api: null })
+  })
+
+  it('rechecks a reduced handed-work cap inside an automatic assignment', async () => {
+    const s = await swarm({ Ash: 'backend' }, { First: 'backend/src/a.ts', Next: 'backend/src/b.ts' })
+    await s.execute({ type: 'work.assign', conversationId: s.tasks.First!, agentId: s.crew.Ash! })
+    const id = (await readGroup(s.tab, s.tasks.First!)).assignment!.id
+    await s.execute({ type: 'work.status', conversationId: s.tasks.First!, assignmentId: id, status: 'review', result: 'Ready at abc1234.' }, s.crew.Ash)
+    const store = s.store as unknown as { pushOriginFor: (...args: unknown[]) => Promise<unknown> }
+    vi.spyOn(store, 'pushOriginFor').mockImplementationOnce(async () => {
+      await save(s, 0, { dispatch: { ...SEED_RULES.dispatch, maxHanded: 1 } })
+      return undefined
+    })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0, skipped: { DISPATCH_STALE: 1 } })
+    expect(await s.holders()).toEqual({ First: 'Ash', Next: null })
+  })
+
   it('hands a free member its pinned task first, then its lane\'s top task, as the PM, through work.assign', async () => {
     const s = await swarm({ Ash: 'backend', Birch: 'desktop' }, { Api: 'backend/src/a.ts', Store: 'backend/src/b.ts', Board: 'desktop/lib/c.dart' })
     await editGroup(s.tab, s.tasks.Store!, group => ({ ...group, pin: { agentId: s.crew.Ash!, why: 'ci', at: NOW } }))
