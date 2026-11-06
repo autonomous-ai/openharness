@@ -53,15 +53,8 @@
   `personal_project_tabs_test.dart`, `super_tab_personal_lead_test.dart` and `super_tab_personal_lead_card_test.dart`
   named their no-repo tab with an invented id; they now use a 32-hex desk id.
 
-### Task 2: Safely retire closed-tab projects
+### Task 2: Safely retire closed-tab projects (moved to task #3940)
 
-**Files:** same Desktop files and `docs/plans/2026-11-03-personal-tab-projects-plan.md`. Backend prerequisite #3929 is a separate task; integrate its merged contract here.
-
-**Interfaces:** existing `project.delete` is unconditional on message emptiness, and `project.archive` does not exist. Do not use a permissive fixture to pretend these interfaces provide the required safety. Resolve the server contract before implementing this task.
-
-- [ ] Add acceptance tests `a closed tab's empty project goes`, `a tab project with messages is archived, not deleted`, and capacity recovery for a new repo after many closed tabs.
-- [ ] Add safety tests for every Review Focus case, including cross-computer deduplication and messages arriving concurrently.
-- [ ] Observe and commit failing tests before implementation.
-- [ ] Implement cleanup before creation using the supported atomic server contract, eligibility rechecks after awaits, and deterministic operation IDs.
-- [ ] Add the growth lifecycle to the original feature plan; run affected tests, build, and commit/push.
-- [ ] Mark ready for two security reviews and independent testing; resolve findings test first; merge once all gates pass.
+The PM split this task (2026-11-06): this pull request ships Task 1 alone. Deleting an empty closed tab's project and
+archiving one with messages is task #3940, which starts once #3929's atomic server cleanup command merges; the growth
+line in `docs/plans/2026-11-03-personal-tab-projects-plan.md` lands with it.
