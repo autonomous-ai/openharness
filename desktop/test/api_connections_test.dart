@@ -467,6 +467,7 @@ void main() {
         ),
       ],
     );
+    await subscriptions.refresh();
     addTearDown(() {
       controller.dispose();
       subscriptions.dispose();
@@ -530,7 +531,7 @@ void main() {
     expect(find.byTooltip('Add OpenRouter'), findsNothing);
     final search = find.byKey(const ValueKey('models-search'));
     for (final (query, match) in [
-      ('claude', 'Claude'),
+      ('anthropic', 'Anthropic'),
       ('qwen3.8-27b', 'Qwen3.8-27B'),
       ('TEAM COMPUTER', 'Shared DeepSeek'),
       ('openrouter.ai', 'OpenRouter'),
@@ -990,6 +991,7 @@ void main() {
         ),
       ],
     );
+    await subscriptions.refresh();
     addTearDown(() {
       controller.dispose();
       subscriptions.dispose();
