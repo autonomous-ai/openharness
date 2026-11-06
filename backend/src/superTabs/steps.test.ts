@@ -832,7 +832,7 @@ describe('a verdict at a pull request head', () => {
     const f = stepsFixture()
     const reviewer = f.add('reviewer', f.task)
     // What the task's PR watch read last (store.ts pullRequestSeen).
-    Object.assign(f.group(f.task), { pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: A, patch: 'p1', at: 1 } } })
+    Object.assign(f.group(f.task), { codePullRequestUrls: [PR], pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: A, patch: 'p1', at: 1 } } })
     const check = (group: string, passed: boolean, head?: string) => f.run({ type: 'work.check', conversationId: group,
       assignmentId: f.group(group).assignment!.id, checkId: f.group(group).checks[0]!.id, passed, evidence: 'Read it', ...head ? { head } : {} } as Command,
     f.as(reviewer))
@@ -844,6 +844,45 @@ describe('a verdict at a pull request head', () => {
     check(f.task, true, A.toUpperCase())
     expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: A, patch: 'p1' })
     expect(f.group(f.task).checks[0]!.passedBy).not.toBeNull()
+  })
+
+  it('judges its own code PR rather than another task\'s watched PR from the brief', () => {
+    const { f, check } = watched()
+    const other = 'https://github.com/acme/app/pull/99'
+    Object.assign(f.group(f.task), { brief: `Follows ${other}`, pullRequestUrls: [PR, other],
+      pullRequestHeads: { [PR]: { head: A, at: 1, patch: 'p1' }, [other]: { head: B, at: 2, patch: 'p2' } } })
+    expect(check(f.task, true, A).result).toMatchObject({ counts: true })
+    expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: A, patch: 'p1' })
+  })
+
+  it('does not replace an unread code PR with another task\'s watched PR', () => {
+    const { f, check } = watched()
+    const other = 'https://github.com/acme/app/pull/99'
+    Object.assign(f.group(f.task), { brief: `Follows ${other}`, pullRequestUrls: [PR, other],
+      pullRequestHeads: { [other]: { head: A, at: 2, patch: 'other' } } })
+    expect(check(f.task, true, A).result).toMatchObject({ counts: false })
+    expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: A, stale: '' })
+  })
+
+  it('on a step, prefers the code PR its Engineer named in Ready over brief links in the code list', () => {
+    const { f, reviewer, check } = watched()
+    const other = 'https://github.com/acme/app/pull/99'
+    Object.assign(f.group(f.task), { brief: `Follows ${other}`, codePullRequestUrls: [PR, other], pullRequestUrls: [PR, other],
+      pullRequestHeads: { [PR]: { head: A, at: 1, patch: 'p1' }, [other]: { head: B, at: 2, patch: 'p2' } } })
+    f.group(f.task).assignment!.result = `Ready for review: ${PR}`
+    const step = f.step('Review', f.as(f.dev), f.task, [{ description: 'Code is sound', independent: true }])
+    f.run({ type: 'conversation.agent', conversationId: step, agentId: reviewer, present: true, lead: false })
+    f.run({ type: 'work.assign', conversationId: step, agentId: reviewer }, f.as(f.dev))
+    expect(check(step, true, A).result).toMatchObject({ counts: true })
+    expect(f.group(step).checks[0]!.verdicts!.at(-1)).toMatchObject({ pullRequest: PR, head: A, patch: 'p1' })
+    expect(check(step, true, B).result).toMatchObject({ counts: false })
+  })
+
+  it('retains the latest-link fallback for a task stored before code PRs were listed', () => {
+    const { f, check } = watched()
+    delete f.group(f.task).codePullRequestUrls
+    expect(check(f.task, true, A).result).toMatchObject({ counts: true })
+    expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ pullRequest: PR })
   })
 
   it('on a step, records its task\'s pull request', () => {
