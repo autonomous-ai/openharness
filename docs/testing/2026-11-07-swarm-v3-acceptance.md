@@ -1,6 +1,6 @@
 # Swarm v3 acceptance, November 7
 
-Task #4172; test-only PR #3456. **Overall: FAIL on main 3932fd2c7**, pending #4120 / PR #3446 (Team-account removal). The exact Desktop + New agent payload prevents assignment/suggestion of the new member's Regular agent in another person's project. No product code changes in this task.
+Task #4172; test-only PR #3456. **Overall: FAIL on main 57e129117**, pending #4120 / PR #3446 (Team-account removal). The exact Desktop + New agent payload prevents assignment/suggestion of the new member's Regular agent in another person's project. No product code changes in this task.
 
 The initial Pass at ed429d4c6 is superseded: its real-store fixture omitted the dialog's `teamAccountOnly: true` restriction. The corrected fixture includes that field, `agents: memory`, and the dialog's capacity setting. Both continuous cases now fail at the remaining Team-account requirement, while separate CLI and Desktop checks pass. The failure was handed to #4120; it must be rerun after that task merges.
 
@@ -8,6 +8,7 @@ The initial Pass at ed429d4c6 is superseded: its real-store fixture omitted the 
 
 - Main initially tested: `b39fbe09b48ac476c8a853b68b41302286ba77fb`.
 - Main after Tasks merged: `3932fd2c7f49478c7e4a178f51e1f2c840761c48`.
+- Latest main tested after the CI correction: `57e129117515e558f34d01b443dc73a221972bbd`, integrated as `0cb86d7f1766fb9d9b0d71ce3267c2ea227672e6`; both acceptance cases still fail at the same Team-account gates.
 - Acceptance test commit: `3220a3213`; combined checkout: `08b5a0be35b78c5cf9284cd4f3d55c9e70517430`.
 - `git diff b39fbe09b..3932fd2c7 -- backend cli` is empty. Backend/CLI receipts carry unchanged; the Desktop Tasks checks ran after this merge.
 - macOS arm64, Node/Vitest and Flutter offscreen. New test calls the real store, host read and personal feed against an ephemeral loopback Mongo replica; no production store, real sign-in or credential file is opened.
@@ -84,3 +85,5 @@ The first test draft attempted a second suggestion after its worker was already 
 Both corrected acceptance cases passed in a temporary checkout combining main `3932fd2c7f49478c7e4a178f51e1f2c840761c48` with #3446 at `ed86fd9bfeb6bcb3cfebb574b6fa0ead9fa72e99` (combined source tree including acceptance: `c17f1a6143505773df3c09e65811e73a369936d9`). This is candidate evidence only; main acceptance remains failed until the dependency merges and is tested there.
 
 CI at `ad91434f0` exposed two failures: the known main usage-vocabulary mismatch (#4173), and this PR's acceptance/config filenames being treated as production files. The existing `productionBuild.test.ts` reproduced the latter locally (1 failed, 3 passed), naming all three dev imports. Renaming both files to `.test-support.ts` keeps them out of production and out of automatic unit discovery. The same packaging check then passed all 4 tests; TypeScript passed. The renamed explicit config still runs both acceptance cases and reproduces the same Team-account failures. Its first invocation stopped before any case on a transient Mongo port collision; a second invocation reached both expected failures. Neither invocation is reported as a pass.
+
+Main `57e129117` contains the vocabulary correction through #3450. After integrating it, `npm test -- src/lib/productionBuild.test.ts src/lib/productUsage.test.ts` passed all **83 tests**, and `npx tsc --noEmit` passed. The explicit renamed acceptance ran on this main source and still failed both cases at the same assignment/suggestion gates. Full backend and integration evidence remains automatic PR CI; these local checks do not claim that suite green.
