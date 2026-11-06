@@ -134,3 +134,4 @@ describe('a project\'s document on the new base', () => {
     expect(core.bytes).toBeLessThan(1024)
   })
 })
+
