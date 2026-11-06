@@ -196,6 +196,19 @@ describe('settleReleases', () => {
     expect(state.conversations.some(c => c.id === 'step')).toBe(true)
   })
 
+  it('does not reopen releases for old Simple work when the project returns to Full', () => {
+    const state = swarm([entry({ groupId: 'g12' })])
+    Object.assign(state.projects![0]!, { process: 'full', simpleThrough: 20 })
+    expect(settleReleases(state, 'p1', noFacts, T).opened).toBeNull()
+    expect(ledgerOf(state).pending).toHaveLength(1)
+    state.conversations.push(task(21))
+    ledgerOf(state).pending.push(entry({ groupId: 'g21', components: ['cli'] }))
+    const opened = settleReleases(state, 'p1', noFacts, T).opened
+    expect(opened).not.toBeNull()
+    expect(state.conversations.find(c => c.id === opened)!.brief).toContain('Release CLI')
+    expect(state.conversations.find(c => c.id === opened)!.brief).not.toContain('Desktop')
+  })
+
   it('marks a task released once every release it needs carries it, and takes it off the list', () => {
     const state = swarm([entry({ groupId: 'g12', mergedAt: T - 20 * MINUTE, components: ['desktop', 'web'] })])
     const group = () => state.conversations.find(c => c.id === 'g12')!

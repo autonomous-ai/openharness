@@ -162,6 +162,12 @@ describe('Simple task lifecycle', () => {
     expect(stepsOf(f.state, task.id)).toEqual([])
   })
 
+  it('also refuses an older client’s linked review without an explicit step name', () => {
+    const f = fixture(), project = f.create('simple'), task = f.task(project)
+    expect(() => f.run({ type: 'conversation.create', projectId: project, title: 'Review', brief: 'Read it', reviewOf: task.id, checks: [] }, peer))
+      .toThrow(expect.objectContaining({ code: 'SIMPLE_PROCESS' }))
+  })
+
   it('keeps earlier Simple tasks Simple when switching to Full, including dormant records', () => {
     const f = fixture(), project = f.create('simple'), old = f.task(project)
     const dormant = structuredClone(f.group(old.id))
@@ -207,6 +213,18 @@ describe('Simple task lifecycle', () => {
     const fresh = f.task(project)
     fresh.status('review', ['desktop/lib/a.dart'])
     expect(stepsOf(f.state, fresh.id).map(s => s.step)).toEqual(['Review', 'Test'])
+  })
+
+  it('keeps an unnumbered dormant task Simple when its first later command gives it a number', () => {
+    const f = fixture(), project = f.create('full'), old = f.task(project)
+    const dormant = structuredClone(f.group(old.id))
+    delete dormant.number
+    delete (dormant as { process?: string }).process
+    f.state.conversations = f.state.conversations.filter(g => g.id !== old.id)
+    f.set(project, 'simple'); f.set(project, 'full')
+    f.state.conversations.push(dormant)
+    old.status('review', ['desktop/lib/a.dart'])
+    expect(stepsOf(f.state, old.id)).toEqual([])
   })
 
   it('keeps the old tasks Simple across repeated switches, and a repeated Full save does not change newer work', () => {
