@@ -7,6 +7,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/finger_target.dart';
+import 'buddy_engine.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'model.dart';
@@ -103,7 +104,9 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
     final snapshot = c.snapshot!;
     final agent = widget.agent;
     final now = DateTime.now();
-    final offers = buddyModelOffers(snapshot, now: now);
+    final offers = agent.engine == 'claude'
+        ? buddyModelOffers(snapshot, now: now)
+        : <BuddyModelOffer>[];
     final current = agent.gridModel;
     final on = offers.where((o) => o.model == current).firstOrNull;
     // A model gone quiet is still named by the last reading that served it.
@@ -117,7 +120,11 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
         model;
     final request = agent.modelRequest;
     final phone = workspaceIsCompact(context);
-    final busy = !c.canWrite || c.saving || c.hasPendingAction;
+    final busy =
+        !c.canWrite ||
+        c.saving ||
+        c.hasPendingAction ||
+        agent.switchRequest != null;
     final after = [
       if (request == null && current != null)
         on == null ? 'not served now' : _servers(on),
@@ -136,20 +143,22 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
             phone: phone,
             busy: busy,
           );
-    return Text.rich(
-      TextSpan(
-        children: [
-          WidgetSpan(
-            alignment: PlaceholderAlignment.middle,
-            child: KeyedSubtree(
-              key: const ValueKey('super-buddy-model'),
-              child: picker,
-            ),
+    // Text.rich scales inline widgets as well as the Text they contain.
+    // Ordinary children scale once and wrap naturally on a narrow header.
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        if (buddyEngineCapable(snapshot, agent)) ...[
+          BuddyEnginePicker(
+            key: const ValueKey('super-buddy-engine'),
+            controller: c,
+            agent: agent,
           ),
-          TextSpan(text: ' · $after'),
+          Text(' · ', style: DesktopChrome.metadata()),
         ],
-      ),
-      style: DesktopChrome.metadata(),
+        KeyedSubtree(key: const ValueKey('super-buddy-model'), child: picker),
+        Text(' · $after', style: DesktopChrome.metadata()),
+      ],
     );
   }
 
@@ -179,35 +188,37 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
           AppMenuItem(
             icon: current == null ? AppIcons.check : null,
             label: 'Your subscription',
-            note: 'Claude Code',
-            onPressed: () => _pick(null),
+            note: buddyEngineLabel(widget.agent.engine),
+            onPressed: busy ? null : () => _pick(null),
           ),
         ),
-        const AppMenuDivider(),
-        words('SHARED IN THIS SWARM'),
-        // A Buddy-only machine never joins the Swarm's grid (backend
-        // read/hostRows.ts), so nothing shared reaches a Buddy there.
-        if (pool == null || pool['buddyOnly'] == true)
-          words(
-            "Add ${widget.machine} to the Swarm's Machines to use shared models.",
-          )
-        else if (offers.isEmpty)
-          words('Nobody shares a model in this Swarm yet.')
-        else
-          for (final offer in offers)
-            row(
-              AppMenuItem(
-                icon: offer.model == current ? AppIcons.check : null,
-                label: offer.name,
-                // Under the name: a list of servers would be cut short beside it.
-                detail: _servers(offer),
-                onPressed: () => _pick(offer.model),
+        if (widget.agent.engine == 'claude') ...[
+          const AppMenuDivider(),
+          words('SHARED IN THIS SWARM'),
+          // A Buddy-only machine never joins the Swarm's grid (backend
+          // read/hostRows.ts), so nothing shared reaches a Buddy there.
+          if (pool == null || pool['buddyOnly'] == true)
+            words(
+              "Add ${widget.machine} to the Swarm's Machines to use shared models.",
+            )
+          else if (offers.isEmpty)
+            words('Nobody shares a model in this Swarm yet.')
+          else
+            for (final offer in offers)
+              row(
+                AppMenuItem(
+                  icon: offer.model == current ? AppIcons.check : null,
+                  label: offer.name,
+                  // Under the name: a list of servers would be cut short beside it.
+                  detail: _servers(offer),
+                  onPressed: busy ? null : () => _pick(offer.model),
+                ),
               ),
-            ),
-        const AppMenuDivider(),
-        words(
-          'What your Buddy reads and writes goes to the machine or API that serves the model you pick.',
-        ),
+          const AppMenuDivider(),
+          words(
+            'What your Buddy reads and writes goes to the machine or API that serves the model you pick.',
+          ),
+        ],
       ],
       builder: (context, menu, _) => fingerTarget(
         enabled: phone,
@@ -217,9 +228,13 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                label,
-                style: DesktopChrome.metadata(color: DesktopChrome.foreground),
+              Flexible(
+                child: Text(
+                  label,
+                  style: DesktopChrome.metadata(
+                    color: DesktopChrome.foreground,
+                  ),
+                ),
               ),
               Icon(
                 AppIcons.chevronDown,

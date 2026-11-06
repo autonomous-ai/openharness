@@ -75,6 +75,22 @@ describe('a Ready through the store', () => {
     expect([...listed ?? []].sort()).toEqual(opened.sort())
   })
 
+  it('persists history evidence in every review brief on Ready', async () => {
+    const head = 'a'.repeat(40)
+    const { tab, execute, task, dev, assignment } = await swarm({ pullRequestFiles: async (_repository, urls) => ({ urls, head,
+      files: ['backend/src/routes/auth.ts'], heads: [{ url: `${REPO}/pull/7`, head, base: 'main', history: { head,
+        planFirst: 'pass', testBeforeCode: 'fail', productionLines: 42, totalLines: 64, commits: 3, merges: 0, missingTests: ['b'.repeat(40)] } }] }) })
+    await execute({ type: 'work.status', conversationId: task, assignmentId: assignment, status: 'review', result: `Ready: ${REPO}/pull/7` }, host, dev)
+    const rows = await db.swarmGroup.findMany({ where: { tabId: tab } })
+    const steps = rows.map(row => row.data as { reviewOf?: string; brief?: string }).filter(group => group.reviewOf === task)
+    expect(steps).toHaveLength(2)
+    for (const step of steps) {
+      expect(step.brief).toContain('Plan first: pass')
+      expect(step.brief).toContain('Test before code: fail')
+      expect(step.brief).toContain('42 production lines')
+    }
+  })
+
   it('plans by the project\'s saved rules record', async () => {
     const pullRequestFiles = vi.fn(async (_repository: string | null, urls: string[]) => ({ urls, head: 'abc1234', files: ['docs/a.md'] }))
     const { tab, execute, task, dev, assignment } = await swarm({ pullRequestFiles })

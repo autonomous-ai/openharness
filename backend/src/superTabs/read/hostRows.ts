@@ -7,6 +7,7 @@ import { buddySleepManaged } from '../buddySleep.js'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, conversation, type Agent, type SuperTabState } from '../model.js'
 import { buddyChatOf, isSwarmBuddy, isSwarmBuddyChat } from '../buddies.js'
+import { buddyEngineChat } from '../buddyEngine.js'
 import { hostLocalGrid, machineContribution, machineLimitReached, machineRoom, type MachineCleanup } from '../machines.js'
 import { agentProjectId, agentSetRole, canWatchAgent, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, startProject, skillSetOf, watchClosed } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
@@ -80,6 +81,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
   const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
   const custom = home && skillSetOf(home) === 'custom' ? home : null
   const chosen = custom ? agentSetRole(state, custom, target) : null
+  const buddyChat = isSwarmBuddy(target) || (target.buddySession && target.buddyOf) ? buddyChatOf(state, target) : undefined
   return {
     tabId, tabName: state.name, lastChangedAt, paused: state.paused,
     // `active` lets the host release members that are only in archived groups to automatic cleanup.
@@ -111,6 +113,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     // The conversation it leads: the chat its host rebuilds its start prompt from when it switches it (cli leadSwitchRequest.ts).
     // A field of its own: an older host reads leadsConversationId as "only this conversation's deliveries" (cli host.ts).
     ledConversationId: ledProject(state, target.id)?.leadConversationId ?? null,
+    ...(isSwarmBuddy(target) && !target.buddySession ? { buddyConversationId: buddyChat?.id ?? buddyEngineChat(state, target) } : {}),
     stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
     observers: lookups.people.filter(p => p.id !== user.sub && canWatchAgent(state, { kind: 'person', userId: p.id, email: p.email }, target, closed))
       .map(p => ({ email: p.email, userId: p.id })),
@@ -119,7 +122,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     // But for this Swarm's current Lead: its listed observers watch it while this row is in force (Ken, 2026-10-28).
     membersWatch: isConfidential(state, target, closed) && !watchClosed(state, target, closed),
     // Which of its person's Buddies' chats it is in (task #3818).
-    ...isSwarmBuddy(target) || (target.buddySession && target.buddyOf) ? { buddyChatId: buddyChatOf(state, target)?.id ?? null } : {},
+    ...isSwarmBuddy(target) || (target.buddySession && target.buddyOf) ? { buddyChatId: buddyChat?.id ?? null } : {},
   }
 }
 
