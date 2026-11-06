@@ -40,12 +40,23 @@ class Intern3Swarm extends ChangeNotifier {
     required this.machineId,
     required this.machineName,
     this.swarmId,
+    this.engine = 'claude',
     this.pause = const Duration(seconds: 2),
   });
 
   /// The Swarm the person picked on Set up Intern 3, when they have two or more (owner, 2026-11-06); null for the one
   /// [targetOf] chooses.
   final String? swarmId;
+
+  /// What the person picked for their Buddy on Set up Intern 3: `claude` (Claude Code) or `codex` (owner, 2026-11-06).
+  /// Installed and signed in on Intern 3 only when it is not already.
+  final String engine;
+
+  /// [engine] as the person reads it.
+  String get engineName => engine == 'codex' ? 'Codex' : 'Claude Code';
+
+  /// Who the person signs in to for [engine].
+  String get accountName => engine == 'codex' ? 'ChatGPT' : 'Claude';
 
   final SwarmSession session;
   final SwarmComputers computers;
@@ -172,7 +183,7 @@ class Intern3Swarm extends ChangeNotifier {
         if (DateTime.now().isAfter(deadline)) {
           throw SuperTabFailure(
             'SIGN_IN_PENDING',
-            'Claude\'s sign-in did not open on $machineName. Try again.',
+            '$accountName\'s sign-in did not open on $machineName. Try again.',
           );
         }
         await Future<void>.delayed(const Duration(seconds: 1));
@@ -201,9 +212,9 @@ class Intern3Swarm extends ChangeNotifier {
     final deadline = DateTime.now().add(const Duration(minutes: 2));
     while (answer['state'] != 'done') {
       if (DateTime.now().isAfter(deadline)) {
-        throw const SuperTabFailure(
+        throw SuperTabFailure(
           'SIGN_IN_PENDING',
-          'Claude did not answer yet. Try again.',
+          '$accountName did not answer yet. Try again.',
         );
       }
       await Future<void>.delayed(const Duration(seconds: 1));
@@ -218,7 +229,8 @@ class Intern3Swarm extends ChangeNotifier {
   /// starts a new login.
   Future<Map<String, dynamic>> _signIn(Map<String, dynamic> payload) async {
     final answer = await computers.ask(machineId, {
-      'action': 'claudeSignIn',
+      'action': 'engineSignIn',
+      'engine': engine,
       ...payload,
     });
     if (answer['error'] != null) {
@@ -310,22 +322,21 @@ class Intern3Swarm extends ChangeNotifier {
     }
   }
 
-  /// Intern 3 prepared for the Swarm — Claude Code installed there when neither engine is — and in it. Answers the engine
-  /// the Buddy runs on.
+  /// Intern 3 prepared for the Swarm — the [engine] the person picked installed there when it is not — and in it. Answers
+  /// the engine the Buddy runs on.
   Future<String> _machine(SwarmReader reader) async {
     final prepared = await _prepare(reader.tabId);
     final engines = [
       for (final e in prepared['engines'] as List? ?? const [])
         if (e == 'claude' || e == 'codex') e as String,
     ];
-    if (engines.isEmpty) {
-      // A CLI from before `installEngine` installs nothing.
+    if (!engines.contains(engine)) {
+      // A CLI from before `installEngine`, or one that installs only Claude Code, left it out.
       throw SuperTabFailure(
         'NO_SWARM_ENGINE',
-        'Update Harness on $machineName, then try again.',
+        '$engineName is not on $machineName. Update Harness there, then try again.',
       );
     }
-    final engine = engines.contains('claude') ? 'claude' : engines.first;
     final signedIn = prepared['signedIn'];
     // A CLI from before `signedIn` does not say: the Buddy's terminal does.
     needsSignIn = signedIn is List && !signedIn.contains(engine);
@@ -375,7 +386,7 @@ class Intern3Swarm extends ChangeNotifier {
           'tabId': tabId,
           'scope': 'swarm',
           'operationId': id,
-          'installEngine': 'claude',
+          'installEngine': engine,
         });
         answered = true;
       } catch (_) {
