@@ -32,6 +32,7 @@ import type { attachedFiles as attachedFilesType } from './attachments.js'
 import { backend, writeJournal, removeStaleJournalTemps, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { ADDED_MAX } from './deliveryContext.js'
 import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
+import { switchChangeId } from './leadSwitchRequest.js'
 import { TerminalHost } from './terminal.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { CREW_CONTINUE } from './crew.js'
@@ -4750,12 +4751,31 @@ describe('keeping a Swarm Lead alive', () => {
   // Dee, 11-01: its owner switches a Product Manager's engine from its pane. The host holds off reopening the old session while
   // the new one takes its place, and reopens the old one on its old engine when none started in time; a restart keeps the
   // hold, so a project never has two, and never none for long (superTabs/leadSwitch.ts).
-  const switched = (t: ReturnType<typeof lifeFixture>, at = 0) => {
+  const switched = (t: ReturnType<typeof lifeFixture>, at = 0, changeId = 'f'.repeat(32)) => {
     const folder = join(t.dir, 'super-tabs', 'lead-switch')
     mkdirSync(folder, { recursive: true, mode: 0o700 })
     writeFileSync(join(folder, `${createHash('sha256').update('harness').digest('hex')}.json`),
-      JSON.stringify({ version: 1, agentId: 'harness', changeId: 'f'.repeat(32), targetEngine: 'codex', at }), { mode: 0o600 })
+      JSON.stringify({ version: 1, agentId: 'harness', changeId, targetEngine: 'codex', at }), { mode: 0o600 })
   }
+
+  it('reports a Buddy switch after the backend replaces its request with the landed receipt', async () => {
+    const buddy = { tabId: 'tab', active: true, buddyConversationId: 'private-chat', agent: {
+      id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyScope: 'swarm',
+      buddyOf: { personId: 'peer', generation: 'g' },
+      switchRequest: { id: 'buddy-switch', engine: 'codex', requestedBy: 'peer' },
+    } }
+    const t = lifeFixture([buddy])
+    switched(t, 0, switchChangeId('buddy-switch'))
+    await t.poll()
+    const results = () => t.commands.map(body => body.command as Record<string, unknown>)
+      .filter(command => command.type === 'agent.switchResult')
+    expect(results()).toEqual([])
+    // Same-machine agent.rebind keeps this receipt, without the cross-machine candidateAgentId.
+    t.rows.splice(0, 1, { ...buddy, agent: { ...buddy.agent, harnessId: 'replacement', switchRequest: undefined,
+      switchLanded: { id: 'buddy-switch', requestedBy: 'peer' } } })
+    await t.poll(5_000)
+    expect(results()).toEqual([{ type: 'agent.switchResult', agentId: 'agent', switchId: 'buddy-switch', ok: true }])
+  })
   /** The switch's new session [id], running here when [runs] says so, by its creation receipt. */
   const replacement = (t: ReturnType<typeof lifeFixture>, runs: () => boolean, old: () => boolean = () => false, id = 'new-session') => {
     t.core.agents.byAgent = vi.fn((agentId: string) => (agentId === id ? runs() : agentId === 'harness' && old()) ? { agentId } : undefined) as never
