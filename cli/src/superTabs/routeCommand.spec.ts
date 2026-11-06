@@ -1007,6 +1007,16 @@ describe('what the route log says about each candidate', () => {
     // Multiply's earlier work in this Super Tab: the finished assignment (also in the log), and the log's one in a group this tab no longer has.
     expect(memberLabel(s)).toContain('earlier here: API done; another group done')
   })
+  // Review 2 of #3296: the pick's "work that follows on" rule compares the route's own group by id; the label shows its title.
+  it('picks the member that worked on this very task before, whatever its account, because the earlier work carries the task\'s id', async () => {
+    const decision = { id: 'd6', conversationId: 'g1', title: 'Pick d6', via: 'order', outcome: 'done', assignmentId: 'x', createdAt: '2026-10-19T10:00:00Z',
+      final: { kind: 'member', agentId: 'a1' } }
+    const s = scoped(world({ decisions: [decision] }, { id: 'x', agentId: 'a1', status: 'done', result: 'Shipped.' }))
+    const answer = await routeTask(input, s, where as never, opener(), () => 'op')
+    const pick = (answer.candidates as Array<{ id: string; agentId?: string }>).find(c => c.id === (answer.pick as { id: string }).id)
+    expect(pick).toMatchObject({ agentId: 'a1' })
+    expect((answer.reasons as string[])[2]).toContain('worked on this task before')
+  })
   it('labels a member with the effort it was launched with when it reports none, and keeps an effort it reports', async () => {
     const label = async (effort: string | undefined, start: unknown) => {
       const t = tab(); t.state.agents = [{ ...agents[0], configuration: { engine: 'claude', model: 'sonnet', effort } }, agents[1]] as never

@@ -114,15 +114,15 @@ describe('pickByOrder step 3: an idle agent is reused only between equals', () =
   })
 
   it('reuses the same reviewer for its next round, and an agent for work that follows on, whatever its account', () => {
-    const member = idle({ left: 20, resets: NOW + 5 * D, earlier: [{ group: 'g1', outcome: 'changes requested' }] }), fresh = opus({ left: 90, resets: NOW + 1 * D })
+    const member = idle({ left: 20, resets: NOW + 5 * D, earlier: [{ group: 'Title of g1', groupId: 'g1', outcome: 'changes requested' }] }), fresh = opus({ left: 90, resets: NOW + 1 * D })
     expect(pick([fresh, { ...member, model: 'opus', quality: 3 } as Shown], small({ kind: 'review' }))!.id).toBe(member.id)
-    const other = idle({ left: 20, resets: NOW + 5 * D, earlier: [{ group: 'g9', outcome: 'done' }] })
+    const other = idle({ left: 20, resets: NOW + 5 * D, earlier: [{ group: 'Title of g9', groupId: 'g9', outcome: 'done' }] })
     expect(pick([fresh, { ...other, model: 'opus', quality: 3 } as Shown], small({ kind: 'review' }))!.id).toBe(fresh.id)
     expect(pick([row({ left: 90, resets: NOW + 1 * D }), member])!.id).toBe(member.id)
   })
 
   it('the exception still needs the model and the quota the work needs', () => {
-    const wrong = idle({ model: 'haiku', earlier: [{ group: 'g1', outcome: 'done' }] }), fresh = row()
+    const wrong = idle({ model: 'haiku', earlier: [{ group: 'Title of g1', groupId: 'g1', outcome: 'done' }] }), fresh = row()
     expect(pick([wrong, fresh])!.id).toBe(fresh.id)
   })
 })
