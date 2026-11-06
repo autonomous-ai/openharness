@@ -6,15 +6,18 @@
  */
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../../config/env.js'
 import { joinedInstructions } from '../../lib/agentAttribution.js'
 import { claudeReportPath, readClaudeReport } from '../../lib/quotaReports.js'
 import { agentInstructionArgs } from '../launches.js'
+import { statusLineSetting } from '../kit/statusLine.js'
+import { managedNodePath } from '../../lib/nodeRuntime.js'
+import { launch as claudeLaunch } from './launch.js'
 
 const SCRIPT = fileURLToPath(new URL('../../../hook/statusline.mjs', import.meta.url))
 const posix = process.platform !== 'win32'
@@ -199,5 +202,70 @@ describe.skipIf(!posix)('a Claude launch\'s status line (a POSIX shell line)', (
     const result = spawnSync(command, { shell: true, input: JSON.stringify(STATUS), encoding: 'utf8', timeout: 15_000, env: { ...process.env, CLAUDE_CONFIG_DIR: configDir } })
     expect(result.stdout).toBe('owner-line\n')
     expect(JSON.parse(readFileSync(reportPath(env.ADAPTER_DATA_DIR, configDir), 'utf8')).five_hour.used_percentage).toBe(42.5)
+  })
+})
+
+// Task #4164: on Windows, Claude Code 2.1.316 runs its status line in Git Bash when it finds one (lib/windows/claudeCodeGitBash.ts), and in
+// PowerShell otherwise. Harness's line is written for that shell, and the person's own line runs in it as Claude Code would run
+// it, so a Windows agent reports its quota and the person sees their line as before.
+describe('a Claude launch\'s status line on Windows', () => {
+  const CONTRACT = claudeLaunch.statusLine!
+  const HOME = '/home/jo/.claude'
+  const BASH = 'C:\\Program Files\\Git\\bin\\bash.exe'
+  const files = (statusLine?: Record<string, unknown>) => ({ home: HOME, personal: '/home/jo', cwd: null, folder: false,
+    read: (path: string) => path === join(HOME, CONTRACT.file) && statusLine ? JSON.stringify({ statusLine }) : null })
+  /** A data folder with a space in its path, as a Windows account named "Jo Smith" has. */
+  const spaced = () => { const dir = join(root, 'Jo Smith', 'harness'); mkdirSync(dir, { recursive: true }); return dir }
+  const slashes = (path: string) => path.replace(/\\/g, '/')
+  const lineOf = (setting: Record<string, unknown> | null) => (setting?.statusLine as { command: string } | undefined)?.command
+
+  it('in Git Bash, quotes Harness\'s line as a POSIX shell reads it, a path with a space too, and names that bash', () => {
+    const dir = spaced()
+    const line = lineOf(statusLineSetting(CONTRACT, files(), dir, 'win32', () => BASH))
+    expect(line).toBe(`'${slashes(managedNodePath())}' '${slashes(join(dir, 'statusline', 'statusline.mjs'))}' --data '${slashes(dir)}' --bash 'C:/Program Files/Git/bin/bash.exe'`)
+  })
+
+  it('in Git Bash, passes the person\'s own line along, kept as it is', () => {
+    const setting = statusLineSetting(CONTRACT, files({ type: 'command', command: 'bash ~/.claude/line.sh', padding: 1 }), spaced(), 'win32', () => BASH)
+    expect(setting!.statusLine).toMatchObject({ type: 'command', padding: 1 })
+    expect(lineOf(setting)).toContain(` --then ${b64('bash ~/.claude/line.sh')} --bash 'C:/Program Files/Git/bin/bash.exe'`)
+  })
+
+  it('in PowerShell, writes Harness\'s line as PowerShell runs a program', () => {
+    const dir = spaced()
+    const line = lineOf(statusLineSetting(CONTRACT, files(), dir, 'win32', () => null))
+    expect(line).toBe(`& '${managedNodePath()}' '${join(dir, 'statusline', 'statusline.mjs')}' --data '${dir}'`)
+  })
+
+  it('in PowerShell, leaves the person\'s own line as it is, and says that session reports no quota', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(statusLineSetting(CONTRACT, files({ type: 'command', command: 'pwsh -File line.ps1' }), spaced(), 'win32', () => null)).toBeNull()
+      expect(warn.mock.calls.flat().join(' ')).toMatch(/PowerShell.*no quota/)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
+// The person's own line, run by the script in the Git Bash Claude Code runs status lines in, as Claude Code would run it there:
+// with that bash, its folder first on PATH, and a line whose first word is a `.sh` file as `bash <line>`. Run here with this
+// computer's bash, which stands in for Git Bash.
+describe.skipIf(!posix)('hook/statusline.mjs with --bash', () => {
+  it('runs the person\'s line in that bash, its folder first on PATH', () => {
+    const out = run(['--data', data, '--then', b64('echo "$BASH" "${PATH%%:*}"'), '--bash', '/bin/bash'], STATUS)
+    expect(out).toMatchObject({ stdout: '/bin/bash /bin\n', status: 0 })
+    expect(readClaudeReport(data, configDir)?.five_hour?.used_percentage).toBe(42.5)
+  })
+
+  it('runs a line whose first word is a .sh file as bash runs it, as Claude Code does', () => {
+    const script = join(root, 'my line.sh')
+    writeFileSync(script, 'echo "line $1"\n', { mode: 0o644 })
+    const out = run(['--data', data, '--then', b64(`"${script}" one`), '--bash', '/bin/bash'], STATUS)
+    expect(out).toMatchObject({ stdout: 'line one\n', status: 0 })
+  })
+
+  it('keeps the person\'s line\'s exit status', () => {
+    expect(run(['--data', data, '--then', b64('echo partial; exit 3'), '--bash', '/bin/bash'], STATUS)).toMatchObject({ stdout: 'partial\n', status: 3 })
   })
 })

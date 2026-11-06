@@ -11,6 +11,8 @@ import type { StatusLineContract } from '../facets/launch.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { shellSingleQuote } from '../../lib/shellQuote.js'
 import { isRecord, jsonObject, merged, type AttributionFiles } from './attribution.js'
+import { quoteHookCommand } from './notifyHooks.js'
+import { claudeCodeGitBash } from '../../lib/windows/claudeCodeGitBash.js'
 
 declare const __STATUS_LINE_SCRIPT__: string | undefined
 
@@ -60,25 +62,30 @@ function scriptIn(dataDir: string): string | null {
   }
 }
 
-/** A word every shell a status line may run in reads as itself. */
+/** A word a POSIX shell reads as itself. */
 const BARE_WORD = /^[A-Za-z0-9_-]+$/
-const WINDOWS_WORD = /^[A-Za-z0-9_:/.-]+$/
+
+let leftAlone = false
 
 /**
- * [argv] as one shell line. Off Windows a POSIX shell reads it, so a word that is not bare is single-quoted. On Windows
- * the engine runs it in Git Bash or PowerShell, which no one quoting serves (kit/notifyHooks.ts `quoteHookCommand`), and a
- * status line has no exec form: paths go with forward slashes, which both read as themselves, and a word that would need
- * quoting gives no line.
+ * [argv] as the line the shell that runs it reads: a POSIX shell off Windows; on Windows the one Claude Code runs its status
+ * line in (lib/windows/claudeCodeGitBash.ts, task #4164), Git Bash with its paths in forward slashes, else PowerShell (`& 'program' …`).
+ * Null for a word PowerShell would not pass whole.
  */
-function commandLine(argv: string[], platform: NodeJS.Platform): string | null {
-  if (platform !== 'win32') return argv.map((arg) => BARE_WORD.test(arg) ? arg : shellSingleQuote(arg)).join(' ')
-  const words = argv.map((arg) => arg.replace(/\\/g, '/'))
-  return words.every((word) => WINDOWS_WORD.test(word)) ? words.join(' ') : null
+function commandLine(argv: string[], platform: NodeJS.Platform, bash: string | null): string | null {
+  if (platform === 'win32' && !bash) {
+    try { return quoteHookCommand('powershell', argv) as string } catch { return null }
+  }
+  const words = platform === 'win32' ? argv.map((arg) => arg.replace(/\\/g, '/')) : argv
+  return words.map((arg) => BARE_WORD.test(arg) ? arg : shellSingleQuote(arg)).join(' ')
 }
 
-/** The settings object that gives the launch Harness's status line, or null where it cannot have one. */
+/**
+ * The settings object that gives the launch Harness's status line, or null where it cannot have one. [gitBash] is the Git
+ * Bash Claude Code runs it in on Windows, null where that is PowerShell.
+ */
 export function statusLineSetting(contract: StatusLineContract, files: StatusLineFiles, dataDir: string,
-  platform: NodeJS.Platform = process.platform): Record<string, unknown> | null {
+  platform: NodeJS.Platform = process.platform, gitBash: () => string | null = claudeCodeGitBash): Record<string, unknown> | null {
   const paths = [join(files.home, contract.file), ...(files.cwd && files.folder ? contract.folder.map((name) => join(files.cwd!, name)) : [])]
   let theirs: unknown
   for (const path of paths) {
@@ -86,12 +93,17 @@ export function statusLineSetting(contract: StatusLineContract, files: StatusLin
     if (settings && Object.hasOwn(settings, contract.key)) theirs = merged(theirs, settings[contract.key])
   }
   const own = isRecord(theirs) && theirs.type === contract.type && typeof theirs.command === 'string' && theirs.command.trim() ? theirs : null
-  // On Windows the script would run the person's command in another shell than the engine does: theirs is left as it is.
-  if (own && platform === 'win32') return null
+  const bash = platform === 'win32' ? gitBash() : null
+  // In PowerShell the script could not run the person's line as Claude Code runs it there: theirs is left as it is.
+  if (own && platform === 'win32' && !bash) {
+    if (!leftAlone) console.warn('[statusline] Claude Code runs status lines in PowerShell here (no Git Bash), so a session with the person\'s own status line reports no quota')
+    leftAlone = true
+    return null
+  }
   const script = scriptIn(dataDir)
   if (!script) return null
   const command = commandLine([managedNodePath(), script, '--data', dataDir,
-    ...(own ? ['--then', Buffer.from(own.command as string, 'utf8').toString('base64url')] : [])], platform)
+    ...(own ? ['--then', Buffer.from(own.command as string, 'utf8').toString('base64url')] : []), ...(bash ? ['--bash', bash] : [])], platform, bash)
   if (!command) return null
   const { type: _type, command: _command, ...kept } = own ?? {}
   return { [contract.key]: { ...kept, type: contract.type, command } }
