@@ -102,11 +102,12 @@ Swarm and machine settings (each refused unless you may change that setting; a p
 - \`capacity MACHINE_ID JSON\` inspects a machine's, engine's and quota headroom (JSON: the start fields). Unknown allowances are not reported as free tokens.
 - \`start OPERATION_ID JSON\` creates one agent in a conversation on a machine in the Swarm's Machines list; \`assign\` below assigns it. JSON:
   \`{"conversationId":"GROUP","machineId":"MACHINE","engine":"codex","name":"AGENT NAME","cwd":"/absolute/repo/on/that/machine","worktree":true,"branchRef":"refs/remotes/origin/BASE_BRANCH","model":"opus","effort":"high","routeDecisionId":"DECISION","roleName":"optional","assign":{"message":"first message"}}\`
-  - \`worktree: true\` starts from the repository's default branch, fetched first; \`branchRef\` (refs/heads/BRANCH, or refs/remotes/origin/BRANCH to fetch it first) starts from another branch, such as the one the work builds on.
+  - \`worktree: true\` starts from the repository's default branch, fetched first; \`branchRef\` (refs/heads/BRANCH, or refs/remotes/origin/BRANCH to fetch it first) starts from another branch.
   - \`assign\` (coordinator only): the server assigns the agent this task and sends \`message\` when its host says it is ready: no resume or assign call.
   - \`roleName\` is optional: the role the agent starts in, free text taken from the project's instructions, up to 40 characters. An older Swarm refuses the key.
-  - Start only on the Swarm's listed machines; to use another, a person adds it first. \`resume START_ID\` finishes a pending start without creating another agent; repeat \`start\` with the same id after an interruption. Two failed starts in a row suspend the engine on that machine; the route says so.
+  - Start only on the Swarm's listed machines; to use another, a person adds it first. \`resume START_ID\` finishes a pending start without creating another agent; repeat \`start\` with the same id after an interruption. Two failed starts in a row suspend that engine there.
   - A start that fails is reported (\`START_FAILED\`, with why) and moved nowhere: you decide; the coordinator is told too.
+  - Starts can be refused when too many starts are pending.
 - Add a step to a task: create a conversation with \`reviewOf\` set to the task and \`step\` set to the step's name from your project's instructions, then assign it. A step's status reaches the task's assignee.
 - Any group created with \`reviewOf\` is a step of that task, with or without a \`step\` name: its status and its posts that name no one reach the task's assignee. A \`review\` status wakes nobody by itself: when the work is ready for review, name the reviewing agent with \`--to\` in your post.
 

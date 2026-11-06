@@ -239,7 +239,7 @@ const SOURCE: Readonly<Record<string, string>> = {
   "- Start or assign the candidate": "cfc6e51b5d31",
   "- `plan [JSON]`": "ba5881b0781b",
   "- `capacity MACHINE_ID": "06721cd15ba5",
-  "- `start OPERATION_ID JSON`": "bb7cec55c82e",
+  "- `start OPERATION_ID JSON`": "560b174c38ba",
   "- Add a step to a task": "d42101a501d5",
   "- Any group created with `reviewOf`": "995b60db37d8",
   "- A group opened for a person's request": "b3c7b277a521",
