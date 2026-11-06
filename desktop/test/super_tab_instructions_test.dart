@@ -353,6 +353,43 @@ void main() {
     expect(unconfirmed, findsNothing);
   });
 
+  testWidgets(
+    'a refused save says why only in the panel, and no Reply box keeps it '
+    'after the panel closes (task #3652)',
+    (tester) async {
+      final (server, controller) = await mount(tester, account: 'peer');
+      await openInstructions(tester);
+      await tester.enterText(find.byKey(_editor), 'Draft line');
+      await tester.enterText(find.byKey(_summary), 'Mine');
+      await tester.pump();
+      const why = 'Not saved: Core over budget.';
+      server.refuse = {'code': 'INSTRUCTIONS_BUDGET', 'message': why};
+      server.refuseStatus = 400;
+      await tester.tap(find.byKey(_save));
+      await tester.pumpAndSettle();
+      server.refuse = null;
+
+      final inPanel = find.descendant(
+        of: find.byType(SuperTabDetailDialog),
+        matching: find.textContaining('Core over budget'),
+      );
+      expect(inPanel, findsOneWidget);
+      // Only there: not in the chat's Reply box behind it.
+      expect(find.textContaining('Core over budget'), findsOneWidget);
+      expect(controller.composerError('lead'), isNull);
+      expect(controller.threadComposerError('lead', 'message-1'), isNull);
+
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Discard'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
+      expect(find.textContaining('Core over budget'), findsNothing);
+      expect(controller.composerError('lead'), isNull);
+      expect(controller.threadComposerError('lead', 'message-1'), isNull);
+    },
+  );
+
   testWidgets('closing with unsaved changes asks first', (tester) async {
     await mount(tester, account: 'peer');
     await openInstructions(tester);
