@@ -13,6 +13,7 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/status_line_style.dart';
+import '../shared/theme/machines_style.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/app_menu.dart';
@@ -54,6 +55,8 @@ import '../widgets/laid_out_list.dart';
 
 export 'machine_status.dart';
 
+part 'machines_manage.dart';
+
 /// The backend's upper bound. A machine's own total RAM may set a lower one.
 const _agentSlotsMin = 1;
 const _agentSlotsMax = 1024;
@@ -85,9 +88,6 @@ int? _maxAgentSlots(MachineResources? resources) {
 
 int? _suggestedAgentSlots(MachineResources? resources) =>
     superTabSuggestedAgentSlots(resources);
-
-/// Where a machine's row starts in Manage, so its mark sits under the heading.
-const _manageRowStart = 12.0;
 
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
@@ -838,6 +838,8 @@ Future<void> _machineSettingsDialog(
 class _SuperTabMachinesState extends State<SuperTabMachines> {
   final _samples = <String, (MachineResources, DateTime)>{};
   String? _selectedMachineId;
+  String _machineSearch = '';
+  String _machineFilter = 'all';
 
   /// Samples from before foreground return stay cached, but their readings are
   /// hidden behind the refreshing state until the next read answers.
@@ -2247,7 +2249,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       active: true,
       child: _RowHoverRegion(
         child: Material(
-          color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
+          color: widget.manage && view.owner?.id == c.accountId
+              ? MachinesStyle.selected
+              : selected
+              ? grid.AppSurface.selectedFill
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
           clipBehavior: Clip.antiAlias,
           // No chevron (Dee, 2026-10-27): a click expands the machine, and its
@@ -2287,36 +2293,45 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 },
                 child: Semantics(
                   expanded: expanded,
-                  child: _MachineLine(
-                    view: view,
-                    words: widget.manage,
-                    onMore: BrowserMenuGuard.inBrowser
-                        ? (at) => _menu(view, at)
-                        : null,
-                    onSetUpTeam: view.retryJoin
-                        ? () async {
-                            await widget.app!.retryTeamJoin();
-                            await _readTeamSetup();
-                          }
-                        : view.setUpTeam
-                        ? () async {
-                            await showTeamAccountSetup(
-                              context,
-                              widget.app!,
-                              restart: view.setUpTeamLabel == 'Restart',
-                              missing: view.setUpTeamLabel == 'Restart'
-                                  ? 'Harness Team account offline'
-                                  : _teamSetup?.state == 'incomplete'
-                                  ? _teamSetup?.detail ?? ''
-                                  : null,
-                              signInAgain:
-                                  view.setUpTeamLabel != 'Restart' &&
-                                  _teamSetup?.state == 'exists',
-                            );
-                            await _readTeamSetup();
-                          }
-                        : null,
-                  ),
+                  child: widget.manage
+                      ? _ManageMachineLine(
+                          view: view,
+                          own: view.owner?.id == c.accountId,
+                          local:
+                              widget.app?.stateOf(view.id)?.isLocalMachine ==
+                              true,
+                          now: widget.now(),
+                          onMore: (at) => _menu(view, at),
+                        )
+                      : _MachineLine(
+                          view: view,
+                          onMore: BrowserMenuGuard.inBrowser
+                              ? (at) => _menu(view, at)
+                              : null,
+                          onSetUpTeam: view.retryJoin
+                              ? () async {
+                                  await widget.app!.retryTeamJoin();
+                                  await _readTeamSetup();
+                                }
+                              : view.setUpTeam
+                              ? () async {
+                                  await showTeamAccountSetup(
+                                    context,
+                                    widget.app!,
+                                    restart: view.setUpTeamLabel == 'Restart',
+                                    missing: view.setUpTeamLabel == 'Restart'
+                                        ? 'Harness Team account offline'
+                                        : _teamSetup?.state == 'incomplete'
+                                        ? _teamSetup?.detail ?? ''
+                                        : null,
+                                    signInAgain:
+                                        view.setUpTeamLabel != 'Restart' &&
+                                        _teamSetup?.state == 'exists',
+                                  );
+                                  await _readTeamSetup();
+                                }
+                              : null,
+                        ),
                 ),
               ),
             ),
@@ -2690,13 +2705,16 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final views = _sortedViews();
     final yours = <_MachineView>[];
     final online = <_MachineView>[];
+    final asleep = <_MachineView>[];
     final unknown = <_MachineView>[];
     final offline = <_MachineView>[];
     for (final view in views) {
+      if (widget.manage && !_matchesMachine(view)) continue;
       if (view.owner?.id != null && view.owner?.id == c.accountId) {
         yours.add(view);
       } else {
         (switch (view.status) {
+          SuperTabMachineStatus.late when widget.manage => asleep,
           SuperTabMachineStatus.unknown => unknown,
           SuperTabMachineStatus.offline => offline,
           _ => online,
@@ -2706,6 +2724,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     return [
       ('yours', 'Yours', yours),
       ('online', 'Online', online),
+      ('asleep', 'Asleep', asleep),
       ('unknown', 'Status unknown', unknown),
       ('offline', 'Offline', offline),
     ].where((g) => g.$3.isNotEmpty).toList();
@@ -2717,17 +2736,25 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     header: true,
     container: true,
     child: Padding(
-      padding: const EdgeInsets.fromLTRB(
-        grid.AppDesktop.controlGap,
-        grid.AppDesktop.controlGap,
-        grid.AppDesktop.controlGap,
-        grid.AppDesktop.listRowGap,
-      ),
+      padding: widget.manage
+          ? MachinesStyle.groupInset
+          : const EdgeInsets.fromLTRB(
+              grid.AppDesktop.controlGap,
+              grid.AppDesktop.controlGap,
+              grid.AppDesktop.controlGap,
+              grid.AppDesktop.listRowGap,
+            ),
       child: Text(
-        '$label · $count',
-        style: DesktopChrome.metadata().copyWith(
-          fontWeight: grid.AppFont.semibold,
-        ),
+        widget.manage
+            ? (key == 'yours'
+                  ? 'YOUR MACHINE'
+                  : '${label.toUpperCase()} · $count')
+            : '$label · $count',
+        style: widget.manage
+            ? MachinesStyle.small(heading: true)
+            : DesktopChrome.metadata().copyWith(
+                fontWeight: grid.AppFont.semibold,
+              ),
       ),
     ),
   );
@@ -2819,45 +2846,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             ),
           )
         : null;
-    if (widget.manage) {
-      return LaidOutListView(
-        // A row's mark starts under Manage's heading, its words end at the
-        // page's edge (Swarm's and Models' 24).
-        padding: const EdgeInsets.fromLTRB(
-          _manageRowStart,
-          grid.AppDesktop.controlGap,
-          grid.AppDesktop.groupGap,
-          grid.AppDesktop.controlGap,
-        ),
-        children: [
-          // Only a Swarm that can't be read is news, as under the old heading.
-          if (c.backendUnreachable)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: SuperTabMachinesPill(
-                connecting: c.stillConnecting,
-                reconnectingFor: failingSince == null
-                    ? Duration.zero
-                    : widget.now().difference(failingSince),
-              ),
-            ),
-          ?_stateNote(const EdgeInsets.all(grid.AppDesktop.controlGap)),
-          if (_ids.isNotEmpty) ..._machines(),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: Padding(
-              padding: const EdgeInsets.only(right: grid.AppDesktop.controlGap),
-              child: TextButton(
-                key: const ValueKey('super-manage-add-machine'),
-                onPressed: add,
-                child: const Text('Add machine'),
-              ),
-            ),
-          ),
-        ],
-      );
-    }
+    if (widget.manage) return _manageScreen(add, failingSince);
     final children = [
       SuperTabSectionHeading(
         'Machines',
@@ -3357,17 +3346,9 @@ class _MachineProjectsSettingState extends State<_MachineProjectsSetting> {
 }
 
 class _MachineLine extends StatelessWidget {
-  const _MachineLine({
-    required this.view,
-    this.onSetUpTeam,
-    this.onMore,
-    this.words = false,
-  });
+  const _MachineLine({required this.view, this.onSetUpTeam, this.onMore});
 
   final _MachineView view;
-
-  /// Its owner and status in words (Manage), not their marks.
-  final bool words;
 
   /// In a browser, opens the machine's menu at a point until it closes: the ⋯ that needs no right-click.
   final Future<void> Function(Offset at)? onMore;
@@ -3487,29 +3468,7 @@ class _MachineLine extends StatelessWidget {
               ),
             ),
           ),
-          if (words) ...[
-            if (owner != null)
-              Padding(
-                padding: const EdgeInsets.only(
-                  left: grid.AppDesktop.controlGap,
-                ),
-                child: Text(
-                  owner.shownName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.metadata(),
-                ),
-              ),
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: grid.AppDesktop.controlGap,
-              ),
-              child: Text(switch (view.status) {
-                SuperTabMachineStatus.live => 'online',
-                final status => superTabMachineStateLabel(status).toLowerCase(),
-              }, style: DesktopChrome.metadata()),
-            ),
-          ] else if (owner != null)
+          if (owner != null)
             Padding(
               padding: const EdgeInsets.only(left: 6),
               child: Tooltip(
@@ -3527,22 +3486,21 @@ class _MachineLine extends StatelessWidget {
               key: ValueKey('super-machine-more-${view.id}'),
               onOpen: open,
             ),
-          if (!words)
-            SizedBox(
-              width: 32,
-              child: Center(
-                child: KeyedSubtree(
-                  key: ValueKey(
-                    'super-machine-state-${view.id}-${view.status.name}',
-                  ),
-                  child: SuperTabMachineDot(
-                    status: view.status,
-                    readingAt: view.readingAt,
-                    arrived: view.arrived,
-                  ),
+          SizedBox(
+            width: 32,
+            child: Center(
+              child: KeyedSubtree(
+                key: ValueKey(
+                  'super-machine-state-${view.id}-${view.status.name}',
+                ),
+                child: SuperTabMachineDot(
+                  status: view.status,
+                  readingAt: view.readingAt,
+                  arrived: view.arrived,
                 ),
               ),
             ),
+          ),
         ],
       ),
     );
