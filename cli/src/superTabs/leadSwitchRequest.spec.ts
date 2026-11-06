@@ -9,6 +9,9 @@ import { markBuddyOwner, writeBuddyAccount } from '../lib/buddyGuard.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { processCoreApi } from '../services/processCoreApi.js'
 import { FIXTURE, readFixture } from './fixtures/read/index.js'
+// Each trust fixture moves the engine homes; do not reuse a login-shell snapshot captured by another fixture.
+vi.mock('../engines/kit/launchExecutable.js', async original => ({ ...await original<object>(),
+  launchEnvironment: async () => Object.fromEntries(['HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) }))
 import { LeadSwitchRequests, profileSignedIn, switchChangeId, type SwitchRow } from './leadSwitchRequest.js'
 
 afterEach(() => { vi.unstubAllEnvs() })
@@ -443,6 +446,7 @@ describe('a Buddy engine handoff', () => {
       return request(type, payload, timeout)
     })
     await t.switches.serve(buddyRow({ switchRequest: { id: 'sw1', engine, profileId: 'default', requestedBy: 'owner' } }))
+    expect(existsSync(config), 'the target engine must have its folder-trust answer').toBe(true)
     expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare', 'agent_close', 'agent_create', 'agent_handoff_complete'])
   })
 
