@@ -55,11 +55,11 @@ says to use `--dangerously-skip-permissions` only in isolated environments; a pe
 - A Team-written start: still `teamWritten`.
 - `harness new` for an engine without a mode row: still no mode, as before.
 
-## Out of scope (proposed to the PM)
+## Clients (added by the PM, 2026-11-07)
 
 Desktop's Cmd+S Swarm PM (`desktop/lib/super_tabs/launch.dart:129 forcedPermissionMode: 'full'`) and the phone's Swarm PM
-(`mobile/lib/swarm/swarm_computers.dart:184`) still force full mode from the client; with the acceptance write gone, such a
-PM on a machine that never accepted full mode stops at Claude Code's warning. Those files are outside this task's owns.
+(`mobile/lib/swarm/swarm_computers.dart:184`) forced full mode from the client; with the acceptance write gone, such a PM on
+a machine that never accepted full mode would stop at Claude Code's warning. The PM put both in this task (Tasks 5 and 6).
 
 ---
 
@@ -109,3 +109,25 @@ PM on a machine that never accepted full mode stops at Claude Code's warning. Th
 - [ ] Test: `harness new claude` and `harness new codex` send neither `permissionMode` nor `bypassPermission: true`;
   `--mode auto`, `--mode full`, `--plan` still send theirs.
 - [ ] Run, see it fail; implement; run, see it pass; commit each.
+
+### Task 5: Desktop starts a Swarm PM in the mode the person chose
+
+**Files:**
+- Modify: `desktop/lib/super_tabs/launch.dart`, `desktop/lib/state/harness_launch_integration.dart`,
+  `desktop/lib/state/new_harness.dart`, `desktop/lib/super_tabs/personal_lead.dart`
+- Test: `desktop/test/super_tab_launch_test.dart`, `desktop/test/super_tab_personal_lead_test.dart`
+
+- [ ] Test: a new Swarm, new project and member start of Claude and Codex shows Permissions and sends the person's mode
+  (`ask`, bypass off); OpenCode and Hermes members launch as their ordinary harness; the personal PM sends no mode and
+  `bypassPermission: false` (Desktop's `createAgent` defaults it to true).
+- [ ] Run, see it fail; remove `forcedPermissionMode`; the Permissions row is hidden only when the Swarm starts the PM on
+  another machine (`leadThroughSwarm`), which cannot take a choice; run, see it pass; commit each.
+
+### Task 6: the phone starts a Swarm PM with no mode
+
+**Files:**
+- Modify: `mobile/lib/swarm/swarm_computers.dart`
+- Test: `mobile/test/swarm/swarm_lead_computers_test.dart`
+
+- [ ] Test: `startLead` sends no `permissionMode` and `bypassPermission: false`.
+- [ ] Run, see it fail; drop `permissionMode: 'full'`; run, see it pass; commit each.
