@@ -1,4 +1,9 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { createInterface } from 'node:readline'
+import { createSuperTabTerminal } from './inCore/terminal.js'
+import { screen as codexScreen } from '../engines/codex/screen.js'
+import type { RegisteredSession } from '../lib/registry.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -657,27 +662,54 @@ describe('reading a model that keeps failing off a screen', () => {
 // #3904: a resumed Swarm Codex already has an identity, so startup settlement never sees its folder prompt.
 describe('opening a Swarm Codex folder restricted after start or resume', () => {
   const restricted = fixture('codex-0165-open-restricted')
-  it.each(['fresh start', 'resume'])('continues a fake Codex %s without granting trust', async () => {
-    let capture = restricted
+  it.each(['start', 'resume'])('continues a fake Codex %s without granting trust', async (mode) => {
     const home = mkdtempSync(join(tmpdir(), 'codex-restricted-'))
     const config = join(home, 'config.toml')
     const savedConfig = '[projects."/worktree"]\ntrust_level = "untrusted"\n'
     writeFileSync(config, savedConfig)
-    const t = setup({ engine: 'codex', screen: () => ({ ok: true, text: capture,
-      hold: capture === restricted ? 'trust_open' : null }) })
-    // Fake Codex waits for the highlighted restricted choice; no other key or stale screen opens it.
-    vi.mocked(t.core.superTabs!.inputIfScreen).mockImplementation(async (_id, keys, expected) => {
-      if (expected !== capture) return { ok: false, error: 'Screen changed.' }
-      if (keys.length !== 1 || keys[0] !== 'Enter') return { ok: false, error: 'Still waiting.' }
-      capture = '› Ask Codex to do anything'
-      return { ok: true }
-    })
-    await t.host.tick([row()])
-    expect(capture).toBe('› Ask Codex to do anything')
-    expect(readFileSync(config, 'utf8')).toBe(savedConfig)
-    rmSync(home, { recursive: true, force: true })
-    t.wait(180_000); await t.host.tick([row()])
-    expect(t.alerts()).toEqual([])
+    // A separate fake engine waits on input on both startup paths, reading only its disposable home.
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `
+      import { readFileSync } from 'node:fs';
+      import { createInterface } from 'node:readline';
+      const [mode, config, prompt] = process.argv.slice(1);
+      if (!['start', 'resume'].includes(mode) || !readFileSync(config, 'utf8').includes('"untrusted"')) process.exit(1);
+      console.log(JSON.stringify(prompt));
+      createInterface({ input: process.stdin }).on('line', key => {
+        if (key === 'Enter') console.log(JSON.stringify('› Ask Codex to do anything'));
+      });
+    `, mode, config, restricted], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+    const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]()
+    const nextScreen = async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const line = await Promise.race([lines.next(), new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Fake Codex did not draw its next screen')), 2_000)
+        })])
+        if (line.done) throw new Error('Fake Codex exited before drawing its screen')
+        return JSON.parse(line.value) as string
+      } finally { clearTimeout(timer) }
+    }
+    try {
+      let capture = await nextScreen()
+      const t = setup({ engine: 'codex' })
+      const terminal = createSuperTabTerminal({
+        resolve: id => id === 'h1' ? { agentId: id, engine: 'codex' } as RegisteredSession : undefined,
+        capture: async () => ({ state: 'succeeded', value: capture }),
+        read: async (_session, text) => codexScreen.inspect(text ?? ''),
+        type: async () => false,
+        key: async (_id, key) => { child.stdin.write(`${key}\n`); capture = await nextScreen(); return true },
+        locked: async (_id, write) => write(),
+      })
+      Object.assign(t.core.superTabs!, terminal)
+      await t.host.tick([row()])
+      expect(capture).toBe('› Ask Codex to do anything')
+      expect(readFileSync(config, 'utf8')).toBe(savedConfig)
+      t.wait(180_000); await t.host.tick([row()])
+      expect(t.alerts()).toEqual([])
+    } finally {
+      child.kill()
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 
   it.each([
