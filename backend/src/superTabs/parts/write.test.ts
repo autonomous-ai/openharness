@@ -88,7 +88,8 @@ describe('the feed ids a conversation write stores (read/feedIds.ts, task #4203)
 
   it('names the requester, the approver, the suggested agent, the proposal senders and the assignee, each once, archived or not', () => {
     expect(ids(task({ taskApproval: { personId: 'asker', generation: 'g1', state: 'approved', createdAt: 1, suggestedAgentId: 'worker' },
-      proposal: { senders: [{ personId: 'proposer', generation: 'g1' }, { personId: 'asker', generation: 'g1' }] } as never })))
+      proposal: { version: 1, text: 'Keep drafts', goal: 'Drafts', why: 'Loss', doneWhen: 'Returns', evidence: ['Repro'], priority: 'P2', createdAt: 1, questions: [],
+        senders: [{ personId: 'proposer', generation: 'g1' }, { personId: 'asker', generation: 'g1' }] } })))
       .toEqual(['asker', 'proposer', 'worker'])
     expect(ids(task({ requesterId: undefined, assignment: null, taskApproval: { personId: 'approver', generation: 'g1', state: 'proposal', createdAt: 1,
       suggestedAgentId: 'suggested' } }))).toEqual(['approver', 'suggested'])

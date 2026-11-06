@@ -1972,6 +1972,9 @@ model SwarmGroup {
   /// Out of first loads and changes: work done or cancelled and quiet for a day, or archived by hand. A message wakes it.
   dormant            Boolean   @default(false)
   agentIds           String[]
+  /// The people and agents whose Tasks feed lists it (read/feedIds.ts); [] for a conversation that is no task. Set on every
+  /// write; parts written before it are set at worker startup (markFeedIds).
+  feedIds            String[]  @default([])
   /// The machine running its active assignment, for the host's change read.
   executionMachineId String?
   messageSeq         Int       @default(0)
@@ -1995,6 +1998,8 @@ model SwarmGroup {
   @@index([tabId, changedAt])
   @@index([tabId, dormant, changedAt])
   @@index([tabId, agentIds])
+  /// A person's Tasks feed, newest activity first, then by key (read/personalTasks.ts): the person and their own agents.
+  @@index([tabId, feedIds, lastActivityAt, key])
   /// A project's quiet conversations by activity (leaderboard, digest), and their pages newest first, then by key (parts/load.ts loadDormant).
   @@index([tabId, projectId, dormant, lastActivityAt, key])
   @@index([tabId, projectId, dormant, reportSeq])

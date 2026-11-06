@@ -49,13 +49,18 @@ async function fixture() {
     ...requesterId ? { requesterId } : { noRequesterReason: 'fixture' },
     task: { goal: title, changes: title, constraints: 'none', owns: ['backend/'] }, checks: [{ description: `${title} works`, independent: false }] }, owner, pm)).conversationId)
   const theirs = await task('Peer agent work', owner.sub)
-  const peerAgent = String((await execute({ type: 'agent.add', conversationId: theirs, machineId: 'feed-peer-mac', harnessId: randomUUID(), name: 'Peers', configuration: config }, peer)).agentId)
+  const peerAgent = String((await execute({ type: 'agent.add', conversationId: theirs, machineId: 'feed-peer-mac', harnessId: randomUUID(), name: 'Peers', configuration: config, lead: false }, peer)).agentId)
   await execute({ type: 'work.assign', conversationId: theirs, agentId: peerAgent }, owner, pm)
   const asked = await task('Peer asked', peer.sub)
+  // The Board switch is #3819's command; the proposal cards read only its stored value.
+  const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${tab}:head` } })
+  const data = head.data as unknown as { projects: Array<{ boardMode?: true }> }
+  data.projects[0]!.boardMode = true
+  await db.swarmHead.update({ where: { id: head.id }, data: { data: data as never, version: head.version + 1 } })
   const proposal = String((await execute({ type: 'proposal.create', projectId: 'lead', title: 'Keep drafts', text: 'Keep offline drafts', goal: 'Preserve work',
     why: 'Reconnect loses drafts', doneWhen: 'Draft returns', evidence: ['Repro'], priority: 'P2' }, peer)).conversationId)
   const ownersOwn = await task('Owner work', owner.sub)
-  const ownerAgent = String((await execute({ type: 'agent.add', conversationId: ownersOwn, machineId: 'feed-owner-mac', harnessId: randomUUID(), name: 'Builder', configuration: config })).agentId)
+  const ownerAgent = String((await execute({ type: 'agent.add', conversationId: ownersOwn, machineId: 'feed-owner-mac', harnessId: randomUUID(), name: 'Builder', configuration: config, lead: false })).agentId)
   await execute({ type: 'work.assign', conversationId: ownersOwn, agentId: ownerAgent }, owner, pm)
   const secret = String((await execute({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })).projectId)
   // Archived and quiet, as the archive pass leaves a finished task: still in its people's history.

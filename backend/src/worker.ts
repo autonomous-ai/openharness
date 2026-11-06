@@ -27,6 +27,7 @@ import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { startDeliveryRepush } from './superTabs/deliveryRepush.js'
 import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
 import { startThreadBackfill } from './superTabs/threadBackfill.js'
+import { markFeedIds } from './superTabs/read/feedIds.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
 import { appPullRequestWatch, startPullRequestWatch } from './superTabs/pullRequestEvents.js'
 import { startTimeChecks } from './superTabs/timeChecks.js'
@@ -70,6 +71,8 @@ async function start(): Promise<void> {
   const schema = await releaseSchema()
   // After the push, which adds the finished mark: parts written before it are marked once, so the archive pass finds them.
   await markFinishedGroups(prisma)
+  // Likewise the Tasks feed's column (read/feedIds.ts): a person's older tasks show once it is set.
+  logger.info('[swarm] Tasks feed ids set on older conversations', { count: await markFeedIds(prisma) })
   // AFTER the push: it creates the new collections + their unique indexes, and the copy uses $merge
   // so those indexes survive. Copying first would leave the unique index build to fail silently.
   await migrateMachineRename()
