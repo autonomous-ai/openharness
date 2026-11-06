@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/machines.dart';
+import 'package:harness/ws/local_cli_discovery.dart';
 
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
@@ -48,6 +49,12 @@ void main() {
       addTearDown(tester.view.reset);
       final fixture = SuperTabLaunchFixture();
       fixture.app.machineStates['mine'] = fixture.app.machineStates['m']!;
+      fixture.app.machineStates['mine']!.localEndpoint = LocalCliEndpoint(
+        computerId: 'capture-machine',
+        wsUri: Uri.parse('ws://127.0.0.1:18473'),
+        protocolVersion: 1,
+        terminalProtocolVersion: 1,
+      );
       fixture.app.machineStates['mine']!.machine = fixture
           .app
           .machineStates['mine']!
