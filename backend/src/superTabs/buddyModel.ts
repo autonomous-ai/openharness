@@ -152,8 +152,7 @@ export function buddyModelResult(state: SuperTabState, actor: Actor,
       const on = gaveUp[0]!.gridModel!
       // The host's words name why (cli superTabs/buddyModel.ts), after its own lead-in, which this line says differently.
       const why = words.replace(/^(?:A thread session stayed where it was|\d+ thread sessions stayed where they were): /, '')
-      return mine(`A thread session is still on ${served(state, on, now)?.name ?? on}: ${why || 'its computer could not move it'}. `
-        + 'End that thread\'s session to bring it back to your subscription.')
+      return mine(stillOn(state, on, why || 'its computer could not move it', now, request.name))
     }
     // Another try is owed while one stays; its owner hears once it lands or gives up, not at every try.
     return stayedIds.size ? [] : mine('Your Buddy\'s thread sessions are back on your subscription too.')
@@ -203,8 +202,15 @@ export function expiredModelRequests(state: SuperTabState, now: number): Array<{
     const request = buddy.modelRequest
     if (!request || !buddy.buddyOf || now < Date.parse(request.at) + BUDDY_MODEL_LEASE_MS) continue
     delete buddy.modelRequest
-    // A sessions-only move home its machine never answered counts as a try, said only when it gives up (task #3810).
-    if (request.sessionsOnly) { owedHome(state, buddy).forEach(session => countTry(session)); continue }
+    // A sessions-only move home its machine never answered counts as a try, said only when it gives up (task #3810; review of
+    // #3393: the last one gave up without a word).
+    if (request.sessionsOnly) {
+      const gaveUp = owedHome(state, buddy).filter(countTry)
+      if (gaveUp.length) out.push({ buddy, requestId: request.id, machines: hiddenMachines(state, buddy, request, now),
+        conversationId: swarmBuddyChatId({ id: buddy.buddyOf.personId, generation: buddy.buddyOf.generation }),
+        text: stillOn(state, gaveUp[0]!.gridModel!, 'its computer didn\'t answer', now, request.name) })
+      continue
+    }
     out.push({ buddy, requestId: request.id, conversationId: swarmBuddyChatId({ id: buddy.buddyOf.personId, generation: buddy.buddyOf.generation }),
       machines: hiddenMachines(state, buddy, request, now),
       text: `Couldn't switch your Buddy: its computer didn't answer. It is still on ${current(state, buddy, now)}.` })
@@ -215,11 +221,17 @@ export function expiredModelRequests(state: SuperTabState, now: number): Array<{
 /** [buddy]'s thread sessions a move home left on a shared model (task #3810). */
 const owedHome = (state: SuperTabState, buddy: Agent): Agent[] => state.agents.filter(a => a.buddySession && a.homeOwed && a.gridModel
   && a.buddyOf?.personId === buddy.buddyOf!.personId && a.buddyOf.generation === buddy.buddyOf!.generation)
-function countTry(session: Agent): void {
+/** One more try at moving [session] home; true when that was the last, and its follow-up is dropped. */
+function countTry(session: Agent): boolean {
   const tries = session.homeOwed!.tries + 1
-  if (tries > HOME_TRIES) delete session.homeOwed
-  else session.homeOwed = { ...session.homeOwed!, tries }
+  if (tries <= HOME_TRIES) { session.homeOwed = { ...session.homeOwed!, tries }; return false }
+  delete session.homeOwed
+  return true
 }
+/** The owner's line when a thread session stays on [model] after its last try home: what to do about it. [known]: the name the
+ *  request recorded, for when no machine serves the model by now. */
+const stillOn = (state: SuperTabState, model: string, why: string, now: number, known?: string) =>
+  `A thread session is still on ${served(state, model, now)?.name ?? known ?? model}: ${why}. End that thread's session to bring it back to your subscription.`
 
 /** Buddies on a model nobody has served for BUDDY_MODEL_GONE_MS are sent home; one served again is unmarked. A Buddy at home
  *  whose thread session a move home left on a shared model asks its machine to move that session home (task #3810). */
