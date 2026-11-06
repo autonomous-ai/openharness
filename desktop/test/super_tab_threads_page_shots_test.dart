@@ -183,6 +183,16 @@ void main() {
           shots,
           'threads-page-expanded-${brightness.name}',
         );
+        // Task #3751: the cards' text can be selected and copied, as in the chat.
+        tester
+            .state<SelectableRegionState>(find.byType(SelectableRegion).first)
+            .selectAll(SelectionChangedCause.keyboard);
+        await tester.pumpAndSettle();
+        await captureWindow(
+          tester,
+          shots,
+          'threads-page-selected-${brightness.name}',
+        );
       });
     });
   }
