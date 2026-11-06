@@ -269,14 +269,15 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(String(t.calls.find(c => c[0] === 'agent_create')![1].prompt)).toContain(`conversation is ${FIXTURE.leadGroup}`)
   })
 
-  it('refuses a signed-out default account before closing the PM, outside Team only', async () => {
-    const t = setup({ home: 'default', signedIn: false })
-    await t.switches.serve(row())
-    expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'that account is signed out' })
-    expect(t.calls).toEqual([])
-    const team = setup({ home: 'default', signedIn: false, team: true })
-    await team.switches.serve(row())
-    expect(team.calls.map(c => c[0])).toContain('agent_close')
+  // A Team daemon's default account was signed in through its owner's relay, which this could not read, so it went
+  // unchecked. With no relay (#4137) it is the account's own sign-in, which the CLI reports like any other.
+  it('refuses a signed-out default account before closing the PM, in a Team daemon too', async () => {
+    for (const team of [false, true]) {
+      const t = setup({ home: 'default', signedIn: false, team })
+      await t.switches.serve(row())
+      expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'that account is signed out' })
+      expect(t.calls).toEqual([])
+    }
   })
 
   it('refuses a signed-out account without closing the PM', async () => {
