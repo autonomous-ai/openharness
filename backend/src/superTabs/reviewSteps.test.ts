@@ -63,6 +63,11 @@ describe('a handed task opens its review steps', () => {
     const f = fixture()
     f.add('rev', f.task, 'Reviewer')
     const tester = f.add('tst', f.task, 'Tester')
+    // A Desktop test runs on a Mac: its Tester's machine says it is one (task #3602; an unlisted machine takes no OS step).
+    f.state.machines = [{ machineId: 'host', name: 'host', contributorId: 'owner', membershipGeneration: 'g', generation: 'g1', cwd: '/swarm', scope: 'swarm',
+      engines: ['claude'], maxAgents: 8, paused: false, observation: { generation: 'g1', receivedAt: 1_000_000 - 1000, sessionKind: 'computer', resources: { os: 'macOS' },
+        tools: {}, runningHarnessIds: [], stoppedHarnessIds: [], readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
+        quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } }] as never
     f.ready(['desktop/lib/super_tabs/view.dart'])
     expect(f.steps().map(s => s.name)).toEqual(['Review', 'Test'])
     expect(f.steps()[1]!.agent).toBe(tester)

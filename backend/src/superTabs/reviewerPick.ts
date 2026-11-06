@@ -80,9 +80,8 @@ export function reviewerCandidates(state: SuperTabState, task: Conversation, kin
     // out of quota. A machine the state does not list is not judged here; work.assign's checks still hold it.
     const pool = state.machines?.find(m => m.machineId === agent.machineId && m.contributorId === agent.contributorId)
     if (pool && !canStart(standing(state, pool, agent.configuration.engine, now))) return []
-    // A test step for an OS goes to a machine that reports that OS; a machine reporting another is never it.
-    if (os && pool?.observation?.resources?.os && !reportsOs(pool.observation.resources.os, os)) return []
-    if (os && pool && !pool.observation?.resources?.os) return []
+    // A test step for an OS goes to a machine that reports that OS: one reporting another, none, or not listed is never it.
+    if (os && !reportsOs(pool?.observation?.resources?.os, os)) return []
     const row = catalogRow(state, agent)
     if (!row || row.strength < bar) return []
     return [{ agent, rank: 0, cost: row.cost }]

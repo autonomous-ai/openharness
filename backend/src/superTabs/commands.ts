@@ -21,7 +21,7 @@ import {
 import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
 import { reviewPlan, stepBrief, stepCheck, type PlannedStep, type StepKind } from './reviewTable.js'
-import { reviewerCandidates } from './reviewerPick.js'
+import { builtBy, reviewerCandidates } from './reviewerPick.js'
 import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
@@ -2545,13 +2545,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // One level: a step's own work is a task's step, never a task with steps of its own (task steps design).
         if (command.step && isStep(reviewed)) fail('STEP_OF_STEP', 'A step belongs to a task, not to another step.', 400)
         // Never doubled (task #3602: #3561 got its server's Security reviews and Test, then its Engineer's review, review and
-        // test): an agent's step is refused when one of the same name is open, or the server opened one of that kind. An
-        // agent's own second step of a kind under another name ("Security review 2") still opens. A person may open any.
-        if (command.step && actor.kind === 'agent') {
+        // test): the task's own Engineer is refused a step when one of the same name is open, or the server opened one of that
+        // kind, while its work is open. Its own second step of a kind under another name ("Security review 2") still opens. The
+        // PM, the Integrator and people open their later checks (a main merge check, a combination read) as before, and a done
+        // step blocks nobody (review of #3312).
+        const engineer = actor.kind === 'agent' && (reviewed!.assignment?.agentId === actor.agentId || builtBy(reviewed!).has(actor.agentId))
+        if (command.step && engineer) {
           const name = (text: string) => text.trim().replace(/\s+/g, ' ').toLowerCase()
           const kind = (text: string) => /security/i.test(text) ? 'security' : /test/i.test(text) ? 'test' : /review|read/i.test(text) ? 'review' : null
           const wanted = kind(command.step)
-          const same = stepsOf(state, reviewed!.id).find(step => !step.archived && (name(stepName(step)) === name(command.step!)
+          const same = stepsOf(state, reviewed!.id).find(step => !step.archived && (!step.assignment || activeWork(step)) && (name(stepName(step)) === name(command.step!)
             || (step.openedBy === 'server' && wanted !== null && kind(stepName(step)) === wanted)))
           if (same) fail('STEP_OPEN', `"${stepName(same)}"${same.number ? ` (#${same.number})` : ''} is already open on this task: use it rather than opening another.`, 409)
         }
