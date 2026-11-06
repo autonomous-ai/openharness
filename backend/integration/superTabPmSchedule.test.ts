@@ -207,7 +207,7 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     expect(await schedules(f.tab)).toHaveLength(1)
   })
 
-  it('sends no wake of its own while the update request that carried the last one is unread', async () => {
+  it('sends no wake of its own while the wake that carried the last one is unread', async () => {
     const f = await swarm({ fresh: true })
     wantSchedule()
     await unassigned(f)
@@ -215,24 +215,10 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     await f.poll()
     f.clock.now += SCHEDULE_SLOT_MS
     await f.poll()
-    expect((await schedules(f.tab)).map(kindOf)).toEqual(['update-request'])
+    expect((await schedules(f.tab)).map(kindOf)).toEqual(['schedule-request'])
   })
 
-  it('goes in the update request when one is written in the same poll', async () => {
-    // Fresh: the setup's own update request would still wait for its answer, and no second one goes meanwhile.
-    const f = await swarm({ fresh: true })
-    wantSchedule()
-    await unassigned(f)
-    f.clock.now += DUE
-    await f.poll()
-    const [wake] = await schedules(f.tab)
-    expect(kindOf(wake!)).toBe('update-request')
-    expect(wake!.source).toMatchObject({ kind: 'update-request', schedule: scheduleSlot(f.clock.now) })
-    expect(wake!.text.indexOf('Work changed')).toBeLessThan(wake!.text.indexOf('Built-in schedule,'))
-    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => kindOf(m) === 'schedule-request')).toEqual([])
-  })
-
-  it('goes in the notice digest when one is written and no update request is', async () => {
+  it('goes in the notice digest when one is written', async () => {
     const f = await swarm()
     wantSchedule()
     await f.write({ kind: 'idle' }, f.lead)
@@ -242,22 +228,6 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     const [digest] = await digests(f.tab)
     expect(digest!.text).toContain('Built-in schedule,')
     expect(digest!.source).toMatchObject({ kind: 'notice-digest', schedule: scheduleSlot(f.clock.now) })
-    expect(await schedules(f.tab)).toHaveLength(1)
-  })
-
-  it('does not go in an update request already stored under its id', async () => {
-    const f = await swarm({ fresh: true })
-    wantSchedule()
-    await f.write({ kind: 'idle' }, f.lead)
-    await unassigned(f)
-    f.clock.now += DUE
-    const { projectUpdateRequest } = await import('../src/superTabs/projectUpdates.js')
-    const { state } = await f.timed.read(host, f.tab, undefined, f.lead)
-    const draft = projectUpdateRequest(state, state.agents.find(a => a.id === f.lead)!, f.clock.now)!
-    await db.superTabMessage.create({ data: { id: draft.id, tabId: f.tab, conversationId: draft.conversationId, sequence: 1, text: draft.text, replyTo: null, recipientIds: draft.recipients,
-      mentions: [], thread: draft.id, source: draft.source as object, author: draft.author as object } })
-    await f.poll()
-    expect((await db.superTabMessage.findUniqueOrThrow({ where: { id: draft.id } })).text).not.toContain('Built-in schedule,')
     expect(await schedules(f.tab)).toHaveLength(1)
   })
 

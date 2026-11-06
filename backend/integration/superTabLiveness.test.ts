@@ -1436,61 +1436,11 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     expect(counted.ops).toContain('SwarmGroup.aggregateRaw')
   })
 
-  it('still runs the Lead\'s time checks: the five-minute update request arrives once 30 seconds have passed', async () => {
+  it('sends the Lead no update request for work changes: its inbox stays empty five minutes on (#3593)', async () => {
     const f = await swarm()
     await f.leadInbox()
     f.clock.now += 5 * MINUTE
-    const told = await f.leadInbox()
-    expect(told.map(m => (m.source as { kind?: string }).kind)).toEqual(['update-request'])
-    // It is the Lead's to act on, with a command to run: the Lead reads it in its chat, and the people there do not.
-    const read = async (asAgentId?: string) => (await f.timed.messages(asAgentId ? host : owner, f.tab, told[0]!.conversationId, {}, asAgentId)).messages.map(m => m.id)
-    expect(await read(f.lead)).toContain(told[0]!.id)
-    expect(await read()).not.toContain(told[0]!.id)
-  })
-
-  // Prod, 2026-10-28: a Lead's host received an update request on 26 Oct and the Lead never answered it. Every later poll
-  // took it as still pending, so the project was never asked again, its reports were never summarized, and 372 archived
-  // conversations could not go quiet for two days.
-  it('asks again once an update request the Lead\'s host received goes unanswered for two hours, and not before', async () => {
-    const f = await swarm()
-    await f.leadInbox()
-    f.clock.now += 5 * MINUTE
-    const requests = async () => {
-      const rows = await f.timed.deliveries(host, f.tab, f.lead)
-      const messages = await db.superTabMessage.findMany({ where: { id: { in: rows.map(r => r.messageId) } } })
-      return rows.filter(r => (messages.find(m => m.id === r.messageId)!.source as { kind?: string }).kind === 'update-request')
-    }
-    const [first] = await requests()
-    expect(first).toBeDefined()
-    // Typed into the Lead's terminal, never answered.
-    await f.timed.delivery(host, f.tab, f.lead, first!.id, { type: 'claim', claimId: 'claim' })
-    await f.timed.delivery(host, f.tab, f.lead, first!.id, { type: 'ack', claimId: 'claim', receipt: 'typed', uncertain: false })
-    // New work changes keep coming (an ordinary progress note would wake nobody: Dee, 2026-10-31).
-    f.clock.now += MINUTE
-    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'review', result: 'Halfway' }, host, f.worker)
-    f.clock.now += 59 * MINUTE
-    expect(await requests()).toEqual([])
-    f.clock.now += 61 * MINUTE
-    const again = await requests()
-    expect(again).toHaveLength(1)
-    expect(again[0]!.messageId).not.toBe(first!.messageId)
-  })
-
-  it('keeps holding later update requests while the first never reached the Lead\'s host, however long', async () => {
-    const f = await swarm()
-    await f.leadInbox()
-    f.clock.now += 5 * MINUTE
-    const kinds = async () => {
-      const rows = await f.timed.deliveries(host, f.tab, f.lead)
-      const messages = await db.superTabMessage.findMany({ where: { id: { in: rows.map(r => r.messageId) } } })
-      return rows.map(r => (messages.find(m => m.id === r.messageId)!.source as { kind?: string }).kind)
-    }
-    expect(await kinds()).toContain('update-request')
-    // Never claimed: the host is offline. New reports keep coming.
-    f.clock.now += MINUTE
-    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Halfway' }, host, f.worker)
-    f.clock.now += 3 * 60 * MINUTE
-    expect((await kinds()).filter(kind => kind === 'update-request')).toHaveLength(1)
+    expect(await f.leadInbox()).toEqual([])
   })
 
   it('delivers a message on the very next poll, within a second of the last one', async () => {
@@ -1760,19 +1710,6 @@ describe('the delivery poll of an agent with a held delivery', () => {
     f.clock.now += 1_000
     const team: AuthUser = { ...host, harnessSessionId: 'team-elsewhere', harnessSessionKind: 'team', harnessComputerId: 'elsewhere' }
     await expect(f.timed.deliveries(team, f.tab, f.lead)).rejects.toMatchObject({ code: 'TEAM_SESSION_LIMITED' })
-  })
-
-  it('still runs the Lead\'s time checks: the five-minute update request arrives beside the held delivery', async () => {
-    const f = await swarm()
-    const row = await held(f)
-    for (let second = 0; second < 5 * 60; second++) {
-      f.clock.now += 1_000
-      await f.timed.deliveries(host, f.tab, f.lead)
-    }
-    const rows = await f.timed.deliveries(host, f.tab, f.lead)
-    expect(rows[0]!.id).toBe(row.id)
-    const kinds = await db.superTabMessage.findMany({ where: { id: { in: rows.map(r => r.messageId) } } })
-    expect(kinds.map(m => (m.source as { kind?: string } | null)?.kind)).toContain('update-request')
   })
 })
 

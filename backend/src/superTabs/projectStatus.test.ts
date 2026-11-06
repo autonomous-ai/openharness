@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
-import { BATCH_MS, dirtyGroups, noteWorkChanges, WAKE_GAP_MS } from './projectUpdates.js'
 import { DEFAULT_DIGEST, digestDue, digestOf } from './digest.js'
 import { projectOf } from './projects.js'
 import { numberMessages } from './parts/commit.js'
@@ -19,10 +18,8 @@ function fixture() {
   let sequence = 0, now = 1_000_000
   /** A command as the store runs it: numbered messages, then the work changes it made (store.ts execute). */
   const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
-    const before = state
     const effects = applyCommand(state, actor, command, { now, operationId: `op-${++sequence}`, ...context })
     numberMessages(effects.state, effects.messages, now)
-    noteWorkChanges(before, effects.state, now)
     state = effects.state
     return effects
   }
@@ -111,11 +108,10 @@ describe('no card wake-up for the coordinator (#3593)', () => {
     const engineer = f.add('engineer', group)
     const as: Actor = { kind: 'agent', agentId: engineer, machineOwnerId: 'host-owner' }
     const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: engineer }).result.assignmentId as string
-    f.tick(BATCH_MS)
+    f.tick(5 * MINUTE)
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'PR #7' }, as)
     f.run({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
-    f.tick(WAKE_GAP_MS)
-    expect(dirtyGroups(f.state, projectOf(f.state, 'lead'))).toEqual([])
+    f.tick(15 * MINUTE)
     expect(f.state.conversations.find(c => c.id === group)!.reportSeq).toBeUndefined()
     expect(projectOf(f.state, 'lead').progress).toBeUndefined()
   })

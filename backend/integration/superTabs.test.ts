@@ -859,9 +859,9 @@ describe('private swarm projects on the real control API', () => {
       name: 'Moved lead', configuration: config, lead: false })).rejects.toMatchObject({ code: 'PROJECT_SESSION' })
   })
 
-  // Quiet project chats (Dee, 2026-10-31): a work group's change of state wakes the coordinator at most once every 15 minutes,
-  // an ordinary message never; its report sets the project's status card and posts nothing; the digest is on by default.
-  it('wakes the coordinator only on work changes, at most every 15 minutes, and keeps its report in the status card', async () => {
+  // Quiet project chats (Dee, 2026-10-31; task #3593): the server writes the status card's lines from task state and wakes the coordinator
+  // for none of them; its report adds its own lines after them and posts nothing; the digest is on by default.
+  it('wakes the coordinator for no work change, shows the server\'s card with its own lines, and sends the digest by default', async () => {
     wantDefaultDigest()
     // 14:00 in Vietnam: the default digest starts tomorrow at 08:00.
     let now = Date.UTC(2026, 9, 31, 7, 0)
@@ -873,46 +873,37 @@ describe('private swarm projects on the real control API', () => {
       harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })).result.agentId)
     const updates = async () => (await timed.deliveries(host, tab, lead)).filter(d => d.conversationId === 'lead')
     const chat = async () => db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' } })
+    const status = async () => (await timed.read(owner, tab)).state.projects!.find(p => p.id === 'lead')!.status
     expect(await updates()).toEqual([])
     const group = String((await execute({ type: 'conversation.create', title: 'Work', brief: 'Implement it',
       checks: [{ description: 'Verified', independent: true }] })).result.conversationId)
-    // Five minutes on, so a burst of changes is one wake-up (the quiet poll's 30 s fit within that).
-    now += 299_999
+    // No wake-up however long it waits: the poll that used to carry the card's request finds nothing.
+    now += 330_000
     expect(await updates()).toEqual([])
-    now += 30_001
-    const polls = await Promise.all(Array.from({ length: 3 }, () => updates()))
-    const ids = new Set(polls.flat().map(d => d.id))
-    expect(ids.size).toBe(1)
-    // After the row naming who added the Lead (#2207); a task no message asked for posts nothing in the chat (#2925).
-    expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['system', 'update-request'])
-    await execute({ ...message('New evidence'), conversationId: group } as Command)
     now += 900_000
-    expect((await updates()).map(d => d.id)).toEqual([...ids])
-    // The Lead reports through what it read of each workgroup: the card, and nothing in the chat.
-    const read = (await timed.read(owner, tab)).state.conversations.find(c => c.id === group)!
-    const card = 'Work: implementation ready, verification next.'
-    await execute({ type: 'project.report', projectId: 'lead', through: { [group]: read.lastMessageSequence }, text: card }, lead)
+    expect(await updates()).toEqual([])
+    // After the row naming who added the Lead (#2207); a task no message asked for posts nothing in the chat (#2925).
+    expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['system'])
+    // The server wrote the card: one line for the task, which waits on an owner.
+    expect((await status())!.text).toContain('"Work": to do. Waits on: an owner. Owner: none.')
+    // The Lead's report adds its own lines after the server's, and posts nothing.
+    const card = 'Freeze starts Friday.'
+    await execute({ type: 'project.report', projectId: 'lead', through: {}, text: card }, lead)
     expect(await updates()).toEqual([])
     expect((await chat()).filter(m => m.text === card || (m.source as Record<string, unknown>)?.kind === 'project-report')).toEqual([])
-    expect((await timed.read(owner, tab)).state.projects!.find(p => p.id === 'lead')!.status).toEqual({ text: card, at: new Date(now).toISOString(), by: lead })
-    // An ordinary message, here an hour of them, wakes nobody.
+    expect((await status())!.text).toContain('"Work": to do.')
+    expect((await status())!.text.endsWith(card)).toBe(true)
+    // An ordinary message, a second task and a merge wake nobody.
     await execute({ ...message('Tests passed'), conversationId: group } as Command)
     now += 3_600_000
-    expect(await updates()).toEqual([])
-    // Two changes within 15 minutes: one wake-up now, the second waits for the next window.
     await execute({ type: 'conversation.create', title: 'Docs', brief: 'Write them', checks: [{ description: 'Read', independent: false }] })
-    now += 300_000
-    expect(await updates()).toHaveLength(1)
-    const answered = (await timed.read(owner, tab)).state.conversations.filter(c => c.title === 'Docs' || c.id === group)
-    await execute({ type: 'project.report', projectId: 'lead', through: Object.fromEntries(answered.map(c => [c.id, c.lastMessageSequence])), text: null }, lead)
-    expect(await updates()).toEqual([])
     await execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
-    now += 600_000
+    now += 900_000
     expect(await updates()).toEqual([])
-    now += 300_000
-    expect(await updates()).toHaveLength(1)
-    // The card stayed through the acknowledgement, and the morning digest comes by default at 08:00 the next day.
-    expect((await timed.read(owner, tab)).state.projects!.find(p => p.id === 'lead')!.status!.text).toBe(card)
+    const lines = (await status())!.text
+    expect(lines).toContain('"Docs": to do.')
+    expect(lines.endsWith(card)).toBe(true)
+    // The morning digest comes by default at 08:00 the next day.
     expect((await chat()).some(m => (m.source as Record<string, unknown>)?.kind === 'digest-request')).toBe(false)
     now = Date.UTC(2026, 10, 1, 1, 0) + 30_000
     await updates()
