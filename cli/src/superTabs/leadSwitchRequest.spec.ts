@@ -401,6 +401,10 @@ const buddyRow = (over: Record<string, unknown> = {}, top: Record<string, unknow
 }, { ledConversationId: undefined, buddyConversationId: 'private-chat', ...top })
 const buddySetup = (options: Parameters<typeof setup>[0] = {}) => {
   const t = setup({ home: 'default', ...options, old: { engine: 'claude', swarmSkill: { role: 'buddy', key: 'swarm-buddy', mode: 'orchestration' }, ...options.old } })
+  vi.stubEnv('CLAUDE_CONFIG_DIR', t.home)
+  vi.stubEnv('CODEX_HOME', t.home)
+  // A signed-in daemon has already installed Codex's hooks in this fixture's own config.
+  writeFileSync(join(t.home, 'config.toml'), '')
   markBuddyOwner('work', 'owner', t.dataDir)
   writeBuddyAccount('owner', t.dataDir)
   vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'owner', email: 'owner@example.com' })
@@ -433,11 +437,7 @@ describe('a Buddy engine handoff', () => {
 
   it.each(['codex', 'claude'])('answers %s folder trust for its existing Swarm Buddy home before stopping the source', async engine => {
     const t = buddySetup({ old: { engine: engine === 'codex' ? 'claude' : 'codex' } })
-    vi.stubEnv('CODEX_HOME', t.home)
-    vi.stubEnv('CLAUDE_CONFIG_DIR', t.home)
     const config = join(t.home, engine === 'codex' ? 'config.toml' : '.claude.json')
-    // The daemon has installed Codex's hooks in this config before it can serve a signed-in engine switch.
-    if (engine === 'codex') writeFileSync(config, '')
     const request = vi.mocked(t.daemon.request).getMockImplementation()!
     vi.mocked(t.daemon.request).mockImplementation(async (type, payload, timeout) => {
       if (type === 'agent_close') {
@@ -454,9 +454,7 @@ describe('a Buddy engine handoff', () => {
 
   it('leaves a project Buddy folder to its own trust question', async () => {
     const t = buddySetup()
-    vi.stubEnv('CODEX_HOME', t.home)
     const config = join(t.home, 'config.toml')
-    writeFileSync(config, '')
     await t.switches.serve(buddyRow({}, { agent: { ...buddyRow().agent, buddyScope: undefined } }))
     expect(readFileSync(config, 'utf8')).toBe('')
   })
@@ -487,9 +485,7 @@ describe('a Buddy engine handoff', () => {
 
   it('rechecks the owner after an awaited handoff before trusting the folder or closing the original Buddy', async () => {
     const t = buddySetup()
-    vi.stubEnv('CODEX_HOME', t.home)
     const config = join(t.home, 'config.toml')
-    writeFileSync(config, '')
     const request = vi.mocked(t.daemon.request).getMockImplementation()!
     vi.mocked(t.daemon.request).mockImplementation(async (type, payload, timeout) => {
       const reply = await request(type, payload, timeout)
