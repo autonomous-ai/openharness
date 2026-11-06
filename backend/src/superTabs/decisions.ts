@@ -3,14 +3,15 @@
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: the PM's private lines go
  *  to the person's Buddy chat (buddies.ts). Called inside SuperTabStore's transactions. */
-import { defaultBuddyChat, isBuddy, isSwarmBuddy, openBuddyChat } from './buddies.js'
+import { defaultBuddy, defaultBuddyChat, isBuddy, isSwarmBuddy, openBuddyChat } from './buddies.js'
+import { switched } from './boardRights.js'
 import { usernameOf } from './usernames.js'
 import { agentWrittenNameOf } from './personNames.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { agentDisplayName } from './agentNames.js'
-import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Author, type Conversation, type SuperTabState } from './model.js'
+import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, canReadGroup, groupProject, isClosedPmChat, ledProject, projectAgent, projectOf, projectsOf, readsRecordsIn } from './projects.js'
 import { LEDGER_WEEKS } from './leaderboard/record.js'
 import { coordinatorNameOf } from './instructions.js'
@@ -83,6 +84,34 @@ export function askDecisions(state: SuperTabState, group: Conversation, personId
   return questions.map((q, index) => ({ ...q, id: stableId(from.operationId, 'decision', String(index)), batchId: from.operationId,
     conversationId: group.id, projectId, personId, askerAgentId: from.askerAgentId, assignmentId: from.assignmentId, ...from.kind ? { kind: from.kind } : {} }))
 }
+
+/** Whether an agent's ask in [group] goes to the person directly, never through the PM: in a switched project (boardRights.ts;
+ *  task #3826, spec "When an agent needs a person"). Elsewhere people talk only to the PM (crewNeeds.ts). */
+export const asksDirectly = (state: SuperTabState, group: Conversation): boolean => switched(groupProject(state, group))
+
+/** A direct ask always says when its recommendation applies: the person may be away, and the work must not wait without end. */
+export function checkDirectAsk(questions: ReadonlyArray<{ defaultAt?: string }>): void {
+  if (questions.some(q => !q.defaultAt)) {
+    fail('INVALID_DECISION', 'In this project you ask the person directly, so each question needs defaultAt: the time its recommended option applies if they have not answered (at least 15 minutes ahead).', 400)
+  }
+}
+
+/** Each asked decision's line in its person's default Buddy chat, to their default Buddy, which brings it to them: the Buddy
+ *  cannot answer it (answerable), the person answers in their Needs you list. Marked with its project, so it hides once they
+ *  lose it (buddies.ts hiddenProjectRow). Written as [author], the agent that asked. */
+export function askedThroughBuddy(state: SuperTabState, group: Conversation, drafts: readonly DecisionDraft[], author: Author): MessageDraft[] {
+  return drafts.map(d => {
+    const to = person(state, d.personId)
+    const buddy = defaultBuddy(state, to.id)
+    const options = d.options.map((o, i) => i === d.recommended ? `${o} (recommended)` : o).join(' / ')
+    const task = group.number ? ` on task #${group.number}` : ''
+    const text = `${author.displayName ?? author.name} asks ${usernameOf(state, to.id)}${task}: ${d.question}\n\nOptions: ${options}\n`
+      + `Unblocks: ${d.unblocks}\nAt ${d.defaultAt}, if not answered: ${d.options[d.recommended]!}.`
+    return { id: stableId(d.id, 'buddy'), conversationId: defaultBuddyChat(state, to).id, author, text, replyTo: null,
+      recipients: buddy ? [buddy.id] : [], source: { kind: DECISION_ASKED_KIND, decisionId: d.id, projectId: d.projectId }, buddyProject: d.projectId }
+  })
+}
+export const DECISION_ASKED_KIND = 'decision-asked'
 
 /** Any agent of the project asks with `decision.ask`, in its own project's conversations (project instructions, phase 4); a
  *  worker may also ask through needs_human. */

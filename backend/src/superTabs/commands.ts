@@ -32,9 +32,9 @@ import { projectRulesSchema, rulesDiff, rulesEqual, SEED_RULES, type ProjectRule
 import { accessRefusal, changeAccess, expireAccess, taskAccess } from './machineAccess.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
-import { CREW_NEED_KIND, crewNeedPlace, crewNeedText, routedLine, routesToPm, type CrewNeed } from './crewNeeds.js'
+import { CREW_NEED_KIND, crewNeedPlace, crewNeedText, projectPm, routedLine, routesToPm, type CrewNeed } from './crewNeeds.js'
 import { checkReason, heldReason, missingReason } from './heldReason.js'
-import { answerDecision, askDecisions, checkDecisionDeadline, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
+import { answerDecision, askDecisions, askedThroughBuddy, asksDirectly, checkDirectAsk, checkDecisionDeadline, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
 import { BACK_WITH_YOU, pickUp, reopenHanded } from './handed.js'
 import { changesRequested, engineerAnswered, leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, revisionReady, toldEngineer, waitingForReview } from './liveness.js'
@@ -2730,9 +2730,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const group = open(state, command.conversationId)
       const drafts = askDecisions(state, group, command.personId, command.questions,
         { now: context.now, operationId, askerAgentId: checkAsker(state, actor, group), assignmentId: null })
-      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): another agent's questions are the PM's crew needs, one
-      // each, checked as a decision would be and opened for nobody.
-      const pmInstead = routesToPm(state, actor, group)
+      // In a switched project the person is asked directly, through their default Buddy (task #3826). Elsewhere people talk only
+      // to the PM (anh Dee, 11-05; crewNeeds.ts): another agent's questions are the PM's crew needs, one each, checked as a
+      // decision would be and opened for nobody.
+      const direct = asksDirectly(state, group)
+      if (direct) checkDirectAsk(command.questions)
+      const pmInstead = direct ? null : routesToPm(state, actor, group)
       if (pmInstead) {
         command.questions.forEach((q, i) => crewNeed(group, pmInstead, { personIds: [command.personId], conversationId: group.id,
           question: q.question, options: q.options, recommended: q.recommended, ...q.defaultAt ? { defaultAt: q.defaultAt } : {} }, q.question, stableId(operationId, 'crew-need', String(i))))
@@ -2740,6 +2743,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         break
       }
       effects.decisions = drafts
+      if (direct) effects.messages.push(...askedThroughBuddy(state, group, drafts, sender))
       result.decisionIds = effects.decisions.map(d => d.id)
       break
     }
@@ -4295,7 +4299,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       let asked: string | undefined
       // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): an agent's needs_human, whoever's assignment it is, when that
       // agent is not the PM, is the PM's crew need, and its question opens no decision for the person it names (review of #3223).
-      const pmInstead = command.status === 'needs_human' ? routesToPm(state, actor, group) : null
+      // In a switched project an ask goes to the person directly, through their default Buddy and their Needs you list, and the
+      // PM sees only the task waiting on them (task #3826).
+      const direct = !!command.ask && asksDirectly(state, group)
+      if (direct) checkDirectAsk([command.ask!])
+      const pmInstead = command.status === 'needs_human' && !direct ? routesToPm(state, actor, group) : null
       if (command.ask) {
         if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {
           fail('INVALID_DECISION', 'An agent asks a person for a decision only when its work needs a human, with the question as its result.', 400)
@@ -4312,6 +4320,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (context.openDecisions == null) {
           effects.decisions = drafts
           asked = context.repeatedDecision ?? drafts[0]!.id
+          // A repeat of a question still open was already brought to the person.
+          if (direct && !context.repeatedDecision) effects.messages.push(...askedThroughBuddy(state, group, drafts, sender))
         }
         else effects.result.notAsked = `Not asked ${agentWrittenNameOf(state, person(state, personId).id)}: ${context.openDecisions} decisions you asked them are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`
       }
@@ -4358,7 +4368,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           // Its own Ready wakes nobody (Ken, 2026-11-02: every hand-over reached the PM): it names whom it hands to.
           : own ? (lead && ['needs_human', 'blocked', 'done'].includes(command.status) ? [lead] : [])
           : [...command.status === 'stopped' ? [] : [assignment.agentId], ...lead ? [lead] : []]
-        const recipients = [...new Set(told)].filter(id => actor.kind !== 'agent' || id !== actor.agentId)
+        // A direct ask is the person's to answer: the PM only sees the task waiting on them (askedOf), never the question.
+        const pm = direct ? projectPm(state, group) : null
+        const recipients = [...new Set(told)].filter(id => (actor.kind !== 'agent' || id !== actor.agentId) && !(direct && (id === pm || id === group.leadId)))
         const askedName = command.ask ? agentWrittenNameOf(state, person(state, command.ask.personId).id) : ''
         const asked = !command.ask ? '' : pmInstead ? `\n\nFor the PM to ask ${askedName}.`
           : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${askedName}.`
