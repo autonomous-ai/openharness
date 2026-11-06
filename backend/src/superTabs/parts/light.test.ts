@@ -95,6 +95,7 @@ const conversation: Required<Conversation> = {
   teamWritten: true,
   teamWrittenBy: { kind: 'assigned' },
   title: 't',
+  unlinkedPullRequests: [],
   writers: [],
 }
 

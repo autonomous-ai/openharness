@@ -96,7 +96,7 @@ import { commitParts, indexesOf, machineContentChanged, numberMessages, type Tou
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
 import { checksStateOf, pullRequestEvents, readPullRequestsNow, type PullRequestReader, type PullRequestWatch, type TaskHeads } from './pullRequestEvents.js'
-import { deriveCheck, keepHead, refreshChecks, watchedLinks } from './checkVerdicts.js'
+import { checkedPullRequest, deriveCheck, keepHead, refreshChecks, watchedLinks } from './checkVerdicts.js'
 import { reopenOnEvents } from './handed.js'
 import type { TrainTask } from './mergeTrain/plan.js'
 import type { TrainTaskPull } from './mergeTrain/train.js'
@@ -2529,9 +2529,9 @@ export class SuperTabStore {
     await this.headsReadNow(user, tabId, command, (state) => {
       const group = state.conversations.find(c => c.id === command.conversationId)
       const task = group?.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : group
-      const urls = task?.pullRequestUrls ?? [], heads = task?.pullRequestHeads
+      const heads = task?.pullRequestHeads
       // The pull request the command records the verdict on (commands.ts work.check).
-      const url = urls.findLast(u => heads?.[u]) ?? urls.at(-1)
+      const url = task ? checkedPullRequest(task, groupProject(state, task).repository?.repositoryUrl ?? null) : undefined
       const known = url ? heads?.[url] : undefined
       const same = (sha: string) => sha.toLowerCase() === head.toLowerCase()
       if (!task || !url || (known && (same(known.head) || known.carries?.some(same)) && (base === undefined || base === known.base))) return null
@@ -5422,6 +5422,15 @@ export class SuperTabStore {
       // A new base branch counts as a new head (security review of #3218, round 3): the patch id names the branch.
       const known = group.pullRequestHeads?.[watch.url], newHead = known?.head !== watch.head || known.base !== watch.base
       const repatched = !newHead && patch !== undefined && known!.patch === null
+      // Open again after it was read closed: it may capture the task's checks once more (task #3953).
+      const reopened = !newHead && !!known?.closed
+      if (reopened) {
+        const { closed: _closed, ...open } = known!
+        group.pullRequestHeads = { ...group.pullRequestHeads, [watch.url]: open }
+        for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
+          for (const check of checked.checks) if (check.verdicts?.length) deriveCheck(check, group.pullRequestHeads)
+        }
+      }
       if (newHead || repatched) {
         // A task from before steps were listed lists the ones its watch looked up, with its awake ones (#3394).
         if (lookedUp && !group.stepIds) {
@@ -5445,13 +5454,13 @@ export class SuperTabStore {
       if (checksMoved) group.pullRequestChecks = Object.fromEntries(Object.entries({ ...group.pullRequestChecks, [watch.url]: checks })
         .filter(([url]) => group.pullRequestUrls!.includes(url)))
       if (done) {
-        if (!newHead && !repatched && !checksMoved) return 0
+        if (!newHead && !repatched && !reopened && !checksMoved) return 0
         await this.save(tx, loaded, state, clock.next())
         return 0
       }
       const seen = group.pullRequestEvents?.[watch.url] ?? []
       const { events: seenEvents, keys } = pullRequestEvents(watch, seen, botLogin, now)
-      if (!newHead && !repatched && !checksMoved && keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
+      if (!newHead && !repatched && !reopened && !checksMoved && keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
       group.pullRequestEvents = { ...group.pullRequestEvents, [watch.url]: keys }
       // CI failing or a conflict brings a handed task back to its Engineer, in the message that tells it (handed.ts, #3399).
       const events = reopenOnEvents(group, seenEvents, now)
@@ -5475,6 +5484,28 @@ export class SuperTabStore {
       await this.save(tx, loaded, state, clock.next())
       await this.writeMessages(tx, tabId, state, rows, sequences)
       return rows.length
+    })
+  }
+
+  /** GitHub shows [url], a pull request the PR watch read before, closed: its head is marked, and the task's checks no longer
+   *  count at it while another linked pull request is open (checkVerdicts.ts checkedPullRequest, task #3953). Whether it wrote. */
+  async pullRequestClosed(tabId: string, groupId: string, url: string, stepIds: readonly string[] = [], lookedUp = false): Promise<boolean> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt) return false
+      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId, ...stepIds] }), state = cloneData(loaded.state)
+      const group = state.conversations.find(c => c.id === groupId), known = group?.pullRequestHeads?.[url]
+      if (!group || group.reviewOf || !known || known.closed) return false
+      group.pullRequestHeads = { ...group.pullRequestHeads, [url]: { ...known, closed: true } }
+      if (lookedUp && !group.stepIds) {
+        group.stepIds = [...new Set([...state.conversations.filter(c => c.reviewOf === group.id).map(c => c.id), ...stepIds])]
+      }
+      // The verdicts of the task and its steps count against the heads that are left (checkVerdicts.ts verdictCounts).
+      for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
+        for (const check of checked.checks) if (check.verdicts?.length) deriveCheck(check, group.pullRequestHeads)
+      }
+      await this.save(tx, loaded, state, clock.next())
+      return true
     })
   }
 
