@@ -387,6 +387,9 @@ class Intern3Swarm extends ChangeNotifier {
     }
   }
 
+  /// The server's refusals of a Buddy start that the next reading of Intern 3 answers: signed out, or none read yet.
+  static const _readingPending = {'ENGINE_UNAVAILABLE', 'MACHINE_OFFLINE'};
+
   /// The person's one Buddy in the Swarm: one already running is kept; else it starts on Intern 3.
   Future<void> _buddy(SwarmReader reader, String engine) async {
     final running = swarmBuddy(reader, swarmBuddyKey);
@@ -395,9 +398,12 @@ class Intern3Swarm extends ChangeNotifier {
       return;
     }
     await openSwarmBuddyChat(reader, swarmBuddyKey);
-    // Just signed in, Intern 3's reading may still say signed out for a pass (cli superTabs/machines.ts engineSignedIn):
-    // the server refuses until the next one comes (the Dell, 2026-11-05). Asked again meanwhile, never for ever.
-    final deadline = DateTime.now().add(const Duration(seconds: 90));
+    // The server starts nothing on Intern 3 before a fresh reading of it says it may. Just signed in, its reading may still
+    // say signed out for a pass (cli superTabs/machines.ts engineSignedIn), and just added, it has sent none to this Swarm
+    // yet: its host finds a new Swarm on its next full read, up to a minute on. With Claude Code there and signed in already,
+    // Start asked a second after the add (the Dell, 2026-11-06, MACHINE_OFFLINE "Wait for a fresh reading"). Asked again
+    // meanwhile, never for ever.
+    final deadline = DateTime.now().add(const Duration(minutes: 3));
     while (true) {
       try {
         await startSwarmBuddy(
@@ -408,7 +414,7 @@ class Intern3Swarm extends ChangeNotifier {
         );
         return;
       } on SuperTabFailure catch (failure) {
-        if (failure.code != 'ENGINE_UNAVAILABLE' ||
+        if (!_readingPending.contains(failure.code) ||
             DateTime.now().isAfter(deadline)) {
           rethrow;
         }
