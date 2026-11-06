@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { handoffHash } from '../lib/handoffAuthority.js'
-import { leadCloseProtected, leadSwitchEnded, leadSwitching, leadSwitchOf, mayBeLead, resetLeadSwitchPassesForTest, SWITCH_ARM_MS,
+import { buddyCloseProtected, leadCloseProtected, leadSwitchEnded, leadSwitching, leadSwitchOf, mayBeLead, resetLeadSwitchPassesForTest, SWITCH_ARM_MS,
   SWITCH_HOLD_MS, switchWithin } from './leadSwitch.js'
-import { retainContributions } from './retention.js'
+import { retainedLeads, retainContributions } from './retention.js'
 
 const roots: string[] = []
 const LEAD = 'lead-harness', WORKER = 'worker-harness'
@@ -159,4 +159,22 @@ it('reads no switch from an unreadable record, and holds none from a clock far a
   writeFileSync(join(folder, readdirSync(folder)[0]), '{')
   expect(leadSwitchOf(dir, LEAD)).toBeNull()
   expect(switchWithin(null, now)).toBe(false)
+})
+
+
+it('grants a Buddy only the one prepared switch close while ordinary closes stay protected', () => {
+  const dir = machine(), now = Date.now()
+  retainContributions(dir, 'machine', [{ tabId: 'tab', agent: { harnessId: WORKER, machineId: 'machine', buddyOf: { personId: 'owner' } } }], now)
+  expect(retainedLeads(dir).has(WORKER)).toBe(false)
+  expect(buddyCloseProtected(dir, WORKER, undefined, now)).toBe(true)
+  expect(buddyCloseProtected(dir, WORKER, CHANGE, now)).toBe(true)
+  prepared(dir, WORKER, CHANGE, now)
+  expect(buddyCloseProtected(dir, WORKER, CHANGE, now)).toBe(false)
+  expect(buddyCloseProtected(dir, WORKER, CHANGE, now)).toBe(true)
+  leadSwitchEnded(dir, WORKER, CHANGE, true, now)
+  expect(leadSwitchOf(dir, WORKER)).toMatchObject({ agentId: WORKER, changeId: CHANGE, targetEngine: 'codex' })
+  expect(buddyCloseProtected(dir, WORKER, undefined, now)).toBe(true)
+  expect(retainedLeads(dir).has(WORKER)).toBe(true)
+  // Buddy Stop Harness remains available.
+  expect(mayBeLead(dir, WORKER)).toBe(false)
 })
