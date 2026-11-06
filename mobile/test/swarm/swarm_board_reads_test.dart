@@ -223,6 +223,27 @@ void main() {
       expect(r.swarm.paths.where((p) => p.startsWith(dormant)).length, 40);
     });
 
+    test(
+      'once read to the bound, asking again reads no further page',
+      () async {
+        final r = rig();
+        var page = 0;
+        r.swarm.routes[dormant] = (_) => {
+          'groups': [closed('g${page++}', 5000)],
+          'next': 'p$page',
+        };
+        await r.reader.refresh();
+        await r.reader.loadShipped(project, since);
+
+        await Future.wait([
+          r.reader.loadShipped(project, since),
+          r.reader.loadShipped(project, since),
+        ]);
+
+        expect(r.swarm.paths.where((p) => p.startsWith(dormant)).length, 40);
+      },
+    );
+
     test('a failed page is flagged, kept apart from the open work, and read again on the next call', () async {
       final r = rig();
       var fail = true;
