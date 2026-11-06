@@ -30,8 +30,8 @@
 
 **Interfaces:** Test-local `removedRefusals(text: string): string[]` is shared by fixtures and the source scan. No production interface changes.
 
-- [ ] Extract the existing matcher without changing its ban. Add fixture cases permitting all non-registry codes and rejecting `ROLE_KIND`, `ROLE_UNAVAILABLE`, `ROLE_IN_USE`, `ROLE_GONE`, across the three quote styles. Commit the tests.
-- [ ] Run `npm test -- src/superTabs/removedRefusals.test.ts`; observe rule-code cases fail against the old ban.
-- [ ] Replace the blanket list with the four registry codes and individual reasons. Mark the design's enforcement section and phase-4 completion note superseded by Dee's decision.
-- [ ] Rerun the focused test; require all cases pass. Commit, push and record red/green evidence in the PR.
+- [x] Extract the existing matcher without changing its ban. Add fixture cases permitting all non-registry codes and rejecting `ROLE_KIND`, `ROLE_UNAVAILABLE`, `ROLE_IN_USE`, `ROLE_GONE`, across the three quote styles. Commit the tests.
+- [x] Run `npm test -- src/superTabs/removedRefusals.test.ts`; observe rule-code cases fail against the old ban.
+- [x] Replace the blanket list with the four registry codes and individual reasons. Mark the design's enforcement section and phase-4 completion note superseded by Dee's decision.
+- [x] Rerun the focused test; require all cases pass. Commit, push and record red/green evidence in the PR.
 - [ ] Mark ready and hand to the Integrator for one review; use PR CI for full unit/integration evidence.
