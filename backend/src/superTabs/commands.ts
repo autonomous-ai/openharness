@@ -3192,7 +3192,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const main = own.find(c => c.id === swarmBuddyChatId(me))
       const picked = command.conversationId ? own.find(c => c.id === command.conversationId) ?? fail('NOT_FOUND', 'This conversation is unavailable.', 404)
         : command.name === undefined ? defaultBuddyChat(state, me) : main && !occupied(main) ? main : undefined
-      if (!picked && buddyCount(state, me) >= buddyCapOf(state)) fail('BUDDY_CAP', buddyCapRefusal(buddyCapOf(state)), 409)
+      // The cap counts every start that adds a Buddy: into a new chat, or into one of theirs with none in it (a failed start
+      // retried, their main chat left empty). Only a start that replaces a Buddy already there adds none (review of #3818).
+      if ((!picked || !occupied(picked)) && buddyCount(state, me) >= buddyCapOf(state)) fail('BUDDY_CAP', buddyCapRefusal(buddyCapOf(state)), 409)
       const chat = picked ?? (main ? openNewBuddyChat(state, me, stableId('buddy', 'swarm', me.id, me.generation, operationId)) : openSwarmBuddyChat(state, me))
       const chatId = chat.id
       if (command.name !== undefined) renameBuddy(state, actor, chat, command.name, context.buddyNames)
