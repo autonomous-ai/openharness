@@ -214,6 +214,24 @@ describe('Swarm permission mode', () => {
     expect(f.open).not.toHaveBeenCalled()
   })
 
+  // Task #3861: a daemon whose creation folder is unusable answers the status check with its code and no creationId. That is a
+  // fault of this machine, said with the daemon's own words, and not an uncertain launch.
+  it('returns the daemon\'s code and reason when its receipts cannot be read, as a fault of this machine', async () => {
+    const f = fixture()
+    const detail = 'The creation folder ~/.harness/cli/data/agent-creations is not usable by this account (permissions).'
+    f.request.mockImplementation(async (type: string) => type === 'agent_create_status' ? { error: 'CREATION_STORAGE_FAILED', detail } : {})
+    const result = await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)
+    expect(result).toMatchObject({ error: 'START_MACHINE_FAULT', startId: 'start', creationId: f.start.creationId })
+    expect(result.detail).toBe(`CREATION_STORAGE_FAILED: ${detail}`)
+    expect(f.request.mock.calls.map(c => c[0])).toEqual(['agent_create_status'])
+  })
+
+  it('still reads a status answer without a creationId or a code as uncertain', async () => {
+    const f = fixture()
+    f.request.mockImplementation(async (type: string) => type === 'agent_create_status' ? {} : {})
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_UNCERTAIN' })
+  })
+
   it.each(['opencode', 'kilo'])('keeps a dispatched legacy %s start uncertain without marking it failed', async engine => {
     const f = fixture()
     Object.assign(f.start.request, { engine })
