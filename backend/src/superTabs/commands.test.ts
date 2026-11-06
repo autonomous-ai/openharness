@@ -1536,7 +1536,7 @@ describe('a route that names no pick', () => {
 
 // The route is advice (project instructions, phase 4): the server refuses no start, assignment or route for its model, its
 // machine, the owner's old rules, a task's requirement or quota; only facts and access. A route decision is optional, and
-// following another candidate needs no reason (it is still recorded).
+// following another candidate needs a reason when the route named a pick (task #3576; it is still recorded).
 describe('the route is advice', () => {
   const request = (patch: Record<string, unknown> = {}) => ({ conversationId: 'lead', machineId: 'machine', engine: 'claude', model: 'opus', effort: 'high',
     name: 'Builder', cwd: '/repo', worktree: false, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false },
@@ -1608,18 +1608,23 @@ describe('the route is advice', () => {
     expect(f.state.conversations.find(c => c.id === group)!.task!.requires).toEqual(requires)
   })
 
-  it('follows another candidate with no reason', () => {
+  // Anh Dee, 2026-11-06 (task #3576): the route picks by the Routing order, so the pick is followed as it is and another candidate
+  // is chosen only with a reason; it is still recorded as an override.
+  it('follows the pick with no reason, and another candidate only with one', () => {
     const f = routed(), group = f.group(), engineer = f.add('engineer')
     const decision = (id: string) => ({ id, conversationId: group, record: record(), final: null, override: null, assignmentId: null, outcome: null }) as unknown as RouteDecision
-    const assigned = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker, routeDecisionId: 'd1' }, as(engineer), { routeDecision: decision('d1') })
-    expect(assigned.routeDecisions).toEqual([expect.objectContaining({ op: 'final', id: 'd1', override: expect.objectContaining({ by: 'lead', reason: 'No reason given.' }) })])
-    expect(assigned.messages.find(m => m.source?.kind === 'route-override')!.text).toBe('engineer assigned worker instead of Title c0.')
+    expect(() => f.run({ type: 'work.assign', conversationId: group, agentId: f.worker, routeDecisionId: 'd1' }, as(engineer), { routeDecision: decision('d1') }))
+      .toThrow(expect.objectContaining({ code: 'ROUTE_REASON_REQUIRED', message: expect.stringContaining('Title c0') }))
     const start = (id: string, overrideReason?: string) => f.run({ type: 'agent.start', request: request({ conversationId: group, effort: 'xhigh' }), routeDecisionId: id,
       ...(overrideReason ? { overrideReason } : {}) }, as(engineer), { routeDecision: decision(id), contribution: f.contribution })
-    expect(start('d2').messages.find(m => m.source?.kind === 'route-override')!.text).toBe('engineer started Builder instead of Title c0.')
+    expect(() => start('d2')).toThrow(expect.objectContaining({ code: 'ROUTE_REASON_REQUIRED' }))
     const reasoned = start('d3', 'Xhigh is needed here.')
     expect(reasoned.routeDecisions[0]).toMatchObject({ override: { by: 'lead', reason: 'Xhigh is needed here.' } })
     expect(reasoned.messages.find(m => m.source?.kind === 'route-override')!.text).toBe('engineer started Builder instead of Title c0. Reason: Xhigh is needed here.')
+    // The pick itself needs none and records no override.
+    const followed = f.run({ type: 'agent.start', request: request({ conversationId: group, effort: 'high' }), routeDecisionId: 'd4' }, as(engineer),
+      { routeDecision: decision('d4'), contribution: f.contribution })
+    expect(followed.routeDecisions).toEqual([expect.not.objectContaining({ override: expect.anything() })])
   })
 
   it('records the instructions revision a route relied on', () => {
