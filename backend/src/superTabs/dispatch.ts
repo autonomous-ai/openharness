@@ -174,6 +174,8 @@ export function candidatesFor(state: SuperTabState, member: Agent, rules: Dispat
     return reviewerCandidates(state, task, kind, head, now).some(a => a.id === member.id)
   })
   const lane = open.filter(g => !g.reviewOf && !pinned.includes(g) && !(pinOf(g) && members.has(pinOf(g)!.agentId)) && !lostByIt(g)
+    // Ordinary workers recover work; new tasks still need the PM's route or a standing crew lane.
+    && (member.crew || (g.assignment?.status === 'lost' && g.lostAttempt))
     && acceptsLane(laneOf(g, rules.lanes)))
   // Team-written code goes to Team accounts only (teamWritten.ts); a pick refused this round is not sent again (store.ts).
   const allowed = (group: Conversation) => (!group.reviewOf || steps.includes(group)) && !barredFromTeamWritten(state, group, member) && !skip(group.id, member.id)
