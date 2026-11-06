@@ -89,7 +89,7 @@ import { activeMachineKeysOf } from '../lib/deviceKeyLog.js'
 import { commitParts, indexesOf, machineContentChanged, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
-import { pullRequestEvents, readPullRequestsNow, type PullRequestReader, type PullRequestWatch, type TaskHeads } from './pullRequestEvents.js'
+import { checksStateOf, pullRequestEvents, readPullRequestsNow, type PullRequestReader, type PullRequestWatch, type TaskHeads } from './pullRequestEvents.js'
 import { deriveCheck, keepHead, refreshChecks, watchedLinks } from './checkVerdicts.js'
 import { reopenOnEvents } from './handed.js'
 import type { TrainTask } from './mergeTrain/plan.js'
@@ -111,7 +111,7 @@ import { STATUS_LABELS,
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { agentPost, digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredMessage, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
-import { PM_SCHEDULE_TEXT, recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
+import { pmScheduleText, recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, startedHolds, tokenTask, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
@@ -3253,7 +3253,7 @@ export class SuperTabStore {
       const coordinator = actor.kind === 'agent' && ledProject(state, actor.agentId)?.id === project.id
       return { projectId, revision, hash: stored ? stored.hash : FIRST_INSTRUCTIONS.instructionsHash, text: stored?.text ?? INSTRUCTIONS_TEMPLATE, template: !stored,
         coordinatorName: coordinatorNameOf(project), notesRevision: project.notesRevision ?? 0, ...(notes ? { notes } : {}),
-        ...(coordinator ? { builtIn: PM_SCHEDULE_TEXT } : {}) }
+        ...(coordinator ? { builtIn: pmScheduleText(project) } : {}) }
     })
   }
 
@@ -5244,14 +5244,19 @@ export class SuperTabStore {
           refreshChecks(checked.checks, watch.url, newHead ? known : undefined, group.pullRequestHeads)
         }
       }
+      // What the board says of its checks (task #3827): recorded with the head, even for a done task, and only when it changed.
+      const checks = checksStateOf(watch), checksMoved = group.pullRequestChecks?.[watch.url] !== checks
+      // Of the links it still has: a state of a pull request the task dropped goes with the link.
+      if (checksMoved) group.pullRequestChecks = Object.fromEntries(Object.entries({ ...group.pullRequestChecks, [watch.url]: checks })
+        .filter(([url]) => group.pullRequestUrls!.includes(url)))
       if (done) {
-        if (!newHead && !repatched) return 0
+        if (!newHead && !repatched && !checksMoved) return 0
         await this.save(tx, loaded, state, clock.next())
         return 0
       }
       const seen = group.pullRequestEvents?.[watch.url] ?? []
       const { events: seenEvents, keys } = pullRequestEvents(watch, seen, botLogin, now)
-      if (!newHead && !repatched && keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
+      if (!newHead && !repatched && !checksMoved && keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
       group.pullRequestEvents = { ...group.pullRequestEvents, [watch.url]: keys }
       // CI failing or a conflict brings a handed task back to its Engineer, in the message that tells it (handed.ts, #3399).
       const events = reopenOnEvents(group, seenEvents, now)

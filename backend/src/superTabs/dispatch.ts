@@ -135,7 +135,9 @@ export function openTasks(state: SuperTabState, projectId: string, now: number):
     return !!task && !task.archived && (task.projectId ?? 'lead') === projectId && activeWork(task)
   })
   const open = [...queueSiblings(state, project), ...lostSteps].filter(group => (group.task || group.brief.trim())
-    && !activeWork(group) && !['done', 'cancelled'].includes(group.assignment?.status ?? '') && !(group.notBefore && group.notBefore > today))
+    && !activeWork(group) && !['done', 'cancelled'].includes(group.assignment?.status ?? '') && !(group.notBefore && group.notBefore > today)
+    // Paused by someone who steers its project (boardRights.ts, task #3819): until resumed.
+    && !group.paused)
   const ordered = queueOrder(open)
   return [...ordered.filter(g => g.priority === 'P0'), ...ordered.filter(g => g.priority !== 'P0')]
 }

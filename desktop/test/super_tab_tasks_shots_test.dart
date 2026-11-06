@@ -104,6 +104,21 @@ void main() {
             status: 'done',
             pullRequest: 3500,
             shippedAt: DateTime.now().subtract(const Duration(minutes: 12)),
+            checks: {
+              'https://github.com/autonomous-ai/openharness/pull/3500': 'green',
+            },
+          ),
+          taskFixture(
+            'done-red',
+            'Checks failed after review',
+            27,
+            requester: 'owner',
+            status: 'done',
+            pullRequest: 3502,
+            shippedAt: DateTime.now().subtract(const Duration(minutes: 5)),
+            checks: {
+              'https://github.com/autonomous-ai/openharness/pull/3502': 'red',
+            },
           ),
           taskFixture(
             'done-stuck',
@@ -113,6 +128,9 @@ void main() {
             status: 'done',
             pullRequest: 3501,
             shippedAt: DateTime.now().subtract(const Duration(minutes: 90)),
+            checks: {
+              'https://github.com/autonomous-ai/openharness/pull/3501': 'green',
+            },
           ),
           taskFixture(
             'merged-two',
@@ -151,6 +169,20 @@ void main() {
             },
           ),
         ]);
+        // What the server sends in `derived.releaseTimes` (task #3827): the apps may release in two hours, the backend later.
+        server.state['releaseTimes'] = {
+          'lead': {
+            'desktop': DateTime.now()
+                .add(const Duration(hours: 2))
+                .millisecondsSinceEpoch,
+            'cli': DateTime.now()
+                .add(const Duration(hours: 2))
+                .millisecondsSinceEpoch,
+            'backend': DateTime.now()
+                .add(const Duration(hours: 4))
+                .millisecondsSinceEpoch,
+          },
+        };
         final conversations = (server.state['conversations'] as List)
             .cast<Map<String, dynamic>>();
         conversations.firstWhere((task) => task['id'] == 'sender')['liveness'] =
