@@ -124,7 +124,7 @@ describe('idle agents', () => {
     const talked = worker({ startedSession: started })
     const quiet = worker({ id: 'q', harnessId: 'hq', displayName: 'Quinn', startedSession: started })
     const reviewer = worker({ id: 'r', harnessId: 'hr', displayName: 'Ash', roleName: 'Reviewer', startedSession: started })
-    const chat = group({ id: 'g2', agentIds: ['w', 'q', 'r'], assignment: null, talkedAt: { w: at - 5 * MINUTE, r: at - 5 * MINUTE } })
+    const chat = group({ id: 'g2', agentIds: ['w', 'q', 'r'], assignment: null, talkedAt: { w: { person: at - 6 * MINUTE, answer: at - 5 * MINUTE }, r: { person: at - 5 * MINUTE } } })
     const state = swarm({ agents: [talked, quiet, reviewer], groups: [chat] })
     const agentOf = (id: string) => state.agents.find(a => a.id === id)!
     const rows = idleNotices(state, 'lead', at, new Set())

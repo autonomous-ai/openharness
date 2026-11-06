@@ -18,9 +18,31 @@ describe('when a person last talked with an agent in a chat', () => {
   it('marks each agent a person\'s message reaches, then that agent\'s own answers in the same chat', () => {
     const state = swarm()
     numberMessages(state, [draft('p1', person, { recipients: ['eng'] })], 10)
-    expect(chat(state).talkedAt).toEqual({ eng: 10 })
+    expect(chat(state).talkedAt).toEqual({ eng: { person: 10 } })
     numberMessages(state, [draft('a1', as('eng'))], 20)
-    expect(chat(state).talkedAt).toEqual({ eng: 20 })
+    expect(chat(state).talkedAt).toEqual({ eng: { person: 10, answer: 20 } })
+  })
+
+  // Review of #3389: one person's message once made every later post of that agent here count, its posts to other agents too,
+  // so two agents talking kept each other from idling for good.
+  it('counts one answer per person\'s message, and never a post to an agent', () => {
+    const state = swarm()
+    numberMessages(state, [draft('p1', person, { recipients: ['eng'] })], 10)
+    numberMessages(state, [draft('a1', as('eng'), { recipients: ['other'] })], 20)
+    expect(chat(state).talkedAt).toEqual({ eng: { person: 10 } })
+    numberMessages(state, [draft('a2', as('eng'))], 30)
+    numberMessages(state, [draft('a3', as('eng'))], 40)
+    expect(chat(state).talkedAt).toEqual({ eng: { person: 10, answer: 30 } })
+    numberMessages(state, [draft('p2', person, { recipients: ['eng'] })], 50)
+    numberMessages(state, [draft('a4', as('eng'))], 60)
+    expect(chat(state).talkedAt).toEqual({ eng: { person: 50, answer: 60 } })
+  })
+
+  it('never brings back an entry older than an hour: it is dropped before the post is read', () => {
+    const state = swarm()
+    numberMessages(state, [draft('p1', person, { recipients: ['eng'] })], 10)
+    numberMessages(state, [draft('a1', as('eng'))], 10 + TALKED_KEEP_MS + 1)
+    expect(chat(state).talkedAt).toEqual({})
   })
 
   it('marks nobody for a person\'s message that reaches no agent, an agent nobody talked with, a system row or a notice', () => {
@@ -38,6 +60,6 @@ describe('when a person last talked with an agent in a chat', () => {
     const state = swarm()
     numberMessages(state, [draft('p1', person, { recipients: ['eng'] })], 10)
     numberMessages(state, [draft('p2', person, { recipients: ['pm'] })], 10 + TALKED_KEEP_MS + 1)
-    expect(chat(state).talkedAt).toEqual({ pm: 10 + TALKED_KEEP_MS + 1 })
+    expect(chat(state).talkedAt).toEqual({ pm: { person: 10 + TALKED_KEEP_MS + 1 } })
   })
 })
