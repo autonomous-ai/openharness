@@ -15,6 +15,7 @@ export interface PersonalTask {
   agent: { id: string; name: string; avatar?: AgentView['avatar'] } | null
   status: import('../model.js').WorkStatus | 'proposal' | 'rejected'
   suggested: boolean
+  canApprove: boolean
   reason?: string
 }
 export interface PersonalTasks {
@@ -51,7 +52,7 @@ export function personalTasksFor(changed: readonly Part[], view: ReaderView, act
     const status = approval?.state === 'proposal' || approval?.state === 'rejected' ? approval.state
       : group.assignment?.status ?? (group.proposal && !['accept', 'reshape'].includes(group.proposal.decision?.kind ?? '') ? 'proposal' : 'planned')
     out.upserts.push({ id: group.id, version: part.version, at: part.changedAt, projectId: project.id, projectName: project.name,
-      title: group.title, status, suggested: !group.assignment && !!approval?.suggestedAgentId,
+      title: group.title, status, suggested: !group.assignment && !!approval?.suggestedAgentId, canApprove: approval?.state === 'proposal',
       agent: worker ? { id: worker.id, name: worker.displayName ?? worker.name, ...worker.avatar ? { avatar: worker.avatar } : {} } : null,
       ...approval?.reason ? { reason: approval.reason } : {} })
   }

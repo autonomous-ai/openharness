@@ -58,7 +58,7 @@ describe('durable proposal cards', () => {
     expect((await f.card(id)).taskApproval).toMatchObject({ personId: peer.sub, state: 'proposal' })
     f.clock.now += 100
     const changed = await read.changes(peer, f.tab, initial.cursor)
-    expect(changed).toMatchObject({ reload: false, personalTasks: { reset: false, upserts: [{ id, status: 'proposal' }] } })
+    expect(changed).toMatchObject({ reload: false, personalTasks: { reset: false, upserts: [{ id, status: 'proposal', canApprove: true }] } })
     const decision = { type: 'task.reject', conversationId: id, reason: 'Do later' }, operationId = randomUUID()
     await expect(f.execute(decision, owner, f.pm, operationId)).rejects.toThrow()
     await f.execute(decision, peer, undefined, operationId)
@@ -66,7 +66,7 @@ describe('durable proposal cards', () => {
     await expect(f.execute(decision, owner, undefined, operationId)).rejects.toThrow()
     f.clock.now = Date.now() + 60_000 // Existing cursors intentionally overlap writes by thirty seconds.
     const latest = await read.firstLoad(peer, f.tab)
-    expect(latest.personalTasks!.upserts).toContainEqual(expect.objectContaining({ id, status: 'rejected', reason: 'Do later' }))
+    expect(latest.personalTasks!.upserts).toContainEqual(expect.objectContaining({ id, status: 'rejected', reason: 'Do later', canApprove: false }))
     f.clock.now += 100
     expect(await read.changes(peer, f.tab, latest.cursor)).toMatchObject({ personalTasks: { upserts: [], removed: [] } })
     const actorRead = await read.firstLoad(owner, f.tab, f.pm)
