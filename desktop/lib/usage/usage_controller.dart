@@ -3,16 +3,13 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../core/test_run.dart';
-import '../core/viewer_mode.dart';
-import 'claude_usage_source.dart';
-import 'codex_usage_source.dart';
 import 'usage_accounts.dart';
 import 'usage_source.dart';
 import 'usage_window.dart';
 
 /// What each agent account has spent, kept current for the status rail.
 ///
-/// Polling, because neither vendor pushes,
+/// Polling the connected CLIs, which own their own rate-limit reports,
 /// and neither figure moves fast enough to be worth a socket. A minute is also
 /// the granularity the countdowns are printed at, so a faster poll would redraw
 /// the same minute.
@@ -27,14 +24,7 @@ class UsageController extends ChangeNotifier {
     this.remote,
     this.interval = const Duration(seconds: 60),
     bool autoStart = true,
-    bool? readsThisComputer,
-  }) : _sources =
-           sources ??
-           // A viewer build (a browser) runs no agent CLI, so it has no tokens of its own to
-           // read: its figures are the account's computers' ([remote]).
-           ((readsThisComputer ?? !kViewerMode)
-               ? [ClaudeUsageSource(), CodexUsageSource()]
-               : const []) {
+  }) : _sources = sources ?? const [] {
     for (final source in _sources) {
       _readings[source.provider] = ProviderUsage.loading(source.provider);
     }
