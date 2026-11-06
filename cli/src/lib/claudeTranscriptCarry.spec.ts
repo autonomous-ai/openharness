@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -52,6 +52,140 @@ describe('carrying a Claude transcript between accounts', () => {
     expect(() => carryClaudeTranscript(from, join(root, 'b'), CWD, ID)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
     expect(() => carryClaudeTranscript(join(root, 'none'), join(root, 'b'), CWD, ID)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
     expect(() => carryClaudeTranscript(from, join(root, 'b'), CWD, '../escape')).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+  })
+
+  it.each([false, true])('refuses a linked session file (shared projects: %s)', (shared) => {
+    const from = home('a'), to = join(root, 'b')
+    const outside = join(root, 'unrelated.json')
+    writeFileSync(outside, 'unrelated data')
+    const source = join(from, 'projects', FOLDER, `${ID}.jsonl`)
+    symlinkSync(outside, source)
+    if (shared) {
+      mkdirSync(to)
+      symlinkSync(join(from, 'projects'), join(to, 'projects'), 'junction')
+    }
+
+    expect(() => carryClaudeTranscript(from, to, CWD, ID)).toThrow()
+    expect(lstatSync(source).isSymbolicLink()).toBe(true)
+    expect(readFileSync(outside, 'utf8')).toBe('unrelated data')
+    if (!shared) expect(existsSync(join(to, 'projects', FOLDER, `${ID}.jsonl`))).toBe(false)
+  })
+
+  it('refuses a non-file source without exposing its path in the error', () => {
+    const from = home('a'), to = join(root, 'b')
+    mkdirSync(join(from, 'projects', FOLDER, `${ID}.jsonl`))
+
+    expect(() => carryClaudeTranscript(from, to, CWD, ID)).toThrow(expect.objectContaining({ message: expect.not.stringContaining(root) }))
+    expect(existsSync(join(to, 'projects', FOLDER, `${ID}.jsonl`))).toBe(false)
+  })
+
+  it.each([FOLDER, 'some-other-encoding'])('refuses a linked source project child: %s', (folder) => {
+    const from = join(root, 'a'), to = join(root, 'b')
+    const outside = join(root, 'unrelated-project')
+    mkdirSync(join(from, 'projects'), { recursive: true })
+    mkdirSync(outside)
+    writeFileSync(join(outside, `${ID}.jsonl`), 'unrelated data')
+    symlinkSync(outside, join(from, 'projects', folder), 'junction')
+
+    expect(() => carryClaudeTranscript(from, to, CWD, ID)).toThrow()
+    expect(existsSync(join(to, 'projects', folder, `${ID}.jsonl`))).toBe(false)
+    expect(readFileSync(join(outside, `${ID}.jsonl`), 'utf8')).toBe('unrelated data')
+  })
+
+  it('refuses a linked target project child without writing outside projects', () => {
+    const from = home('a'), to = join(root, 'b')
+    const outside = join(root, 'unrelated-project')
+    writeSession(from)
+    mkdirSync(join(to, 'projects'), { recursive: true })
+    mkdirSync(outside)
+    writeFileSync(join(outside, `${ID}.jsonl`), 'unrelated data')
+    symlinkSync(outside, join(to, 'projects', FOLDER), 'junction')
+
+    expect(() => carryClaudeTranscript(from, to, CWD, ID)).toThrow()
+    expect(readFileSync(join(outside, `${ID}.jsonl`), 'utf8')).toBe('unrelated data')
+    expect(readFileSync(join(from, 'projects', FOLDER, `${ID}.jsonl`), 'utf8')).toBe('{"turn":1}\n')
+  })
+
+  it.each(['link', 'dangling link', 'directory'])('refuses a target session that is a %s', (kind) => {
+    const from = home('a'), to = home('b')
+    const target = join(to, 'projects', FOLDER, `${ID}.jsonl`)
+    const outside = join(root, 'unrelated.json')
+    writeSession(from)
+    if (kind === 'directory') mkdirSync(target)
+    else {
+      if (kind === 'link') writeFileSync(outside, 'unrelated data')
+      symlinkSync(outside, target)
+    }
+
+    expect(() => carryClaudeTranscript(from, to, CWD, ID)).toThrow()
+    expect(lstatSync(target).isDirectory()).toBe(kind === 'directory')
+    expect(lstatSync(target).isSymbolicLink()).toBe(kind !== 'directory')
+    if (kind === 'link') expect(readFileSync(outside, 'utf8')).toBe('unrelated data')
+    expect(readdirSync(join(to, 'projects', FOLDER))).toEqual([`${ID}.jsonl`])
+  })
+
+  it('leaves a planted predictable temporary link and its destination untouched', () => {
+    const from = home('a'), to = home('b')
+    const target = join(to, 'projects', FOLDER, `${ID}.jsonl`)
+    const planted = `${target}.${process.pid}.tmp`
+    const outside = join(root, 'unrelated.json')
+    writeSession(from)
+    writeFileSync(outside, 'unrelated data')
+    symlinkSync(outside, planted)
+
+    expect(carryClaudeTranscript(from, to, CWD, ID)).toEqual({ transcriptPath: target, copied: true })
+    expect(readFileSync(outside, 'utf8')).toBe('unrelated data')
+    expect(lstatSync(planted).isSymbolicLink()).toBe(true)
+    expect(readFileSync(target, 'utf8')).toBe('{"turn":1}\n')
+    expect(readdirSync(join(to, 'projects', FOLDER)).sort()).toEqual([`${ID}.jsonl`, `${ID}.jsonl.${process.pid}.tmp`].sort())
+  })
+
+  it.skipIf(process.platform === 'win32')('publishes a private copy without changing source permissions', () => {
+    const from = home('a'), to = home('b')
+    writeSession(from)
+    const source = join(from, 'projects', FOLDER, `${ID}.jsonl`)
+    chmodSync(source, 0o644)
+
+    const carried = carryClaudeTranscript(from, to, CWD, ID)
+    expect(statSync(carried.transcriptPath).mode & 0o777).toBe(0o600)
+    expect(statSync(source).mode & 0o777).toBe(0o644)
+  })
+
+  it('publishes the whole replacement without modifying the previous file', () => {
+    const from = home('a'), to = home('b')
+    const target = join(to, 'projects', FOLDER, `${ID}.jsonl`)
+    const previous = join(root, 'previous.jsonl')
+    const transcript = '{"turn":"' + 'x'.repeat(200_000) + '"}\n'
+    writeFileSync(join(from, 'projects', FOLDER, `${ID}.jsonl`), transcript)
+    writeFileSync(target, 'previous transcript')
+    linkSync(target, previous)
+
+    const carried = carryClaudeTranscript(from, to, CWD, ID)
+    expect(readFileSync(carried.transcriptPath, 'utf8')).toBe(transcript)
+    expect(readFileSync(previous, 'utf8')).toBe('previous transcript')
+    expect(readFileSync(join(from, 'projects', FOLDER, `${ID}.jsonl`), 'utf8')).toBe(transcript)
+    expect(readdirSync(join(to, 'projects', FOLDER))).toEqual([`${ID}.jsonl`])
+  })
+
+  it('copies through a supported shared projects root when the roots differ', () => {
+    const from = home('a'), to = join(root, 'b'), shared = home('shared')
+    writeSession(from)
+    mkdirSync(to)
+    symlinkSync(join(shared, 'projects'), join(to, 'projects'), 'junction')
+
+    const carried = carryClaudeTranscript(from, to, CWD, ID)
+    expect(carried.copied).toBe(true)
+    expect(readFileSync(carried.transcriptPath, 'utf8')).toBe('{"turn":1}\n')
+    expect(readFileSync(join(shared, 'projects', FOLDER, `${ID}.jsonl`), 'utf8')).toBe('{"turn":1}\n')
+  })
+
+  it('reports a filesystem failure without exposing account paths', () => {
+    const from = home('a'), to = join(root, 'not-a-directory')
+    writeSession(from)
+    writeFileSync(to, 'unrelated data')
+
+    expect(() => carryClaudeTranscript(from, to, CWD, ID)).toThrow(expect.objectContaining({ message: expect.not.stringContaining(root) }))
+    expect(readFileSync(to, 'utf8')).toBe('unrelated data')
   })
 
   it('the default account is the daemon projects folder', async () => {
