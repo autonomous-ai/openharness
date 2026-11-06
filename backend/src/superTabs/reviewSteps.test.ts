@@ -231,3 +231,45 @@ describe('a handed task opens its review steps', () => {
     expect(a).toBeTruthy()
   })
 })
+
+// Task #3774 (Ken's routing rule, restored 11-06: "A Tester runs where the change runs: the machine comes before the model, and a
+// mid-strength model is enough for most testing"). On 11-06 four Linux test steps waited for an Opus Tester while Sonnet Testers
+// sat idle on the same machine.
+describe('a test step\'s Tester runs a mid-strength model or stronger, whatever the engineer runs', () => {
+  const sonnet: AgentConfiguration = { ...opus, model: 'sonnet' }
+  function linux() {
+    const f = fixture()
+    const join = (name: string, roleName: string, configuration: AgentConfiguration) => f.run({ type: 'agent.add', conversationId: f.task, machineId: 'linux1',
+      harnessId: name, name, configuration, lead: false, roleName } as Command, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
+    f.state.machines = [{ machineId: 'linux1', name: 'linux1', contributorId: 'owner', membershipGeneration: 'g', generation: 'g1', cwd: '/swarm',
+      scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
+      observation: { generation: 'g1', receivedAt: 1_000_000 - 1000, sessionKind: 'computer', resources: { os: 'Linux' }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+        readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
+        quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } }] as never
+    return { ...f, join }
+  }
+
+  it('gives an Opus-built task\'s Linux test step to an idle Sonnet Tester; its review still refuses a Sonnet Reviewer', () => {
+    const f = linux()
+    const tester = f.join('sonnet-tst', 'Tester', sonnet)
+    f.join('sonnet-rev', 'Reviewer', sonnet)
+    const effects = f.ready(['backend/src/superTabs/store.ts'])
+    expect(f.steps()).toEqual(expect.arrayContaining([{ name: 'Review', agent: null, status: null },
+      { name: 'Test on a Linux machine', agent: tester, status: 'working' }]))
+    // The notice names the rule it applied to the step left open.
+    const told = effects.messages.find(m => m.recipients.includes(f.lead) && /no free reviewer/i.test(m.text))!
+    expect(told.text).toContain('Review')
+    expect(told.text).toContain('at least as strong as its engineer')
+  })
+
+  it('never gives a test step to a grid model or a weaker one, and says the rule it applied', () => {
+    const f = linux()
+    const grid = f.join('grid-tst', 'Tester', sonnet)
+    f.state.agents.find(a => a.id === grid)!.gridModel = 'kimi k3'
+    f.join('haiku-tst', 'Tester', { ...opus, model: 'haiku', effort: 'auto' })
+    const effects = f.ready(['backend/src/superTabs/store.ts'])
+    expect(f.steps().find(s => s.name === 'Test on a Linux machine')).toMatchObject({ agent: null })
+    const told = effects.messages.find(m => m.recipients.includes(f.lead) && /no free reviewer/i.test(m.text))!
+    expect(told.text).toMatch(/Test on a Linux machine.*mid-strength model or stronger/s)
+  })
+})
