@@ -42,26 +42,26 @@ no migration; older clients are unaffected (the project chat stays on the server
 
 ### 1. A project opens its Board (`view.dart`)
 
-- [ ] Failing test: tapping a project row shows `super-tasks-board` and no project chat.
-- [ ] Code.
+- [x] Failing test: tapping a project row shows `super-tasks-board` and no project chat.
+- [x] Code.
 
 ### 2. The Board looks like Trello (`task_card.dart`, `tasks_view.dart`; parallel)
 
-- [ ] Screenshot test of the Board, light and dark; widget tests unchanged in behaviour.
-- [ ] Code.
+- [x] Screenshot test of the Board, light and dark; widget tests unchanged in behaviour.
+- [x] Code.
 
 ### 3. No Buddy entry under Projects (`project_sidebar.dart`)
 
-- [ ] Failing test: the left pane lists no Buddy row or Buddies section.
-- [ ] Code.
+- [x] Failing test: the left pane lists no Buddy row or Buddies section.
+- [x] Code.
 
 ### 4. The Buddy chat on the right (`view.dart`)
 
-- [ ] Failing test: with no thread open, the right pane shows the Buddy chat; a card or a mention opens its thread
+- [x] Failing test: with no thread open, the right pane shows the Buddy chat; a card or a mention opens its thread
       there; closing it shows the Buddy again.
-- [ ] Code.
+- [x] Code.
 
 ### 5. Hide and show the side panes (`view.dart`)
 
-- [ ] Failing test: each pane's icon hides and shows it, and a new view starts as it was left.
-- [ ] Code. Light and dark screenshots of the three panes.
+- [x] Failing test: each pane's icon hides and shows it, and a new view starts as it was left.
+- [x] Code. Light and dark screenshots of the three panes.
