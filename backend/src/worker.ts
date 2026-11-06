@@ -18,6 +18,7 @@ import { startQueryStats } from './lib/queryStats.js'
 import { startRetryStats } from './superTabs/retryStats.js'
 import { releaseSchema } from './lib/db/schemaRelease.js'
 import { startSwarmSweeps } from './superTabs/sweeps.js'
+import { startDecisionSweep } from './superTabs/decisionSweep.js'
 import { requeueCompactedAgents } from './superTabs/agentTombstones.js'
 import { startLegacyDrop } from './superTabs/migration/dropLegacyJob.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
@@ -80,6 +81,7 @@ async function start(): Promise<void> {
   await reconcileCommunityLikeCounts()
 
   let stopSweeps = (): void => {}
+  let stopDecisionSweep = (): void => {}
   let stopLegacyDrop = (): void => {}
   let stopArchive = (): void => {}
   let stopPullRequestWatch = (): void => {}
@@ -104,6 +106,7 @@ async function start(): Promise<void> {
     machineBillingWorkerService.stop()
     productUsagePeopleRollupService.stop()
     stopSweeps()
+    stopDecisionSweep()
     stopLegacyDrop()
     stopArchive()
     stopPullRequestWatch()
@@ -158,7 +161,8 @@ async function start(): Promise<void> {
   // A failure leaves them compacted, as before, and never stops the worker starting.
   await requeueCompactedAgents(prisma, Date.now()).then(queued => logger.info('[swarm-sweeps] queued compacted agent tombstones for purge', { queued }),
     error => logger.warn('[swarm-sweeps] queuing compacted agent tombstones failed', { error: error instanceof Error ? error.message : String(error) }))
-  stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals(), now => swarms.leaveOverdueDecisions(now))
+  stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
+  stopDecisionSweep = startDecisionSweep(now => swarms.leaveOverdueDecisions(now))
   // The dead old state of migrated Swarms goes by itself, a few at a time (superTabs/migration/dropLegacyJob.ts).
   stopLegacyDrop = startLegacyDrop(prisma)
   // Finished groups archive once GitHub says their pull requests are merged or closed; without the app, only groups that
