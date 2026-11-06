@@ -3582,10 +3582,7 @@ class _SuperTabViewState extends State<SuperTabView>
           ),
         ),
         const SizedBox(width: 12),
-        _projectTabs(
-          project,
-          board: c.selectedId != project.leadConversationId,
-        ),
+        _projectTabs(project, board: true),
         const Spacer(),
         // Propose straight from the Board (#3820), on a project that works from proposals.
         if (project.boardMode && c.canWrite)
@@ -3638,20 +3635,15 @@ class _SuperTabViewState extends State<SuperTabView>
   void _openProjectChat(SuperTabProject project) {
     setState(() {
       _boardProjectId = null;
-      _agentChatId = null;
+      // Its chat is the one chosen, so the Board is not implied by the selection.
+      _agentChatId = project.leadConversationId;
     });
     unawaited(c.select(project.leadConversationId));
   }
 
-  /// The chat of the selected agent or project in the middle (Swarm v3, task #4118): a project's chat keeps its Board and
-  /// Chat tabs above it, any other chat is named.
+  /// The chat of the selected agent in the middle (Swarm v3, task #4118), under its name.
   Widget _middleChat(Widget chat) {
     final group = c.selected;
-    final project = group == null
-        ? null
-        : c.snapshot?.projects
-              .where((p) => p.leadConversationId == group.id)
-              .firstOrNull;
     return Column(
       key: const ValueKey('super-middle-chat'),
       children: [
@@ -3660,30 +3652,18 @@ class _SuperTabViewState extends State<SuperTabView>
           child: Row(
             children: [
               const SizedBox(width: 12),
-              if (project != null) ...[
-                Flexible(
-                  child: Text(
-                    project.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: DesktopChrome.heading(),
+              Expanded(
+                child: Text(
+                  group?.isBuddyChat == true
+                      ? 'Your Buddy'
+                      : group?.label ?? '',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.control().copyWith(
+                    fontWeight: grid.AppFont.semibold,
                   ),
                 ),
-                const SizedBox(width: 12),
-                _projectTabs(project, board: false),
-              ] else
-                Expanded(
-                  child: Text(
-                    group?.isBuddyChat == true
-                        ? 'Your Buddy'
-                        : group?.label ?? '',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: DesktopChrome.control().copyWith(
-                      fontWeight: grid.AppFont.semibold,
-                    ),
-                  ),
-                ),
+              ),
               const SizedBox(width: 8),
             ],
           ),
@@ -6214,8 +6194,16 @@ class _SuperTabViewState extends State<SuperTabView>
         images: () => _images(_shownMessages(c.selectedId)),
         child: _conversation(narrow),
       );
+      // With the Tasks slot, a project that is selected shows its Board first, though its chat is the selected
+      // conversation (Swarm v3, task #4118).
+      final impliedBoard = widget.rightPane != null && !agentChat
+          ? c.snapshot?.projects
+                .where((p) => p.leadConversationId == c.selectedId)
+                .firstOrNull
+                ?.id
+          : null;
       final boardProject = boardLayout
-          ? c.snapshot?.projectById(_boardProjectId ?? '')?.id
+          ? c.snapshot?.projectById(_boardProjectId ?? impliedBoard ?? '')?.id
           : null;
       final chatCovered =
           (narrow && _sidebarOpen) || (!wide && _rosterOpen) || threadDrawer;
@@ -6294,7 +6282,11 @@ class _SuperTabViewState extends State<SuperTabView>
                     : null,
                 // Over the chat, beside an open thread, as in Slack.
                 over: wide ? viewer : null,
-                center: boardLayout && boardProject == null
+                // A project's own chat keeps its header and tabs (Project options, Tasks): the full chat view.
+                center:
+                    boardLayout &&
+                        boardProject == null &&
+                        c.snapshot?.isProjectLead(c.selectedId) != true
                     ? (chatInMiddle
                           ? _middleChat(chat)
                           : const SizedBox.shrink())

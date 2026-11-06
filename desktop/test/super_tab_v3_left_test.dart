@@ -550,10 +550,8 @@ void main() {
       // The project's chat is the selected one at start: the Board is shown.
       expect(c.selectedId, 'lead');
       expect(key('super-tasks-lead'), findsOneWidget);
-      expect(key('super-middle-chat'), findsNothing);
       await tester.tap(key('super-board-tab-chat'));
       await settle(tester);
-      expect(key('super-middle-chat'), findsOneWidget);
       expect(key('super-tasks-lead'), findsNothing);
       expect(
         find.descendant(
