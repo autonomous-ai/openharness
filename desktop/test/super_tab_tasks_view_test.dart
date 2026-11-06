@@ -305,6 +305,161 @@ void main() {
     await _close(tester, c);
   });
 
+  group('the Board\'s columns share the pane and every one is reachable (task #3869)', () {
+    const names = [
+      'proposals',
+      'nextUp',
+      'working',
+      'done',
+      'merged',
+      'shipped',
+    ];
+    final board = find.byKey(const ValueKey('super-tasks-board'));
+    List<double> widths(WidgetTester tester) => [
+      for (final name in names) tester.getSize(_column(name)).width,
+    ];
+    ScrollPosition position(WidgetTester tester) => tester
+        .state<ScrollableState>(
+          find.descendant(of: board, matching: find.byType(Scrollable)).first,
+        )
+        .position;
+
+    for (final width in [1920.0, 2560.0]) {
+      testWidgets(
+        'at $width the six columns are equal and reach the pane\'s edge',
+        (tester) async {
+          final c = await _show(tester, tasksServer(), size: Size(width, 900));
+          final all = widths(tester);
+          expect(
+            all.every((w) => (w - all.first).abs() < .5),
+            isTrue,
+            reason: '$all',
+          );
+          expect(all.first, greaterThan(SuperTabTasksView.columnWidth));
+          // No empty band: the last column ends where the pane's padding does.
+          expect(
+            tester.getTopRight(_column('shipped')).dx,
+            moreOrLessEquals(
+              tester.getRect(board).right - grid.AppDesktop.groupGap,
+              epsilon: 1,
+            ),
+          );
+          expect(position(tester).maxScrollExtent, 0);
+          await _close(tester, c);
+        },
+      );
+    }
+
+    testWidgets(
+      'at 1280 they keep their minimum and the Board scrolls sideways',
+      (tester) async {
+        final c = await _show(
+          tester,
+          tasksServer(),
+          size: const Size(1280, 900),
+        );
+        final all = widths(tester);
+        expect(all.every((w) => (w - 240).abs() < .5), isTrue, reason: '$all');
+        expect(position(tester).maxScrollExtent, greaterThan(0));
+        await _close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'a scrollbar shows while they do not fit, and not when they do',
+      (tester) async {
+        final c = await _show(
+          tester,
+          tasksServer(),
+          size: const Size(900, 900),
+        );
+        final bar = find.descendant(
+          of: find.byKey(const ValueKey('super-tasks-board-scrollbar')),
+          matching: find.byType(RawScrollbar),
+        );
+        expect(bar, findsOneWidget);
+        expect(tester.widget<RawScrollbar>(bar).thumbVisibility, isTrue);
+        await tester.binding.setSurfaceSize(const Size(2560, 900));
+        await tester.pumpAndSettle();
+        expect(position(tester).maxScrollExtent, 0);
+        await _close(tester, c);
+      },
+    );
+
+    Future<void> reachesTheLastColumnAndBack(
+      WidgetTester tester,
+      Future<void> Function() there,
+      Future<void> Function() back,
+    ) async {
+      final start = position(tester).pixels;
+      await there();
+      await tester.pumpAndSettle();
+      expect(
+        position(tester).pixels,
+        position(tester).maxScrollExtent,
+        reason: 'the last column is in view',
+      );
+      expect(tester.getTopRight(_column('shipped')).dx, lessThanOrEqualTo(900));
+      await back();
+      await tester.pumpAndSettle();
+      expect(position(tester).pixels, start, reason: 'and back to the first');
+    }
+
+    testWidgets('a trackpad swipe reaches every column and back', (
+      tester,
+    ) async {
+      final c = await _show(tester, tasksServer(), size: const Size(900, 900));
+      await reachesTheLastColumnAndBack(
+        tester,
+        () => tester.trackpadFling(board, const Offset(-2000, 0), 3000),
+        () => tester.trackpadFling(board, const Offset(2000, 0), 3000),
+      );
+      await _close(tester, c);
+    });
+
+    testWidgets('shift plus the mouse wheel reaches every column and back', (
+      tester,
+    ) async {
+      final c = await _show(tester, tasksServer(), size: const Size(900, 900));
+      final mouse = TestPointer(1, PointerDeviceKind.mouse);
+      Future<void> wheel(double dy) async {
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+        tester.binding.handlePointerEvent(mouse.hover(tester.getCenter(board)));
+        tester.binding.handlePointerEvent(mouse.scroll(Offset(0, dy)));
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      }
+
+      await reachesTheLastColumnAndBack(
+        tester,
+        () => wheel(3000),
+        () => wheel(-3000),
+      );
+      await _close(tester, c);
+    });
+
+    testWidgets(
+      'dragging the scrollbar\'s thumb reaches every column and back',
+      (tester) async {
+        final c = await _show(
+          tester,
+          tasksServer(),
+          size: const Size(900, 900),
+        );
+        final rect = tester.getRect(board);
+        final thumb = Offset(rect.left + 60, rect.bottom - 4);
+        await reachesTheLastColumnAndBack(
+          tester,
+          () => tester.dragFrom(thumb, const Offset(2000, 0)),
+          () => tester.dragFrom(
+            Offset(rect.right - 60, rect.bottom - 4),
+            const Offset(-2000, 0),
+          ),
+        );
+        await _close(tester, c);
+      },
+    );
+  });
+
   testWidgets('columns that do not fit scroll sideways', (tester) async {
     final c = await _show(tester, tasksServer(), size: const Size(900, 800));
     expect(tester.getTopLeft(_column('shipped')).dx, greaterThan(900));
