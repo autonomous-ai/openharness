@@ -42,7 +42,8 @@ today.
    - `PM_SCHEDULE_TEXT` itself is unchanged, so the what-changed note pin (processNotes.ts) stands.
 6. **Switch-on migration**, at the boundary agreed with Fir (#3817):
    - `project.boardMode on` hands each unanswered ask in the project chat, oldest first, to Fir's pure
-     `importLegacyProposal(state, project, ask, now)`, with `ask = {messageId, conversationId, personId, text, at}`.
+     `importLegacyProposal(state, project, ask, now)`, with `ask = {messageId, conversationId, personId, at, thread}`. The
+     command's state holds no message text, so the card shows the message by its id.
    - It clears only the asks the helper turned into cards (Fir, 11-06). Until the helper is wired, the asks stay.
    - `legacyAsks(state, project)` builds that list and is tested here.
    - Whichever of #3817 and #3819 merges second wires the call.

@@ -53,3 +53,16 @@ export function requirePriorityRight(state: SuperTabState, actor: Actor, project
   if (next !== 'P0' && previous !== 'P0' && requesterId === actor.userId) return
   fail('PRIORITY_FORBIDDEN', 'In this project the owner and its decider set P0 and other people\'s priorities. You set P1-P3 on your own cards.', 403)
 }
+
+/** One message a person sent [project]'s PM that it has not answered, as switching the project on hands it to the proposal
+ *  cards (#3817 importLegacyProposal, agreed with Fir 11-06). The card shows the message by its id, so its text never travels. */
+export interface LegacyAsk { messageId: string; conversationId: string; personId: string; at: number; thread: string }
+
+/** Every message [project]'s PM still owes, oldest first, in its chat and its tasks' chats (pulse.ts owe). Switching the
+ *  project on keeps each one until its card exists, so nothing is dropped. */
+export function legacyAsks(state: SuperTabState, project: SwarmProject): LegacyAsk[] {
+  return state.conversations
+    .filter(c => !c.archived && c.owed?.length && (c.id === project.leadConversationId || (c.projectId ?? 'lead') === project.id))
+    .flatMap(c => c.owed!.map(ask => ({ messageId: ask.id, conversationId: c.id, personId: ask.personId, at: ask.at, thread: ask.thread })))
+    .sort((a, b) => a.at - b.at)
+}
