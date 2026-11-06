@@ -9,6 +9,7 @@ import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_LANES, CREW_ROLE_MAX, removeCrew } from './crew.js'
+import { noteIndex } from './processNotes.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
 import { z } from 'zod'
@@ -235,6 +236,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.delete'), projectId: id }).strict(),
   z.object({ type: z.literal('project.sharing'), projectId: id, visibility: z.enum(['public', 'private']), memberIds: z.array(id).max(200) }).strict(),
   z.object({ type: z.literal('project.cadence'), projectId: id, minutes: z.union([z.literal(1), z.literal(5), z.literal(15), z.literal(30)]) }).strict(),
+  // A project's PM confirms a what-changed note for PMs (processNotes.ts, task #3581).
+  z.object({ type: z.literal('process.confirm'), projectId: id, noteId: z.string().trim().min(1).max(80) }).strict(),
   // A local time of day ("08:00") in an IANA zone; null turns the digest off.
   z.object({ type: z.literal('project.digest'), projectId: id, time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).nullable(), timeZone: z.string().min(1).max(64) }).strict(),
   // `through`: each conversation's sequence the Lead read, as its wake-up names them. `throughRevision` is the tab revision a
@@ -2190,6 +2193,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       else manageProject(state, actor, project.id)
       mutableProjects(state)
       projectOf(state, project.id).coordinatorName = command.name
+      break
+    }
+    case 'process.confirm': {
+      const project = readProject(state, actor, command.projectId)
+      if (actor.kind !== 'agent' || ledProject(state, actor.agentId)?.id !== project.id) fail('FORBIDDEN', 'Only the project\'s PM confirms a note for PMs.', 403)
+      if (noteIndex(command.noteId) < 0) fail('INVALID_NOTE', 'Confirm a note the Swarm sent: its id is in your wake or inbox.', 400)
+      mutableProjects(state)
+      const stored = projectOf(state, project.id)
+      // Confirming an older note after a newer one never brings the newer back.
+      if (noteIndex(command.noteId) > noteIndex(stored.processNote?.confirmed)) stored.processNote = { ...stored.processNote, confirmed: command.noteId }
       break
     }
     case 'project.digest': {
