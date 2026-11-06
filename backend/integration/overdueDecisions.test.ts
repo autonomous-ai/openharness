@@ -56,8 +56,26 @@ async function swarm() {
   const row = (id: string) => db.superTabDecision.findUniqueOrThrow({ where: { id } })
   // The notice is the agents' line (AGENT_ONLY): the PM reads it, a person does not.
   const notices = async () => (await store.messages(owner, tab, 'lead', {}, lead)).messages.filter(m => m.text.startsWith(overdueNotice('Product Manager'))).length
-  return { store, tab, execute, ask, askBroken, row, notices }
+  return { store, tab, lead, execute, ask, askBroken, row, notices }
 }
+
+describe('explicit deadline persistence', () => {
+  it('stores, reads and deduplicates the normalized deadline while a changed deadline is a new decision', async () => {
+    const f = await swarm()
+    const question = { question: 'Ship today?', options: ['Yes', 'Tomorrow'], recommended: 0, unblocks: 'Release', defaultAt: '2026-11-04T13:00:00Z' }
+    const ask = async (defaultAt: string) => {
+      return f.execute({ type: 'decision.ask', conversationId: 'lead', personId: peer.sub, questions: [{ ...question, defaultAt }] } as Command, owner, f.lead)
+    }
+    const first = await ask(question.defaultAt)
+    const id = String((first.result.decisionIds as string[])[0])
+    expect(await f.row(id)).toMatchObject({ defaultAt: new Date('2026-11-04T13:00:00Z') })
+    expect((await ask('2026-11-04T14:00:00+01:00')).result.decisionIds).toEqual([id])
+    const changed = await ask('2026-11-04T14:00:00Z')
+    expect(changed.result.decisionIds).not.toEqual([id])
+    const list = await f.store.decisions(peer, f.tab, 'open')
+    expect(list.decisions.find(d => d.id === id)).toMatchObject({ defaultAt: new Date('2026-11-04T13:00:00Z'), defaulted: false })
+  })
+})
 
 describe('decisions left to the PM after 24 hours', () => {
   it('a decision asked 25 hours ago is left to the PM', async () => {
