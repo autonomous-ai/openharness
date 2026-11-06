@@ -1,4 +1,6 @@
 import 'support/open_harness.dart';
+import 'package:harness/usage/usage_accounts.dart';
+import 'package:harness/usage/usage_window.dart';
 
 import 'dart:io';
 import 'dart:async';
@@ -60,8 +62,26 @@ Future<void> tabTo(
   fail('Tab could not reach $target');
 }
 
+/// Explicit CLI reports keep model-search fixtures independent of Desktop defaults.
+class _ReportedModelApp extends ModelManagerTestApp {
+  _ReportedModelApp() : super(ModelManagerConnection());
+
+  @override
+  Future<List<MachineUsage>> readRemoteUsage() async => [
+    MachineUsage(
+      machineName: 'This computer',
+      isLocal: true,
+      readings: [
+        for (final provider in UsageProvider.values)
+          ProviderUsage.loading(provider),
+      ],
+    ),
+  ];
+}
+
 Future<ModelManagerTestApp> fixture({ModelManagerTestApp? provided}) async {
-  final app = provided ?? ModelManagerTestApp(ModelManagerConnection());
+  final app = provided ?? _ReportedModelApp();
+  await app.modelsMenu.refresh();
   await seedPreviews(app);
   app.adoptSessionForTest(terminal('a69', []));
   app.machineStates['m']!.dsh.replace(const [
@@ -166,8 +186,7 @@ class _MachineApp extends ModelManagerTestApp {
   Future<String?> clearRemotePassword() => change('clear', 'm', '');
 }
 
-class _ModelSelectionApp extends ModelManagerTestApp {
-  _ModelSelectionApp() : super(ModelManagerConnection());
+class _ModelSelectionApp extends _ReportedModelApp {
   bool completeStarts = false;
 
   @override

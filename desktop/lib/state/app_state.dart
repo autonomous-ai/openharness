@@ -2836,6 +2836,12 @@ class AppNotifier extends ChangeNotifier {
             return;
           }
           if (_joinPassed.contains('$account/$tabId')) continue;
+          // Discovery already knows the owner; only new collaborators need
+          // the offer, without opening an owner's other Swarms to find out.
+          if (superTabs.ownerOf(tabId) == account) {
+            _joinPassed.add('$account/$tabId');
+            continue;
+          }
           await _offerBringAgent(tabId);
         }
       } catch (error) {
@@ -2859,7 +2865,9 @@ class AppNotifier extends ChangeNotifier {
     try {
       final c = await superTabs.open(tabId);
       if (!current()) return;
-      await c.refresh();
+      // Reuse the state already read for an open Swarm. Discovery must not
+      // add a second read when the connection comes back.
+      if (c.snapshot == null) await c.refresh();
       if (!current()) return;
       final snapshot = c.snapshot;
       if (snapshot == null) {
