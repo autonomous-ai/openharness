@@ -268,7 +268,7 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
     assignment: null, lastMessageSequence: 0,
     // The task contract (#3389) holds for what the Swarm opens too: a check, a priority, and why nobody is named as its requester.
     checks: [{ id: stableId(id, 'check', '0'), description: RELEASE_CHECK, independent: false, evidence: null, passedBy: null }],
-    release: true, ledger: { askedAt: now, noRequesterReason: RELEASE_NO_REQUESTER } } as unknown as Conversation)
+    release: true, codePullRequestUrls: [], ledger: { askedAt: now, noRequesterReason: RELEASE_NO_REQUESTER } } as unknown as Conversation)
   for (const component of due) (ledger.steps ??= {})[component.id] = { groupId: id, at: now }
   outcome.opened = id
   say(row(id, integrator

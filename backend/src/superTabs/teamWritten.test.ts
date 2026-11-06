@@ -490,13 +490,14 @@ describe('a release task the Swarm opened', () => {
     return { ...f, task, step, get state() { return f.state } }
   }
 
-  it('is never Team-written, whoever it was assigned to or whatever GitHub says of a branch', () => {
+  it('is never Team-written while it names no code of its own, whoever it was assigned to or whatever GitHub says of a branch', () => {
     const f = releaseTask(), task = () => f.state.conversations.find(c => c.id === f.task)!
     f.run({ type: 'work.assign', conversationId: f.task, agentId: f.member('team-builder', 'mac-team') })
     expect(task().teamWritten).toBeUndefined()
     expect(teamWrittenTask(f.state, task())).toBe(false)
     markTeamWritten(f.state, task(), f.state.agents.find(a => a.id === 'team-builder')!)
-    applyPushOrigin(f.state, task(), 'team', ['https://github.com/acme/app/pull/1'])
+    // A read that names no pull request of its own (a branch GitHub cannot place) marks nothing on a release task.
+    applyPushOrigin(f.state, task(), 'team', [])
     expect(task().teamWritten).toBeUndefined()
     expect(stepMark(f.state, task())).toEqual({})
     expect(teamWrittenTask(f.state, f.state.conversations.find(c => c.id === f.step)!)).toBe(false)
