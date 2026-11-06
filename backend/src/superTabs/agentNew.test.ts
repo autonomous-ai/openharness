@@ -198,6 +198,14 @@ describe('+ New agent, Member started on its own computer', () => {
     expect(code(() => f.run(join(chat, { harnessId: 'h-other' }), mate, own('mate')))).toBe('AGENT_CHAT_TAKEN')
   })
 
+  it('leaves an unused chat for its person to archive, as Desktop\'s Discard does', () => {
+    const f = swarm()
+    const chat = f.add({ kind: 'regular', name: 'Ada', machineId: 'mate-laptop', local: true }).result.conversationId as string
+    expect(code(() => f.run({ type: 'conversation.archive', conversationId: chat, archived: true }, owner))).not.toBeNull()
+    f.run({ type: 'conversation.archive', conversationId: chat, archived: true }, mate)
+    expect(f.state.conversations.find(c => c.id === chat)!.archived).toBe(true)
+  })
+
   it('is refused for a PM, another person\'s computer, another person\'s chat and a viewer', () => {
     const f = swarm()
     expect(code(() => f.add({ kind: 'pm', projectName: 'P', machineId: 'mate-laptop', local: true }))).not.toBeNull()
