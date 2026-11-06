@@ -335,16 +335,19 @@ class _SuperTabPulseStripState extends State<SuperTabPulseStrip>
     if (widget.pulse.asks.list.isEmpty) _none('No asks waiting'),
   ];
 
-  /// The task [agentId] works on in this project, while the Swarm holds it.
-  SuperTabConversation? _taskOf(String agentId) => _snapshot.conversations
-      .where(
-        (g) =>
-            g.projectId == widget.projectId &&
-            g.assignment?['agentId'] == agentId &&
-            !g.closed &&
-            !superTabTaskShipped(g),
-      )
-      .firstOrNull;
+  /// The task [agentId] works on in this project, while the Swarm holds it. A lost one counts only when it holds
+  /// nothing else (#3649): an old lost task is that task's history, not the agent's work.
+  SuperTabConversation? _taskOf(String agentId) {
+    final held = _snapshot.conversations.where(
+      (g) =>
+          g.projectId == widget.projectId &&
+          g.assignment?['agentId'] == agentId &&
+          !g.closed &&
+          !superTabTaskShipped(g),
+    );
+    return held.where((g) => g.assignment?['status'] != 'lost').firstOrNull ??
+        held.firstOrNull;
+  }
 
   List<Widget> _agentRows() => [
     for (final id in widget.pulse.working.agentIds)

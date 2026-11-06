@@ -26,6 +26,7 @@ export interface CrewNeed {
   question?: string
   options?: string[]
   recommended?: number
+  defaultAt?: string
 }
 
 /** The crew need a stored message's source carries, in either shape, or null. */

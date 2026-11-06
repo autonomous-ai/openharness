@@ -80,6 +80,7 @@ import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
 import 'buddies.dart';
+import 'buddy_restart.dart';
 import 'decisions.dart';
 import 'day_pill.dart';
 import 'decisions_view.dart';
@@ -1038,13 +1039,13 @@ class _SuperTabViewState extends State<SuperTabView>
   void _jumpToLatest() {
     final id = c.selectedId;
     _focus.requestFocus();
-    if (!c.hasNewer(id)) {
-      if (_farFromEnd(id)) _restartAtEnd(id);
-      return _followEnd(id);
-    }
-    // More are waiting than were read: the latest page first, then its end.
+    final far = _farFromEnd(id);
+    if (!c.hasNewer(id) && !far) return _followEnd(id);
+    // More are waiting than were read, or the reader is far up: the latest
+    // page replaces the rows read back, then its end shows. The rows on screen
+    // stay until it lands, so the list is never empty (task #3630).
     unawaited(
-      c.showLatest(id).then((_) {
+      c.showLatest(id, replace: far).then((_) {
         if (!mounted || c.selectedId != id) return;
         _restartAtEnd(id);
         _followEnd(id);
@@ -3961,6 +3962,20 @@ class _SuperTabViewState extends State<SuperTabView>
             item(
               'Rename Buddy…',
               () => unawaited(showRenameBuddy(context, c, group.projectId)),
+            ),
+          if (editable &&
+              (c.buddy(group.projectId)?.harnessId.isNotEmpty ?? false) &&
+              c.buddy(group.projectId)!.machineId.isNotEmpty)
+            item(
+              'Restart Buddy…',
+              () => unawaited(
+                showRestartBuddy(
+                  context,
+                  c,
+                  group.projectId,
+                  app: widget.app,
+                ),
+              ),
             ),
           if (editable && c.buddy(group.projectId) != null)
             item(

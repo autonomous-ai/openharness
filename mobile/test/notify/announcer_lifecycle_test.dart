@@ -29,103 +29,104 @@ void main() {
     expect(announcer.inFront, isTrue);
   });
 
-  testWidgets('in front while resumed; an agent not on screen gets the notice, in front or pocketed', (
-    tester,
-  ) async {
-    final system = _Recording();
-    final announcer = AgentAnnouncer(system: system);
-    addTearDown(announcer.dispose);
+  testWidgets(
+    'in front while resumed; a finished turn is a mark, in front or pocketed (task #3607)',
+    (tester) async {
+      final system = _Recording();
+      final announcer = AgentAnnouncer(system: system);
+      addTearDown(announcer.dispose);
 
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    expect(announcer.inFront, isTrue);
-    // In front, elsewhere: the haptic tap, a mark and the OS's banner over the
-    // app — the default chime must never throw, even where no platform answers it.
-    expect(
-      announcer.turnEnded(agent, news, watching: () => false),
-      AgentNotice.alert,
-    );
-    expect(system.shown, hasLength(1));
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      expect(announcer.inFront, isTrue);
+      // In front, elsewhere: a mark and nothing louder — no chime, no banner. The
+      // default chime must never throw, even where no platform answers it.
+      expect(
+        announcer.turnEnded(agent, news, watching: () => false),
+        AgentNotice.filed,
+      );
+      expect(system.shown, isEmpty);
 
-    for (final state in [
-      AppLifecycleState.inactive,
-      AppLifecycleState.hidden,
-      AppLifecycleState.paused,
-    ]) {
-      tester.binding.handleAppLifecycleStateChanged(state);
-    }
-    expect(announcer.inFront, isFalse);
-    // Pocketed, even on the agent last on screen: the notice is posted. The
-    // first one is still up, unseen, so this one replaces it quietly (task #3248).
-    expect(
-      announcer.turnEnded(agent, news, watching: () => true),
-      AgentNotice.quiet,
-    );
-    expect(system.shown, hasLength(2));
-    expect(system.shown.last.quiet, isTrue);
-    expect(system.shown.last.body, 'Fixed the login screen.');
+      for (final state in [
+        AppLifecycleState.inactive,
+        AppLifecycleState.hidden,
+        AppLifecycleState.paused,
+      ]) {
+        tester.binding.handleAppLifecycleStateChanged(state);
+      }
+      expect(announcer.inFront, isFalse);
+      // Pocketed, even on the agent last on screen: still only a mark.
+      expect(
+        announcer.turnEnded(agent, news, watching: () => true),
+        AgentNotice.filed,
+      );
+      expect(system.shown, isEmpty);
+      expect(announcer.unread.contains(agent.ref), isTrue);
 
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-  });
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    },
+  );
 
-  testWidgets('a question waiting out its grace is told the moment the app is hidden', (
-    tester,
-  ) async {
-    final system = _Recording();
-    final announcer = AgentAnnouncer(system: system);
-    addTearDown(announcer.dispose);
+  testWidgets(
+    'a question waiting out its grace is told the moment the app is hidden',
+    (tester) async {
+      final system = _Recording();
+      final announcer = AgentAnnouncer(system: system);
+      addTearDown(announcer.dispose);
 
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    expect(
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      expect(
+        announcer.questionAsked(
+          agent,
+          requestId: 'q1',
+          prompt: 'Approve Bash command: npm test',
+          watching: () => false,
+        ),
+        AgentNotice.filed,
+      );
+      expect(system.shown, isEmpty, reason: 'in front, it waits out its grace');
+
+      // Locking the phone: iOS suspends the app within seconds, and the wait's
+      // timer with it — so it goes now, and loud.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      expect(system.shown, isEmpty, reason: 'inactive is not away');
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      expect(system.shown, hasLength(1));
+      expect(system.shown.single.quiet, isFalse);
+      expect(system.shown.single.body, 'Approve Bash command: npm test');
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      expect(system.shown, hasLength(1), reason: 'told once');
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    },
+  );
+
+  testWidgets(
+    'going away after the announcer is disposed tells nothing, and throws nothing',
+    (tester) async {
+      final system = _Recording();
+      final announcer = AgentAnnouncer(system: system);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       announcer.questionAsked(
         agent,
         requestId: 'q1',
         prompt: 'Approve Bash command: npm test',
         watching: () => false,
-      ),
-      AgentNotice.filed,
-    );
-    expect(system.shown, isEmpty, reason: 'in front, it waits out its grace');
-
-    // Locking the phone: iOS suspends the app within seconds, and the wait's
-    // timer with it — so it goes now, and loud.
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-    expect(system.shown, isEmpty, reason: 'inactive is not away');
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-    expect(system.shown, hasLength(1));
-    expect(system.shown.single.quiet, isFalse);
-    expect(system.shown.single.body, 'Approve Bash command: npm test');
-
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-    expect(system.shown, hasLength(1), reason: 'told once');
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-  });
-
-  testWidgets('going away after the announcer is disposed tells nothing, and throws nothing', (
-    tester,
-  ) async {
-    final system = _Recording();
-    final announcer = AgentAnnouncer(system: system);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    announcer.questionAsked(
-      agent,
-      requestId: 'q1',
-      prompt: 'Approve Bash command: npm test',
-      watching: () => false,
-    );
-    announcer.dispose();
-    // Its wait went with it, and so did its ear: going away tells of nothing.
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-    expect(system.shown, isEmpty);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-  });
+      );
+      announcer.dispose();
+      // Its wait went with it, and so did its ear: going away tells of nothing.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      expect(system.shown, isEmpty);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    },
+  );
 }
 
 class _Recording extends SilentSystemNotices {
