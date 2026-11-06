@@ -12,6 +12,10 @@ import 'swarm_request.dart';
 /// The name Desktop gives the person's Personal Swarm (`kPersonalSwarmName`).
 const swarmPersonalName = 'Personal';
 
+/// The request id Desktop creates the Personal Swarm with (`kPersonalSwarmOperation`): the server derives the Swarm's id
+/// from the account and it (backend superTabs/store.ts `create`), so whichever app asks first, a person has one.
+const swarmPersonalOperation = 'personal-swarm';
+
 /// How long a start the phone asked for shows as starting: the server's claim
 /// holds as long (backend leadStart.ts `LEAD_CLAIM_MS`).
 const swarmLeadStartWindow = Duration(minutes: 10);

@@ -892,10 +892,6 @@ class _AddDevicePageState extends State<AddDevicePage> {
     }
     if (!await _saveName() || !mounted) return;
     setState(() => _busy = false);
-    final user = _app.currentUser;
-    final owner = (user?.name ?? '').trim().isNotEmpty
-        ? user!.name!.trim()
-        : (user?.email ?? '').split('@').first;
     final name = _name.text.trim();
     // Intern 3 is set up; the Swarm is a page of its own, and back from it goes where this page came from.
     await Navigator.of(context).pushReplacement(
@@ -906,7 +902,6 @@ class _AddDevicePageState extends State<AddDevicePage> {
           computers: computers,
           machineId: machine.machineId,
           machineName: name.isEmpty ? machine.displayName : name,
-          ownerName: owner.isEmpty ? 'My' : owner,
           swarmId: _pickedSwarm(session)?.id,
         ),
       ),
@@ -1286,7 +1281,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
       return [
         say(switch (picked) {
           null =>
-            'Start makes your Swarm, adds it there and starts your Buddy on it. '
+            'Start makes your Personal Swarm, adds it there and starts your Buddy on it. '
                 'Claude Code is installed on it first.',
           final swarm =>
             'Start adds it to "${swarm.name}" and starts your Buddy there. '

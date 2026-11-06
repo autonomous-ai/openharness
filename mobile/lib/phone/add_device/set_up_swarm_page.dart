@@ -27,7 +27,6 @@ class SetUpSwarmPage extends StatefulWidget {
     required this.computers,
     required this.machineId,
     required this.machineName,
-    required this.ownerName,
     this.swarmId,
   });
 
@@ -36,7 +35,6 @@ class SetUpSwarmPage extends StatefulWidget {
   final SwarmComputers computers;
   final String machineId;
   final String machineName;
-  final String ownerName;
 
   /// The Swarm picked on Set up Intern 3 ([Intern3Swarm.swarmId]).
   final String? swarmId;
@@ -51,7 +49,6 @@ class _SetUpSwarmPageState extends State<SetUpSwarmPage> {
     computers: widget.computers,
     machineId: widget.machineId,
     machineName: widget.machineName,
-    ownerName: widget.ownerName,
     swarmId: widget.swarmId,
   )..addListener(_changed);
 
