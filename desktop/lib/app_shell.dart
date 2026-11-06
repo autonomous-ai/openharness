@@ -130,17 +130,14 @@ class HarnessApp extends StatelessWidget {
     required this.authenticatedScreen,
     this.frame,
     this.deferFirstScreen,
-    this.firstFrameDrawn,
   });
 
   /// Whether the first frame draws only the window colour, leaving the app
   /// state and the screen to the next frame (task #3563). Null: on, except in
-  /// widget tests, which expect the screen on their first pump.
+  /// widget tests, which expect the screen on their first pump, and on the web,
+  /// which this change did not measure.
   final bool? deferFirstScreen;
 
-  /// Completes when the first frame is on screen. Null: the engine's own
-  /// signal in the app, the next frame in widget tests (which never rasterise).
-  final Future<void>? firstFrameDrawn;
   final AppKeymap? keymap;
   final AuthenticatedScreenBuilder authenticatedScreen;
   final AppFrameBuilder? frame;
@@ -192,8 +189,8 @@ class HarnessApp extends StatelessWidget {
           );
         }
 
-        return deferFirstScreen ?? !kUnderTest
-            ? _AfterFirstFrame(build: shell, drawn: firstFrameDrawn)
+        return deferFirstScreen ?? !(kUnderTest || kIsWeb)
+            ? _AfterFirstFrame(build: shell)
             : shell();
       },
       home: StatsLifecycle(
@@ -203,19 +200,19 @@ class HarnessApp extends StatelessWidget {
   }
 }
 
-/// Draws only the window's own colour on the first frame, then [build] once
-/// that frame is on screen (task #3563).
+/// Draws only the window's own colour on the first frame, then [build] on the
+/// next one (task #3563).
 ///
 /// The app state (its bootstrap starts when it is first read), the menu and
-/// device strips, the keymap and the screen are built inside [build]. None of
-/// them is on screen in the first frame, and on a release build they were
-/// ~50 of its ~85 ms. The window colour matches the screen's, so nothing
-/// flashes when they arrive a frame later.
+/// device strips, the keymap and the screen are built inside [build]. The
+/// first frame no longer waits for them: its mark moves from ~82 ms to ~55 ms
+/// after the window is configured, and the boot screen is on screen about
+/// 10 ms earlier than before, because the next frame starts straight after
+/// this one. The window colour matches the screen's, so nothing flashes.
 class _AfterFirstFrame extends StatefulWidget {
-  const _AfterFirstFrame({required this.build, this.drawn});
+  const _AfterFirstFrame({required this.build});
 
   final Widget Function() build;
-  final Future<void>? drawn;
 
   @override
   State<_AfterFirstFrame> createState() => _AfterFirstFrameState();
@@ -227,26 +224,14 @@ class _AfterFirstFrameState extends State<_AfterFirstFrame> {
   @override
   void initState() {
     super.initState();
-    void ready() {
-      if (mounted) setState(() => _ready = true);
-    }
-
-    final drawn =
-        widget.drawn ??
-        (kUnderTest
-            ? null
-            : WidgetsBinding.instance.waitUntilFirstFrameRasterized);
-    if (drawn == null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => ready());
-    } else {
-      // A window that is hidden or covered may never rasterise: the app must
-      // still open, so the wait is bounded.
-      unawaited(
-        drawn
-            .timeout(const Duration(milliseconds: 250), onTimeout: () {})
-            .then((_) => ready()),
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _ready = true);
+      speedMarks.launch('first screen built');
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => speedMarks.launch('first screen painted'),
       );
-    }
+    });
   }
 
   @override
@@ -257,10 +242,6 @@ class _AfterFirstFrameState extends State<_AfterFirstFrame> {
         color: grid.AppPalette.windowBg,
       );
     }
-    speedMarks.launch('first screen built');
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => speedMarks.launch('first screen painted'),
-    );
     return widget.build();
   }
 }
