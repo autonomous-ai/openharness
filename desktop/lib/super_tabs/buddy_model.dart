@@ -138,7 +138,12 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
             label: current == null ? 'Your subscription' : nameOf(current),
             offers: offers,
             phone: phone,
-            busy: busy,
+            // The current server's buddy.model command addresses the first
+            // main Buddy only. A secondary header must never switch another one.
+            busy:
+                busy ||
+                (widget.compact &&
+                    c.buddy(SuperTabController.kSwarmBuddyKey)?.id != agent.id),
           );
     if (widget.compact) {
       return Row(
