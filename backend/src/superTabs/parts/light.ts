@@ -95,6 +95,7 @@ export const GROUP_FIELDS = {
     'pin',
     'priority',
     'proposals',
+    'pullRequestChecks',
     'pullRequestEvents',
     'pullRequestHeads',
     'pullRequestUrls',
