@@ -227,7 +227,7 @@ describe('profileHome', () => {
     account(folder, {})
     const codex = join(home, '.codex-two')
     mkdirSync(codex)
-    writeFileSync(join(codex, 'auth.json'), '{}')
+    writeFileSync(join(codex, 'config.toml'), '')
     const options = { home, environment: {}, offeredOnly: true }
     const work = listClaudeProfiles([], { home, environment: {}, machineId })[1]
     expect(profileHome('claude', work.id, machineId, options)).toBeNull()
@@ -249,7 +249,7 @@ describe('profileHome', () => {
     const { profileHome, profileId, codexReportLabel } = await loadModule()
     const codex = join(home, '.codex-two')
     mkdirSync(codex)
-    writeFileSync(join(codex, 'auth.json'), '{}')
+    writeFileSync(join(codex, 'config.toml'), '')
     const found = profileHome('codex', profileId(machineId, 'codex', codex), machineId, { home, environment: {} })
     expect(found).toBe(codex)
     expect(codexReportLabel('/x/.codex-two')).toBe('.codex-two')
@@ -273,7 +273,7 @@ describe('profileHome', () => {
     const { profileHome, profileId } = await loadModule()
     const codex = join(home, '.codex')
     mkdirSync(codex)
-    writeFileSync(join(codex, 'auth.json'), '{}')
+    writeFileSync(join(codex, 'config.toml'), '')
     expect(profileHome('codex', profileId(machineId, 'codex', codex), machineId, { home, environment: {} })).toBe('default')
   })
 

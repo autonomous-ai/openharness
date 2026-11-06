@@ -27,7 +27,7 @@ function cli(answer: { claude?: boolean | string | null; codex?: number | null }
   const run: EngineStatusRun = async (engine, args, env) => {
     calls.push({ engine, args, env })
     if (engine === 'claude') {
-      const value = answer.claude ?? false
+      const value = answer.claude === undefined ? false : answer.claude
       if (value === null) return null
       const stdout = typeof value === 'string' ? value : JSON.stringify({ loggedIn: value, authMethod: value ? 'claude.ai' : 'none', apiProvider: 'firstParty' })
       return { code: value === true ? 0 : 1, stdout }

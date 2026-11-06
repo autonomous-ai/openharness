@@ -11,11 +11,11 @@ import { join } from 'node:path'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import type { CoreApi } from '../core/api.js'
 import type { AgentEngine } from '../engines/types.js'
-import { asRecord, jwtClaims, parseJson, readClaudeStored, readText, stringField, type CredentialReadDeps } from '../lib/agentCredentials.js'
+import { cliSignedIn, type EngineStatusRun } from '../lib/engineAccount.js'
 import { buddyAccountFile, buddyOwnerOf, signedInAccount } from '../lib/buddyGuard.js'
 import { handoffBaseName } from '../lib/agentHandoff.js'
 import { profileHome } from '../lib/claudeProfiles.js'
-import { defaultCodexHome } from '../lib/codexProfiles.js'
+import { oneShotParentEnv } from '../lib/loginShellEnv.js'
 import { permissionModeApproves, permissionModeFlags } from '../lib/engineLaunch.js'
 import { parseSwarmSkill, wireRole } from '../lib/swarmSkills.js'
 import { trustBuddyHome } from './buddyHome.js'
@@ -56,8 +56,8 @@ export interface LeadSwitchDeps {
   home: () => string
   /** Whether the account (a profile folder, or 'default') holds a usable sign-in. */
   signedIn: (engine: string, home: string) => Promise<boolean>
-  /** Where the default [signedIn] reads from (the Keychain on macOS, the folder's files elsewhere); injected by specs. */
-  credentials?: CredentialReadDeps
+  /** What the default [signedIn] runs to ask the engine; injected by specs. */
+  run?: EngineStatusRun
   /** Reads only the daemon-prepared handoff file, with a strict byte limit; injected by host specs. */
   readHandoff: (cwd: string, file: string, maxBytes: number) => string | null
   log: (message: string) => void
@@ -66,25 +66,16 @@ interface Run { switchId: string; harnessId: string; changeId: string; busy: boo
   /** Why the new session did not start. Reported only once the old PM is back: a late start can still land the switch. */
   failed?: string }
 
-/** A sign-in the account holds: a token that is not past its expiry, or one that Claude Code / Codex can renew with its refresh
- *  token, or for the default account a key its engine reads instead. Missing, or expired with no refresh token, is signed out.
- *  Reads only; nothing is renewed or sent anywhere. */
-export async function profileSignedIn(engine: string, home: string, now: number, read: CredentialReadDeps = {}, environment: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+/** Whether the account (a profile folder, or 'default') is signed in, as its engine says (lib/engineAccount.ts `cliSignedIn`):
+ *  the folder as its CLAUDE_CONFIG_DIR or CODEX_HOME, the default account under the daemon's environment, where a key its engine
+ *  reads also counts. An engine that cannot say is taken as signed out: the switch would stop at a sign-in screen nobody sees. */
+export async function profileSignedIn(engine: string, home: string, environment: NodeJS.ProcessEnv = oneShotParentEnv(), run?: EngineStatusRun): Promise<boolean> {
   const isDefault = home === 'default'
   if (engine === 'claude') {
     if (isDefault && CLAUDE_KEY_VARIABLES.some(name => environment[name])) return true
-    const configDir = isDefault ? environment.CLAUDE_CONFIG_DIR || undefined : home
-    const oauth = asRecord(asRecord(parseJson((await readClaudeStored({ ...read, ...(configDir ? { configDir } : {}) }))?.raw ?? null))?.claudeAiOauth)
-    if (!oauth || !stringField(oauth.accessToken)) return false
-    return typeof oauth.expiresAt !== 'number' || oauth.expiresAt > now || !!stringField(oauth.refreshToken)
+    return await cliSignedIn('claude', isDefault ? environment : { ...environment, CLAUDE_CONFIG_DIR: home }, run) === true
   }
-  const auth = asRecord(parseJson(await readText(join(isDefault ? defaultCodexHome(read.home ?? homedir(), environment) : home, 'auth.json'))))
-  if (stringField(auth?.OPENAI_API_KEY)) return true
-  const tokens = asRecord(auth?.tokens)
-  const token = stringField(tokens?.access_token)
-  if (!token) return false
-  const exp = jwtClaims(token)?.exp
-  return typeof exp !== 'number' || exp * 1000 > now || !!stringField(tokens?.refresh_token)
+  return await cliSignedIn('codex', isDefault ? environment : { ...environment, CODEX_HOME: home }, run) === true
 }
 
 /** A request's one change id, so a record of #2493 (which holds only this) tells which switch it belongs to, and a create repeated
@@ -102,7 +93,7 @@ export class LeadSwitchRequests {
   private readonly deps: LeadSwitchDeps
   constructor(private readonly core: CoreApi, private readonly machineId: string, deps: Partial<LeadSwitchDeps> = {}) {
     this.deps = { now: Date.now, open: openDaemon, profiles: profileHome, team: () => false, home: homedir, log: () => {},
-      signedIn: (engine, home) => profileSignedIn(engine, home, this.deps.now(), this.deps.credentials),
+      signedIn: (engine, home) => profileSignedIn(engine, home, undefined, this.deps.run),
       readHandoff: (cwd, relativeFile, maxBytes) => {
         try {
           const file = join(cwd, relativeFile), stats = lstatSync(file)

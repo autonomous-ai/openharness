@@ -5,14 +5,14 @@
  * it, `profileId(machine, 'claude', 'default')`. A profile's `path` is the folder as it was given or linked, which is what
  * Claude Code hashes for its Keychain item and what CLAUDE_CONFIG_DIR must hold; its id is of the real path.
  *
- * Two labels: `label` is for the machine's owner (may be an email); `reportLabel` is what leaves the
- * machine, so it comes from the folder alone and never names a person. `offered` marks what the owner put on the Swarm: the
+ * Two labels, both from the folder alone: `label` is for the machine's owner; `reportLabel` is what leaves the
+ * machine, so it drops a name holding an '@' and is cut short. `offered` marks what the owner put on the Swarm: the
  * default account and what they offered by name (lib/accountOffers.ts); every other folder, linked or made by Add Claude account
  * included, stays the owner's own to pick in Change agent.
  */
 
 import { createHash, randomUUID } from 'crypto'
-import { closeSync, constants, fchmodSync, fsyncSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
+import { closeSync, constants, fchmodSync, fsyncSync, openSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { basename, join, resolve, sep } from 'path'
 import { env } from '../config/env.js'
@@ -35,8 +35,6 @@ export type ClaudeProfileError = { error: 'INVALID_PATH' | 'NOT_FOUND' }
 const FILE = join(env.ADAPTER_DATA_DIR, 'claude-profiles.json')
 const MAX_LINKED = 256
 const MAX_ENTRIES = 512
-// A real ~/.claude.json grows with the project history; this only stops a runaway file.
-const MAX_ACCOUNT_FILE_BYTES = 16 * 1024 * 1024
 const REPORT_LABEL_MAX = 40
 const CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/
 const ORCA_HOME_RE = /\/claude-profiles\/([0-9a-f][0-9a-f-]*)\/home$/i
@@ -46,36 +44,28 @@ export function profileId(machineId: string, engine: 'claude' | 'codex', realpat
   return createHash('sha256').update(`${machineId}:${engine}:${realpath}`).digest('hex').slice(0, 16)
 }
 
-function accountOf(folder: string): { displayName?: string; emailAddress?: string } {
-  try {
-    const file = join(folder, '.claude.json')
-    if (statSync(file).size > MAX_ACCOUNT_FILE_BYTES) return {}
-    const account = (JSON.parse(readFileSync(file, 'utf8')) as { oauthAccount?: Record<string, unknown> }).oauthAccount
-    const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
-    return { displayName: text(account?.displayName), emailAddress: text(account?.emailAddress) }
-  } catch {
-    return {}
-  }
-}
-
 function harnessFolder(home: string): string {
   return join(home, '.harness', 'claude-profiles') + sep
 }
 
-/** The folder's name, never the account's: a display name is a person's, and this label is served to the whole Swarm. */
-function reportLabelFor(path: string, home: string): string {
+/** The folder's name, never the account's: Harness reads no sign-in (loginReads.spec.ts), so not the account's name either. */
+function folderLabel(path: string, home: string): string {
   const orca = ORCA_HOME_RE.exec(path)
-  const name = orca ? `Orca ${orca[1].slice(0, 4)}` : path.startsWith(harnessFolder(home)) ? `Claude ${basename(path)}` : basename(path)
+  return orca ? `Orca ${orca[1].slice(0, 4)}` : path.startsWith(harnessFolder(home)) ? `Claude ${basename(path)}` : basename(path)
+}
+
+/** The folder's label as it may leave the machine: never one holding an '@' (an email), and short. */
+function reportLabelFor(path: string, home: string): string {
+  const name = folderLabel(path, home)
   return (name.includes('@') ? 'Claude' : name).slice(0, REPORT_LABEL_MAX)
 }
 
 function profileFor(machineId: string, path: string, real: string, home: string, offered: boolean, isDefault = false): ClaudeProfile {
-  const { displayName, emailAddress } = accountOf(path)
   return {
     id: profileId(machineId, 'claude', isDefault ? 'default' : real),
     ...(isDefault ? { default: true as const } : {}),
     path,
-    label: displayName ?? emailAddress ?? basename(path),
+    label: folderLabel(path, home),
     reportLabel: reportLabelFor(path, home),
     offered: offered || isDefault,
   }
