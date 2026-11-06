@@ -91,6 +91,9 @@ class SuperTabPersonalTasks {
     return changed;
   }
 
+  /// The row of task [id], or null when the feed holds none.
+  SuperTabPersonalTask? row(String id) => _rows[id];
+
   Map<String, int> get versions => Map.unmodifiable(_versions);
 
   /// Cache tombstones share the cursor's lifetime, so its overlap stays idempotent after restart.

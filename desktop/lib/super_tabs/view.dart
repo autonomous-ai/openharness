@@ -115,6 +115,7 @@ import 'buddy_rows.dart';
 import 'task_groups.dart';
 import 'tasks_view.dart';
 import 'tasks/personal_tasks_pane.dart';
+import 'tasks/task_header.dart';
 import 'voice_length.dart';
 import '../widgets/dial_list_scroll.dart';
 import '../widgets/laid_out_list.dart';
@@ -3553,6 +3554,12 @@ class _SuperTabViewState extends State<SuperTabView>
     _openConversation(id);
   }
 
+  /// A Tasks card opens its task's chat in the middle under the task's header, never the Board (#4204).
+  Future<void> _openPersonalTask(String id) async {
+    if (!await c.loadGroup(id) || !mounted) return;
+    _openAgentChat(id);
+  }
+
   /// How many of [project]'s tasks need the reader: the Tasks icon's count.
   int _tasksNeedingYou(SuperTabProject project) => superTabTasksNeedingYouIn(
     superTabProjectBoard(
@@ -3646,33 +3653,38 @@ class _SuperTabViewState extends State<SuperTabView>
     unawaited(c.select(project.leadConversationId));
   }
 
-  /// The chat of the selected agent in the middle (Swarm v3, task #4118), under its name.
+  /// The chat of the selected agent in the middle (Swarm v3, task #4118), under its name; a task opened from its
+  /// Tasks card, under the task's header (#4204).
   Widget _middleChat(Widget chat) {
     final group = c.selected;
+    final task = c.personalTasks?.row(group?.id ?? '');
     return Column(
       key: const ValueKey('super-middle-chat'),
       children: [
-        SizedBox(
-          height: 44,
-          child: Row(
-            children: [
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  group?.isBuddyChat == true
-                      ? 'Your Buddy'
-                      : group?.label ?? '',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.control().copyWith(
-                    fontWeight: grid.AppFont.semibold,
+        if (task != null)
+          SuperTabTaskHeader(controller: c, task: task)
+        else
+          SizedBox(
+            height: 44,
+            child: Row(
+              children: [
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    group?.isBuddyChat == true
+                        ? 'Your Buddy'
+                        : group?.label ?? '',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.control().copyWith(
+                      fontWeight: grid.AppFont.semibold,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-            ],
+                const SizedBox(width: 8),
+              ],
+            ),
           ),
-        ),
         Expanded(child: chat),
       ],
     );
@@ -6270,7 +6282,9 @@ class _SuperTabViewState extends State<SuperTabView>
                           (c.personalTasks?.supported == true
                               ? SuperTabPersonalTasksPane(
                                   controller: c,
-                                  onOpenTask: (id) => unawaited(_openTask(id)),
+                                  selectedId: c.selectedId,
+                                  onOpenTask: (id) =>
+                                      unawaited(_openPersonalTask(id)),
                                 )
                               : agentChat
                               ? const SizedBox.expand()
