@@ -464,9 +464,16 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       unread: task != null && widget.controller.unreadShown(task),
       activity: _activity(entry),
       titleLines: list ? 1 : 3,
-      // A merged task's release parts are what the card is for: they wrap
-      // however long, never cut off (task #3452).
-      captionLines: task != null && superTabTaskReleasing(task) ? null : 1,
+      // What a merged task waits on, and how long a done one has waited, are
+      // what the card is for: they wrap however long, never cut off (tasks
+      // #3452, #3812).
+      captionLines:
+          task != null &&
+              (superTabTaskReleasing(task) ||
+                  task.assignment?['status'] == 'done' &&
+                      !superTabTaskShipped(task))
+          ? null
+          : 1,
       tile: !list,
       warn: task != null && superTabMergeOverdue(task, now),
       selected: id == widget.selectedId,
