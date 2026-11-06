@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { PROCESS_ENGINES } from '../engines/types.js'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -317,6 +318,8 @@ export class ContributedMachines {
   /** Whether this Team account's [engine] may spend its owner's subscription now: the relay's grant is there, and the relay
    *  answers it, or cannot be asked (no grant to ask with, as before). */
   private relayServes(engine: string, health: RelayHealth | null): boolean {
+    // The owner relay serves these two subscriptions only; another engine needs its own sign-in (#3839).
+    if (engine !== 'claude' && engine !== 'codex') return false
     if (!(this.deps.relayed ?? teamRelayed)()) return false
     return !health || health.ok || (health.claudeOnly === true && engine !== 'claude')
   }
@@ -334,14 +337,15 @@ export class ContributedMachines {
   }
   /** The engines' own installs and sign-ins, probed again once [READINESS_MS] old. */
   private async ownEngines(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }, now: number): Promise<ReadyEngine[] | null> {
-    const answer = await local.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000).catch(() => null)
+    // All pane engines take four bounded login-shell batches; leave room for account reads too.
+    const answer = await local.request('engines_probe', { engines: PROCESS_ENGINES, accounts: true }, 30_000).catch(() => null)
     const engines = object(answer).engines
     // An engine that says nothing of its sign-in (an older daemon, an engine not installed) is unknown, never signed out.
     // Not installed is unknown too: the probe answers the same for a login shell that timed out (lib/engineProbe.ts), and
     // such a machine fails its first start loudly instead (review of #1743).
     // A Harness Team account that has not signed an engine in spends its owner's subscription through the owner's relay
     // (team/relay.ts): the Lead routed nothing to it while it read as signed out (routeCommand.ts `unreadyPool`).
-    const value = Array.isArray(engines) ? list(engines).filter(e => e.engine === 'claude' || e.engine === 'codex')
+    const value = Array.isArray(engines) ? list(engines).filter(e => (PROCESS_ENGINES as readonly unknown[]).includes(e.engine))
       .map((e): ReadyEngine => ({ engine: String(e.engine), installed: e.installed === true ? true : null,
         signedIn: e.installed === true && typeof e.signedIn === 'boolean' ? e.signedIn : null })) : null
     this.engineRead = { value, until: now + (value ? READINESS_MS : READINESS_RETRY_MS) }
