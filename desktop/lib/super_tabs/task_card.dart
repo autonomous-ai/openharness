@@ -11,14 +11,17 @@ import 'backlog.dart';
 import 'chip.dart';
 
 /// One card of a project's Tasks view, on the Board and as a List row alike:
-/// its title (up to [titleLines]), its caption led by its [priority] badge
-/// (task #3117), and its shared activity mark.
+/// its title (up to [titleLines]), its caption led by its [priority] (task
+/// #3117), and its shared activity mark.
 ///
-/// On the Board it is a [tile] (task #2948): an inset tile set into its
-/// column's panel, one step less rounded than the panel, with no shadow.
-/// The task the reader has open is [selected]: the sidebar's selected-row
-/// fill, not the blue keyboard selection, and said to a screen reader.
-class SuperTabTaskCard extends StatelessWidget {
+/// On the Board it is a [tile], drawn as Trello draws a card (anh Dee, task
+/// #3787): raised card material on its column's tinted lane, rounded one
+/// step less than the lane, with a soft shadow that lifts on hover; its
+/// [lane]'s colour label on top, then the title, then one quiet line of
+/// priority and caption. The task the reader has open is [selected]: the
+/// sidebar's selected-row fill, not the blue keyboard selection, and said to
+/// a screen reader.
+class SuperTabTaskCard extends StatefulWidget {
   const SuperTabTaskCard({
     super.key,
     required this.title,
@@ -28,6 +31,7 @@ class SuperTabTaskCard extends StatelessWidget {
     required this.activity,
     required this.onOpen,
     this.priority,
+    this.lane,
     this.titleLines = 2,
     this.captionLines = 1,
     this.tile = false,
@@ -40,6 +44,10 @@ class SuperTabTaskCard extends StatelessWidget {
   final HarnessActivity activity;
   final VoidCallback onOpen;
   final SuperTabTaskPriority? priority;
+
+  /// The crew lane the task is handed out in ("Desktop"), its label on a
+  /// Board tile; null when no lane owns it.
+  final String? lane;
   final int titleLines;
 
   /// How many lines the caption takes; null takes as many as it needs.
@@ -47,106 +55,80 @@ class SuperTabTaskCard extends StatelessWidget {
   final bool tile, selected;
   final Widget? trailing;
 
+  /// A tile's padding: the spacing scale's 12, between the control and the
+  /// group gap.
+  static const tilePadding =
+      (grid.AppDesktop.controlGap + grid.AppDesktop.groupGap) / 2;
+
+  @override
+  State<SuperTabTaskCard> createState() => _SuperTabTaskCardState();
+}
+
+/// A lane's label colour: one of the roster's hand-picked hues, which carry
+/// white at 5:1 or more and stay the same in both appearances, so a lane is
+/// found by its colour before it is read. Red and amber are left to P0 and P1.
+Color superTabLaneColor(String lane) {
+  const palette = grid.AppPalette.avatarPalette;
+  return switch (lane.toLowerCase()) {
+    'desktop' => palette[0],
+    'cli' => palette[1],
+    'mobile' => palette[2],
+    'backend' => palette[5],
+    'docs' => palette[6],
+    _ => palette[7],
+  };
+}
+
+class _SuperTabTaskCardState extends State<SuperTabTaskCard> {
+  bool _hovered = false;
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final muted = DesktopChrome.metadata();
+    final w = widget;
     return Semantics(
       button: true,
-      selected: selected ? true : null,
+      selected: w.selected ? true : null,
       label: [
-        title,
-        if (priority case final priority?) 'Priority ${priority.badge}',
-        caption,
-        if (!needsYou)
-          switch (activity) {
+        w.title,
+        ?w.lane,
+        if (w.priority case final priority?) 'Priority ${priority.badge}',
+        w.caption,
+        if (!w.needsYou)
+          switch (w.activity) {
             HarnessActivity.starting => 'Queued',
             HarnessActivity.needsInput => 'Waiting on a person',
             HarnessActivity.offline => 'Blocked or agent lost',
             HarnessActivity.done => 'Shipped',
-            _ => activity.label,
+            _ => w.activity.label,
           },
-        if (unread) 'New replies',
+        if (w.unread) 'New replies',
       ].join(', '),
       excludeSemantics: true,
       child: _surface(
         Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: grid.AppDesktop.controlGap,
-            vertical: tile
-                ? grid.AppDesktop.controlGap
-                : grid.AppDesktop.menuInset,
-          ),
-          child: Row(
+          padding: w.tile
+              ? const EdgeInsets.all(SuperTabTaskCard.tilePadding)
+              : const EdgeInsets.symmetric(
+                  horizontal: grid.AppDesktop.controlGap,
+                  vertical: grid.AppDesktop.menuInset,
+                ),
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      maxLines: titleLines,
-                      overflow: TextOverflow.ellipsis,
-                      style:
-                          DesktopChrome.control(color: DesktopChrome.foreground)
-                              .copyWith(
-                                fontWeight: unread
-                                    ? FontWeight.w600
-                                    : FontWeight.w400,
-                              ),
-                    ),
-                    if (priority != null || caption.isNotEmpty)
-                      Padding(
-                        padding: EdgeInsets.only(
-                          top: priority == null
-                              ? 0
-                              : grid.AppDesktop.listRowGap,
-                        ),
-                        child: Row(
-                          children: [
-                            if (priority case final priority?) ...[
-                              SuperTabPriorityBadge(priority),
-                              const SizedBox(width: grid.AppDesktop.menuInset),
-                            ],
-                            Flexible(
-                              child: Text(
-                                caption,
-                                maxLines: captionLines,
-                                // An ellipsis without a line limit still cuts
-                                // the text to one line.
-                                overflow: captionLines == null
-                                    ? TextOverflow.clip
-                                    : TextOverflow.ellipsis,
-                                style: muted,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
+              if (w.tile && w.lane != null) ...[
+                _LaneLabel(w.lane!),
+                const SizedBox(height: grid.AppDesktop.controlGap),
+              ],
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: _text()),
+                  const SizedBox(width: grid.AppDesktop.controlGap),
+                  _mark(),
+                  ?w.trailing,
+                ],
               ),
-              const SizedBox(width: grid.AppDesktop.menuInset),
-              ListenableBuilder(
-                listenable: Listenable.merge([
-                  terminalThemeStore,
-                  appearancePrefsStore,
-                ]),
-                builder: (context, _) => ActivityMark(
-                  activity: activity,
-                  color: activityColor(
-                    activity,
-                    terminalThemeFor(
-                      grid.AppTheme.surfacePalette,
-                      terminalThemeStore.value,
-                    ),
-                    color: appearancePrefsStore.value.prompt.color,
-                  ),
-                  tooltip: false,
-                ),
-              ),
-              ?trailing,
             ],
           ),
         ),
@@ -154,36 +136,191 @@ class SuperTabTaskCard extends StatelessWidget {
     );
   }
 
+  /// The title, the card's strongest text, over its one quiet line.
+  Widget _text() {
+    final w = widget;
+    final hasLine = w.priority != null || w.caption.isNotEmpty;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          w.title,
+          maxLines: w.titleLines,
+          overflow: TextOverflow.ellipsis,
+          style: DesktopChrome.control(color: DesktopChrome.foreground)
+              .copyWith(
+                // Unread out-ranks the medium every tile title has.
+                fontWeight: w.unread
+                    ? grid.AppFont.semibold
+                    : w.tile
+                    ? grid.AppFont.medium
+                    : grid.AppFont.regular,
+                height: w.tile ? 1.35 : null,
+              ),
+        ),
+        if (hasLine)
+          Padding(
+            padding: EdgeInsets.only(
+              top: w.tile
+                  ? grid.AppDesktop.menuInset
+                  : w.priority == null
+                  ? 0
+                  : grid.AppDesktop.listRowGap,
+            ),
+            child: Row(
+              crossAxisAlignment: w.captionLines == null
+                  ? CrossAxisAlignment.start
+                  : CrossAxisAlignment.center,
+              children: [
+                if (w.priority case final priority?) ...[
+                  if (w.tile)
+                    _PriorityMark(priority)
+                  else
+                    SuperTabPriorityBadge(priority),
+                  const SizedBox(width: grid.AppDesktop.menuInset),
+                ],
+                Flexible(
+                  child: Text(
+                    w.caption,
+                    maxLines: w.captionLines,
+                    // An ellipsis without a line limit still cuts the text
+                    // to one line.
+                    overflow: w.captionLines == null
+                        ? TextOverflow.clip
+                        : TextOverflow.ellipsis,
+                    style: DesktopChrome.metadata(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _mark() => ListenableBuilder(
+    listenable: Listenable.merge([terminalThemeStore, appearancePrefsStore]),
+    builder: (context, _) => ActivityMark(
+      activity: widget.activity,
+      color: activityColor(
+        widget.activity,
+        terminalThemeFor(
+          grid.AppTheme.surfacePalette,
+          terminalThemeStore.value,
+        ),
+        color: appearancePrefsStore.value.prompt.color,
+      ),
+      tooltip: false,
+    ),
+  );
+
   /// A List row is a plain row that takes the list's hover, filled when it is
-  /// selected; a Board tile is inset material of its own. Each fill is [Ink]
-  /// on its own [Material], so the hover paints over it inside its panel.
+  /// selected; a Board tile is raised card material of its own, its shadow a
+  /// step deeper under the pointer. Each fill is [Ink] on its own [Material],
+  /// so the hover paints over it inside its lane.
   Widget _surface(Widget body) {
+    final w = widget;
     final radius = BorderRadius.circular(
-      tile ? grid.AppCard.insetRadius : DesktopChrome.rowRadius,
+      w.tile ? grid.AppCard.insetRadius : DesktopChrome.rowRadius,
     );
     final ink = InkWell(
-      onTap: onOpen,
+      onTap: w.onOpen,
+      onHover: w.tile
+          ? (hovered) {
+              if (hovered != _hovered) setState(() => _hovered = hovered);
+            }
+          : null,
       hoverColor: grid.AppSurface.hoverFill,
       focusColor: grid.AppSurface.hoverFill,
       borderRadius: radius,
       child: body,
     );
-    if (!tile && !selected) return ink;
+    if (!w.tile && !w.selected) return ink;
     final fill = grid.AppSurface.selectedFill;
     return Material(
       type: MaterialType.transparency,
       child: Ink(
-        decoration: tile
+        decoration: w.tile
             ? BoxDecoration(
-                color: selected
-                    ? Color.alphaBlend(fill, grid.AppCard.inset)
-                    : grid.AppCard.inset,
+                color: w.selected
+                    ? Color.alphaBlend(fill, grid.AppCard.base)
+                    : grid.AppCard.base,
                 borderRadius: radius,
-                border: Border.all(color: grid.AppCard.insetHair),
+                border: Border.all(
+                  color: w.selected
+                      ? grid.AppGlass.lift
+                      : grid.AppCard.insetHair,
+                ),
+                boxShadow: _hovered
+                    ? grid.AppGlass.shadow
+                    : grid.AppGlass.cardShadow,
               )
             : BoxDecoration(color: fill, borderRadius: radius),
         child: ink,
       ),
+    );
+  }
+}
+
+/// A lane's label, as Trello labels a card: a small capsule of the lane's
+/// colour with its name in white, so the colour is never the only cue.
+class _LaneLabel extends StatelessWidget {
+  const _LaneLabel(this.lane);
+  final String lane;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    key: ValueKey('super-task-lane-$lane'),
+    decoration: BoxDecoration(
+      color: superTabLaneColor(lane),
+      borderRadius: BorderRadius.circular(grid.AppDesktop.paneCloseInset),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: grid.AppDesktop.menuInset,
+        vertical: grid.AppDesktop.listRowGap / 2,
+      ),
+      child: Text(
+        lane,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: DesktopChrome.metadata(color: grid.AppDesktop.onSelection)
+            .copyWith(fontWeight: grid.AppFont.medium, height: 1.25),
+      ),
+    ),
+  );
+}
+
+/// A tile's priority, kept small: P0 and P1 lead with a dot of their ink (red,
+/// amber) and say their name in it; P2 and P3 are a quiet word.
+class _PriorityMark extends StatelessWidget {
+  const _PriorityMark(this.priority);
+  final SuperTabTaskPriority priority;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = superTabPriorityColor(priority);
+    final loud =
+        priority == SuperTabTaskPriority.p0 ||
+        priority == SuperTabTaskPriority.p1;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (loud) ...[
+          SizedBox.square(
+            dimension: grid.AppDesktop.menuInset,
+            child: DecoratedBox(
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+          ),
+          const SizedBox(width: grid.AppDesktop.paneCloseInset),
+        ],
+        Text(
+          priority.badge,
+          style: DesktopChrome.metadata(color: color)
+              .copyWith(fontWeight: loud ? grid.AppFont.semibold : null),
+        ),
+      ],
     );
   }
 }
