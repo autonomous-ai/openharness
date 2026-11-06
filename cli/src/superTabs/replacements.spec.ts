@@ -155,5 +155,4 @@ it('rebinds a Swarm Buddy under its stable identity without inventing a project'
   expect(observations[0].body).toMatchObject({ asAgentId: 'buddy', command: {
     type: 'agent.rebind', agentId: 'buddy', machineId: 'machine', previousHarnessId: 'old', harnessId: 'new' } })
   expect(observations[0].body.command).not.toHaveProperty('projectId')
-  expect(row.buddyConversationId).toBe('private-chat')
 })

@@ -8,6 +8,7 @@
  * discussion and running assignments continue. */
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { leadSwitchOf, SWITCH_RECOVERY_MS, switchWithin } from './leadSwitch.js'
 import { isCrewRow } from './crew.js'
 import { identifier, object } from './wire.js'
 
@@ -49,10 +50,17 @@ export function retainedHarnesses(dataDir: string, now = Date.now()): Set<string
   return new Set(read(file).harnesses)
 }
 
-/** The sessions here the host may reopen, the Leads and the crew: only those a valid roster named. The core reads it as its
- *  Leads (core/main.ts, inCore/agents.ts keepLeadAlive), so a crew member reopens exactly as a Lead does. */
+/** Sessions a valid roster lets the core reopen: Leads, crew, and a Buddy whose engine switch still needs rollback.
+ *  A recovered Buddy is excluded so the person's later Stop Harness stays effective. */
 export function retainedLeads(dataDir: string): Set<string> {
-  try { const kept = read(retentionFile(dataDir)); return new Set([...kept.leads ?? [], ...kept.crew ?? []]) } catch { return new Set() }
+  try {
+    const kept = read(retentionFile(dataDir))
+    const switching = (kept.buddies ?? []).filter(id => {
+      const switched = leadSwitchOf(dataDir, id)
+      return !switched?.recovered && switchWithin(switched, Date.now(), SWITCH_RECOVERY_MS)
+    })
+    return new Set([...kept.leads ?? [], ...kept.crew ?? [], ...switching])
+  } catch { return new Set() }
 }
 
 /** Whether a stop may reach a Lead, for the core's guard, which fails closed (the review of #1635): with no file this

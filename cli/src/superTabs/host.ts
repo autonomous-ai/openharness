@@ -54,7 +54,7 @@ const agentCommandOf = (entry: Entry, prefix: string, buddy = false) =>
 const readCommand = (entry: Entry, prefix: string, group: string, id: string, buddy = false) =>
   `${agentCommandOf(entry, prefix, buddy)} message ${shellQuote(group)} ${shellQuote(id)}`
 export { backend, identifier, object, SuperTabHostError } from './wire.js'
-import { leadSwitchOf, SWITCH_ADOPT_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
+import { leadSwitchOf, leadSwitchRecovered, SWITCH_ADOPT_MS, SWITCH_RECOVERY_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError, within } from './wire.js'
 import { parseSwarmSkill, recordSwarmSkillNotice, refreshSwarmSkill, wireRole, type CustomSwarmRole, type SkillRefresh, type SwarmSkill, type SwarmSkillGrant,
   type SwarmSkillMode } from '../lib/swarmSkills.js'
@@ -383,7 +383,7 @@ const HELD_RECLAIM_MS = 120_000
 const HELD_LIST_MS = 30_000
 const LEAD_RETRY_MS = 5_000
 /** How long after a Product Manager's switch its host still closes a new session of it that starts late (leadSwitch.ts). */
-const LATE_REPLACEMENT_MS = 30 * 60_000
+const LATE_REPLACEMENT_MS = SWITCH_RECOVERY_MS
 const LEAD_RETRY_MAX_MS = 30 * 60_000
 const LEAD_REOPEN_WAIT_MS = 60_000
 /** How often a running Product Manager is checked for a hang (watchLead): its owed ask's time is in minutes. */
@@ -640,7 +640,9 @@ export class SuperTabHost {
     builtInHash: string | null; builtIn: string | null; history: { summary: string | null; savedAt: number | null } | null; failedSince?: number }>()
   private skillsRunning: Promise<void> | null = null
   private missing = new Map<string, number>()
-  /** Per Lead harness here: a reopen in progress, its failures, when the next may run, and the reason last logged. */
+  /** A Buddy with no pending switch is checked once at roster admission, never on idle passes. */
+  private readonly buddySwitches = new Map<string, number>()
+  /** Per protected harness here: its reopen, failures, retry time and last logged reason. */
   private readonly keepAlives = new Map<string, { running: boolean; failures: number; retryAt: number; reason?: string }>()
   /** Per Product Manager harness here (watchLead): when it was last checked, since when it has been in one turn, the owed ask
    *  it was last restarted for, a check or restart in progress, and until when the keep-alive leaves its relaunch be. */
@@ -1244,12 +1246,13 @@ export class SuperTabHost {
     /** Every delivery of those lists, also those after one whose claim threw: only a list read without it says it is gone. */
     const listed = new Set<string>()
     const running: HostAgent[] = []
-    const leads = new Set<string>(), ended = new Set<string>()
+    const leads = new Set<string>(), ended = new Set<string>(), rosterHarnesses = new Set<string>()
     this.serveBuddyModels(data)
     for (const item of data) {
       const row = object(item), agent = object(row.agent)
       if (!identifier(row.tabId) || !identifier(agent.id) || !identifier(agent.harnessId) || agent.machineId !== this.machineId) continue
       const target = row as unknown as HostAgent
+      rosterHarnesses.add(target.agent.harnessId)
       // A row still marked Lead is never closed (owner, 2026-10-23); one marked both is neither closed nor reopened.
       if (row.closeSession === true) {
         ended.add(endingKey(target))
@@ -1284,11 +1287,17 @@ export class SuperTabHost {
           .finally(() => { this.restoring.delete(restKey) }))
       }
       if ((target.agent as { crew?: unknown }).crew) this.pruneCrewBranches(target.tabId, target.agent.harnessId)
-      if (row.lead === true || target.agent.switchLanded) {
-        if (row.lead === true) leads.add(target.agent.harnessId)
-        this.keepAlive(target.agent.harnessId)
+      const buddy = isBuddy(agent) && !agent.buddySession
+      if (buddy && (!this.buddySwitches.has(target.agent.harnessId) || agent.switchRequest)) {
+        const record = leadSwitchOf(this.core.dataDir, target.agent.harnessId)
+        this.buddySwitches.set(target.agent.harnessId, record ? record.at + SWITCH_RECOVERY_MS : agent.switchRequest ? this.now() + SWITCH_RECOVERY_MS : -Infinity)
+      }
+      const buddySwitch = buddy && this.now() <= (this.buddySwitches.get(target.agent.harnessId) ?? -Infinity)
+      if (row.lead === true || target.agent.switchLanded || buddySwitch) {
+        leads.add(target.agent.harnessId)
+        this.keepAlive(target.agent.harnessId, false, buddy)
         if (row.lead === true) this.watchLead(target.agent.harnessId, row.owed)
-        void this.leadSwitches.serve(target as unknown as SwitchRow).catch(error => this.log(`PM switch: ${error instanceof Error ? error.name : typeof error}`))
+        void this.leadSwitches.serve(target as unknown as SwitchRow).catch(error => this.log(`Engine switch: ${error instanceof Error ? error.name : typeof error}`))
       } else if (isCrewRow(row)) {
         // A project's crew is kept alive as its PM is (task #3397): reopened in place, then told to continue its task.
         leads.add(target.agent.harnessId)
@@ -1406,6 +1415,7 @@ export class SuperTabHost {
     }
     if (this.stopped) return
     // A Lead the roster no longer marks (its project deleted) is never reopened again.
+    for (const harnessId of this.buddySwitches.keys()) if (!rosterHarnesses.has(harnessId)) this.buddySwitches.delete(harnessId)
     for (const [harnessId, state] of this.keepAlives) if (!leads.has(harnessId) && !state.running) this.keepAlives.delete(harnessId)
     for (const [harnessId, watch] of this.leadWatches) if (!leads.has(harnessId) && !watch.checking && !watch.restarting) this.leadWatches.delete(harnessId)
     for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
@@ -1494,7 +1504,7 @@ export class SuperTabHost {
     }
   }
 
-  private keepAlive(harnessId: string, crew = false): void {
+  private keepAlive(harnessId: string, crew = false, buddy = false): void {
     const reopen = this.core.agents.keepLeadAlive
     if (!reopen) return
     const state = this.keepAlives.get(harnessId) ?? { running: false, failures: 0, retryAt: 0 }
@@ -1507,11 +1517,16 @@ export class SuperTabHost {
     if (watch && (watch.restarting || now < watch.settleUntil)) return
     // Its owner switched its engine from its pane (leadSwitch.ts), stopping it once the stop went through.
     const switched = leadSwitchOf(this.core.dataDir, harnessId)
+    const held: boolean = switchWithin(switched, now)
     if (this.core.agents.byAgent(harnessId)) {
       state.failures = 0; state.retryAt = 0; delete state.reason
       // Reopened here after its switch's hold: a new session of that switch that runs now is unlinked beside it, and is
       // closed (security review 2 of #2493).
-      if (switched && !switchWithin(switched, now) && switchWithin(switched, now, LATE_REPLACEMENT_MS)) {
+      if (switched && !held && switchWithin(switched, now, LATE_REPLACEMENT_MS)) {
+        if (buddy && !switched.recovered) {
+          try { leadSwitchRecovered(this.core.dataDir, harnessId, switched.changeId) }
+          catch (error) { this.log(`Buddy recovery record failed: ${error instanceof Error ? error.name : typeof error}`) }
+        }
         state.running = true
         void this.switchReplacement(switched).then(id => id ? this.closeReplacement(id, switched) : undefined)
           .catch(() => { /* Checked again on the next poll. */ }).finally(() => { state.running = false })
@@ -1528,15 +1543,21 @@ export class SuperTabHost {
     void (async () => {
       if (switched) {
         const replacement = await this.switchReplacement(switched)
+        if (buddy && switched.recovered) {
+          // Rollback finished; the person can stop it again. A late candidate still has to go.
+          if (replacement) await this.closeReplacement(replacement, switched)
+          return
+        }
         // Its new session runs: the Swarm takes it in its place (recordReplacements), within its time.
         if (replacement && switchWithin(switched, now, SWITCH_ADOPT_MS)) return
         // Its new session has not started yet: waited for, within its time.
         if (!replacement && switchWithin(switched, now)) return
         // Not taken in: closed before the old one reopens, so the two never run side by side.
-        if (replacement) await this.closeReplacement(replacement, switched)
+        if (replacement && !await this.closeReplacement(replacement, switched)) return failed('the new session could not be closed')
       }
       const result = await reopen(harnessId)
       if (!result.ok) return failed(result.detail ?? result.error)
+      if (buddy && switched) leadSwitchRecovered(this.core.dataDir, harnessId, switched.changeId)
       if (crew) this.crew.reopened(harnessId)
       state.failures = 0
       state.retryAt = this.now() + LEAD_REOPEN_WAIT_MS
@@ -1601,11 +1622,12 @@ export class SuperTabHost {
   }
 
   /** Closes the new session [agentId] of a switch the Swarm did not take in, by its creation receipt (closeMember). */
-  private async closeReplacement(agentId: string, switched: LeadSwitch): Promise<void> {
+  private async closeReplacement(agentId: string, switched: LeadSwitch): Promise<boolean> {
     const closed = await this.core.agents.closeMember?.(agentId, switched.changeId)
     this.log(closed && 'closed' in closed && closed.closed
-      ? `Closed the new session ${agentId.slice(0, 8)} of a Product Manager's switch the Swarm did not take in.`
-      : `Could not close the new session ${agentId.slice(0, 8)} of a Product Manager's switch: ${closed?.error ?? 'unsupported'}.`)
+      ? `Closed the new session ${agentId.slice(0, 8)} of a protected session's switch the Swarm did not take in.`
+      : `Could not close the new session ${agentId.slice(0, 8)} of a protected session's switch: ${closed?.error ?? 'unsupported'}.`)
+    return closed?.closed === true
   }
 
   /** A Buddy's thread sessions (spec 2026-10-30-buddy-thread-sessions) end on their own, so none is left running on its

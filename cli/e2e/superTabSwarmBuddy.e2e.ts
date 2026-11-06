@@ -10,6 +10,7 @@ import { LocalClient } from './harness/client.js'
 import { until, type IsolatedDaemon } from './harness/daemon.js'
 import { FakeBackend } from './harness/fakeBackend.js'
 import { signedInDaemon } from './harness/fleet.js'
+import { isTeamAccount } from '../src/team/config.js'
 import { overOldRoutes } from './harness/swarmReads.js'
 
 const TAB = 'buddy-tab'
@@ -21,7 +22,8 @@ afterEach(async () => {
   await relay?.close(); relay = undefined
 })
 
-it('starts and switches its engine in the same folder and private chat, with one Buddy and no app token', async () => {
+// A Team OS account must refuse every real Buddy launch; approved CI runs this flow on an isolated runner account.
+it.skipIf(isTeamAccount())('starts and switches its engine in the same folder and private chat, with one Buddy and no app token', async () => {
   const backend = await FakeBackend.start(); relay = backend
   backend.addMachine(ME)
   backend.me = { id: 'person', email: ME.email }
@@ -91,7 +93,10 @@ it('starts and switches its engine in the same folder and private chat, with one
   expect(existsSync(join(homes, folders[0]!, 'projects', 'API', 'README.md'))).toBe(true)
   expect(existsSync(start.request.cwd)).toBe(false)
   const original = agents[0].harnessId
-  const before = (await client.request('agents_list')).agents.find((agent: Record<string, any>) => agent.id === original)
+  const before = await until('the original Buddy to bind its native conversation', async () => {
+    const row = (await client!.request('agents_list')).agents.find((agent: Record<string, any>) => agent.id === original)
+    return row?.sessionId ? row : null
+  }, 30_000, 100)
   const close = { agentId: original, sessionId: before.sessionId, createdAt: before.createdAt }
   await until('the host to retain the Buddy', async () => (await client!.request('agent_close', { ...close, mode: 'inspect' })).keptRunning === true || null, 15_000, 100)
   // Ordinary Close still keeps a Buddy running; the engine switch alone carries its prepared handoff permit.
@@ -109,8 +114,10 @@ it('starts and switches its engine in the same folder and private chat, with one
   const saved = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')).find((agent: Record<string, any>) => agent.agentId === live[0].id)
   expect(saved.swarmSkill).toMatchObject({ role: 'buddy' })
   expect(saved.swarmSkill.github).not.toBe(true)
-  const prompts = readFileSync(join(d.root, 'submitted-prompts'), 'utf8')
-  expect(prompts).toContain('Your chat with your owner is conversation buddy-chat')
+  await until('the replacement to read its private chat and handoff', () => {
+    const prompts = readFileSync(join(d.root, 'submitted-prompts'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as string)
+    return prompts.some(prompt => prompt.includes('Your chat with your owner is conversation buddy-chat') && prompt.includes('Context handoff:')) || null
+  }, 30_000, 100)
   expect(agents[0]).toMatchObject({ id: 'buddy', buddyOf: { personId: 'person', generation: 'g' } })
   expect(asked).toEqual([])
 })
