@@ -18,6 +18,7 @@ SuperTabConversation _task({
   DateTime? shippedAt,
   num? queueRank,
   String? notBefore,
+  Map<String, String>? checks,
 }) => SuperTabConversation.fromJson({
   ...conversationFixture(id, 'Task $id'),
   'number': number,
@@ -35,6 +36,7 @@ SuperTabConversation _task({
   if (shippedAt != null) 'shippedAt': shippedAt.millisecondsSinceEpoch,
   'queueRank': ?queueRank,
   'notBefore': ?notBefore,
+  'pullRequestChecks': ?checks,
 });
 
 Map<String, dynamic> _waiting(String why, {String? personId}) => {
@@ -48,12 +50,14 @@ SuperTabTaskPlace? _place(
   SuperTabConversation task, {
   int mentions = 0,
   int needsHuman = 0,
+  Map<String, int> releaseTimes = const {},
 }) => superTabTaskPlaceOf(
   task,
   readerId: 'me',
   now: _now,
   mentions: mentions,
   needsHuman: needsHuman,
+  releaseTimes: releaseTimes,
   personName: (id) => const {'ken': 'Ken', 'me': 'Dee'}[id],
 );
 
@@ -257,6 +261,127 @@ void main() {
     for (final (name, task, needsHuman, expected) in cases) {
       expect(_place(task, needsHuman: needsHuman), expected, reason: name);
     }
+  });
+
+  // Task #3827: the server records each linked pull request's check state and each component's next release time.
+  group('what the server says of checks and releases', () {
+    SuperTabConversation done(Map<String, String> checks, {int minutes = 12}) =>
+        _task(
+          status: 'done',
+          linked: true,
+          checks: checks,
+          shippedAt: _now.subtract(Duration(minutes: minutes)),
+        );
+
+    test('a done task says its checks and how long it has waited', () {
+      expect(_place(done({_pr: 'green'}))!.state, 'green, waiting 12 min');
+      expect(
+        _place(done({_pr: 'running'}))!.state,
+        'CI running, waiting 12 min',
+      );
+      expect(
+        _place(done({_pr: 'green'}, minutes: 90))!.state,
+        'green, waiting 1 h 30 min',
+      );
+      expect(_place(done({_pr: 'green'}))!.column, SuperTabTaskColumn.done);
+    });
+
+    test('a done task with no state recorded reads as before', () {
+      expect(_place(done({}))!.state, 'waiting to merge for 12 min');
+      expect(
+        _place(done({'https://github.com/acme/app/pull/99': 'green'}))!.state,
+        'waiting to merge for 12 min',
+      );
+    });
+
+    test('red checks put a done task back in Working, as CI red', () {
+      expect(_place(done({_pr: 'red'})), (
+        column: SuperTabTaskColumn.working,
+        needsYou: false,
+        state: 'CI red',
+      ));
+    });
+
+    test('the worst state of its pull requests is the task\'s', () {
+      final two = _task(
+        status: 'done',
+        linked: true,
+        checks: {
+          _pr: 'green',
+          'https://github.com/acme/app/pull/13': 'running',
+        },
+        shippedAt: _now.subtract(const Duration(minutes: 5)),
+      );
+      expect(_place(two)!.state, 'CI running, waiting 5 min');
+    });
+
+    SuperTabConversation releasing(List<String> parts) =>
+        SuperTabConversation.fromJson({
+          ...conversationFixture('t', 'Task t'),
+          'assignment': {'agentId': 'a1', 'status': 'done'},
+          'releasing': parts,
+        });
+    int at(int day, int hour, [int minute = 0]) =>
+        DateTime(2026, 11, day, hour, minute).millisecondsSinceEpoch;
+
+    test(
+      'a merged task says when the next release is due, in the reader\'s time',
+      () {
+        final times = {'desktop': at(4, 15, 30), 'cli': at(4, 15, 30)};
+        expect(
+          _place(releasing(['desktop', 'cli']), releaseTimes: times)!.state,
+          'waiting for Desktop, CLI · next release about 15:30',
+        );
+        expect(
+          _place(releasing(['desktop']), releaseTimes: times)!.column,
+          SuperTabTaskColumn.merged,
+        );
+      },
+    );
+
+    test(
+      'it names the earliest of the parts it waits for, and now as due now',
+      () {
+        final times = {'desktop': at(4, 15, 30), 'cli': at(4, 11)};
+        expect(
+          _place(releasing(['desktop', 'cli']), releaseTimes: times)!.state,
+          'waiting for Desktop, CLI · next release about 11:00',
+        );
+        expect(
+          _place(releasing(['desktop']), releaseTimes: {'desktop': 0})!.state,
+          'waiting for Desktop · next release due now',
+        );
+      },
+    );
+
+    test('tomorrow and later days say so', () {
+      expect(
+        _place(
+          releasing(['backend']),
+          releaseTimes: {'backend': at(5, 9)},
+        )!.state,
+        'waiting for Backend · next release about 09:00 tomorrow',
+      );
+      expect(
+        _place(
+          releasing(['backend']),
+          releaseTimes: {'backend': at(9, 9)},
+        )!.state,
+        'waiting for Backend · next release about 09:00 Nov 9',
+      );
+    });
+
+    test('no time for its parts, or none known, reads as before', () {
+      expect(_place(releasing(['desktop']))!.state, 'waiting for Desktop');
+      expect(
+        _place(releasing(['desktop']), releaseTimes: {'cli': at(4, 15)})!.state,
+        'waiting for Desktop',
+      );
+      expect(
+        _place(releasing([]), releaseTimes: {'desktop': at(4, 15)})!.state,
+        'waiting for a release',
+      );
+    });
   });
 
   test('a tag of the reader marks the task in its own column', () {

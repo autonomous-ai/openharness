@@ -195,6 +195,7 @@ class SwarmPartsBackend {
       'otherProjectsWork': state['otherProjectsWork'],
     // Each project's board pulse (backend superTabs/pulse.ts, task #3384).
     if (state['pulse'] != null) 'pulse': state['pulse'],
+    if (state['releaseTimes'] != null) 'releaseTimes': state['releaseTimes'],
     if (state['avatars'] != null) 'avatars': state['avatars'],
     // Only where the server does not try Team accounts (backend read/views.ts).
     if (state['teamAccounts'] == false) 'teamAccounts': false,
