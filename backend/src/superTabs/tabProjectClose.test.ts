@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, stableId, type Actor } from './model.js'
 import { PERSONAL_SWARM_OPERATION } from './deletion.js'
+import { SEED_RULES } from './policy.js'
 
 // Task #3929 (for Diego's #3903): a no-repo tab's project in the Personal Swarm goes when the tab closes, if it never had a
 // message; otherwise it is archived, read-only and out of the sidebar. Only the Personal Swarm's owner, only a tab's project.
@@ -51,6 +52,25 @@ describe('closing a tab\'s Personal project', () => {
     expect(f.project(tab)).toMatchObject({ archived: true })
     expect(f.chatOf(tab)).toMatchObject({ archived: true })
     expect(f.state.agents.some(a => a.id === lead)).toBe(false)
+  })
+
+  // Security review 2 (Phonecheck2): what the person wrote without a message, saved instructions or a rules record, is kept.
+  it('archives it, never deletes it, when the person saved its instructions or its rules without a message', () => {
+    const f = setup()
+    const written = f.create('personal-tab-instructions')
+    f.run({ type: 'instructions.save', projectId: written, baseRevision: 1, text: '# Mine\n\nKeep this.', summary: 'My own' } as Command,
+      owner, { instructions: { revision: 1, text: 'template' } } as Partial<CommandContext>)
+    expect(f.project(written)!.instructionsRevision).toBe(2)
+    expect(f.close(written, 'personal-tab-instructions').result).toMatchObject({ outcome: 'archived' })
+    expect(f.project(written)).toMatchObject({ archived: true })
+    const ruled = f.create('personal-tab-rules')
+    expect(f.run({ type: 'project.closeTab', projectId: ruled, tabOperation: 'personal-tab-rules' } as Command, owner,
+      { projectRules: { revision: 1, rules: SEED_RULES } }).result).toMatchObject({ outcome: 'archived' })
+    expect(f.project(ruled)).toMatchObject({ archived: true })
+    // The built-in instructions it started with, and no rules record, are not the person's: an untouched tab still goes.
+    const untouched = f.create('personal-tab-untouched')
+    expect(f.run({ type: 'project.closeTab', projectId: untouched, tabOperation: 'personal-tab-untouched' } as Command, owner,
+      { projectRules: null }).result).toMatchObject({ outcome: 'deleted' })
   })
 
   it('refuses a repo project, a project that is not a tab\'s, another person, an agent, and a Swarm that is not Personal', () => {

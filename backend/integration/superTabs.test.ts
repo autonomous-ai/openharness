@@ -22,6 +22,7 @@ import { sweepPendingUploads } from '../src/lib/pendingUploadSweep.js'
 import { IGNORED_NOTE, type Command } from '../src/superTabs/commands.js'
 import { nextMachineShareGrants } from '../src/lib/machineSharePolicy.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
+import { SEED_RULES } from '../src/superTabs/policy.js'
 import { stableId, type Agent, type SuperTabState } from '../src/superTabs/model.js'
 import { agentDisplayName } from '../src/superTabs/agentNames.js'
 import { roleVersion } from '../src/superTabs/projects.js'
@@ -5607,6 +5608,39 @@ describe('a closed tab\'s Personal project', () => {
     expect(closed.result).toMatchObject({ outcome: 'archived' })
     expect((await store.read(person, tab)).state.projects!.find(p => p.id === projectId)).toMatchObject({ archived: true })
   })
+
+  // Security review 2 (Phonecheck2): a project whose instructions or rules the person saved is kept, also when the save lands
+  // while the tab closes.
+  const instructions = { type: 'instructions.save', baseRevision: 1, text: '# Mine\n\nKeep this.', summary: 'My own' }
+  const rulesSave = { type: 'rules.set', baseRevision: 0, rules: SEED_RULES, summary: 'My own rules' }
+  const kept = async (tab: string, projectId: string) => {
+    expect((await store.read(person, tab)).state.projects!.find(p => p.id === projectId)).toMatchObject({ archived: true })
+    expect(await db.superTabInstructionsRevision.count({ where: { tabId: tab, projectId } })).toBeGreaterThan(0)
+  }
+  for (const [what, save] of [['instructions', instructions], ['rules', rulesSave]] as const) {
+    it(`archives it, keeping what was written, when its ${what} were saved before the close`, async () => {
+      const { tab, projectId, tabOperation } = await personal()
+      await run(tab, { ...save, projectId } as Command, person)
+      const closed = await store.execute(person, tab, { operationId: randomUUID(), command: { type: 'project.closeTab', projectId, tabOperation } as Command })
+      expect(closed.result).toMatchObject({ outcome: 'archived' })
+      await kept(tab, projectId)
+      if (what === 'rules') expect(await db.superTabProjectRules.count({ where: { tabId: tab, projectId } })).toBe(1)
+    })
+    it(`archives it, keeping what was written, when its ${what} are saved while it is being closed`, async () => {
+      const { tab, projectId, tabOperation } = await personal()
+      let saved = false
+      const raced = new SuperTabStore(beforeFirstWrite(db, async () => {
+        if (saved) return
+        saved = true
+        await run(tab, { ...save, projectId } as Command, person)
+      }))
+      const closed = await raced.execute(person, tab, { operationId: randomUUID(), command: { type: 'project.closeTab', projectId, tabOperation } as Command })
+      expect(saved).toBe(true)
+      expect(closed.result).toMatchObject({ outcome: 'archived' })
+      await kept(tab, projectId)
+      if (what === 'rules') expect(await db.superTabProjectRules.count({ where: { tabId: tab, projectId } })).toBe(1)
+    })
+  }
 
   it('does its work once under one operation id, from any of the person\'s computers', async () => {
     const { tab, projectId, tabOperation } = await personal()
