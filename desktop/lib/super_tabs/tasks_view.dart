@@ -99,9 +99,13 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   /// The Board's sideways scroll, shared with its scrollbar.
   final _boardScroll = ScrollController();
 
+  /// The Search field's text, so Show all can empty it.
+  final _search = TextEditingController();
+
   @override
   void dispose() {
     _boardScroll.dispose();
+    _search.dispose();
     super.dispose();
   }
 
@@ -219,6 +223,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         key: value.where(_keeps).toList(),
     };
     final empty = board.values.every((entries) => entries.isEmpty);
+    final hidden = shown.values.every((entries) => entries.isEmpty);
     final pulse = c.snapshot?.pulseOf(project.id);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -254,11 +259,41 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
                     style: DesktopChrome.control(color: DesktopChrome.muted),
                   ),
                 )
+              : hidden
+              ? _noMatch()
               : _layout == _Layout.list
               ? _listView(shown, now)
               : _boardView(shown, now),
         ),
       ],
+    );
+  }
+
+  /// What Mine and Search hid, so a filtered board never reads as an empty
+  /// project (Dee, task #3869); Show all lifts both.
+  Widget _noMatch() {
+    final filters = [if (_mine) 'Mine', if (_query.isNotEmpty) '“$_query”'];
+    return Center(
+      key: const ValueKey('super-tasks-no-match'),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'No cards match ${filters.join(' and ')}',
+            style: DesktopChrome.control(color: DesktopChrome.muted),
+          ),
+          const SizedBox(height: grid.AppDesktop.controlGap),
+          DesktopPill(
+            key: const ValueKey('super-tasks-show-all'),
+            label: 'Show all',
+            onPressed: () {
+              _search.clear();
+              setState(() => _query = '');
+              _choose(mine: false);
+            },
+          ),
+        ],
+      ),
     );
   }
 
@@ -321,6 +356,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
           width: _searchWidth,
           child: TextField(
             key: const ValueKey('super-tasks-search'),
+            controller: _search,
             onChanged: (query) => setState(() => _query = query.trim()),
             textInputAction: TextInputAction.search,
             style: grid.kFieldTextStyle,
