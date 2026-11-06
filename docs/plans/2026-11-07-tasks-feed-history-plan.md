@@ -9,7 +9,7 @@ for and their proposals, dormant and archived ones included, newest first, with 
 **Architecture:** Each stored conversation gets one indexed column, `feedIds`: the people and agents whose feed lists it,
 computed from its data on every write (parts/write.ts `extracted`) and backfilled once at worker startup. A feed page is one
 read of the `(tabId, feedIds, lastActivityAt, key)` index for the person and their own agents, newest activity first, 50
-readable rows a page. First load sends the first page with a `next` cursor; a new `GET /api/super-tabs/:tabId/personal-tasks`
+readable rows a page. First load sends the first page with an `olderCursor`; a new `GET /api/super-tabs/:tabId/personal-tasks`
 pages older ones; change polls keep summarising only the parts that changed since the cursor, now without dropping dormant
 or archived tasks.
 
@@ -41,8 +41,8 @@ or archived tasks.
 - Concurrency: no new lock; the column is written in the same guarded part write as the data.
 - Read cost: first load adds one indexed read of ≤ 50 rows; a page is the same; polls read only changed parts, as today.
 - Scale: 10x is ~46k rows; a page still reads the 50 it returns. The first warning is the feed read's p95 in the read timing.
-- Compatibility: `next` and the new row fields are additions; `at` becomes the last activity time (clients only sort by it).
-  Clients from the last 30 days ignore what they don't read. Older backends never send `next`.
+- Compatibility: `olderCursor` and the new row fields are additions; `at` becomes the last activity time (clients only sort by it).
+  Clients from the last 30 days ignore what they don't read. Older backends never send `olderCursor`. Shape agreed with Desktop's Taskcards (#4204); Desktop picks project colours.
 - Migration and rollback: `db push` adds the index; the worker's startup backfill sets `feedIds` on rows without it. A
   rollback leaves an unused column and index; nothing reads them.
 - Audience: `canReadGroup` on every row before it counts toward a page; cursor from the last row sent.
@@ -72,11 +72,11 @@ Test: `backend/src/superTabs/read/personalTasks.test.ts`, `backend/integration/s
 Test: `backend/integration/superTabPersonalTasksFeed.test.ts`, `backend/integration/superTabRead.test.ts`.
 
 **Interfaces:** `loadFeed(tx, tabId, ids: string[], before?: { lastActivityAt: number; key: string }): Promise<Part<GroupData>[]>`;
-`PersonalTasks.next?: string | null`; `SwarmReads.personalTasks(user, tabId, before?): Promise<PersonalTasks>`;
+`PersonalTasks.olderCursor?: string | null`; `SwarmReads.personalTasks(user, tabId, before?): Promise<PersonalTasks>`;
 `GET /api/super-tabs/:tabId/personal-tasks?before=`.
 
 - [ ] Failing tests: first load lists a dormant archived task of the person's own agent and their own proposal, newest first,
-  with `next`; the next page continues with no repeat; another member's view and an outsider's never list it; a hidden
+  with `olderCursor`; the next page continues with no repeat; another member's view and an outsider's never list it; a hidden
   project's task never shortens a page nor names the cursor; the read plan is IXSCAN `feed` with examined ≈ returned.
 - [ ] Run them; record red.
 - [ ] Implement; run them and the read tests green; commit.
@@ -85,10 +85,10 @@ Test: `backend/integration/superTabPersonalTasksFeed.test.ts`, `backend/integrat
 
 **Files:** Modify `backend/src/superTabs/read/personalTasks.ts`. Test: `backend/src/superTabs/read/personalTasks.test.ts`.
 
-**Interfaces:** `PersonalTask` gains `projectColor: number` (0–7, stable per project id), `requester: { id, name?, avatar? } | null`,
-`pullRequestUrl: string | null`; `at` is `lastActivityAt` in ms.
+**Interfaces:** `PersonalTask` gains `requester: { id, name, avatar? } | null` and optional `pullRequestUrl` (newest linked);
+`at` is `lastActivityAt` in ms.
 
 - [ ] Failing tests: a poll keeps a dormant or archived own task and a task of the person's agent requested by someone else;
-  removes deleted, merged and no-longer-own ones; rows carry project colour, requester, newest pull request and canApprove.
+  removes deleted, merged and no-longer-own ones; rows carry requester, newest pull request and canApprove.
 - [ ] Run them; record red.
 - [ ] Implement; run them green; commit; mark the pull request ready.

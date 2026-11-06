@@ -78,3 +78,28 @@ describe('which hosts a write concerns', () => {
     expect(update('progress', {})).toEqual([])
   })
 })
+
+describe('the feed ids a conversation write stores (read/feedIds.ts, task #4203)', () => {
+  const work = { id: 'w', agentId: 'worker', status: 'done' as const, configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null },
+    execution: { machineId: 'm', harnessId: 'h', machineOwnerId: 'machine-owner' }, result: null }
+  const task = (change: Partial<GroupData> = {}): GroupData => ({ id: 'g', projectId: 'p', title: 'Work', leadId: 'lead', agentIds: ['lead', 'worker'],
+    archived: true, dormant: true, brief: '', checks: [], lastMessageSequence: 0, requesterId: 'asker', assignment: work, ...change })
+  const ids = (data: GroupData) => (extracted('group', data, 1).feedIds as string[]).sort()
+
+  it('names the requester, the approver, the suggested agent, the proposal senders and the assignee, each once, archived or not', () => {
+    expect(ids(task({ taskApproval: { personId: 'asker', generation: 'g1', state: 'approved', createdAt: 1, suggestedAgentId: 'worker' },
+      proposal: { senders: [{ personId: 'proposer', generation: 'g1' }, { personId: 'asker', generation: 'g1' }] } as never })))
+      .toEqual(['asker', 'proposer', 'worker'])
+    expect(ids(task({ requesterId: undefined, assignment: null, taskApproval: { personId: 'approver', generation: 'g1', state: 'proposal', createdAt: 1,
+      suggestedAgentId: 'suggested' } }))).toEqual(['approver', 'suggested'])
+  })
+
+  it('names nobody for a conversation that is no task: a Buddy or agent chat, a private chat, a step', () => {
+    for (const change of [{ kind: 'buddy' as const }, { kind: 'agent-chat' as const }, { audience: { people: [{ id: 'asker', generation: 'g1' }] } }, { reviewOf: 'task' }])
+      expect(ids(task(change as Partial<GroupData>))).toEqual([])
+  })
+
+  it('never names the machine owner, whose login the agent may not run under', () => {
+    expect(ids(task())).not.toContain('machine-owner')
+  })
+})
