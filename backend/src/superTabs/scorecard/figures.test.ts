@@ -265,3 +265,10 @@ describe('PM first-answer time (#3609)', () => {
     expect(scorecardDay(input({ messages })).pmAnswer).toEqual({ count: 1, medianSeconds: 30, slowestSeconds: 30 })
   })
 })
+
+
+it('orders a same-millisecond PM answer after its ask by stored sequence', () => {
+  const ask = person('chat', at(1), { id: 'instant', recipientIds: ['pm'], sequence: 10 })
+  const answer = row({ conversationId: 'chat', createdAt: at(1), answers: 'instant', sequence: 11 })
+  expect(scorecardDay(input({ messages: [answer, ask] })).pmAnswer).toEqual({ count: 1, medianSeconds: 0, slowestSeconds: 0 })
+})
