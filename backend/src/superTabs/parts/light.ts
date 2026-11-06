@@ -42,6 +42,7 @@ export const GROUP_FIELDS = {
     'proposal',
     'pulse',
     'reviewOf',
+    'taskApproval',
   ],
   whenRunning: [
     'assignment.execution',
@@ -114,6 +115,7 @@ export const GROUP_FIELDS = {
     'talkedAt',
     'teamWritten',
     'teamWrittenBy',
+    'unlinkedPullRequests',
     'writers',
   ],
 } as const
