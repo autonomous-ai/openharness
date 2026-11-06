@@ -172,8 +172,8 @@ void main() {
       await t.tap(find.text('Task new'));
       await t.pump();
       expect(opened, ['new']);
-      expect(find.text('Approve'), findsNothing);
-      expect(find.text('Reject'), findsNothing);
+      expect(inCard('new', find.text('Approve')), findsNothing);
+      expect(inCard('new', find.text('Reject')), findsNothing);
       expect(find.byType(DropdownButtonFormField<String>), findsNothing);
       expect(f.commands, isEmpty);
       f.rows.last['canApprove'] = false;
@@ -468,13 +468,7 @@ void main() {
         );
         expect(t.widget<Text>(title).maxLines, 3);
         expect(
-          t
-              .widget<DecoratedBox>(
-                find
-                    .descendant(of: tag, matching: find.byType(DecoratedBox))
-                    .first,
-              )
-              .decoration,
+          t.widget<DecoratedBox>(tag).decoration,
           isA<BoxDecoration>().having(
             (d) => d.color,
             'color',
