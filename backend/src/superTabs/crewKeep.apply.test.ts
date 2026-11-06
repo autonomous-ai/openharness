@@ -166,3 +166,27 @@ describe('a take-over marks nothing Team-written (security review of #3229, Curl
     expect(after.teamWritten).toBeFalsy()
   })
 })
+
+describe('a member that keeps stopping is moved and its task goes back at once (#3662)', () => {
+  it('hands its task on as soon as the move is decided, not after its start runs, and says why', () => {
+    const f = fixture()
+    const task = working(f)
+    f.state.agents.find(a => a.id === f.ada.id)!.stops = [NOW - 50 * 60_000, NOW - 30 * 60_000, NOW - 5 * 60_000]
+    const drafts = applyCrewKeep(f.state, NOW, everywhere)
+    const ada = f.state.agents.find(a => a.id === f.ada.id)!
+    expect(ada.movedTo).toMatchObject({ machineId: 'mini', reason: 'unstable' })
+    const now = f.state.conversations.find(c => c.id === task.id)!
+    expect(now.assignment).toMatchObject({ status: 'lost', lost: { reason: 'crew-unstable', at: NOW } })
+    expect(activeWork(now)).toBe(false)
+    expect(drafts.map(d => d.text).join(' ')).toContain('stopped 3 times in the last hour')
+  })
+
+  it('moves a member below its quota floor without handing its task on: it is still working', () => {
+    const f = fixture([machine('mac', { usedPercent: 90 }), machine('mini')])
+    const task = working(f)
+    applyCrewKeep(f.state, NOW, everywhere)
+    expect(f.state.agents.find(a => a.id === f.ada.id)!.movedTo).toMatchObject({ machineId: 'mini', reason: 'quota-low' })
+    expect(f.state.conversations.find(c => c.id === task.id)!.assignment!.status).toBe('working')
+  })
+})
+
