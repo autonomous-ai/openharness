@@ -54,17 +54,17 @@ Main-chat posts that answer nothing (a release out, an outage) stay possible: on
 
 **Files:** backend/src/superTabs/projects.ts, backend/src/superTabs/commands.ts, backend/src/superTabs/answers.test.ts
 
-- [ ] Test: in a project set to answer in threads, a plain `--answers` post and an `answer` on a person's main-chat message land
+- [x] Test: in a project set to answer in threads, a plain `--answers` post and an `answer` on a person's main-chat message land
   in its thread and settle it; an agent's message, a post answering nothing, and other projects behave as before; only the
   coordinator or a manager sets it.
-- [ ] Watch it fail; commit.
-- [ ] Code; watch it pass; commit.
+- [x] Watch it fail; commit.
+- [x] Code; watch it pass; commit.
 
 ## Task 2: the reply line says --reply-to
 
 **Files:** cli/src/superTabs/host.ts, cli/src/superTabs/host.spec.ts
 
-- [ ] Test: in such a project a person's main-chat message gets `--reply-to MESSAGE` and the thread rule; other projects keep
+- [x] Test: in such a project a person's main-chat message gets `--reply-to MESSAGE` and the thread rule; other projects keep
   `--answers`.
-- [ ] Watch it fail; commit.
-- [ ] Code; watch it pass; commit.
+- [x] Watch it fail; commit.
+- [x] Code; watch it pass; commit.
