@@ -116,6 +116,33 @@ void main() {
     await close(tester, c);
   });
 
+  testWidgets("the menu has none on someone else's Buddy chat", (tester) async {
+    final server = swarm();
+    final c = server.controller(account: 'someone-else');
+    await c.refresh();
+    await tester.binding.setSurfaceSize(const Size(1280, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(),
+        home: Scaffold(
+          body: SuperTabView(
+            controller: c,
+            app: app,
+            onInvite: () {},
+            onAddAgent: (_) {},
+            onOpenTerminal: (_) {},
+            machineName: (_) => 'Team Mac',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(c.buddy('lead'), isNull);
+    expect(find.text('Restart Buddy…'), findsNothing);
+    await close(tester, c);
+  });
+
   testWidgets('the menu has none on a Buddy chat whose Buddy is gone', (
     tester,
   ) async {
@@ -219,8 +246,7 @@ void main() {
     await tester.pump();
     connection.restartReplies.single.complete({
       'creationId': creationId(),
-      'state': 'failed',
-      'failure': {'code': 'RESUME_FAILED'},
+      'state': 'unconfirmed',
     });
     await tester.pumpAndSettle();
     expect(
@@ -228,6 +254,132 @@ void main() {
       "The Buddy didn't start with these flags. Fix or clear them and restart.",
     );
     expect(find.text('Restart Buddy'), findsOneWidget);
+    await close(tester, c);
+  });
+
+  testWidgets('after a bad flag, clearing the field restarts anew', (
+    tester,
+  ) async {
+    final c = await show(tester, swarm());
+    await openDialog(tester);
+    await tester.enterText(field, '--bad');
+    await tester.tap(restart);
+    await tester.pump();
+    final first = creationId();
+    connection.restartReplies.single.complete({
+      'creationId': first,
+      'state': 'unconfirmed',
+    });
+    await tester.pumpAndSettle();
+    expect(error, findsOneWidget);
+    await tester.enterText(field, '');
+    await tester.tap(restart);
+    await tester.pump();
+    expect(connection.checks, isEmpty);
+    expect(connection.requests, hasLength(2));
+    expect(connection.requests.last['launchArgs'], '');
+    expect(creationId(), isNot(first));
+    connection.restartReplies.last.complete({
+      ...restartReceipt(creationId(), agentId: 'h-wren'),
+      'launchArgs': <String>[],
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('Restart Buddy'), findsNothing);
+    await close(tester, c);
+  });
+
+  testWidgets('a stopped Buddy resumes with the flags', (tester) async {
+    app.stateOf('m')!.agents = [
+      const Agent(
+        id: 'h-wren',
+        name: 'Wren',
+        engine: 'claude',
+        status: 'stopped',
+        launchArgs: ['--chrome'],
+      ),
+    ];
+    final c = await show(tester, swarm());
+    await openDialog(tester);
+    await tester.tap(restart);
+    await tester.pump();
+    expect(connection.types.single, 'agent_resume');
+    expect(connection.requests.single['launchArgs'], '--chrome');
+    connection.restartReplies.single.complete({
+      ...restartReceipt(creationId(), agentId: 'h-wren'),
+      'launchArgs': ['--chrome'],
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('Restart Buddy'), findsNothing);
+    await close(tester, c);
+  });
+
+  testWidgets('a restart started elsewhere is not the dialog\'s result', (
+    tester,
+  ) async {
+    final c = await show(tester, swarm());
+    final other = app.restartAgent('m', 'h-wren');
+    await openDialog(tester);
+    await tester.tap(restart);
+    await tester.pump();
+    expect(connection.requests, hasLength(2));
+    expect(connection.requests.last['launchArgs'], '--chrome');
+    connection.restartReplies.first.complete(
+      restartReceipt(
+        connection.requests.first['creationId'] as String,
+        agentId: 'h-wren',
+      ),
+    );
+    await other;
+    await tester.pump();
+    expect(find.text('Restart Buddy'), findsOneWidget);
+    connection.restartReplies.last.complete({
+      ...restartReceipt(creationId(), agentId: 'h-wren'),
+      'launchArgs': ['--chrome'],
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('Restart Buddy'), findsNothing);
+    await close(tester, c);
+  });
+
+  testWidgets('a busy Buddy shows its own failure, not the flags text', (
+    tester,
+  ) async {
+    final c = await show(tester, swarm());
+    await openDialog(tester);
+    await tester.tap(restart);
+    await tester.pump();
+    connection.restartReplies.single.completeError(
+      const WsRequestFailure(
+        responseType: 'agent_restart_result',
+        code: 'AGENT_BUSY',
+      ),
+    );
+    await tester.pumpAndSettle();
+    final text = tester.widget<Text>(error).data!;
+    expect(text, isNot(contains("didn't start")));
+    expect(text, isNotEmpty);
+    await close(tester, c);
+  });
+
+  testWidgets('an offline machine shows the connection failure', (
+    tester,
+  ) async {
+    app.stateOf('m')!.agents = [
+      const Agent(
+        id: 'h-wren',
+        name: 'Wren',
+        engine: 'claude',
+        status: 'stopped',
+      ),
+    ];
+    app.stateOf('m')!.connectionStatus = ConnectionStatus.disconnected;
+    final c = await show(tester, swarm());
+    await openDialog(tester);
+    await tester.tap(restart);
+    await tester.pumpAndSettle();
+    final text = tester.widget<Text>(error).data!;
+    expect(text, isNot(contains("didn't start")));
+    expect(text, contains('not connected'));
     await close(tester, c);
   });
 

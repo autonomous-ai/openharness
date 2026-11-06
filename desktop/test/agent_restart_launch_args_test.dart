@@ -47,12 +47,15 @@ void main() {
     expect(result.launchArgsIgnored, isTrue);
   });
 
-  test('without launchArgs the payload has none and nothing is ignored', () async {
-    final request = app.restartAgent('m', 'a0');
-    expect(connection.requests.single.containsKey('launchArgs'), isFalse);
-    connection.restartReplies.single.complete(restartReceipt(id()));
-    expect((await request).launchArgsIgnored, isFalse);
-  });
+  test(
+    'without launchArgs the payload has none and nothing is ignored',
+    () async {
+      final request = app.restartAgent('m', 'a0');
+      expect(connection.requests.single.containsKey('launchArgs'), isFalse);
+      connection.restartReplies.single.complete(restartReceipt(id()));
+      expect((await request).launchArgsIgnored, isFalse);
+    },
+  );
 
   test('a status check never sends launchArgs or reports ignored', () async {
     final attempt = app.restartAttempt('m', 'a0');
@@ -92,6 +95,29 @@ void main() {
     final result = await request;
     expect(result.error, "--model is set by Harness and can't be added here.");
     expect(result.launchArgsRefused, isTrue);
+  });
+
+  for (final code in ['RESTART_FAILED', 'RESUME_UNCONFIRMED']) {
+    test(
+      '$code and an unconfirmed receipt mean the engine did not start',
+      () async {
+        final request = app.restartAgent('m', 'a0', launchArgs: '--bad');
+        connection.restartReplies.single.completeError(
+          WsRequestFailure(responseType: 'agent_restart_result', code: code),
+        );
+        expect((await request).engineNotStarted, isTrue);
+      },
+    );
+  }
+
+  test('a lost reply is not read as the engine not starting', () async {
+    final request = app.restartAgent('m', 'a0', launchArgs: '--bad');
+    connection.restartReplies.single.completeError(
+      const WsRequestTimeout('agent_restart'),
+    );
+    final result = await request;
+    expect(result.error, isNotNull);
+    expect(result.engineNotStarted, isFalse);
   });
 
   test('Agent.fromJson keeps only string launchArgs', () {
