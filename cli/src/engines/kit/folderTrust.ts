@@ -30,9 +30,11 @@ export function trustsIn(trust: TrustContract, file: string, path: string): bool
   return trust.format === 'json' ? jsonTrusts(trust, file, path) : tomlTrusts(trust, file, path)
 }
 
-/** Record trust in `cwd` in `file`. */
-export function recordTrustIn(trust: TrustContract, file: string, cwd: string): 'trusted' | 'already' | 'skipped' {
-  return trust.format === 'json' ? recordJson(trust, file, cwd) : recordToml(trust, file, cwd)
+/** Record trust in `cwd` in `file`. `create`: the engine has never run here, so there is no `file` to extend; a JSON one is
+ *  made holding that folder's entry alone (a Buddy's own folder, superTabs/buddyHome.ts). Without it a missing file is left
+ *  missing: the engine writes it on its first run, and a caller that did not make the folder has no business starting it. */
+export function recordTrustIn(trust: TrustContract, file: string, cwd: string, options: { create?: boolean } = {}): 'trusted' | 'already' | 'skipped' {
+  return trust.format === 'json' ? recordJson(trust, file, cwd, options.create === true) : recordToml(trust, file, cwd)
 }
 
 /** A folder as this platform compares it. DESKTOP-0TFH0OJ, 2026-10-23: a Swarm worktree's source came as
@@ -74,8 +76,18 @@ export function replaceConfigFile(file: string, text: string): void {
   renameSync(tmp, target)
 }
 
-function recordJson(trust: JsonTrust, file: string, cwd: string): 'trusted' | 'already' | 'skipped' {
-  if (!existsSync(file)) return 'skipped'
+function recordJson(trust: JsonTrust, file: string, cwd: string, create = false): 'trusted' | 'already' | 'skipped' {
+  if (!existsSync(file)) {
+    if (!create) return 'skipped'
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+    try {
+      writeFileSync(file, JSON.stringify({ [trust.projects]: { [cwd]: { ...structuredClone(trust.entry), [trust.accepted]: true } } }, null, 2), { mode: 0o600, flag: 'wx' })
+      return 'trusted'
+    } catch (error) {
+      // Made meanwhile, by the engine itself: its file is extended below, never replaced.
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    }
+  }
   let config: unknown
   try {
     config = JSON.parse(readFileSync(file, 'utf8'))
