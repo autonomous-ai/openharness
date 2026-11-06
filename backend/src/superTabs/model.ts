@@ -446,6 +446,11 @@ export interface Conversation {
   /** Each linked pull request's check state as the PR watch last read it, `green`, `red` or `running` (pullRequestEvents.ts
    *  checksStateOf, task #3827): what the board's Done cards say. Written only when it changes; absent until the watch reads one. */
   pullRequestChecks?: Record<string, import('./pullRequestEvents.js').ChecksState>
+  /** The people who posted here, newest last, at most four (stuck.ts noteWriter, task #3915): whom a stuck line tags. */
+  writers?: string[]
+  /** The stuck line this task's people were told, until it is fixed (stuck.ts, task #3915): its reason's key, the line, whom it
+   *  tagged and what its fix says. */
+  stuck?: { key: string; messageId: string; tagged: string[]; fixed: string }
   /** Its steps and reviews (groups whose reviewOf is this one), newest last, at most 200 (production's most was 14): what a new
    *  pull request head re-derives the checks of, dormant ones included (#3394). Empty from a task's start; absent on a task
    *  from before, whose PR watch looks them up once (pullRequestEvents.ts listedSteps). */
