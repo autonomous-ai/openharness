@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -6,6 +6,14 @@ import { launchClaudeConfigDir, launchCodexHome } from '../../lib/engineHomes.js
 import { launch as claude } from '../claude/launch.js'
 import { launch as codex } from '../codex/launch.js'
 import { recordAcceptanceIn, recordTrustIn, trustsIn } from './folderTrust.js'
+
+/** Whether this account may link to a file: Windows lets it only with Developer Mode or as an administrator (Window of Tim,
+ *  #3815), and a person there with neither has no such link to write through. */
+const canLinkFiles = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'file-link-'))
+  try { writeFileSync(join(dir, 'f'), ''); symlinkSync(join(dir, 'f'), join(dir, 'l'), 'file'); return true } catch { return false }
+  finally { rmSync(dir, { recursive: true, force: true }) }
+})()
 
 // The former lib/claudeTrust.spec.ts, its cases unchanged, against the two engines' declared trust (`trust` in
 // claude/launch.ts and codex/launch.ts) applied by the kit, in the homes the former functions read.
@@ -71,7 +79,7 @@ describe('preTrustClaudeProject', () => {
     }
   })
 
-  it('writes through a symlinked ~/.claude.json instead of replacing the link', () => {
+  it.runIf(canLinkFiles)('writes through a symlinked ~/.claude.json instead of replacing the link', () => {
     const home = mkdtempSync(join(tmpdir(), 'trust-'))
     mkdirSync(join(home, 'dotfiles'))
     writeFileSync(join(home, 'dotfiles', 'claude.json'), JSON.stringify({ projects: {} }))
@@ -156,7 +164,7 @@ describe('preTrustCodexProject', () => {
     expect(preTrustCodexProject(cwd, join(home, '.codex'))).toBe('already')
   })
 
-  it('writes through a symlinked config.toml instead of replacing the link', () => {
+  it.runIf(canLinkFiles)('writes through a symlinked config.toml instead of replacing the link', () => {
     const home = codexHome()
     mkdirSync(join(home, 'dotfiles'))
     mkdirSync(join(home, '.codex'))
