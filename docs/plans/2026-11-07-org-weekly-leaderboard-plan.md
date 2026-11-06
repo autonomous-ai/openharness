@@ -53,37 +53,39 @@ Projects                  2  Ken             6          8         3      3d     
 **Files:** `backend/src/superTabs/leaderboard/{stats.ts,contract.ts,weekly.test.ts}`.
 **Interfaces:** existing `leaderboard(LeaderboardInput): Leaderboard`; weekly all-project rows add `accepted: number` and `agentsBrought: number`; optional `visibleAgents: Agent[]` input supplies server-filtered agents.
 
-- [ ] Commit failing tests for cross-project ships/rank, accepted first assignments, excluded review/private/hidden projects, zero agent/lending points and week boundaries.
-- [ ] Run `npm test -- src/superTabs/leaderboard/weekly.test.ts`; record red.
-- [ ] Implement weekly-only scoring, count agents once per person, preserve legacy scoring and fields.
-- [ ] Run the new tests and existing stats/rolling/brought tests; commit green and push.
+- [x] Commit failing tests for cross-project ships/rank, accepted first assignments, excluded review/private/hidden projects, zero agent/lending points and week boundaries.
+- [x] Run `npm test -- src/superTabs/leaderboard/weekly.test.ts`; record red.
+- [x] Implement weekly-only scoring, count agents once per person, preserve legacy scoring and fields.
+- [x] Run the new tests and existing stats/rolling/brought tests; commit green and push.
 
 ### Task 2: Cached authenticated weekly read
 
 **Files:** `backend/src/superTabs/read/service.ts`, `backend/src/superTabs/leaderboard/{read.ts,read.test.ts}`, `backend/src/routes/superTabs.ts`, `backend/integration/superTabLeaderboard.test.ts`.
 **Interfaces:** cache helper `weeklyBoard(cached, tabId, actorKey, projectId, week, now, load): Promise<Leaderboard>`; existing endpoint remains unchanged.
 
-- [ ] Commit tests proving unchanged-stamp reuse, actor separation, mutation invalidation and day/week rollover.
-- [ ] Run affected test, observe red; use the existing CacheView rather than a new cache.
-- [ ] Cache weekly aggregation after authorization, supply visible agents, emit a content-free slow-read warning.
-- [ ] Run affected read/cache tests and typecheck; commit green and push.
-- [ ] Extend route validation to allow `scope=all` without a rolling period. First watch the integration tests fail with 400, then verify weekly project/agent audience isolation through the real API.
+- [x] Commit tests proving unchanged-stamp reuse, actor separation, mutation invalidation and day/week rollover.
+- [x] Run affected test, observe red; use the existing CacheView rather than a new cache.
+- [x] Cache weekly aggregation after authorization, supply visible agents, emit a content-free slow-read warning.
+- [x] Run affected read/cache tests and typecheck; commit green and push.
+- [x] Extend route validation to allow `scope=all` without a rolling period. First watch the integration tests fail with 400, then verify weekly project/agent audience isolation through the real API.
 
 ### Task 3: Weekly board page
 
 **Files:** `desktop/lib/super_tabs/leaderboard/{model.dart,weekly_page.dart}`, `desktop/test/super_tab_weekly_leaderboard_test.dart`.
 **Interfaces:** `SuperTabWeeklyLeaderboardPage(controller: SuperTabController)`; request existing endpoint with `scope=all`, without period; derive anchor from readable snapshot projects. Add optional accepted/agentsBrought parsed fields.
 
-- [ ] Commit widget tests for all weekly columns/order, loading/empty/error/unsupported/revocation, coalesced change refresh and light/dark screenshots.
-- [ ] Run the new widget file, observe red.
-- [ ] Implement page with existing theme/identity, horizontal scroll at narrow widths, bounded lazy rows and request timeout.
-- [ ] Run affected widget/model tests, analyze and capture light/dark screenshots; commit green and push.
+- [x] Commit widget tests for all weekly columns/order, loading/empty/error/unsupported/revocation, coalesced change refresh and light/dark screenshots.
+- [x] Run the new widget file, observe red.
+- [x] Implement page with existing theme/identity, horizontal scroll at narrow widths, bounded lazy rows and request timeout.
+- [x] Run affected widget/model tests, analyze and capture light/dark screenshots; commit green and push.
 
 ### Task 4: v3 navigation and handoff
 
 **Files:** #4118's `desktop/lib/super_tabs/{places.dart,project_sidebar.dart,view.dart}` and affected sidebar/view tests.
 **Interfaces:** `SwarmPage.leaderboard` opens Task 3's page, with title and Back/Forward support.
 
-- [ ] Integrate #4118 after coordination; commit a test that tapping the row immediately below Decisions opens this week's board.
-- [ ] Observe red, then add the slot and page wiring; verify dark/light, navigation and existing affected tests.
-- [ ] Record before/after same-workload numbers, red/green evidence, platforms and design in the PR. Mark ready and keep head stable for independent review/test and ci/required. Merge only after #4118.
+- [x] Coordinate the shared slot; commit a test that tapping the row immediately below Decisions opens this week's board.
+- [x] Observe red, then add the slot and page wiring; verify dark/light, navigation and existing affected tests.
+- [x] Record before/after same-workload numbers, red/green evidence, platforms and design in the PR.
+- [ ] Independent review/test and ci/required at the stable head.
+- [ ] Integrate the final merged #4118 layout, validate the combined navigation, and merge only after #4118.
