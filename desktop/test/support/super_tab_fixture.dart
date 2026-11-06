@@ -527,6 +527,9 @@ class ConversationServer {
   Map<String, dynamic>? saved;
   // While set, every read waits for it: a slow server.
   Completer<void>? holdReads;
+  // While set, a thread's older pages (`thread` and `before`) wait for it, and
+  // nothing else does: a slow older read while the page reloads.
+  Completer<void>? holdThreadPages;
   // Makes every command answer with this refusal: {code, message}, with
   // [refuseStatus] as its HTTP status.
   Map<String, String>? refuse;
@@ -2065,6 +2068,9 @@ class ConversationServer {
       final before = int.tryParse(query['before'] ?? '');
       final afterId = query['afterId'], beforeId = query['beforeId'];
       final messageId = query['messageId'], thread = query['thread'];
+      if (thread != null && before != null && holdThreadPages != null) {
+        await holdThreadPages!.future;
+      }
       if (messageId != null) {
         if (forbidMessageReads.contains(conversationId)) {
           throw const SuperTabFailure(
