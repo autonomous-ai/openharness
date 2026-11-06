@@ -103,6 +103,20 @@ describe('shell guard: sudo and system-wide installs', () => {
   })
 })
 
+describe('shell guard: heredocs', () => {
+  it.each([
+    "cat > notes.md <<'EOF'\nnever run sudo or pkill here\nEOF",
+    'gh pr comment 1 --body-file - <<EOF\nuse sudo apt install x, then killall Finder\nEOF',
+  ])('reads a heredoc body as text, not commands: %j', (command) => {
+    expect(refused(command)).toBeNull()
+  })
+
+  it('still reads the command a heredoc feeds', () => {
+    expect(refused('cat <<EOF | sudo tee /etc/x\nhi\nEOF')).toBe(GUARD_REASONS.systemWide)
+    expect(refused('cat <<-EOF > /tmp/x\n\tbody\n\tEOF')).toBe(GUARD_REASONS.fixedTmp)
+  })
+})
+
 describe('shell guard: fixed names in /tmp', () => {
   it.each([
     'echo hi > /tmp/out.txt',
