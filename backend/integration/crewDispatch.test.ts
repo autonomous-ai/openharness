@@ -111,11 +111,11 @@ describe('the crew dispatch pass', () => {
     expect(['Cedar', 'Dune']).toContain(held[0])
   })
 
-  it('leaves a project without crew to its PM', async () => {
+  it('hands work to an ordinary Engineer in a project without crew', async () => {
     const s = await swarm({}, { Api: 'backend/src/a.ts' })
-    await s.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Plain', configuration: config, lead: false })
-    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0 })
-    expect(await s.holders()).toEqual({ Api: null })
+    const plain = String((await s.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Plain', configuration: config, lead: false })).result.agentId)
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+    expect(await s.holders()).toEqual({ Api: plain })
   })
 
   it('assigns as a PM that runs in a Harness Team account, with no one\'s sign-in', async () => {
@@ -130,7 +130,7 @@ describe('the crew dispatch pass', () => {
     }
   })
 
-  it('runs by itself a second after a write that opens a task, only in a Swarm with a crew', async () => {
+  it('runs by itself a second after a write that opens a task for a project worker', async () => {
     const s = await swarm({ Ash: 'backend' }, {}, true)
     const id = String((await s.execute({ type: 'conversation.create', title: 'Api', checks: [],
       task: { goal: 'Api.', changes: 'The change.', constraints: 'None.', owns: ['backend/src/a.ts'] } })).result.conversationId)
@@ -144,18 +144,26 @@ describe('the crew dispatch pass', () => {
     await s.execute({ type: 'work.status', conversationId: id, assignmentId, status: 'review', result: 'Ready at abc1234.' }, s.crew.Ash)
     expect(s.store.dispatchScheduled(s.tab)).toBe(true)
 
-    // In a Swarm without a crew, no write schedules one.
+    // With only a PM, no write schedules one.
     const plain = await swarm({}, {}, true)
     await plain.execute({ type: 'conversation.create', title: 'Api', checks: [],
       task: { goal: 'Api.', changes: 'The change.', constraints: 'None.', owns: ['backend/src/a.ts'] } })
     expect(plain.store.dispatchScheduled(plain.tab)).toBe(false)
   })
 
-  it('does not assign a member taken out of the crew while the pass read GitHub', async () => {
+  it('automatically dispatches an opened task without any crew', async () => {
+    const s = await swarm({}, {}, true)
+    const plain = String((await s.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Plain', configuration: config, lead: false })).result.agentId)
+    const id = String((await s.execute({ type: 'conversation.create', title: 'Api', checks: [],
+      task: { goal: 'Api.', changes: 'The change.', constraints: 'None.', owns: ['backend/src/a.ts'] } })).result.conversationId)
+    await vi.waitFor(async () => expect((await readGroup(s.tab, id)).assignment?.agentId).toBe(plain), { timeout: 5_000, interval: 200 })
+  })
+
+  it('does not assign a worker stopped while the pass read GitHub', async () => {
     const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
     const store = s.store as unknown as { pushOriginFor: (...args: unknown[]) => Promise<unknown> }
     vi.spyOn(store, 'pushOriginFor').mockImplementationOnce(async () => {
-      await editAgent(s.tab, s.crew.Ash!, agent => { const { crew: _crew, ...rest } = agent; return rest as Agent })
+      await editAgent(s.tab, s.crew.Ash!, agent => ({ ...agent, workDecision: 'stop' }))
       return undefined
     })
     await s.store.dispatchCrew(s.tab)
