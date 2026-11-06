@@ -296,6 +296,11 @@ void main() {
       Actions.invoke(tester.element(reply), CopySelectionTextIntent.copy);
       await tester.pump();
       expect(copied, contains('Yes, select it.'));
+      expect(copied, contains('Can we copy this?'));
+      // Only what was said: the card's controls are not part of the text.
+      expect(copied, isNot(contains('Reply…')));
+      expect(copied, isNot(contains('Unfollow')));
+      expect(copied, isNot(contains('Also send')));
 
       await tester.tap(_key('super-thread-card-title:lead/$id'));
       await _settle(tester);
