@@ -66,6 +66,9 @@ void main() {
       ) async {
         await tester.binding.setSurfaceSize(Size(width, 260));
         addTearDown(() => tester.binding.setSurfaceSize(null));
+        final oldBrightness = grid.AppTheme.brightness.value;
+        grid.AppTheme.brightness.value = brightness;
+        addTearDown(() => grid.AppTheme.brightness.value = oldBrightness);
         final server = swarm();
         server.state['swarmBuddy'] = true;
         server.state['buddyCap'] = 5;
@@ -103,7 +106,8 @@ void main() {
         await tester.runAsync(c.refresh);
         await tester.pumpWidget(
           MaterialApp(
-            theme: grid.buildAppTheme(brightness: brightness),
+            debugShowCheckedModeBanner: false,
+          theme: grid.buildAppTheme(brightness: brightness),
             home: Scaffold(
               body: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,

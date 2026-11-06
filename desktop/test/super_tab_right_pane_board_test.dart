@@ -27,6 +27,9 @@ void main() {
   }) async {
     await tester.binding.setSurfaceSize(const Size(1800, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    final oldBrightness = grid.AppTheme.brightness.value;
+    grid.AppTheme.brightness.value = brightness;
+    addTearDown(() => grid.AppTheme.brightness.value = oldBrightness);
     final server = swarm();
     server.state['swarmBuddy'] = true;
     server.state['buddyCap'] = 5;
@@ -77,6 +80,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: brightness),
+        debugShowCheckedModeBanner: false,
         home: Scaffold(
           body: SuperTabView(
             controller: c,
@@ -135,10 +139,13 @@ void main() {
       final c = await show(tester, terminal: (agent) => opened.add(agent.id));
       await tester.tap(key('super-buddy-tab-plan'));
       await tester.pumpAndSettle();
+      expect(find.text('Message Planning'), findsOneWidget);
       await tester.tap(key('super-buddy-open-terminal'));
       expect(opened, ['buddy-plan']);
       await tester.tap(key('super-buddy-tab-code'));
       await tester.pumpAndSettle();
+      expect(find.text('Message Code'), findsOneWidget);
+      expect(key('super-buddy-context'), findsOneWidget);
       await tester.tap(key('super-buddy-menu'));
       await tester.pumpAndSettle();
       await tester.tap(key('super-buddy-menu-terminal'));
