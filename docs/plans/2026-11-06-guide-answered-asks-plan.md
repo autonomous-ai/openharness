@@ -48,11 +48,26 @@
 **Interfaces:**
 - Extend `OwedAsk` with optional `delegatedTo?: string`, the project agent explicitly named by its PM.
 - Add `handoffAsk(state, group, agentId, messageId, recipients): void` to validate and record the PM's handoff of its project-chat ask. Add the optional `handoff` message ID to `message.send`; only a public post to one explicitly named recipient may carry it.
-- Keep the `settleReply`, `owedLines`, `storedPulse`, and existing command request/response fields unchanged.
+- Keep the `settleReply`, `owedLines`, `storedPulse`, and existing command request/response fields unchanged. The delivered handoff post names the ask and project chat so its recipient can answer without guessing.
 - Guard the PM authority check against a concurrent PM replacement by touching the project chat.
 
-- [ ] Add command-level tests: handoff retains the ask; entrusted thread answer removes it from both consumers; member's unsolicited Guide answer remains owed; wrong agent/thread and agent-only replies do not settle; PM can answer later; greeting closes by PM verdict without a message.
-- [ ] Commit tests and run `npm test -- src/superTabs/delegatedAsks.test.ts`; capture the expected failures in handoff/settlement behavior.
-- [ ] Implement bounded handoff recording and settlement in `pulse.ts`, passing the explicit handoff and validated named recipient from `commands.ts`. Preserve normal PM settlement and answer receipts.
-- [ ] Run `delegatedAsks.test.ts`, `parts/touches.test.ts`, `pulse.test.ts`, `inbox.test.ts`, `answers.test.ts`, `chatLimits.test.ts`, `commands.test.ts`, `liveness.test.ts`, and `processNotes.test.ts`, plus backend typecheck. Compare message-path timings with the baseline.
-- [ ] Commit and push the implementation; reconcile the membership ruling; add red/green evidence to the PR, mark Ready, and hand it to independent review and testing through task status.
+- [x] Add command-level tests: handoff retains the ask; entrusted thread answer removes it from both consumers; member's unsolicited Guide answer remains owed; wrong agent/thread and agent-only replies do not settle; PM can answer later; greeting closes by PM verdict without a message.
+- [x] Commit tests and run `npm test -- src/superTabs/delegatedAsks.test.ts`; capture the expected failures in handoff/settlement behavior.
+- [x] Implement bounded handoff recording and settlement in `pulse.ts`, passing the explicit handoff and validated named recipient from `commands.ts`. Preserve normal PM settlement and answer receipts.
+- [x] Run `delegatedAsks.test.ts`, `parts/touches.test.ts`, `pulse.test.ts`, `inbox.test.ts`, `answers.test.ts`, `chatLimits.test.ts`, `commands.test.ts`, `liveness.test.ts`, and `processNotes.test.ts`, plus backend typecheck. Compare message-path timings with the baseline.
+- [x] Commit and push the implementation; reconcile the membership ruling; add red/green evidence to the PR, mark Ready, and hand it to independent review and testing through task status.
+
+
+## Validation and operation
+
+At the final test-only revision, the new spec fails 10 tests and passes 4; the restored handoff still reports one owed ask. With the fix, 590 tests pass across the nine affected specs and backend typecheck passes on macOS. Full backend and Super Tab integration runs are left to automatic PR CI.
+
+A PM sends the handoff in the Guide's task through the existing generic command API:
+
+```json
+{"type":"message.send","conversationId":"GUIDE_TASK","text":"Please answer this support ask.","replyTo":null,"recipientIds":["GUIDE_AGENT"],"handoff":"PROJECT_CHAT_ASK"}
+```
+
+Plain prose posts do not create a handoff. No historical transcript is backfilled: already-answered old asks can be closed by the PM's existing verdict reaction. A greeting uses that same reaction without a response message.
+
+Serial same-workload timings on this Mac, 10,000 command reductions per author with 50 owed asks: PM median 0.068024 → 0.068116 ms, p95 batch mean 0.081393 → 0.081166 ms; project agent median 0.064630 → 0.064356 ms, p95 batch mean 0.071624 → 0.071184 ms. These measure the command reducer, not database or delivery latency. No query or index changes.

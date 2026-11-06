@@ -130,6 +130,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       group(command.after ?? undefined)
       break
     case 'message.send': {
+      if (command.handoff) leadCheck(projectOfGroup(command.conversationId)?.id)
       // Every start a post makes, a thread session's or the one Buddy's in an older project chat (commands.ts
       // startOldChatBuddy), counts its machine's slots, as buddy.create's does, and meets a concurrent removal of the Buddy it
       // runs beside: a Remove racing it can never leave it running (security review 2 of #2435).
