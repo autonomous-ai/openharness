@@ -39,17 +39,26 @@
 
 **Files:** Create desktop/lib/super_tabs/tasks/personal_tasks.dart; modify parts.dart and controller.dart; test desktop/test/super_tab_personal_tasks_test.dart.
 **Interfaces:** Parts exposes personalTasks store; controller exposes it read-only; rows include id/version/at/project/title/agent/status/suggested/reason.
-- [ ] Commit failing tests for first load, overlapping versions, removals/reset, serialization, missing capability and roster overlays.
-- [ ] Run those tests and record red.
-- [ ] Implement envelope merging and wire it into existing parts first load/change/cache. Feed changes notify as content changes.
-- [ ] Run affected parts tests and new feed tests; commit green.
+- [x] Commit failing tests for first load, overlapping versions, removals/reset, serialization, missing capability and roster overlays.
+- [x] Run those tests and record red.
+- [x] Implement envelope merging and wire it into existing parts first load/change/cache. Feed changes notify as content changes.
+- [x] Run affected parts tests and new feed tests; commit green.
 
 ### Task 2: Tasks pane and shell
 
 **Files:** Create desktop/lib/super_tabs/tasks/personal_tasks_pane.dart; modify view.dart's existing right-pane default; test desktop/test/super_tab_personal_tasks_pane_test.dart.
 **Interfaces:** SuperTabPersonalTasksPane(controller, onOpenTask); authenticated commands member.approvalMode, task.suggest, task.approve, task.reject.
-- [ ] Commit failing widget tests for newest order, quiet two-line rows, proposal/rejected marks, default/mode persistence, suggestion change, approve/reject/reason, error/retry, double click, account switch and unsupported backend.
-- [ ] Run widget tests and record red.
-- [ ] Implement native pane, preserving supplied rightPane override and existing task opener; safe pending/error/retry behavior.
-- [ ] Run affected widget/shell tests and style/icon checks; capture and inspect light/dark panes; commit green.
-- [ ] Push draft early, then mark ready with red/green evidence and request independent review and platform checks.
+- [x] Commit failing widget tests for newest order, quiet two-line rows, proposal/rejected marks, default/mode persistence, suggestion change, approve/reject/reason, error/retry, double click, account switch and unsupported backend.
+- [x] Run widget tests and record red.
+- [x] Implement native pane, preserving supplied rightPane override and existing task opener; safe pending/error/retry behavior.
+- [x] Run affected widget/shell tests and style/icon checks; capture and inspect light/dark panes; commit green.
+- [x] Push draft early.
+- [ ] Independent review, platform checks and ci/required at the held head.
+
+## Validation receipt
+
+- Feed red at 7f42f8686, green at a4a26797d; widget red at a7782272c, green at ecf949b13. Cached tombstone regression red at b9059b20e, green at 5e50f13ea. Portable status-mark regression red at 691a9bf8d, green at 0940e2037.
+- 73 affected feed, parts, pane and shell tests pass on macOS; two screenshot tests produce six inspected light/dark auto, review and rejection captures. Memory store and fake sign-in only.
+- New-file Dart analysis, UI style gate and icon audit pass. Linux/Windows platform checks and automatic CI are review gates; native window/IME and live-account launch are not claimed.
+- Mac debug microbenchmark, same recorded parts-overlap workload, 2,000 warm-ups then 21 batches of 1,000: baseline d78772f median 4.047 µs / p95 5.179 µs; Tasks branch median 3.903–4.432 µs / p95 4.604–4.961 µs (run variation, no observed p95 regression). A single new version in 1,000 Tasks including sorted list materialization: median 263 µs / p95 519 µs over 100 updates. Temporary benchmark fixtures removed.
+- Merged main at 7356cf633 (real #3449 contract), without conflicts. Shell #3445 and join #3448 remain merge-order dependencies.

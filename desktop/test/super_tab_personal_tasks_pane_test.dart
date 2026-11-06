@@ -35,8 +35,9 @@ class TasksFixture {
     pollInterval: Duration.zero,
     save: (value) => store.write('controller', value.toString()),
     request: (method, path, {body}) async {
-      if (path.contains('/messages'))
+      if (path.contains('/messages')) {
         return {'messages': <dynamic>[], 'next': null};
+      }
       if (method == 'POST') {
         operations.add(body!['operationId'] as String);
         final command = Map<String, dynamic>.from(body['command'] as Map);

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/tasks/personal_tasks_pane.dart';
@@ -11,7 +12,18 @@ import 'support/capture.dart';
 
 void main() {
   final shots = Platform.environment['HARNESS_V3_TASKS_SHOTS'];
-  setUpAll(() => loadCaptureFonts(shots));
+  setUpAll(() async {
+    await loadCaptureFonts(shots);
+    if (shots != null && Platform.isMacOS) {
+      for (final (family, path) in [
+        ('Menlo', '/System/Library/Fonts/Menlo.ttc'),
+        ('Apple Symbols', '/System/Library/Fonts/Apple Symbols.ttf'),
+      ]) {
+        final bytes = ByteData.sublistView(await File(path).readAsBytes());
+        await (FontLoader(family)..addFont(Future.value(bytes))).load();
+      }
+    }
+  });
   for (final brightness in Brightness.values) {
     testWidgets('Tasks pane and decisions fit in ${brightness.name}', (
       t,
