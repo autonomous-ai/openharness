@@ -62,7 +62,7 @@ import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
 import { currentRules, deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
-import { SEED_RULES } from './policy.js'
+import { SEED_RULES, seedRules } from './policy.js'
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, FIRST_SUMMARY, liveNotes, MAX_REVISIONS } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
@@ -3133,7 +3133,7 @@ export class SuperTabStore {
     return this.instructionHistory(user, tabId, projectId, asAgentId, async tx => {
       const history = await readRulesHistory(tx, tabId, projectId)
       const newest = history[0]
-      return { projectId, revision: newest?.revision ?? 0, rules: newest?.rules ?? SEED_RULES, seeded: !newest, history }
+      return { projectId, revision: newest?.revision ?? 0, rules: seedRules(tabId, projectId, newest?.rules), seeded: !newest, history }
     })
   }
 

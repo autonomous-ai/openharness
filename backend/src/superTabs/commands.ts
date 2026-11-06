@@ -26,7 +26,7 @@ import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
-import { projectRulesSchema, rulesDiff, rulesEqual, SEED_RULES, type ProjectRules } from './policy.js'
+import { projectRulesSchema, rulesDiff, rulesEqual, seedRules, SEED_RULES, type ProjectRules } from './policy.js'
 import { accessRefusal, changeAccess, expireAccess, taskAccess } from './machineAccess.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
@@ -2135,18 +2135,25 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         askedIn = { conversationId: command.askedIn!.conversationId, messageId: command.askedIn!.messageId }
       } else askedBy = (actor as Extract<Actor, { kind: 'person' }>).userId
       if (context.projectRules === undefined) fail('RULES_UNAVAILABLE', 'This project\'s rules cannot be read now. Try again in a moment.', 503)
-      const current = context.projectRules ?? { revision: 0, rules: SEED_RULES }
+      const current = context.projectRules ?? { revision: 0, rules: seedRules(state.id, project.id) }
       if (command.baseRevision !== current.revision) {
         // Refused with the record it missed, to merge and save again: never two writers' records kept silently.
         fail('RULES_STALE', `The project rules changed since revision ${command.baseRevision}. Merge your change into revision ${current.revision} and save again.`,
           409, { revision: current.revision, rules: current.rules })
       }
-      if (rulesEqual(current.rules, command.rules)) {
+      // Old clients omit the additive authority section. Preserve it; an explicit null removes it.
+      const next = command.rules.instructionApprovals === undefined && current.rules.instructionApprovals !== undefined
+        ? { ...command.rules, instructionApprovals: current.rules.instructionApprovals } : command.rules
+      if (JSON.stringify(current.rules.instructionApprovals ?? null) !== JSON.stringify(next.instructionApprovals ?? null)
+        && askedBy !== project.ownerId && askedBy !== current.rules.instructionApprovals?.topDeciderId) {
+        fail('RULES_APPROVAL_EDITOR_REQUIRED', 'Only the project owner or its current top decider may change who approves instruction rules or link their accounts.', 403)
+      }
+      if (rulesEqual(current.rules, next)) {
         Object.assign(result, { projectId: project.id, revision: current.revision, unchanged: true })
         break
       }
       const revision = current.revision + 1
-      effects.projectRules = { projectId: project.id, revision, rules: command.rules, diff: rulesDiff(current.rules, command.rules),
+      effects.projectRules = { projectId: project.id, revision, rules: next, diff: rulesDiff(current.rules, next),
         summary: command.summary, writtenBy: { kind: sender.kind, id: sender.id }, askedBy, askedIn, at: context.now }
       Object.assign(result, { projectId: project.id, revision })
       break
