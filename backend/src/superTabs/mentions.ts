@@ -368,7 +368,7 @@ export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, 
     const authorName = taggerName(state, author && { ...author, id: row.authorAgentId })
     return { id: row.id, projectId: row.projectId, projectName: projectOf(state, group.projectId ?? 'lead').name,
       conversationId: row.conversationId, conversationTitle: group.title, messageId: row.messageId,
-      leadId: row.authorAgentId, leadName: authorName, text: (message?.text ?? '').slice(0, 200),
+      leadId: row.authorAgentId, leadName: authorName, leadKind: author?.kind ?? null, text: (message?.text ?? '').slice(0, 200),
       createdAt: row.createdAt, resolvedAt: row.resolvedAt, resolvedBy: row.resolvedBy, threadId: message ? threads.get(message.id) ?? null : null,
       // Where the tagged message is in its chat: Desktop clears its red number once the reader has read past it (Slack).
       messageSequence: message?.sequence ?? null }

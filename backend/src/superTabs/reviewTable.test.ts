@@ -23,9 +23,12 @@ describe('reviewPlan', () => {
   })
 
   it('adds a test step where the change runs, and none for docs or tests alone', () => {
+    // Task #3602: a test that runs on a Mac and a Linux machine is one step per OS; one OS is that step's.
     const plan = reviewPlan(['desktop/lib/super_tabs/view.dart', 'cli/src/superTabs/route.ts'])
-    expect(plan.map(step => step.name)).toEqual(['Review', 'Test'])
+    expect(plan.map(step => [step.name, step.os ?? null])).toEqual([['Review', null], ['Test on a Mac', 'mac'], ['Test on a Linux machine', 'linux']])
     expect(plan.find(step => step.kind === 'test')?.where).toEqual(['Desktop on a Mac', 'The CLI on a Mac and on a Linux machine'])
+    expect(reviewPlan(['desktop/lib/a.dart']).map(step => [step.name, step.os ?? null])).toEqual([['Review', null], ['Test', 'mac']])
+    expect(reviewPlan(['mobile/lib/a.dart']).map(step => [step.name, step.os ?? null])).toEqual([['Review', null], ['Test', null]])
     expect(names(['desktop/test/super_tabs/view_test.dart', 'backend/src/superTabs/steps.test.ts', 'docs/a.md'])).toEqual(['Review'])
     expect(names(['backend/src/superTabs/steps.ts'])).toEqual(['Review'])
   })
