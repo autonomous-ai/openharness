@@ -14,28 +14,40 @@ class ProfileCache {
   static const key = 'signed_in_profile_v1';
 
   Future<CurrentUserProfile?> read(String machineId) async {
+    final kept = await readKept();
+    return kept == null || kept.machineId != machineId ? null : kept.profile;
+  }
+
+  /// The record with the machine id it was proven under, before the CLI has named one: what a launch opens as while
+  /// `harness auth status` still runs (task #3561). Only that answer proves it, as [read] does.
+  Future<({String machineId, CurrentUserProfile profile})?> readKept() async {
     final storage = _storage;
     if (storage == null) return null;
     try {
       final stored = await storage.read(key);
       if (stored == null) return null;
       final value = jsonDecode(stored);
-      if (value is! Map || value['machineId'] != machineId) return null;
-      final (id, email, name, avatar) = (
+      if (value is! Map) return null;
+      final (machineId, id, email, name, avatar) = (
+        value['machineId'],
         value['id'],
         value['email'],
         value['name'],
         value['avatarUrl'],
       );
+      if (machineId is! String || machineId.isEmpty) return null;
       if (id is! String || id.isEmpty || email is! String || email.isEmpty) {
         return null;
       }
       if (name is! String? || avatar is! String?) return null;
-      return CurrentUserProfile(
-        id: id,
-        email: email,
-        name: name,
-        avatarUrl: avatar,
+      return (
+        machineId: machineId,
+        profile: CurrentUserProfile(
+          id: id,
+          email: email,
+          name: name,
+          avatarUrl: avatar,
+        ),
       );
     } catch (_) {
       return null;
