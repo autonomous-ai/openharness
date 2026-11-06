@@ -412,6 +412,17 @@ const buddySetup = (options: Parameters<typeof setup>[0] = {}) => {
 }
 
 describe('a Buddy engine handoff', () => {
+  it('waits for a sleeping Buddy to reopen before claiming its switch', async () => {
+    const t = buddySetup({ live: false })
+    await t.switches.serve(buddyRow())
+    expect(t.posted).toEqual([])
+    expect(t.calls).toEqual([])
+    t.reopen()
+    await t.switches.serve(buddyRow())
+    expect(t.posted.map(command => command.type)).toEqual(['agent.switchClaim'])
+    expect(t.calls.map(call => call[0])).toEqual(['agent_handoff_prepare', 'agent_close', 'agent_create', 'agent_handoff_complete'])
+  })
+
   it.each(['owner', 'other', null])('checks the core account through the service process API (%s)', async accountId => {
     const t = buddySetup()
     const core = processCoreApi(t.dataDir, 'superTabs', {

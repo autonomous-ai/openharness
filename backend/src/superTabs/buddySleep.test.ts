@@ -29,7 +29,7 @@ function fixture() {
 describe('server-owned Buddy sleep', () => {
   it.each(['requested', 'landed'])('does not sleep during a %s engine switch', phase => {
     const f = fixture()
-    if (phase === 'requested') f.buddy.switchRequest = { id: 'switch', engine: 'codex', requestedBy: 'owner' }
+    if (phase === 'requested') f.buddy.switchRequest = { id: 'switch', engine: 'codex', profileId: 'default', requestedBy: 'owner', at: new Date(NOW).toISOString() }
     else f.buddy.switchLanded = { id: 'switch', requestedBy: 'owner' }
     expect(buddySleepCandidates(f.state, NOW)).toEqual([])
   })
