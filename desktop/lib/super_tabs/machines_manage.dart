@@ -52,7 +52,7 @@ extension _ManageMachines on _SuperTabMachinesState {
         views.where((v) => _machineStatusGroup(v) == group).length;
     final summary =
         '${count('online')} online · ${count('asleep')} asleep · ${count('offline')} offline';
-    final machines = _machines();
+    final machines = _machines(views);
     return ColoredBox(
       color: MachinesStyle.background,
       child: Column(
@@ -117,6 +117,11 @@ extension _ManageMachines on _SuperTabMachinesState {
                         onPressed: add,
                         style: FilledButton.styleFrom(
                           backgroundColor: MachinesStyle.accent,
+                          foregroundColor: MachinesStyle.onAccent,
+                          textStyle: MachinesStyle.body(),
+                          shape: const RoundedRectangleBorder(
+                            borderRadius: MachinesStyle.radius,
+                          ),
                         ),
                         child: const Text('Add machine'),
                       ),

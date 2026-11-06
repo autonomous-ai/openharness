@@ -28,22 +28,33 @@
 **Files:** Modify `desktop/lib/super_tabs/machines.dart`; create `desktop/lib/super_tabs/machines_manage.dart` and `desktop/lib/shared/theme/machines_style.dart`; test `desktop/test/super_tab_machines_mockups_test.dart`.
 **Interfaces:** Consume existing `_MachineView`, `_groups`, `_machine`, `toggleMachineExpanded`, `_menu`; produce Manage-only screen, toolbar and fixed-height row widgets. No public API changes.
 
-- [ ] Write and commit widget tests for title/search/filter counts, leading dots, owner badge, crew chips, 56pt rows and aligned disk bars, including stale readings and long names.
-- [ ] Run the new test file and record expected failures.
-- [ ] Implement theme roles and Manage presentation; preserve existing compact presentation and expansion/menu behavior.
-- [ ] Run new tests plus existing Machines tests and analyze changed Dart files; record red/green evidence.
-- [ ] Commit implementation and push.
+- [x] Write and commit widget tests for title/search/filter counts, leading dots, owner badge, crew chips, 56pt rows and aligned disk bars, including stale readings and long names.
+- [x] Run the new test file and record expected failures.
+- [x] Implement theme roles and Manage presentation; preserve existing compact presentation and expansion/menu behavior.
+- [x] Run new tests plus existing Machines tests and analyze changed Dart files; record red/green evidence.
+- [x] Commit implementation and push.
 
 ## Task 2: Visual evidence and interaction coverage
 
 **Files:** Modify `desktop/test/super_tab_machines_standard_shots_test.dart` and `desktop/test/super_tab_machines_mockups_test.dart`.
 **Interfaces:** Capture the Manage screen using the existing screenshot helper with fake state; no production interface changes.
 
-- [ ] Add failing interaction assertions for combined search/filter, no matches, crew expansion and changing live status counts.
-- [ ] Run and record red; implement any remaining presentation behavior and run green.
-- [ ] Capture light/dark screens with realistic fixtures, compare side by side to attachments, and check the UI style gate.
-- [ ] Push final evidence, mark ready, hand off independent review/test through the Integrator.
+- [x] Add failing interaction assertions for combined search/filter, no matches, crew expansion and changing live status counts.
+- [x] Run and record red; implement any remaining presentation behavior and run green.
+- [x] Capture light/dark screens with realistic fixtures, compare side by side to attachments, and check the UI style gate.
+- [x] Push final evidence, mark ready, hand off independent review/test through the Integrator.
 
 ## Validation
 
 Affected widget files on macOS with Flutter 3.47.9; changed-file analysis; `python3 scripts/check-ui-style.py --only desktop/lib/super_tabs --against origin/main`; light/dark screenshots. Linux component suite comes from PR CI. Native Windows and Linux windows are not available on this Mac and must be reported as unverified.
+
+
+## Results
+
+Implemented the Manage-only presentation and regression coverage. Targeted macOS widget checks passed: 29 across mockups, standard, screenshots and Manage navigation; 81 existing Machines tests (110 total). Changed-file Flutter analysis, UI style gate and diff whitespace checks passed. Red tests were committed before implementation; replay against the original presentation produced the expected failures.
+
+Light/dark captures and side-by-side reference comparisons are attached to task #3974. Fixture values and alphabetical ordering differ from the reference. Native Windows/Linux windows and OS accessibility/theme switching remain unverified; independent Team-account testing is offscreen.
+
+Same 16-machine debug/offscreen redraw workload (100 updates): base median 2840µs / p95 4595µs; current median 3098µs / p95 4533µs. Reusing sorted views removed a repeated grouping pass. This is a widget microbenchmark, not native production latency; median increased 258µs while p95 decreased 62µs.
+
+Final delivery goes through independent Integrator review/test and ready-PR Linux CI; no release is part of this task.

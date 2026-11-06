@@ -5,6 +5,7 @@ import 'app_theme.dart' as grid;
 /// Scholes's agreed Machines palette and geometry. Scoped to this screen so
 /// matching its mockup does not recolor the rest of the workspace.
 abstract final class MachinesStyle {
+  static const onAccent = Color(0xffffffff);
   static Color get background =>
       grid.AppTheme.pick(const Color(0xffffffff), const Color(0xff141416));
   static Color get field =>

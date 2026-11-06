@@ -838,6 +838,7 @@ Future<void> _machineSettingsDialog(
 class _SuperTabMachinesState extends State<SuperTabMachines> {
   final _samples = <String, (MachineResources, DateTime)>{};
   String? _selectedMachineId;
+  String? _focusedMachineId;
   String _machineSearch = '';
   String _machineFilter = 'all';
   Object? _manageLayoutDrawn;
@@ -996,7 +997,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     if (!mounted || c.snapshot == null || c.accessRevoked) return;
     final views = _sortedViews();
     final groups = [
-      for (final (key, _, group) in _groups())
+      for (final (key, _, group) in _groups(views))
         for (final v in group) '$key/${v.id}',
     ];
     if (c.backendUnreachable ||
@@ -2260,12 +2261,23 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       active: true,
       child: _RowHoverRegion(
         child: Material(
+          key: widget.manage ? ValueKey('machines-surface-${view.id}') : null,
+          shape: widget.manage
+              ? RoundedRectangleBorder(
+                  borderRadius: MachinesStyle.radius,
+                  side: _focusedMachineId == view.id
+                      ? BorderSide(color: MachinesStyle.accent, width: 2)
+                      : BorderSide.none,
+                )
+              : null,
           color: widget.manage && view.owner?.id == c.accountId
               ? MachinesStyle.selected
               : selected
               ? grid.AppSurface.selectedFill
               : Colors.transparent,
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+          borderRadius: widget.manage
+              ? null
+              : BorderRadius.circular(DesktopChrome.rowRadius),
           clipBehavior: Clip.antiAlias,
           // No chevron (Dee, 2026-10-27): a click expands the machine, and its
           // details are in the right-click menu, or a long press on a touch screen.
@@ -2294,6 +2306,16 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 focusColor: grid.AppSurface.hoverFill,
                 borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
                 onFocusChange: (focused) {
+                  if (widget.manage) {
+                    if (focused &&
+                        FocusManager.instance.highlightMode ==
+                            FocusHighlightMode.traditional) {
+                      _focusedMachineId = view.id;
+                    } else if (_focusedMachineId == view.id) {
+                      _focusedMachineId = null;
+                    }
+                    _rowBeats[view.id]?.value++;
+                  }
                   if (focused &&
                       FocusManager.instance.highlightMode ==
                           FocusHighlightMode.traditional) {
@@ -2723,8 +2745,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   /// Status first (Scholes, task #3801): the reader's own machines pinned in Yours, then Online, Status unknown and
   /// Offline, each under a heading with its count. A group with no machine has no heading.
-  List<(String, String, List<_MachineView>)> _groups() {
-    final views = _sortedViews();
+  List<(String, String, List<_MachineView>)> _groups([
+    List<_MachineView>? sorted,
+  ]) {
+    final views = sorted ?? _sortedViews();
     final yours = <_MachineView>[];
     final online = <_MachineView>[];
     final asleep = <_MachineView>[];
@@ -2808,9 +2832,19 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       );
     }
     if (c.snapshot == null) {
-      return const SkeletonList(
-        key: ValueKey('super-machines-loading'),
+      return SkeletonList(
+        key: const ValueKey('super-machines-loading'),
         rows: 3,
+        itemBuilder: widget.manage
+            ? (_, i) => SizedBox(
+                key: ValueKey('machines-loading-row-$i'),
+                height: 56,
+                child: const SkeletonListTile(
+                  leading: 8,
+                  padding: MachinesStyle.rowInset,
+                ),
+              )
+            : null,
       );
     }
     return Padding(
@@ -2823,8 +2857,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   }
 
   /// One row each, redrawn on its own ([_redrawMoved]), under its group's heading.
-  List<Widget> _machines() {
-    final groups = _groups();
+  List<Widget> _machines([List<_MachineView>? sorted]) {
+    final groups = _groups(sorted);
     _orderDrawn = [
       for (final (_, _, views) in groups)
         for (final v in views) v.id,
