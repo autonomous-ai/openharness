@@ -307,7 +307,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       const launchModel = status.state === 'created' ? receipts.createdLaunchModel(creationId) : null
       reply({ creationId, ...await creationStatusPayload(status), ...(launchModel ? { launchModel } : {}) })
     } catch (error) {
-      reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
+      // The reason travels with the code, so the host can tell the Swarm why the start waits (task #3861).
+      reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL', ...error instanceof AgentCreationReceiptError && error.detail ? { detail: error.detail } : {} })
     }
   }
 
