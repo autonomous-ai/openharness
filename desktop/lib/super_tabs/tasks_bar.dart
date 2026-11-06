@@ -10,9 +10,9 @@ enum SuperTabTasksLayout { board, list, members }
 
 /// The Tasks view's one bar (Huy, 2026-11-06): what it is on the left, then
 /// the layout as one pick-one control, Mine as an on/off filter, Search at the
-/// controls' height, and [trailing] (the Buddy pane's icon) at the end. On a
-/// project's Board, [leading] is the page's own header, so the page has one
-/// row above its lanes, not two.
+/// controls' height. On a project's Board, [leading] is the page's own header,
+/// so the page has one row above its lanes, not two. Nothing follows Search:
+/// the layout is fixed, with no Show your Buddy (anh Dee, #3863).
 class SuperTabTasksBar extends StatelessWidget {
   const SuperTabTasksBar({
     super.key,
@@ -23,7 +23,6 @@ class SuperTabTasksBar extends StatelessWidget {
     required this.onQuery,
     this.moveError,
     this.leading,
-    this.trailing = const [],
   });
 
   final SuperTabTasksLayout layout;
@@ -37,7 +36,6 @@ class SuperTabTasksBar extends StatelessWidget {
 
   /// What stands for the bar's title; the word Tasks without it.
   final Widget? leading;
-  final List<Widget> trailing;
 
   static const searchWidth = 220.0;
 
@@ -123,10 +121,6 @@ class SuperTabTasksBar extends StatelessWidget {
       _MineFilter(on: mine, onPressed: onMine),
       const SizedBox(width: grid.AppDesktop.controlGap),
       _Search(onChanged: onQuery),
-      for (final widget in trailing) ...[
-        const SizedBox(width: grid.AppDesktop.controlGap),
-        widget,
-      ],
     ],
   );
 }
@@ -162,6 +156,12 @@ class _Search extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final height = grid.AppControl.heightScaled;
+    // The theme's field inset beside the text; only the height differs here.
+    final inset =
+        Theme.of(context).inputDecorationTheme.contentPadding
+            ?.resolve(Directionality.of(context))
+            .left ??
+        0;
     return SizedBox(
       width: SuperTabTasksBar.searchWidth,
       child: TextField(
@@ -175,7 +175,7 @@ class _Search extends StatelessWidget {
           constraints: BoxConstraints(minHeight: height, maxHeight: height),
           // The theme's own arithmetic, at this height.
           contentPadding: EdgeInsets.symmetric(
-            horizontal: 10,
+            horizontal: inset,
             vertical: (height - grid.AppControl.fontSize * 1.35) / 2,
           ),
           prefixIcon: Icon(
