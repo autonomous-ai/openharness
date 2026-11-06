@@ -443,7 +443,7 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
       questions: [{ question, options: ['Yes', 'No'], recommended: 0, unblocks: 'The release' }] } as Command, owner, s.worker)
     let ids: string[] = []
     const notices = await pushed(async () => { ids = (await ask('Ship it today?')).result.decisionIds as string[] })
-    expect(notices).toEqual([{ personId: peer.sub, key: `decision:${ids[0]}`, slot: `decision:${ids[0]}`, title: 'worker-harness asks you',
+    expect(notices).toEqual([{ personId: peer.sub, key: `decision:${ids[0]}`, slot: `task:${s.tabId}:${s.web}`, title: 'worker-harness asks you',
       subtitle: await swarmName(s.tabId), body: 'Open Harness to answer.', link: `swarm:${s.tabId}/${s.web}/decision/${ids[0]}` }])
     // The same open question asked again is the same decision: no second push.
     expect(await pushed(() => ask('Ship it today?'))).toEqual([])

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { phoneNotices } from './notices.js'
+import { phoneNotices, taskSlot } from './notices.js'
 import { swarm, owner, peer } from '../superTabs/read/fixture.test-support.js'
 import { shownNameOf } from '../superTabs/personNames.js'
 import type { MessageDraft } from '../superTabs/model.js'
@@ -109,13 +109,21 @@ describe('phoneNotices: the push rule Tony approved (task #3248)', () => {
     const decision = (id: string, personId: string) => ({ id, personId, conversationId: web, askerAgentId: worker })
     const notices = phoneNotices('tab', state, { replies: [], tags: [], decisions: [decision('d1', owner.userId), decision('d2', owner.userId), decision('d3', peer.userId)] }, [])
     expect(notices).toEqual([
-      { personId: owner.userId, key: 'decision:d1', slot: 'decision:d1', title: 'worker-harness asks you', subtitle: 'Web launch', body: 'Open Harness to answer.',
+      { personId: owner.userId, key: 'decision:d1', slot: `task:tab:${web}`, title: 'worker-harness asks you', subtitle: 'Web launch', body: 'Open Harness to answer.',
         link: `swarm:tab/${web}/decision/d1` },
-      { personId: owner.userId, key: 'decision:d2', slot: 'decision:d2', title: 'worker-harness asks you', subtitle: 'Web launch', body: 'Open Harness to answer.',
+      { personId: owner.userId, key: 'decision:d2', slot: `task:tab:${web}`, title: 'worker-harness asks you', subtitle: 'Web launch', body: 'Open Harness to answer.',
         link: `swarm:tab/${web}/decision/d2`, quiet: true },
-      { personId: peer.userId, key: 'decision:d3', slot: 'decision:d3', title: 'worker-harness asks you', subtitle: 'Web launch', body: 'Open Harness to answer.',
+      { personId: peer.userId, key: 'decision:d3', slot: `task:tab:${web}`, title: 'worker-harness asks you', subtitle: 'Web launch', body: 'Open Harness to answer.',
         link: `swarm:tab/${web}/decision/d3` },
     ])
+  })
+
+  it('gives every decision of one task one slot, so a later question replaces the earlier in the notification centre; two tasks keep two', () => {
+    const { state, web, worker } = scene()
+    const decision = (id: string, conversationId: string) => ({ id, personId: owner.userId, conversationId, askerAgentId: worker })
+    const notices = phoneNotices('tab', state, { replies: [], tags: [], decisions: [decision('d1', web), decision('d2', web), decision('d3', 'another-task')] }, [])
+    expect(notices.map(n => [n.key, n.slot])).toEqual([['decision:d1', `task:tab:${web}`], ['decision:d2', `task:tab:${web}`], ['decision:d3', 'task:tab:another-task']])
+    expect(taskSlot('tab', web)).toBe(`task:tab:${web}`)
   })
 
   it('names an asker that is gone as the app does', () => {
