@@ -321,6 +321,8 @@ export interface PrivacyObserverDeps {
   /** This computer's stored sign-in is a team session. */
   teamSession(): boolean
   check(config: TeamConfig): PrivacyResult
+  /** The status file as it is: whether a sign-in it says is gone was said before this one worked (#3684). */
+  readStatus?(path: string): TeamStatus | null
   writeStatus(path: string, update: Partial<Omit<TeamStatus, 'version'>>): void
   now(): number
 }
@@ -351,7 +353,17 @@ export class TeamPrivacyObserver {
               detail: TEAM_SIGNED_OUT_DETAIL } })
             this.signedIn = signedIn
           } catch { /* Try the status write again at the next observation; privacy is checked independently. */ }
-        } else this.signedIn = signedIn
+        } else {
+          // A signed-out left from an earlier start or a revoke stuck while the session worked, and the owner's card
+          // offered Sign in again for an account that was fine (Linuxtest2, daniel-pc, #3684). A hand-over that failed is
+          // kept: setup reads it to say the new sign-in did not take.
+          try {
+            if ((this.deps.readStatus ?? readTeamStatus)(config.statusFile)?.signIn?.state === 'signed-out') {
+              this.deps.writeStatus(config.statusFile, { signIn: { state: 'signed-in', at: now } })
+            }
+            this.signedIn = signedIn
+          } catch { /* Try again at the next observation. */ }
+        }
       }
       if (!this.last || now - this.last.checkedAt >= PRIVACY_RECHECK_MS || now < this.last.checkedAt) {
         try {
