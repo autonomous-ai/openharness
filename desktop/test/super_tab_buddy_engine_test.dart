@@ -77,6 +77,18 @@ void main() {
     await closeBuddyEngine(tester, c);
   });
 
+  testWidgets('a Team session never offers its subscription to a Buddy', (
+    tester,
+  ) async {
+    final c = await showBuddyEngine(
+      tester,
+      buddyEngineSwarm(sessionKind: 'team', limited: true),
+    );
+    expect(picker, findsNothing);
+    expect(find.text('Switch engine'), findsNothing);
+    await closeBuddyEngine(tester, c);
+  });
+
   testWidgets('an engine handoff names its target and disables model changes', (
     tester,
   ) async {
@@ -143,6 +155,22 @@ void main() {
     expect(find.text('Claude Code'), findsNothing);
     expect(find.text('SHARED IN THIS SWARM'), findsNothing);
     await closeBuddyEngine(tester, c);
+  });
+
+  testWidgets('header selectors scale their text once at 200 percent', (
+    tester,
+  ) async {
+    final label = find.descendant(of: picker, matching: find.text('Claude Code'));
+    final normal = await showBuddyEngine(tester, buddyEngineSwarm());
+    final normalHeight = tester.getRect(label).height;
+    await closeBuddyEngine(tester, normal);
+    final large = await showBuddyEngine(
+      tester,
+      buddyEngineSwarm(),
+      textScale: 2,
+    );
+    expect(tester.getRect(label).height, closeTo(normalHeight * 2, 1));
+    await closeBuddyEngine(tester, large);
   });
 
   for (final narrow in [false, true]) {

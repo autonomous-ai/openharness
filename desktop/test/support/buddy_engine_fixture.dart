@@ -17,6 +17,7 @@ ConversationServer buddyEngineSwarm({
   bool installed = true,
   int ageMs = 0,
   bool capable = true,
+  String sessionKind = 'computer',
   bool limited = false,
   Map<String, dynamic>? switchRequest,
   Map<String, dynamic>? modelRequest,
@@ -38,6 +39,7 @@ ConversationServer buddyEngineSwarm({
   final machine = (server.state['machines'] as List).first as Map;
   machine['observation'] = {
     'receivedAt': DateTime.now().millisecondsSinceEpoch - ageMs,
+    'sessionKind': sessionKind,
     'capabilities': ['buddySessions', 'swarmBuddy', if (capable) 'buddyEngine'],
     'readiness': {
       'engines': [
