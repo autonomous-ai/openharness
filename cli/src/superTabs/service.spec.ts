@@ -1901,3 +1901,13 @@ it('help shows a step\'s example with neutral words', async () => {
   expect(step).toMatchObject({ reviewOf: 'GROUP', step: 'STEP_NAME' })
   expect(JSON.stringify(answer.help.commands)).not.toContain('Review: Outcome')
 })
+
+// Task #3614 (anh Dee): a start can name what its agent is for, so the server assigns and briefs it when it is ready and the PM
+// neither resumes nor assigns.
+it('tells a start can assign and brief its agent by itself, and that the PM hears only of a failure', async () => {
+  const help = (await setup().ask({ action: 'help' }, owner)).help as { start: string; startRequest: Record<string, unknown> }
+  expect(help.startRequest).toMatchObject({ assign: { message: expect.any(String) } })
+  expect(help.start).toContain('assign')
+  expect(help.start).not.toContain('It does not assign work.')
+  expect(help.start).toContain('no resume or assign call')
+})
