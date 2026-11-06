@@ -3037,6 +3037,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     }
     case 'agent.start': {
+      const proposed = conversation(state, command.request.conversationId).proposal
+      if (proposed && !['accept', 'reshape'].includes(proposed.decision?.kind ?? '')) fail('PROPOSAL_UNDECIDED', 'The PM must accept or reshape this proposal before starting work.', 409)
       chatOnly(command.request.conversationId)
       projectChatWork(command.request.conversationId)
       // A coordinator starts there through lead.start alone.

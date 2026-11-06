@@ -1127,6 +1127,17 @@ export class SuperTabStore {
 
   /** Writes what changed between the loaded state and `next`, and touches the parts the change relied on. */
   private async save(tx: Transaction, loaded: Loaded, next: SuperTabState, stamp: number, touches: Touch[] = []) {
+    const changedCards = next.conversations.filter(c => c.proposal && !isDeepStrictEqual(c.proposal, loaded.state.conversations.find(old => old.id === c.id)?.proposal))
+    // Timer/release transitions have no command actor: guard the same current rights that proposal commands guard.
+    if (changedCards.length) {
+      touches = [...touches, { kind: 'head', key: 'head' }]
+      for (const card of changedCards) {
+        touches.push({ kind: 'group', key: groupProject(next, card).leadConversationId })
+        for (const identity of card.proposal!.senders) {
+          if (loaded.state.people.some(p => p.id === identity.personId)) touches.push({ kind: 'member', key: identity.personId })
+        }
+      }
+    }
     const committed = await commitParts(tx, loaded, next, { stamp, touches })
     const told = this.hooks.hostsChanged
     if (told && committed.hosts.length) afterCommit(tx, () => told({ tabId: loaded.parts.tabId, machineIds: committed.hosts, lastChangedAt: stamp }))
@@ -4872,7 +4883,7 @@ export class SuperTabStore {
       }
       allowed.sort((a, b) => rank(a) - rank(b))
     }
-    return { open, allowed, state }
+    return { open, allowed: allowed.slice(0, 100), state }
   }
 
   /** A withdrawn host can retire its own journal without regaining shared

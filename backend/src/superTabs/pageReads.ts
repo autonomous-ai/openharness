@@ -115,7 +115,7 @@ export async function agentOpenDeliveries(tx: Transaction, tabId: string, agentI
   const ordered = await inConversationOrder(tx, tabId, joined.map(row => prismaRow<SuperTabDelivery>('SuperTabDelivery', row)))
   // Old notices remain readable; missing priority means a normal server notice, below P0.
   if (prioritized) ordered.sort((a, b) => (a.inputPriority ?? 1) - (b.inputPriority ?? 1) || a.createdAt.getTime() - b.createdAt.getTime())
-  return ordered.slice(0, 100)
+  return ordered
 }
 
 /** An agent's open deliveries, read by creation time, with each conversation's tied rows put in its message order. One

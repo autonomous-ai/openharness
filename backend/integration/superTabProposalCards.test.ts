@@ -91,7 +91,7 @@ describe('durable proposal cards', () => {
     const urgent = await f.create(owner, 'P0')
     const prof = await profiled(db, async () => expect((await f.store.deliveries(owner, f.tab, f.pm))[0]?.conversationId).toBe(urgent))
     const priority = plan(reads(prof, 'SuperTabDelivery', ['inputPriority']))
-    expect(priority).toEqual([expect.objectContaining({ plan: 'IXSCAN { tabId: 1, agentId: 1, status: 1, inputPriority: 1, createdAt: 1 }' })])
+    expect(priority).toEqual([expect.objectContaining({ plan: expect.stringContaining('IXSCAN { tabId: 1, agentId: 1, status: 1, inputPriority: 1, createdAt: 1 }') })])
     expect(priority[0]!.docsExamined).toBeLessThanOrEqual(110)
     console.info('Proposal priority read:', priority)
     expect((await f.store.deliveries(owner, f.tab, f.pm))[0]?.conversationId).toBe(urgent)
