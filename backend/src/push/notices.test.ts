@@ -126,3 +126,48 @@ describe('phoneNotices: the push rule Tony approved (task #3248)', () => {
       .toBe('Agent asks you')
   })
 })
+
+describe('phoneNotices: who rings (task #3607, Tony 2026-11-06)', () => {
+  const asAgent = (id: string) => ({ kind: 'agent' as const, id, name: 'worker-harness', membershipGeneration: 'g' })
+  const row = (web: string, id: string, personId: string, why: 'starter' | 'quoted' | 'tagged' | 'replier', actorKind: 'person' | 'agent', actorId: string) =>
+    ({ id, personId, conversationId: web, messageId: 'r1', threadId: 'root1', actorKind, actorId, why, createdAt: AT })
+
+  it('an agent\'s reply rings nobody, for starter, quoted and tagged alike', () => {
+    const { state, web, worker } = scene()
+    const reply = draft({ id: 'r1', conversationId: web, author: asAgent(worker), thread: 'root1' })
+    const rows = (['starter', 'quoted', 'tagged'] as const).map((why, i) => row(web, `a${i}`, `p${i}`, why, 'agent', worker))
+    expect(phoneNotices('tab', state, { replies: rows, tags: [] }, [reply])).toEqual([])
+  })
+
+  it('a person\'s reply rings for starter, quoted and tagged, never for one who only replied', () => {
+    const { state, web } = scene()
+    const reply = draft({ id: 'r1', conversationId: web, author: person(peer), thread: 'root1' })
+    const rows = (['starter', 'quoted', 'tagged', 'replier'] as const).map((why, i) => row(web, `a${i}`, `p${i}`, why, 'person', peer.userId))
+    expect(phoneNotices('tab', state, { replies: rows, tags: [] }, [reply]).map(n => n.personId)).toEqual(['p0', 'p1', 'p2'])
+  })
+
+  it('an agent\'s tag rings nobody, a person\'s tag rings', () => {
+    const { state, web, worker } = scene()
+    const byAgent = draft({ id: 'm1', conversationId: web, author: asAgent(worker), mentions: [owner.userId] })
+    const byPerson = draft({ id: 'm2', conversationId: web, author: person(peer), mentions: [owner.userId] })
+    const tag = (id: string, messageId: string) => ({ id, personId: owner.userId, conversationId: web, messageId })
+    const notices = phoneNotices('tab', state, { replies: [], tags: [tag('t1', 'm1'), tag('t2', 'm2')] }, [byAgent, byPerson])
+    expect(notices.map(n => n.key)).toEqual(['mention:t2'])
+  })
+
+  it('an agent\'s words that say approve or decide ring nobody: the type of the event decides, never the text', () => {
+    const { state, web, worker } = scene()
+    const text = 'Please approve this and decide now: waiting on you'
+    const reply = draft({ id: 'r1', conversationId: web, author: asAgent(worker), thread: 'root1', text })
+    const tagging = draft({ id: 'm1', conversationId: web, author: asAgent(worker), mentions: [owner.userId], text })
+    expect(phoneNotices('tab', state, { replies: [row(web, 'a', owner.userId, 'starter', 'agent', worker)],
+      tags: [{ id: 't1', personId: owner.userId, conversationId: web, messageId: 'm1' }] }, [reply, tagging])).toEqual([])
+  })
+
+  it('a decision an agent asks of a person still rings, however the asking agent words it', () => {
+    const { state, web, worker } = scene()
+    const [notice] = phoneNotices('tab', state, { replies: [], tags: [], decisions: [{ id: 'd1', personId: owner.userId, conversationId: web, askerAgentId: worker }] }, [])
+    expect(notice).toEqual(expect.objectContaining({ key: 'decision:d1', title: 'worker-harness asks you' }))
+    expect(notice!.quiet).toBeUndefined()
+  })
+})
