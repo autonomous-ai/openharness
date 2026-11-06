@@ -41,6 +41,7 @@
 
 **Files:**
 - Modify: `desktop/lib/super_tabs/view.dart`
+- Modify: `desktop/lib/super_tabs/tasks_view.dart` (wrap the toolbar only when both panes leave it too narrow).
 - Modify / test: `desktop/test/super_tab_board_layout_test.dart`
 - Test: existing `super_tab_pane_layout_test.dart`, `super_tab_tasks_view_test.dart`, `super_tab_navigation_test.dart`, `super_tab_sidebar_test.dart`, `super_tab_workspace_test.dart`.
 
@@ -48,10 +49,10 @@
 - Consumes `SuperTabView(board: true)`, `SuperTabPaneLayout`, fake `ConversationServer` and `MemoryKeyValueStore`.
 - Produces the same public view interface; `paneStore` supplies pane sizing only. No visibility persistence remains.
 
-- [ ] Replace the old hide/show regression with tests seeded with both old hidden preferences; assert visible project rows and right chat, no hide/show controls, including after remount.
-- [ ] Add blank-center tests with a Buddy selected and with no projects; assert no center text, editor or controls. Select a project and assert the Board appears in the center, then remove it and assert blank again.
-- [ ] Cover the minimum Desktop window and light/dark screenshot capture using synthetic state. Keep existing task / Buddy navigation tests and update the project Chat test to keep the Board beside its chat.
-- [ ] Commit tests first; run the layout file and record behavioral failures on the unchanged implementation. Measure the same Board divider-drag workload before and after.
-- [ ] Remove visibility flags, reads, writes and buttons. Reserve side panes for the Desktop Board workspace at supported window widths, and leave the center blank without an open project. Keep other navigation surfaces intact.
-- [ ] Run the layout regression, named affected tests, changed-file analysis, icon and style audits. Capture and inspect both appearances, with and without a project. Record evidence and platform limitations in the PR.
+- [x] Replace the old hide/show regression with tests seeded with both old hidden preferences; assert visible project rows and right chat, no hide/show controls, including after remount.
+- [x] Add blank-center tests with a Buddy selected and with no projects; assert no center text, editor or controls. Select a project and assert the Board appears in the center, then remove it and assert blank again.
+- [x] Cover the minimum Desktop window and light/dark screenshot capture using synthetic state. Keep existing task / Buddy navigation tests and update the project Chat test to keep the Board beside its chat.
+- [x] Commit tests first; run the layout file and record behavioral failures on the unchanged implementation. Measure the same Board divider-drag workload before and after.
+- [x] Remove visibility flags, reads, writes and buttons. Reserve side panes for the Desktop Board workspace at supported window widths, and leave the center blank without an open project. Keep other navigation surfaces intact.
+- [x] Run the layout regression, named affected tests, changed-file analysis, icon and style audits. Capture and inspect both appearances, with and without a project. Record evidence and platform limitations in the PR.
 - [ ] Commit implementation, push, mark ready and hand the stable revision to the Integrator for independent review and test. Full Desktop suite evidence comes from automatic PR CI.

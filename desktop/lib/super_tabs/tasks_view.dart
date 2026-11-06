@@ -259,71 +259,94 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       grid.AppDesktop.groupGap,
       grid.AppDesktop.controlGap,
     ),
-    child: Row(
-      children: [
-        Text('Tasks', style: DesktopChrome.text(medium: true)),
-        if (_moveError case final error?) ...[
-          const SizedBox(width: grid.AppDesktop.groupGap),
-          Flexible(
-            child: Text(
-              error,
-              key: const ValueKey('super-tasks-move-error'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.metadata(),
-            ),
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        // Both side panes stay visible on Desktop, leaving less room for the
+        // Board controls at the minimum window width.
+        final compact =
+            constraints.maxWidth < MediaQuery.textScalerOf(context).scale(560);
+        final children = <Widget>[
+          Text('Tasks', style: DesktopChrome.text(medium: true)),
+          if (_moveError case final error?) ...[
+            const SizedBox(width: grid.AppDesktop.groupGap),
+            if (compact)
+              SizedBox(
+                width: constraints.maxWidth,
+                child: Text(
+                  error,
+                  key: const ValueKey('super-tasks-move-error'),
+                  style: DesktopChrome.metadata(),
+                ),
+              )
+            else
+              Flexible(
+                child: Text(
+                  error,
+                  key: const ValueKey('super-tasks-move-error'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.metadata(),
+                ),
+              ),
+          ],
+          if (!compact) const Spacer(),
+          DesktopPill(
+            key: const ValueKey('super-tasks-layout-board'),
+            label: 'Board',
+            selected: _layout == _Layout.board,
+            onPressed: () => _choose(layout: _Layout.board),
           ),
-        ],
-        const Spacer(),
-        DesktopPill(
-          key: const ValueKey('super-tasks-layout-board'),
-          label: 'Board',
-          selected: _layout == _Layout.board,
-          onPressed: () => _choose(layout: _Layout.board),
-        ),
-        const SizedBox(width: grid.AppDesktop.listRowGap),
-        DesktopPill(
-          key: const ValueKey('super-tasks-layout-list'),
-          label: 'List',
-          selected: _layout == _Layout.list,
-          onPressed: () => _choose(layout: _Layout.list),
-        ),
-        const SizedBox(width: grid.AppDesktop.listRowGap),
-        DesktopPill(
-          key: const ValueKey('super-tasks-layout-members'),
-          label: 'Members',
-          selected: _layout == _Layout.members,
-          tooltip: 'Tasks by crew member',
-          onPressed: () => _choose(layout: _Layout.members),
-        ),
-        const SizedBox(width: grid.AppDesktop.groupGap),
-        DesktopPill(
-          key: const ValueKey('super-tasks-mine'),
-          label: 'Mine',
-          selected: _mine,
-          tooltip: 'Only the tasks you asked for',
-          onPressed: () => _choose(mine: !_mine),
-        ),
-        const SizedBox(width: grid.AppDesktop.controlGap),
-        SizedBox(
-          width: _searchWidth,
-          child: TextField(
-            key: const ValueKey('super-tasks-search'),
-            onChanged: (query) => setState(() => _query = query.trim()),
-            textInputAction: TextInputAction.search,
-            style: grid.kFieldTextStyle,
-            decoration: InputDecoration(
-              hintText: 'Search',
-              isDense: true,
-              prefixIcon: Icon(
-                AppIcons.search,
-                size: grid.kFieldIconSize,
-                color: grid.AppPalette.textFaint,
+          const SizedBox(width: grid.AppDesktop.listRowGap),
+          DesktopPill(
+            key: const ValueKey('super-tasks-layout-list'),
+            label: 'List',
+            selected: _layout == _Layout.list,
+            onPressed: () => _choose(layout: _Layout.list),
+          ),
+          const SizedBox(width: grid.AppDesktop.listRowGap),
+          DesktopPill(
+            key: const ValueKey('super-tasks-layout-members'),
+            label: 'Members',
+            selected: _layout == _Layout.members,
+            tooltip: 'Tasks by crew member',
+            onPressed: () => _choose(layout: _Layout.members),
+          ),
+          const SizedBox(width: grid.AppDesktop.groupGap),
+          DesktopPill(
+            key: const ValueKey('super-tasks-mine'),
+            label: 'Mine',
+            selected: _mine,
+            tooltip: 'Only the tasks you asked for',
+            onPressed: () => _choose(mine: !_mine),
+          ),
+          const SizedBox(width: grid.AppDesktop.controlGap),
+          SizedBox(
+            width: _searchWidth,
+            child: TextField(
+              key: const ValueKey('super-tasks-search'),
+              onChanged: (query) => setState(() => _query = query.trim()),
+              textInputAction: TextInputAction.search,
+              style: grid.kFieldTextStyle,
+              decoration: InputDecoration(
+                hintText: 'Search',
+                isDense: true,
+                prefixIcon: Icon(
+                  AppIcons.search,
+                  size: grid.kFieldIconSize,
+                  color: grid.AppPalette.textFaint,
+                ),
               ),
             ),
           ),
-        ),
-      ],
+        ];
+        return compact
+            ? Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                runSpacing: grid.AppDesktop.controlGap,
+                children: children,
+              )
+            : Row(children: children);
+      },
     ),
   );
 
