@@ -19,6 +19,17 @@ void main() {
           violations.add(file.path);
         }
       }
+      final credentialNames = RegExp(
+        r"auth\.json|\.credentials\.json|find-generic-password|api/oauth/usage|backend-api/wham/usage",
+      );
+      for (final file in Directory(
+        'lib',
+      ).listSync(recursive: true).whereType<File>()) {
+        if (file.path.endsWith('.dart') &&
+            credentialNames.hasMatch(file.readAsStringSync())) {
+          violations.add(file.path);
+        }
+      }
       expect(
         violations,
         isEmpty,
