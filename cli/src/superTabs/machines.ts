@@ -337,8 +337,9 @@ export class ContributedMachines {
   }
   /** The engines' own installs and sign-ins, probed again once [READINESS_MS] old. */
   private async ownEngines(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }, now: number): Promise<ReadyEngine[] | null> {
-    // All pane engines take four bounded login-shell batches; leave room for account reads too.
-    const answer = await local.request('engines_probe', { engines: PROCESS_ENGINES, accounts: true }, 30_000).catch(() => null)
+    // Periodic work asks only engines with account readers. Add a vendor here when its reader lands;
+    // unsupported engines would spawn login shells just to return unknown (#3839 security review).
+    const answer = await local.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000).catch(() => null)
     const engines = object(answer).engines
     // An engine that says nothing of its sign-in (an older daemon, an engine not installed) is unknown, never signed out.
     // Not installed is unknown too: the probe answers the same for a login shell that timed out (lib/engineProbe.ts), and
