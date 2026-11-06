@@ -6,6 +6,11 @@
 **Goal:** Inventory Table A #4 (anh Dee 11-06, checkable rules run as code): a join-link token was logged in #2480. An
 agent's text that holds a credential is refused before anything is stored, naming the kinds found and never the value.
 
+**As built after the security reviews (River's ruling, 11-06):** an agent's text-like attachment (text/*, JSON, XML, YAML,
+scripts, or a name such as .log, .md, .txt) is scanned up to its first 1 MB with the same detector and refused by kind on both
+upload paths; on the direct link its object is deleted. People's files and binaries are as before. A needs_human question's
+options and unblocks, and decision.ask's words, are scanned too (SecAlder's review 1).
+
 **Architecture:** One scan, credentials.ts `findCredentials`, the conservative detector chat redaction already uses (it passes
 commit ids, UUIDs and hashes), plus one new rule: a bare Harness join or link token (43 base64url characters mixing upper
 case, lower case and digits, as sharing.ts makes them). Not machineAccess.ts `secretLike`: its 20-character rule matches every
