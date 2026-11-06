@@ -37,6 +37,7 @@ import type { attachedFiles as attachedFilesType } from './attachments.js'
 import { backend, writeJournal, removeStaleJournalTemps, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
 import { ADDED_MAX } from './deliveryContext.js'
 import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
+import { switchChangeId } from './leadSwitchRequest.js'
 import { TerminalHost } from './terminal.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { CREW_CONTINUE } from './crew.js'
@@ -4758,12 +4759,31 @@ describe('keeping a Swarm Lead alive', () => {
   // Dee, 11-01: its owner switches a Product Manager's engine from its pane. The host holds off reopening the old session while
   // the new one takes its place, and reopens the old one on its old engine when none started in time; a restart keeps the
   // hold, so a project never has two, and never none for long (superTabs/leadSwitch.ts).
-  const switched = (t: ReturnType<typeof lifeFixture>, at = 0) => {
+  const switched = (t: ReturnType<typeof lifeFixture>, at = 0, changeId = 'f'.repeat(32)) => {
     const folder = join(t.dir, 'super-tabs', 'lead-switch')
     mkdirSync(folder, { recursive: true, mode: 0o700 })
     writeFileSync(join(folder, `${createHash('sha256').update('harness').digest('hex')}.json`),
-      JSON.stringify({ version: 1, agentId: 'harness', changeId: 'f'.repeat(32), targetEngine: 'codex', at }), { mode: 0o600 })
+      JSON.stringify({ version: 1, agentId: 'harness', changeId, targetEngine: 'codex', at }), { mode: 0o600 })
   }
+
+  it('reports a Buddy switch after the backend replaces its request with the landed receipt', async () => {
+    const buddy = { tabId: 'tab', active: true, buddyConversationId: 'private-chat', agent: {
+      id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyScope: 'swarm',
+      buddyOf: { personId: 'peer', generation: 'g' },
+      switchRequest: { id: 'buddy-switch', engine: 'codex', requestedBy: 'peer' },
+    } }
+    const t = lifeFixture([buddy])
+    switched(t, 0, switchChangeId('buddy-switch'))
+    await t.poll()
+    const results = () => t.commands.map(body => body.command as Record<string, unknown>)
+      .filter(command => command.type === 'agent.switchResult')
+    expect(results()).toEqual([])
+    // Same-machine agent.rebind keeps this receipt, without the cross-machine candidateAgentId.
+    t.rows.splice(0, 1, { ...buddy, agent: { ...buddy.agent, harnessId: 'replacement', switchRequest: undefined,
+      switchLanded: { id: 'buddy-switch', requestedBy: 'peer' } } })
+    await t.poll(5_000)
+    expect(results()).toEqual([{ type: 'agent.switchResult', agentId: 'agent', switchId: 'buddy-switch', ok: true }])
+  })
   /** The switch's new session [id], running here when [runs] says so, by its creation receipt. */
   const replacement = (t: ReturnType<typeof lifeFixture>, runs: () => boolean, old: () => boolean = () => false, id = 'new-session') => {
     t.core.agents.byAgent = vi.fn((agentId: string) => (agentId === id ? runs() : agentId === 'harness' && old()) ? { agentId } : undefined) as never
@@ -4838,6 +4858,78 @@ describe('keeping a Swarm Lead alive', () => {
     await u.poll(SWITCH_HOLD_MS + 1)
     await vi.waitFor(() => expect(u.keepLeadAlive).toHaveBeenCalledTimes(1))
     expect(u.closeMember).not.toHaveBeenCalled()
+  })
+
+  it('recovers a switching Buddy across restart and closes a late replacement before the original stays alone', async () => {
+    const buddy = { ...leadRow({ lead: false, buddyConversationId: 'private-chat' }), agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' } } }
+    const t = lifeFixture([buddy])
+    switched(t)
+    await t.poll()
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    t.host.stop()
+    const again = t.open()
+    t.wait(SWITCH_HOLD_MS + 1)
+    await again.tick()
+    await vi.waitFor(() => expect(t.keepLeadAlive).toHaveBeenCalledWith('harness'))
+    replacement(t, () => true, () => true)
+    t.wait(5_000)
+    await again.tick()
+    await vi.waitFor(() => expect(t.closeMember).toHaveBeenCalledWith('new-session', 'f'.repeat(32)))
+  })
+
+  it('does not reopen the original Buddy until an unadopted replacement is confirmed closed', async () => {
+    const buddy = { ...leadRow({ lead: false }), agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' } } }
+    const t = lifeFixture([buddy])
+    switched(t)
+    replacement(t, () => true)
+    t.closeMember.mockResolvedValue({ error: 'AGENT_CHANGED' })
+    await t.poll(SWITCH_ADOPT_MS + 1)
+    expect(t.closeMember).toHaveBeenCalledWith('new-session', 'f'.repeat(32))
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    t.closeMember.mockResolvedValue({ closed: true })
+    await t.poll(5_000)
+    await vi.waitFor(() => expect(t.keepLeadAlive).toHaveBeenCalledWith('harness'))
+  })
+
+  it('wakes a managed Buddy after switch rollback, without reopening an explicit Stop', async () => {
+    const buddy = { ...leadRow({ lead: false, buddySleepManaged: true }), agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' } } }
+    const t = lifeFixture([buddy])
+    t.keepLeadAlive.mockResolvedValue({ ok: true })
+    switched(t)
+    await t.poll(SWITCH_HOLD_MS + 1)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    t.live(true)
+    Object.assign(buddy.agent, { asleep: { since: 1 } })
+    await t.poll(1_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+    t.live(false)
+    delete (buddy.agent as Record<string, unknown>).asleep
+    t.host.stop()
+    const again = t.open()
+    t.wait(60_000)
+    await again.tick()
+    await vi.waitFor(() => expect(t.keepLeadAlive).toHaveBeenCalledTimes(2))
+    Object.assign(buddy, { stopRequested: true })
+    t.wait(60_000)
+    await again.tick()
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps Stop Harness effective after Buddy rollback, across host restart, while removing a late replacement', async () => {
+    const buddy = { ...leadRow({ lead: false }), agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' } } }
+    const t = lifeFixture([buddy])
+    t.keepLeadAlive.mockResolvedValue({ ok: true })
+    switched(t)
+    await t.poll(SWITCH_HOLD_MS + 1)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    t.host.stop()
+    // The person's Stop happens after recovery; the host restarts with the original stopped again.
+    const again = t.open()
+    replacement(t, () => true)
+    t.wait(5_000)
+    await again.tick()
+    await vi.waitFor(() => expect(t.closeMember).toHaveBeenCalledWith('new-session', 'f'.repeat(32)))
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
   })
 
   it('waits a minute after a reopen it asked for before asking again', async () => {

@@ -2927,7 +2927,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       leadProtected: (agentId: string, changeId?: string) => swarm.leadCloseProtected(env.ADAPTER_DATA_DIR, agentId, changeId),
       leadSwitching: (agentId: string, changeId: string) => swarm.leadSwitching(env.ADAPTER_DATA_DIR, agentId, changeId),
       leadSwitchEnded: (agentId: string, changeId: string, stopped: boolean) => swarm.leadSwitchEnded(env.ADAPTER_DATA_DIR, agentId, changeId, stopped),
-      buddyProtected: (agentId: string) => swarm.mayBeBuddy(env.ADAPTER_DATA_DIR, agentId),
+      buddyProtected: (agentId: string, changeId?: string) => swarm.buddyCloseProtected(env.ADAPTER_DATA_DIR, agentId, changeId),
     } : {}),
   })
   backend.closeAgentService = closing.closeAgentService

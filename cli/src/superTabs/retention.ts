@@ -8,6 +8,7 @@
  * discussion and running assignments continue. */
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { leadSwitchOf, SWITCH_RECOVERY_MS, switchWithin } from './leadSwitch.js'
 import { isCrewRow } from './crew.js'
 import { identifier, object } from './wire.js'
 import { isTeamDaemon } from './teamDaemon.js'
@@ -54,10 +55,17 @@ export function retainedHarnesses(dataDir: string, now = Date.now()): Set<string
   return new Set(read(file).harnesses)
 }
 
-/** The sessions here the host may reopen, the Leads, crew and managed main Buddies: only those a valid roster named. The core reads it as its
- *  Leads (core/main.ts, inCore/agents.ts keepLeadAlive), so a crew member reopens exactly as a Lead does. */
+/** Sessions a valid roster lets the core reopen: Leads, crew, managed main Buddies and a Buddy whose engine switch needs
+ * rollback. A recovered unmanaged Buddy is excluded so its person's later Stop Harness stays effective. */
 export function retainedLeads(dataDir: string): Set<string> {
-  try { const kept = read(retentionFile(dataDir)); return new Set([...kept.leads ?? [], ...kept.crew ?? [], ...kept.wakeableBuddies ?? []]) } catch { return new Set() }
+  try {
+    const kept = read(retentionFile(dataDir))
+    const switching = (kept.buddies ?? []).filter(id => {
+      const switched = leadSwitchOf(dataDir, id)
+      return !switched?.recovered && switchWithin(switched, Date.now(), SWITCH_RECOVERY_MS)
+    })
+    return new Set([...kept.leads ?? [], ...kept.crew ?? [], ...kept.wakeableBuddies ?? [], ...switching])
+  } catch { return new Set() }
 }
 
 /** Only the server's current sleep instruction grants an idle close, never a window's Close or a Team purge. A new
@@ -125,7 +133,7 @@ export function retainContributions(dataDir: string, machineId: string, rows: un
       buddies.add(agent.harnessId)
       if (row.buddySleepManaged === true && !agent.buddySession && row.stopRequested !== true) {
         wakeableBuddies.add(agent.harnessId)
-        if (agent.asleep && !agent.modelRequest && !agent.teamAccount) sleepingBuddies.add(agent.harnessId)
+        if (agent.asleep && !agent.modelRequest && !agent.switchRequest && !agent.switchLanded && !agent.teamAccount) sleepingBuddies.add(agent.harnessId)
       }
     }
     if (row.lead === true) leads.add(agent.harnessId)
