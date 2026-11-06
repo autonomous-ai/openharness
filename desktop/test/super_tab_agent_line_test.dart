@@ -60,6 +60,19 @@ Map<String, dynamic> _task(String agentId, String status) => {
   'assignment': {'id': 'as-$agentId', 'agentId': agentId, 'status': status},
 };
 
+/// A task of [agentId] with its own id and title, so one agent can hold several.
+Map<String, dynamic> _taskNamed(
+  String agentId,
+  String id,
+  String title,
+  String status,
+) => {
+  ...conversationFixture(id, title),
+  'leadId': 'Lead',
+  'agentIds': ['Lead', agentId],
+  'assignment': {'id': 'as-$id', 'agentId': agentId, 'status': status},
+};
+
 Map<String, dynamic> _start(String agentId, String effort) => {
   'id': 'start-$agentId',
   'harnessId': 'h-$agentId',
@@ -173,6 +186,76 @@ void main() {
       );
       expect(line(HarnessActivity.idle), 'Assigned · Mac Studio · Opus · high');
       expect(line(null), 'Assigned · Mac Studio · Opus · high');
+    });
+
+    // Task #3649 (Gray, 11-06): a lost earlier task listed before the current
+    // one made the agent read Lost. The state is the current assignment's.
+    test(
+      'reads the current task, not an older lost one listed before it',
+      () async {
+        final server = ConversationServer();
+        server.state['machines'] = [_machine('m1', 'Mac Studio')];
+        server.state['agents'] = [_agent('Lamp', 'm1')];
+        (server.state['conversations'] as List).addAll([
+          _taskNamed('Lamp', 'old', 'First customers', 'lost'),
+          _taskNamed('Lamp', 'now', 'Mobile guide link', 'working'),
+        ]);
+        final c = server.controller();
+        addTearDown(c.dispose);
+        await c.refresh();
+        final info = SuperTabAgentInfo(
+          c,
+          null,
+          c.snapshot!.agent('Lamp')!,
+          activity: HarnessActivity.working,
+        );
+        expect(info.taskGroup?.title, 'Mobile guide link');
+        expect(
+          superTabAgentGlance(info).line,
+          'Working · Mac Studio · Opus · high',
+        );
+        expect(info.status, 'Working on "Mobile guide link"');
+      },
+    );
+
+    test('an agent whose only task is lost still reads Lost', () async {
+      final server = ConversationServer();
+      server.state['machines'] = [_machine('m1', 'Mac Studio')];
+      server.state['agents'] = [_agent('Lamp', 'm1')];
+      (server.state['conversations'] as List).add(
+        _taskNamed('Lamp', 'old', 'First customers', 'lost'),
+      );
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      final info = SuperTabAgentInfo(c, null, c.snapshot!.agent('Lamp')!);
+      expect(superTabAgentGlance(info).label, 'Lost');
+      expect(info.status, 'Lost "First customers"');
+    });
+
+    testWidgets('the roster row of an agent with an older lost task shows its '
+        'current task', (tester) async {
+      await _swarm(
+        tester,
+        agents: [_agent('Lamp', 'm1')],
+        tasks: [
+          _taskNamed('Lamp', 'old', 'First customers', 'lost'),
+          _taskNamed('Lamp', 'now', 'Mobile guide link', 'working'),
+        ],
+      );
+      expect(
+        _line('Lamp', 'Assigned · Mac Studio · Opus · high'),
+        findsOneWidget,
+      );
+      final tip = tester
+          .widgetList<Tooltip>(
+            find.ancestor(of: _row('Lamp'), matching: find.byType(Tooltip)),
+          )
+          .single
+          .message!;
+      expect(tip, contains('Mobile guide link'));
+      expect(tip, isNot(contains('Lost')));
+      expect(tip, isNot(contains('First customers')));
     });
 
     testWidgets(
