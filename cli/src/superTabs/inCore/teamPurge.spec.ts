@@ -975,8 +975,9 @@ describe('a purge that did not finish', () => {
     const own = join(home, PM_HOMES, 'super-start', 'codex')
     mkdirSync(own, { recursive: true })
     const record = purgeRecord(recordFile)
-    const state = { failing: true }
+    const state = { failing: true, responseDelay: 0 }
     const purge = vi.fn(async (request: Record<string, unknown>) => {
+      if (state.responseDelay) await new Promise(resolve => realTimeout(resolve, state.responseDelay))
       if (state.failing) return { error: 'SERVICE_DOWN' }
       return request.mode === 'inspect' ? { reviewId: 'review-1' } : { ok: true }
     })
@@ -1013,7 +1014,7 @@ describe('a purge that did not finish', () => {
     second.stop()
   })
 
-  it('tries again with growing waits while it fails, and stops once none is left', async () => {
+  it.each([100, 1_000])('tries again with growing waits while it fails, and stops once none is left (service takes %i ms)', async responseDelay => {
     const f = fixture(dir())
     const retried = f.start()
     await retried('pm')
@@ -1032,6 +1033,7 @@ describe('a purge that did not finish', () => {
     expect(f.record.pending().map(t => t.agentId)).toEqual(['pm'])
     expect(f.reports.at(-1)).toMatchObject({ pending: 1, unreadable: false })
     f.state.failing = false
+    f.state.responseDelay = responseDelay
     await pass(30 * MINUTE)
     expect(f.record.pending()).toEqual([])
     const done = tries()
