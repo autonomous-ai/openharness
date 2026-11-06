@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -39,6 +39,33 @@ describe('the folder Harness makes for an agent whose start named a temporary on
     const projects = JSON.parse(readFileSync(join(claude, '.claude.json'), 'utf8')).projects as Record<string, { hasTrustDialogAccepted?: boolean }>
     expect(Object.keys(projects)).toEqual([folder])
     expect(projects[folder].hasTrustDialogAccepted).toBe(true)
+  })
+
+  // Security review of #3341 (Readycheck): a folder or link already at that path was marked and trusted, and a link wrote
+  // the mark outside. Only a folder Harness made, or one it made and marked before, is ever used.
+  it('refuses a link or an unmarked folder already where it would go, and writes nothing through it', async () => {
+    const root = temp('agent-root-'), outside = temp('agent-outside-'), claude = temp('agent-claude-')
+    writeFileSync(join(claude, '.claude.json'), '{}')
+    const env = { HOME: root, CLAUDE_CONFIG_DIR: claude }
+    const linked = agentFolderFor(root, 'linked')
+    mkdirSync(join(linked, '..'), { recursive: true })
+    symlinkSync(outside, linked)
+    await expect(prepareAgentFolder(linked, 'claude', env)).rejects.toThrow()
+    expect(existsSync(join(outside, AGENT_FOLDER_MARK))).toBe(false)
+    const planted = agentFolderFor(root, 'planted')
+    mkdirSync(planted, { recursive: true })
+    await expect(prepareAgentFolder(planted, 'claude', env)).rejects.toThrow()
+    expect(existsSync(join(planted, AGENT_FOLDER_MARK))).toBe(false)
+    expect(readFileSync(join(claude, '.claude.json'), 'utf8')).toBe('{}')
+    // A link above it, in place of agent-home itself.
+    const other = temp('agent-root-')
+    mkdirSync(join(other, 'worktrees'), { recursive: true })
+    symlinkSync(outside, join(other, 'worktrees', AGENT_FOLDERS))
+    await expect(prepareAgentFolder(agentFolderFor(other, 'above'), 'claude', env)).rejects.toThrow()
+    // Its own folder, made and marked by an earlier try of the same start, is used again.
+    const again = agentFolderFor(root, 'again')
+    await prepareAgentFolder(again, 'claude', env)
+    await expect(prepareAgentFolder(again, 'claude', env)).resolves.toBeUndefined()
   })
 
   it('may be removed only when it is a marked folder directly in agent-home', async () => {

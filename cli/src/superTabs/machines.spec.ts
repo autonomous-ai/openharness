@@ -2202,9 +2202,21 @@ describe('removed machine cleanup', () => {
       return folder
     }
 
-    it('goes with its record once no session works in it', async () => {
+    // Security review of #3341 (Readycheck): a stop deleted the agent's work with its folder. Only an empty one goes.
+    it('keeps the folder, with its record, while it holds the agent\'s work', async () => {
+      const m = machine()
+      m.setLive([])
+      const folder = agentFolder(m, 'with-work')
+      addRecord(m, { tabId: 'tab', startId: 'with-work', harnessId: 'h-work', source: folder, path: folder, kind: 'agent-folder' })
+      await m.open().removeStoppedWorktree('tab', 'h-work')
+      expect(readFileSync(join(folder, 'notes.md'), 'utf8')).toBe('the agent\'s work')
+      expect(startIds(m)).toContain('with-work')
+    })
+
+    it('goes with its record once no session works in it and it holds nothing of the agent\'s', async () => {
       const m = machine()
       const folder = agentFolder(m, 'agent-start')
+      rmSync(join(folder, 'notes.md'))
       addRecord(m, { tabId: 'tab', startId: 'agent-start', harnessId: 'h-agent', source: folder, path: folder, kind: 'agent-folder' })
       m.setLive([session('h-agent', join(folder, 'sub'), 'agent')])
       await m.open().removeStoppedWorktree('tab', 'h-agent')
