@@ -30,9 +30,8 @@ describe('phoneNotices: what a write tells phones (task #2905)', () => {
   })
 
   it('words a tag as the phone does, and links the message, in its thread only when it is only there', () => {
-    const { state, web, worker } = scene()
-    const agent = { kind: 'agent' as const, id: worker, name: 'worker-harness', membershipGeneration: 'g' }
-    const inChat = draft({ id: 'm1', conversationId: web, author: agent, mentions: [owner.userId] })
+    const { state, web } = scene()
+    const inChat = draft({ id: 'm1', conversationId: web, author: person(peer), mentions: [owner.userId] })
     const inThread = draft({ id: 'm2', conversationId: web, author: person(peer), mentions: [owner.userId], thread: 'root2' })
     const alsoInChat = draft({ id: 'm3', conversationId: web, author: person(peer), mentions: [owner.userId], thread: 'root2', alsoInChat: true })
     const tag = (id: string, messageId: string) => ({ id, personId: owner.userId, conversationId: web, messageId })
@@ -40,7 +39,7 @@ describe('phoneNotices: what a write tells phones (task #2905)', () => {
     // A tag is a notice of its own: it shows in the slot of its key, as the app's notice for it does.
     expect(notices.every(n => n.slot === n.key && !n.thread && !n.quiet)).toBe(true)
     expect(notices.map(n => [n.key, n.title, n.subtitle, n.link])).toEqual([
-      ['mention:t1', 'worker-harness tagged you', 'Web launch', `swarm:tab/${web}/message/m1`],
+      ['mention:t1', `${shownNameOf(state, peer.userId)} tagged you`, 'Web launch', `swarm:tab/${web}/message/m1`],
       ['mention:t2', `${shownNameOf(state, peer.userId)} tagged you`, 'Web launch', `swarm:tab/${web}/message/m2/thread/root2`],
       ['mention:t3', `${shownNameOf(state, peer.userId)} tagged you`, 'Web launch', `swarm:tab/${web}/message/m3`],
     ])
@@ -50,10 +49,9 @@ describe('phoneNotices: what a write tells phones (task #2905)', () => {
   it('tells of a reply in a person\'s Swarm Buddy chat, which belongs to no project, without failing (security review 2)', () => {
     const { state } = scene()
     const buddy = openSwarmBuddyChat(state, state.people.find(p => p.id === peer.userId)!).id
-    const agent = { kind: 'agent' as const, id: 'buddy-session', name: 'Buddy', membershipGeneration: 'g' }
-    const reply = draft({ id: 'r1', conversationId: buddy, author: agent, thread: 'root1' })
+    const reply = draft({ id: 'r1', conversationId: buddy, author: person(owner), thread: 'root1' })
     const notices = phoneNotices('tab', state, { replies: [{ id: 'row1', personId: peer.userId, conversationId: buddy, messageId: 'r1', threadId: 'root1',
-      actorKind: 'agent', actorId: 'buddy-session', why: 'starter', createdAt: AT }], tags: [] }, [reply])
+      actorKind: 'person', actorId: owner.userId, why: 'starter', createdAt: AT }], tags: [] }, [reply])
     expect(notices).toEqual([expect.objectContaining({ personId: peer.userId, subtitle: '', link: `swarm:tab/${buddy}/message/r1/thread/root1` })])
   })
 
@@ -100,10 +98,10 @@ describe('phoneNotices: the push rule Tony approved (task #3248)', () => {
     const agent = { kind: 'agent' as const, id: worker, name: 'worker-harness', membershipGeneration: 'g' }
     const line = draft({ id: 'r1', conversationId: web, author: agent, thread: 'root1', source: { kind: 'system' } })
     expect(phoneNotices('tab', state, { replies: [{ ...row('a', owner.userId, 'starter'), conversationId: web }], tags: [] }, [line])).toEqual([])
-    // The same row for an agent's own words is pushed.
-    const words = draft({ id: 'r1', conversationId: web, author: agent, thread: 'root1' })
-    expect(phoneNotices('tab', state, { replies: [{ ...row('a', owner.userId, 'starter'), conversationId: web, actorKind: 'agent', actorId: worker }], tags: [] }, [words]))
-      .toEqual([expect.objectContaining({ personId: owner.userId, title: 'worker-harness replied in a thread' })])
+    // A person's own words in the same row are pushed; an agent's are not (task #3607: Activity and the badge only).
+    const words = draft({ id: 'r1', conversationId: web, author: person(peer), thread: 'root1' })
+    expect(phoneNotices('tab', state, { replies: [{ ...row('a', owner.userId, 'starter'), conversationId: web }], tags: [] }, [words]))
+      .toEqual([expect.objectContaining({ personId: owner.userId, title: `${shownNameOf(state, peer.userId)} replied in a thread` })])
   })
 
   it('pushes a decision asked of a person as the app words it, linking its card, and only the first of one ask\'s questions sounds', () => {
