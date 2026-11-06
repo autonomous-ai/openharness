@@ -9,7 +9,7 @@ import type { Agent, Author, SuperTabState } from './model.js'
 import { digestIsDue, noticeLine } from './noticeDigest.js'
 import { TURN_END_WAIT_MS } from './turnEnd.js'
 import { ledProject, type SwarmProject } from './projects.js'
-import { processLines } from './processNotes.js'
+import { noteLines } from './processNotes.js'
 import { swarmUsernames } from './usernames.js'
 
 /** What a host reports (machines.ts `capabilities`) when it sends its PM's turn with the PM's delivery list read (cli
@@ -74,10 +74,10 @@ export function crewNeedLine(state: SuperTabState, delivery: Where, need: CrewNe
 export const OWED_LINES_MAX = 10
 const MINUTE = 60_000
 
-/** [project]'s owed asks as the inbox's first lines: what it owes about the process (a what-changed note to confirm, a project with
- *  no crew; processNotes.ts, task #3581), then a header and one line per ask, oldest first. None when nothing is owed. */
+/** [project]'s owed asks as the inbox's first lines: a what-changed note its PM has not confirmed (processNotes.ts, task #3581),
+ *  then a header and one line per ask, oldest first. None when nothing is owed. */
 export function owedLines(state: SuperTabState, project: SwarmProject, now: number): string[] {
-  const process = processLines(state, project)
+  const process = noteLines(project)
   const asks = state.conversations.filter(c => !c.archived && c.owed && (c.projectId ?? 'lead') === project.id)
     .flatMap(c => c.owed!.map(ask => ({ ...ask, conversationId: c.id }))).sort((a, b) => a.at - b.at)
   if (!asks.length) return process

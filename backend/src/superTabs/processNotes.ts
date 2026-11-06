@@ -34,12 +34,18 @@ export function unconfirmedNote(project: Pick<SwarmProject, 'processNote'>): Pro
 export const hasCrew = (state: SuperTabState, project: SwarmProject): boolean =>
   state.agents.some(a => !!a.crew && agentProjectId(state, a) === project.id)
 
-/** What [project]'s PM owes about the process, for its wakes and its inbox: the note it has not confirmed, and that the project
- *  has no crew. Neither wakes the PM by itself but the note's first time (pmSchedule.ts). */
-export function processLines(state: SuperTabState, project: SwarmProject): string[] {
+/** The what-changed note [project]'s PM owes, for its wakes and its inbox (inbox.ts owedLines), until it confirms it. */
+export function noteLines(project: SwarmProject): string[] {
   const note = unconfirmedNote(project)
+  return note ? [`What changed for PMs (note ${note.id}): ${note.text} Confirm you read it: command process.confirm {"projectId":"${project.id}","noteId":"${note.id}"}.`] : []
+}
+
+/** What [project]'s PM hears at each wake about the process (pmSchedule.ts): its unconfirmed note, and, while the project has no
+ *  crew, that it has none (the brief: "at its next wake until it marks one"). Neither wakes the PM by itself but the note's
+ *  first time. */
+export function processLines(state: SuperTabState, project: SwarmProject): string[] {
   return [
-    ...note ? [`What changed for PMs (note ${note.id}): ${note.text} Confirm you read it: command process.confirm {"projectId":"${project.id}","noteId":"${note.id}"}.`] : [],
+    ...noteLines(project),
     ...hasCrew(state, project) ? [] : ['No crew yet in this project: mark its standing agents once with crew.add {agentId, role, lane}. Until then this line comes with every wake.'],
   ]
 }

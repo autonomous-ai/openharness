@@ -77,11 +77,10 @@ describe('a project with no crew', () => {
     return state
   }
 
-  it('says so in its PM\'s due wake and in its inbox, until an agent is marked crew', () => {
+  it('says so in its PM\'s due wake, until an agent is marked crew', () => {
     const state = confirmed(false)
     state.conversations.push(task('g2', null))
     expect(scheduleRequest(state, pm(state), T)!.draft.text).toMatch(/no crew/i)
-    expect(owedLines(state, project(state), T).join('\n')).toMatch(/no crew/i)
     const marked = confirmed(true)
     marked.conversations.push(task('g2', null))
     expect(scheduleRequest(marked, pm(marked), T)!.draft.text).not.toMatch(/no crew/i)
