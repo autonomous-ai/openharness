@@ -194,6 +194,16 @@ describe('crewKeep: machine rules apply to moves, read from the project rules re
     const onBack = fixture(pools()); onBack.state.machines!.forEach(p => { p.observation!.receivedAt = back - 5000 })
     expect(crewKeep(onBack.state, back, withRules)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'travels' })])
   })
+  // Review of PR #3436 (SecAlder): a crew Reviewer is never moved onto a machine where no Reviewer runs.
+  it('never moves a Reviewer to a machine where no Reviewer runs; an Engineer may go there', () => {
+    const noReviews: CrewDeps = { admits: () => true, machineRules: () => [{ machineIds: ['local-codex'], why: 'Its Codex defaults to a local model', noReviews: true }] }
+    const pools = () => [machine('mac', { signedIn: false }), machine('local-codex'), machine('other', { resetIn: 6 * 86_400_000 })]
+    const reviewer = fixture(pools())
+    ;(reviewer.ada as Agent & { crew?: unknown }).crew = { role: 'Reviewer', at: 1, by: 'owner' }
+    expect(crewKeep(reviewer.state, NOW, noReviews)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'other' })])
+    const engineer = fixture(pools())
+    expect(crewKeep(engineer.state, NOW, noReviews)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'local-codex' })])
+  })
   it('reads the member\'s own project\'s rules, never another project\'s', () => {
     const codex = fixture([machine('mac', { signedIn: false }), machine('no-codex'), machine('other', { resetIn: 6 * 86_400_000 })])
     codex.ada.configuration = { ...codex.ada.configuration, engine: 'codex' }
