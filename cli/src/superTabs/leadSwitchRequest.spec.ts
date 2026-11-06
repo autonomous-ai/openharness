@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { Daemon } from '../agentClient/daemon.js'
+import { markBuddyOwner, writeBuddyAccount } from '../lib/buddyGuard.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { FIXTURE, readFixture } from './fixtures/read/index.js'
 import { LeadSwitchRequests, profileSignedIn, switchChangeId, type SwitchRow } from './leadSwitchRequest.js'
@@ -383,5 +384,67 @@ describe('whether a profile folder holds a sign-in', () => {
     await switches.serve(row())
     // Nothing signed in under that folder: refused before anything is closed.
     expect(vi.mocked(switches['core'].account.backend).mock.calls.at(-1)![2]).toMatchObject({ command: { type: 'agent.switchResult', ok: false, error: 'that account is signed out' } })
+  })
+})
+
+
+const buddyRow = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): SwitchRow => row({
+  buddyOf: { personId: 'owner', generation: 'g' }, buddyScope: 'swarm',
+  switchRequest: { id: 'sw1', engine: 'codex', profileId: 'default', requestedBy: 'owner' }, ...over,
+}, { ledConversationId: undefined, buddyConversationId: 'private-chat', ...top })
+const buddySetup = (options: Parameters<typeof setup>[0] = {}) => {
+  const t = setup({ home: 'default', ...options, old: { engine: 'claude', swarmSkill: { role: 'buddy', key: 'swarm-buddy', mode: 'orchestration' }, ...options.old } })
+  markBuddyOwner('work', 'owner', t.dataDir)
+  writeBuddyAccount('owner', t.dataDir)
+  return t
+}
+
+describe('a Buddy engine handoff', () => {
+  it('switches Claude Code to Codex in its folder as a Buddy in the same private chat, without PM authority', async () => {
+    const t = buddySetup()
+    await t.switches.serve(buddyRow())
+    expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare', 'agent_close', 'agent_create', 'agent_handoff_complete'])
+    const create = t.calls[2][1]
+    expect(create).toMatchObject({ engine: 'codex', cwd: '/work', swarmRole: 'buddy', swarmSkillMode: 'orchestration', creationId: t.calls[1][1].changeId })
+    expect(create).not.toHaveProperty('swarmGitHub')
+    expect(String(create.prompt)).toContain('Your chat with your owner is conversation private-chat')
+    expect(String(create.prompt)).toContain('Context handoff:')
+    expect(String(create.prompt)).not.toContain('Product Manager of the project')
+  })
+
+  it.each(['different-owner', 'unknown-owner', 'missing-folder-owner', 'signed-out', 'team', 'no-chat', 'model-pending'])(
+    'refuses %s before preparing or closing the Buddy', async reason => {
+      const t = buddySetup({ signedIn: reason !== 'signed-out', team: reason === 'team' })
+      if (reason === 'different-owner') writeBuddyAccount('other', t.dataDir)
+      if (reason === 'unknown-owner') writeBuddyAccount(null, t.dataDir)
+      if (reason === 'missing-folder-owner') markBuddyOwner('work', 'other', t.dataDir)
+      const r = buddyRow(reason === 'model-pending' ? { modelRequest: { id: 'model1' } } : {}, reason === 'no-chat' ? { buddyConversationId: undefined } : {})
+      await t.switches.serve(r)
+      expect(t.calls).toEqual([])
+      expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false })
+    })
+
+  it('does not create twice across duplicate polls or a restarted host, and accepts a late successful rebind', async () => {
+    const t = buddySetup({ createTimesOut: true })
+    await t.switches.serve(buddyRow())
+    await t.switches.serve(buddyRow())
+    const restart = new LeadSwitchRequests(fakeCore({ dataDir: t.dataDir }), 'm1', { now: () => t.clock.now, open: async () => { throw new Error('must not launch twice') } })
+    await restart.serve(buddyRow())
+    expect(t.calls.filter(c => c[0] === 'agent_create')).toHaveLength(1)
+    t.clock.now += 60_000
+    await t.switches.serve(buddyRow({ harnessId: 'h2', switchRequest: undefined }))
+    expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: true })
+  })
+
+  it('reports a failed launch only after the original Buddy is back', async () => {
+    const t = buddySetup({ refuse: 'SPAWN_LIMIT' })
+    await t.switches.serve(buddyRow())
+    expect(t.posted.map(c => c.type)).toEqual(['agent.switchClaim'])
+    t.clock.now += 3 * 60_000 + 1
+    await t.switches.serve(buddyRow())
+    expect(t.posted.map(c => c.type)).toEqual(['agent.switchClaim'])
+    t.reopen()
+    await t.switches.serve(buddyRow())
+    expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'the new session could not start' })
   })
 })

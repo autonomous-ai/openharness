@@ -4809,6 +4809,23 @@ describe('keeping a Swarm Lead alive', () => {
     expect(u.closeMember).not.toHaveBeenCalled()
   })
 
+  it('recovers a switching Buddy across restart and closes a late replacement before the original stays alone', async () => {
+    const buddy = { ...leadRow({ lead: false, buddyConversationId: 'private-chat' }), agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' } } }
+    const t = lifeFixture([buddy])
+    switched(t)
+    await t.poll()
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    t.host.stop()
+    const again = t.open()
+    t.wait(SWITCH_HOLD_MS + 1)
+    await again.tick()
+    await vi.waitFor(() => expect(t.keepLeadAlive).toHaveBeenCalledWith('harness'))
+    replacement(t, () => true, () => true)
+    t.wait(5_000)
+    await again.tick()
+    await vi.waitFor(() => expect(t.closeMember).toHaveBeenCalledWith('new-session', 'f'.repeat(32)))
+  })
+
   it('waits a minute after a reopen it asked for before asking again', async () => {
     const t = lifeFixture([leadRow()])
     t.keepLeadAlive.mockResolvedValue({ ok: true })
