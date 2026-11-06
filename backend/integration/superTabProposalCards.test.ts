@@ -45,6 +45,20 @@ async function fixture() {
 }
 
 describe('durable proposal cards', () => {
+  it('turns verified unanswered original messages into cards once on switch, preserving words and ownership', async () => {
+    const f = await fixture()
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: false })
+    const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Keep these original words', recipientIds: [f.pm], replyTo: null })
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    const { legacyProposalId } = await import('../src/superTabs/proposalCards.js')
+    const id = legacyProposalId('lead', String(sent.result.messageId))
+    expect((await f.card(id)).proposal).toMatchObject({ text: 'Keep these original words', legacyMessageId: sent.result.messageId,
+      senders: [{ personId: owner.sub }] })
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    expect(await db.swarmGroup.count({ where: { tabId: f.tab, key: id } })).toBe(1)
+    expect((await f.card('lead')).owed ?? []).toHaveLength(0)
+  })
+
   it('delivers a decided notice inside the sending person’s private Buddy chat', async () => {
     const f = await fixture()
     const added = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } })
