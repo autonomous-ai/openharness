@@ -68,7 +68,8 @@ it.each(['autoApprove', 'review'] as const)('new member → Buddy → PM proposa
   const buddy = await launch(String(added.result.startId)), chat = String(added.result.conversationId)
   expect((await store.read(member, tab)).state.agents).toContainEqual(expect.objectContaining({ id: buddy, buddyOf: expect.objectContaining({ personId: member.sub }) }))
   // + New agent admits work capacity as part of creating a Regular agent, after joining with the Buddy.
-  await execute({ type: 'machine.contribute', machineId: member.sub, name: 'Member computer', cwd: '/fixture', scope: 'swarm', engines: ['codex'], maxAgents: 8 }, member)
+  await execute({ type: 'machine.contribute', machineId: member.sub, name: 'Member computer', cwd: '/fixture', scope: 'swarm', engines: ['codex'], maxAgents: 16,
+    agents: 'memory', teamAccountOnly: true }, member)
   await report()
   const regular = await execute({ type: 'agent.new', kind: 'regular', name: 'Worker', machineId: member.sub, engine: 'codex' }, member)
   const worker = await launch(String(regular.result.startId))
