@@ -187,6 +187,7 @@ function split(text: string, nested: string[]): Simple[] {
 
   // Expand at the lexical position, so single quotes and escaped dollars remain literal and reassignments keep order.
   const variableAt = (at: number): { value: string; end: number } | null => {
+    if (text[at] !== '$') return null
     const match = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/.exec(text.slice(at))
     if (!match) return null
     const value = variables.get(match[1] ?? match[2])
