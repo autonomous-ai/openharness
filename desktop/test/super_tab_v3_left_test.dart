@@ -397,6 +397,7 @@ void main() {
     Future<SuperTabController> view(
       WidgetTester tester, {
       Widget Function(BuildContext)? rightPane,
+      void Function(ConversationServer server)? setup,
     }) async {
       final server = swarm()
         ..state['agents'] = [
@@ -413,6 +414,7 @@ void main() {
       };
       server.append('Working on the fix.', conversationId: 'offline');
       server.append('The project chat line.');
+      setup?.call(server);
       final c = server.controller(
         account: 'owner',
         initial: {
@@ -470,6 +472,42 @@ void main() {
       expect(key('super-tasks-lead'), findsNothing);
       expect(key('super-board-chat'), findsNothing);
       expect(key('super-right-pane'), findsOneWidget);
+      await end(tester, c);
+    });
+
+    testWidgets('the Buddy opens its chat in the middle', (tester) async {
+      final c = await view(
+        tester,
+        setup: (server) {
+          server.state['swarmBuddy'] = true;
+          (server.state['agents'] as List).add({
+            ..._agent('buddy', 'Buddy'),
+            'buddyScope': 'swarm',
+            'buddyOf': {'personId': 'owner'},
+          });
+          (server.state['conversations'] as List).add({
+            ...conversationFixture('swarm-buddy-owner', 'Buddy'),
+            'kind': 'swarm-buddy',
+            'buddyOwnerId': 'owner',
+            'agentIds': ['buddy'],
+          });
+          server.append(
+            'What shall we work on?',
+            conversationId: 'swarm-buddy-owner',
+          );
+        },
+      );
+      await tester.tap(key('super-swarm-buddy'));
+      await settle(tester);
+      expect(c.selectedId, 'swarm-buddy-owner');
+      expect(
+        find.descendant(
+          of: key('super-center-pane'),
+          matching: find.text('What shall we work on?'),
+        ),
+        findsOneWidget,
+      );
+      expect(key('super-board-chat'), findsNothing);
       await end(tester, c);
     });
 
