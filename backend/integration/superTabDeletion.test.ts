@@ -140,6 +140,12 @@ describe('deleting a Swarm', () => {
     expect(await marks(owner)).toMatchObject({ [mine]: true, [f.tab]: undefined })
     expect(await marks(member)).toMatchObject({ [theirs]: true, [f.tab]: undefined })
     expect(Object.keys(await marks(member))).not.toContain(mine)
+    // The route reads the list through SwarmReads (GET /api/super-tabs/list), which must mark it too: #3200 marked only the
+    // store's list, so the dial never saw a Personal Swarm.
+    const read = async (who: AuthUser) => Object.fromEntries((await w.reads.list(who)).tabs.map(t => [t.id, 'personal' in t ? t.personal : undefined]))
+    expect(await read(owner)).toMatchObject({ [mine]: true, [f.tab]: undefined })
+    expect(await read(member)).toMatchObject({ [theirs]: true, [f.tab]: undefined })
+    expect(Object.keys(await read(member))).not.toContain(mine)
   })
 
   it('stops its agents through their host and releases the machine, whose host still confirms both', async () => {

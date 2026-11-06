@@ -3,7 +3,8 @@
  * `answer`, the CLI's `answer` command) goes where the ask was made: in its thread when it is a reply in one, else right below
  * it in the main chat. The PM's answers are recorded on the conversation (`Conversation.answered`), by `answer` or by any post
  * that settles an owed ask (pulse.ts), and a second `answer` to the same message is refused with where the first one is. A
- * plain post is never refused: only the command that says "this is the answer" is.
+ * plain post in a task/private chat is never refused by this helper. Project chats extend this to every agent and explicit
+ * answer link or person reply mirrored into main (chatLimits.ts, task #3598).
  */
 import type { CommandContext } from './commands.js'
 import { fail, type Conversation, type SuperTabState } from './model.js'
@@ -30,8 +31,8 @@ export function leadsGroup(state: SuperTabState, group: Conversation, agentId: s
 const clock = (at: number): string => new Date(at).toISOString().slice(11, 16)
 
 /** Refuses an answer to [messageId] when [group] records one, saying where it is. */
-export function requireUnanswered(group: Conversation, messageId: string): void {
-  const first = group.answered?.find(a => a.id === messageId)
+export function requireUnanswered(group: Conversation, messageId: string, recorded?: AnsweredAsk): void {
+  const first = recorded ?? group.answered?.find(a => a.id === messageId)
   if (!first) return
   const where = first.thread ? 'in its thread' : 'right below it'
   fail(ALREADY_ANSWERED, `Answered already ${where} at ${clock(first.at)} UTC (message ${first.answerId}). Add to it there if something changed.`, 409,
