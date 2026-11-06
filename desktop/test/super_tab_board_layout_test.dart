@@ -246,9 +246,8 @@ void main() {
   });
 
   testWidgets('with room, the Board has one row above its lanes: the header, '
-      'the layout, Mine, Search and the Buddy icon (Huy, 2026-11-06)', (
-    tester,
-  ) async {
+      'the layout, Mine and Search (Huy, 2026-11-06), and no Show your Buddy '
+      '(anh Dee: a fixed layout, #3863)', (tester) async {
     final (c, _) = await show(tester);
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
@@ -261,7 +260,6 @@ void main() {
       'super-tasks-layout',
       'super-tasks-mine',
       'super-tasks-search',
-      'super-pane-right-toggle',
       'super-board-tab-board',
     ]) {
       expect(
@@ -271,6 +269,7 @@ void main() {
       );
     }
     expect(find.text('Tasks'), findsNothing, reason: 'the header names it');
+    expect(find.byTooltip('Show your Buddy'), findsNothing);
     await end(tester, c);
   });
 }
