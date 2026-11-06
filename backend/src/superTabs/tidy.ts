@@ -53,7 +53,8 @@ function waitingToResume(state: SuperTabState, target: Agent): boolean {
  * is assigned again, which clears it, and finishes that work), with no delivery waiting for it (`busy`), not
  * waiting to resume after a usage limit, and in no loaded group with active work. One row in the coordinator's chat, to it
  * alone (model.ts NOTICE_READERS `idle`); the agent's `idleNoticedAt` records the spell, so the next poll says nothing until
- * new activity starts another. Nothing else about the agent changes. Run on the coordinator's poll, which knows what waits.
+ * new activity starts another. It also records host-confirmed idle stops or role retention. Run by the backend's time
+ * checks, which know what deliveries wait even when the PM is hung.
  */
 export function idleNotices(state: SuperTabState, projectId: string, now: number, busy: ReadonlySet<string>): MessageDraft[] {
   if (state.paused) return []

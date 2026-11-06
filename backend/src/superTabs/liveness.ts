@@ -384,11 +384,11 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
 /** Every worker 2 hours without progress hears it once in its task, without waiting for the PM (dispatch.ts crewClock). */
 function crewNudges(state: SuperTabState, now: number): MessageDraft[] {
   const workers = new Map(state.agents.filter(a => !isBuddy(a)).map(a => [a.id, a]))
-  const leaders = new Set(state.conversations.flatMap(c => c.leadId ? [c.leadId] : []))
-  let steps: StepIndex | undefined
+  let leaders: Set<string> | undefined, steps: StepIndex | undefined
   return state.conversations.flatMap(group => {
     const assignment = group.assignment, worker = assignment && workers.get(assignment.agentId)
     if (!worker || !activeWork(group) || crewClock(group, worker, assignment, now, DISPATCH_RULES) !== 'nudge') return []
+    leaders ??= new Set(state.conversations.flatMap(c => c.leadId ? [c.leadId] : []))
     if (leaders.has(worker.id)) return []
     steps ??= stepIndex(state)
     // Waiting on others is no lack of progress: the waits that stop a loss stop the line too (lostReason).

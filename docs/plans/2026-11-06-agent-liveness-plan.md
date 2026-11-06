@@ -1,6 +1,6 @@
 # Automatic liveness for every project worker
 
-> Execute task by task in this Engineer session, test first, with one independent PR review.
+> Execute task by task in this Engineer session, test first, with independent PR reviews.
 
 **Goal:** Recover lost work, nudge stalled workers and decide idle worker retention without waiting for the PM.
 
@@ -27,14 +27,14 @@
 
 ## Task 1: Dispatch and handoff
 
-**Files:** `backend/src/superTabs/dispatch.ts`, `dispatch.test.ts`, `commands.ts`.
+**Files:** `backend/src/superTabs/dispatch.ts`, `dispatch.test.ts`, `commands.ts`, `reviewerPick.test.ts`.
 
 **Interfaces:** Keep `freeCrew`, `candidatesFor`, `dispatchPlan` signatures; extend eligibility to ordinary project workers using roleNameOf and known task area. Add a test-local scenario invoking real work.assign to check the delivered handoff.
 
-- [ ] Write tests: non-crew Engineer takes lost work; unavailable/failed workers, other projects, stopping agents and protected roles are excluded; stale pins cannot hand it back; assignment includes prior result, PR URL/ref and watched head.
-- [ ] Commit tests and run `npm test -- src/superTabs/dispatch.test.ts`; observe missing dispatch/handoff failures.
-- [ ] Broaden dispatch eligibility, preserve existing work.assign checks, and append recovery context only for reassigned lost work.
-- [ ] Run dispatch tests and commit the passing implementation.
+- [x] Write tests: non-crew Engineer takes lost work; unavailable/failed workers, other projects, stopping agents and protected roles are excluded; stale pins cannot hand it back; assignment includes prior result, PR URL/ref and watched head.
+- [x] Commit tests and run `npm test -- src/superTabs/dispatch.test.ts`; observe missing dispatch/handoff failures.
+- [x] Broaden dispatch eligibility, preserve existing work.assign checks, and append recovery context only for reassigned lost work.
+- [x] Run dispatch tests and commit the passing implementation.
 
 ## Task 2: Clocks for all workers
 
@@ -42,10 +42,10 @@
 
 **Interfaces:** Keep `crewClock(group, worker, assignment, now, rules)`; nudge delivery uses every worker, excluding PMs/Buddies and genuine waits.
 
-- [ ] Add/adjust tests for non-crew nudge once at 2 hours, reset after progress, return at 3 hours, step/person/blocked/review waits and information-only PM notices.
-- [ ] Commit and run focused dispatch/liveness tests to see non-crew cases fail.
-- [ ] Remove crew-only clock/nudge filters, retain loss fencing and wait checks, and mark PM notices informational.
-- [ ] Run affected dispatch/liveness tests and commit.
+- [x] Add/adjust tests for non-crew nudge once at 2 hours, reset after progress, return at 3 hours, step/person/blocked/review waits and information-only PM notices.
+- [x] Commit and run focused dispatch/liveness tests to see non-crew cases fail.
+- [x] Remove crew-only clock/nudge filters, retain loss fencing and wait checks, and mark PM notices informational.
+- [x] Run affected dispatch/liveness tests and commit.
 
 ## Task 3: Idle decisions and PM guidance
 
@@ -53,7 +53,29 @@
 
 **Interfaces:** `idleNotices` still returns informational notice drafts; it also records host-confirmed idle stops for Engineers using workDecision, releaseId and idleStop. Existing crew keeper handles sleep/wake.
 
-- [ ] Add failing tests for automatic stop, repeat-pass idempotence, dirty-folder refusal metadata, Reviewer/Tester retention, active work/delivery/usage-limit protection and paused-state safety.
-- [ ] Commit tests, run tidy tests and observe missing automatic stop/retention failures.
-- [ ] Implement decisions with existing fields, preserve protections, and replace the PM's hand-on/stop instructions with information-only guidance.
-- [ ] Run changed test files plus directly affected command/step/worker tests, record evidence, push and mark ready for one independent review. No new suite run after equivalent green CI.
+- [x] Add failing tests for automatic stop, repeat-pass idempotence, dirty-folder refusal metadata, Reviewer/Tester retention, active work/delivery/usage-limit protection and paused-state safety.
+- [x] Commit tests, run tidy tests and observe missing automatic stop/retention failures.
+- [x] Implement decisions with existing fields, preserve protections, and replace the PM's hand-on/stop instructions with information-only guidance.
+- [x] Run changed test files plus directly affected command/step/worker tests, record evidence, push and mark ready for independent review. No new suite run after equivalent green CI.
+
+
+## Task 4: Persisted dispatch and integration expectations
+
+**Files:** `backend/src/superTabs/store.ts`, `backend/integration/crewDispatch.test.ts`, `backend/integration/superTabTidy.test.ts`.
+
+**Interfaces:** Preserve the store dispatch API and timer coalescing. A write opening work schedules dispatch when any project worker exists, even with no crew. Lost Review/Test steps use the existing independent candidate selector.
+
+- [x] Commit a failing integration test showing an ordinary Engineer receives no automatic assignment when the project has no crew.
+- [x] Broaden the write trigger from crew to workers; preserve transactional revalidation when an agent starts stopping during the pass.
+- [x] Update prior crew-only and notice-only integration expectations to the new behavior.
+- [ ] Run the two affected integration files, affected unit tests and backend typecheck; record red/green and hot-path timings in the PR.
+
+## Data and rollout
+
+Existing assignment, lost-attempt, release and idle-stop fields are reused: no new collection, index, query, stored history or migration. The existing transaction/operation receipt fences concurrent assignment; the host's release identity fences stale stops. Current clients already understand these fields. Backend deploy enables the decisions; reverting the backend restores notice-only non-crew idle handling. Any stop already requested remains host-confirmed and can be refused for dirty work. No client release is needed; behavior applies to macOS, Linux and Windows hosts. Existing source/account checks remain authoritative and the PM receives informational loss/idle notices.
+
+The store uses its existing delta loads and capped dispatch attempts; no new polling or database read is added. The existing liveness/dispatch notices and state expose progress and unavailable capacity. Benchmarks compare dispatch and liveness on the same 2,000-task workload; full suites run once in PR CI.
+
+## Final review scope
+
+Although the brief requests one review, project instructions require two independent security reviews for cleanup or anything deleting data. Automatic idle stops reach the existing host worktree cleanup path, so two independent security reads must verify dirty-folder refusal, stop identity, PM/Buddy protection, paused projects and account boundaries before merge. They also review all acceptance cases; a separate third general review is unnecessary.

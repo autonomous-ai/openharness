@@ -194,13 +194,13 @@ describe('an agent left idle', () => {
     expect(named.workDecision).toBe('keep')
   })
 
-  it('is told whether or not the owner turned tidying off', async () => {
+  it('stops idle Engineers whether or not the owner turned archiving off', async () => {
     const f = await swarm()
     await f.execute({ type: 'tab.tidy', enabled: false })
     f.clock.now += 20 * MINUTE
     await f.timed.runTimeChecks(f.tab)
     expect(await f.lines()).toHaveLength(1)
-    expect((await f.member()).workDecision).toBe('awaiting')
+    expect((await f.member()).workDecision).toBe('stop')
   })
 })
 
