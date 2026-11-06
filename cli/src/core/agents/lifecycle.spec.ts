@@ -192,8 +192,14 @@ describe('stopping, purging and resuming an agent', () => {
       const { deps, lifecycle } = setup()
       expect(await lifecycle.resumeAgent('a1', 'plan')).toEqual({ ok: true })
       const resume = vi.mocked(createResumeAgentService).mock.results[0].value
-      expect(resume).toHaveBeenCalledWith('a1', 'plan')
+      expect(resume).toHaveBeenCalledWith('a1', 'plan', undefined)
       expect(deps.stoppedAgents.get).toHaveBeenCalledWith('a1')
+    })
+
+    it('carries the owner\'s new launch words to the resume', async () => {
+      const { lifecycle } = setup()
+      await lifecycle.resumeAgent('a1', undefined, ['--chrome'])
+      expect(vi.mocked(createResumeAgentService).mock.results[0].value).toHaveBeenCalledWith('a1', undefined, ['--chrome'])
     })
 
     it('resumes no guest\'s harness, stopped or running: it would run as the owner', async () => {

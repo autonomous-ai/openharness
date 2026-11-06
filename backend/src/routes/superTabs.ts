@@ -27,6 +27,7 @@ import { projectGitHubAccess } from '../github/projectAccess.js'
 import { projectCiLoad } from '../github/ciLoad.js'
 import { projectBranchOrigin, projectPushOrigin } from '../github/pushOrigin.js'
 import { projectPullRequestFiles } from '../superTabs/pullRequestFiles.js'
+import { appPullRequestWatch } from '../superTabs/pullRequestEvents.js'
 import { githubSignIn, PrismaApprovals, readState, signState, stateSecret, type Approvals, type GitHubSignIn } from '../github/approvals.js'
 import type { GitHubRepository } from '../github/repository.js'
 import { githubRepository } from '../github/repository.js'
@@ -280,6 +281,8 @@ async function productionStore(github: GitHubTokens | null, approvals: Approvals
       ...(github ? { pullRequestMerges: (_env: string, _tab: string, _project: string, urls: string[]) => appPullRequestMerges(github.app)(urls) } : {}),
       // A task's Ready reads the files its pull requests change, and the server opens its review steps from them (task #3401).
       ...(github ? { pullRequestFiles: projectPullRequestFiles(github.app) } : {}),
+      // A verdict naming a head the record does not have, and a Ready, read the pull request's head now (task #3628).
+      ...(github ? { pullRequestReader: () => appPullRequestWatch(github.app) } : {}),
       // A start or assignment its account cannot reach the repository from is refused at once, by the read Project details
       // shows (task #3266): the token endpoint below would refuse it on the machine, after the start was queued.
       ...(github ? { repositoryReach: async (autonomousEnv: string, tabId: string, projectId: string, repositoryUrl: string) =>

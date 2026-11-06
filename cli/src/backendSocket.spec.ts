@@ -4465,6 +4465,30 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     expect(core.terminals.open).not.toHaveBeenCalled()
   })
 
+  // Launch flags run as the owner: only the owner's own app may send them (core/agents/launches.ts decides from this).
+  it.each(['agent_restart', 'agent_resume'])('tells the launch provider whether a %s came from the owner\'s own app, never a device or an agent\'s own CLI', async type => {
+    const { socket, dispatch } = harness()
+    const provider = vi.fn(async (_type: string, _payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void, _asker: { ownerApp: boolean }) => reply({}))
+    socket.restartProvider = provider
+    const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole')
+    role.mockReturnValue('web')
+    await dispatch(sealedDown(socket, 'web-1', type, { requestId: 'r', agentId: 'a1', launchArgs: '--chrome' }).frame, 'web-1')
+    await vi.waitFor(() => expect(provider).toHaveBeenCalledTimes(1))
+    expect(provider.mock.calls[0]![3]).toEqual({ ownerApp: true })
+    role.mockReturnValue('device')
+    await dispatch(sealedDown(socket, 'device-1', type, { requestId: 'r', agentId: 'a1', launchArgs: '--chrome' }).frame, 'device-1')
+    await vi.waitFor(() => expect(provider).toHaveBeenCalledTimes(2))
+    const sink = { sendFrame: () => true, sendBinary: () => true }
+    expect(socket.registerLocalClient('local:app', sink)).toBe(true)
+    expect(socket.registerLocalClient('local:tool', sink, { tool: true })).toBe(true)
+    socket.handleLocalFrame('local:app', { type, payload: { requestId: 'r', agentId: 'a1' } })
+    socket.handleLocalFrame('local:tool', { type, payload: { requestId: 'r', agentId: 'a1' } })
+    await vi.waitFor(() => expect(provider).toHaveBeenCalledTimes(4))
+    expect(provider.mock.calls.slice(1).map(call => call[3])).toEqual([{ ownerApp: false }, { ownerApp: true }, { ownerApp: false }])
+    await socket.unregisterLocalClient('local:app')
+    await socket.unregisterLocalClient('local:tool')
+  })
+
   it('hands a sealed dsh_install from a paired client to the service that answers it', async () => {
     const { socket, dispatch } = harness()
     const serviceRouter = vi.fn(() => true)
