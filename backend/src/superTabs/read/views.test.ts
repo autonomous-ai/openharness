@@ -34,6 +34,15 @@ const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machin
 const keys = (list: Array<{ key: string }>) => list.map(p => p.key)
 
 describe('reader view of the parts (design 4.1, 4.3)', () => {
+  // Task #3818 (Desktop's ask, #3820): the head always says how many Buddies a person may have, so an app tells a backend that
+  // makes several from an older one, which sends none.
+  it('always sends the Swarm\'s Buddy cap: its owner\'s number, else the default', () => {
+    const { s } = scene()
+    const head = (state: typeof s.state) => readerView(store.split(state, { tabId: 'tab', version: R, now: NOW }), peer, NOW, { teamMachines: [] }).parts.head.data
+    expect(head(s.state).buddyCap).toBe(5)
+    expect(head({ ...s.state, buddyCap: 3 }).buddyCap).toBe(3)
+  })
+
   it('sends the head without owner-only and internal fields, and projects without their progress', () => {
     const { parts } = scene()
     const { head } = readerView(parts, peer, NOW, { teamMachines: [] }).parts
