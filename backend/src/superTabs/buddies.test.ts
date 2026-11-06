@@ -1593,6 +1593,27 @@ describe('several Buddies', () => {
     expect(refusal(() => f.run({ type: 'tab.buddyCap', cap: 3 } as Command, peer))?.code).toBe('OWNER_REQUIRED')
   })
 
+  // Review of #3818 (Readycheck, P1): the cap counts every start that adds a Buddy, also into one of the person's chats with none.
+  it('refuses a Buddy past the cap into a chat of theirs that has none: a failed start retried, or an empty main chat', () => {
+    const f = fresh()
+    f.run({ type: 'tab.buddyCap', cap: 2 } as Command, owner)
+    add(f)
+    const failed = f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' } as Command, peer, host)
+    f.run({ type: 'agent.startFailed', startId: failed.result.startId as string, error: 'It did not launch.' }, peer, host)
+    add(f, { name: 'Planning' })
+    expect(refusal(() => f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', conversationId: failed.result.conversationId } as Command, peer, host))?.code).toBe('BUDDY_CAP')
+    // The main chat left empty, with the cap lowered below what is left: neither a new Buddy nor that chat takes one.
+    const g = fresh()
+    g.run({ type: 'tab.buddyCap', cap: 3 } as Command, owner)
+    add(g)
+    add(g, { name: 'Research' })
+    add(g, { name: 'Planning' })
+    g.run({ type: 'buddy.remove', conversationId: peerSwarmChat } as Command, peer)
+    g.run({ type: 'tab.buddyCap', cap: 2 } as Command, owner)
+    expect(refusal(() => g.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Writing' } as Command, peer, host))?.code).toBe('BUDDY_CAP')
+    expect(refusal(() => g.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', conversationId: peerSwarmChat } as Command, peer, host))?.code).toBe('BUDDY_CAP')
+  })
+
   it('moves the default, passes it to the oldest left when the default is removed, and archives a removed Buddy\'s chat', () => {
     const f = fresh()
     const first = add(f), second = add(f, { name: 'Research' }), third = add(f, { name: 'Planning' })
