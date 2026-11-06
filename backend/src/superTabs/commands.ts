@@ -24,6 +24,7 @@ import {
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
+import { closeMerged } from './mergedTasks.js'
 import { reviewPlan, stepBrief, stepCheck, refreshStepBrief, type PlannedStep, type StepKind } from './reviewTable.js'
 import { builtBy, reviewerCandidates } from './reviewerPick.js'
 import { recordCheckVerdict } from './checkVerdicts.js'
@@ -3002,16 +3003,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // its result (the Ready line), a check's evidence or its own posts, which a merge record never writes. A merge of an unrelated
       // one recorded here, even twice, only links it (Aster, review of #3259). Closed whenever the record is made: a lost attempt, a
       // merge recorded again later (#3574).
+      // Its open steps close with it (mergedTasks.ts, task #4032).
       if (ownPullRequest && !isStep(group) && assignment && !['done', 'cancelled'].includes(assignment.status) && builderGone(state, assignment)) {
-        const previous = assignment.status
-        assignment.status = 'done'
-        assignment.result = `Merged ${pullRequestUrl}. Its builder is no longer running, so the recorded merge closes the task.`
-        delete assignment.hold
-        delete assignment.askedOf
-        recordStatus(group, assignment, previous, context.now, operationId)
+        effects.messages.push(...closeMerged(state, group, pullRequestUrl, context.now, sender, part => stableId(operationId, part), operationId))
         effects.closedAssignment = { assignmentId: assignment.id, outcome: 'done' }
-        message(group.id, `Done\n\n${assignment.result}`, [], null, { ...SYSTEM_ROW, status: 'done' }, undefined, undefined, undefined,
-          stableId(operationId, 'merged-done'))
       }
       break
     }
