@@ -31,6 +31,7 @@ void main() {
       await tester.runAsync(c.refresh);
       await tester.pumpWidget(
         MaterialApp(
+          debugShowCheckedModeBanner: false,
           theme: grid.buildAppTheme(brightness: brightness),
           home: Scaffold(
             body: SuperTabView(
