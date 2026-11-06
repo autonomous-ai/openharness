@@ -38,3 +38,14 @@
 - [ ] Implement the minimal Windows path classification and extra step, Windows brief, and OS-safe reuse of named test steps. Keep existing Mac/Linux names and requirements.
 - [ ] Run those files plus direct importer tests (`commands`, `dispatch`, `reviewerPick`, `teamWritten`, `mergeTrain`) and `npm --prefix backend run typecheck`; inspect every failure.
 - [ ] Commit/push the passing change, record red/green evidence in the PR, mark Ready and record the acceptance check at the full head on main. Independent review runs while CI runs.
+
+## Task 2: Keep Windows routing after a lost Tester
+
+**Files:** Modify `backend/src/superTabs/dispatch.ts`; test `backend/src/superTabs/dispatch.test.ts`.
+
+**Interfaces:** Lost-step recovery passes the named test step's OS to the existing `reviewerCandidates` filter. Ordinary tasks and unnamed steps retain their current routing.
+
+- [ ] Commit a failing dispatch test: a lost `Test on Windows` step passes over a Mac Tester for a Windows Tester, or waits if none is available.
+- [ ] Observe the wrong-Mac assignment before the fix with the focused dispatch test.
+- [ ] Pass the named step OS through recovery, then run dispatch, reviewerPick, reviewSteps, reviewTable, commands and teamWritten tests and typecheck.
+- [ ] Commit/push and include this red/green evidence with Task 1 before Ready.
