@@ -13,7 +13,7 @@ const request = { id: 'sw1', engine: 'claude', profileId: 'p1' }
 const row = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): SwitchRow => ({ tabId: 'tab', ledConversationId: 'conv1', roleName: 'Product Manager',
   agent: { id: 'a1', harnessId: 'h1', switchRequest: request, ...over }, ...top })
 const NOW = 1_800_000_000_000
-const PM = { agentId: 'h1', engine: 'codex', cwd: '/work', permissionMode: 'ask', bypassPermission: false, defaultName: 'PM', startedBy: 'agent',
+const PM = { agentId: 'h1', sessionId: 'native-old', registeredAt: NOW, engine: 'codex', cwd: '/work', permissionMode: 'ask', bypassPermission: false, defaultName: 'PM', startedBy: 'agent',
   swarmSkill: { role: 'coordinator', key: 'swarm-lead', mode: 'orchestration', github: true } }
 
 function writeRecord(dataDir: string, changeId: string, at: number) {
@@ -74,7 +74,7 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare', 'agent_close', 'agent_create', 'agent_handoff_complete'])
     const changeId = String(t.calls[0][1].changeId)
     expect(changeId).toMatch(/^[0-9a-f]{32}$/)
-    expect(t.calls[1][1]).toEqual({ agentId: 'h1', mode: 'now', changeId })
+    expect(t.calls[1][1]).toEqual({ agentId: 'h1', sessionId: 'native-old', createdAt: '2027-01-15T08:00:00.000Z', mode: 'now', changeId })
     expect(t.calls[2][1]).toMatchObject({ engine: 'claude', cwd: '/work', creationId: changeId, claudeHome: '/home/p1', permissionMode: 'ask', name: 'PM' })
     expect(String(t.calls[2][1].prompt)).toContain(`.harness/handoff/h1-${changeId}.md`)
     expect(t.calls[3][1]).toEqual({ agentId: 'h1', replacementId: 'h2', changeId, targetEngine: 'claude' })
@@ -317,7 +317,7 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
 
     await t.switches.serve(row({ switchRequest: undefined, switchLanded: { id: 'sw1', candidateAgentId: 'm2-h2' } }))
     expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare', 'agent_close'])
-    expect(t.calls.at(-1)![1]).toEqual({ agentId: 'h1', mode: 'now', changeId })
+    expect(t.calls.at(-1)![1]).toEqual({ agentId: 'h1', sessionId: 'native-old', createdAt: '2027-01-15T08:00:00.000Z', mode: 'now', changeId })
     expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: true })
   })
 

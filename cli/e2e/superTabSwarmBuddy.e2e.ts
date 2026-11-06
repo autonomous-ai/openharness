@@ -3,7 +3,7 @@
  * for, and the folder its start names is never made: 2026-11-02, each of those failed every such start while unit tests,
  * which faked the steps either side, passed. */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
@@ -35,7 +35,7 @@ it('starts and switches its engine in the same folder and private chat, with one
   git('init', '-q'); writeFileSync(join(project, 'README.md'), 'fixture\n'); git('add', '.'); git('commit', '-qm', 'fixture')
   const cwd = join(d.env.HOME!, 'harnesses', 'swarms', TAB)
   const pool = { machineId: ME.machineId, generation: 'grant-1', cwd, scope: 'swarm', engines: ['claude'], maxAgents: 2, paused: false }
-  const start: Record<string, any> = { id: 'start-buddy', poolGeneration: 'grant-1', creationId: 'super-start-buddy', dispatched: false, harnessId: null, error: null,
+  const start: Record<string, any> = { id: 'start-buddy', machineOwnerId: 'person', contributorId: 'person', poolGeneration: 'grant-1', creationId: 'super-start-buddy', dispatched: false, harnessId: null, error: null,
     request: { conversationId: 'buddy-chat', machineId: ME.machineId, engine: 'claude', name: "person's Buddy", cwd: `${cwd}/.buddy-person`, worktree: false,
       requirements: { memoryBytes: 0, diskBytes: 1, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false },
       buddyOf: { personId: 'person', generation: 'g' }, buddyScope: 'swarm', buddyProjects: [{ id: 'p1', name: 'API', cwd: project }] } }
@@ -63,7 +63,7 @@ it('starts and switches its engine in the same folder and private chat, with one
       else if (command.type === 'agent.rebind') {
         expect(command).toMatchObject({ agentId: 'buddy', previousHarnessId: buddy.harnessId, configuration: { engine: 'codex' } })
         expect(command).not.toHaveProperty('projectId')
-        buddy.harnessId = command.harnessId; buddy.configuration = command.configuration; rebinds++
+        buddy.harnessId = command.harnessId; buddy.configuration = command.configuration; delete buddy.switchRequest; rebinds++
       } else if (command.type === 'agent.switchResult') {
         outcomes.push(command); delete buddy.switchRequest
       } else if (command.type === 'agent.configuration') buddy.configuration = command.configuration
@@ -92,8 +92,10 @@ it('starts and switches its engine in the same folder and private chat, with one
   expect(existsSync(start.request.cwd)).toBe(false)
   const original = agents[0].harnessId
   const before = (await client.request('agents_list')).agents.find((agent: Record<string, any>) => agent.id === original)
+  const close = { agentId: original, sessionId: before.sessionId, createdAt: before.createdAt }
+  await until('the host to retain the Buddy', async () => (await client!.request('agent_close', { ...close, mode: 'inspect' })).keptRunning === true || null, 15_000, 100)
   // Ordinary Close still keeps a Buddy running; the engine switch alone carries its prepared handoff permit.
-  expect(await client.request('agent_close', { agentId: original, mode: 'now' })).toMatchObject({ error: 'BUDDY_PROTECTED' })
+  expect(await client.request('agent_close', { ...close, mode: 'now' })).toMatchObject({ error: 'BUDDY_PROTECTED' })
   agents[0].switchRequest = { id: 'engine-switch', engine: 'codex', profileId: 'default', requestedBy: 'person' }
   await client.request('super_tabs', { action: 'wake' }, 30_000)
   await until('the Buddy engine switch to settle', () => outcomes.length > 0 || null, 60_000, 100)
@@ -102,8 +104,13 @@ it('starts and switches its engine in the same folder and private chat, with one
   expect(rebinds).toBe(1)
   const live = (await client.request('agents_list')).agents
   expect(live).toHaveLength(1)
-  expect(live[0]).toMatchObject({ id: agents[0].harnessId, engine: 'codex', cwd: before.cwd, swarmRole: 'buddy' })
+  expect(live[0]).toMatchObject({ id: agents[0].harnessId, engine: 'codex', cwd: before.cwd })
   expect(live[0].id).not.toBe(original)
+  const saved = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')).find((agent: Record<string, any>) => agent.agentId === live[0].id)
+  expect(saved.swarmSkill).toMatchObject({ role: 'buddy' })
+  expect(saved.swarmSkill.github).not.toBe(true)
+  const prompts = readFileSync(join(d.root, 'submitted-prompts'), 'utf8')
+  expect(prompts).toContain('Your chat with your owner is conversation buddy-chat')
   expect(agents[0]).toMatchObject({ id: 'buddy', buddyOf: { personId: 'person', generation: 'g' } })
   expect(asked).toEqual([])
 })
