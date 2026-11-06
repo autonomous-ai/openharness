@@ -92,6 +92,44 @@ describe('personal approval enforced before work', () => {
     expect(() => f.runCommand({ type: 'task.approve', conversationId: id })).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_DECIDED' }))
     expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
   })
+  it.each([undefined, owner.userId])('stages personal approval when an unassigned task is attributed from %s to a Review requester', previous => {
+    const f = fixture(); f.mode('review')
+    const id = f.runCommand({ type: 'conversation.create', title: 'PM maintenance', task, priority: 'P2',
+      ...previous ? { requesterId: previous } : { noRequesterReason: 'Proactive maintenance' },
+      checks: [{ description: 'Restores drafts' }] }, f.pm).result.conversationId as string
+    const command = commandSchema.parse({ type: 'conversation.requester', conversationId: id, personId: peer.userId })
+    const before = f.state
+    const effects = f.runCommand(command, f.pm)
+    expect(f.card(id)).toMatchObject({ requesterId: peer.userId, assignment: null,
+      taskApproval: { personId: peer.userId, generation: f.state.people.find(p => p.id === peer.userId)!.generation, state: 'proposal' } })
+    expect(touchesFor(command, f.pm, before, effects)).toContainEqual({ kind: 'member', key: peer.userId })
+    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm))
+      .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
+    f.runCommand({ type: 'task.approve', conversationId: id })
+    f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)
+    expect(f.card(id).assignment?.agentId).toBe(f.candidate)
+  })
+  it('refuses attribution to a Review requester after assignment without changing the existing task', () => {
+    const f = fixture()
+    const id = f.runCommand({ type: 'conversation.create', title: 'PM maintenance', task, priority: 'P2', requesterId: owner.userId,
+      checks: [{ description: 'Restores drafts' }] }, f.pm).result.conversationId as string
+    f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)
+    f.mode('review')
+    expect(() => f.runCommand({ type: 'conversation.requester', conversationId: id, personId: peer.userId }, f.pm))
+      .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
+    expect(f.card(id)).toMatchObject({ requesterId: owner.userId, assignment: { agentId: f.candidate } })
+    expect(f.card(id).taskApproval).toBeUndefined()
+  })
+  it('keeps existing attribution and Auto approve attribution compatible', () => {
+    const f = fixture(), id = f.create()
+    f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)
+    f.mode('review')
+    f.runCommand({ type: 'conversation.requester', conversationId: id, personId: peer.userId }, f.pm)
+    expect(f.card(id).taskApproval).toBeUndefined()
+    f.runCommand({ type: 'conversation.requester', conversationId: id, personId: owner.userId }, f.pm)
+    expect(f.card(id)).toMatchObject({ requesterId: owner.userId, assignment: { agentId: f.candidate } })
+    expect(f.card(id).taskApproval).toBeUndefined()
+  })
   it.each([true, false])('keeps consented Buddy proposals in Tasks and reaches the PM with board mode %s', board => {
     const f = fixture(board); f.mode('review'); const sent = f.propose()
     const card = f.state.conversations.find(c => c.proposal?.senders.some(s => s.buddyId === f.buddy))!
