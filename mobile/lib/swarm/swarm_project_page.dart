@@ -275,6 +275,7 @@ class _SwarmOpenedChatState extends State<SwarmOpenedChat> {
       key: const ValueKey('swarm-opened-project'),
       swarmId: widget.swarmId,
       projectId: projectId,
+      tab: SwarmProjectTab.chat,
       messageId: widget.messageId,
       threadId: widget.threadId,
       threadFocus: widget.threadFocus,
