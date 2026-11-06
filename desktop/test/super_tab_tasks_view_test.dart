@@ -4,7 +4,10 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/chip.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/task_card.dart';
 import 'package:harness/super_tabs/tasks_view.dart';
 
 import 'support/memory_key_value_store.dart';
@@ -28,6 +31,8 @@ Map<String, dynamic> taskFixture(
   List<String>? releasing,
   Map<String, dynamic>? released,
   Map<String, String>? checks,
+  List<Map<String, dynamic>>? acceptance,
+  int? messages,
 }) => {
   ...conversationFixture(id, title),
   'projectId': 'lead',
@@ -58,6 +63,8 @@ Map<String, dynamic> taskFixture(
   'releasing': ?releasing,
   'released': ?released,
   'pullRequestChecks': ?checks,
+  if (acceptance != null) 'checks': acceptance,
+  if (messages != null) 'lastMessageSequence': messages,
 };
 
 /// The project of the mockup Dee confirmed: a proposal, two tasks nobody is on
@@ -308,6 +315,223 @@ void main() {
       );
     }
     await _close(tester, c);
+  });
+
+  group('a Board card is Trello\'s (task #3869)', () {
+    String pr(int n) => 'https://github.com/autonomous-ai/openharness/pull/$n';
+    var checkCount = 0;
+    Map<String, dynamic> check(bool passed) => {
+      'id': 'check-${checkCount++}',
+      'description': 'A check',
+      'independent': false,
+      'evidence': null,
+      'passedBy': passed ? 'agent:r' : null,
+    };
+    Future<SuperTabController> faces(
+      WidgetTester tester, {
+      Size size = const Size(1920, 900),
+    }) async {
+      final server = tasksServer();
+      (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+        taskFixture(
+          'ready',
+          'Ready to merge',
+          50,
+          requester: 'tony',
+          status: 'done',
+          pullRequest: 3700,
+          shippedAt: _now.subtract(const Duration(minutes: 12)),
+          checks: {pr(3700): 'green'},
+          acceptance: [
+            check(true),
+            check(true),
+            check(true),
+            check(false),
+            check(false),
+          ],
+          messages: 4,
+        ),
+        taskFixture(
+          'failing',
+          'Checks are red',
+          51,
+          requester: 'tony',
+          status: 'working',
+          pullRequest: 3701,
+          checks: {pr(3701): 'red'},
+        ),
+        taskFixture(
+          'bare',
+          'Nothing linked yet',
+          52,
+          requester: 'tony',
+          status: 'working',
+        ),
+      ]);
+      return _show(tester, server, size: size);
+    }
+
+    Finder inCard(String id, Key key) =>
+        find.descendant(of: _card(id), matching: find.byKey(key));
+    const agentKey = ValueKey('super-card-agent');
+    const requesterKey = ValueKey('super-card-requester');
+
+    testWidgets(
+      'the agent\'s avatar sits bottom right with the requester\'s small beside it, and no name line',
+      (tester) async {
+        final c = await faces(tester);
+        final agent = inCard('ready', agentKey);
+        final requester = inCard('ready', requesterKey);
+        expect(agent, findsOneWidget);
+        expect(requester, findsOneWidget);
+        final card = tester.getRect(_card('ready'));
+        expect(
+          tester.getBottomRight(agent).dx,
+          moreOrLessEquals(
+            card.right - SuperTabTaskCard.tilePadding,
+            epsilon: 1,
+          ),
+        );
+        expect(
+          tester.getBottomRight(agent).dy,
+          moreOrLessEquals(
+            card.bottom - SuperTabTaskCard.tilePadding,
+            epsilon: 1,
+          ),
+        );
+        expect(
+          tester.getSize(requester).width,
+          lessThan(tester.getSize(agent).width),
+        );
+        expect(
+          tester.getTopRight(requester).dx,
+          lessThanOrEqualTo(tester.getTopLeft(agent).dx),
+        );
+        expect(
+          find.descendant(
+            of: _card('ready'),
+            matching: find.byType(SuperTabAvatar),
+          ),
+          findsNWidgets(2),
+        );
+        expect(
+          find.descendant(
+            of: _card('ready'),
+            matching: find.textContaining('Finch2'),
+          ),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: _card('ready'),
+            matching: find.textContaining('tony'),
+          ),
+          findsNothing,
+        );
+        await _close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'a task nobody is on shows the requester alone, and a proposal too',
+      (tester) async {
+        final c = await faces(tester);
+        expect(inCard('shipped-means', agentKey), findsNothing);
+        expect(inCard('shipped-means', requesterKey), findsOneWidget);
+        expect(inCard('p-old', requesterKey), findsOneWidget);
+        await _close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'chips say the state once: Ready to merge green, CI failing red, Needs you yellow',
+      (tester) async {
+        final c = await faces(tester);
+        Color? ink(String id, String text) => tester
+            .widget<SuperTabChip>(
+              find.descendant(
+                of: _card(id),
+                matching: find.widgetWithText(SuperTabChip, text),
+              ),
+            )
+            .color;
+        expect(ink('ready', 'Ready to merge'), grid.AppPalette.online);
+        expect(ink('failing', 'CI failing'), grid.AppPalette.usageCritical);
+        expect(ink('test-copy', 'Needs you'), grid.AppPalette.warn);
+        // Said once: the quiet line leaves out what a chip says.
+        expect(
+          find.descendant(of: _card('failing'), matching: find.text('CI red')),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: _card('ready'),
+            matching: find.textContaining('green,'),
+          ),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: _card('ready'),
+            matching: find.textContaining('waiting 12 min'),
+          ),
+          findsOneWidget,
+        );
+        await _close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'the footer counts the pull request, the checks done and the comments',
+      (tester) async {
+        final c = await faces(tester);
+        Finder footer(String id, String key) => inCard(id, ValueKey(key));
+        expect(
+          find.descendant(
+            of: footer('ready', 'super-card-pr'),
+            matching: find.text('#3700'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: footer('ready', 'super-card-checks'),
+            matching: find.text('3/5'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: footer('ready', 'super-card-comments'),
+            matching: find.text('4'),
+          ),
+          findsOneWidget,
+        );
+        // None of a kind, none shown.
+        expect(footer('bare', 'super-card-pr'), findsNothing);
+        expect(footer('bare', 'super-card-checks'), findsNothing);
+        expect(footer('bare', 'super-card-comments'), findsNothing);
+        await _close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'List keeps its rows as they were: names in the caption, no footer',
+      (tester) async {
+        final c = await faces(tester);
+        await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
+        await tester.pumpAndSettle();
+        expect(inCard('ready', agentKey), findsNothing);
+        expect(
+          find.descendant(
+            of: _card('ready'),
+            matching: find.textContaining('Finch2'),
+          ),
+          findsOneWidget,
+        );
+        await _close(tester, c);
+      },
+    );
   });
 
   group('the Board\'s columns share the pane and every one is reachable (task #3869)', () {
