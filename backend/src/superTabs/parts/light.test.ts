@@ -68,6 +68,7 @@ const conversation: Required<Conversation> = {
   owed: [],
   pin: { agentId: 'a', why: 'ci', at: 1 },
   priority: 'P0',
+  process: 'full',
   projectId: 'p',
   proposals: [],
   pullRequestEvents: {},

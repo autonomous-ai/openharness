@@ -157,7 +157,7 @@ describe('Simple task lifecycle', () => {
 
   it.each(['Review', 'Test', 'Merge', 'Release'])('refuses a new explicit %s step for Simple work', step => {
     const f = fixture(), project = f.create('simple'), task = f.task(project)
-    expect(() => f.run({ type: 'conversation.create', projectId: project, title: step, reviewOf: task.id, step, checks: [] }, peer))
+    expect(() => f.run({ type: 'conversation.create', projectId: project, title: step, brief: 'Check the work', reviewOf: task.id, step, checks: [] }, peer))
       .toThrow(expect.objectContaining({ code: 'SIMPLE_PROCESS' }))
     expect(stepsOf(f.state, task.id)).toEqual([])
   })
