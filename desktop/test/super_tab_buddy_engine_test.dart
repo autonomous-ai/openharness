@@ -6,6 +6,47 @@ import 'package:harness/super_tabs/buddy_engine.dart';
 import 'support/buddy_engine_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
+ConversationServer namedBuddySwarm({
+  String firstEngine = 'claude',
+  bool secondLimited = false,
+}) {
+  final server = buddyEngineSwarm(engine: firstEngine);
+  server.state['buddyCap'] = 5;
+  final first = (server.state['agents'] as List).cast<Map>().firstWhere(
+    (a) => a['id'] == 'wren',
+  );
+  server.state['agents'] = <dynamic>[
+    ...server.state['agents'] as List,
+    {
+      ...first,
+      'id': 'moss',
+      'name': 'Moss',
+      'harnessId': 'h-moss',
+      'configuration': {'engine': 'claude', 'model': 'default'},
+      if (secondLimited)
+        'limitedUntil': DateTime.now()
+            .add(const Duration(hours: 1))
+            .toUtc()
+            .toIso8601String(),
+    },
+  ];
+  final firstChat = (server.state['conversations'] as List)
+      .cast<Map>()
+      .firstWhere((g) => g['id'] == 'swarm-buddy-peer');
+  server.state['conversations'] = <dynamic>[
+    ...server.state['conversations'] as List,
+    {
+      ...firstChat,
+      'id': 'swarm-buddy-peer-moss',
+      'title': 'Moss',
+      'buddyName': 'Moss',
+      'buddyDefault': true,
+      'agentIds': ['moss'],
+    },
+  ];
+  return server;
+}
+
 void main() {
   final picker = find.byKey(const ValueKey('super-buddy-engine'));
   final model = find.byKey(const ValueKey('super-buddy-model'));
@@ -51,29 +92,7 @@ void main() {
   testWidgets('a named Buddy engine picker targets its own selected chat', (
     tester,
   ) async {
-    final server = buddyEngineSwarm();
-    server.state['buddyCap'] = 5;
-    final first = (server.state['agents'] as List).cast<Map>().firstWhere(
-      (a) => a['id'] == 'wren',
-    );
-    server.state['agents'] = <dynamic>[
-      ...server.state['agents'] as List,
-      {...first, 'id': 'moss', 'name': 'Moss', 'harnessId': 'h-moss'},
-    ];
-    final firstChat = (server.state['conversations'] as List)
-        .cast<Map>()
-        .firstWhere((g) => g['id'] == 'swarm-buddy-peer');
-    server.state['conversations'] = <dynamic>[
-      ...server.state['conversations'] as List,
-      {
-        ...firstChat,
-        'id': 'swarm-buddy-peer-moss',
-        'title': 'Moss',
-        'buddyName': 'Moss',
-        'buddyDefault': true,
-        'agentIds': ['moss'],
-      },
-    ];
+    final server = namedBuddySwarm();
     final c = server.controller(account: 'peer');
     await c.refresh();
     await c.select('swarm-buddy-peer-moss');
@@ -108,6 +127,52 @@ void main() {
       'moss',
     ]);
   });
+
+  for (final limitAction in [false, true]) {
+    testWidgets(
+      'named Buddy full header targets its chat, limit=$limitAction',
+      (tester) async {
+        final server = namedBuddySwarm(
+          firstEngine: limitAction ? 'claude' : 'codex',
+          secondLimited: limitAction,
+        );
+        final c = await showBuddyEngine(tester, server);
+        addTearDown(c.dispose);
+        await c.select('swarm-buddy-peer-moss');
+        await tester.pumpAndSettle();
+        if (limitAction) {
+          final notice = find.byKey(const ValueKey('super-buddy-engine-limit'));
+          expect(notice, findsOneWidget);
+          await tester.tap(
+            find.descendant(of: notice, matching: find.text('Switch engine')),
+          );
+          await tester.pumpAndSettle();
+        } else {
+          expect(
+            find.descendant(of: picker, matching: find.text('Claude Code')),
+            findsOneWidget,
+          );
+          await open(tester);
+        }
+        await tester.tap(row('Codex'));
+        await tester.pumpAndSettle();
+        expect(commands(server), [
+          {
+            'type': 'buddy.engine',
+            'engine': 'codex',
+            'conversationId': 'swarm-buddy-peer-moss',
+          },
+        ]);
+        expect(c.selectedId, 'swarm-buddy-peer-moss');
+        expect(c.snapshot!.conversation('swarm-buddy-peer')!.agentIds, [
+          'wren',
+        ]);
+        expect(c.snapshot!.conversation('swarm-buddy-peer-moss')!.agentIds, [
+          'moss',
+        ]);
+      },
+    );
+  }
 
   // Catches interpreting unknown authentication, installation or old readings
   // as an offer. Values are independent of the production eligibility helper.
