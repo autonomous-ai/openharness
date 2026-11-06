@@ -4445,12 +4445,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'task.suggest': case 'task.approve': case 'task.reject': {
       const group = authorizeTaskApproval(state, actor, command.type, command.conversationId)!
-      const approval = pendingTaskApproval(group)
+      const approval = command.type === 'task.suggest' && group.taskApproval?.state === 'approved' && !group.assignment
+        ? group.taskApproval : pendingTaskApproval(group)
       if (group.archived) fail('ARCHIVED', 'Reopen this conversation before deciding its work.')
       if (command.type === 'task.suggest') {
         const worker = readAgent(state, actor, command.agentId)
         assignRefusal(group, worker, true)
         approval.suggestedAgentId = worker.id
+        // A new worker choice never inherits an earlier decision, even before the first assignment.
+        approval.state = 'proposal'
+        delete approval.decidedAt
       } else {
         approval.state = command.type === 'task.approve' ? 'approved' : 'rejected'
         approval.decidedAt = context.now
