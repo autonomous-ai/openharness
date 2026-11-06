@@ -111,7 +111,11 @@ void main() {
   for (final brightness in Brightness.values) {
     for (final count in [0, 2, 40]) {
       final name =
-          '${brightness.name}, ${count == 0 ? 'no tasks' : count == 2 ? 'two tasks' : 'many tasks, scrolling'}';
+          '${brightness.name}, ${count == 0
+              ? 'no tasks'
+              : count == 2
+              ? 'two tasks'
+              : 'many tasks, scrolling'}';
 
       testWidgets('the Tasks pane is one surface to the bottom: $name', (
         t,
@@ -144,9 +148,7 @@ void main() {
                 matching: find.byType(ColoredBox),
               ),
             )
-            .where(
-              (box) => box.color == surface(t),
-            );
+            .where((box) => box.color == surface(t));
         expect(
           fills.where((box) {
             final size = t.getSize(find.byWidget(box));
