@@ -15,6 +15,8 @@ import { queueOrder, queueSiblings } from './taskQueue.js'
 import { unavailableReason } from './liveness.js'
 import { FAILED, type PullRequestWatch } from './pullRequestEvents.js'
 import { roleNameOf } from './instructions.js'
+import { reviewerCandidates } from './reviewerPick.js'
+import { stepName } from './steps.js'
 
 const HOUR_MS = 3_600_000
 
@@ -136,7 +138,12 @@ export function openTasks(state: SuperTabState, projectId: string, now: number):
   const project = projectOf(state, projectId)
   // The day people meant: the project's own (its digest's time zone), Vietnam's without one, as the PM schedule reads it.
   const today = localNow(digestOf(project)?.timeZone ?? DEFAULT_TIME_ZONE, now).date
-  const open = queueSiblings(state, project).filter(group => (group.task || group.brief.trim())
+  const lostSteps = state.conversations.filter(group => {
+    if (group.archived || !group.reviewOf || group.assignment?.status !== 'lost' || (group.projectId ?? 'lead') !== projectId) return false
+    const task = state.conversations.find(g => g.id === group.reviewOf)
+    return !!task && !task.archived && activeWork(task)
+  })
+  const open = [...queueSiblings(state, project), ...lostSteps].filter(group => (group.task || group.brief.trim())
     && !activeWork(group) && !['done', 'cancelled'].includes(group.assignment?.status ?? '') && !(group.notBefore && group.notBefore > today))
   const ordered = queueOrder(open)
   return [...ordered.filter(g => g.priority === 'P0'), ...ordered.filter(g => g.priority !== 'P0')]
@@ -159,11 +166,18 @@ export function candidatesFor(state: SuperTabState, member: Agent, rules: Dispat
   const pinned = open.filter(g => pinOf(g)?.agentId === member.id).sort((a, b) => pinOf(a)!.at - pinOf(b)!.at)
   const members = new Set(state.agents.filter(a => a.workDecision !== 'stop' && !moving(a)).map(a => a.id))
   const acceptsLane = takes(state, member, rules)
-  const lane = open.filter(g => !pinned.includes(g) && !(pinOf(g) && members.has(pinOf(g)!.agentId)) && !lostByIt(g)
+  const steps = open.filter(g => g.reviewOf && !lostByIt(g)).filter(step => {
+    const task = state.conversations.find(g => g.id === step.reviewOf)!
+    const kind = /test/i.test(stepName(step)) ? 'test' : /security/i.test(stepName(step)) ? 'security' : 'review'
+    const latest = task.pullRequestUrls?.at(-1)
+    const head = latest ? task.pullRequestHeads?.[latest]?.head ?? null : null
+    return reviewerCandidates(state, task, kind, head, now).some(a => a.id === member.id)
+  })
+  const lane = open.filter(g => !g.reviewOf && !pinned.includes(g) && !(pinOf(g) && members.has(pinOf(g)!.agentId)) && !lostByIt(g)
     && acceptsLane(laneOf(g, rules.lanes)))
   // Team-written code goes to Team accounts only (teamWritten.ts); a pick refused this round is not sent again (store.ts).
   const allowed = (group: Conversation) => !barredFromTeamWritten(state, group, member) && !skip(group.id, member.id)
-  return [...pinned.filter(allowed).map(group => ({ group, why: 'pin' as const })), ...lane.filter(allowed).map(group => ({ group, why: 'lane' as const }))]
+  return [...pinned.filter(allowed).map(group => ({ group, why: 'pin' as const })), ...[...steps, ...lane].filter(allowed).map(group => ({ group, why: 'lane' as const }))]
 }
 
 /** A pin never sends a lost task straight back to the failed agent; another free worker takes it. */
