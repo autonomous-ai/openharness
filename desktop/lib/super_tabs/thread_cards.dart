@@ -17,6 +17,10 @@ class SuperTabThreadCard {
     this.readThrough = -1,
     this.loading = false,
     this.error,
+    this.expanded = false,
+    this.next,
+    this.loadingOlder = false,
+    this.olderFailed = false,
   });
 
   /// The root message; null until read, or when the server no longer has it.
@@ -35,6 +39,18 @@ class SuperTabThreadCard {
   final bool loading;
   final String? error;
 
+  /// Show N more replies was pressed and every reply this card can read is
+  /// held: the card draws all of them (task #3619).
+  final bool expanded;
+
+  /// Where the replies older than [replies] start (`before`, `beforeId` of the
+  /// next page); null when [replies] reach the thread's first.
+  final Map<String, dynamic>? next;
+  final bool loadingOlder;
+
+  /// The last read of older replies failed: the button stays, and says so.
+  final bool olderFailed;
+
   SuperTabThreadCard _copy({bool? loading, String? error}) =>
       SuperTabThreadCard(
         root: root,
@@ -44,7 +60,31 @@ class SuperTabThreadCard {
         readThrough: readThrough,
         loading: loading ?? this.loading,
         error: error,
+        expanded: expanded,
+        next: next,
+        loadingOlder: loadingOlder,
+        olderFailed: olderFailed,
       );
+
+  SuperTabThreadCard _older({
+    List<SuperTabMessage>? replies,
+    Map<String, dynamic>? next,
+    bool? expanded,
+    bool? loadingOlder,
+    bool? olderFailed,
+  }) => SuperTabThreadCard(
+    root: root,
+    replies: replies ?? this.replies,
+    count: count,
+    people: people,
+    readThrough: readThrough,
+    loading: loading,
+    error: error,
+    expanded: expanded ?? this.expanded,
+    next: replies == null && next == null ? this.next : next,
+    loadingOlder: loadingOlder ?? this.loadingOlder,
+    olderFailed: olderFailed ?? this.olderFailed,
+  );
 }
 
 /// The Threads page's cards, one per followed thread it lists: each read once
@@ -65,13 +105,19 @@ class SuperTabThreadCards extends ChangeNotifier {
   final SuperTabController controller;
   final _cards = <String, SuperTabThreadCard>{};
   final _loading = <String, Future<void>>{};
+  final _olderReads = <String, Future<void>>{};
   int? _epoch;
+
+  /// Most pages of older replies one card reads, so a runaway thread cannot
+  /// loop; a thread longer than that keeps its Show N more replies count.
+  static const _olderPagesMost = 40;
 
   /// Moves on [clear], so an answer for a page that closed is not kept.
   int _generation = 0;
   bool _disposed = false;
 
   static const failed = 'Could not load this thread.';
+  static const olderFailedText = 'Could not load earlier replies.';
 
   SuperTabThreadCard? card(SuperTabFollowedThread thread) => _cards[thread.key];
 
@@ -134,10 +180,21 @@ class SuperTabThreadCards extends ChangeNotifier {
         if (!current()) return;
         root = rowsOf(asked).where((m) => m.id == thread.rootId).firstOrNull;
       }
-      final replies = [
+      final newest = [
         for (final m in rows)
           if (m.id != thread.rootId) m,
       ];
+      // An expanded card keeps the older replies it read, whatever arrives.
+      final held = _cards[key];
+      final keepOlder = held?.expanded == true;
+      final replies = keepOlder
+          ? ([
+              for (final m in {
+                for (final m in [...held!.replies, ...newest]) m.id: m,
+              }.values)
+                m,
+            ]..sort(superTabMessageOrder))
+          : newest;
       final summary = [
         for (final row in page['threads'] as List? ?? const [])
           if (superTabMap(row)['id'] == thread.rootId) superTabMap(row),
@@ -161,6 +218,14 @@ class SuperTabThreadCards extends ChangeNotifier {
           thread.lastReplySequence,
           ...replies.map((m) => m.sequence),
         ].reduce((a, b) => a > b ? a : b),
+        expanded: keepOlder,
+        next: keepOlder
+            ? held!.next
+            : (held?.loadingOlder == true
+                  ? held!.next
+                  : (page['next'] is Map ? superTabMap(page['next']) : null)),
+        loadingOlder: held?.loadingOlder ?? false,
+        olderFailed: held?.olderFailed ?? false,
       );
       notifyListeners();
     } catch (_) {
@@ -171,6 +236,90 @@ class SuperTabThreadCards extends ChangeNotifier {
       );
       notifyListeners();
     }
+  }
+
+  /// Show N more replies (task #3619): the card draws every reply. Reads the
+  /// older pages the card lacks, joins a read under way, and keeps the button
+  /// with a message when a page fails.
+  Future<void> expand(SuperTabFollowedThread thread) {
+    final held = _cards[thread.key];
+    if (held == null || _disposed || controller.accessRevoked) {
+      return Future.value();
+    }
+    if (_olderReads[thread.key] case final running?) return running;
+    final read = _readOlder(thread)
+        .whenComplete(() => _olderReads.remove(thread.key));
+    _olderReads[thread.key] = read;
+    return read;
+  }
+
+  Future<void> _readOlder(SuperTabFollowedThread thread) async {
+    final key = thread.key;
+    final generation = _generation, epoch = controller.visibilityEpoch;
+    bool current() =>
+        !_disposed &&
+        !controller.accessRevoked &&
+        generation == _generation &&
+        epoch == controller.visibilityEpoch;
+    var card = _cards[key];
+    if (card == null) return;
+    _cards[key] = card = card._older(loadingOlder: true, olderFailed: false);
+    notifyListeners();
+    final path =
+        '/api/super-tabs/${Uri.encodeComponent(controller.tabId)}'
+        '/conversations/${Uri.encodeComponent(thread.conversationId)}/messages';
+    final replies = {for (final m in card.replies) m.id: m};
+    var from = card.next;
+    try {
+      for (var page = 0; from != null && page < _olderPagesMost; page++) {
+        final answer = await controller.request(
+          'GET',
+          '$path?thread=${Uri.encodeQueryComponent(thread.rootId)}'
+              '&before=${from['sequence']}'
+              '&beforeId=${Uri.encodeQueryComponent(from['id'] as String)}',
+        );
+        if (!current()) return;
+        for (final row in answer['messages'] as List? ?? const []) {
+          final m = SuperTabMessage.fromJson(superTabMap(row));
+          if (m.conversationId == thread.conversationId &&
+              m.thread == thread.rootId &&
+              m.id != thread.rootId) {
+            replies[m.id] = m;
+          }
+        }
+        from = answer['next'] is Map ? superTabMap(answer['next']) : null;
+      }
+      // A reply that came in while this read ran is in the card, not in
+      // [replies]: both stay.
+      final now = _cards[key] ?? card;
+      final all = {
+        ...replies,
+        for (final m in now.replies) m.id: m,
+      }.values.toList()..sort(superTabMessageOrder);
+      _cards[key] = now._older(
+        replies: List.unmodifiable(all),
+        next: from,
+        // Only when no older page is left: a read the cap stopped keeps its
+        // button, with what is still hidden counted.
+        expanded: from == null,
+        loadingOlder: false,
+      );
+    } catch (_) {
+      if (!current()) return;
+      // What was read stays, so the next tap goes on from there.
+      final now = _cards[key] ?? card;
+      final all = {
+        ...replies,
+        for (final m in now.replies) m.id: m,
+      }.values.toList()..sort(superTabMessageOrder);
+      _cards[key] = now._older(
+        replies: List.unmodifiable(all),
+        next: from,
+        loadingOlder: false,
+        olderFailed: true,
+      );
+    }
+    notifyListeners();
   }
 
   /// Keeps only the cards of [keys], the threads the page lists now.
@@ -184,6 +333,7 @@ class SuperTabThreadCards extends ChangeNotifier {
     _generation++;
     _cards.clear();
     _loading.clear();
+    _olderReads.clear();
   }
 
   void _changed() {
