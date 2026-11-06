@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/widgets/app_menu.dart';
+import 'package:harness/super_tabs/buddy_engine.dart';
 
 import 'support/buddy_engine_fixture.dart';
 import 'support/super_tab_fixture.dart';
@@ -42,6 +43,70 @@ void main() {
     expect(c.selectedId, 'swarm-buddy-peer');
     expect(c.buddy('')!.id, 'wren');
     await closeBuddyEngine(tester, c);
+  });
+
+  // A named Buddy must not inherit the person's first Buddy as its target.
+  // Exercise the picker with the actual agent it was given: the second chat
+  // is both selected and default, and both Buddies belong to the same owner.
+  testWidgets('a named Buddy engine picker targets its own selected chat', (
+    tester,
+  ) async {
+    final server = buddyEngineSwarm();
+    server.state['buddyCap'] = 5;
+    final first = (server.state['agents'] as List).cast<Map>().firstWhere(
+      (a) => a['id'] == 'wren',
+    );
+    server.state['agents'] = <dynamic>[
+      ...server.state['agents'] as List,
+      {...first, 'id': 'moss', 'name': 'Moss', 'harnessId': 'h-moss'},
+    ];
+    final firstChat = (server.state['conversations'] as List)
+        .cast<Map>()
+        .firstWhere((g) => g['id'] == 'swarm-buddy-peer');
+    server.state['conversations'] = <dynamic>[
+      ...server.state['conversations'] as List,
+      {
+        ...firstChat,
+        'id': 'swarm-buddy-peer-moss',
+        'title': 'Moss',
+        'buddyName': 'Moss',
+        'buddyDefault': true,
+        'agentIds': ['moss'],
+      },
+    ];
+    final c = server.controller(account: 'peer');
+    await c.refresh();
+    await c.select('swarm-buddy-peer-moss');
+    addTearDown(c.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: BuddyEnginePicker(
+              key: const ValueKey('super-buddy-engine'),
+              controller: c,
+              agent: c.snapshot!.agent('moss')!,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await open(tester);
+    await tester.tap(row('Codex'));
+    await tester.pumpAndSettle();
+    expect(commands(server), [
+      {
+        'type': 'buddy.engine',
+        'engine': 'codex',
+        'conversationId': 'swarm-buddy-peer-moss',
+      },
+    ]);
+    expect(c.selectedId, 'swarm-buddy-peer-moss');
+    expect(c.snapshot!.conversation('swarm-buddy-peer')!.agentIds, ['wren']);
+    expect(c.snapshot!.conversation('swarm-buddy-peer-moss')!.agentIds, [
+      'moss',
+    ]);
   });
 
   // Catches interpreting unknown authentication, installation or old readings
