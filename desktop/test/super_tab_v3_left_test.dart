@@ -5,7 +5,8 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/buddy_rows.dart' show SuperTabCountBadge;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/my_agents.dart';
-import 'package:harness/super_tabs/model.dart' show SuperTabConversation;
+import 'package:harness/super_tabs/model.dart'
+    show SuperTabAgent, SuperTabConversation;
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -573,4 +574,61 @@ void main() {
       await end(tester, c);
     });
   });
+
+  group(
+    'an agent says what it is and where its person talks to it (#4116)',
+    () {
+      Map<String, dynamic> row(Map<String, dynamic> extra) => {
+        'id': 'a',
+        'name': 'A',
+        'machineId': 'host',
+        'harnessId': 'session',
+        'contributorId': 'owner',
+        ...extra,
+      };
+
+      test('the model reads its kind and its chat; an older backend sends '
+          'neither', () {
+        final pm = SuperTabAgent.fromJson(
+          row({'kind': 'pm', 'chatId': 'lead'}),
+        );
+        expect((pm.kind, pm.chatId), ('pm', 'lead'));
+        final older = SuperTabAgent.fromJson(row({}));
+        expect((older.kind, older.chatId), (null, null));
+      });
+
+      testWidgets('a PM by kind has the crown and opens the chat it names', (
+        tester,
+      ) async {
+        final selected = <String>[];
+        await show(
+          tester,
+          agents: [
+            {..._agent('zed', 'Zed'), 'kind': 'pm', 'chatId': 'offline'},
+            {..._agent('amy', 'Amy'), 'kind': 'regular', 'chatId': null},
+          ],
+          selected: selected,
+        );
+        expect(key('super-agent-crown-zed'), findsOneWidget);
+        expect(key('super-agent-crown-amy'), findsNothing);
+        await tester.tap(key('super-agent-zed'));
+        await tester.pump();
+        expect(selected, ['offline']);
+      });
+
+      testWidgets('its kind wins over the project it once led', (tester) async {
+        await show(
+          tester,
+          agents: [
+            {..._agent('orion', 'Orion'), 'kind': 'regular', 'chatId': null},
+          ],
+          setup: (server) =>
+              (server.state['conversations'] as List<Map<String, dynamic>>)
+                      .firstWhere((g) => g['id'] == 'lead')['leadId'] =
+                  'orion',
+        );
+        expect(key('super-agent-crown-orion'), findsNothing);
+      });
+    },
+  );
 }
