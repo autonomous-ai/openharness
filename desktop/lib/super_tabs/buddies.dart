@@ -579,8 +579,9 @@ class SuperTabBuddyBar extends StatelessWidget {
       "Couldn't switch your Buddy: Start your Buddy again to switch its model";
 
   /// How far back the bar looks for that line: one page of the chat. The read
-  /// runs on every build, so it is bounded (ENGINEERING.md 4); a refusal under
-  /// more newer messages than this offers nothing, and nothing is removed.
+  /// runs on every build, so it is bounded (AGENTS.md standard 4); a refusal
+  /// under more newer messages than this offers nothing, and nothing is
+  /// removed.
   static const _heldSwitchReach = 100;
 
   /// Whether [agent]'s last switch failed because it must be started again:
