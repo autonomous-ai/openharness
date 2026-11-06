@@ -632,6 +632,16 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'startStatus' && identifier(payload.startId)) {
           return { ok: true, value: await backend(core, 'GET', `${path}/starts/${payload.startId}?${identity}`) }
         }
+        // What a Buddy's proposal files decide on (command.ts proposalFiles): its status is a task summary with no chats, so the
+        // chat they go from, its own project session and each project's chat come from here, and nothing else of the Swarm (task #3872).
+        if (payload.action === 'proposalContext') {
+          const read = await swarm()
+          if (!isBuddyIn(read.state, agentId) || !identifier(payload.conversationId)) return { error: 'INVALID_REQUEST' }
+          const chat = list(read.state.conversations).find(c => c.id === payload.conversationId)
+          const session = object(list(read.state.agents).find(a => a.id === agentId)?.buddySession).projectId
+          return { ok: true, value: { chat: chat ? { kind: chat.kind, projectId: chat.projectId } : null, session: typeof session === 'string' ? session : null,
+            projects: list(read.state.projects).map(p => ({ id: p.id, leadConversationId: p.leadConversationId })) } }
+        }
         if (payload.action === 'status') {
           const read = await swarm()
           if (!isBuddyIn(read.state, agentId)) return { ok: true, value: statusView(answerOf(read), agentId) }

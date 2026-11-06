@@ -489,15 +489,14 @@ async function proposalFiles(paths: string[], operationId: string, command: Reco
   const caller = callerOf(frames, deps.pane, String(daemon.machineId))
   const folder = frames.find(f => f.id === caller?.agentId)?.project?.cwd
   if (!folder) throw new Error('Attach files to a proposal from your Buddy\'s own terminal.')
-  const state = object(object((await scoped({ action: 'status' })).value).state)
-  const chat = (Array.isArray(state.conversations) ? state.conversations : []).map(object).find(c => c.id === target.conversationId)
+  const context = object((await scoped({ action: 'proposalContext', conversationId: target.conversationId })).value)
+  const chat = context.chat === null ? undefined : object(context.chat)
   // A person's one Buddy chat has no project (Dee, 10-31): a project session proposes into its own project, and the Swarm-wide
   // Buddy into the one its JSON names (Scholes, 11-02), with only that project's files: its folder holds every project's.
-  const self = (Array.isArray(state.agents) ? state.agents : []).map(object).find(a => a.id === caller?.agentId)
-  const session = object(self?.buddySession).projectId
+  const session = context.session
   const wide = chat?.kind === 'swarm-buddy' && typeof session !== 'string'
   const projectId = wide ? command.projectId : chat?.kind === 'swarm-buddy' ? session : chat?.projectId
-  const home = (Array.isArray(state.projects) ? state.projects : []).map(object).find(p => p.id === projectId)?.leadConversationId
+  const home = (Array.isArray(context.projects) ? context.projects : []).map(object).find(p => p.id === projectId)?.leadConversationId
   // Refused here too, before any upload: the backend would refuse it and leave the file behind.
   if (!wide && command.projectId && command.projectId !== projectId) throw new Error('A session sends only to its own project\'s PM: leave the project out.')
   if (typeof home !== 'string') throw new Error(wide ? 'Name the project to send this to, from your status.' : 'Name your own chat: a proposal comes from there.')

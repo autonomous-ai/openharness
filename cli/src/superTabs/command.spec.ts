@@ -394,7 +394,7 @@ it('attaches to a proposal only files inside the Buddy\'s own folder, uploaded t
     request.mockImplementation(async (type: string, payload: Record<string, unknown> = {}) => {
       if (type === 'agents_list') return { agents: frames }
       calls.push(payload)
-      if (payload.action === 'status') return { ok: true, value: { state: { projects: [{ id: 'p', leadConversationId: 'lead' }], conversations: [{ id: 'chat', projectId: 'p' }] } } }
+      if (payload.action === 'proposalContext') return { ok: true, value: { chat: { projectId: 'p' }, session: null, projects: [{ id: 'p', leadConversationId: 'lead' }] } }
       if (payload.step === 'sent') return { ok: true, value: { agentId: 'buddy', attachmentIds: ['owner-log', 'f1', 'f2'] } }
       return { ok: true, value: { revision: 9, result: { messageId: 'm' } } }
     })
@@ -473,7 +473,7 @@ it('sends a proposal file\'s bytes as they were when checked, even if the path t
     const frames = [{ id: 'buddy-harness', engine: 'claude', status: 'active', tmuxPane: '%7', project: { cwd: folder } }]
     const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
       if (type === 'agents_list') return { agents: frames }
-      if (payload.action === 'status') return { ok: true, value: { state: { projects: [{ id: 'p', leadConversationId: 'lead' }], conversations: [{ id: 'chat', projectId: 'p' }] } } }
+      if (payload.action === 'proposalContext') return { ok: true, value: { chat: { projectId: 'p' }, session: null, projects: [{ id: 'p', leadConversationId: 'lead' }] } }
       if (payload.step === 'sent') {
         // After the check, before the upload: the checked name now points outside.
         unlinkSync(join(folder, 'plan.md'))
