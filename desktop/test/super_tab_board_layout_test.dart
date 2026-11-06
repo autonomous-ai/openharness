@@ -118,6 +118,24 @@ void main() {
     await end(tester, c);
   });
 
+  testWidgets("a card's chat is flat: its thread replies show inline, in time "
+      'order, with no thread line', (tester) async {
+    final (c, server) = await show(tester);
+    final root = server.messages
+        .lastWhere((m) => m['conversationId'] == 'offline')['id'] as String;
+    server.append('A reply in its thread.', conversationId: 'offline');
+    server.messages.last['thread'] = root;
+    await tester.runAsync(c.refresh);
+    await tester.tap(_key('super-group-lead'));
+    await _settle(tester);
+    await tester.tap(_key('super-task-card-offline'));
+    await _settle(tester);
+    expect(find.text('Working on the fix.'), findsOneWidget);
+    expect(find.text('A reply in its thread.'), findsOneWidget);
+    expect(find.textContaining('1 reply'), findsNothing);
+    await end(tester, c);
+  });
+
   testWidgets('the left rail has no Buddy entry and no Threads', (
     tester,
   ) async {
@@ -145,8 +163,13 @@ void main() {
     expect(_key('super-tasks-lead'), findsOneWidget);
     await end(tester, c);
 
+    // A new view: the project's Board opens as the panes were left.
     final (again, _) = await show(tester, store: store);
-    expect(_key('super-group-lead'), findsNothing);
+    await tester.tap(_key('super-group-lead'));
+    await _settle(tester);
+    expect(_key('super-tasks-lead'), findsOneWidget);
+    expect(_key('super-group-lead'), findsNothing, reason: 'still hidden');
+    expect(_key('super-board-chat'), findsNothing, reason: 'still hidden');
     await tester.tap(_key('super-pane-left-toggle'));
     await _settle(tester);
     expect(_key('super-group-lead'), findsOneWidget);
