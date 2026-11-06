@@ -117,18 +117,16 @@ describe('reviewerCandidates', () => {
     expect(f.pick('security')).toEqual(['free'])
   })
 
-  it('takes the step\'s role first, then any other free agent; never a Guide or an Integrator', () => {
+  // Task #3602: only the step's own role, with no other free agent standing in.
+  it('takes only the step\'s role; never an Engineer, a Guide or an Integrator', () => {
     const f = fixture()
     f.add('eng', f.task, opus, { roleName: 'Engineer' })
     f.add('guide', f.task, opus, { roleName: 'Guide' })
     f.add('integrator', f.task, opus, { roleName: 'Integrator' })
     f.add('tst', f.task, opus, { roleName: 'Tester' })
     f.add('rev', f.task, opus, { roleName: 'Reviewer' })
-    const review = f.pick('review'), test = f.pick('test')
-    expect(review[0]).toBe('rev')
-    expect(review.slice(1).sort()).toEqual(['eng', 'tst'])
-    expect(test[0]).toBe('tst')
-    expect(test.slice(1).sort()).toEqual(['eng', 'rev'])
+    expect(f.pick('review')).toEqual(['rev'])
+    expect(f.pick('test')).toEqual(['tst'])
   })
 
   // Review of #3227 (Digest): on the live Swarm the Guides carry the role Reviewer and the Integrator none (an Engineer).

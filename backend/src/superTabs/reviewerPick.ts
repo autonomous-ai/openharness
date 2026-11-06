@@ -13,7 +13,7 @@ import { agentProjectId, groupProject } from './projects.js'
 import { agentTarget, modelMatches } from './rules.js'
 import { canStart, standing } from './reviewSeats.js'
 import { stepsOf } from './steps.js'
-import type { StepKind } from './reviewTable.js'
+import { reportsOs, type StepKind, type StepOs } from './reviewTable.js'
 
 /** The agents that built [task]: its assignee and every agent its ledger says ran it. */
 export function builtBy(task: Conversation): Set<string> {
@@ -58,7 +58,7 @@ const atHead = (verdict: CheckVerdict & { head?: string }, head: string | null) 
  * unknown model or one weaker than the engineer; anyone busy, coordinating a conversation, a Buddy, stopping, or of another
  * project; anyone holding another open step of this task; anyone with a verdict at this head on the task or its steps.
  */
-export function reviewerCandidates(state: SuperTabState, task: Conversation, kind: StepKind, head: string | null, now: number): Agent[] {
+export function reviewerCandidates(state: SuperTabState, task: Conversation, kind: StepKind, head: string | null, now: number, os?: StepOs): Agent[] {
   const projectId = groupProject(state, task).id
   const index = workerIndex(state)
   const built = builtBy(task)
@@ -74,13 +74,18 @@ export function reviewerCandidates(state: SuperTabState, task: Conversation, kin
     if (judged.has(`agent:${agent.id}`)) return []
     const role = roleNameOf(state, agent)
     if (NEVER.test(role) || NEVER_NAMED.test(agent.name) || NEVER_NAMED.test(agent.displayName ?? '')) return []
+    // Only the step's own role, Reviewer or Tester, with no other agent standing in (task #3602: #3576's Test went to an Engineer).
+    if (!ROLE[kind].test(role)) return []
     // Its machine can start work within the review's wait (reviewSeats.ts): not offline, paused, signed out, suspended or
     // out of quota. A machine the state does not list is not judged here; work.assign's checks still hold it.
     const pool = state.machines?.find(m => m.machineId === agent.machineId && m.contributorId === agent.contributorId)
     if (pool && !canStart(standing(state, pool, agent.configuration.engine, now))) return []
+    // A test step for an OS goes to a machine that reports that OS; a machine reporting another is never it.
+    if (os && pool?.observation?.resources?.os && !reportsOs(pool.observation.resources.os, os)) return []
+    if (os && pool && !pool.observation?.resources?.os) return []
     const row = catalogRow(state, agent)
     if (!row || row.strength < bar) return []
-    return [{ agent, rank: ROLE[kind].test(role) ? 0 : 1, cost: row.cost }]
+    return [{ agent, rank: 0, cost: row.cost }]
   })
   return ranked.sort((a, b) => a.rank - b.rank || a.cost - b.cost || a.agent.id.localeCompare(b.agent.id)).map(entry => entry.agent)
 }

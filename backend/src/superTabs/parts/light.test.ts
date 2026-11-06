@@ -61,6 +61,7 @@ const conversation: Required<Conversation> = {
   messageSeq: 0,
   notBefore: '2026-12-04',
   number: 1,
+  openedBy: 'server',
   owed: [],
   pin: { agentId: 'a', why: 'ci', at: 1 },
   priority: 'P0',
