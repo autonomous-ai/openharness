@@ -115,13 +115,50 @@ Duration? superTabMergeWait(SuperTabConversation task, DateTime now) {
 /// Past this a merge waiting turns to a warning, so a merge bottleneck shows.
 const superTabMergeWarnAfter = Duration(hours: 1);
 
-/// Whether [task] is done, not merged, and has waited past the warning.
-bool superTabMergeOverdue(SuperTabConversation task, DateTime now) =>
+/// Whether [task] is done and waits for its pull request to merge.
+bool _waitingToMerge(SuperTabConversation task) =>
     task.assignment?['status'] == 'done' &&
     !task.closed &&
     !superTabTaskReleasing(task) &&
-    !superTabTaskShipped(task) &&
+    !superTabTaskShipped(task);
+
+/// Whether [task] is done, not merged, and has waited past the warning.
+bool superTabMergeOverdue(SuperTabConversation task, DateTime now) =>
+    _waitingToMerge(task) &&
     (superTabMergeWait(task, now) ?? Duration.zero) > superTabMergeWarnAfter;
+
+/// The state chips a Board card wears (task #3869), each a colour and its words: green Ready to merge, red CI failing,
+/// yellow Needs you. A chip says its state once: the card's quiet line leaves the same words out ([superTabQuietState]).
+enum SuperTabStateChip {
+  readyToMerge('Ready to merge'),
+  ciFailing('CI failing'),
+  needsYou('Needs you');
+
+  const SuperTabStateChip(this.label);
+  final String label;
+}
+
+/// The chips of [entry]'s card, in the order they read.
+List<SuperTabStateChip> superTabStateChips(SuperTabTaskEntry entry) {
+  final task = entry.task;
+  final checks = task == null ? null : _checksOf(task);
+  return [
+    if (checks == 'red') SuperTabStateChip.ciFailing,
+    if (task != null && checks == 'green' && _waitingToMerge(task))
+      SuperTabStateChip.readyToMerge,
+    if (entry.needsYou) SuperTabStateChip.needsYou,
+  ];
+}
+
+/// A card's quiet line with what its chips and footer already say left out: the red checks (a chip), the green that leads
+/// "green, waiting 12 min" and the pull request (the footer's); null when nothing is left.
+String? superTabQuietState(String? state) => switch (state) {
+  'CI red' => null,
+  // The footer names the pull request.
+  final String text when RegExp(r'^PR #\d+$').hasMatch(text) => null,
+  final String text when text.startsWith('green, ') => text.substring(7),
+  _ => state,
+};
 
 /// A task's checks as the server recorded them for the pull requests it still links, the worst first: `red`, then `running`,
 /// then `green`; null when it recorded none (an older server, or the watch has not read one).
