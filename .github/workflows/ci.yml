@@ -113,6 +113,8 @@ jobs:
           retention-days: 14
 
   process-checks:
+    outputs:
+      local_receipts: ${{ steps.local.outputs.local_receipts }}
     concurrency:
       group: ci-${{ github.event_name }}-${{ github.event.action || 'run' }}-${{ github.event.pull_request.number || github.run_id }}-process-checks
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -136,6 +138,11 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: Verify declared source checkout
         run: python3 scripts/ci-source-inputs.py process
+      - name: Require local validation receipts for mapped paths
+        id: local
+        env:
+          CI_PLAN: ${{ needs.plan.outputs.plan }}
+        run: python3 scripts/local-checks.py
       - name: Validation deadlines, cleanup, receipts and release version guards
         # The fixtures commit in temporary repositories. Each commit starts a detached
         # `git maintenance run --auto`, which can still be writing objects/pack when the

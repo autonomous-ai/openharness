@@ -42,8 +42,8 @@ Implement sequentially in this session, test first, with one independent review 
 
 **Interfaces:** `required_checks(paths) -> list[str]`; `validate_receipts(required, receipts, head) -> list[dict]`; `check(plan, event) -> list[dict]`. Plans expose `local_checks`; the process job exports validated `local_receipts`; `verify` revalidates them before emitting the existing `ci-required` receipt.
 
-- [ ] Commit tests first: literal path mapping cases, real-Git rename/delete planning, bounded parser/refusal cases, subprocess process-check behavior, and aggregate refusal/pass with missing/valid evidence.
-- [ ] Run the new tests, record their expected failure, then implement the contract and workflow wiring.
-- [ ] Run targeted receipt/planner/source-input/merge-helper tests and actionlint; use automatic process CI for the full scripts suite.
+- [x] Commit tests first: literal path mapping cases, real-Git rename/delete planning, bounded parser/refusal cases, subprocess process-check behavior, and aggregate refusal/pass with missing/valid evidence.
+- [x] Run the new tests, record their expected failure, then implement the contract and workflow wiring.
+- [x] Run targeted receipt/planner/source-input/merge-helper tests and actionlint; use automatic process CI for the full scripts suite.
 - [ ] Add concise receipt instructions/example to the PR template. Record red/green evidence, stable head, platform limits and timing in the draft PR before Ready.
 - [ ] Obtain independent review and hand the completed revision to the PM for merge.
