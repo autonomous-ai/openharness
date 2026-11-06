@@ -112,4 +112,13 @@ void main() {
     expect(parts.personalTasks.rows.first.id, '3');
     expect(parts.personalTasks.rows.first.version, 2);
   });
+  test('a cached removal cannot be resurrected by the cursor overlap', () {
+    final parts = SuperTabParts.firstLoad(recorded('first_load')..['personalTasks'] =
+      feed([task('a', 3, 20)], reset: true));
+    parts.apply(recorded('changes')..['personalTasks'] = feed([], removed: ['a']));
+    final restored = SuperTabParts.fromJson(parts.toJson());
+    restored.apply(recorded('changes')..['personalTasks'] = feed([task('a', 2, 10)]));
+    expect(restored.personalTasks.rows, isEmpty);
+  });
+
 }

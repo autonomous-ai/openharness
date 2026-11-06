@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/view.dart';
+import 'swarm_state_test.dart' show createApp;
 import 'package:harness/super_tabs/tasks/personal_tasks_pane.dart';
 
 import 'super_tab_parts_test.dart' show recorded;
@@ -219,6 +221,22 @@ void main() {
     await t.tap(find.text('Reject task').last); await t.pumpAndSettle();
     expect(f.commands, isEmpty);
     expect(replacement.commands, isEmpty);
+  });
+
+  testWidgets('the Desktop shell defaults its right slot to Tasks and keeps chat in the middle', (t) async {
+    await mount(t);
+    final app = createApp(); addTearDown(app.dispose);
+    t.view.physicalSize = const Size(1600, 1000);
+    t.view.devicePixelRatio = 1; addTearDown(t.view.reset);
+    await t.pumpWidget(MaterialApp(home: Scaffold(body: SuperTabView(
+      controller: f.controller, app: app, board: true, machineName: (_) => 'Computer',
+      onInvite: () {}, onAddAgent: (_) {}, onOpenTerminal: (_) {},
+      onNewSwarm: () {},
+    ))));
+    await t.pump();
+    expect(find.byType(SuperTabPersonalTasksPane), findsOneWidget);
+    expect(find.byKey(const ValueKey('super-board-chat')), findsNothing);
+    expect(find.text('Task new'), findsOneWidget);
   });
 
 }
