@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript, Zod, Vitest, existing MongoDB Swarm parts and version guards. No dependencies or collections.
 
-**Spec:** Harness task #3896, conversation `e39be2ce9fc6e4dad2f0d9a7`: Simple has To do / Doing / Done; Full has Proposal / Next up / Working / Done / Merged / Shipped. Backend only; Desktop is separate. The implementation follows the brief’s asymmetric switch rule: Full→Simple simplifies existing tasks without changing open steps; Simple→Full affects only new tasks. The exact seed project identities are requested in the task conversation before seed application.
+**Spec:** Harness task #3896, conversation `e39be2ce9fc6e4dad2f0d9a7`: Simple has To do / Doing / Done; Full has Proposal / Next up / Working / Done / Merged / Shipped. Backend only; Desktop is separate. The implementation follows the brief’s asymmetric switch rule: Full→Simple simplifies existing tasks without changing open steps; Simple→Full affects only new tasks. The seed is restricted to the requesting Swarm and resolves exactly one existing project of each requested name; missing or ambiguous names refuse the entire seed. Its dry run reports the exact identities before application.
 
 ## Global Constraints
 
@@ -26,7 +26,7 @@
 3. **Read cost:** Read the already loaded head, at most 100 projects, and the named task. Fixed columns live only in read output, not storage. Parts readers receive the changed head; no task-history scan, added database query or index. Private project metadata stays filtered by `canReadProject`.
 4. **Scale:** Constant metadata per project/task, no new fan-out. Measure reducer/read time on the same fixture before and after and report payload growth at 100 projects. Existing part latency/bytes measures reveal growth first.
 5. **Compatibility:** Backend ships first. `project.create.process` is optional; the new `project.process` command is additive. Existing CLI and Desktop clients ignore new JSON fields and keep their existing board labels until the Desktop task ships. Work status values stay unchanged; no new enum reaches old clients. Parts reads expose fixed columns in the head; old full-state reads receive the same process defaults. New clients treat missing process/columns as Full and handle an old server's unsupported settings command visibly.
-6. **Migration and rollback:** No mass migration or production write. An explicit seed helper will accept only the identified target records and leave any owner's saved choice alone. Missing metadata remains Full. A rollback ignores new fields and resumes Full automation; existing steps and work remain readable. Seed application belongs to the authorized release, with its targets and dry-run evidence recorded before application. No production backup is available to this task; tests use legacy and dormant record fixtures.
+6. **Migration and rollback:** No mass migration or production write. An explicit seed helper will accept only unique exact names in Swarm c51479bd73b59e58176ad9e4, report their ids, and leave any owner's saved choice alone. Missing metadata remains Full. A rollback ignores new fields and resumes Full automation; existing steps and work remain readable. Seed application belongs to the authorized release, with its targets and dry-run evidence recorded before application. No production backup is available to this task; tests use legacy and dormant record fixtures.
 7. **Audience:** Settings require the named person's current ownership (including membership generation) or Swarm ownership. Process metadata follows project visibility on full reads, parts and feeds. Changing a setting grants no chat access. No content, secret or private project data is added to notifications, agent prompts, logs, shares or other Swarms.
 8. **Identity:** Commands use the authenticated person, never an agent's contributor or machine owner's identity. Missing identity is refused by existing author checks. No process start or subscription behavior changes.
 9. **Failure:** Bad preset, unauthorized change and new forbidden steps return named command refusals. Existing operation receipts keep retries idempotent. A failed write leaves project/task data unchanged. Old steps can finish normally after a switch.
@@ -67,9 +67,9 @@
 
 **Files:** New `backend/src/superTabs/migration/projectProcesses.ts` and test, plus this plan.
 
-**Interfaces:** A dry-run seed operation names exact Swarm/project identities, fills only absent process choices, reports each planned change and changes no task or step history. The caller retains the existing guarded-head write protocol.
+**Interfaces:** A dry-run seed operation reads the requesting Swarm’s head by its primary key, resolves the four unique exact names, fills only absent process choices, reports the ids and changes no task or step history. Missing or duplicate names refuse all changes. An explicit apply uses the existing guarded-head write protocol; the release operator applies it only after the backend deploy and production authorization.
 
-- [ ] Read the seed identities from the PM; commit tests that select only the four intended records, set the requested presets, preserve saved choices and do nothing on a second run.
+- [x] Commit tests that select only the four intended names within the requesting Swarm, refuse missing/ambiguous targets, set the requested presets, preserve saved choices and do nothing on a second run.
 - [ ] Run and record red; implement the bounded seed helper; run and record green.
 - [ ] Document authorized release application and rollback, final command/read examples, platforms, red/green and timing evidence in the PR.
 - [ ] Mark the stable head Ready and record its acceptance evidence; let automatic CI and independent review finish before handing it back.
