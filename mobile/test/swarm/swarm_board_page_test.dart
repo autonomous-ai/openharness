@@ -167,6 +167,20 @@ void main() {
   Finder key(String value) => find.byKey(ValueKey(value));
   Finder columnTab(String name) => key('swarm-board-tab-$name');
   Finder card(String id) => key('swarm-board-card-$id');
+
+  /// A tab of the strip: the phone's strip scrolls, so the tests that tap
+  /// across the columns are given room for all six.
+  Future<void> tapColumn(WidgetTester tester, String name) async {
+    await tester.tap(columnTab(name));
+    await tester.pumpAndSettle();
+  }
+
+  void roomForSixTabs(WidgetTester tester) {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+  }
+
   String count(WidgetTester tester, String name) => tester
       .widget<Text>(
         find.descendant(
@@ -216,6 +230,7 @@ void main() {
   testWidgets(
     'it opens on Working, and a column tab shows that column\'s cards',
     (tester) async {
+      roomForSixTabs(tester);
       await pump(tester, backend());
 
       expect(card('g1'), findsOneWidget);
@@ -229,8 +244,7 @@ void main() {
         ('shipped', 'g6'),
         ('proposal', 'prop-1'),
       ]) {
-        await tester.tap(columnTab(name));
-        await tester.pumpAndSettle();
+        await tapColumn(tester, name);
         expect(card(id), findsOneWidget, reason: name);
         expect(card('g1'), findsNothing, reason: '$name has no Working card');
       }
@@ -249,6 +263,7 @@ void main() {
   testWidgets(
     'a card has its title, one quiet line, and a mark when it waits on the viewer',
     (tester) async {
+      roomForSixTabs(tester);
       await pump(tester, backend());
 
       expect(
@@ -277,8 +292,7 @@ void main() {
         findsNothing,
       );
 
-      await tester.tap(columnTab('done'));
-      await tester.pumpAndSettle();
+      await tapColumn(tester, 'done');
       expect(
         find.descendant(
           of: card('g4'),
@@ -295,8 +309,7 @@ void main() {
         findsOneWidget,
       );
 
-      await tester.tap(columnTab('shipped'));
-      await tester.pumpAndSettle();
+      await tapColumn(tester, 'shipped');
       expect(
         find.descendant(
           of: card('g6'),
@@ -305,8 +318,7 @@ void main() {
         findsOneWidget,
       );
 
-      await tester.tap(columnTab('proposal'));
-      await tester.pumpAndSettle();
+      await tapColumn(tester, 'proposal');
       expect(
         find.descendant(
           of: card('prop-1'),
@@ -359,6 +371,7 @@ void main() {
   testWidgets(
     'a tap on a task card opens its chat; a tap on a proposal opens the project chat',
     (tester) async {
+      roomForSixTabs(tester);
       await pump(tester, backend());
 
       await tester.tap(card('g1'));
@@ -368,10 +381,9 @@ void main() {
       );
       expect(chat.conversationId, 'g1');
 
-      await tester.pageBack();
+      Navigator.of(tester.element(find.byType(SwarmConversationPage))).pop();
       await tester.pumpAndSettle();
-      await tester.tap(columnTab('proposal'));
-      await tester.pumpAndSettle();
+      await tapColumn(tester, 'proposal');
       await tester.tap(card('prop-1'));
       await tester.pumpAndSettle();
 
@@ -380,6 +392,7 @@ void main() {
   );
 
   testWidgets('an empty column says what it holds', (tester) async {
+    roomForSixTabs(tester);
     final fake = backend();
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
     fake.routes[proposals] = (_) => {'proposals': <Object>[]};
@@ -387,25 +400,23 @@ void main() {
     await pump(tester, fake);
 
     expect(find.text('Nothing is being worked on.'), findsOneWidget);
-    await tester.tap(columnTab('shipped'));
-    await tester.pumpAndSettle();
+    await tapColumn(tester, 'shipped');
     expect(find.text('Nothing has shipped this week.'), findsOneWidget);
   });
 
   testWidgets(
     'a read that failed is said in its column, and the others still show',
     (tester) async {
+      roomForSixTabs(tester);
       await pump(tester, backend(proposalsFail: true, closedFail: true));
 
       expect(card('g1'), findsOneWidget);
-      await tester.tap(columnTab('proposal'));
-      await tester.pumpAndSettle();
+      await tapColumn(tester, 'proposal');
       expect(
         find.text('Proposals could not be read. Pull down to try again.'),
         findsOneWidget,
       );
-      await tester.tap(columnTab('shipped'));
-      await tester.pumpAndSettle();
+      await tapColumn(tester, 'shipped');
       expect(
         find.text('Closed work could not be read. Pull down to try again.'),
         findsOneWidget,
