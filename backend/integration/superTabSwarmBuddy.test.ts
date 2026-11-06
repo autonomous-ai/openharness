@@ -947,4 +947,26 @@ describe('+ New agent through the store', () => {
     const stored = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: webTask } } })
     expect((stored.data as { agentIds: string[] }).agentIds).not.toContain(ada)
   })
+
+  // Security review 1 of #4116 (SecAlder): a dormant chat is in no first load. Its Regular agent leaves it even so, and a message
+  // that wakes it reaches the agent nowhere while it works in another project.
+  it('takes a Regular agent out of a dormant chat of an earlier project, and a message that wakes it never reaches the agent', async () => {
+    const f = await swarm()
+    await capable(f)
+    const made = await f.execute({ type: 'agent.new', kind: 'regular', name: 'Ada', engine: 'claude', machineId: 'peer-mac' }, peer)
+    const ada = await f.launch(String(made.result.startId))
+    const task = async (projectId: string) => String((await f.execute({ type: 'conversation.create', projectId, title: 'A task', brief: 'Do it.', checks: [] })).result.conversationId)
+    const webTask = await task(f.web.projectId)
+    const first = await f.execute({ type: 'work.assign', conversationId: webTask, agentId: ada }, owner, f.pms.web)
+    await f.execute({ type: 'work.status', conversationId: webTask, assignmentId: String(first.result.assignmentId), status: 'done', result: 'Done.' }, peer, ada)
+    // Dormant, as the sweep leaves a finished task a day quiet (sweeps.ts).
+    await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: webTask }, data: { dormant: true } })
+    const secretTask = await task(f.secret.projectId)
+    await f.execute({ type: 'work.assign', conversationId: secretTask, agentId: ada }, owner, f.pms.secret)
+    const stored = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: webTask } } })
+    expect(stored.agentIds).not.toContain(ada)
+    const woke = await send(f, webTask, 'What is Ada on now?', { recipientIds: [] }, owner)
+    const queued = await f.store.deliveries(peer, f.tab, ada)
+    expect(queued.map(d => d.messageId)).not.toContain(String(woke.result.messageId))
+  })
 })
