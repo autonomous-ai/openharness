@@ -127,6 +127,26 @@ describe('with Team accounts removed', () => {
     expect(refusal(() => f.assign(own))).toMatchObject({ code: 'READ_ONLY' })
   })
 
+  // Security review 2 of #3446: off the Machines list, or through a machine share, the grant's contributor is not the machine's
+  // owner; the start must be its owner's own, with no share, no Team account and no Team session, as agent.new checks.
+  it('starts nothing on a computer shared through a machine share, or an unlisted Team sign-in', () => {
+    const f = swarm()
+    const startOn = (machineId: string, contribution: Record<string, unknown>) => () => f.run({ type: 'agent.start', request: { conversationId: f.task,
+      machineId, engine: 'claude', name: 'Builder', cwd: '/swarm/lead', worktree: true, requirements } } as Command, mate, { contribution: contribution as never })
+    expect(refusal(startOn('strangers-mac', { machineOwnerId: 'stranger', contributorId: 'mate', hostGrant: 'share-1' }))).toMatchObject({ code: 'NOT_YOUR_COMPUTER' })
+    expect(refusal(startOn('mates-team', { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null, teamSession: true }))).toMatchObject({ code: 'TEAM_ACCOUNTS_REMOVED' })
+    expect(refusal(startOn('mates-team', { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null, hostMachineId: 'mate-mac' }))).toMatchObject({ code: 'TEAM_ACCOUNTS_REMOVED' })
+  })
+
+  it('never lets the owner\'s agent on a machine shared with them take a task a Team agent wrote', () => {
+    const f = swarm()
+    // A machine off the Machines list that its owner, mate, shared with the project owner: the agent runs in mate's account.
+    const shared = f.member('owners-shared', 'strangers-mac', 'owner')
+    Object.assign(f.state.agents.find(a => a.id === shared)!, { machineOwnerId: 'mate', hostGrant: 'share-1' })
+    Object.assign(f.group(), { teamWritten: true, teamWrittenBy: { kind: 'assigned' } })
+    expect(refusal(() => f.assign(shared))).toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
+  })
+
   it('lets only the project owner\'s own agent take over a task a Team agent wrote', () => {
     const f = swarm()
     const mates = f.member('mates-own', 'mate-mac', 'mate'), owners = f.member('owners-own', 'owner-mac', 'owner')
