@@ -337,10 +337,15 @@ export const WRITE_PUBLIC = 'umask 022 && cat > "$1.next" && chmod 644 "$1.next"
 export const SENTINEL_TEXT = 'Harness Team privacy check. The Harness Team account on this Mac must not be able to read this file:'
   + ' if it can, your home folder is not private. It is removed with the account (harness team remove).'
 
-/** Step 7 of every setup script, with its $SIGN_IN, $TEAM_SESSION, $HANDOFF, as_owner and as_team. */
+/**
+ * Step 7 of every setup script, with its $SIGN_IN, $TEAM_SESSION, $HANDOFF, as_owner and as_team. A sign-in is handed over
+ * when asked again, when the account has none, or when the one it has is marked signed out: a revoke keeps the session on
+ * disk with that mark (lib/authSession.ts `markSignedOut`), and Repair started the daemon again on it (#3684, 11-06). Only a
+ * person's own setup runs this script on an existing account (autoSetup.ts `decide`), so nothing automatic signs in again.
+ */
 const signInStep = (mintEnv: string): string[] => [
   'no_sign_in=',
-  'if [ "$SIGN_IN" = always ] || [ ! -s "$TEAM_SESSION" ]; then',
+  'if [ "$SIGN_IN" = always ] || [ ! -s "$TEAM_SESSION" ] || grep -q \'"signedOut"\' "$TEAM_SESSION" 2>/dev/null; then',
   `  if minted=$(as_owner /usr/bin/env ${mintEnv ? `${mintEnv} ` : ''}"$OWNER_NODE" "$OWNER_CLI" team __handoff); then`,
   // Its last line: a warning the CLI printed first must not become part of the code.
   '    code=$(printf \'%s\\n\' "$minted" | tail -n 1)',

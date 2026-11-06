@@ -115,7 +115,7 @@ describe('setup script', () => {
   it('hands over a sign-in only when the team account has none, unless asked again', () => {
     expect(buildSetupScript(input())).toContain("SIGN_IN='missing'")
     expect(buildSetupScript(input({ signIn: 'always' }))).toContain("SIGN_IN='always'")
-    expect(buildSetupScript(input())).toContain('if [ "$SIGN_IN" = always ] || [ ! -s "$TEAM_SESSION" ]; then')
+    expect(buildSetupScript(input())).toContain('if [ "$SIGN_IN" = always ] || [ ! -s "$TEAM_SESSION" ] || grep -q \'"signedOut"\' "$TEAM_SESSION" 2>/dev/null; then')
   })
 
   // #3684 (kelvin1295, 11-06): a revoked sign-in is kept on disk, marked signed out (lib/authSession.ts), so the file is not
