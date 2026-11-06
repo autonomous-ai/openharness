@@ -1609,6 +1609,7 @@ class AppNotifier extends ChangeNotifier {
       deviceHosts.clear();
       _deviceReads.clear();
       // Names and membership belong to the account that discovered them.
+      _openedInRun.clear();
       _superTabNames = {};
     }
     _currentUser = profile;
@@ -1973,7 +1974,10 @@ class AppNotifier extends ChangeNotifier {
       // new here (task #3160).
       _addMachineWhereNew(
         [for (final tab in tabs) tab.id],
-        {for (final swarm in swarms) ?swarm.superTabId, ...hidden},
+        {
+          for (final swarm in swarms) ?swarm.superTabId,
+          ...hidden,
+        }.difference(_openedInRun),
       );
       var changed = false;
       // Membership and names for the closed list: a tab hidden before a
@@ -1992,6 +1996,7 @@ class AppNotifier extends ChangeNotifier {
             changed = true;
           }
         } else if (!hidden.contains(tab.id)) {
+          _openedInRun.add(tab.id);
           swarms.add(
             Swarm(
               id: newDeskId(),
@@ -2787,6 +2792,16 @@ class AppNotifier extends ChangeNotifier {
   /// (review of #3115).
   final _joinPassed = <String>{};
 
+  /// The Swarms that became open on this computer during this run: joined in
+  /// the dialog, opened by the person, or added by discovery. The update's
+  /// baseline ([SwarmJoinSeen.fresh]) takes the Swarms a long-time member had
+  /// open or hidden here as seen, never these: a new member's Swarm is open
+  /// by the time the first pass that can add runs (this computer's own row,
+  /// or Swarm mode, was not ready at sign-in), and counting it with the ones
+  /// they had skipped the add and the account choice (task #3791). A Swarm the
+  /// person had hidden and reopens stays known.
+  final _openedInRun = <String>{};
+
   /// The pass discovery started last, for tests to wait on.
   @visibleForTesting
   Future<void> get joinAddPassForTest => _joinPass ?? Future.value();
@@ -3007,6 +3022,7 @@ class AppNotifier extends ChangeNotifier {
   /// Reopen later cannot add a second view.
   void openSuperTab(String tabId, String name, {String? intoSwarmId}) {
     enterSuperTabs();
+    _noteOpenedInRun(tabId);
     _rememberSuperTabVisibility(tabId, true);
     _closedHistory.removeWhere(
       (entry) => entry is ClosedSwarm && entry.superTabId == tabId,
@@ -3033,12 +3049,24 @@ class AppNotifier extends ChangeNotifier {
     bindSuperTab(activeSwarmId, tabId, name);
   }
 
+  /// Notes that Swarm [tabId] is about to open on this computer for the first
+  /// time in this run ([_openedInRun]). Read before the visibility is saved:
+  /// showing a Swarm clears its hidden state at once, and one the person had
+  /// hidden and reopens is still one they had.
+  void _noteOpenedInRun(String tabId) {
+    if (!swarms.any((s) => s.superTabId == tabId) &&
+        !superTabs.hiddenIds.contains(tabId)) {
+      _openedInRun.add(tabId);
+    }
+  }
+
   /// Shows Swarm [tabId] in the Swarm tab [swarmId] in place of the Swarm it
   /// shows, from the Swarm dropdown: the tab keeps its place and its name
   /// follows. A Swarm already open in another tab is selected there instead,
   /// so no tab is added or closed. The Swarm the tab showed is hidden here as
   /// a closed one is, and let go, which keeps its draft for its return.
   void showSuperTabIn(String swarmId, String tabId, String name) {
+    _noteOpenedInRun(tabId);
     final tab = swarms.where((s) => s.id == swarmId).firstOrNull;
     final previous = tab?.superTabId;
     if (tab == null || previous == null || previous == tabId) return;

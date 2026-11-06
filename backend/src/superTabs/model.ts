@@ -504,6 +504,9 @@ export interface Conversation {
   notBefore?: string
   /** Why its not-before date holds it (heldReason.ts), set with the date by work.queue. Absent on a hold from before reasons. */
   hold?: import('./heldReason.js').HeldReason
+  /** A pause by someone who steers its project (boardRights.ts, task #3819): who (actorKey), when and why. While set, the task
+   *  is not handed out (dispatch.ts) or chased by the PM's sweep (pmSchedule.ts), and shows held (pulse.ts). */
+  paused?: { by: string; at: number; reason?: string }
   /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
    *  from before priorities, which reads as P2. */
   priority?: import('./taskPriority.js').TaskPriority
