@@ -18395,7 +18395,7 @@ class AppNotifier extends ChangeNotifier {
           payload: {
             'creationId': attempt._id,
             'agentId': agentId,
-            if (launchArgs != null) 'launchArgs': launchArgs,
+            'launchArgs': ?launchArgs,
           },
         );
       }
