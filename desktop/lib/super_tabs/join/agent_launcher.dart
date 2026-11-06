@@ -68,7 +68,9 @@ class SwarmAgentLauncher {
           'engines': _prepared!['engines'],
           'maxAgents': 16,
           'agents': 'memory',
-          'ifMissing': true,
+          // Listing this computer must never authorize a teammate to use
+          // its person's login. Keep the existing owner-project restriction.
+          'teamAccountOnly': true,
         }, '$operationId-machine').timeout(const Duration(seconds: 25));
         _admitted = true;
       }
