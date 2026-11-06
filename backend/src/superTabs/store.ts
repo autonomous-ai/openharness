@@ -74,7 +74,7 @@ import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefus
 import { sessionRows } from './memberRows.js'
 import { RefusalMemory } from './dispatchRefusals.js'
 import { tasksHoldingMoves } from './ruleGuard.js'
-import { candidatesFor, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type Skip } from './dispatch.js'
+import { candidatesFor, dispatchRules, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type DispatchLookup, type DispatchRules, type Skip } from './dispatch.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
 import { owedAsk } from './timeChecks.js'
@@ -89,7 +89,7 @@ import { activeMachineKeysOf } from '../lib/deviceKeyLog.js'
 import { commitParts, indexesOf, machineContentChanged, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
-import { pullRequestEvents, type PullRequestWatch } from './pullRequestEvents.js'
+import { pullRequestEvents, readPullRequestsNow, type PullRequestReader, type PullRequestWatch, type TaskHeads } from './pullRequestEvents.js'
 import { deriveCheck, keepHead, refreshChecks, watchedLinks } from './checkVerdicts.js'
 import { reopenOnEvents } from './handed.js'
 import type { TrainTask } from './mergeTrain/plan.js'
@@ -121,7 +121,7 @@ import { MAX_PROPOSALS, proposalQuestion, proposalTitle, REASK_DAYS, reflectionM
 import { readEvidence, recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByAnswer, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
-import { OVERDUE_PER_PASS, overdueDecisions } from './overdueDecisions.js'
+import { OVERDUE_PER_PASS, overdueDecisions, dueDefaultDecisions } from './overdueDecisions.js'
 import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
@@ -177,7 +177,7 @@ export const MAX_MERGE_READS = 20
 /** The writes after which the crew dispatch runs (store.ts dispatchSoon): those that may free a member or open a task. A
  *  status only when it hands the task over or ends it; a progress note, the Swarm's most frequent write, frees nobody. */
 const DISPATCH_TRIGGERS: ReadonlySet<string> = new Set(['work.cancel', 'conversation.create', 'work.define', 'work.priority',
-  'work.queue', 'work.lane', 'agent.release', 'crew.add'])
+  'work.queue', 'work.lane', 'agent.release', 'crew.add', 'rules.set'])
 const FREEING_STATUSES: ReadonlySet<string> = new Set(['done', 'review', 'stopped'])
 const freesOrOpens = (command: Command): boolean =>
   command.type === 'work.status' ? FREEING_STATUSES.has(command.status) : DISPATCH_TRIGGERS.has(command.type)
@@ -428,6 +428,9 @@ export interface SuperTabStoreHooks {
    *  instructions save that may drop a person's rule kept in a code task (ruleMoves.ts, task #3463). Absent with no GitHub App:
    *  such a line then stays. */
   pullRequestMerges?: (autonomousEnv: string, tabId: string, projectId: string, pullRequestUrls: string[]) => Promise<Record<string, number | null>>
+  /** A reader of pull requests as the minute PR watch reads them (pullRequestEvents.ts appPullRequestWatch), for a verdict naming
+   *  a head the record does not have and for a Ready, which read the head now (task #3628). Absent with no GitHub App. */
+  pullRequestReader?: () => PullRequestReader
   /** The same for a branch a start names: its open pull request's answer, clean for the default branch, unknown with no pull request. */
   branchPushOrigin?: (repositoryUrl: string | null, branch: string) => Promise<PushOrigin>
   /** Whether the Harness GitHub App reaches a project's GitHub repository for this Swarm (github/projectAccess.ts), read before
@@ -1472,38 +1475,48 @@ export class SuperTabStore {
     })
   }
 
-  /**
-   * Leaves to the PM every decision asked at least 24 hours ago that its person still has not answered (spec: Diego,
-   * 2026-11-04, a decision left a day goes to the PM). Runs as the person through the same pipeline as their own delegate, with
-   * the store-only `overdue` context, so a person answering in the same second wins (DECISION_ANSWERED) and a repeat replays.
-   * Every pass reads the waiting decisions asked 24 hours to 8 days ago, 500 at most, oldest first. No cursor: a row that failed or
-   * missed the cap is read again next pass until it is 8 days old, and a person answering takes it out of the index range.
-   */
+  /** Applies explicit due recommendations first, then legacy 24-hour defaults, at most 500 per pass. Each answer uses
+   * the same access-checked transaction and conditional write as a person's answer. Explicit deadlines have no age cutoff;
+   * legacy retries keep their 8-day reach. Failed rows remain waiting and the next minute retries them. */
   async leaveOverdueDecisions(now: number, limit = OVERDUE_PER_PASS): Promise<{ answered: number; skipped: number; failed: number }> {
-    const rows = await overdueDecisions(this.db, now, limit)
+    // Reserve legacy capacity even when the explicit queue is full; let explicit work use any unused share.
+    const legacyWaiting = await overdueDecisions(this.db, now, limit)
+    const reserved = Math.min(legacyWaiting.length, Math.max(1, Math.floor(limit / 2)))
+    const due = reserved < limit ? await dueDefaultDecisions(this.db, now, limit - reserved) : []
+    const legacy = legacyWaiting.slice(0, limit - due.length)
+    const rows = [...due.map(row => ({ ...row, defaulted: true })), ...legacy.map(row => ({ ...row, defaulted: false }))]
     const result = { answered: 0, skipped: 0, failed: 0 }
     const tabs = new Map<string, AuthUser['autonomousEnv'] | null>()
     const codes = new Set<string>()
+    const withdrawDefault = async (row: typeof rows[number]) => {
+      if (!row.defaulted) return
+      // A person can answer meanwhile; never overwrite that answer. Closed rows leave the next indexed due range.
+      await this.db.superTabDecision.updateMany({ where: { id: row.id, tabId: row.tabId,
+        OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] }, data: { answeredAt: new Date(now), withdrawn: true } })
+    }
     for (const row of rows) {
       try {
         if (!tabs.has(row.tabId)) tabs.set(row.tabId, (await this.db.superTab.findUnique({ where: { id: row.tabId }, select: { autonomousEnv: true } }))?.autonomousEnv as AuthUser['autonomousEnv'] | undefined ?? null)
         const autonomousEnv = tabs.get(row.tabId)
         const person = await this.db.user.findUnique({ where: { id: row.personId }, select: { email: true } })
-        if (!autonomousEnv || !person) { result.skipped++; continue }
+        if (!autonomousEnv || !person) { await withdrawDefault(row); result.skipped++; continue }
         const user: AuthUser = { sub: row.personId, email: person.email, autonomousEnv, role: 'user' }
-        await this.executeOnce(user, row.tabId, { operationId: `overdue-decision-${row.id}`, command: { type: 'decision.answer', decisionId: row.id, delegate: true } },
-          undefined, undefined, false, { overdue: true })
+        await this.executeOnce(user, row.tabId, { operationId: `${row.defaulted ? 'default' : 'overdue'}-decision-${row.id}`, command: { type: 'decision.answer', decisionId: row.id, delegate: true } },
+          undefined, undefined, false, row.defaulted ? { defaulted: true } : { overdue: true })
         result.answered++
       } catch (error) {
         const code = error instanceof SuperTabError ? error.code : 'unknown'
         // Answered meanwhile, a recommendation out of range, or the person or Swarm gone: nothing for the sweep to do.
-        if (code === 'DECISION_ANSWERED' || code === 'INVALID_DECISION' || code === 'NOT_FOUND' || code === 'WORKSPACE_ACCESS_REVOKED') { result.skipped++; continue }
+        if (code === 'DECISION_ANSWERED' || code === 'INVALID_DECISION' || code === 'NOT_FOUND' || code === 'WORKSPACE_ACCESS_REVOKED' || code === 'FORBIDDEN' || code === 'READ_ONLY') {
+          try { await withdrawDefault(row) } catch { result.failed++; codes.add('DEFAULT_WITHDRAW_FAILED'); continue }
+          result.skipped++; continue
+        }
         result.failed++
         codes.add(code)
       }
     }
     // One loud line a pass (backend/AGENTS.md rule 4): codes only, never ids or emails.
-    if (result.failed > 0) logger.error('[swarm-sweeps] overdue decisions failed: they stay waiting and every pass tries them again until answered or 8 days old', { failed: result.failed, codes: [...codes] })
+    if (result.failed > 0) logger.error('[swarm-sweeps] overdue decisions failed: they stay waiting and every pass tries them again until answered (legacy questions stop at 8 days old)', { failed: result.failed, codes: [...codes] })
     return result
   }
 
@@ -1698,13 +1711,14 @@ export class SuperTabStore {
     }
   }
 
-  /** [only]: what the store alone may give a command: `overdue` for decision.answer (leaveOverdueDecisions), `movedTo` for
+  /** [only]: what the store alone may give a command: `overdue`/`defaulted` for decision.answer (leaveOverdueDecisions), `movedTo` for
    *  machine.moved (computerSignedIn). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
+    workspaceLeave = false, only: { overdue?: boolean; defaulted?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([this.pushOriginFor(user, tabId, command),
-      this.repositoryReachFor(user, tabId, command), this.pullRequestFilesFor(user, tabId, command), this.pullRequestMergesFor(user, tabId, command)])
+      this.repositoryReachFor(user, tabId, command), this.pullRequestFilesFor(user, tabId, command), this.pullRequestMergesFor(user, tabId, command),
+      this.verdictHeadRead(user, tabId, command)])
     let ended: WorkHold[] = [], started: WorkHold[] = []
     // With only PMs and Buddies, no dispatch pass can hand out work.
     let hasWorkers = false
@@ -1810,7 +1824,8 @@ export class SuperTabStore {
       }
       if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed' && command.type !== 'machine.cleaned') author(original, actor)
       const context: CommandContext = { operationId, now: this.now(), ...(leavingDeleted ? { workspaceLeave: true as const } : {}),
-        ...(only.overdue && command.type === 'decision.answer' ? { overdue: true as const } : {}) }
+        ...(only.overdue && command.type === 'decision.answer' ? { overdue: true as const } : {}),
+        ...(only.defaulted && command.type === 'decision.answer' ? { defaulted: true as const } : {}) }
       if (command.type === 'machine.moved' && only.movedTo && actor.kind === 'person') {
         context.computerMove = await this.computerMove(tx, original, actor.userId, command.machineId, only.movedTo)
       }
@@ -1914,7 +1929,15 @@ export class SuperTabStore {
       }
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
       // A stale rules save is refused with the newest revision, to merge (policy.ts); null is the seed.
-      if (command.type === 'rules.set') context.projectRules = await readRules(tx, tabId, command.projectId)
+      if (command.type === 'rules.set') context.projectRules = await readRules(tx, tabId, command.projectId, true)
+      if (command.type === 'crew.add' || command.type === 'work.lane' || command.type === 'work.define'
+        || (command.type === 'conversation.create' && !command.reviewOf && !command.audience)) {
+        authorizeCommandAccess(original, actor, command)
+        const projectId = command.type === 'crew.add' ? agentProjectId(original, agent(original, command.agentId))!
+          : command.type === 'conversation.create' ? readProject(original, actor, command.projectId ?? (actor.kind === 'agent' ? agentProjectId(original, agent(original, actor.agentId))! : 'lead')).id
+          : groupProject(original, conversation(original, command.conversationId)).id
+        context.projectRules = await currentRules(tx, tabId, projectId)
+      }
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
         || command.type === 'machine.engineResume' || command.type === 'machine.projects' || command.type === 'machine.ownAccountWork'
         || command.type === 'machine.access' || command.type === 'rules.set') && command.askedIn) {
@@ -2355,7 +2378,69 @@ export class SuperTabStore {
     this.startWork(tabId, started)
     // A write that may free a worker or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
     if (hasWorkers && freesOrOpens(command)) this.dispatchSoon(tabId)
+    // A task's Ready records its pull request's head as GitHub has it now, for the Reviewers it hands over to (task #3628).
+    if (command.type === 'work.status' && command.status === 'review') await this.readyHeadRead(user, tabId, command)
     return done
+  }
+
+  /**
+   * Before a work.check naming a head (or base) its pull request's record does not have, that pull request's head as GitHub has
+   * it now, recorded as the PR watch records it (task #3628): the verdict is then judged on it. On #3561 a Yes at the real head
+   * did not count, twice, while the minute's pass had not read the push. A head the record has, carried ones too, reads nothing:
+   * the record never moves but to the head GitHub gives, so a verdict at an older head still counts at none.
+   */
+  private async verdictHeadRead(user: AuthUser, tabId: string, command: Command): Promise<void> {
+    if (!this.hooks.pullRequestReader || command.type !== 'work.check' || !command.head) return
+    const { head, base } = command
+    await this.headsReadNow(user, tabId, command, (state) => {
+      const group = state.conversations.find(c => c.id === command.conversationId)
+      const task = group?.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : group
+      const urls = task?.pullRequestUrls ?? [], heads = task?.pullRequestHeads
+      // The pull request the command records the verdict on (commands.ts work.check).
+      const url = urls.findLast(u => heads?.[u]) ?? urls.at(-1)
+      const known = url ? heads?.[url] : undefined
+      const same = (sha: string) => sha.toLowerCase() === head.toLowerCase()
+      if (!task || !url || (known && (same(known.head) || known.carries?.some(same)) && (base === undefined || base === known.base))) return null
+      return { task, urls: [url] }
+    }, [command.conversationId])
+  }
+
+  /** After a task's Ready, the heads of the pull requests it names that the task links, else its newest link (task #3628). */
+  private async readyHeadRead(user: AuthUser, tabId: string, command: Extract<Command, { type: 'work.status' }>): Promise<void> {
+    if (!this.hooks.pullRequestReader) return
+    await this.headsReadNow(user, tabId, command, (state) => {
+      const task = state.conversations.find(c => c.id === command.conversationId)
+      if (!task || task.reviewOf || !task.pullRequestUrls?.length) return null
+      const linked = watchedLinks(task.pullRequestUrls)
+      const named = typeof command.result === 'string' ? pullRequestsIn(command.result, groupProject(state, task).repository?.repositoryUrl ?? null) : []
+      const urls = linked.filter(url => named.includes(url))
+      return { task, urls: urls.length ? urls : linked.slice(-1) }
+    }, [])
+  }
+
+  /** [pick]'s pull requests of a task read from GitHub now and recorded (pullRequestEvents.ts readPullRequestsNow), outside any
+   *  command's transaction, as GitHub may take seconds. A failure leaves the record as it was and is logged: the command is
+   *  judged on the record then, as before. [groups]: the command's groups whose task, when they are a step, is loaded too. */
+  private async headsReadNow(user: AuthUser, tabId: string, command: Command,
+    pick: (state: SuperTabState) => { task: Conversation; urls: string[] } | null, groups: string[]): Promise<void> {
+    let picked: { task: TaskHeads; urls: string[] } | null = null
+    try {
+      picked = await transaction(this.db, async tx => {
+        const loaded = await this.load(tx, user, tabId, namedFor(command))
+        // A step's task may be dormant: loaded by its id.
+        const reviewOf = groups.map(id => loaded.state.conversations.find(c => c.id === id)?.reviewOf).filter((id): id is string => !!id)
+        const { state } = reviewOf.length ? await this.ensure(tx, loaded, { groupIds: [...groups, ...reviewOf] }) : loaded
+        const chosen = pick(state)
+        return chosen && chosen.urls.length ? { task: { key: chosen.task.id, heads: chosen.task.pullRequestHeads ?? null,
+          steps: chosen.task.stepIds ?? null }, urls: chosen.urls } : null
+      })
+      if (!picked) return
+      const unread = await readPullRequestsNow(this.db, this, this.hooks.pullRequestReader!(), tabId, picked.task, picked.urls, this.now())
+      if (unread.length) logger.warn('[swarm-pr-head] not read', { tabId, group: picked.task.key, pulls: unread.length })
+    } catch (error) {
+      if (error instanceof SuperTabError) return
+      logger.warn('[swarm-pr-head] not read', { tabId, group: picked?.task.key, error: error instanceof Error ? error.message : String(error) })
+    }
   }
 
   /**
@@ -2380,8 +2465,9 @@ export class SuperTabStore {
     // The pick as this write's state has it: the worker still free, the task still its candidate (open, its
     // day come, its lane or pin, not the one it just lost). What moved since the pass read is refused, and the next pass decides.
     const assigned = command.type === 'work.assign' ? command.agentId : undefined
-    const now = this.now(), member = freeCrew(state, project.id, DISPATCH_RULES, now).find(a => a.id === assigned)
-    if (!member || !candidatesFor(state, member, DISPATCH_RULES, now).some(c => c.group.id === task.id)) {
+    const rules = dispatchRules((await currentRules(tx, state.id, project.id)).rules)
+    const now = this.now(), member = freeCrew(state, project.id, rules, now).find(a => a.id === assigned)
+    if (!member || !candidatesFor(state, member, rules, now).some(c => c.group.id === task.id)) {
       fail('DISPATCH_STALE', 'This task is no longer one to hand out to this member.', 409)
     }
     try {
@@ -2410,18 +2496,60 @@ export class SuperTabStore {
     return !!leadId && this.waitingPms.refused(`${tabId}:${leadId}`, now)
   }
 
-  private readonly dispatchWaiting = new Map<string, ReturnType<typeof setTimeout>>()
+  // One last pass per project, bounded and expired after the schema's longest cadence (one hour).
+  private readonly dispatchTimes = new Map<string, number>()
+  private periodicDue(tabId: string, projectId: string, rules: DispatchRules, now: number): boolean {
+    const last = this.dispatchTimes.get(`${tabId}:${projectId}`)
+    return last === undefined || now >= last + rules.everyMs
+  }
+  private rememberDispatch(tabId: string, projectId: string, now: number): void {
+    for (const [key, at] of this.dispatchTimes) if (now - at >= 3_600_000) this.dispatchTimes.delete(key)
+    const key = `${tabId}:${projectId}`
+    this.dispatchTimes.delete(key)
+    while (this.dispatchTimes.size >= DISPATCH_REFUSALS_HELD) this.dispatchTimes.delete(this.dispatchTimes.keys().next().value!)
+    this.dispatchTimes.set(key, now)
+  }
+
+  /** A broken/unreadable policy holds its project only; never run it on seed defaults. */
+  private async dispatchPolicy(tx: Transaction, tabId: string, projectId: string): Promise<DispatchRules | null> {
+    try { return dispatchRules((await currentRules(tx, tabId, projectId)).rules) }
+    catch (error) {
+      logger.error('[swarm-dispatch] project policy unavailable; clocks and dispatch held until rules are repaired or readable',
+        error, { tabId, projectId })
+      return null
+    }
+  }
+
+  /** One indexed policy read per relevant project, reused by this pass's clocks and dispatch check. */
+  private async projectDispatch(tx: Transaction, state: SuperTabState, machineId?: string, dispatch = false): Promise<DispatchLookup> {
+    const workers = machineId ? new Set(state.agents.filter(a => a.machineId === machineId).map(a => a.id)) : null
+    const ids = new Set(state.conversations.filter(c => activeWork(c) && c.assignment && (!workers || workers.has(c.assignment.agentId)))
+      .map(c => groupProject(state, c).id))
+    if (dispatch) {
+      const pms = new Set(state.conversations.flatMap(c => c.leadId ? [c.leadId] : []))
+      for (const worker of state.agents) {
+        const projectId = !pms.has(worker.id) && !isBuddy(worker) && agentProjectId(state, worker)
+        if (projectId) ids.add(projectId)
+      }
+    }
+    const policies = new Map(await Promise.all([...ids].map(async id => [id, await this.dispatchPolicy(tx, state.id, id)] as const)))
+    return id => policies.has(id) ? policies.get(id)! : DISPATCH_RULES
+  }
+
+  private readonly dispatchWaiting = new Map<string, { timer: ReturnType<typeof setTimeout>; periodic: boolean }>()
   /** Whether a write scheduled a dispatch pass for [tabId] that has not run yet (dispatchSoon). */
   dispatchScheduled(tabId: string): boolean { return this.dispatchWaiting.has(tabId) }
-  /** Runs the crew dispatch for [tabId] a second from now, once however many writes asked: on servers whose hooks turn it on. */
-  private dispatchSoon(tabId: string): void {
-    if (!this.hooks.dispatch || this.dispatchWaiting.has(tabId)) return
-    const timer = setTimeout(() => {
+  /** Debounces on the existing host sweep; any work event upgrades a waiting periodic pass to immediate. */
+  private dispatchSoon(tabId: string, periodic = false): void {
+    if (!this.hooks.dispatch) return
+    const waiting = this.dispatchWaiting.get(tabId)
+    if (waiting) { waiting.periodic &&= periodic; return }
+    const pending = { periodic, timer: setTimeout(() => {
       this.dispatchWaiting.delete(tabId)
-      this.dispatchCrew(tabId).catch(error => logger.warn('[swarm-dispatch] pass failed', { tabId, error: error instanceof Error ? error.message : String(error) }))
-    }, DISPATCH_DEBOUNCE_MS)
-    timer.unref?.()
-    this.dispatchWaiting.set(tabId, timer)
+      this.dispatchCrew(tabId, pending.periodic).catch(error => logger.warn('[swarm-dispatch] pass failed', { tabId, error: error instanceof Error ? error.message : String(error) }))
+    }, DISPATCH_DEBOUNCE_MS) }
+    pending.timer.unref?.()
+    this.dispatchWaiting.set(tabId, pending)
   }
 
   /**
@@ -2432,18 +2560,22 @@ export class SuperTabStore {
    * replay one receipt or collide, and never assign twice. A refused pick is counted by code and the member's next task tried,
    * up to DISPATCH_TRIES. A project with no PM, or no free crew, is left alone.
    */
-  async dispatchCrew(tabId: string): Promise<{ assigned: number; skipped: Record<string, number> }> {
+  async dispatchCrew(tabId: string, periodic = false): Promise<{ assigned: number; skipped: Record<string, number> }> {
     const out = { assigned: 0, skipped: {} as Record<string, number> }, started = performance.now()
     const load: Record<string, { waiting: number; busy: number }> = {}
     const skipCode = (code: string) => { out.skipped[code] = (out.skipped[code] ?? 0) + 1 }
     const row = await this.db.superTab.findUnique({ where: { id: tabId }, select: { ...SWARM_ROW, autonomousEnv: true } })
     if (!row || row.deletedAt || row.format !== 2) return out
     const { state } = await loadRow(this.db, row)
-    const now = this.now(), rules = DISPATCH_RULES
+    const now = this.now()
     if (state.paused) return out
     this.refusedPicks.prune(now)
     this.waitingPms.prune(now)
     projects: for (const project of projectsOf(state)) {
+      const rules = await this.dispatchPolicy(this.db, tabId, project.id)
+      if (!rules) { skipCode('RULES_INVALID'); continue }
+      if (periodic && !this.periodicDue(tabId, project.id, rules, now)) continue
+      this.rememberDispatch(tabId, project.id, now)
       if (this.pmWaiting(tabId, state, project, now)) continue
       const free = freeCrew(state, project.id, rules, now)
       if (!free.length) continue
@@ -2492,7 +2624,7 @@ export class SuperTabStore {
         }
       }
     }
-    // One line a pass that did something (backend/AGENTS.md rule 4; ENGINEERING.md 8): counts, codes, lane loads and how long
+    // One line a pass that did something (backend/AGENTS.md rule 4; AGENTS.md standard 8): counts, codes, lane loads and how long
     // it took, never names or ids but the Swarm's.
     if (out.assigned || Object.keys(out.skipped).length) {
       logger.info('[swarm-dispatch] pass', { tabId, ...out, lanes: load, ms: Math.round(performance.now() - started) })
@@ -4201,14 +4333,18 @@ export class SuperTabStore {
       // The Team facts are read only when a member needs another machine (review of #3229); sleeps and folders need none.
       const crew = sweep && state.agents.some(isCrew)
         ? crewNeedsMachine(state, now) ? await this.crewDeps(tx, state, now) : { admits: () => false } : null
-      const checked = [...failRefusedStarts(state, machineId, now), ...loseTasks(state, now, worker => worker.machineId === machineId),
-        ...sweep ? sweepLiveness(state, now) : [], ...crew ? applyCrewKeep(state, now, crew) : [],
+      const rulesFor = await this.projectDispatch(tx, state, sweep ? undefined : machineId, !!sweep && !!this.hooks.dispatch)
+      const checked = [...failRefusedStarts(state, machineId, now), ...loseTasks(state, now, worker => worker.machineId === machineId, undefined, rulesFor),
+        ...sweep ? sweepLiveness(state, now, rulesFor) : [], ...crew ? applyCrewKeep(state, now, crew) : [],
         // A woken crew member this reading shows running again: its wake's timing row (crewTimes.ts, task #3462).
         ...finishedWakes(state, now)]
       // The 30-second sweep also hands out work when the Swarm, as loaded here, has a free crew member and a task for it.
-      if (sweep && this.hooks.dispatch && projectsOf(state).some(p => !this.pmWaiting(tabId, state, p, now)
-        && dispatchPlan(state, p.id, DISPATCH_RULES, now, this.refusedSkip(tabId, state, now)).length)) {
-        afterCommit(tx, () => this.dispatchSoon(tabId))
+      if (sweep && this.hooks.dispatch && projectsOf(state).some(p => {
+        const rules = rulesFor(p.id)
+        return rules && !this.pmWaiting(tabId, state, p, now) && this.periodicDue(tabId, p.id, rules, now)
+          && dispatchPlan(state, p.id, rules, now, this.refusedSkip(tabId, state, now)).length
+      })) {
+        afterCommit(tx, () => this.dispatchSoon(tabId, true))
       }
       // Then the agents it shows closed leave, those with no active work left: the Lead is told of their tasks above (closedAgents.ts).
       const closedOut = removeClosedAgents(state, state.agents.filter(a => closed.includes(a.id)), now).map(a => a.id)
@@ -4910,7 +5046,7 @@ export class SuperTabStore {
       if (!fresh.length) return 'empty'
       await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
       await writeDecisions(tx, tabId, askDecisions(state, chat, project.ownerId, fresh.map(proposalQuestion),
-        { operationId: id, askerAgentId: lead.id, assignmentId: null, kind: REFLECTION_DECISION }), now)
+        { now, operationId: id, askerAgentId: lead.id, assignmentId: null, kind: REFLECTION_DECISION }), now)
       return 'posted'
     })
   }
@@ -5194,7 +5330,8 @@ export class SuperTabStore {
       const chats = taskLineChats(loaded.state)
       if (chats.length) loaded = await this.ensure(tx, loaded, { groupIds: chats })
       const state = cloneData(loaded.state), now = this.now()
-      const written = sweepForLead(state, now)
+      const rulesFor = await this.projectDispatch(tx, state)
+      const written = sweepForLead(state, now, rulesFor)
       // What waits for each agent: an agent with a delivery open is not idle. Only loaded groups' active work keeps an agent
       // from being idle (project instructions, phase 4).
       const projects = projectsOf(state).filter(p => state.conversations.find(c => c.id === p.leadConversationId)?.leadId)

@@ -92,6 +92,22 @@ void main() {
     expect(told(), ['mention:t1']);
   });
 
+  test(
+    'a chat nobody set tells no new message: Mentions only is the default, '
+    'All new messages only when the person turns it on (task #3607)',
+    () async {
+      backend.settings = {};
+      final session = await start();
+
+      backend
+        ..move('g1', 4)
+        ..move('g2', 4);
+      await poll(session);
+
+      expect(told(), isEmpty);
+    },
+  );
+
   test('chosen on this phone, it tells at once: before any read carries the '
       'setting', () async {
     final session = await start();

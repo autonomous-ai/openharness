@@ -47,7 +47,28 @@ const instructionApprovals = z.object({
     }, 'An account belongs to only one named person, once.'),
 }).strict()
 
-export const projectRulesSchema = z.object({
+/** Defaults for projects predating configurable dispatch (#3601); kept here with the rest of the project policy. */
+export const SEED_DISPATCH = deepFreeze({ everyMs: 30_000, maxHanded: 3, nudgeAfterMs: 7_200_000, returnAfterMs: 10_800_000 })
+export const SEED_LANES = deepFreeze([
+  { name: 'backend', owns: ['backend/'] }, { name: 'CLI', owns: ['cli/'] },
+  { name: 'Desktop', owns: ['desktop/'] }, { name: 'mobile', owns: ['mobile/'] }, { name: 'docs', owns: ['docs/'] },
+])
+const dispatchSchema = z.object({
+  everyMs: z.number().int().min(30_000).max(3_600_000),
+  maxHanded: z.number().int().min(1).max(1000),
+  nudgeAfterMs: z.number().int().min(60_000).max(604_800_000),
+  returnAfterMs: z.number().int().max(1_209_600_000),
+}).strict().refine(d => d.returnAfterMs > d.nudgeAfterMs, 'Return time is later than the nudge.')
+
+/** Old clients and stored revisions have no dispatch section; their unused empty lane table meant the fixed five lanes.
+ * An explicit dispatch section makes an empty list deliberate. No backfill or mutation of a saved revision. */
+const legacyDispatch = (value: unknown): unknown => {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || 'dispatch' in value) return value
+  const old = value as Record<string, unknown>
+  return { ...old, dispatch: SEED_DISPATCH, ...Array.isArray(old.lanes) && old.lanes.length === 0 ? { lanes: SEED_LANES } : {} }
+}
+
+export const projectRulesSchema = z.preprocess(legacyDispatch, z.object({
   /** Explicit authority for instruction-rule changes; absent on older records, null deliberately disables it. */
   instructionApprovals: instructionApprovals.nullable().optional(),
   /** When releases go out, in a local time of day; the end comes after the start, the same day. */
@@ -74,6 +95,8 @@ export const projectRulesSchema = z.object({
   paths: distinct(z.object({ name: line(80), path: line(400) }).strict(), entry => entry.name, 'path name'),
   /** The crew roster: each role and who fills it. */
   crew: distinct(z.object({ role: line(40), names: z.array(line(80)).max(20) }).strict(), entry => entry.role, 'role'),
+  /** Periodic dispatch cadence, handed-work cap and progress clocks. */
+  dispatch: dispatchSchema,
   /** Lanes of work and the paths each owns. */
   lanes: distinct(z.object({ name: line(80), owns: z.array(line(400)).max(MAX_LIST) }).strict(), lane => lane.name, 'lane'),
 }).strict().refine(rules => Buffer.byteLength(JSON.stringify(rules)) <= MAX_RULES_BYTES,
@@ -82,7 +105,7 @@ export const projectRulesSchema = z.object({
   .refine(rules => {
     const pause = rules.releasePace.backendPause
     return !pause || (pause.start >= rules.releaseWindow.start && pause.end <= rules.releaseWindow.end)
-  }, 'The backend pause falls inside the release window.')
+  }, 'The backend pause falls inside the release window.'))
 
 export type ProjectRules = z.infer<typeof projectRulesSchema>
 
@@ -104,7 +127,7 @@ export const SECURITY_ROWS: ReadonlyArray<{ area: string; reads: number; paths: 
   { area: 'Tokens', reads: 2, paths: ['**/*token*', '**/*token*/**', '**/*credential*', '**/*credential*/**', '**/*secret*', '**/*secret*/**', '**/*keychain*', 'backend/src/github/**', 'cli/src/team/handoff*'] },
   { area: 'Encryption', reads: 2, paths: ['**/*crypt*', '**/*crypt*/**', '**/*cipher*', '**/*cipher*/**', '**/*encrypt*', '**/e2ee/**', '**/*seal*', '**/*pake*', '**/*tlsguard*', 'backend/src/**/*key', 'backend/src/**/*key.*', 'backend/src/**/*key/**', 'backend/src/**/*key-*', 'backend/src/**/*keys', 'backend/src/**/*keys.*', 'backend/src/**/*keys/**', 'backend/src/**/*keys-*', 'cli/src/**/*key', 'cli/src/**/*key.*', 'cli/src/**/*key/**', 'cli/src/**/*key-*', 'cli/src/**/*keys', 'cli/src/**/*keys.*', 'cli/src/**/*keys/**', 'cli/src/**/*keys-*'] },
   { area: 'Access', reads: 2, paths: ['**/*access*', '**/*access*/**', '**/*permission*', '**/*permission*/**', '**/*audience*', '**/*audience*/**', '**/*membership*', '**/*membership*/**', '**/*authority*', '**/*trust*', '**/teamWritten*'] },
-  { area: 'Buddy guard', reads: 2, paths: ['**/*buddy*guard*', '**/*ruleguard*', '**/*rule_guard*', '**/*devicesguard*', '**/*devices_guard*', '**/*leadguard*', '**/*lead_guard*', 'backend/src/superTabs/*guard*', 'companions/src/shared/guard.ts'] },
+  { area: 'Buddy guard', reads: 2, paths: ['**/*buddy*guard*', '**/*ruleguard*', '**/*rule_guard*', '**/*devicesguard*', '**/*devices_guard*', '**/*leadguard*', '**/*lead_guard*', 'backend/src/superTabs/*guard*', 'companions/src/shared/guard.ts', 'cli/src/lib/agentShellGuard*', 'cli/src/superTabs/shellGuard*'] },
   { area: 'Device links', reads: 2, paths: ['**/*device*', 'cli/src/device/**', 'cli/src/devices/**', 'cli/src/lib/*device*/**', '**/add_device/**', '**/*wifi_robot*', 'devices/**/*cable*', 'devices/**/*pair*', 'devices/**/*link*', 'devices/**/*key*', '**/*harnesslinks*', '**/*harnesslinks*/**', '**/*harness_links*', '**/*harness_links*/**', '**/*pairing*', '**/*pairing*/**', '**/*joinlink*', '**/*joinlink*/**', '**/*join_link*', '**/*join_link*/**', '**/*deviceauth*'] },
   { area: 'Deletion', reads: 2, paths: ['**/*delet*', '**/*delet*/**', '**/*purge*', '**/*purge*/**', '**/*cleanup*', '**/*cleanup*/**', '**/*sweep*', '**/*sweep*/**', '**/*prune*', '**/*prune*/**', '**/*tombstone*', '**/*wipe*', '**/account_keys*'] },
 ])
@@ -152,7 +175,8 @@ export const SEED_RULES: ProjectRules = deepFreeze({
   caps: [],
   paths: [],
   crew: [],
-  lanes: [],
+  lanes: SEED_LANES,
+  dispatch: SEED_DISPATCH,
 })
 
 /** Task #3710: only this Harness project asked for Dee's authority and Ken's linked accounts.

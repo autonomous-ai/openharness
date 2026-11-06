@@ -159,6 +159,8 @@ abstract final class AppIcons {
   static const panelLeft = LucideIcons.panelLeft400;
   static const panelLeftClose = LucideIcons.panelLeftClose400;
   static const panelLeftOpen = LucideIcons.panelLeftOpen400;
+  static const panelRightClose = LucideIcons.panelRightClose400;
+  static const panelRightOpen = LucideIcons.panelRightOpen400;
   static const panelsTopLeft = LucideIcons.panelsTopLeft400;
   static const pause = LucideIcons.pause400;
   static const pencil = LucideIcons.pencil400;

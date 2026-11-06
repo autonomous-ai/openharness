@@ -25,7 +25,38 @@ describe('the project rules record', () => {
       'The phone app in a simulator', 'The web in a browser', 'Install and update on a Mac', 'Firmware on the device plugged into a machine'])
     // The merge train is opt-in per project (River, #3402).
     expect(SEED_RULES.mergeTrain).toEqual({ enabled: false, everyMinutes: 10 })
-    expect(SEED_RULES).toMatchObject({ caps: [], paths: [], crew: [], lanes: [] })
+    expect(SEED_RULES).toMatchObject({ caps: [], paths: [], crew: [] })
+  })
+
+  it('seeds the current dispatch lanes and numbers and accepts project replacements', () => {
+    const seed = projectRulesSchema.parse(SEED_RULES)
+    expect(seed.lanes).toEqual([
+      { name: 'backend', owns: ['backend/'] }, { name: 'CLI', owns: ['cli/'] },
+      { name: 'Desktop', owns: ['desktop/'] }, { name: 'mobile', owns: ['mobile/'] }, { name: 'docs', owns: ['docs/'] },
+    ])
+    expect(seed.dispatch).toEqual({ everyMs: 30_000, maxHanded: 3, nudgeAfterMs: 7_200_000, returnAfterMs: 10_800_000 })
+    const custom = { ...copy(), lanes: [{ name: 'firmware', owns: ['devices/'] }],
+      dispatch: { everyMs: 60_000, maxHanded: 1, nudgeAfterMs: 60_000, returnAfterMs: 120_000 } }
+    expect(projectRulesSchema.parse(custom)).toEqual(custom)
+  })
+
+  it('normalizes legacy empty lanes but preserves a new deliberately empty list', () => {
+    const { dispatch: _old, ...legacy } = copy()
+    expect(projectRulesSchema.parse({ ...legacy, lanes: [] }).lanes.map(l => l.name)).toEqual(['backend', 'CLI', 'Desktop', 'mobile', 'docs'])
+    expect(projectRulesSchema.parse({ ...copy(), lanes: [] }).lanes).toEqual([])
+    const custom = projectRulesSchema.parse({ ...legacy, lanes: [{ name: 'firmware', owns: ['devices/'] }] })
+    expect(custom.lanes).toEqual([{ name: 'firmware', owns: ['devices/'] }])
+    expect(custom.dispatch).toEqual({ everyMs: 30_000, maxHanded: 3, nudgeAfterMs: 7_200_000, returnAfterMs: 10_800_000 })
+  })
+
+  it('refuses unsafe dispatch bounds and ambiguous lane names', () => {
+    for (const dispatch of [
+      { everyMs: 29_999 }, { everyMs: 3_600_001 }, { maxHanded: 0 }, { maxHanded: 1001 },
+      { maxHanded: 1.5 }, { nudgeAfterMs: 59_999 }, { nudgeAfterMs: 604_800_001 },
+      { returnAfterMs: 1_209_600_001 }, { nudgeAfterMs: 120_000, returnAfterMs: 120_000 },
+    ]) expect(refused({ ...copy(), dispatch: { ...copy().dispatch, ...dispatch } }), JSON.stringify(dispatch)).toBe(true)
+    expect(refused({ ...copy(), lanes: [{ name: 'firmware', owns: [] }, { name: 'Firmware', owns: [] }] })).toBe(true)
+    expect(refused({ ...copy(), lanes: [{ name: '', owns: [] }] })).toBe(true)
   })
 
   it('holds caps, paths, the crew and lanes', () => {
