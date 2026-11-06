@@ -917,11 +917,12 @@ describe('a machine\'s report', () => {
 
 // A report never reads its projects' report progress (projectUpdates.ts): only commands and native events note reports.
 describe('machine reports and report progress', () => {
-  it('reads no report progress and leaves its part as it was, also when the report loses a task', async () => {
+  it('reads no report progress and writes none, also when the report loses a task', async () => {
     const f = await swarm()
     await f.execute({ type: 'message.send', conversationId: f.group, text: 'Parser done', replyTo: null, recipientIds: [] })
+    // Nothing marks a work group for a report any more (task #3593), so no report progress exists to read or write.
     const before = await db.swarmProgress.findFirst({ where: { tabId: f.tab, deleted: false } })
-    expect(before).not.toBeNull()
+    expect(before).toBeNull()
     const { reads } = await profiledReads(db, /\.SwarmProgress$/, async () => {
       // The tab's first report, so it runs the liveness sweep too.
       await f.observe('test-host', [f.harness.worker])
@@ -931,10 +932,7 @@ describe('machine reports and report progress', () => {
     })
     expect(reads).toBe(0)
     expect((await f.assignment()).status).toBe('lost')
-    const after = await db.swarmProgress.findFirst({ where: { tabId: f.tab, deleted: false } })
-    expect(after!.version).toBe(before!.version)
-    expect(after!.data).toEqual(before!.data)
-    expect(after!.changedAt).toEqual(before!.changedAt)
+    expect(await db.swarmProgress.findFirst({ where: { tabId: f.tab, deleted: false } })).toBeNull()
   })
 })
 
@@ -1896,16 +1894,6 @@ describe('the push for a new delivery', () => {
     const f = await swarm({ hooks: { terminalWaiting: w => { heard.push(w) } } })
     await f.execute({ type: 'agent.screen', agentId: f.worker, scrollback: 50 })
     expect(heard).toEqual([{ machineId: 'test-host', tabId: f.tab, agentId: f.worker }])
-  })
-
-  it('announces the update request the Lead\'s own poll writes for it', async () => {
-    const { waiting, hooks } = announcing()
-    const f = await swarm({ hooks })
-    await f.leadInbox()
-    waiting.length = 0
-    f.clock.now += 5 * MINUTE
-    await f.timed.deliveries(host, f.tab, f.lead)
-    expect(waiting).toContainEqual({ machineId: 'lead-host', tabId: f.tab, agentId: f.lead })
   })
 })
 

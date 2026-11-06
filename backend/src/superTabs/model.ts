@@ -11,7 +11,7 @@ import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
 import { visibleAccess } from './machineAccess.js'
-import { cardText } from './statusCard.js'
+import { withExtra } from './statusCard.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
@@ -1167,9 +1167,10 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
       const chat = state.conversations.find(c => c.id === p.leadConversationId)
       if (chat && canReadGroup(state, actor, chat)) {
         // The server's lines, then the coordinator's own (statusCard.ts); the stored status text is only the latter.
-        const lines = chat.card
-        if (!lines?.lines.length) return p
-        return { ...p, status: { text: cardText(lines.lines, p.status?.own ? p.status.text : null, lines.more), at: new Date(Math.max(...lines.lines.map(l => l.since))).toISOString(), by: p.status?.by ?? chat.leadId ?? '' } }
+        const card = chat.card
+        if (p.status?.shown || !card?.text) return p
+        const lastChange = card.changedAt ?? Date.now()
+        return { ...p, status: { text: withExtra(card.text, p.status?.own ? p.status.text : null), at: new Date(lastChange).toISOString(), by: p.status?.by ?? chat.leadId ?? '', shown: true } }
       }
       if (p.status === undefined) return p
       const { status: _status, ...rest } = p

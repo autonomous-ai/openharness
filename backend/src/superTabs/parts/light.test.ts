@@ -39,7 +39,7 @@ const conversation: Required<Conversation> = {
   buddyDownTold: true,
   buddyName: 'Sparky',
   buddySessions: [],
-  card: { lines: [] },
+  card: { lines: [], text: '' },
   cards: {},
   checks: [],
   codePullRequestUrls: [],
@@ -92,7 +92,7 @@ describe('the light conversation projection (parts/light.ts)', () => {
   it('projects or deliberately leaves out every field a conversation and its assignment carry', () => {
     const fields = [...Object.keys(conversation).filter(k => k !== 'assignment'), ...Object.keys(assignment).map(k => `assignment.${k}`)]
     const projected: string[] = [...GROUP_FIELDS.always, ...GROUP_FIELDS.whenRunning]
-    const named = [...projected, ...GROUP_FIELDS.unread].map(f => f === 'task.owns' ? 'task' : f)
+    const named = [...projected, ...GROUP_FIELDS.unread].map(f => f === 'task.owns' ? 'task' : f.startsWith('card.') ? 'card' : f)
     expect(fields.filter(f => !named.includes(f))).toEqual([])
     expect(GROUP_FIELDS.unread.filter(f => projected.includes(f))).toEqual([])
   })

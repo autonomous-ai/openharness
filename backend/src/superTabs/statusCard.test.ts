@@ -101,6 +101,15 @@ describe('the status card the server writes (#3593)', () => {
     expect(f.text()).not.toContain('Old whole card')
   })
 
+  it('shows the same card when a read applies the reader\'s view twice', () => {
+    const f = cardFixture()
+    f.run({ type: 'project.report', projectId: 'lead', through: {}, text: 'Freeze starts Friday.' }, f.as(f.lead))
+    const once = visibleState(f.state, owner)
+    const twice = visibleState(once, owner)
+    expect(twice.projects!.find(p => p.id === 'lead')!.status!.text).toBe(once.projects!.find(p => p.id === 'lead')!.status!.text)
+    expect(twice.projects!.find(p => p.id === 'lead')!.status!.text).toContain('Freeze starts Friday.')
+  })
+
   it('keeps the card within its limit, naming how many tasks the last line leaves out', () => {
     const lines = Array.from({ length: 200 }, (_, i) => ({ id: `t${i}`, text: `#${i} "A task with a title that takes room": working. Waits on: nothing. Owner: Jules.`, since: 0 }))
     const text = cardText(lines, 'Extra line.')

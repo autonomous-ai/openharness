@@ -9,19 +9,23 @@
 import { agentDisplayName } from './agentNames.js'
 import { holdOf, type PulseIndex } from './pulse.js'
 import type { Conversation, SuperTabState } from './model.js'
-import { PROJECT_STATUS_MAX, type SwarmProject } from './projects.js'
+import type { SwarmProject } from './projects.js'
 import { stepName } from './steps.js'
 import { usernameOf } from './usernames.js'
 
 /** One active task's line without its time: `id` its conversation, `since` when the line last changed. */
 export interface CardLine { id: string; text: string; since: number }
 /** What the project's chat keeps: the lines (at most CARD_LINES_MAX) and how many more tasks were left out. */
-export interface StatusCard { lines: CardLine[]; more?: number }
+export interface StatusCard { lines: CardLine[]; more?: number
+  /** The lines as readers see them, with their times (cardText without the coordinator's own lines): the part a light read keeps, so a
+   *  change poll's read of a project chat costs this text and not every line (parts/light.ts, task #3593). */
+  text: string
+  /** When a line last changed (the command's time): a change poll sends the head, where readers get the card, only for a chat whose
+   *  card moved since the reader's cursor (read/changes.ts). */
+  changedAt?: number }
 
 /** A growth bound on the chat's part: far above the tasks a project has open at once. */
 export const CARD_LINES_MAX = 50
-/** The most of the card the PM's own lines may take, so the generated lines always have room. */
-const EXTRA_MAX = PROJECT_STATUS_MAX / 2
 const ENDED = new Set(['done', 'stopped', 'cancelled'])
 const DONE_STEP = new Set(['done', 'stopped', 'cancelled'])
 
@@ -88,25 +92,38 @@ export function projectCard(state: SuperTabState, project: SwarmProject, index: 
     const was = before.get(task.id)
     lines.push({ id: task.id, text, since: was && was.text === text ? was.since : now })
   }
-  return { lines: lines.slice(0, CARD_LINES_MAX), ...(lines.length > CARD_LINES_MAX ? { more: lines.length - CARD_LINES_MAX } : {}) }
+  const kept = lines.slice(0, CARD_LINES_MAX), more = lines.length - kept.length
+  return { lines: kept, ...(more ? { more } : {}), text: cardText(kept, null, more) }
 }
 
 const clock = (at: number): string => new Date(at).toISOString().slice(11, 16)
 
-/** The card readers see: each line with its time, then the PM's own lines, within PROJECT_STATUS_MAX. When the lines do not all
- *  fit, the last line says how many tasks it leaves out. */
+/** The card readers see: each line with its time, then the PM's own lines. When the lines do not all fit in LINES_ROOM, the last line says
+ *  how many tasks it leaves out. */
 export function cardText(lines: readonly CardLine[], extra?: string | null, more = 0): string {
-  const own = extra ? extra.slice(0, EXTRA_MAX) : ''
-  const room = PROJECT_STATUS_MAX - (own ? own.length + 1 : 0)
+  return withExtra(linesText(lines, more), extra)
+}
+
+/** The coordinator's own lines after the card's lines, at most EXTRA_ROOM of them. The whole card is at most PROJECT_STATUS_MAX. */
+export function withExtra(text: string, extra?: string | null): string {
+  const own = extra ? extra.slice(0, EXTRA_ROOM) : ''
+  return own ? (text ? `${text}\n${own}` : own) : text
+}
+
+/** What the lines take of the card: LINES_ROOM, the rest being the coordinator's. */
+const LINES_ROOM = 1_500
+const EXTRA_ROOM = 500
+
+function linesText(lines: readonly CardLine[], more: number): string {
   const shown: string[] = []
   let used = 0
   for (const line of lines) {
     const text = `${line.text} Since ${clock(line.since)} UTC.`
     // Keep room for the "N more tasks." line, which is at most this long.
-    if (used + text.length + 1 + 24 > room) break
+    if (used + text.length + 1 + 24 > LINES_ROOM) break
     shown.push(text)
     used += text.length + 1
   }
   const left = lines.length - shown.length + more
-  return [...shown, ...(left ? [`${left} more tasks.`] : []), ...(own ? [own] : [])].join('\n')
+  return [...shown, ...(left ? [`${left} more tasks.`] : [])].join('\n')
 }

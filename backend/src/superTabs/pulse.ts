@@ -220,7 +220,10 @@ export function recordPulse(state: SuperTabState, now: number, only?: string): v
     if (JSON.stringify(pulse) !== JSON.stringify(chat.pulse)) chat.pulse = pulse
     // The status card's lines (statusCard.ts), written only when one changed; a project with no active task keeps none.
     const card = projectCard(state, project, index, chat.card, now, dayOf(now))
-    if (card.lines.length || chat.card) { if (JSON.stringify(card) !== JSON.stringify(chat.card)) chat.card = card }
+    if (card.lines.length || chat.card) {
+      const { changedAt: _changedAt, ...held } = chat.card ?? {}
+      if (JSON.stringify(card) !== JSON.stringify(chat.card ? held : undefined)) chat.card = { ...card, changedAt: now }
+    }
   }
 }
 

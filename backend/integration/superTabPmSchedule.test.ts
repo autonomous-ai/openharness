@@ -50,7 +50,7 @@ afterAll(async () => {
 })
 
 /** A Swarm whose coordinator runs on one machine and whose worker, on another, works on task "Ship the parser". The coordinator's
- *  first update request (for the assignment) has gone, so nothing merges with a digest in the next 15 minutes, unless [fresh]. */
+ *  first poll is a full one ([fresh] is kept for callers: no update request goes with the setup any more, task #3593). */
 async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[] } = {}) {
   let now = Date.parse('2026-11-02T06:30:00.000Z')
   const timed = new SuperTabStore(db, () => now, null, told ? { deliveriesWaiting: w => { told.push(w.agentId) } } : {})
@@ -93,12 +93,6 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
   }
   const status = (s: 'done' | 'blocked' | 'needs_human' | 'working', result = 'A result') =>
     execute({ type: 'work.status', conversationId: group, assignmentId, status: s, result }, host, worker)
-  if (!fresh) {
-    clock.now += DUE + 1_000
-    await poll()
-    const early = await rowsOf(tab, { status: 'gathered' })
-    expect(await Promise.all(early.map(d => db.superTabMessage.findUnique({ where: { id: d.messageId } }).then(m => [m?.text, m?.source])))).toEqual([])
-  }
   /** Writes one message as the store writes every message, for a notice no short command here sets off. */
   const write = async (source: Record<string, unknown> | undefined, recipient: string, conversationId = group, text = 'A notice.', as = worker) => {
     const id = randomUUID().replaceAll('-', '').slice(0, 24)
@@ -169,8 +163,9 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     expect(await schedules(f.tab)).toEqual([])
     expect(await headOf(f.tab)).toEqual(before)
     expect((await projectOf(f)).schedule).toBeUndefined()
-    // Something to sweep later in the same slot wakes it once.
+    // Something to sweep later in the same slot wakes it once (at the next full poll, 30 seconds on).
     await unassigned(f)
+    f.clock.now += 30_000
     await f.poll()
     expect(await schedules(f.tab)).toHaveLength(1)
   })
@@ -242,6 +237,7 @@ describe('the built-in schedule on the coordinator\'s poll', () => {
     await f.poll()
     expect(await schedules(f.tab)).toEqual([])
     await f.execute({ type: 'tab.pause', paused: false })
+    f.clock.now += 30_000
     await f.poll()
     expect(await schedules(f.tab)).toHaveLength(1)
     expect((await projectOf(f)).schedule).toMatchObject({ lastSlot: scheduleSlot(f.clock.now) })

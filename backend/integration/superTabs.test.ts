@@ -892,6 +892,7 @@ describe('private swarm projects on the real control API', () => {
     expect(await updates()).toEqual([])
     expect((await chat()).filter(m => m.text === card || (m.source as Record<string, unknown>)?.kind === 'project-report')).toEqual([])
     expect((await status())!.text).toContain('"Work": to do.')
+    console.log('CARDTEXT', JSON.stringify(await status()), JSON.stringify((await timed.read(owner, tab)).state.projects![0]).slice(0, 700))
     expect((await status())!.text.endsWith(card)).toBe(true)
     // An ordinary message, a second task and a merge wake nobody.
     await execute({ ...message('Tests passed'), conversationId: group } as Command)
@@ -5174,14 +5175,11 @@ describe('Swarm sweeps', () => {
     await run(tab, { type: 'project.report', projectId: 'lead', through: { [group]: read.lastMessageSequence }, text: null }, host, lead)
   }
 
-  it('puts a conversation archived by hand to sleep once its reports are acknowledged, and ordinary loads stop reading it', async () => {
+  it('puts a conversation archived by hand to sleep at once, with no report to wait for, and ordinary loads stop reading it (#3593)', async () => {
     const { tab, lead } = await fixture()
     const group = await finishedGroup(tab, lead)
     await run(tab, { type: 'conversation.archive', conversationId: group, archived: true })
     const loaded = async () => (await db.$transaction(tx => parts.loadActive(tx, tab))).groups.map(p => p.key)
-    expect(await loaded()).toContain(group)
-    await acknowledge(tab, lead, group)
-    await sweepSwarms(db)
     expect(await loaded()).not.toContain(group)
     expect((await db.$transaction(tx => parts.loadDormant(tx, tab, {}))).map(p => p.key)).toEqual([group])
     // Reopened, it is active again.
@@ -5195,10 +5193,7 @@ describe('Swarm sweeps', () => {
     const listed = async () => (await store.read(owner, tab)).state.conversations.map(c => c.id)
     await sweepSwarms(db, Date.now() + day - 60_000)
     expect(await listed()).toContain(group)
-    // Its reports are not acknowledged yet: it stays awake, where the Lead's report check sees it.
-    await sweepSwarms(db, Date.now() + day + 60_000)
-    expect(await listed()).toContain(group)
-    await acknowledge(tab, lead, group)
+    // No report is waited for (task #3593): after the quiet day it sleeps.
     await sweepSwarms(db, Date.now() + day + 60_000)
     expect(await listed()).not.toContain(group)
     // The Lead conversation stays awake whatever its age.
