@@ -29,6 +29,7 @@ import '../shortcuts/keymap.dart' show KeymapContext;
 import 'chat_find.dart';
 import 'chat_scroll.dart';
 import 'leaderboard/reader.dart';
+import 'leaderboard/weekly_page.dart';
 import 'jump_to_latest.dart';
 import 'unread_line.dart';
 import 'roster.dart';
@@ -3046,6 +3047,7 @@ class _SuperTabViewState extends State<SuperTabView>
         : _pageShown != null
         ? switch (_pageShown!) {
             SwarmPage.decisions => 'Decisions',
+            SwarmPage.leaderboard => 'Leaderboard',
             SwarmPage.mentions => 'Mentions',
             SwarmPage.threads => 'Threads',
           }
@@ -6371,6 +6373,10 @@ class _SuperTabViewState extends State<SuperTabView>
                                       )
                                     : const SizedBox.shrink(),
                                 switch (_pageShown) {
+                                  SwarmPage.leaderboard =>
+                                    SuperTabWeeklyLeaderboardPage(
+                                      controller: c,
+                                    ),
                                   SwarmPage.decisions => SuperTabDecisionsPage(
                                     activity: SuperTabActivity.of(c),
                                     highlight: _highlight,
