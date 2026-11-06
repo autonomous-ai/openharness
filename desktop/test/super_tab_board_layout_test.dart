@@ -112,6 +112,8 @@ void main() {
     final (c, _) = await show(tester);
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
+    // The wider chat leaves the Board narrower: it scrolls sideways to the card.
+    await tester.ensureVisible(_key('super-task-card-offline'));
     await tester.tap(_key('super-task-card-offline'));
     await _settle(tester);
     expect(c.selectedId, 'offline');
@@ -135,6 +137,8 @@ void main() {
     await tester.runAsync(c.refresh);
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
+    // The wider chat leaves the Board narrower: it scrolls sideways to the card.
+    await tester.ensureVisible(_key('super-task-card-offline'));
     await tester.tap(_key('super-task-card-offline'));
     await _settle(tester);
     // The root, and its quote on the reply below.

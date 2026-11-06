@@ -21,6 +21,8 @@ class SuperTabPaneLayout extends StatefulWidget {
     this.right,
     this.storage,
     this.rightDefault = rightWidth,
+    this.rightMinimum = rightWidth,
+    this.rightShare,
     this.over,
   });
 
@@ -33,6 +35,10 @@ class SuperTabPaneLayout extends StatefulWidget {
   /// takes its own line under the box, in full (11-03). [rightWidth] stays
   /// the narrowest the pane goes.
   static const threadWidth = 340.0;
+
+  /// The Board's chat: a third of the window, never narrower than this.
+  static const boardChatMinimum = 420.0;
+  static const boardChatShare = 1 / 3;
 
   /// The roster drawer's share of a narrow window at most. On a phone it filled the screen, leaving no
   /// veil to tap, so closing it was hard (owner, 2026-10-23).
@@ -51,6 +57,14 @@ class SuperTabPaneLayout extends StatefulWidget {
   /// The right pane's width until a person sets one by its divider (that
   /// width, saved, wins): [threadWidth] while it shows a thread.
   final double rightDefault;
+
+  /// The narrowest the right pane goes, before text scaling: the Board's chat
+  /// is the main interface and keeps [boardChatMinimum] (Dee, task #3863).
+  final double rightMinimum;
+
+  /// With no width chosen, the right pane takes this share of the window (at
+  /// least [rightMinimum]) instead of [rightDefault].
+  final double? rightShare;
 
   /// Drawn over the left and centre panes, leaving the right one as it is:
   /// the picture viewer beside an open thread, as in Slack (Huy, 11-04).
@@ -133,7 +147,7 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
       final hasLeft = widget.left != null, hasRight = widget.right != null;
       final centerMin = math.min(scale.scale(360), width);
       final leftMin = hasLeft ? scale.scale(180) : 0.0;
-      final rightMin = hasRight ? scale.scale(280) : 0.0;
+      final rightMin = hasRight ? scale.scale(widget.rightMinimum) : 0.0;
       double limit(double value, double floor, double ceiling) => value
           .clamp(math.min(floor, ceiling), math.max(0, ceiling))
           .toDouble();
@@ -142,7 +156,10 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
           : 0.0;
       final right = hasRight
           ? limit(
-              _right ?? widget.rightDefault,
+              _right ??
+                  (widget.rightShare == null
+                      ? widget.rightDefault
+                      : math.max(rightMin, width * widget.rightShare!)),
               rightMin,
               width - centerMin - left,
             )

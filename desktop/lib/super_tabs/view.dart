@@ -5923,6 +5923,14 @@ class _SuperTabViewState extends State<SuperTabView>
                 rightDefault: !boardLayout && thread == null && !chatBeside
                     ? SuperTabPaneLayout.rightWidth
                     : SuperTabPaneLayout.threadWidth,
+                // The Board's chat is the main interface: a third of the
+                // window, never under 420 (Dee, task #3863).
+                rightMinimum: boardLayout
+                    ? SuperTabPaneLayout.boardChatMinimum
+                    : SuperTabPaneLayout.rightWidth,
+                rightShare: boardLayout
+                    ? SuperTabPaneLayout.boardChatShare
+                    : null,
                 // Over the chat, beside an open thread, as in Slack.
                 over: wide ? viewer : null,
                 center: boardLayout && boardProject == null
