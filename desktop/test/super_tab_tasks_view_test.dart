@@ -26,6 +26,7 @@ Map<String, dynamic> taskFixture(
   bool archived = false,
   DateTime? shippedAt,
   List<String>? releasing,
+  Map<String, dynamic>? released,
 }) => {
   ...conversationFixture(id, title),
   'projectId': 'lead',
@@ -54,6 +55,7 @@ Map<String, dynamic> taskFixture(
   },
   if (shippedAt != null) 'shippedAt': shippedAt.millisecondsSinceEpoch,
   'releasing': ?releasing,
+  'released': ?released,
 };
 
 /// The project of the mockup Dee confirmed: a proposal, two tasks nobody is on
@@ -224,18 +226,26 @@ List<String> _cardsIn(WidgetTester tester, String column) {
 /// A project's Tasks view (Dee, task #2569): Board by default, or List, with
 /// Mine and Search, every ask from proposal to shipped.
 void main() {
-  testWidgets('Board shows the five columns in order, each with its count', (
+  testWidgets('Board shows the six columns in order, each with its count', (
     tester,
   ) async {
     final c = await _show(tester, tasksServer());
-    final names = ['proposals', 'nextUp', 'working', 'waiting', 'shipped'];
+    final names = [
+      'proposals',
+      'nextUp',
+      'working',
+      'done',
+      'merged',
+      'shipped',
+    ];
     final lefts = [for (final n in names) tester.getTopLeft(_column(n)).dx];
     expect(lefts, orderedEquals([...lefts]..sort()));
     for (final (name, label, count) in [
-      ('proposals', 'Proposals', '2'),
+      ('proposals', 'Proposal', '2'),
       ('nextUp', 'Next up', '2'),
-      ('working', 'Working', '1'),
-      ('waiting', 'Waiting', '1'),
+      ('working', 'Working', '2'),
+      ('done', 'Done', '0'),
+      ('merged', 'Merged', '0'),
       ('shipped', 'Shipped', '1'),
     ]) {
       final heading = find.byKey(ValueKey('super-tasks-heading-$name'));
@@ -259,7 +269,8 @@ void main() {
       'proposals',
       'nextUp',
       'working',
-      'waiting',
+      'done',
+      'merged',
       'shipped',
     ]) {
       expect(tester.getSize(_column(name)).width, 280, reason: name);
@@ -497,7 +508,7 @@ void main() {
       tester.widget<Text>(empty).style?.color,
       grid.AppPalette.textSecondary,
     );
-    for (final name in ['proposals', 'nextUp', 'waiting', 'shipped']) {
+    for (final name in ['proposals', 'nextUp', 'working', 'shipped']) {
       expect(
         find.descendant(of: _column(name), matching: find.text('No tasks')),
         findsNothing,
@@ -546,7 +557,7 @@ void main() {
       ),
     );
     final c = await _show(tester, server);
-    expect(_cardsIn(tester, 'waiting'), ['test-copy', 'later']);
+    expect(_cardsIn(tester, 'working'), ['test-copy', 'later', 'tag']);
     expect(
       find.descendant(
         of: _card('test-copy'),
@@ -885,9 +896,9 @@ void main() {
     });
   });
 
-  testWidgets('a merged task waits in Waiting, as merged, releasing, until its '
-      'release; a merge the server has no release list for stays Shipped '
-      '(task #3452)', (tester) async {
+  testWidgets('a merged task waits under Merged, with its parts, until its '
+      'release, in Board and in List; a merge the server has no release list '
+      'for stays Shipped (tasks #3452, #3812)', (tester) async {
     final server = tasksServer();
     (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
       taskFixture(
@@ -914,24 +925,129 @@ void main() {
       ),
     ]);
     final c = await _show(tester, server);
-    expect(_cardsIn(tester, 'waiting'), containsAll(['releasing', 'fresh']));
+    expect(_cardsIn(tester, 'merged'), containsAll(['releasing', 'fresh']));
+    expect(_cardsIn(tester, 'working'), isNot(contains('releasing')));
     expect(_cardsIn(tester, 'shipped'), ['sender']);
     expect(
       find.descendant(
         of: _card('releasing'),
-        matching: find.textContaining('merged, releasing (Desktop, CLI)'),
+        matching: find.textContaining('waiting for Desktop, CLI'),
       ),
       findsOneWidget,
     );
     expect(
       find.descendant(
         of: _card('fresh'),
-        matching: find.textContaining('merged, releasing'),
+        matching: find.textContaining('waiting for a release'),
       ),
       findsOneWidget,
     );
+    // List agrees: under the Merged heading, above Shipped's.
+    await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
+    await tester.pumpAndSettle();
+    double top(Finder f) => tester.getTopLeft(f).dy;
+    final merged = top(
+      find.byKey(const ValueKey('super-tasks-heading-merged')),
+    );
+    final shipped = top(
+      find.byKey(const ValueKey('super-tasks-heading-shipped')),
+    );
+    expect(top(_card('releasing')), inExclusiveRange(merged, shipped));
+    expect(top(_card('fresh')), inExclusiveRange(merged, shipped));
+    expect(
+      find.byKey(const ValueKey('super-tasks-heading-waiting')),
+      findsNothing,
+    );
     await _close(tester, c);
   });
+
+  testWidgets('a task done and waiting for its merge is under Done with how '
+      'long it has waited, a warning past an hour; work with no code stays '
+      'Done (task #3812)', (tester) async {
+    final server = tasksServer();
+    (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+      taskFixture(
+        'fresh-done',
+        'Just reviewed',
+        30,
+        requester: 'owner',
+        status: 'done',
+        pullRequest: 3500,
+        shippedAt: _now.subtract(const Duration(minutes: 12)),
+      ),
+      taskFixture(
+        'stuck-done',
+        'Waiting on the merge',
+        31,
+        requester: 'owner',
+        status: 'done',
+        pullRequest: 3501,
+        shippedAt: _now.subtract(const Duration(minutes: 90)),
+      ),
+      taskFixture(
+        'no-code',
+        'A research note',
+        32,
+        requester: 'owner',
+        status: 'done',
+        shippedAt: _now.subtract(const Duration(hours: 2)),
+      ),
+    ]);
+    final c = await _show(tester, server);
+    expect(
+      _cardsIn(tester, 'done'),
+      unorderedEquals(['fresh-done', 'stuck-done', 'no-code']),
+    );
+    Finder line(String id, String text) =>
+        find.descendant(of: _card(id), matching: find.text(text));
+    expect(line('fresh-done', 'waiting to merge for 12 min'), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(line('fresh-done', 'waiting to merge for 12 min'))
+          .style
+          ?.color,
+      isNot(grid.AppPalette.warn),
+    );
+    final stuck = line('stuck-done', 'waiting to merge for 1 h 30 min');
+    expect(stuck, findsOneWidget);
+    expect(tester.widget<Text>(stuck).style?.color, grid.AppPalette.warn);
+    expect(line('no-code', 'Done'), findsOneWidget);
+    expect(_cardsIn(tester, 'shipped'), ['sender']);
+    await _close(tester, c);
+  });
+
+  testWidgets(
+    'a released task is under Shipped with its version (task #3812)',
+    (tester) async {
+      final server = tasksServer();
+      (server.state['conversations'] as List).add(
+        taskFixture(
+          'released',
+          'Out in a release',
+          33,
+          requester: 'owner',
+          status: 'done',
+          pullRequest: 3400,
+          merged: true,
+          shippedAt: _now.subtract(const Duration(hours: 3)),
+          released: {
+            'at': _now.millisecondsSinceEpoch,
+            'tags': ['v1.3.84_desktop'],
+          },
+        ),
+      );
+      final c = await _show(tester, server);
+      expect(_cardsIn(tester, 'shipped'), contains('released'));
+      expect(
+        find.descendant(
+          of: _card('released'),
+          matching: find.text('Desktop 1.3.84'),
+        ),
+        findsOneWidget,
+      );
+      await _close(tester, c);
+    },
+  );
 
   for (final scale in [1.0, 1.5]) {
     testWidgets('all four release parts show in full on a board card, at text '
@@ -958,9 +1074,7 @@ void main() {
       );
       final caption = find.descendant(
         of: _card('all-four'),
-        matching: find.textContaining(
-          'merged, releasing (backend, CLI, Desktop, Web)',
-        ),
+        matching: find.textContaining('waiting for backend, CLI, Desktop, Web'),
       );
       expect(caption, findsOneWidget);
       expect(

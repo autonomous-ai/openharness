@@ -62,10 +62,11 @@ SuperTabTaskPlace? _place(
 void main() {
   test('the columns read in the board\'s order', () {
     expect(SuperTabTaskColumn.values.map((c) => c.label), [
-      'Proposals',
+      'Proposal',
       'Next up',
       'Working',
-      'Waiting',
+      'Done',
+      'Merged',
       'Shipped',
     ]);
   });
@@ -112,13 +113,13 @@ void main() {
         'in review',
         _task(status: 'review', liveness: _waiting('review')),
         0,
-        (column: .waiting, needsYou: false, state: 'in review'),
+        (column: .working, needsYou: false, state: 'in review'),
       ),
       (
         'changes requested',
         _task(status: 'working', liveness: _waiting('revision')),
         0,
-        (column: .waiting, needsYou: false, state: 'changes requested'),
+        (column: .working, needsYou: false, state: 'changes requested'),
       ),
       (
         'waiting on Ken',
@@ -127,7 +128,7 @@ void main() {
           liveness: _waiting('person', personId: 'ken'),
         ),
         0,
-        (column: .waiting, needsYou: false, state: 'Ken to decide'),
+        (column: .working, needsYou: false, state: 'Ken to decide'),
       ),
       (
         'waiting on the reader',
@@ -136,25 +137,25 @@ void main() {
           liveness: _waiting('person', personId: 'me'),
         ),
         0,
-        (column: .waiting, needsYou: true, state: 'Dee to decide'),
+        (column: .working, needsYou: true, state: 'Dee to decide'),
       ),
       (
         'needs_human, no one named',
         _task(status: 'needs_human', liveness: _waiting('person')),
         0,
-        (column: .waiting, needsYou: true, state: 'someone to decide'),
+        (column: .working, needsYou: true, state: 'someone to decide'),
       ),
       (
         'quiet with a question in its terminal',
         _task(status: 'working', liveness: {'state': 'quiet', 'since': 1}),
         1,
-        (column: .waiting, needsYou: true, state: 'quiet'),
+        (column: .working, needsYou: true, state: 'quiet'),
       ),
       (
         'quiet',
         _task(status: 'working', liveness: {'state': 'quiet', 'since': 1}),
         0,
-        (column: .waiting, needsYou: false, state: 'quiet'),
+        (column: .working, needsYou: false, state: 'quiet'),
       ),
       (
         'a question in a working task\'s terminal',
@@ -169,29 +170,49 @@ void main() {
           liveness: {'state': 'orphaned', 'why': 'lost', 'since': 1},
         ),
         0,
-        (column: .waiting, needsYou: false, state: 'agent lost'),
+        (column: .working, needsYou: false, state: 'agent lost'),
       ),
       (
         'queued for a machine',
         _task(status: 'working', liveness: _waiting('queued')),
         0,
-        (column: .waiting, needsYou: false, state: 'waiting for a machine'),
+        (column: .working, needsYou: false, state: 'waiting for a machine'),
       ),
       (
         'blocked',
         _task(status: 'blocked', liveness: _waiting('blocked')),
         0,
-        (column: .waiting, needsYou: false, state: 'blocked'),
+        (column: .working, needsYou: false, state: 'blocked'),
       ),
       (
         'done, its pull request not merged',
         _task(
           status: 'done',
           linked: true,
-          shippedAt: _now.subtract(const Duration(hours: 1)),
+          shippedAt: _now.subtract(const Duration(minutes: 12)),
         ),
         0,
-        (column: .waiting, needsYou: false, state: 'ready to merge'),
+        (column: .done, needsYou: false, state: 'waiting to merge for 12 min'),
+      ),
+      (
+        'done 90 minutes ago, still not merged',
+        _task(
+          status: 'done',
+          linked: true,
+          shippedAt: _now.subtract(const Duration(minutes: 90)),
+        ),
+        0,
+        (
+          column: .done,
+          needsYou: false,
+          state: 'waiting to merge for 1 h 30 min',
+        ),
+      ),
+      (
+        'done, its first Done not known',
+        _task(status: 'done', linked: true),
+        0,
+        (column: .done, needsYou: false, state: 'waiting to merge'),
       ),
       (
         'finished with no pull request',
@@ -200,7 +221,7 @@ void main() {
           shippedAt: _now.subtract(const Duration(hours: 1)),
         ),
         0,
-        (column: .shipped, needsYou: false, state: 'Done'),
+        (column: .done, needsYou: false, state: 'Done'),
       ),
       (
         'merged 2 days ago, archived',
