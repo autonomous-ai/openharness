@@ -45,8 +45,10 @@ class SuperTabTaskHeader extends StatelessWidget {
       ],
     );
     Widget words(String text) => Text(text, style: DesktopChrome.metadata());
-    return Padding(
+    // As wide as the middle, so a short title starts at its left edge instead of centred in its column.
+    return Container(
       key: const ValueKey('super-task-header'),
+      width: double.infinity,
       padding: const EdgeInsets.fromLTRB(
         grid.AppDesktop.controlGap,
         grid.AppDesktop.controlGap,

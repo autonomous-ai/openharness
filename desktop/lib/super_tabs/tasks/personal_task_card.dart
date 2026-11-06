@@ -103,8 +103,15 @@ class _CardState extends State<SuperTabPersonalTaskCard> {
                 children: [
                   Row(
                     children: [
-                      Flexible(child: _Tag(w.project, w.task.projectId)),
-                      const Spacer(),
+                      // The tag takes the room left, so the mark sits at the right edge: a Flexible beside a Spacer split
+                      // the free space and left the mark mid-card (as in #3846).
+                      Expanded(
+                        child: Align(
+                          alignment: AlignmentDirectional.centerStart,
+                          child: _Tag(w.project, w.task.projectId),
+                        ),
+                      ),
+                      const SizedBox(width: grid.AppDesktop.controlGap),
                       SuperTabTaskStatusMark(w.task.status),
                     ],
                   ),

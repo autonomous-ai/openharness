@@ -480,7 +480,15 @@ void main() {
         expect(t.getRect(mark).bottom, lessThanOrEqualTo(t.getRect(title).top));
         expect(
           t.getRect(mark).right,
-          closeTo(t.getRect(card).right - SuperTabTaskCard.tilePadding, 2),
+          closeTo(
+            t
+                    .getRect(
+                      inCard('new', find.byType(SuperTabPersonalTaskCard)),
+                    )
+                    .right -
+                SuperTabTaskCard.tilePadding,
+            2,
+          ),
         );
         // Two avatars bottom left, who asked first; no names, priority or checks.
         final avatars = inCard('new', find.byType(SuperTabAvatar));
