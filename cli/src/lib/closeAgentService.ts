@@ -130,9 +130,8 @@ export interface CloseAgentServiceDeps {
   /** The `now` close naming switch [changeId] ended, [stopped] or not (superTabs/leadSwitch.ts `leadSwitchEnded`): the pass its
    *  stop was given is gone either way. */
   leadSwitchEnded?(agentId: string, changeId: string, stopped: boolean): void
-  /** Whether the agent may be a Swarm Buddy (superTabs/retention.ts `mayBeBuddy`): ordinary closes never stop it.
-   *  Only the internal idle sleep permit or Stop Harness may do so. */
-  buddyProtected?(agentId: string): boolean
+  /** A Buddy refuses ordinary closes; its prepared engine switch or internal idle sleep permit grants one stop. */
+  buddyProtected?(agentId: string, changeId?: string): boolean
   /** Whether its pane shows a question the engine asks before any conversation: the folder's trust, or an MCP server the
    *  folder brings (`trust_open`). */
   atStartupQuestion?(s: RegisteredSession): Promise<boolean>
@@ -194,7 +193,7 @@ export class CloseAgentService {
     if (request.mode !== 'inspect' && this.deps.leadProtected?.(request.agentId, changeId)) {
       return Promise.resolve({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
     }
-    const buddy = this.deps.buddyProtected?.(request.agentId) === true
+    const buddy = this.deps.buddyProtected?.(request.agentId, changeId) === true
     if (buddy && request.mode !== 'inspect' && !(request.mode === 'idle' && typeof request.buddySleep === 'function' && request.buddySleep())) {
       return Promise.resolve({ error: 'BUDDY_PROTECTED', detail: BUDDY_PROTECTED_DETAIL, keptRunning: true })
     }
