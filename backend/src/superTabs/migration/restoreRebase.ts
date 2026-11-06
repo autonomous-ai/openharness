@@ -40,11 +40,30 @@ export const MAX_PASSES = 24
 /** What a note to a PM that restored by hand begins with, which is how it is told once. */
 const NOTE_PREFIX = 'Restore (task #3679):'
 
+/** What the move lost of [before]: each line's words and how many times, since a line may stand in two sections (removedLines). */
+export function moveLoss(before: string, moved: string): ReadonlyMap<string, number> {
+  const loss = new Map<string, number>()
+  for (const text of removedLines(before, moved)) loss.set(text, (loss.get(text) ?? 0) + 1)
+  return loss
+}
+
+/** The lines of [before] that [current] lacks and the move lost, each at most as often as the move lost it: a copy a later save of
+ *  the project dropped is never counted. In document order, with their sections. */
+export function stillMissing(before: string, current: string, loss: ReadonlyMap<string, number>): Array<{ text: string; path: string }> {
+  const left = new Map(loss)
+  return removedLineItems(before, current).filter(line => {
+    const n = left.get(line.text) ?? 0
+    if (!n) return false
+    left.set(line.text, n - 1)
+    return true
+  })
+}
+
 /** [current] with the lines of [before] it lacks appended under "Restored lines", by section; [lines] is what came back, none when
- *  nothing was missing (then [text] is [current] as it was). Pure. [revision] names the revision [before] is, in the section's note. */
-export function restoredDocument(before: string, current: string, revision: number, only?: ReadonlySet<string>): { text: string; lines: string[] } {
-  // [only]: just these lines (what the move lost), so a line a later save of the project chose to drop is never put back.
-  const lost = removedLineItems(before, current).filter(line => !only || only.has(line.text))
+ *  nothing was missing (then [text] is [current] as it was). Pure. [revision] names the revision [before] is, in the section's note.
+ *  [only]: just what the move lost (moveLoss), so a line a later save of the project chose to drop is never put back. */
+export function restoredDocument(before: string, current: string, revision: number, only?: ReadonlyMap<string, number>): { text: string; lines: string[] } {
+  const lost = only ? stillMissing(before, current, only) : removedLineItems(before, current)
   if (!lost.length) return { text: current, lines: [] }
   const byPath = new Map<string, string[]>()
   for (const line of lost) byPath.set(line.path, [...byPath.get(line.path) ?? [], line.text])
@@ -87,16 +106,17 @@ async function restoreSwarm(tx: Transaction, { tabId, askedBy }: RebaseSwarm, no
     const stored = await tx.superTabInstructions.findUnique({ where: { id: instructionsId(tabId, project.id) } })
     if (!stored || stored.revision !== current) { report.held.push({ tabId, projectId: project.id, why: 'its stored document does not match its revision' }); continue }
     // What the move itself lost, which no later save of the project can have chosen to drop (it was never in a later revision).
-    const lostByMove = new Set(removedLines(before.text, moved.text))
+    const lostByMove = moveLoss(before.text, moved.text)
+    const lostCount = [...lostByMove.values()].reduce((a, b) => a + b, 0)
     if (current !== moved.revision) {
       // Saved since the move (the daily tidy is a save): the lines the move lost that are still missing come back. Unless its PM already
       // put some back by hand and chose what to leave out (harness's did, revision 81): that one is left alone and told by a note.
-      const missing = removedLineItems(before.text, stored.text).filter(line => lostByMove.has(line.text))
+      const missing = stillMissing(before.text, stored.text, lostByMove)
       if (!missing.length) { report.unchanged++; continue }
-      if (missing.length < lostByMove.size) {
+      if (missing.length < lostCount) {
         report.left.push({ tabId, projectId: project.id, why: `its PM restored some of the lost lines by hand since the move (revision ${current}, the move is ${moved.revision})`, missing: missing.length })
         if (!await tx.superTabPmNote.findFirst({ where: { tabId, projectId: project.id, text: { startsWith: NOTE_PREFIX } } })) {
-          noted.push({ projectId: project.id, text: `${NOTE_PREFIX} ${missing.length} of the ${lostByMove.size} lines the move onto the new base lost are still missing from your instructions: they are in revision ${before.revision} of your History. You decide what to restore.` })
+          noted.push({ projectId: project.id, text: `${NOTE_PREFIX} ${missing.length} of the ${lostCount} lines the move onto the new base lost are still missing from your instructions: they are in revision ${before.revision} of your History. You decide what to restore.` })
         }
         continue
       }

@@ -56,15 +56,16 @@ describe('the lines a project is given back after the first move (#3679)', () =>
   // later save chose to drop.
   it('gives back only what the move lost, never a line a later save dropped', () => {
     const lostByMove = removedLines(BEFORE, MOVED)
+    const loss = moveLoss(BEFORE, MOVED)
     // A later save of the PM: it kept the moved document and dropped nothing the move had kept; here it added a line.
     const later = `${MOVED.trimEnd()}\n\n- The PM's own note.\n`
-    const { text, lines } = restoredDocument(BEFORE, later, 80, new Set(lostByMove))
+    const { text, lines } = restoredDocument(BEFORE, later, 80, loss)
     expect(lines).toEqual(lostByMove)
     expect(text).toContain('- The PM\'s own note.')
     // A line the later save dropped from the moved document is not the move's loss: it stays dropped.
     const withoutOwn = MOVED.replace(/^.*Owns the product.*$/m, '')
     expect(removedLines(BEFORE, withoutOwn)).toContain('Owns the product (Dee, 2026-11-03).')
-    expect(restoredDocument(BEFORE, withoutOwn, 80, new Set(lostByMove)).lines).not.toContain('Owns the product (Dee, 2026-11-03).')
+    expect(restoredDocument(BEFORE, withoutOwn, 80, loss).lines).not.toContain('Owns the product (Dee, 2026-11-03).')
   })
 
   // Review round 2 of #3327 (Rowan): the move's loss is counted per line, since a line may sit in two sections.
@@ -77,7 +78,7 @@ describe('the lines a project is given back after the first move (#3679)', () =>
     // The PM's later save dropped A's copy too: only the move's one copy comes back, once.
     const later = '# P\n\n## B\n\n- Keep Y (Ken, 2026-11-02).\n'
     expect(restoredDocument(before, later, 80, loss).lines).toEqual(['Never X.'])
-    expect(stillMissing(before, later, loss).map(l => l.text)).toEqual(['Never X.'])
+    expect(stillMissing(before, later, loss).map((l: { text: string }) => l.text)).toEqual(['Never X.'])
   })
 
   it('knows a PM that put one lost line back by hand, though another was lost twice', () => {
