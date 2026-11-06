@@ -386,6 +386,43 @@ void main() {
     },
   );
 
+  // Every way into the Board shows the same three panes (Scholes, task #3863).
+  testWidgets('the Tasks icon of a project chat opens the Board with projects, '
+      'the wide Buddy chat and the project kept', (tester) async {
+    final (c, server) = await show(tester, width: 1500);
+    // A person lands in the project's own chat with a thread open beside it,
+    // no Board in the middle: that chat's header has the Tasks icon.
+    final root =
+        server.messages.firstWhere((m) => m['conversationId'] == 'lead')['id']
+            as String;
+    c.openThread(root);
+    await _settle(tester);
+    expect(c.selectedId, 'lead');
+    expect(_key('super-tasks-lead'), findsNothing);
+    await tester.tap(_key('super-tasks'));
+    await _settle(tester);
+    expect(_key('super-tasks-lead'), findsOneWidget);
+    expect(c.selectedId, 'buddy-owner-lead');
+    expect(_key('super-board-chat'), findsOneWidget);
+    expect(find.text('Your Buddy'), findsOneWidget);
+    expectFixedPanes(tester);
+    expect(tester.getSize(_key('super-right-pane')).width, closeTo(500, 1));
+    expect(tester.takeException(), isNull);
+    await end(tester, c);
+  });
+
+  testWidgets('a task chat opened from a notice shows its project Board '
+      'beside it', (tester) async {
+    final (c, _) = await show(tester, width: 1500);
+    c.select('offline');
+    await _settle(tester);
+    expect(c.selectedId, 'offline');
+    expect(_key('super-tasks-lead'), findsOneWidget);
+    expectFixedPanes(tester);
+    expect(tester.takeException(), isNull);
+    await end(tester, c);
+  });
+
   // The center yields before either side pane at enlarged text (review of
   // #3399): projects keep their scaled minimum and chat its own, whatever
   // is left is the Board's.
