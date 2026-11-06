@@ -31,10 +31,10 @@ export function inboxSection(message: { author: Pick<Author, 'kind'>; source?: u
 export const turnInboxHost = (state: SuperTabState, agent: Agent): boolean => !!ledProject(state, agent.id)
   && !!state.machines?.find(m => m.machineId === agent.machineId)?.observation?.capabilities?.includes(INBOX_CAPABILITY)
 
-/** Whether [message] to [recipient] waits for its inbox: a person's message or a crew need to a project's PM whose host sends
- *  its turn (INBOX_CAPABILITY). Results and notices are gathered as noticeDigest.ts says, whatever the host. */
+/** Only crew needs wait for a turn-aware PM's inbox (#3609). People waited 2–15 minutes behind this gate;
+ *  their original messages now go straight to the session, while noticeDigest.ts still batches agents' notices. */
 export const gathersForInbox = (state: SuperTabState, recipient: Agent, message: { author: Pick<Author, 'kind'>; source?: unknown }): boolean =>
-  inboxSection(message) !== 'results' && turnInboxHost(state, recipient)
+  inboxSection(message) === 'crew' && turnInboxHost(state, recipient)
 
 /** Whether the PM's gathered rows, oldest first, go out now. A read that sends no turn (an older host) keeps the notice
  *  digest's own clock. One that does: when the oldest has waited TURN_END_WAIT_MS, whatever the turn; at idle, at once for a

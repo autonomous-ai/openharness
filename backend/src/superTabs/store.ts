@@ -4378,7 +4378,8 @@ export class SuperTabStore {
     const last = await this.polls.get(key).catch(error => { pollMemoryFailed(error); return undefined })
     // A PM whose inbox is due gets it now, not at the next full poll (#3545): only its host sends `turn`, and only a read
     // whose gathered rows are due (inboxDue) skips the fast answer, by one indexed read.
-    const releasing = turn !== undefined && inboxDue(await agentGatheredDeliveries(this.db, tabId, agentId, NOTICE_DIGEST_MAX), this.now(), turn)
+    const gathered = turn !== undefined ? await agentGatheredDeliveries(this.db, tabId, agentId, NOTICE_DIGEST_MAX) : []
+    const releasing = gathered.some(d => d.inboxSection === 'people') || inboxDue(gathered, this.now(), turn)
     if (!releasing && last !== undefined && this.now() - last.at < SWEEP_EVERY_MS) {
       const open = await openDeliveries(this.db, tabId, agentId)
       if (!open.length) return []
@@ -4440,10 +4441,10 @@ export class SuperTabStore {
       let gathered = led ? await agentGatheredDeliveries(tx, tabId, agentId, NOTICE_DIGEST_MAX) : []
       // A read that sends no turn, from a PM whose machine says its host does (#3545): the people's messages and crew needs it
       // gathered go now, in this read, as they would to an older host; the notices keep their digest.
-      if (turn === undefined && gathered.length && turnInboxHost(loaded.state, agent(loaded.state, agentId))) {
+      if (gathered.some(d => d.inboxSection === 'people') || turn === undefined && gathered.length && turnInboxHost(loaded.state, agent(loaded.state, agentId))) {
         const requeued = new Set<string>()
         // By the section recorded when each was gathered: no message is read for it.
-        for (const delivery of gathered.filter(d => d.inboxSection)) {
+        for (const delivery of gathered.filter(d => d.inboxSection === 'people' || turn === undefined && d.inboxSection)) {
           if ((await tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId, status: 'gathered' }, data: { status: 'queued' } })).count) requeued.add(delivery.id)
         }
         gathered = gathered.filter(d => !requeued.has(d.id))
