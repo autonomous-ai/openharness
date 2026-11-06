@@ -5584,12 +5584,12 @@ describe('a migrated Swarm\'s kept old state (Stability 2.1)', () => {
 // write; a message that lands meanwhile makes it archived instead. Desktop sends it under one operation id from every computer.
 describe('a closed tab\'s Personal project', () => {
   const person: AuthUser = { sub: '100000000000000000000391', email: 'tabs-3929@example.com', autonomousEnv: 'prod', role: 'user' }
-  const personal = async () => {
+  const personal = async (visibility: 'private' | 'public' = 'private') => {
     await db.user.upsert({ where: { id: person.sub }, create: { id: person.sub, externalId: `fixture-${person.sub}`, email: person.email,
       autonomousEnv: person.autonomousEnv }, update: {} })
     const tab = (await store.create(person, 'personal-swarm', 'Personal', 'private')).id
     const tabOperation = `personal-tab-${randomUUID()}`
-    const projectId = String((await run(tab, { type: 'project.create', name: 'Untitled tab', visibility: 'private', brief: '' }, person, undefined,
+    const projectId = String((await run(tab, { type: 'project.create', name: 'Untitled tab', visibility, brief: '' }, person, undefined,
       tabOperation)).result.projectId)
     const chat = (await store.read(person, tab)).state.projects!.find(p => p.id === projectId)!.leadConversationId
     return { tab, projectId, chat, tabOperation }
@@ -5641,6 +5641,44 @@ describe('a closed tab\'s Personal project', () => {
       if (what === 'rules') expect(await db.superTabProjectRules.count({ where: { tabId: tab, projectId } })).toBe(1)
     })
   }
+
+  // Security review 2, second pass (Phonecheck2): another person's first rules save shares a guard with the close, and with a
+  // project delete, through the project's Lead chat, so the two never both commit on the same project.
+  const collaborator: AuthUser = { sub: '100000000000000000000392', email: 'tabs-3929-peer@example.com', autonomousEnv: 'prod', role: 'user' }
+  const withCollaborator = async () => {
+    const made = await personal('public')
+    await db.user.upsert({ where: { id: collaborator.sub }, create: { id: collaborator.sub, externalId: `fixture-${collaborator.sub}`,
+      email: collaborator.email, autonomousEnv: collaborator.autonomousEnv }, update: {} })
+    // The person has one Personal Swarm: the collaborator joins it once.
+    if (!(await store.read(person, made.tab)).state.people.some(p => p.id === collaborator.sub)) {
+      const invited = await run(made.tab, { type: 'invite.create', email: collaborator.email, role: 'collaborator', conversationId: 'lead' }, person)
+      await run(made.tab, { type: 'invite.accept', inviteId: invited.result.inviteId as string }, collaborator)
+    }
+    return made
+  }
+  const racing = (tab: string, projectId: string, saved: { done: boolean }) => new SuperTabStore(beforeFirstWrite(db, async () => {
+    if (saved.done) return
+    saved.done = true
+    await run(tab, { ...rulesSave, projectId } as Command, collaborator)
+  }))
+  it('archives it, keeping the rules, when another person saves its first rules while it is being closed', async () => {
+    const { tab, projectId, tabOperation } = await withCollaborator()
+    const saved = { done: false }
+    const closed = await racing(tab, projectId, saved).execute(person, tab, { operationId: randomUUID(),
+      command: { type: 'project.closeTab', projectId, tabOperation } as Command })
+    expect(saved.done).toBe(true)
+    expect(closed.result).toMatchObject({ outcome: 'archived' })
+    expect((await store.read(person, tab)).state.projects!.find(p => p.id === projectId)).toMatchObject({ archived: true })
+    expect(await db.superTabProjectRules.count({ where: { tabId: tab, projectId } })).toBe(1)
+  })
+  it('leaves no rules behind when another person saves its first rules while it is deleted', async () => {
+    const { tab, projectId } = await withCollaborator()
+    const saved = { done: false }
+    await racing(tab, projectId, saved).execute(person, tab, { operationId: randomUUID(), command: { type: 'project.delete', projectId } })
+    expect(saved.done).toBe(true)
+    expect((await store.read(person, tab)).state.projects!.some(p => p.id === projectId)).toBe(false)
+    expect(await db.superTabProjectRules.count({ where: { tabId: tab, projectId } })).toBe(0)
+  })
 
   it('does its work once under one operation id, from any of the person\'s computers', async () => {
     const { tab, projectId, tabOperation } = await personal()
