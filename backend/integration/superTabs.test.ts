@@ -37,6 +37,7 @@ import { beforeFirstWrite } from './interleave.test-support.js'
 import { wantDefaultDigest } from './noDefaultDigest.test-support.js'
 import { startMessageReachStats } from '../src/superTabs/messageReachStats.js'
 import { plan as planOf, profiled, reads } from './plans.test-support.js'
+import { quotaReset } from './holds.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -2453,9 +2454,9 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
     const row = async () => (await rosterRows(store, host, 'test-host')).find(t => t.tabId === tab && t.agent.id === worker)!
     expect(await row()).toMatchObject({ tabName: 'Pilot', attention: null })
-    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'blocked', hold: { kind: 'reset', what: 'quota', at: new Date(Date.now() + 3_600_000).toISOString() }, result: 'No access to staging.' } as Command, host, worker)
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'blocked', hold: quotaReset(), result: 'No access to staging.' } as Command, host, worker)
     expect((await row()).attention).toEqual({ assignmentId, status: 'blocked', result: 'No access to staging.' })
-    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: new Date(Date.now() + 3_600_000).toISOString() }, result: null } as Command, host, worker)
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', hold: quotaReset(), result: null } as Command, host, worker)
     expect((await row()).attention).toEqual({ assignmentId, status: 'needs_human', result: null })
     await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null } as Command, host, worker)
     expect((await row()).attention).toBeNull()
@@ -4717,7 +4718,7 @@ describe('leaderboard credits written by the store (leaderboard/record.ts)', () 
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Builder', configuration: config, lead: false })).result.agentId as string
     const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
-    const ask = { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: new Date(Date.now() + 3_600_000).toISOString() }, result: 'Ship how?',
+    const ask = { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', hold: quotaReset(), result: 'Ship how?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } } as Command
     await run(tab, ask, host, worker)
     await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null } as Command, host, worker)
