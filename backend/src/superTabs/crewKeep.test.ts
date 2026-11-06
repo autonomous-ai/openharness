@@ -171,7 +171,8 @@ describe('crewKeep: machine rules apply to moves, read from the project rules re
     { machineIds: ['no-codex'], why: 'no Codex there', noEngines: ['codex'] },
     { machineIds: ['travels'], why: 'away', away: { days: [1, 2, 3, 4, 5], windows: [['07:30', '09:30'], ['18:00', '21:00']], timeZone: 'Asia/Ho_Chi_Minh' } },
   ]
-  const withRules: CrewDeps = { admits: () => true, machineRules: rules }
+  // Each project's own rules (#3964): the member's project here is the Swarm's first.
+  const withRules: CrewDeps = { admits: () => true, machineRules: projectId => projectId === 'lead' ? rules : [] }
   it('never moves a member to a machine whose rule refuses its engine; another engine may go there', () => {
     const codex = fixture([machine('mac', { signedIn: false }), machine('no-codex'), machine('other', { resetIn: 6 * 86_400_000 })])
     codex.ada.configuration = { ...codex.ada.configuration, engine: 'codex' }
@@ -192,6 +193,17 @@ describe('crewKeep: machine rules apply to moves, read from the project rules re
     expect(crewKeep(onAway.state, away, withRules)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'other' })])
     const onBack = fixture(pools()); onBack.state.machines!.forEach(p => { p.observation!.receivedAt = back - 5000 })
     expect(crewKeep(onBack.state, back, withRules)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'travels' })])
+  })
+  it('reads the member\'s own project\'s rules, never another project\'s', () => {
+    const codex = fixture([machine('mac', { signedIn: false }), machine('no-codex'), machine('other', { resetIn: 6 * 86_400_000 })])
+    codex.ada.configuration = { ...codex.ada.configuration, engine: 'codex' }
+    for (const pool of codex.state.machines!) {
+      pool.engines = ['claude', 'codex']
+      ;(pool.observation as { readiness: { engines: unknown[] } }).readiness.engines = [{ engine: 'codex', installed: true, signedIn: pool.machineId !== 'mac' }]
+      ;(pool.observation as { quotas: Array<{ engine: string }> }).quotas[0]!.engine = 'codex'
+    }
+    const elsewhere: CrewDeps = { admits: () => true, machineRules: projectId => projectId === 'lead' ? [] : rules }
+    expect(crewKeep(codex.state, NOW, elsewhere)).toEqual([expect.objectContaining({ kind: 'move', toMachineId: 'no-codex' })])
   })
   it('with no rules record, no machine rule applies', () => {
     const f = fixture([machine('mac', { signedIn: false }), machine('travels'), machine('other', { resetIn: 6 * 86_400_000 })])
