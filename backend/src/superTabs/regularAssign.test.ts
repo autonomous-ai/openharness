@@ -83,6 +83,29 @@ describe('a Regular agent and its task', () => {
     expect(code(() => f.run({ type: 'work.assign', conversationId: web.task, agentId: f.ada }, web.asPm))).not.toBeNull()
   })
 
+  // Security review of #4116 (Layoutfix): its one terminal carries every project it worked in and its person's private chat, so
+  // only its person reads or types in it, whichever project's task it holds now.
+  it('keeps its terminal its person\'s alone, even from the PM whose task it holds, and from the Swarm\'s owner', () => {
+    const f = swarm()
+    const app = f.project('app', 'public'), web = f.project('web', 'public')
+    f.run({ type: 'work.assign', conversationId: app.task, agentId: f.ada }, app.asPm)
+    for (const type of ['agent.screen', 'agent.input'] as const) {
+      const command = (type === 'agent.screen' ? { type, agentId: f.ada } : { type, agentId: f.ada, text: 'ls' }) as Command
+      expect(code(() => f.run(command, app.asPm))).toBe('TERMINAL_PRIVATE')
+      expect(code(() => f.run(command, web.asPm))).not.toBeNull()
+      expect(code(() => f.run(command, owner))).not.toBeNull()
+      expect(code(() => f.run(command, mate))).not.toBe('TERMINAL_PRIVATE')
+    }
+  })
+
+  it('keeps its terminal its person\'s alone even once it is out of its own chat', () => {
+    const f = swarm()
+    const app = f.project('app', 'public')
+    f.run({ type: 'work.assign', conversationId: app.task, agentId: f.ada }, app.asPm)
+    for (const chat of f.state.conversations.filter(c => c.kind === 'agent-chat')) chat.agentIds = chat.agentIds.filter(id => id !== f.ada)
+    expect(code(() => f.run({ type: 'agent.screen', agentId: f.ada } as Command, app.asPm))).toBe('TERMINAL_PRIVATE')
+  })
+
   it('is seen idle by its person and itself, and by no other person', () => {
     const f = swarm()
     expect(canReadAgent(f.state, mate, f.agent(f.ada))).toBe(true)
