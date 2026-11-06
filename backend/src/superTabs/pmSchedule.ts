@@ -5,6 +5,8 @@ import { digestOf, localNow } from './digest.js'
 import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 import { taskLiveness } from './liveness.js'
 import { archivable } from './tidy.js'
+import { processLines, unconfirmedNote } from './processNotes.js'
+import { switched } from './boardRights.js'
 
 // Every project's coordinator runs the same built-in schedule, woken by the Swarm on its own poll instead of a timer of its
 // own (Ken, 2026-11-04; docs/plans/2026-11-04-pm-built-in-schedule-design.md): a Codex PM may have no timer, and a restart
@@ -85,6 +87,15 @@ What people teach you:
   if it is missing. Count repeats by person, and give the day's count in your nightly reflection, or in the next morning
   digest when the project has no reflection.`
 
+/** The built-in text's inbox line, which a project switched to the Board way of working drops (task #3819): its PM answers no
+ *  one in the chat, and nothing is owed to it there. */
+const INBOX_LINE = '- Answer each person\'s message once, in its place. Your inbox lists every unanswered message until it is answered.\n'
+if (!PM_SCHEDULE_TEXT.includes(INBOX_LINE)) throw new Error('pmSchedule.ts: the built-in text lost its inbox line; update INBOX_LINE')
+const BOARD_SCHEDULE_TEXT = PM_SCHEDULE_TEXT.replace(INBOX_LINE, '')
+
+/** The built-in text [project]'s coordinator reads: without the inbox line once it is switched (boardRights.ts). */
+export const pmScheduleText = (project: Pick<SwarmProject, 'boardMode'>): string => switched(project) ? BOARD_SCHEDULE_TEXT : PM_SCHEDULE_TEXT
+
 /** The schedule's clock: slot n starts at n * 30 minutes, in UTC. */
 export const SCHEDULE_SLOT_MS = 30 * 60_000
 export const scheduleSlot = (now: number): number => Math.floor(now / SCHEDULE_SLOT_MS)
@@ -104,7 +115,8 @@ export function sweepDue(state: SuperTabState, projectId: string, now: number): 
       const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
       return archivable(state, group, now) && !group.pullRequestUrls?.length && !task?.pullRequestUrls?.length
     }
-    if (group.reviewOf) return false
+    // A paused task waits on whoever paused it, not on the PM (boardRights.ts, task #3819).
+    if (group.reviewOf || group.paused) return false
     if (!group.assignment) return true
     const liveness = taskLiveness(state, group, now)
     return liveness?.state === 'orphaned' || (liveness?.state === 'waiting' && (liveness.why === 'person' || liveness.why === 'blocked'))
@@ -113,28 +125,31 @@ export function sweepDue(state: SuperTabState, projectId: string, now: number): 
 
 /** The jobs a wake carries: the open-task sweep, and what people taught the coordinator since its last wake. The daily tidy
  *  is its own message (tidyRequest). */
-export type ScheduleJob = 'sweep' | 'heard'
+export type ScheduleJob = 'sweep' | 'heard' | 'process'
 
 const JOB_LINES: Record<ScheduleJob, string> = {
   sweep: '- Open-task sweep: every open task ends with an owner, a question to a person with a default and a time, or a close with its reason; '
     + 'then archive the finished groups the Swarm left open (see the built-in PM schedule in your instructions).',
   heard: '- What people taught you: read only what people sent you since the last wake, and save each correction or lasting rule the '
     + 'instructions don\'t have yet, naming who said it.',
+  process: '- What changed for PMs: read the note below, work by it, and confirm it (task #3581).',
 }
 
 /** The wake's words: the slot's local time, the jobs due, and that the project's own schedule wins. It names no reread of the
  *  instructions (anh Dee, 11-05, #3387, undoing #3151's 7-9k tokens a wake): the CLI tells the coordinator when they change
  *  (cli swarmInstructionsSkill.ts). */
-export function scheduleText(project: SwarmProject, slot: number, jobs: readonly ScheduleJob[] = ['sweep']): string {
+export function scheduleText(project: SwarmProject, slot: number, jobs: readonly ScheduleJob[] = ['sweep'], owed: readonly string[] = []): string {
   const zone = digestOf(project)?.timeZone ?? DEFAULT_TIME_ZONE
   return [`Built-in schedule, ${localNow(zone, slot * SCHEDULE_SLOT_MS).time} (${zone}). This is a scheduled request from the Swarm, not a new task.`,
     ...jobs.map(job => JOB_LINES[job]),
+    // What the PM owes about the process (processNotes.ts, task #3581): a note to confirm, a project with no crew.
+    ...owed,
     // Said here too: a CLI older than the built-in section shows its PM only this message.
     'Skip a job your project\'s instructions schedule on their own clock. Set no timer of your own for this one, and delete one you set before.'].join('\n')
 }
 
 /** What a due wake asks of the coordinator: its slot, its jobs and its message. */
-export interface ScheduledWake { slot: number; jobs: ScheduleJob[]; draft: MessageDraft }
+export interface ScheduledWake { slot: number; jobs: ScheduleJob[]; draft: MessageDraft; processNote?: string }
 
 /** The coordinator's slot and its wake, when a slot is due and a job has something to do: the sweep has a task to settle
  *  (sweepDue), a person wrote to the coordinator since its last wake (parts/commit.ts heardAt on the chat written to: who
@@ -152,13 +167,17 @@ export function scheduleRequest(state: SuperTabState, target: Agent, now: number
   // The chats of its project the poll loaded, each marked where a person wrote to the coordinator (parts/commit.ts).
   const since = schedule?.heardAt ?? 0
   const heard = state.conversations.some(c => !c.archived && (c.heardAt ?? 0) > since && (c.id === project.leadConversationId || inProject(c, project.id)))
+  // A what-changed note the PM has not confirmed wakes it once (task #3581); after that it rides on the wakes due anyway.
+  const note = unconfirmedNote(project)
+  const tell = !!note && project.processNote?.told !== note.id
   const jobs: ScheduleJob[] = [
     ...sweepDue(state, project.id, now) ? ['sweep' as const] : [],
     ...heard ? ['heard' as const] : [],
+    ...tell ? ['process' as const] : [],
   ]
   if (!jobs.length) return null
-  return { slot, jobs, draft: { id: scheduleMessageId(state.id, project.id, slot), conversationId: project.leadConversationId,
-    author: author(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }), text: scheduleText(project, slot, jobs),
+  return { slot, jobs, ...tell ? { processNote: note!.id } : {}, draft: { id: scheduleMessageId(state.id, project.id, slot), conversationId: project.leadConversationId,
+    author: author(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }), text: scheduleText(project, slot, jobs, processLines(state, project)),
     replyTo: null, recipients: [target.id], source: { kind: 'schedule-request', projectId: project.id, slot } } }
 }
 
@@ -172,6 +191,7 @@ export function recordWake(project: SwarmProject, wake: ScheduledWake, now: numb
     return
   }
   project.schedule = { ...before, lastSlot: wake.slot, wakeId, ...wake.jobs.includes('heard') ? { heardAt: now } : {} }
+  if (wake.processNote) project.processNote = { ...project.processNote, told: wake.processNote }
 }
 
 /**

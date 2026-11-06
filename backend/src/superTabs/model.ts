@@ -78,7 +78,7 @@ export interface Agent {
   releaseId?: string
   /** Set while it is one of its project's crew (crew.ts): its host keeps it alive, and no idle path closes or removes it.
    *  `by` is the person's or PM agent's id that marked it. */
-  crew?: { role: string; lane?: 'backend' | 'cli' | 'desktop' | 'mobile' | 'docs'; at: number; by: string }
+  crew?: { role: string; lane?: string; at: number; by: string }
   /** A person's request to move this Product Manager to another engine or account (lead.switch), carried out by its host.
    *  `id` is the operation that asked; `claimedUntil` is set once the host took it (agent.switchClaim). */
   /** The switch request the last rebind settled, until its result arrives: that result is the one line the chat gets, and
@@ -421,6 +421,10 @@ export interface Conversation {
    *  reaching the coordinator in another chat of the project (parts/commit.ts). The built-in wake asks the coordinator to save
    *  what it was taught only after one (pmSchedule.ts; task #3022). Absent until then. */
   heardAt?: number
+  /** When a person last talked with each agent here, by agent id (parts/commit.ts): `person`, their last message that reached
+   *  it; `answer`, its own post to people after that one. An agent a person is chatting with is never idle (tidy.ts idleSince,
+   *  task #3816). Ids and times only, the last hour; hidden from readers. Absent until a person talks with an agent here. */
+  talkedAt?: Record<string, { person: number; answer?: number }>
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
   /** The pull requests its own code is in, which GitHub's push read covers for its Team-written mark (teamWritten.ts, task
@@ -465,6 +469,12 @@ export interface Conversation {
   /** The name a Buddy chat's owner chose for their Buddy (buddies.ts renameBuddy): kept here, which outlives the Buddy, so
    *  one added again takes it. Absent: the default, "<person>'s Buddy". */
   buddyName?: string
+  /** A person's main Buddy chat (buddies.ts swarmBuddyChatId) lists their other Buddies' chats, oldest first, so they load
+   *  with it, whose id every command can derive (task #3818). At most the Swarm's Buddy cap. Absent: one Buddy. */
+  buddyChats?: string[]
+  /** This Buddy chat's Buddy is its person's default (task #3818): their lines go to it. One per person; with none marked, the
+   *  main chat's. */
+  buddyDefault?: true
   /** A Buddy chat's live and starting thread sessions (buddySessions.ts); absent while it has none. */
   buddySessions?: BuddySessionEntry[]
   /** An older project Buddy chat whose person was told their one Buddy cannot start there now (commands.ts buddyDownLine):
@@ -494,6 +504,9 @@ export interface Conversation {
   notBefore?: string
   /** Why its not-before date holds it (heldReason.ts), set with the date by work.queue. Absent on a hold from before reasons. */
   hold?: import('./heldReason.js').HeldReason
+  /** A pause by someone who steers its project (boardRights.ts, task #3819): who (actorKey), when and why. While set, the task
+   *  is not handed out (dispatch.ts) or chased by the PM's sweep (pmSchedule.ts), and shows held (pulse.ts). */
+  paused?: { by: string; at: number; reason?: string }
   /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
    *  from before priorities, which reads as P2. */
   priority?: import('./taskPriority.js').TaskPriority
@@ -630,6 +643,8 @@ export interface SuperTabState {
   deletion?: { at: string; by: string; purgeAt: string }
   /** Idle workers stop and finished groups archive by themselves (tidy.ts); false once the owner turns it off. */
   tidy?: false
+  /** The most Buddies a person may have in this Swarm (buddies.ts BUDDY_CAP), set by its owner (task #3818). */
+  buddyCap?: number
   /** Buddies (buddies.ts) are on in every Swarm; readers are always told so (visibleState), as apps from before 10-29 hide
    *  Buddies and show Chat with PM without it. A stored value from the old switch is ignored. */
   buddies?: true
@@ -1152,7 +1167,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // A read never hands out the cleanup records it just applied (read/hostRows.ts delivers them to the machine's host).
   delete visible.machineCleanups
   delete visible.parkedConversations
-  for (const group of visible.conversations) delete group.chatLimits
+  for (const group of visible.conversations) { delete group.chatLimits; delete group.talkedAt }
   numberConversations(visible)
   delete visible.retiredConversationNumber
   delete visible.groupCounter

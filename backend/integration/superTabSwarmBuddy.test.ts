@@ -832,3 +832,45 @@ describe('older apps', () => {
     await expect(f.store.messages(peer, f.tab, 'lead', {}, agentId)).rejects.toThrow(UNAVAILABLE)
   })
 })
+
+// Task #3818: a person's other Buddies' chats are listed on their main one, whose id every command derives, so a command loads
+// them even once they have gone quiet; and a name chosen in one stays taken.
+describe('several Buddies through the store (#3818)', () => {
+  /** [chat] gone quiet, as the tidy pass leaves it: only a command that names it, or loads it with its list, reads it. */
+  const quiet = async (f: Swarm, chat: string) => {
+    const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: chat } })
+    await db.swarmGroup.update({ where: { id: row.id }, data: { dormant: true, version: row.version + 1, changedAt: new Date(),
+      data: { ...row.data as object, dormant: true } } })
+  }
+  const named = async (f: Swarm, name: string) => {
+    const added = await f.execute({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name } as Command, peer)
+    return { chat: String(added.result.conversationId), agent: await f.launch(String(added.result.startId)) }
+  }
+  const agents = async (f: Swarm) => (await f.store.read(peer, f.tab)).state.agents.filter(a => a.buddyOf?.personId === peer.sub).map(a => a.id)
+
+  it('removes a quiet default Buddy, and the first becomes the default again', async () => {
+    const f = await swarm()
+    const first = await buddy(f)
+    const second = await named(f, 'Research')
+    await f.execute({ type: 'buddy.default', conversationId: second.chat } as Command, peer)
+    await quiet(f, second.chat)
+    await f.execute({ type: 'buddy.remove' }, peer)
+    expect(await agents(f)).toEqual([first.main])
+    const chats = (await f.store.read(peer, f.tab)).state.conversations
+    expect(chats.find(c => c.id === first.chat)).toMatchObject({ buddyDefault: true })
+    expect(chats.find(c => c.id === first.chat)!.buddyChats).toBeUndefined()
+  })
+
+  it('keeps a quiet Buddy\'s name taken, and counts it against the cap', async () => {
+    const f = await swarm()
+    await buddy(f)
+    const research = await named(f, 'Research')
+    await quiet(f, research.chat)
+    await expect(f.execute({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' } as Command, peer))
+      .rejects.toMatchObject({ code: 'BUDDY_NAME_TAKEN' })
+    await f.execute({ type: 'tab.buddyCap', cap: 2 } as Command)
+    await expect(f.execute({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Planning' } as Command, peer))
+      .rejects.toMatchObject({ code: 'BUDDY_CAP' })
+    expect((await f.store.read(peer, f.tab)).state.buddyCap).toBe(2)
+  })
+})

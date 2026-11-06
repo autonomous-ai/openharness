@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -653,6 +654,9 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
               children: [
                 if (!showTerminal) Offstage(child: terminal),
                 SuperTabView(
+                  // The Board, the Buddy beside it and no Threads, on Desktop
+                  // (anh Dee, task #3787); the browser is unchanged for now.
+                  board: !kIsWeb,
                   key: ValueKey('${controller.accountId}:$id'),
                   controller: controller,
                   // macOS and the web record; Linux and Windows draw no mic.

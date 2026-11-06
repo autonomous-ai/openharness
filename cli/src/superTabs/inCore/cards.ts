@@ -74,8 +74,12 @@ function noticeIn(value: unknown, chats: ReadonlySet<string>): LeadNotice | null
   if (typeof notice.chat !== 'string' || !chats.has(notice.chat) || !id(notice.chatId) || !id(notice.id) || typeof notice.text !== 'string' || !whole(notice.at)) return null
   // A reply inside a thread names its root (#2463): without it the desktop and the dial read it by opening the chat.
   const thread = typeof notice.thread === 'string' && notice.thread ? cut(notice.thread, THREAD_ROOT_BYTES) : undefined
+  // A decision asked of the reader is heard by a swarmNeedsYou dial alone, and any other keeps the tag it covers
+  // (cableSession): without the mark and the tag the devices sent every dial the decision (Diego's dial, 2026-11-06).
+  const decision = notice.decision === true
+  const tag = decision && notice.tag !== undefined ? noticeIn({ ...object(notice.tag), decision: undefined, tag: undefined }, chats) : null
   return { chat: notice.chat as LeadNotice['chat'], chatId: notice.chatId, id: notice.id, text: cut(notice.text, RECAP_BYTES), at: notice.at,
-    ...(thread ? { thread } : {}) }
+    ...(thread ? { thread } : {}), ...(decision ? { decision: true as const } : {}), ...(tag ? { tag } : {}) }
 }
 
 /** The reader's Buddy on a Lead, checked and cut; null when it is not one. */
@@ -125,7 +129,10 @@ function cardIn(value: unknown): SwarmCard | null {
     if (!lead) return null
     leads.push(lead)
   }
-  return { id: card.id, name: cut(card.name, NAME_BYTES), count: card.count, leads, ...(card.side === 'buddy' ? { side: 'buddy' as const } : {}) }
+  // `personal`: the reader's own Personal Swarm, for the round dial's Personal | Team picker. The port rebuilt each card without
+  // it, so no dial ever showed the picker (Diego's dial, 2026-11-06).
+  return { id: card.id, name: cut(card.name, NAME_BYTES), count: card.count, leads, ...(card.side === 'buddy' ? { side: 'buddy' as const } : {}),
+    ...(card.personal === true ? { personal: true as const } : {}) }
 }
 
 /** A recap the service sent, checked and cut; null when it is not one. */

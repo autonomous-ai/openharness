@@ -84,7 +84,9 @@ const idsOf = (v: unknown): string[] => Array.isArray(v) ? v.filter((id): id is 
  *  person's chat is neither, whatever a read holds. */
 function buddyChatOf(conversations: Json[], projectId: string, me: string | undefined): Json | undefined {
   const live = (c: Json) => isReadersBuddyChat(c, me) && c.archived !== true && cardId(c.id)
-  return conversations.find(c => isSwarmBuddyChat(c) && live(c)) ?? conversations.find(c => !isSwarmBuddyChat(c) && inProject(c, projectId) && live(c))
+  // Of several (task #3818), the reader's default: the chat the backend marks so, else the first.
+  return conversations.find(c => isSwarmBuddyChat(c) && live(c) && c.buddyDefault === true) ?? conversations.find(c => isSwarmBuddyChat(c) && live(c))
+    ?? conversations.find(c => !isSwarmBuddyChat(c) && inProject(c, projectId) && live(c))
 }
 /** The reader's Buddies in their chat: the chat's agents that are a Buddy of the reader. One whose `buddyOf` names someone
  *  else (an agent id reused or misfiled) is not, and neither is a thread session (spec 2026-10-30-buddy-thread-sessions),

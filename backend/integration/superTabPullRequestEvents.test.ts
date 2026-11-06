@@ -64,12 +64,14 @@ function fakeReader() {
 let pullNumbers = 100
 
 /** A Swarm with a Lead and a task, "Ship the parser", assigned to a worker that linked [PR] in its status. */
-async function swarm() {
+/** [reads]: the store reads GitHub through the same fake when a verdict or a Ready needs the head now (#3628). */
+async function swarm({ reads = false } = {}) {
   const number = ++pullNumbers, PR = `https://github.com/acme/app/pull/${number}`
   const pull = (patch: Partial<PullRequestWatch> = {}): PullRequestWatch => ({ url: PR, number, state: 'open', draft: false, head: HEAD, base: 'main',
     mergeable: true, checkRuns: [], checkSuites: [], reviews: [], comments: [], ...patch })
   let now = Date.parse('2026-11-03T08:00:00.000Z')
-  const store = new SuperTabStore(db, () => now)
+  const { pulls, asked, patches, patchReads, merges, reader } = fakeReader()
+  const store = new SuperTabStore(db, () => now, undefined, reads ? { pullRequestReader: () => reader } : {})
   const tab = (await store.create(owner, randomUUID(), 'Events', 'public')).id
   const execute = (command: Command, user = owner, asAgentId?: string) => store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
   const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
@@ -85,7 +87,6 @@ async function swarm() {
   const worker = await add(task, 'test-host', 'Worker')
   const assignment = String((await execute({ type: 'work.assign', conversationId: task, agentId: worker })).result.assignmentId)
   await execute({ type: 'work.status', conversationId: task, assignmentId: assignment, status: 'working', result: `Draft ${PR}` }, host, worker)
-  const { pulls, asked, patches, patchReads, merges, reader } = fakeReader()
   const pass = async () => { now += MINUTE; return watchPullRequests(db, store, reader, now) }
   /** The rows this feature wrote in [conversationId], oldest first. */
   const told = async (conversationId = task) => (await db.superTabMessage.findMany({ where: { tabId: tab, conversationId }, orderBy: { sequence: 'asc' } }))
@@ -193,7 +194,7 @@ describe('pull request events', () => {
     expect(cancelled.asked).not.toContain(cancelled.PR)
   })
 
-  // ENGINEERING.md 4: no loop grows without a bound. A pass reads a capped number of tasks, the most recently active first.
+  // AGENTS.md standard 4: no loop grows without a bound. A pass reads a capped number of tasks, the most recently active first.
   it('reads at most its cap of tasks a pass, the most recently active first', async () => {
     const f = await swarm()
     f.pulls.set(f.PR, f.pull())
@@ -204,7 +205,7 @@ describe('pull request events', () => {
     expect(f.asked).toEqual([f.PR])
   })
 
-  // ENGINEERING.md 6 and 8: a pull request GitHub cannot read is not skipped in silence, and each pass that did something
+  // AGENTS.md standards 6 and 8: a pull request GitHub cannot read is not skipped in silence, and each pass that did something
   // says how much.
   it('says how many pull requests it could not read', async () => {
     const f = await swarm()
@@ -451,6 +452,82 @@ describe('pull request events', () => {
       f.pulls.set(f.PR, f.pull({ head: 'ddddddd4444444ddddddd4444444ddddddd44444' }))
       await f.pass()
       for (const check of await read()) expect(check.passedBy).toBeNull()
+    })
+  })
+
+  // Task #3628: on #3561 a Yes at the pull request's real head did not count, twice, as the watch had not read the push yet. A
+  // verdict naming a head the record does not have reads GitHub first; a Ready reads it too.
+  describe('a head the record does not have yet', () => {
+    const HEAD2 = 'bbbbbbb2222222bbbbbbb2222222bbbbbbb22222', HEAD3 = 'ccccccc3333333ccccccc3333333ccccccc33333'
+    /** The watch read HEAD; GitHub is at HEAD3 now, unread. A Reviewer on the task and a Tester on its step. */
+    const pushed = async () => {
+      const f = await swarm({ reads: true })
+      f.patches.set(HEAD, 'p1').set(HEAD2, 'p2').set(HEAD3, 'p3')
+      f.pulls.set(f.PR, f.pull())
+      await f.pass()
+      const reviewer = await f.add(f.task, 'test-host', 'Reviewer'), tester = await f.add(f.task, 'test-host', 'Tester')
+      const step = String((await f.execute({ type: 'conversation.create', title: 'Test', reviewOf: f.task, step: 'Test', brief: 'Test it',
+        checks: [{ description: 'Signs in', independent: true }] } as Command, host, f.worker)).result.conversationId)
+      await f.execute({ type: 'conversation.agent', conversationId: step, agentId: tester, present: true, lead: false })
+      const stepWork = String((await f.execute({ type: 'work.assign', conversationId: step, agentId: tester }, host, f.worker)).result.assignmentId)
+      const data = async (key: string) => (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key } })).data as unknown as
+        { checks: Array<{ id: string; passedBy: string | null; verdicts?: Array<{ head?: string; stale?: string }> }>; pullRequestHeads?: Record<string, { head: string; patch: string | null }> }
+      const taskCheck = (await data(f.task)).checks[0]!.id, stepCheck = (await data(step)).checks[0]!.id
+      f.pulls.set(f.PR, f.pull({ head: HEAD3 }))
+      const review = async (head: string) => (await f.execute({ type: 'work.check', conversationId: f.task, assignmentId: f.assignment, checkId: taskCheck,
+        passed: true, evidence: 'Reads right', head, base: 'main' } as Command, host, reviewer)).result
+      const test = async (head: string) => (await f.execute({ type: 'work.check', conversationId: step, assignmentId: stepWork, checkId: stepCheck,
+        passed: true, evidence: 'Signs in', head, base: 'main' } as Command, host, tester)).result
+      const recorded = async () => (await data(f.task)).pullRequestHeads?.[f.PR]
+      const checks = async () => [(await data(f.task)).checks[0]!, (await data(step)).checks[0]!]
+      return { f, review, test, recorded, checks }
+    }
+
+    it('a Yes at the real head counts on the task and its step, and the record is that head', async () => {
+      const { review, test, recorded, checks } = await pushed()
+      expect(await review(HEAD3)).toMatchObject({ counts: true })
+      expect(await test(HEAD3)).toMatchObject({ counts: true })
+      expect(await recorded()).toMatchObject({ head: HEAD3, patch: 'p3' })
+      for (const check of await checks()) {
+        expect(check.passedBy).not.toBeNull()
+        expect(check.verdicts!.at(-1)).toMatchObject({ head: HEAD3 })
+        expect(check.verdicts!.at(-1)!.stale).toBeUndefined()
+      }
+    })
+
+    it('a Yes at an older head does not count, and the record moves to GitHub\'s head', async () => {
+      const { review, test, recorded, checks } = await pushed()
+      expect(await review(HEAD2)).toMatchObject({ counts: false })
+      expect(await test(HEAD2)).toMatchObject({ counts: false })
+      expect(await recorded()).toMatchObject({ head: HEAD3 })
+      for (const check of await checks()) {
+        expect(check.passedBy).toBeNull()
+        expect(check.verdicts!.at(-1)).toMatchObject({ head: HEAD2, stale: HEAD3 })
+      }
+    })
+
+    it('a Yes at the recorded head stops counting once GitHub\'s newer head is read', async () => {
+      const { f, review, recorded, checks } = await pushed()
+      // The record still says HEAD, so a Yes there reads nothing and counts, as before; the read for HEAD3 then stales it.
+      expect(await review(HEAD)).toMatchObject({ counts: true })
+      expect(await review(HEAD3)).toMatchObject({ counts: true })
+      f.pulls.set(f.PR, f.pull({ head: HEAD2 }))
+      expect(await review(HEAD)).toMatchObject({ counts: false })
+      expect(await recorded()).toMatchObject({ head: HEAD2 })
+      expect((await checks())[0]!.passedBy).toBeNull()
+    })
+
+    it('GitHub unreadable: the verdict is judged on the record, as before', async () => {
+      const { f, review, recorded } = await pushed()
+      f.pulls.delete(f.PR)
+      expect(await review(HEAD3)).toMatchObject({ counts: false })
+      expect(await recorded()).toMatchObject({ head: HEAD })
+    })
+
+    it('a Ready reads the head of the pull request it names', async () => {
+      const { f, recorded } = await pushed()
+      await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'review', result: `Ready for review: ${f.PR}` }, host, f.worker)
+      expect(await recorded()).toMatchObject({ head: HEAD3, patch: 'p3' })
     })
   })
 })
