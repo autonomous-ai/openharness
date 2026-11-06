@@ -377,12 +377,12 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
     expect((await items(s.tabId, peer)).some(i => i.text === 'Owner again')).toBe(true)
   })
 
-  it('an agent\'s reply in a person\'s thread is worded with the agent\'s name', async () => {
+  it('an agent\'s reply in a person\'s thread rings nobody: it stays in Activity and the badge (task #3607)', async () => {
     const s = await scene()
     const root = await send(s.tabId, s.web, 'Owner root')
-    const [notice, ...more] = await pushed(() => send(s.tabId, s.web, 'Worker answers', owner, root, s.worker))
-    expect(more).toEqual([])
-    expect(notice).toMatchObject({ personId: owner.sub, title: 'worker-harness replied in a thread' })
+    expect(await pushed(() => send(s.tabId, s.web, 'Worker answers', owner, root, s.worker))).toEqual([])
+    // The Activity row is still written: only the ring is gone.
+    expect((await db.superTabActivity.findMany({ where: { tabId: s.tabId, personId: owner.sub, kind: 'reply' } })).length).toBe(1)
   })
 
   it('a reply that tags a person tells them by the tag alone, once', async () => {
@@ -430,10 +430,9 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
     expect(both!.link).toBe(`swarm:${s.tabId}/${s.web}/message/${alsoInChat}`)
   })
 
-  it('an agent\'s tag is worded with the agent\'s name; one\'s own tag tells nobody; a tag held for a quiet chat is not pushed', async () => {
+  it('an agent\'s tag rings nobody (task #3607); one\'s own tag tells nobody; a tag held for a quiet chat is not pushed', async () => {
     const s = await scene()
-    expect(await pushed(() => tagging(s.tabId, s.web, 'Peer, the build is red', owner, null, [peer.sub], {}, s.worker)))
-      .toEqual([expect.objectContaining({ personId: peer.sub, title: 'worker-harness tagged you' })])
+    expect(await pushed(() => tagging(s.tabId, s.web, 'Peer, the build is red', owner, null, [peer.sub], {}, s.worker))).toEqual([])
     expect(await whom(() => tagging(s.tabId, s.web, 'Note to self', owner, null, [owner.sub]))).toEqual([])
     expect(await whom(() => tagging(s.tabId, s.web, 'Peer, if nobody takes this', owner, null, [peer.sub], { mentionsIfNoWorker: true }))).toEqual([])
   })
