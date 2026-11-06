@@ -48,6 +48,30 @@ enum SuperTabTaskColumn {
   final String label;
 }
 
+/// The columns [project] draws, in order: Full's six, Simple's three, which are Next up, Working and Done under their own
+/// titles (task #3897, #3896). A project with none read, or from an older server, is Full.
+List<SuperTabTaskColumn> superTabBoardColumns(SuperTabProject? project) =>
+    project?.isSimple == true
+    ? const [
+        SuperTabTaskColumn.nextUp,
+        SuperTabTaskColumn.working,
+        SuperTabTaskColumn.done,
+      ]
+    : SuperTabTaskColumn.values;
+
+/// [column]'s title in [project]: the server's for a Simple project, else Full's own.
+String superTabColumnLabel(
+  SuperTabProject? project,
+  SuperTabTaskColumn column,
+) {
+  if (project?.isSimple != true) return column.label;
+  return switch (column) {
+    SuperTabTaskColumn.nextUp => project!.columnTitle('todo') ?? 'To do',
+    SuperTabTaskColumn.working => project!.columnTitle('doing') ?? 'Doing',
+    _ => project!.columnTitle('done') ?? column.label,
+  };
+}
+
 /// Where a task is listed: its column, whether it waits on the reader (a mark
 /// in its column, never a column of its own), and what its caption says of
 /// its state, or nothing.
@@ -179,6 +203,7 @@ SuperTabTaskPlace? superTabTaskPlaceOf(
   int needsHuman = 0,
   String? Function(String personId)? personName,
   Map<String, int> releaseTimes = const {},
+  bool simple = false,
 }) {
   final assignment = task.assignment;
   final status = assignment?['status'];
@@ -195,10 +220,14 @@ SuperTabTaskPlace? superTabTaskPlaceOf(
       (column: column, needsYou: needsYou, state: words);
   // Where it is, in Working: a wait on review, a person, a machine or a block
   // is a mark on the card, not a column of its own.
-  SuperTabTaskPlace mark(String words) => at(SuperTabTaskColumn.working, words);
+  // A Simple project has no review step to wait on (#3897): that mark is plain Doing.
+  SuperTabTaskPlace mark(String words) =>
+      simple && (words == 'in review' || words == 'changes requested')
+      ? at(SuperTabTaskColumn.working)
+      : at(SuperTabTaskColumn.working, words);
   // Merged is Shipped only once a release carries it (#3452): until then it
   // waits for one, whatever else the task is (it is often closed already).
-  if (superTabTaskReleasing(task)) {
+  if (!simple && superTabTaskReleasing(task)) {
     final parts = _parts(task.releasing!);
     final next = _nextRelease(task.releasing!, releaseTimes, now);
     return at(
@@ -216,16 +245,18 @@ SuperTabTaskPlace? superTabTaskPlaceOf(
         ? task.closed
         : now.difference(shipped) > superTabBacklogShippedWindow;
     if (old) return null;
-    return merged
+    return merged && !simple
         ? at(
             SuperTabTaskColumn.shipped,
             _versions(task.releasedTags) ?? pullRequest,
           )
-        : at(SuperTabTaskColumn.done, 'Done');
+        : at(SuperTabTaskColumn.done, simple ? null : 'Done');
   }
   if (task.closed || status == 'cancelled' || status == 'stopped') {
     return null;
   }
+  // Simple: its agent marking it done is the end, with no merge or checks to wait on (#3897).
+  if (simple && status == 'done') return at(SuperTabTaskColumn.done);
   if (status == 'done') {
     // Red checks put it back in Working: Done is waiting to merge, with the checks green (task #3827).
     final checks = _checksOf(task);
@@ -316,12 +347,17 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
   int Function(SuperTabConversation task)? needsHuman,
   String? Function(String personId)? personName,
   Map<String, int> releaseTimes = const {},
+  bool simple = false,
 }) {
   final board = {
     for (final column in SuperTabTaskColumn.values)
       column: <SuperTabTaskEntry>[],
   };
-  board[SuperTabTaskColumn.proposals]!.addAll([
+  // A Simple project has no Proposal column: what is proposed waits in To do, never out of sight (#3897).
+  final proposed = simple
+      ? SuperTabTaskColumn.nextUp
+      : SuperTabTaskColumn.proposals;
+  board[proposed]!.addAll([
     for (final proposal in [...proposals]..sort((a, b) => a.at.compareTo(b.at)))
       (task: null, proposal: proposal, needsYou: false, state: null),
   ]);
@@ -333,7 +369,7 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
     if (proposal != null && proposal.mergedInto != null) continue;
     if (proposal != null && !proposal.becameTask) {
       if (task.closed) continue;
-      board[SuperTabTaskColumn.proposals]!.add((
+      board[proposed]!.add((
         task: task,
         proposal: null,
         needsYou: asked || (mentions?.call(task) ?? 0) > 0,
@@ -350,6 +386,7 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
       needsHuman: task.closed ? 0 : needsHuman?.call(task) ?? 0,
       personName: personName,
       releaseTimes: releaseTimes,
+      simple: simple,
     );
     if (place == null) continue;
     board[place.column]!.add((
@@ -424,5 +461,6 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabProjectBoard(
     needsHuman: needsHuman,
     personName: (id) => people[id],
     releaseTimes: c.snapshot?.releaseTimesOf(project.id) ?? const {},
+    simple: project.isSimple,
   );
 }
