@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LAUNCH_ARGS_MAX_CHARS, LAUNCH_ARGS_MAX_WORDS, parseLaunchArgs } from './launchArgs.js'
+import { checkLaunchWords, LAUNCH_ARGS_MAX_CHARS, LAUNCH_ARGS_MAX_WORDS, parseLaunchArgs } from './launchArgs.js'
 
 const refusal = (flag: string) => ({ ok: false, detail: `${flag} is set by Harness and can't be added here.` })
 
@@ -37,7 +37,9 @@ describe('parseLaunchArgs', () => {
 
   it('refuses the flags Harness sets for Claude, bare, with =value, and quoted', () => {
     const flags = ['--resume', '-r', '--continue', '-c', '--model', '--permission-mode', '--dangerously-skip-permissions', '--session-id',
-      '--settings', '--append-system-prompt', '--system-prompt', '--mcp-config', '--fork-session']
+      '--settings', '--append-system-prompt', '--system-prompt', '--mcp-config', '--fork-session',
+      // Added after the audit: each one replaces what Harness tells the agent or where its settings come from.
+      '--setting-sources', '--append-system-prompt-file', '--system-prompt-file', '--effort']
     for (const flag of flags) {
       expect(parseLaunchArgs('claude', flag)).toEqual(refusal(flag))
       expect(parseLaunchArgs('claude', `${flag}=x`)).toEqual(refusal(flag))
@@ -52,7 +54,7 @@ describe('parseLaunchArgs', () => {
   })
 
   it('refuses the flags Harness sets for Codex, and resume or fork as the first word', () => {
-    const flags = ['--model', '-m', '--dangerously-bypass-approvals-and-sandbox', '--ask-for-approval', '-a', '--sandbox', '-s', '--profile', '-p']
+    const flags = ['--model', '-m', '--dangerously-bypass-approvals-and-sandbox', '--yolo', '--full-auto', '--ask-for-approval', '-a', '--sandbox', '-s', '--profile', '-p']
     for (const flag of flags) expect(parseLaunchArgs('codex', `${flag}=x`)).toEqual(refusal(flag))
     expect(parseLaunchArgs('codex', 'resume').ok).toBe(false)
     expect(parseLaunchArgs('codex', 'fork --x').ok).toBe(false)
@@ -83,5 +85,44 @@ describe('parseLaunchArgs', () => {
   it('applies only the generic rules to other engines', () => {
     expect(parseLaunchArgs('opencode', '--model x')).toEqual({ ok: true, args: ['--model', 'x'] })
     expect(parseLaunchArgs('opencode', '-rabc')).toEqual({ ok: true, args: ['-rabc'] })
+  })
+})
+
+describe('Codex config overrides', () => {
+  const keys = ['model', 'model_provider', 'profile', 'sandbox_mode', 'approval_policy', 'developer_instructions', 'mcp_servers', 'mcp_servers.x.command', 'model_providers', 'model_providers.y.base_url']
+
+  it('refuses a key Harness sets, as `k=v`, with the value as the next word, and attached', () => {
+    for (const key of keys) {
+      const detail = `-c ${key} is set by Harness and can't be added here.`
+      for (const text of [`-c ${key}=x`, `--config ${key}=x`, `--config=${key}=x`, `-c${key}=x`, `-c=${key}=x`, `-c "${key}=x"`, `--search -c ${key}="a b"`]) {
+        expect(parseLaunchArgs('codex', text), text).toEqual({ ok: false, detail })
+      }
+    }
+  })
+
+  it('allows every other key, and the same key for Claude, where -c is another flag', () => {
+    for (const text of ['-c model_reasoning_effort=high', '--config=tools.web_search=true', '-cshell_environment_policy.inherit=all', '-c models=x', '-c modelx=1']) {
+      expect(parseLaunchArgs('codex', text).ok, text).toBe(true)
+    }
+    // A trailing -c has no value to check; the engine itself refuses it at startup.
+    expect(parseLaunchArgs('codex', '-c').ok).toBe(true)
+    expect(parseLaunchArgs('claude', '--config model=x')).toEqual({ ok: true, args: ['--config', 'model=x'] })
+  })
+})
+
+describe('checkLaunchWords', () => {
+  it('accepts words the parser accepts and refuses the ones it refuses, with the same detail', () => {
+    expect(checkLaunchWords('claude', ['--chrome', 'a b'])).toEqual({ ok: true })
+    expect(checkLaunchWords('claude', [])).toEqual({ ok: true })
+    expect(checkLaunchWords('claude', ['--settings', 'x'])).toEqual(refusal('--settings'))
+    expect(checkLaunchWords('codex', ['-c', 'model=x'])).toEqual({ ok: false, detail: `-c model is set by Harness and can't be added here.` })
+    expect(checkLaunchWords('codex', ['resume'])).toEqual(refusal('resume'))
+    expect(checkLaunchWords('claude', ['a', '--', 'b']).ok).toBe(false)
+  })
+
+  it('refuses a hand-edited row the parser could never have produced', () => {
+    expect(checkLaunchWords('claude', Array.from({ length: LAUNCH_ARGS_MAX_WORDS + 1 }, () => 'a')).ok).toBe(false)
+    expect(checkLaunchWords('claude', ['a\nb']).ok).toBe(false)
+    expect(checkLaunchWords('claude', ['a\0b']).ok).toBe(false)
   })
 })
