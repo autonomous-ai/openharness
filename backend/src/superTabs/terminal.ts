@@ -4,7 +4,7 @@ import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, occupiesAgent, actorKey, agent, author, conversation, fail, isLeads, stableId, SuperTabError, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { downSince, productManagerOn } from './machines.js'
-import { agentProjectId, isConfidential, ledProject, onTeamAccount, ownSession, projectAgent, projectOf, readAgent, teamSessionAccess } from './projects.js'
+import { agentProjectId, isAgentChat, NO_PROJECT, isConfidential, ledProject, onTeamAccount, ownSession, projectAgent, projectOf, readAgent, teamSessionAccess } from './projects.js'
 import { redactCredentials } from './credentials.js'
 
 /** Any agent of an agent's project, or a person with write access, reads and types in its terminal through the host of its
@@ -101,6 +101,8 @@ export function currentGroup(state: SuperTabState, target: Agent): Conversation 
   return state.conversations.find(c => occupiesAgent(c) && c.assignment!.agentId === target.id)
     ?? state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id)
     ?? state.conversations.findLast(c => !c.archived && !isLeads(c) && !c.audience && c.agentIds.includes(target.id) && c.leadId !== target.id)
+    // A Regular agent between tasks is in its own chat (agent.new, task #4116).
+    ?? (target.regular ? state.conversations.find(c => isAgentChat(c) && c.agentIds.includes(target.id)) : undefined)
     ?? conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId)
 }
 
@@ -198,6 +200,8 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
 export function leadOf(state: SuperTabState, target: Agent): Agent | undefined {
   // A Buddy answers to its person alone, never to a PM; a Swarm-wide one has no project (Dee, 10-31).
   if (target.buddyOf) return undefined
+  // Nor does an agent in no project: a Regular one between tasks (task #4116).
+  if (agentProjectId(state, target) === NO_PROJECT) return undefined
   const lead = conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId).leadId
   return lead && lead !== target.id ? state.agents.find(a => a.id === lead) : undefined
 }
@@ -205,6 +209,7 @@ export function leadOf(state: SuperTabState, target: Agent): Agent | undefined {
 /** A row about an agent, delivered to its project Lead: in the row's group when the Lead is there, else by a second row in
  *  the Lead's chat. */
 export function toLead(state: SuperTabState, target: Agent, row: MessageDraft): MessageDraft[] {
+  if (agentProjectId(state, target) === NO_PROJECT) return [{ ...row, recipients: [] }]
   const chat = conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId)
   const lead = leadOf(state, target)?.id
   const here = !!lead && conversation(state, row.conversationId).agentIds.includes(lead)

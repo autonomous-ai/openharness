@@ -354,7 +354,7 @@ describe('contributed machine executor', () => {
     Object.assign(f.pool, { capabilitiesWanted: true })
     await f.machine.tick()
     const posted = (g: typeof f) => g.backend.mock.calls.filter(c => c[1] === 'POST').map(c => c[3] as Record<string, unknown>)
-    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'leadSwitch', 'buddyModel', 'buddyEngine', 'turnInbox'] })
+    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent', 'leadSwitch', 'buddyModel', 'buddyEngine', 'turnInbox'] })
     // A backend from before them does not ask, and would refuse the field.
     const older = fixture()
     await older.machine.tick()
@@ -3036,5 +3036,18 @@ describe('fresh Buddy idle proof (#3824)', () => {
     expect(posts(f)).toHaveLength(2)
     expect(posts(f).every(p => (p.idleBuddyHarnessIds as string[])?.join() === 'idle')).toBe(true)
     expect(f.core.agents.activity).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Task #4116 (Swarm v3): a Regular agent's start comes apart from `starts` (backend read/hostRows.ts), so a host from before
+// never launches it as a project's agent; this host launches it, and says it can.
+describe('a Regular agent\'s start', () => {
+  it('is launched from its own list', async () => {
+    const f = fixture()
+    const pool = f.pool as Record<string, unknown>
+    pool.regularStarts = pool.starts
+    pool.starts = []
+    await f.machine.tick()
+    expect(f.start).toHaveBeenCalledTimes(1)
   })
 })

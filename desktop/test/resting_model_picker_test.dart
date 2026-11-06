@@ -57,50 +57,50 @@ void main() {
   double top(WidgetTester tester, Finder finder) =>
       tester.getTopLeft(finder).dy;
 
-  testWidgets('with no new field the menu is exactly the one it always was', (
-    tester,
-  ) async {
-    // What the build before this one drew for this very answer, text for text, captured from it.
-    serve([
-      section(
-        'home',
-        own: true,
-        models: [
-          row('Qwen3.5-4B', 'macbook'),
-          // An older daemon folds the label into the node; this build shows it as it comes.
-          row('LFM2.5-8B', 'studio · seems offline'),
-        ],
-      ),
-      section('team', models: [row('DeepSeek-V4-Flash', 'scholes-60001')]),
-      section('empty-team'),
-    ]);
-    await open(tester, currentModel: 'Qwen3.5-4B');
-    expect(textsUnder(tester), [
-      'Qwen3.5-4B',
-      'Search models or machines',
-      'Subscription',
-      'Anthropic',
-      'Checking usage…',
-      'On your machines',
-      '2',
-      'Qwen3.5-4B',
-      'macbook',
-      'LFM2.5-8B',
-      'studio · seems offline',
-      'Shared · team',
-      '1',
-      'DeepSeek-V4-Flash',
-      'scholes-60001',
-      '3 models available',
-      'Local models',
-    ]);
-    // No row is greyed and no pick is gated: nothing said any of them was offline.
-    for (final row in tester.widgetList<ModelPickerRow>(
-      find.byType(ModelPickerRow),
-    )) {
-      expect(row.dimmed, isFalse);
-    }
-  });
+  testWidgets(
+    'older model replies keep their rows without inventing a usage report',
+    (tester) async {
+      // Model compatibility is independent of CLI usage. No CLI report means no usage row.
+      serve([
+        section(
+          'home',
+          own: true,
+          models: [
+            row('Qwen3.5-4B', 'macbook'),
+            // An older daemon folds the label into the node; this build shows it as it comes.
+            row('LFM2.5-8B', 'studio · seems offline'),
+          ],
+        ),
+        section('team', models: [row('DeepSeek-V4-Flash', 'scholes-60001')]),
+        section('empty-team'),
+      ]);
+      await open(tester, currentModel: 'Qwen3.5-4B');
+      expect(textsUnder(tester), [
+        'Qwen3.5-4B',
+        'Search models or machines',
+        'Subscription',
+        'Claude',
+        'On your machines',
+        '2',
+        'Qwen3.5-4B',
+        'macbook',
+        'LFM2.5-8B',
+        'studio · seems offline',
+        'Shared · team',
+        '1',
+        'DeepSeek-V4-Flash',
+        'scholes-60001',
+        '3 models available',
+        'Local models',
+      ]);
+      // No row is greyed and no pick is gated: nothing said any of them was offline.
+      for (final row in tester.widgetList<ModelPickerRow>(
+        find.byType(ModelPickerRow),
+      )) {
+        expect(row.dimmed, isFalse);
+      }
+    },
+  );
 
   testWidgets('every read the picker makes asks for row state', (tester) async {
     serve([

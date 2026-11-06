@@ -425,7 +425,8 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // A start that works in the folder it names, when that folder is a temporary one: a scratchpad, which Claude Code asks
       // about on every run and nobody answers (computer's Dee, Scholes 11-06, #3713). The agent gets a permanent folder of its
       // own, made, marked and trusted here, and removed when it stops (agentFolder.ts, machines.ts).
-      const agentFolder = !homeFolder && request.worktree !== true && typeof request.cwd === 'string' && temporaryFolder(request.cwd)
+      // So does a Regular agent (backend agent.new, task #4116), which starts in no project: the backend's folder only admits it.
+      const agentFolder = !homeFolder && request.worktree !== true && (request.regular === true || (typeof request.cwd === 'string' && temporaryFolder(request.cwd)))
         ? agentFolderFor(projectsRoot(), startId) : null
       // A folder there Harness did not make is refused, and so is the start: it never runs, or trusts, in someone else's folder.
       if (agentFolder) {

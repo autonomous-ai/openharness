@@ -805,6 +805,14 @@ describe('which branch a worktree starts from', () => {
     expect(payload).toMatchObject({ cwd: folder })
     expect(existsSync(join(folder, AGENT_FOLDER_MARK))).toBe(true)
   })
+  // Task #4116 (Swarm v3): a Regular agent starts in no project, in a permanent folder of its own Harness makes and marks.
+  it('is a permanent folder of its own for a Regular agent, never the folder the request names', async () => {
+    const [payload] = await created(request => { request.worktree = false; request.regular = true })
+    const folder = agentFolderFor(projectsRoot(), 'start')
+    expect(payload).toMatchObject({ cwd: folder })
+    expect(payload).not.toHaveProperty('projectSource')
+    expect(existsSync(join(folder, AGENT_FOLDER_MARK))).toBe(true)
+  })
   it('is not asked for when the agent works in the folder itself', async () => {
     const [payload] = await created(request => { request.worktree = false })
     expect(payload).toMatchObject({ cwd: '/repo' })

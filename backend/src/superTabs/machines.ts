@@ -6,7 +6,7 @@ import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, occupiesAgent, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
 import { startFinished } from './parts/write.js'
-import { agentProjectId, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
+import { agentProjectId, isAgentChat, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
 export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
@@ -884,7 +884,8 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   // A person's one Buddy chat has no project (Dee, 10-31): its project session works in the one it names, and its main Buddy
   // and plain sessions in none, in their own folder (buddyHomeFolder).
   const group = forProject ? undefined : conversation(state, request.conversationId)
-  const project = forProject ?? (!isSwarmBuddyChat(group!) ? groupProject(state, group!)
+  // A Regular agent's own chat has none either (agent.new, task #4116): it starts in its person's home folder.
+  const project = forProject ?? (isAgentChat(group!) ? undefined : !isSwarmBuddyChat(group!) ? groupProject(state, group!)
     : request.buddySession?.projectId ? projectOf(state, request.buddySession.projectId) : undefined)
   if (project && !pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
   // Kept by its owner for other projects: a Product Manager too. A Buddy is its owner's own (commands.ts buddy.create).
@@ -899,11 +900,11 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   // a Product Manager outside a Team account: any machine of the Swarm takes it (leadStart.ts, Ken 10-29).
   // What the task needs to reach, checked here for every start whatever the route sent (an older CLI drops needs.access):
   // a Buddy and a Product Manager need none (design section 3).
-  const needed = !request.buddyOf && !request.leadFor ? taskAccess(group) : []
-  if (!request.buddyOf && !(request.leadFor && !teamAccountPool(pool))) requireTeamWork(state, pool.machineId, pool.contributorId, project!, now, teamMachines, otherWorkspaceMachines, needed)
+  const needed = !request.buddyOf && !request.leadFor && !request.regular ? taskAccess(group) : []
+  if (!request.buddyOf && !request.regular && !(request.leadFor && !teamAccountPool(pool))) requireTeamWork(state, pool.machineId, pool.contributorId, project!, now, teamMachines, otherWorkspaceMachines, needed)
   const missing = project ? accessRefusal(state, pool.machineId, project, needed) : null
   if (missing) failTeamWork(missing)
-  const cwd = project ? projectFolder(pool, project) : buddyHomeFolder(pool, { id: request.buddyOf!.personId })
+  const cwd = project ? projectFolder(pool, project) : buddyHomeFolder(pool, { id: request.buddyOf?.personId ?? pool.contributorId })
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.
   const refused: string[] = []
