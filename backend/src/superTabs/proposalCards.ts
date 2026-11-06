@@ -1,3 +1,4 @@
+import { requireTaskApproval, stageTaskApproval } from './taskApproval.js'
 import { steers } from './boardRights.js'
 import { expireProposalQuestion } from './proposalClock.js'
 export { advanceProposalCards, proposalDueAt } from './proposalClock.js'
@@ -58,8 +59,8 @@ export function cardPriority(state: SuperTabState, project: SwarmProject, ownerI
 }
 
 export function createProposalCard(state: SuperTabState, project: SwarmProject, sender: ProposalSender,
-  input: Omit<CreateProposal, 'type' | 'projectId'>, id: string, now: number): Conversation {
-  requireBoard(project)
+  input: Omit<CreateProposal, 'type' | 'projectId'>, id: string, now: number, legacyMirror = false): Conversation {
+  if (!legacyMirror) requireBoard(project)
   const member = state.people.find(p => p.id === sender.personId && p.generation === sender.generation)
   if (!member || !canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) fail('NOT_FOUND', 'This project is unavailable.', 404)
   const parsed = proposalCreateSchema.parse({ type: 'proposal.create', projectId: project.id, ...input })
@@ -72,6 +73,7 @@ export function createProposalCard(state: SuperTabState, project: SwarmProject, 
     requesterId: member.id, priority, codePullRequestUrls: [],
     proposal: { version: 1, text: parsed.text, goal: parsed.goal, why: parsed.why, doneWhen: parsed.doneWhen,
       evidence: parsed.evidence, priority, createdAt: now, senders: [sender], questions: [] } }
+  stageTaskApproval(state, card, now)
   state.conversations.push(card)
   return card
 }
@@ -218,8 +220,10 @@ export function applyProposalAction(state: SuperTabState, actor: Actor, command:
     row(`${command.decision}: ${command.reason}`, { kind: 'proposal-decision', decision: command.decision })
     messages.push(...proposalNotices(state, card, 'decided', `${card.title}: ${command.decision}. ${command.reason}`, sender, operationId))
   } else {
+    requireTaskApproval(card)
     pending(card)
     const target = namedCard(state, actor, command.intoConversationId)
+    requireTaskApproval(target)
     pending(target)
     if (target.id === card.id) fail('PROPOSAL_MERGE_SELF', 'Merge another proposal into this card.', 400)
     if (hasOpenQuestion(card)) fail('PROPOSAL_QUESTION_OPEN', 'Answer the source card’s questions before merging.', 409)

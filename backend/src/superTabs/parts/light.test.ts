@@ -92,6 +92,7 @@ const conversation: Required<Conversation> = {
   task: { goal: '', changes: '', constraints: '', owns: [] },
   teamWritten: true,
   teamWrittenBy: { kind: 'assigned' },
+  taskApproval: { personId: 'p', generation: 'g', state: 'proposal', createdAt: 1 },
   title: 't',
 }
 

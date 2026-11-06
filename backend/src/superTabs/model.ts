@@ -15,6 +15,8 @@ import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProjec
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
 export interface Person {
+  /** Own future task decisions; absent keeps Auto approve. */
+  approvalMode?: import('./taskApproval.js').ApprovalMode
   id: string
   email: string
   role: Role
@@ -382,6 +384,8 @@ export function renderWorkTask(task: WorkTask): string {
 }
 
 export interface Conversation {
+  /** Person decision, separate from execution status for old clients. */
+  taskApproval?: import('./taskApproval.js').TaskApproval
   id: string
   /** The removed Swarm-wide Leads conversation, still stored in an older Swarm (leadsRemoved), a person's Buddy chat in a
    *  project (buddies.ts), or their one Buddy chat for the whole Swarm, with no project (`swarm-buddy`, buddies.ts

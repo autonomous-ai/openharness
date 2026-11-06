@@ -11,7 +11,8 @@ const words = 'Keep offline edits.'
 const task = { goal: words, changes: 'Persist drafts', constraints: 'No sign-in', owns: ['backend/src/superTabs/'] }
 function fixture(board = true) {
   const f = fullSwarm(NOW)
-  f.state.projects![0]!.boardMode = board
+  if (board) f.state.projects![0]!.boardMode = true
+  else delete f.state.projects![0]!.boardMode
   const candidate = f.add('candidate', f.web), other = f.add('other-candidate', f.web)
   let seq = 0
   const pm: Actor = { kind: 'agent', agentId: f.lead, machineOwnerId: `${owner.userId}-machine` }
@@ -30,7 +31,7 @@ function fixture(board = true) {
     proposalAsk: { id: 'ask', conversationId: f.buddyChat, source: false, author: { kind: 'person', id: peer.userId, name: 'Peer',
       membershipGeneration: f.state.people.find(p => p.id === peer.userId)!.generation }, text: words,
       createdAt: NOW, newestOwnerMessageId: 'ask', shown: [] } })
-  return Object.assign(f, { runCommand: run, card, mode, create, propose, pm, buddy, candidate, other })
+  return Object.assign(f, { runCommand: run, card, mode, create, propose, pm, buddyActor: buddy, candidate, other })
 }
 
 describe('personal approval enforced before work', () => {
@@ -42,7 +43,7 @@ describe('personal approval enforced before work', () => {
     expect(f.state.people.find(p => p.id === peer.userId)?.approvalMode).toBe('review')
     expect(f.state.people.find(p => p.id === owner.userId)?.approvalMode).toBeUndefined()
     expect(commandSchema.safeParse({ type: 'member.approvalMode', mode: 'review', personId: owner.userId }).success).toBe(false)
-    for (const actor of [f.pm, f.buddy]) expect(() => f.runCommand({ type: 'member.approvalMode', mode: 'autoApprove' }, actor)).toThrow()
+    for (const actor of [f.pm, f.buddyActor]) expect(() => f.runCommand({ type: 'member.approvalMode', mode: 'autoApprove' }, actor)).toThrow()
   })
   it('stages a PM task, excludes dispatch, and blocks assignment, starts and registration until approval', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
@@ -51,7 +52,7 @@ describe('personal approval enforced before work', () => {
     expect(openTasks(f.state, 'lead', NOW)).not.toContainEqual(f.card(id))
     for (const input of [
       { type: 'work.assign', conversationId: id, agentId: f.candidate },
-      { type: 'agent.start', request: { conversationId: id, machineId: 'host', engine: 'codex', name: 'New worker' } },
+      { type: 'agent.start', request: { conversationId: id, machineId: 'host', engine: 'codex', name: 'New worker', cwd: '/repo', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } },
     ]) expect(() => f.runCommand(input, f.pm)).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
     expect(() => f.runCommand({ type: 'agent.add', conversationId: id, machineId: 'host', harnessId: 'external', name: 'External',
       configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null }, lead: false }, owner,
@@ -72,7 +73,7 @@ describe('personal approval enforced before work', () => {
   })
   it('refuses another person, PM or Buddy approval and old membership authority before receipt replay', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
-    for (const actor of [owner, outsider, f.pm, f.buddy]) for (const type of ['task.approve', 'task.reject'])
+    for (const actor of [owner, outsider, f.pm, f.buddyActor]) for (const type of ['task.approve', 'task.reject'])
       expect(() => f.runCommand({ type, conversationId: id, ...type === 'task.reject' ? { reason: 'No' } : {} }, actor)).toThrow()
     const command = commandSchema.parse({ type: 'task.approve', conversationId: id })
     authorizeCommandAccess(f.state, peer, command)
