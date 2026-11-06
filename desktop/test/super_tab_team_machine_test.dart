@@ -479,10 +479,7 @@ void main() {
         );
         await tester.tap(button);
         await tester.pumpAndSettle();
-        expect(
-          find.textContaining('its sign-in was ended'),
-          findsOneWidget,
-        );
+        expect(find.textContaining('its sign-in was ended'), findsOneWidget);
         await tester.tap(find.byKey(const Key('team-account-setup-continue')));
         await tester.pumpAndSettle();
         expect(daemon.asked.where((a) => a['action'] == 'teamSetup').last, {

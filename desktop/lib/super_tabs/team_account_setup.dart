@@ -30,7 +30,10 @@ Future<void> showTeamAccountSetup(
   builder: (context) => _TeamAccountSetup(
     app: app,
     asked: asked,
-    missing: signInAgain ? 'it is signed in for another account' : missing,
+    // A revoked sign-in says so (#3684); the other sign in again is for another account (#3122).
+    missing: signInAgain
+        ? (missing ?? 'it is signed in for another account')
+        : missing,
     signInAgain: signInAgain,
     restart: restart,
     words: _Words.of(operatingSystem ?? RuntimePlatform.operatingSystem),

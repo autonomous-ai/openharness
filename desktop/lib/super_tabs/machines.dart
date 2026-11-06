@@ -1027,7 +1027,19 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               (m['teamWork'] as Map?)?['code'] == code,
         ) ==
         true;
-    final setup = own('TEAM_ACCOUNT_REQUIRED'),
+    // This Mac's own Team account, offline: its daemon says whether its sign-in was ended (#3684), so the row offers
+    // Sign in again rather than a Restart that would start it signed out.
+    final offline =
+        c.snapshot?.machines.any(
+          (m) =>
+              m['contributorId'] == c.accountId &&
+              m['hostMachineId'] is String &&
+              app.stateOf(m['hostMachineId'] as String)?.isLocalMachine ==
+                  true &&
+              (m['teamWork'] as Map?)?['code'] == 'MACHINE_OFFLINE',
+        ) ==
+        true;
+    final setup = own('TEAM_ACCOUNT_REQUIRED') || offline,
         joining = own('TEAM_ACCOUNT_JOINING');
     if (!setup) _teamSetup = null;
     if (!joining) _teamJoin = null;
@@ -1610,9 +1622,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     // go on working (#3169); otherwise its own person reads why: they
     // cancelled, or setup failed and why.
     final progress = (setUpTeam || restartTeam) ? _setupWatch?.line : null;
+    final signInAgain = restartTeam && _teamSetup?.state == 'sign-in-again';
     final problem = progress != null
         ? '$progress\nKeep working. We\'ll tell you when it\'s ready.'
-        : setUpTeam
+        : setUpTeam || signInAgain
         ? superTabTeamSetupLine(_teamSetup) ?? line
         : joinLine ?? line;
     return _MachineView(
@@ -1633,6 +1646,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       retryJoin: joinLine != null,
       setUpTeamLabel: joinLine != null
           ? 'Retry'
+          : signInAgain
+          ? 'Sign in again'
           : restartTeam
           ? 'Restart'
           : superTabTeamSetupAction(_teamSetup),
@@ -2298,12 +2313,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                               restart: view.setUpTeamLabel == 'Restart',
                               missing: view.setUpTeamLabel == 'Restart'
                                   ? 'Harness Team account offline'
-                                  : _teamSetup?.state == 'incomplete'
+                                  : _teamSetup?.state == 'incomplete' ||
+                                        _teamSetup?.state == 'sign-in-again'
                                   ? _teamSetup?.detail ?? ''
                                   : null,
                               signInAgain:
                                   view.setUpTeamLabel != 'Restart' &&
-                                  _teamSetup?.state == 'exists',
+                                  (_teamSetup?.state == 'exists' ||
+                                      _teamSetup?.state == 'sign-in-again'),
                             );
                             await _readTeamSetup();
                           }
@@ -3047,6 +3064,8 @@ String? superTabTeamSetupLine(({String state, String? detail})? setup) {
     // The Swarm has no Team account for this row while this Mac has one: it serves another account of this computer,
     // the one signed in here before (#3122).
     'exists' => 'Harness Team on this computer works for another account',
+    // Its sign-in was ended, a revoke (cli/src/team/autoSetup.ts `TEAM_SIGN_IN_LOST`, #3684).
+    'sign-in-again' => 'Harness Team signed out',
     _ => null,
   };
   return why == null ? null : "Teammates' agents paused: $why";
@@ -3066,10 +3085,12 @@ String? superTabTeamJoinLine(({String? failure, bool hostRunning}) join) {
       : "Teammates' agents paused: Harness Team could not join: $why";
 }
 
-/// The row's button for this Mac's own setup: Repair when the account is there but a part of it is not (#2765), or it
-/// works for another account (#3122), else Set up.
+/// The row's button for this Mac's own setup: Sign in again when its sign-in was ended (#3684), Repair when the account is
+/// there but a part of it is not (#2765), or it works for another account (#3122), else Set up.
 String superTabTeamSetupAction(({String state, String? detail})? setup) =>
-    setup?.state == 'incomplete' || setup?.state == 'exists'
+    setup?.state == 'sign-in-again'
+    ? 'Sign in again'
+    : setup?.state == 'incomplete' || setup?.state == 'exists'
     ? 'Repair'
     : 'Set up';
 
