@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Backend and CLI Swarm paths only; no cli/src/core changes, production writes, sign-outs or system installs.
+- Backend and CLI Swarm implementation, plus the two existing Desktop scorecard rows needed to display the figures; no cli/src/core changes, production writes, sign-outs or system installs.
 - PR starts `Requested by dee through Harness.` Tests first; affected tests locally, complete backend/integration checks in PR CI.
 - Preserve access checks, message author attribution, cross-account warnings, unanswered tracking and older hosts.
 - Temporary files only in mktemp -d folders; stop only processes started for this task, by id.
@@ -40,28 +40,39 @@ Reuse message/reaction/scorecard stores and their lifecycle; no new collection o
 **Files:** backend/src/superTabs/inbox.ts, inbox.test.ts, store.ts; backend/integration/superTabNoticeDigest.test.ts; pulse.ts if relay tracking needs correction.
 **Interfaces:** gathersForInbox(state, recipient, message): boolean keeps only crew batching; deliveries(user, tab, agent, turn) releases legacy people without releasing other gathered rows. Existing owedLines remains the reminder interface.
 
-- [ ] Commit tests for busy PM project messages, threads and Buddy relays delivered immediately while notices stay gathered; legacy gathered people released; unanswered asks reappear.
-- [ ] Run the affected unit/integration cases and observe the behavior fail.
-- [ ] Implement the minimal classification/requeue changes, preserving all authorization and attribution.
-- [ ] Run affected inbox/digest/pulse tests, commit code and push.
+- [x] Commit tests for busy PM project messages, threads and Buddy relays delivered immediately while notices stay gathered; legacy gathered people released; unanswered asks reappear.
+- [x] Run the affected unit/integration cases and observe the behavior fail.
+- [x] Implement the minimal classification/requeue changes, preserving all authorization and attribution.
+- [x] Run affected inbox/digest/pulse tests, commit code and push.
 
 ### Task 2: Receipt eyes
 
 **Files:** backend/src/superTabs/store.ts; backend/integration/superTabNoticeDigest.test.ts (or existing delivery integration fixture).
 **Interfaces:** deliver(... ack ...) writes eyes under the receiving PM's identity on first confirmed receipt; existing reaction identity and reactionSeq drive reader refresh.
 
-- [ ] Commit tests: claim has no eyes; uncertain ack has no eyes; successful ack adds one, retries keep one and do not settle owed; non-PM/agent messages add none.
-- [ ] Run and observe failing tests.
-- [ ] Add the transactional reaction write and existing conversation change notification; test concurrent/manual eyes and revocation through current delivery authorization.
-- [ ] Run affected receipt/reaction integrations; commit and push.
+- [x] Commit tests: claim has no eyes; uncertain ack has no eyes; successful ack adds one, retries keep one and do not settle owed; non-PM/agent messages add none.
+- [x] Run and observe failing tests.
+- [x] Add the transactional reaction write and existing conversation change notification; test concurrent/manual eyes and revocation through current delivery authorization.
+- [x] Run affected receipt/reaction integrations; commit and push.
 
 ### Task 3: Answer time and five-minute pulse
 
 **Files:** backend/prisma/schema.prisma (optional message answer link), backend/src/superTabs/{model.ts,commands.ts,store.ts}, backend/src/superTabs/scorecard/{figures.ts,figures.test.ts,records.ts}, scorecard presentation module; backend/src/superTabs/{pulse.ts,pulse.test.ts}; backend/integration/superTabScorecard.test.ts.
 **Interfaces:** optional pmAnswer {count, medianSeconds, slowestSeconds} on ScorecardFigures; records includes bounded project message lookback and explicit answer links; PULSE_LIMITS.askMinutes = 5.
 
-- [ ] Commit tests for first PM answers to main/thread/relay messages; wrong agent/place, reactions, task cards and duplicate answers excluded; cross-day, zero samples and subminute timings; redAt equals sent+300000ms.
-- [ ] Run and observe failures.
-- [ ] Implement pure first-answer matching from stored message links and render daily median/slowest; extend existing indexed reader only as necessary, retaining caps and audience filters.
-- [ ] Run figures/pulse/job tests and affected scorecard integrations; profile any changed query against its existing index; typecheck.
-- [ ] Commit and push; add red/green PR comment; mark ready and set task review with exact revision and evidence.
+- [x] Commit tests for first PM answers to main/thread/relay messages; wrong agent/place, reactions, task cards and duplicate answers excluded; cross-day, zero samples and subminute timings; redAt equals sent+300000ms.
+- [x] Run and observe failures.
+- [x] Implement pure first-answer matching from stored message links and render daily median/slowest; extend existing indexed reader only as necessary, retaining caps and audience filters.
+- [x] Run figures/pulse/job tests and affected scorecard integrations; profile any changed query against its existing index; typecheck.
+- [x] Commit and push; add red/green PR comment; mark ready and set task review with exact revision and evidence.
+
+
+### Task 4: Show the scorecard figures
+
+**Files:** desktop/lib/super_tabs/scorecard.dart, desktop/test/super_tab_scorecard_test.dart.
+**Interfaces:** Read optional pmAnswer parts from the existing scorecard API; no transport changes.
+
+- [x] Commit and observe a failing row test for median 30s, slowest 1m30, and missing old-day figures.
+- [x] Add the two rows in the existing table, reusing scorecardSeconds.
+- [x] Run affected scorecard widget tests with memory fixtures and capture light/dark screenshots; no real sign-in.
+- [x] Commit/push and include the current-head screenshots in review evidence.
