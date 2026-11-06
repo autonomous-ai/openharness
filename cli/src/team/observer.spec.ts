@@ -23,3 +23,18 @@ describe('a revoke in the Harness Team account', () => {
       writeStatus: () => { throw new Error('read-only') }, now: () => 1 })).not.toThrow()
   })
 })
+
+// Linuxtest2 on daniel-pc (#3684): the machines spec, run in a Team account, rewrote that machine's real status file to
+// signed-out through the real observer. A spec never reads this Mac's Team config, as team/relay.ts does not.
+describe('the Team config the real observer reads', () => {
+  it('is none under a test run, and the config file outside one', async () => {
+    vi.resetModules()
+    vi.doMock('./config.js', () => ({ readTeamConfig: () => config }))
+    const { teamConfigHere } = await import('./observer.js')
+    expect(teamConfigHere()).toBeNull()
+    const vitest = process.env.VITEST
+    delete process.env.VITEST
+    try { expect(teamConfigHere()).toBe(config) } finally { process.env.VITEST = vitest }
+    vi.doUnmock('./config.js')
+  })
+})
