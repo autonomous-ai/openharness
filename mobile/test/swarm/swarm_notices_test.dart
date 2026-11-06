@@ -722,7 +722,7 @@ void main() {
         'conversationId': 'g9',
         'messageId': 'msg-9',
         'leadName': 'River',
-        if (kind != null) 'leadKind': kind,
+        'leadKind': ?kind,
         'text': 'x',
       }),
     );

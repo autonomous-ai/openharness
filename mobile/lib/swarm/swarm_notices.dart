@@ -15,7 +15,7 @@ import 'swarm_reader.dart';
 /// hide one part of it there for sure: so what is asked, and the conversation
 /// it is in, are read in the app only (Lead, 2026-10-27). The one place to
 /// change if notices may say more.
-SwarmNoticeMessage swarmNotice(SwarmNeed need) {
+SwarmNoticeMessage swarmNotice(SwarmNeed need, {bool quiet = false}) {
   final (title, project, body) = switch (need) {
     SwarmDecisionNeed(:final decision) => (
       '${decision.askerName} asks you',
@@ -44,7 +44,16 @@ SwarmNoticeMessage swarmNotice(SwarmNeed need) {
     ),
   };
   return (
-    key: need.key,
+    key: switch (need) {
+      // A task's decision, its "stuck" and its "needs you" are one
+      // notification, the server's push for the decision too (task #3607).
+      SwarmDecisionNeed() => swarmTaskSlot(need.swarmId, need.conversationId),
+      SwarmWorkNeed(:final work) when !work.atPrompt => swarmTaskSlot(
+        need.swarmId,
+        need.conversationId,
+      ),
+      _ => need.key,
+    },
     title: title,
     subtitle: project,
     body: body,
@@ -56,9 +65,15 @@ SwarmNoticeMessage swarmNotice(SwarmNeed need) {
       // A tag in a reply only in its thread opens that thread.
       threadId: need is SwarmMentionNeed ? need.mention.threadId : null,
     ),
-    quiet: false,
+    quiet: quiet,
   );
 }
+
+/// The notification one task's questions share (task #3607; backend
+/// `push/notices.ts` taskSlot): a decision asked of the person, and the
+/// task's "stuck" or "needs you". A later one replaces the earlier quietly.
+String swarmTaskSlot(String swarmId, String conversationId) =>
+    'task:$swarmId:$conversationId';
 
 /// The notification a thread's replies share, the server's push for them too
 /// (task #3248; backend `push/notices.ts` threadSlot): a newer reply replaces
@@ -90,8 +105,10 @@ class SwarmAnnouncer {
   /// What this phone has told the account already: never told again.
   final SwarmTold told;
 
-  /// The notices posted and not yet taken down: each key's Swarm.
-  final _posted = <String, String>{};
+  /// The needs whose notice is posted and not yet taken down, by need key:
+  /// each one's Swarm and the notification it shows in. Several needs of one
+  /// task show in one ([swarmTaskSlot]), which stays until the last is gone.
+  final _posted = <String, ({String swarmId, String slot})>{};
 
   /// Posted notices whose need the last reads of its Swarm missed: how many
   /// in a row.
@@ -105,11 +122,19 @@ class SwarmAnnouncer {
   /// again) is not news (Dee's iPhone, 2026-11-01: one notice every 5
   /// seconds).
   void announce(SwarmNeed need) {
+    // An agent's tag that asks for no decision is badge and Activity only: the
+    // need still counts on the icon ([settle]), but nothing is posted.
+    if (need is SwarmMentionNeed && need.mention.taggedByAgent) return;
     if (quiet(need)) return;
     if (!told.add(need.key)) return;
-    final notice = swarmNotice(need);
-    _posted[notice.key] = need.swarmId;
-    _missed.remove(notice.key);
+    final slot = swarmNotice(need).key;
+    // The server's push for the task shows this notification already.
+    if (told.pushed(slot)) return;
+    // Another need of the task is up: this one replaces it without a sound.
+    final up = _posted.values.any((posted) => posted.slot == slot);
+    final notice = swarmNotice(need, quiet: up);
+    _posted[need.key] = (swarmId: need.swarmId, slot: notice.key);
+    _missed.remove(need.key);
     unawaited(notices.showSwarm(notice));
   }
 
@@ -119,10 +144,10 @@ class SwarmAnnouncer {
   /// once. [readable] null: the list is not read yet, and nothing goes.
   void settle(List<SwarmNeed> needs, {Set<String>? readable}) {
     final open = {for (final need in needs) need.key};
-    for (final MapEntry(key: key, value: swarm) in _posted.entries.toList()) {
+    for (final MapEntry(key: key, value: posted) in _posted.entries.toList()) {
       if (open.contains(key)) {
         _missed.remove(key);
-      } else if (readable != null && !readable.contains(swarm)) {
+      } else if (readable != null && !readable.contains(posted.swarmId)) {
         _takeDown(key);
       }
     }
@@ -144,8 +169,8 @@ class SwarmAnnouncer {
   /// its whose need this read missed, as the one before did, is taken down.
   void swarmRead(String swarmId, List<SwarmNeed> needs) {
     final open = {for (final need in needs) need.key};
-    for (final MapEntry(key: key, value: swarm) in _posted.entries.toList()) {
-      if (swarm != swarmId) continue;
+    for (final MapEntry(key: key, value: posted) in _posted.entries.toList()) {
+      if (posted.swarmId != swarmId) continue;
       if (open.contains(key)) {
         _missed.remove(key);
         continue;
@@ -229,6 +254,8 @@ class SwarmAnnouncer {
     required SwarmActivityEntry entry,
     required String project,
   }) {
+    // Only a person's reply rings; an agent's is badge and Activity (task #3607).
+    if (entry.actorKind != 'person') return;
     if (quiet(null)) return;
     final key = 'reply:$swarmId:${entry.id}';
     if (!told.add(key)) return;
@@ -290,9 +317,12 @@ class SwarmAnnouncer {
   }
 
   void _takeDown(String key) {
-    _posted.remove(key);
+    final gone = _posted.remove(key);
     _missed.remove(key);
-    unawaited(notices.cancelSwarm(key));
+    if (gone == null) return;
+    // The notification goes with the last need that showed in it.
+    if (_posted.values.any((posted) => posted.slot == gone.slot)) return;
+    unawaited(notices.cancelSwarm(gone.slot));
   }
 
   /// Takes every notice and the icon's count down: the account that saw them
