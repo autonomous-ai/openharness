@@ -85,6 +85,14 @@ describe('hook/statusline.mjs', () => {
     expect(JSON.parse(readFileSync(reportPath(data, configDir), 'utf8'))).toEqual({ v: 1, at: expect.any(Number), five_hour: { used_percentage: 12, resets_at: null } })
   })
 
+  // Claude Code 2.1.316's own schema for these windows names them `utilization` with an ISO `resets_at`, where its status
+  // line docs say `used_percentage` and epoch seconds: either is read, and kept as the report's one shape.
+  it('reads a window spelled as utilization with an ISO reset time', () => {
+    run(['--data', data], { rate_limits: { five_hour: { utilization: 30, resets_at: '2026-11-07T05:00:00.000Z' }, seven_day: { utilization: 61.5, resets_at: null } } })
+    expect(JSON.parse(readFileSync(reportPath(data, configDir), 'utf8'))).toEqual({ v: 1, at: expect.any(Number),
+      five_hour: { used_percentage: 30, resets_at: Date.parse('2026-11-07T05:00:00.000Z') / 1000 }, seven_day: { used_percentage: 61.5, resets_at: null } })
+  })
+
   it('does not write the report again while the windows are unchanged', () => {
     run(['--data', data], STATUS)
     const first = readFileSync(reportPath(data, configDir), 'utf8')
