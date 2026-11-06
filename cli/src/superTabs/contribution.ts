@@ -21,39 +21,49 @@ interface ContributionDeps {
   backend: typeof backend; open: typeof openDaemon; prepare: typeof prepareProjectFolder; capacity: typeof readCapabilities; team?: () => boolean
   /** The daemon's Swarm reads (superTabs/swarmReads.ts); a one-off read of its own when none is given. */
   reads?: SwarmReads
-  install: typeof installClaudeCode
+  install: typeof installEngine
   /** Whether Claude Code's questions before an agent's first turn are answered here (engines/launchPrep.ts). */
   firstRun: () => boolean | null
 }
-const CONTRIBUTION_DEPS = { backend, open: openDaemon, prepare: prepareProjectFolder, capacity: readCapabilities, install: installClaudeCode,
+const CONTRIBUTION_DEPS = { backend, open: openDaemon, prepare: prepareProjectFolder, capacity: readCapabilities, install: installEngine,
   firstRun: () => firstRunAnswered('claude') }
 
-/** How long Claude Code's install may take here before the setup gives up on it: as long as a pane's installer gets
+/** The engines the phone may ask installed for its Buddy (owner, 2026-11-06: Codex as well as Claude Code). */
+export type BuddyEngine = 'claude' | 'codex'
+const ENGINE_NAME: Record<BuddyEngine, string> = { claude: 'Claude Code', codex: 'Codex' }
+
+/** How long an engine's install may take here before the setup gives up on it: as long as a pane's installer gets
  *  (engines/kit/nativeInstall.ts). Over a slow Wi-Fi it took more than 5 minutes (the Dell, 2026-11-05). */
 const INSTALL_FOR_MS = 20 * 60_000
 
-/** The install under way, which a second setup joins: two npm installs into one prefix fight over its files. */
-let installing: Promise<void> | undefined
+/** Each engine's install under way, which a second setup asking for it joins. */
+const installing = new Map<BuddyEngine, Promise<void>>()
+/** The last install, which the next one waits for: two npm installs into one prefix fight over its files. */
+let lastInstall: Promise<unknown> = Promise.resolve()
 
-/** Installs Claude Code on this machine with its vendor's own line (lib/engineInstall.ts), in the shell a pane installs it
+/** Installs [engine] on this machine with its vendor's own line (lib/engineInstall.ts), in the shell a pane installs it
  *  from. Asked for by the phone setting up a new computer, so its Buddy can start there (owner, 2026-11-05): the OS ships no
- *  Claude Code of its own. Whether it worked is the engine probe's to say, not the installer's exit. */
-export function installClaudeCode(run: typeof spawn = spawn): Promise<void> {
-  installing ??= runClaudeCodeInstall(run).finally(() => { installing = undefined })
-  return installing
+ *  engine of its own. Whether it worked is the engine probe's to say, not the installer's exit. */
+export function installEngine(engine: BuddyEngine = 'claude', run: typeof spawn = spawn): Promise<void> {
+  const under = installing.get(engine)
+  if (under) return under
+  const next = lastInstall.catch(() => {}).then(() => runEngineInstall(engine, run)).finally(() => { installing.delete(engine) })
+  installing.set(engine, next)
+  lastInstall = next
+  return next
 }
 
-async function runClaudeCodeInstall(run: typeof spawn): Promise<void> {
-  const recipe = engineInstallRecipe('claude')
-  if (!recipe || process.platform === 'win32') throw new Error('Install Claude Code on this machine, then try again.')
-  const [command, ...args] = buildEngineInstallationArgv('claude', recipe, { HOME: homedir() })
+async function runEngineInstall(engine: BuddyEngine, run: typeof spawn): Promise<void> {
+  const recipe = engineInstallRecipe(engine)
+  if (!recipe || process.platform === 'win32') throw new Error(`Install ${ENGINE_NAME[engine]} on this machine, then try again.`)
+  const [command, ...args] = buildEngineInstallationArgv(engine, recipe, { HOME: homedir() })
   await new Promise<void>((resolve, reject) => {
     // A group of its own, ended whole at the deadline as the pane's installer is (engines/kit/nativeInstall.ts): the shell
     // alone killed left npm running, and the next try's install fought it over the prefix.
     const child = run(command!, args, { stdio: 'ignore', ...ownProcessGroup() })
     const deadline = setTimeout(() => {
       try { process.kill(-child.pid!, 'SIGKILL') } catch { child.kill('SIGKILL') }
-      reject(new Error('Installing Claude Code took too long. Try again.'))
+      reject(new Error(`Installing ${ENGINE_NAME[engine]} took too long. Try again.`))
     }, INSTALL_FOR_MS)
     child.on('error', (error) => { clearTimeout(deadline); reject(error) })
     child.on('close', () => { clearTimeout(deadline); resolve() })
@@ -145,14 +155,16 @@ export async function prepareContribution(core: CoreApi, input: Json, given: Par
       .map(e => e.engine as string)
     const [first, capability] = await Promise.all([probe(), deps.capacity({ cwd, tools: ['git'], devices: [] })])
     let answer = first, engines = installed(answer)
-    // The phone setting up a new computer (`installEngine`): with neither engine here, Claude Code is installed now, so the
-    // Buddy it starts next is admitted (capacity.ts admission). Anyone else is told to install one.
-    if (!engines.length && input.installEngine === 'claude') {
-      await deps.install()
+    // The phone setting up a new computer (`installEngine`): the engine the person picked for their Buddy, Claude Code or
+    // Codex, is installed now when it is not here, so the Buddy it starts next is admitted (capacity.ts admission); one here
+    // already is not installed again (owner, 2026-11-06). Anyone else is told to install one.
+    const wanted = input.installEngine === 'claude' || input.installEngine === 'codex' ? input.installEngine : null
+    if (wanted && !engines.includes(wanted)) {
+      await deps.install(wanted)
       answer = await probe()
       engines = installed(answer)
     }
-    // Which of them are signed in, so that phone asks for Claude's sign-in before the Buddy waits on it.
+    // Which of them are signed in, so that phone asks for the sign-in before the Buddy waits on it.
     const signedIn = (Array.isArray(answer.engines) ? answer.engines.map(object) : [])
       .filter(e => engines.includes(e.engine as string) && e.signedIn === true).map(e => e.engine as string)
     if (!engines.length) throw new Error('Install Claude Code or Codex on this machine, then try again.')

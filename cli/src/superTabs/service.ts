@@ -529,8 +529,9 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return { ok: true, buddy: grant?.role === 'buddy' }
         }
         if (payload.action === 'prepareContribution') return preparations.read(payload)
-        // The phone signing Claude Code in here for the Buddy it starts (claudeSignIn.ts): its owner's, as the setup is.
-        if (payload.action === 'claudeSignIn') {
+        // The phone signing Claude Code, or Codex (`engineSignIn` {engine}), in here for the Buddy it starts (claudeSignIn.ts):
+        // its owner's, as the setup is.
+        if (payload.action === 'claudeSignIn' || payload.action === 'engineSignIn') {
           const answer = await claudeSignIns.read(payload)
           // Once per sign-in: the Swarm reads it signed in now, before the Buddy that phone starts next asks.
           if (answer.state === 'done' && reported !== payload.operationId) {
