@@ -174,7 +174,7 @@ describe('a Regular agent\'s start on its computer', () => {
 describe('+ New agent, Member started on its own computer', () => {
   const configuration = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
   const join = (chat: string, extra: Record<string, unknown> = {}) =>
-    ({ type: 'agent.add', conversationId: chat, machineId: 'mate-laptop', harnessId: 'h-ada', name: 'Ada', configuration, ...extra }) as Command
+    ({ type: 'agent.add', conversationId: chat, machineId: 'mate-laptop', harnessId: 'h-ada', name: 'Ada', lead: false, configuration, ...extra }) as Command
 
   it('opens its chat with no start, even on a computer the Swarm does not list', () => {
     const f = swarm()
