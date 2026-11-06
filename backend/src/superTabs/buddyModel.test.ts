@@ -163,6 +163,8 @@ describe('the Buddy\'s machine reporting the switch', () => {
     const { f, requestId } = asked()
     f.state.agents.push({ ...structuredClone(f.agent()), id: 'session', harnessId: 'h-session', buddySession: { thread: 't', from: 0 } })
     delete f.state.agents.at(-1)!.modelRequest
+    // A session is in its Buddy's chat, as a New session puts it (commands.ts routeBuddySession).
+    f.state.conversations.find(c => c.id === f.chat)!.agentIds.push('session')
     f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId, ok: true }, f.buddy())
     expect(f.state.agents.find(a => a.id === 'session')!.gridModel).toBe(MODEL)
     f.run({ type: 'buddy.model', gridModel: null })

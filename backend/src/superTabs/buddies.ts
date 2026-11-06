@@ -89,6 +89,10 @@ export function openSwarmBuddyChat(state: SuperTabState, owner: Person): Convers
 const ownBuddy = (agent: Agent, person: Pick<Person, 'id' | 'generation'>): boolean => isSwarmBuddy(agent) && !agent.buddySession
   && agent.buddyOf!.personId === person.id && agent.buddyOf!.generation === person.generation
 
+/** The Buddy chat [agent] is in (its main Buddy or a thread session of it), when loaded (task #3818). */
+export const buddyChatOf = (state: SuperTabState, agent: Pick<Agent, 'id'>): Conversation | undefined =>
+  state.conversations.find(c => isSwarmBuddyChat(c) && c.agentIds.includes(agent.id))
+
 /** How many Buddies a person may have in a Swarm unless its owner sets another number (spec: "Many Buddies", task #3818). */
 export const BUDDY_CAP = 5
 /** The most a Swarm's owner may allow (tab.buddyCap): every Buddy is a session on its person's machine. */

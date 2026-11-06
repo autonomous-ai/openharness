@@ -66,7 +66,7 @@ import { recordClosing, sessionClosed } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
-import { BUDDY_REQUIREMENTS, buddyCapOf, buddyCapRefusal, buddyChatId, buddyChatsOf, buddyCount, defaultBuddyChat, dropBuddyChat, MAX_BUDDY_CAP, openNewBuddyChat, setDefaultBuddy, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, okayedWords, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalBrief, proposalSentText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyCapOf, buddyCapRefusal, buddyChatId, buddyChatOf, buddyChatsOf, buddyCount, defaultBuddy, defaultBuddyChat, dropBuddyChat, MAX_BUDDY_CAP, openNewBuddyChat, setDefaultBuddy, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, okayedWords, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalBrief, proposalSentText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
@@ -351,7 +351,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   // A person ends a thread session of their own Buddy chat (buddySessions.ts): `ended` from their app, `idle` and `stopped` from
   // their machine's host, which acts as them. Idempotent: a thread with no session is told so and nothing changes.
   // The person's own Buddy onto a model the Swarm's grid serves now, or back to their subscription (null): buddyModel.ts.
-  z.object({ type: z.literal('buddy.model'), gridModel: z.string().trim().min(1).max(200).nullable() }).strict(),
+  // `conversationId`: which of the person's Buddies, by its chat (task #3818); without it, their default.
+  z.object({ type: z.literal('buddy.model'), gridModel: z.string().trim().min(1).max(200).nullable(), conversationId: id.optional() }).strict(),
   // What the Buddy's machine reports once it carried the request out: `fresh` when the conversation was too long for the model.
   z.object({ type: z.literal('buddy.modelResult'), agentId: id, requestId: id, ok: z.boolean(), fresh: z.boolean().optional(),
     error: z.string().max(300).optional() }).strict(),
@@ -798,7 +799,7 @@ function dropClosing(state: SuperTabState, keep: (request: NonNullable<SuperTabS
 /** What may name a person's one Buddy chat: posts, reactions, proposals, naming the Buddy and ending a session. */
 const SWARM_BUDDY_CHAT_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'message.edit', 'message.delete', 'buddy.propose', 'buddy.rename', 'buddy.sessionEnd',
   // Which of a person's several Buddies (task #3818).
-  'buddy.create', 'buddy.remove', 'buddy.default'])
+  'buddy.create', 'buddy.remove', 'buddy.default', 'buddy.model'])
 
 export function authorizeCommandAccess(state: SuperTabState, actor: Actor, command: Command, context: Partial<CommandContext> = {}) {
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
@@ -932,8 +933,10 @@ function proposalOf(state: SuperTabState, project: SwarmProject, proposal: Propo
   // membership. Without a one Buddy (removed since), the author keeps it.
   const gone = !buddy ? state.people.find(p => p.id === personId) : undefined
   const owner = buddy?.buddyOf ?? (gone ? { personId: gone.id, generation: gone.generation } : undefined)
+  // With several Buddies (task #3818): the main Buddy of the session's own chat, else (its chat gone) the person's default.
+  const sessionChat = buddy?.buddySession ? buddyChatOf(state, buddy) : undefined
   const main = owner && !(buddy && isSwarmBuddy(buddy) && !buddy.buddySession)
-    ? state.agents.find(a => isSwarmBuddy(a) && !a.buddySession && a.buddyOf!.personId === owner.personId && a.buddyOf!.generation === owner.generation)
+    ? (sessionChat && mainBuddyOf(state, sessionChat)) ?? (owner.generation === state.people.find(p => p.id === owner.personId)?.generation ? defaultBuddy(state, owner.personId) : undefined)
     : undefined
   return { buddyId: main?.id ?? buddyId!, messageId: proposal.id, ...personId ? { personId } : {} }
 }
@@ -1475,7 +1478,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       delete chat.buddyDownTold
       return
     }
-    const main = state.agents.find(a => isSwarmBuddy(a) && !a.buddySession && a.buddyOf!.personId === owner.id && a.buddyOf!.generation === owner.generation)
+    // The person's default Buddy answers in their older project chats (task #3818).
+    const main = owner.generation === state.people.find(p => p.id === owner.id)?.generation ? defaultBuddy(state, owner.id) : undefined
     if (!main) return
     const pool = machineContribution(state, main.machineId), machine = pool?.name ?? 'my machine'
     if (state.paused) return 'the Swarm is paused'
@@ -1513,7 +1517,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   const buddyDownLine = (chat: Conversation, why: string) => {
     if (chat.buddyDownTold) return
     const owner = chatOwner(chat)
-    const main = owner && state.agents.find(a => isSwarmBuddy(a) && !a.buddySession && a.buddyOf!.personId === owner.id && a.buddyOf!.generation === owner.generation)
+    const main = owner && owner.generation === state.people.find(p => p.id === owner.id)?.generation ? defaultBuddy(state, owner.id) : undefined
     if (!main) return
     chat.buddyDownTold = true
     effects.messages.push({ id: stableId(operationId, BUDDY_DOWN_SOURCE), conversationId: chat.id, replyTo: null, recipients: [],
@@ -1565,8 +1569,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         delete chat.buddySessions
       }
     }
-    // The one Buddy takes its sessions in the person's older project chats with it (startOldChatBuddy).
-    if (isSwarmBuddy(target) && !target.buddySession) {
+    // The default Buddy takes its sessions in the person's older project chats with it (startOldChatBuddy); another of their
+    // Buddies leaves them to the default (task #3818).
+    if (isSwarmBuddy(target) && !target.buddySession && defaultBuddy(state, target.buddyOf!.personId)?.id === target.id) {
       for (const other of state.agents.filter(a => a.buddyNarrow && !a.buddySession && a.buddyOf?.personId === target.buddyOf!.personId)) removeAgent(other)
       for (const start of state.starts ?? []) {
         if (start.request.buddyNarrow && !start.request.buddySession && start.request.buddyOf?.personId === target.buddyOf!.personId && !start.harnessId && !start.error) {
@@ -2122,7 +2127,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const to = person(state, personId)
         const text = approvedDropNotice(who, project, rules)
         const id = stableId(operationId, 'rule-approved', personId)
-        message(openSwarmBuddyChat(state, to).id, text, [], null, { kind: PM_LINE_KIND, projectId: project.id }, undefined, undefined, undefined, id)
+        message(defaultBuddyChat(state, to).id, text, [], null, { kind: PM_LINE_KIND, projectId: project.id }, undefined, undefined, undefined, id)
         Object.assign(effects.messages.at(-1)!, { buddyProject: project.id })
         effects.messages.push({ id: stableId(id, 'project-chat'), conversationId: openBuddyChat(state, project.id, to).id, author: sender, text, replyTo: null, recipients: [] })
       }
@@ -2468,7 +2473,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const names = leaving.map(a => a.displayName ?? a.name)
       const join = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]
       const signedIn = newOwner ? `signed in as ${usernameOf(state, newOwner.id) ?? 'another account'}` : 'signed in to another account'
-      effects.messages.push({ id: stableId(operationId, 'computer-moved'), conversationId: openSwarmBuddyChat(state, person(state, pool.contributorId)).id,
+      effects.messages.push({ id: stableId(operationId, 'computer-moved'), conversationId: defaultBuddyChat(state, person(state, pool.contributorId)).id,
         author: sender, replyTo: null, recipients: [], source: { kind: 'computer-moved', machineId: pool.machineId },
         text: `Your ${pool.name} is ${signedIn} now, so it left this Swarm under your account${join ? `, and ${join} with it` : ''}.` })
       result.moved = true
@@ -3115,14 +3120,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person opens their own Buddy chat.', 403)
       // With no project, the person's one Buddy chat (Dee, 10-31); with one, their older chat there, which older apps show.
       result.conversationId = command.projectId ? openBuddyChat(state, readProject(state, actor, command.projectId).id, person(state, actor.userId)).id
-        : openSwarmBuddyChat(state, person(state, actor.userId)).id
+        : defaultBuddyChat(state, person(state, actor.userId)).id
       break
     }
     case 'buddy.rename':
       renameBuddy(state, actor, readConversation(state, actor, command.conversationId), command.name, context.buddyNames)
       break
     case 'buddy.model':
-      askBuddyModel(state, actor, command.gridModel, operationId, context.now)
+      askBuddyModel(state, actor, command.gridModel, operationId, context.now, command.conversationId)
       break
     case 'buddy.modelResult': {
       // The machines a line names leave a Buddy's read of it (store.ts withoutMachineNames): a Buddy reads no machines.
@@ -3161,7 +3166,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // To nobody: the person reads it; their Buddy, if they have one, is not asked to answer for them. In their one Buddy chat,
       // marked with its project so it hides once they lose it (buddies.ts hiddenProjectRow), and in their older chat there,
       // which older apps and the phone still show (spec: Older apps).
-      message(openSwarmBuddyChat(state, to).id, command.text, [], null, { kind: PM_LINE_KIND, projectId: project.id })
+      message(defaultBuddyChat(state, to).id, command.text, [], null, { kind: PM_LINE_KIND, projectId: project.id })
       Object.assign(effects.messages.at(-1)!, { buddyProject: project.id })
       effects.messages.push({ id: stableId(operationId, 'project-chat'), conversationId: openBuddyChat(state, project.id, to).id, author: sender,
         text: command.text, replyTo: null, recipients: [] })
@@ -3636,7 +3641,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (moved && label && asked && owner && asked !== owner.id) {
         // The owner's Buddy reads it: by name, never email (review of #2954).
         const who = agentWrittenNameOf(state, asked) ?? 'Someone'
-        effects.messages.push({ id: stableId(operationId, 'pm-switch-notice'), conversationId: openSwarmBuddyChat(state, owner).id, author: sender, replyTo: null, recipients: [],
+        effects.messages.push({ id: stableId(operationId, 'pm-switch-notice'), conversationId: defaultBuddyChat(state, owner).id, author: sender, replyTo: null, recipients: [],
           source: { kind: 'pm-switch-notice', machineId: target.machineId },
           text: `${who} moved the PM of ${project.name} on ${pool?.name ?? target.machineId} to your ${engine} account "${label}".` })
       }
