@@ -76,6 +76,14 @@ describe('an assignment follows the machine rules', () => {
       .toEqual({ code: 'MACHINE_RULE', message: 'Away while its owner travels' })
     expect(refusal(() => s.run({ type: 'work.assign', conversationId: work, agentId: local }, s.as(s.pm)))).toBeNull()
   })
+
+  it('lets a Tester run where no Reviewer runs: a test step is not a review', () => {
+    const s = swarm()
+    const local = s.add('Local', 'local-codex', 'codex')
+    const work = s.task('Server', ['backend/src/a.ts'])
+    const test = s.run({ type: 'conversation.create', title: 'Test', brief: 'Test it.', reviewOf: work, step: 'Test', checks: [] }).result.conversationId as string
+    expect(refusal(() => s.run({ type: 'work.assign', conversationId: test, agentId: local }, s.as(s.pm)))).toBeNull()
+  })
 })
 
 describe('the lane dispatch follows the machine rules', () => {
