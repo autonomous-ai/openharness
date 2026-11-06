@@ -107,6 +107,7 @@ export const GROUP_FIELDS = {
     'step',
     'stepIds',
     'stepUp',
+    'talkedAt',
     'teamWritten',
     'teamWrittenBy',
   ],

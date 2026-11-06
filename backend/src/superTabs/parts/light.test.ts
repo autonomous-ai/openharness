@@ -85,6 +85,7 @@ const conversation: Required<Conversation> = {
   step: 'Review',
   stepIds: [],
   stepUp: { attempt: 2, floor: 2, reason: 'r', at: 1, carry: '' },
+  talkedAt: { w: { person: 1, answer: 2 } },
   task: { goal: '', changes: '', constraints: '', owns: [] },
   teamWritten: true,
   teamWrittenBy: { kind: 'assigned' },
