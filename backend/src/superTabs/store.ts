@@ -383,7 +383,7 @@ const WIDE_WINDOW = 5 * LIST_SIZE
 export const ABANDONED_START_MS = 15 * 60_000
 
 /** The commands that start, assign or route work, which read which of the tab's machines are Team machines. */
-const TEAM_WORK_COMMANDS = new Set<Command['type']>(['agent.start', 'lead.start', 'agent.startDispatch', 'work.assign', 'conversation.agent', 'route.record', 'route.override'])
+const TEAM_WORK_COMMANDS = new Set<Command['type']>(['agent.start', 'agent.new', 'lead.start', 'agent.startDispatch', 'work.assign', 'conversation.agent', 'route.record', 'route.override'])
 /** Whether an agent's command adds an agent to a task by opening it, by posting into it or by naming one there: those joins
  *  check team access as conversation.agent does (commands.ts teamJoin). An ordinary post reads no machine rows. */
 const addsAgent = (state: SuperTabState, actor: Actor, command: Command): boolean => {
@@ -1990,6 +1990,11 @@ export class SuperTabStore {
         throw error
       })
       if (command.type === 'buddy.rename' || command.type === 'buddy.create') context.buddyNames = await buddyNames(tx, tabId, original)
+      // + New agent (task #4116): the person's own computer, by the store's reading of its account row, as a Buddy's.
+      if (command.type === 'agent.new') context.contribution = await this.contribution(tx, original, actor, command, true).catch(error => {
+        if (error instanceof SuperTabError && ['HOST_UNAVAILABLE', 'HOST_REQUIRED'].includes(error.code)) fail('AGENT_OWN_MACHINE', 'A new agent runs only on your own computer, in your own account.', 403)
+        throw error
+      })
       if (command.type === 'agent.started' || command.type === 'agent.startDispatch') {
         const start = original.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
         context.contribution = await this.contribution(tx, original, actor, start.request, true)
