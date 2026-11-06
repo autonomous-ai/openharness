@@ -341,6 +341,9 @@ export interface WorkTask {
   constraints: string
   owns: string[]
   requires?: TaskRequirement
+  /** `strong`: big, hard or risky work, which the crew's dispatch hands only to a member on a strong model (dispatch.ts, #3576); a task
+   *  that wants two reviews counts as strong unless this says `standard`. */
+  strength?: 'standard' | 'strong'
   /** What its reviews check first, and how many independent reviews it wants: written into its brief (renderWorkTask), which
    *  whoever opens its review reads. The server opens and counts no review (project instructions, phase 4). */
   review?: ReviewPlan
