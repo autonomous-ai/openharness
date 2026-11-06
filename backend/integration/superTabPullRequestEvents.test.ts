@@ -580,3 +580,24 @@ describe('a pull request\'s check state', () => {
   })
 })
 
+
+// Task #3953: a pull request GitHub shows closed no longer captures the task's checks while another link is open.
+describe('a closed pull request is marked on the task', () => {
+  it('marks a linked pull request the watch read open and GitHub now shows closed, and clears the mark when it opens again', async () => {
+    const f = await swarm()
+    const duplicate = `https://github.com/acme/app/pull/${9500 + f.number}`, other = 'd'.repeat(40)
+    f.pulls.set(f.PR, f.pull())
+    f.pulls.set(duplicate, { ...f.pull({ head: other }), url: duplicate, number: 9500 + f.number })
+    await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'working', result: `${f.PR} and ${duplicate}` }, host, f.worker)
+    const heads = async () => ((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })).data as { pullRequestHeads: Record<string, { closed?: boolean }> }).pullRequestHeads
+    await f.pass()
+    expect(Object.keys(await heads()).sort()).toEqual([f.PR, duplicate].sort())
+    f.pulls.set(duplicate, { ...f.pulls.get(duplicate)!, state: 'closed' })
+    await f.pass()
+    expect((await heads())[duplicate]).toMatchObject({ closed: true })
+    expect((await heads())[f.PR]!.closed).toBeUndefined()
+    f.pulls.set(duplicate, { ...f.pulls.get(duplicate)!, state: 'open' })
+    await f.pass()
+    expect((await heads())[duplicate]!.closed).toBeUndefined()
+  })
+})

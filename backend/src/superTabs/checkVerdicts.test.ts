@@ -3,7 +3,7 @@
  * request's own patch is the same (a plain rebase, or a main merge that leaves the PR's diff unchanged).
  */
 import { describe, expect, it } from 'vitest'
-import { HEADS_KEPT, deriveCheck, keepHead, recordCheckVerdict, refreshChecks, verdictCounts, watchedLinks, type PullRequestHeads } from './checkVerdicts.js'
+import { HEADS_KEPT, checkedPullRequest, deriveCheck, keepHead, recordCheckVerdict, refreshChecks, verdictCounts, watchedLinks, type PullRequestHeads } from './checkVerdicts.js'
 import type { Check, CheckVerdict } from './model.js'
 
 const PR = 'https://github.com/acme/app/pull/7'
@@ -225,5 +225,33 @@ describe('a verdict at a head a clean main merge carries', () => {
     expect(verdictCounts(read(A), on(B, undefined))).toBe(false)
     // Never a shortened head, as at its own head.
     expect(verdictCounts(read(A.slice(0, 7)), on(B, [A]))).toBe(false)
+  })
+})
+
+// Task #3953: the pull request a task's checks count at is its own, not simply its newest link.
+describe('checkedPullRequest', () => {
+  const OWN = 'https://github.com/acme/app/pull/20', OTHER = 'https://github.com/acme/app/pull/19'
+  const read = (extra: Partial<PullRequestHeads[string]> = {}) => ({ head: A, patch: 'p', at: 1, base: 'main', ...extra })
+  const task = (over: Partial<Parameters<typeof checkedPullRequest>[0]> = {}) => ({ pullRequestUrls: [OWN, OTHER], pullRequestHeads: { [OWN]: read(), [OTHER]: read({ head: B }) }, ...over })
+  const repository = 'https://github.com/acme/app'
+  const said = (result: string) => ({ assignment: { result } as never })
+
+  it('prefers the pull request its Engineer\'s latest status names over a newer link', () => {
+    expect(checkedPullRequest(task(said(`Ready: ${OWN} at aaaaaaa`)), repository)).toBe(OWN)
+  })
+  it('then the code list, then the newest open link', () => {
+    expect(checkedPullRequest(task({ codePullRequestUrls: [OWN] }), repository)).toBe(OWN)
+    expect(checkedPullRequest(task(), repository)).toBe(OTHER)
+  })
+  it('never picks a closed pull request while another is open, even when its Engineer names it', () => {
+    const heads = { [OWN]: read(), [OTHER]: read({ closed: true as const }) }
+    expect(checkedPullRequest(task({ pullRequestHeads: heads, ...said(`Ready: ${OTHER}`) }), repository)).toBe(OWN)
+    expect(checkedPullRequest(task({ pullRequestHeads: heads }), repository)).toBe(OWN)
+  })
+  it('keeps the newest link when every link is closed or none is read', () => {
+    const closed = { [OWN]: read({ closed: true as const }), [OTHER]: read({ closed: true as const }) }
+    expect(checkedPullRequest(task({ pullRequestHeads: closed }), repository)).toBe(OTHER)
+    expect(checkedPullRequest(task({ pullRequestHeads: undefined }), repository)).toBe(OTHER)
+    expect(checkedPullRequest({}, repository)).toBeUndefined()
   })
 })
