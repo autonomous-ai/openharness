@@ -109,14 +109,31 @@ void main() {
     expect(joins, hasLength(1));
   });
 
-  test('Discard after a failed start archives the Member’s empty chat', () async {
+  test('reopened after a failed start, it keeps the same chat', () async {
     final f = SuperTabLaunchFixture()..connection.failCreation = true;
+    final box = await _newAgent(f);
+    expect(await box.create(), NewHarnessOutcome.failed);
+    f.connection.failCreation = false;
+    final again = await _newAgent(f);
+    expect(await again.create(), NewHarnessOutcome.created, reason: again.error);
+    expect(_commands(f).where((c) => c['type'] == 'agent.new'), hasLength(1));
+    expect(f.connection.joins, hasLength(1));
+  });
+
+  test('Discard of a start that never ran archives the Member’s chat', () async {
+    final f = SuperTabLaunchFixture()..connection.loseCreate = true;
+    f.connection.creationRecovery = (type, payload) async => {
+      'creationId': payload['creationId'],
+      'state': type == 'agent_create_cancel' ? 'cancelled' : 'missing',
+    };
     final box = await _newAgent(f);
     expect(await box.create(), NewHarnessOutcome.failed);
     final chatId = f.connection.server.state['conversations']
         .cast<Map>()
         .firstWhere((g) => g['kind'] == 'agent-chat')['id'];
-    expect(await box.integration!.discard!(anyway: true), isNull);
+    final recovered = await _newAgent(f);
+    expect(recovered.integration!.agentKindLocked, isTrue);
+    expect(await recovered.integration!.discard!(), isNull);
     final archive = _commands(
       f,
     ).singleWhere((c) => c['type'] == 'conversation.archive');

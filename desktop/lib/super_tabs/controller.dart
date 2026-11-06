@@ -3466,7 +3466,7 @@ class SuperTabController extends ChangeNotifier {
   /// PM (Ken, 10-29), so no private chat but a Buddy chat is listed or opened,
   /// the reader's old Chat with PM that an older server still sends included.
   bool hiddenByBuddies(SuperTabConversation group) =>
-      group.audience != null && !group.isBuddyChat;
+      group.audience != null && !group.isBuddyChat && !group.isAgentChat;
 
   /// Where opening conversation [id] lands: itself, unless the app hides it.
   String landsOn(String id) => _shownFor(id);
