@@ -431,6 +431,11 @@ class SuperTabConversation {
               (row['shippedAt'] as num).toInt(),
             )
           : null,
+      releasedTags = row['released'] is Map && row['released']['tags'] is List
+          ? List.unmodifiable(
+              (row['released']['tags'] as List).whereType<String>(),
+            )
+          : const [],
       queueRank = (row['queueRank'] as num?)?.toDouble(),
       priority = row['priority'] as String?,
       handOutLane = row['handOutLane'] is String
@@ -495,6 +500,11 @@ class SuperTabConversation {
   /// when it is not on the server's release list (the desktop's model reads
   /// it for its board; the phone carries it as the desktop does).
   final List<String>? releasing;
+
+  /// The release tags that carried it, `v1.3.84_desktop` and the like, once
+  /// the server recorded the release (backend releases.ts `released`): what
+  /// the Board's Shipped names. Empty before, and from an older server.
+  final List<String> releasedTags;
 
   /// Its place in its project's shared Next up and the day before which it
   /// may not start, as Desktop's Tasks view reads them (task #2569); read here

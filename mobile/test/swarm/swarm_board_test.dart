@@ -48,26 +48,27 @@ void main() {
     'personId': ?personId,
   };
 
-  SwarmBoardPlace? place(
-    SuperTabConversation task, {
-    bool needsYou = false,
-  }) => swarmBoardPlaceOf(
-    task,
-    now: now,
-    needsYou: needsYou,
-    personName: (id) => const {'ken': 'Ken'}[id],
-  );
+  SwarmBoardPlace? place(SuperTabConversation task, {bool needsYou = false}) =>
+      swarmBoardPlaceOf(
+        task,
+        now: now,
+        needsYou: needsYou,
+        personName: (id) => const {'ken': 'Ken'}[id],
+      );
 
-  test('the columns read Proposal, Next up, Working, Done, Merged, Shipped', () {
-    expect(SwarmBoardColumn.values.map((c) => c.label), [
-      'Proposal',
-      'Next up',
-      'Working',
-      'Done',
-      'Merged',
-      'Shipped',
-    ]);
-  });
+  test(
+    'the columns read Proposal, Next up, Working, Done, Merged, Shipped',
+    () {
+      expect(SwarmBoardColumn.values.map((c) => c.label), [
+        'Proposal',
+        'Next up',
+        'Working',
+        'Done',
+        'Merged',
+        'Shipped',
+      ]);
+    },
+  );
 
   group('Next up and Working', () {
     test('a task nobody has taken is Next up, with the day it may not start before', () {
@@ -81,10 +82,7 @@ void main() {
 
     test('a task being worked on is Working, with its pull request when it has one', () {
       expect(place(task(status: 'working'))?.column, SwarmBoardColumn.working);
-      expect(
-        place(task(status: 'working', linked: true))?.state,
-        'PR #12',
-      );
+      expect(place(task(status: 'working', linked: true))?.state, 'PR #12');
     });
 
     test('a wait on review, changes, a person, a block, a machine or quiet is a mark in Working', () {
@@ -127,12 +125,15 @@ void main() {
       expect(place(task(status: 'needs_human'))?.state, 'someone to decide');
     });
 
-    test('a task that waits on the reader keeps its column and carries the mark', () {
-      final p = place(task(status: 'needs_human'), needsYou: true);
-      expect(p?.column, SwarmBoardColumn.working);
-      expect(p?.needsYou, isTrue);
-      expect(place(task(status: 'working'))?.needsYou, isFalse);
-    });
+    test(
+      'a task that waits on the reader keeps its column and carries the mark',
+      () {
+        final p = place(task(status: 'needs_human'), needsYou: true);
+        expect(p?.column, SwarmBoardColumn.working);
+        expect(p?.needsYou, isTrue);
+        expect(place(task(status: 'working'))?.needsYou, isFalse);
+      },
+    );
   });
 
   group('Done, Merged and Shipped', () {
@@ -154,7 +155,10 @@ void main() {
         )?.state,
         'waiting to merge for 2 h 15 min',
       );
-      expect(place(task(status: 'done', linked: true))?.state, 'waiting to merge');
+      expect(
+        place(task(status: 'done', linked: true))?.state,
+        'waiting to merge',
+      );
     });
 
     test('a task done with no code to merge stays Done, never Shipped', () {
@@ -166,24 +170,33 @@ void main() {
       expect(place(done)?.state, 'Done');
     });
 
-    test('a merged task still releasing is Merged with the parts it waits for', () {
-      final merged = task(
-        status: 'done',
-        merged: true,
-        releasing: ['desktop', 'backend'],
-      );
-      expect(place(merged)?.column, SwarmBoardColumn.merged);
-      expect(place(merged)?.state, 'waiting for Desktop, Backend');
-      expect(
-        place(task(status: 'done', merged: true, releasing: []))?.state,
-        'waiting for a release',
-      );
-    });
+    test(
+      'a merged task still releasing is Merged with the parts it waits for',
+      () {
+        final merged = task(
+          status: 'done',
+          merged: true,
+          releasing: ['desktop', 'backend'],
+        );
+        expect(place(merged)?.column, SwarmBoardColumn.merged);
+        expect(place(merged)?.state, 'waiting for Desktop, Backend');
+        expect(
+          place(task(status: 'done', merged: true, releasing: []))?.state,
+          'waiting for a release',
+        );
+      },
+    );
 
     test('a merged task is Merged even when it is already closed', () {
       expect(
-        place(task(status: 'done', merged: true, releasing: ['cli'], archived: true))
-            ?.column,
+        place(
+          task(
+            status: 'done',
+            merged: true,
+            releasing: ['cli'],
+            archived: true,
+          ),
+        )?.column,
         SwarmBoardColumn.merged,
       );
     });
@@ -221,10 +234,13 @@ void main() {
   });
 
   group('not listed', () {
-    test('a cancelled, stopped or closed task that shipped nothing has no place', () {
-      expect(place(task(status: 'cancelled')), isNull);
-      expect(place(task(status: 'stopped')), isNull);
-      expect(place(task(status: 'working', archived: true)), isNull);
-    });
+    test(
+      'a cancelled, stopped or closed task that shipped nothing has no place',
+      () {
+        expect(place(task(status: 'cancelled')), isNull);
+        expect(place(task(status: 'stopped')), isNull);
+        expect(place(task(status: 'working', archived: true)), isNull);
+      },
+    );
   });
 }
