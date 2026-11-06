@@ -102,8 +102,8 @@
 
 - [x] Commit and observe the lost-file/scope unit regression and real-store file-opening regression before code.
 - [x] Preserve files, scope and root id. Green: 34 proposal units and 3 real-store file flows (switched, legacy and expired uploads). Red unit `7c72f04bf`; red integration `8088bca73` failed because persisted attachments were absent.
-- [ ] Commit and observe missing-delivery-feedback regressions for person, agent and partial recipients before code.
-- [ ] Compute feedback from final recipients; run affected units, real-store proposal flows and typecheck.
+- [x] Commit and observe missing-delivery-feedback regressions for person, agent and partial recipients before code. Red `5a77e456c`: 3 unit cases lacked feedback; real-store regression (setup correction `8b4535537`) failed on the same absent feedback.
+- [x] Compute feedback from final recipients; run affected units, real-store proposal flows and typecheck. Green: 665 affected units across six files; 10 existing real-store proposal cases and the new sender/partial-delivery case passed. The worker fixture was corrected to post from its task (the project chat does not admit idle workers); its reply to a PM question now passes. Test-helper typing corrected; 37 proposal units and backend typecheck pass. No new query/index/storage lifecycle or production permission change.
 - [ ] Push one repair head including CI fixture repair, request focused independent re-reviews and platform confirmation.
 
 CI fixture repair `47da5780a`: nine automatic integration failures were expired reset holds fixed at 2026-11-06T09:00Z. Reproduced the phone needs-human case failing with HOLD_REASON_MISSING before replacing all 13 resets with each fixture clock plus its original interval. Green: 58 affected checks across seven integration files, then 10 host-attention/Stuck checks across two of those files. Full local suite and manual CI were not run.

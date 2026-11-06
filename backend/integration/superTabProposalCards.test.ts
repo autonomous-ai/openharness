@@ -61,9 +61,11 @@ describe('durable proposal cards', () => {
 
   it('tells senders the PM was excluded and persists only the recipients that will receive a chat post', async () => {
     const f = await fixture()
-    const worker = String((await f.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'proposal-mac', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId)
+    const group = String((await f.execute({ type: 'conversation.create', title: 'Follow-up', brief: 'Resolve the question', checks: [{ description: 'Question answered', independent: false }] })).result.conversationId)
+    const worker = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'proposal-mac', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId)
+    const question = await f.execute({ type: 'message.send', conversationId: group, text: 'Which work should we keep?', recipientIds: [worker], replyTo: null }, owner, f.pm)
     for (const asAgent of [undefined, worker]) {
-      const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'For the PM', recipientIds: [f.pm], replyTo: null }, owner, asAgent)
+      const sent = await f.execute({ type: 'message.send', conversationId: group, text: 'Keep the offline draft work', recipientIds: [f.pm], replyTo: String(question.result.messageId) }, owner, asAgent)
       expect(sent.result.reachedNoAgent).toEqual(expect.any(String))
       expect(sent.result.notReached).toContain('PM')
       expect(sent.result.notReached).toContain('proposal card')
@@ -71,7 +73,7 @@ describe('durable proposal cards', () => {
       expect(row.recipientIds).toEqual([])
       expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: row.id } })).toBe(0)
     }
-    const partial = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'For both', recipientIds: [f.pm, worker], replyTo: null })
+    const partial = await f.execute({ type: 'message.send', conversationId: group, text: 'For both', recipientIds: [f.pm, worker], replyTo: null })
     expect(partial.result.notReached).toContain('PM')
     expect(partial.result).not.toHaveProperty('reachedNoAgent')
     expect((await db.superTabMessage.findUniqueOrThrow({ where: { id: String(partial.result.messageId) } })).recipientIds).toEqual([worker])

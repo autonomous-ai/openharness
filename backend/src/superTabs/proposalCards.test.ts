@@ -21,7 +21,8 @@ function fixture(switched = true) {
   const create = (actor: Actor = peer, extra = {}) => run({ type: 'proposal.create', projectId: 'lead', ...proposal, ...extra }, actor)
   const card = (id: unknown) => f.state.conversations.find(c => c.id === id)!
   const pm: Actor = { kind: 'agent', agentId: f.lead, machineOwnerId: `${owner.userId}-machine` }
-  return Object.assign(f, { run, create, card, pm })
+  const base: Omit<typeof f, 'run'> = f
+  return Object.assign(base, { run, create, card, pm })
 }
 
 // Removing record creation, membership/consent checks or the queue exclusion breaks these caller-visible assertions.
