@@ -126,3 +126,21 @@ describe('a Regular agent\'s chat', () => {
     expect(code(() => f.run(say(f.chat, 'Hi'), { kind: 'agent', agentId: f.agentId, machineOwnerId: 'owner' }))).not.toBeNull()
   })
 })
+
+// Swarm v3 FLOW (anh Dee 11-07): join the org, bring your agent on the computer you are on, and it becomes your Buddy. The
+// computer registers as part of it: no add-machine step.
+describe('joining by bringing your own agent', () => {
+  it('makes a new member\'s agent their Buddy on the computer they are on, which the Swarm did not list', () => {
+    const f = swarm()
+    expect(f.state.machines!.some(m => m.machineId === 'mate-laptop')).toBe(false)
+    const made = f.run({ type: 'buddy.create', machineId: 'mate-laptop', engine: 'codex',
+      setup: { name: 'Mate laptop', cwd: '/home/mate/swarm', engines: ['codex'] } } as Command, mate, own('mate'))
+    const start = f.state.starts!.find(s => s.id === made.result.startId)!
+    expect(start.request).toMatchObject({ machineId: 'mate-laptop', engine: 'codex', buddyOf: { personId: 'mate' }, buddyScope: 'swarm' })
+    expect(f.state.machines!.find(m => m.machineId === 'mate-laptop')).toMatchObject({ contributorId: 'mate', buddyOnly: true })
+    expect(f.state.conversations.find(c => c.id === made.result.conversationId)).toMatchObject({ kind: 'swarm-buddy' })
+    // Its computer is its own: nobody else's agent starts there.
+    expect(code(() => f.run({ type: 'buddy.create', machineId: 'mate-laptop', engine: 'codex',
+      setup: { name: 'Mate laptop', cwd: '/home/mate/swarm', engines: ['codex'] } } as Command, owner, { contribution: { machineOwnerId: 'mate', contributorId: 'mate' } }))).not.toBeNull()
+  })
+})
