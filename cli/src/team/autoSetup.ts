@@ -69,7 +69,10 @@ export const missingDetail = (missing: readonly TeamPart[]): string => missing.m
 
 /** What [TeamAutoSetup.status] answers. `detail`: a failed setup's own sentence, at most 300 characters. While it runs,
  *  `step`: the step it is on (./command.ts `progress`), once one is said, and `elapsedMs`: how long it has run. */
-export interface TeamSetupStatus { state: 'none' | 'running' | 'exists' | 'declined' | 'failed' | 'incomplete'; detail?: string; step?: string
+/** What the machine row says of a Team account whose sign-in was ended (#3684): fixed words, never the sign-in itself. */
+export const TEAM_SIGN_IN_LOST = 'its sign-in was ended. Sign in again to bring it back'
+
+export interface TeamSetupStatus { state: 'none' | 'running' | 'exists' | 'declined' | 'failed' | 'incomplete' | 'sign-in-again'; detail?: string; step?: string
   elapsedMs?: number
   /** `incomplete`: the account is there, these parts are not (Set up repairs them). */
   missing?: TeamPart[] }
@@ -86,6 +89,9 @@ export interface AutoSetupDeps {
   accountExists(user: string): Promise<boolean>
   /** The parts besides the account that are not in place (#2765); none told, none counted (older callers, specs). */
   missing?(): Promise<readonly TeamPart[]>
+  /** Whether the account's own status file says its sign-in is gone: signed out (a revoke) or a handover that failed
+   *  (#3684). None told, or one that cannot be read, is not lost: nothing signs in again on a guess. */
+  signInLost?(): Promise<boolean>
   readDecision(): TeamSetupDecision | null
   writeDecision(decision: TeamSetupDecision): void
   /** `harness team setup --json`, as this account: its exit code and the JSON it answered (null when it said none).
@@ -137,6 +143,9 @@ export class TeamAutoSetup {
     if (deps.readConfig() || await deps.accountExists(TEAM_USER)) {
       // Done only when every part is there (#2765: an account with no daemon answered "already set up", and nothing
       // repaired it). A part missing is repaired only when the person asks (Set up): no password is asked for on its own.
+      // A sign-in that was ended comes back only from the person's own Repair, Restart or Sign in again (#3684): an
+      // automatic moment, or a daemon that is merely down, signs nothing in again.
+      if (reason === 'manual' && !check && await this.signInLost()) signInAgain = true
       const again = reason === 'manual' && (signInAgain || restart)
       if (!(await this.missing()).length && !again) return 'exists'
       if (reason !== 'manual') return 'incomplete'
@@ -166,6 +175,8 @@ export class TeamAutoSetup {
       return { state: 'running', ...(this.step ? { step: this.step } : {}), elapsedMs: Math.max(0, deps.now() - this.startedAt) }
     }
     if (deps.readConfig() || await deps.accountExists(TEAM_USER)) {
+      // Before the parts: Repair's new sign-in starts the daemon too, and Restart alone would start it signed out.
+      if (await this.signInLost()) return { state: 'sign-in-again', detail: TEAM_SIGN_IN_LOST }
       const missing = await this.missing()
       return missing.length ? { state: 'incomplete', missing: [...missing], detail: missingDetail(missing) } : { state: 'exists' }
     }
@@ -178,6 +189,10 @@ export class TeamAutoSetup {
   private async missing(): Promise<readonly TeamPart[]> {
     if (!this.deps.missing) return []
     try { return await this.deps.missing() } catch { return ['daemon'] }
+  }
+
+  private async signInLost(): Promise<boolean> {
+    try { return await this.deps.signInLost?.() === true } catch { return false }
   }
 
   /** "Not now" in Desktop's explanation: not offered again on its own, as a cancelled prompt is not. */
@@ -267,6 +282,15 @@ export async function realTeamAutoSetup(dataDir: string, log: (line: string) => 
       const { teamCommandDeps } = await import('./deps.js')
       const refuse = async (): Promise<never> => { throw new Error('reading the parts changes nothing') }
       return teamMissingParts(teamCommandDeps({ stopDaemon: refuse, startDaemon: refuse }), process.platform)
+    },
+    // The team daemon's report, as `harness team status` reads it: `team __start` writes signed-out for a revoked sign-in.
+    signInLost: async () => {
+      const [{ teamCommandDeps }] = await Promise.all([import('./deps.js')])
+      const refuse = async (): Promise<never> => { throw new Error('reading the sign-in changes nothing') }
+      const deps = teamCommandDeps({ stopDaemon: refuse, startDaemon: refuse })
+      const layout = teamLayout(process.platform)
+      const state = deps.readStatus(deps.readConfig()?.statusFile ?? layout?.statusFile ?? '')?.signIn?.state
+      return state === 'signed-out' || state === 'failed'
     },
     readDecision: () => readTeamSetupDecision(file),
     writeDecision: (decision) => writeTeamSetupDecision(file, decision),
