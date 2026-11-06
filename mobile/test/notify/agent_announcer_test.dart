@@ -28,7 +28,11 @@ class _RecordingNotices implements SystemNotices {
   Future<void> cancel(AgentRef agent) async => cancelled.add(agent);
 
   @override
-  Future<void> showAccountNotice({required String key, required String title, required String body}) async {}
+  Future<void> showAccountNotice({
+    required String key,
+    required String title,
+    required String body,
+  }) async {}
 }
 
 void main() {
@@ -62,40 +66,33 @@ void main() {
     addTearDown(announcer.dispose);
   });
 
-  test('watching: a chime, no mark, no notice', () {
+  // Task #3607 (Tony, 2026-11-06): a finished turn is badge only. Done notices
+  // are pinned in finished_turn_badge_only_test.dart; a question still rings.
+  test('watching: nothing at all, no chime, no mark, no notice', () {
     final notice = announcer.turnEnded(agent, news, watching: () => true);
 
-    expect(notice, AgentNotice.chime);
-    expect(chimes, 1);
+    expect(notice, AgentNotice.none);
+    expect(chimes, 0);
     expect(announcer.unread.count, 0);
     expect(system.shown, isEmpty);
   });
 
-  test('elsewhere in the app: a chime, a mark and the notice, the banner over the app', () {
+  test('elsewhere in the app: a mark, no chime and no notice', () {
     announcer.turnEnded(agent, news, watching: () => false);
 
-    expect(chimes, 1);
+    expect(chimes, 0);
     expect(announcer.unread.contains(ref), isTrue);
-    expect(system.shown, hasLength(1));
-    expect(system.shown.single.agent, ref);
+    expect(system.shown, isEmpty);
   });
 
-  test(
-    'away: a mark and one notice naming the agent, its machine, its news',
-    () {
-      front = false;
-      announcer.turnEnded(agent, news, watching: () => true);
+  test('away: a mark and no notice', () {
+    front = false;
+    announcer.turnEnded(agent, news, watching: () => true);
 
-      expect(chimes, 0, reason: 'nobody is holding a backgrounded app');
-      expect(announcer.unread.contains(ref), isTrue);
-      expect(system.shown, hasLength(1));
-      final shown = system.shown.single;
-      expect(shown.agent, ref);
-      expect(shown.title, 'Fix login');
-      expect(shown.machine, 'MacBook');
-      expect(shown.body, 'Fixed the login screen and pushed.');
-    },
-  );
+    expect(chimes, 0);
+    expect(announcer.unread.contains(ref), isTrue);
+    expect(system.shown, isEmpty);
+  });
 
   test('a sub-agent turn does nothing at all, even away', () {
     front = false;
@@ -136,24 +133,35 @@ void main() {
     });
 
     test('list, elsewhere in the app: a mark with no tap', () {
-      announcer.turnEnded(agent, tiered(NoticeTier.list), watching: () => false);
+      announcer.turnEnded(
+        agent,
+        tiered(NoticeTier.list),
+        watching: () => false,
+      );
 
       expect(chimes, 0);
       expect(announcer.unread.contains(ref), isTrue);
       expect(system.shown, isEmpty);
     });
 
-    test('alert, away: a mark and the notice', () {
+    test('alert, away: a mark, never a notice', () {
       front = false;
-      announcer.turnEnded(agent, tiered(NoticeTier.alert), watching: () => false);
+      announcer.turnEnded(
+        agent,
+        tiered(NoticeTier.alert),
+        watching: () => false,
+      );
 
       expect(announcer.unread.contains(ref), isTrue);
-      expect(system.shown, hasLength(1));
-      expect(system.shown.single.body, 'Fixed the login screen and pushed.');
+      expect(system.shown, isEmpty);
     });
 
     test('alert, on the agent being watched: nothing at all', () {
-      announcer.turnEnded(agent, tiered(NoticeTier.alert), watching: () => true);
+      announcer.turnEnded(
+        agent,
+        tiered(NoticeTier.alert),
+        watching: () => true,
+      );
 
       expect(chimes, 0);
       expect(announcer.unread.count, 0);
@@ -162,7 +170,11 @@ void main() {
 
     test('silent, away: nothing at all', () {
       front = false;
-      announcer.turnEnded(agent, tiered(NoticeTier.silent), watching: () => false);
+      announcer.turnEnded(
+        agent,
+        tiered(NoticeTier.silent),
+        watching: () => false,
+      );
 
       expect(chimes, 0);
       expect(announcer.unread.count, 0);
@@ -176,7 +188,11 @@ void main() {
         prompt: 'Which branch?',
         watching: () => false,
       );
-      announcer.turnEnded(agent, tiered(NoticeTier.list), watching: () => false);
+      announcer.turnEnded(
+        agent,
+        tiered(NoticeTier.list),
+        watching: () => false,
+      );
 
       expect(announcer.unread.kindFor(ref), NoticeKind.done);
     });
@@ -214,24 +230,30 @@ void main() {
       });
     });
 
-    test('an older daemon\'s recap, with no tier, goes by the old rule at once', () {
+    test('an older daemon\'s recap, with no tier, is a mark at once', () {
       inFakeTime((time, a) {
         front = false;
         a.turnEndedAwaitingTier(agent, news, watching: () => false);
-        expect(a.tierDecided(ref, null), AgentNotice.alert);
-        expect(system.shown, hasLength(1));
+        expect(a.tierDecided(ref, null), AgentNotice.filed);
+        expect(a.unread.contains(ref), isTrue);
+        expect(system.shown, isEmpty);
       });
     });
 
-    test('a tier that never comes: the old rule once the wait runs out', () {
+    test('a tier that never comes: a mark once the wait runs out', () {
       inFakeTime((time, a) {
         front = false;
         a.turnEndedAwaitingTier(agent, news, watching: () => false);
         time.elapse(wait - const Duration(milliseconds: 1));
-        expect(system.shown, isEmpty);
+        expect(a.unread.count, 0);
         time.elapse(const Duration(milliseconds: 1));
-        expect(system.shown, hasLength(1));
-        expect(a.tierDecided(ref, NoticeTier.alert), isNull, reason: 'nothing waits any more');
+        expect(a.unread.contains(ref), isTrue);
+        expect(system.shown, isEmpty);
+        expect(
+          a.tierDecided(ref, NoticeTier.alert),
+          isNull,
+          reason: 'nothing waits any more',
+        );
       });
     });
 
@@ -263,21 +285,24 @@ void main() {
       });
     });
 
-    test('a question asked while it waits is what stands: no "done" over it', () {
-      inFakeTime((time, a) {
-        front = false;
-        a.turnEndedAwaitingTier(agent, news, watching: () => false);
-        a.questionAsked(
-          agent,
-          requestId: 'q1',
-          prompt: 'Which branch?',
-          watching: () => false,
-        );
-        expect(a.tierDecided(ref, NoticeTier.alert), AgentNotice.none);
-        expect(a.unread.kindFor(ref), NoticeKind.question);
-        expect(system.shown.map((m) => m.kind), [NoticeKind.question]);
-      });
-    });
+    test(
+      'a question asked while it waits is what stands: no "done" over it',
+      () {
+        inFakeTime((time, a) {
+          front = false;
+          a.turnEndedAwaitingTier(agent, news, watching: () => false);
+          a.questionAsked(
+            agent,
+            requestId: 'q1',
+            prompt: 'Which branch?',
+            watching: () => false,
+          );
+          expect(a.tierDecided(ref, NoticeTier.alert), AgentNotice.none);
+          expect(a.unread.kindFor(ref), NoticeKind.question);
+          expect(system.shown.map((m) => m.kind), [NoticeKind.question]);
+        });
+      },
+    );
 
     test('the turn\'s end takes down the question it asked in, at once', () {
       inFakeTime((time, a) {
@@ -303,7 +328,7 @@ void main() {
       });
     });
 
-    test('a newer end replaces the one waiting, and is told once', () {
+    test('a newer end replaces the one waiting, and is marked once', () {
       inFakeTime((time, a) {
         front = false;
         a.turnEndedAwaitingTier(agent, news, watching: () => false);
@@ -316,9 +341,10 @@ void main() {
           tier: null,
         ), watching: () => false);
         time.elapse(wait ~/ 2);
-        expect(system.shown, isEmpty, reason: 'the first one\'s wait was dropped');
+        expect(a.unread.count, 0, reason: 'the first one\'s wait was dropped');
         time.elapse(wait);
-        expect(system.shown.map((m) => m.body), ['Second answer.']);
+        expect(a.unread.count, 1);
+        expect(system.shown, isEmpty);
       });
     });
 
@@ -336,18 +362,18 @@ void main() {
     });
   });
 
-  test('a finished turn sounds once until the person goes to the agent; '
-      'the next only replaces it quietly (task #3248)', () {
+  test('a finished turn never posts a notice, however many agents finish', () {
     front = false;
-    const other = (ref: (machineId: 'm', agentId: 'b'), name: 'Docs', machine: 'MacBook');
+    const other = (
+      ref: (machineId: 'm', agentId: 'b'),
+      name: 'Docs',
+      machine: 'MacBook',
+    );
     announcer.turnEnded(agent, news, watching: () => false);
     announcer.turnEnded(agent, news, watching: () => false);
     announcer.turnEnded(other, news, watching: () => false);
-    expect([for (final n in system.shown) (n.agent.agentId, n.quiet)], [('a', false), ('a', true), ('b', false)]);
-
-    announcer.seen(ref);
-    announcer.turnEnded(agent, news, watching: () => false);
-    expect(system.shown.last.quiet, isFalse, reason: 'seen: the next is news again');
+    expect(system.shown, isEmpty);
+    expect(announcer.unread.count, 2, reason: 'one mark for each agent');
   });
 
   test('an agent is one mark however many turns it finished', () {
@@ -362,7 +388,13 @@ void main() {
   group('going to the agent', () {
     test('takes down its mark and the notice still in the OS centre', () {
       front = false;
-      announcer.turnEnded(agent, news, watching: () => false);
+      announcer.questionAsked(
+        agent,
+        requestId: 'q1',
+        prompt: 'Which branch?',
+        watching: () => false,
+      );
+      expect(system.shown, hasLength(1));
       front = true;
       announcer.seen(ref);
       expect(announcer.unread.contains(ref), isFalse);
@@ -370,14 +402,8 @@ void main() {
     });
 
     test('never asks the OS to cancel a notice it did not post', () {
-      // A `list` turn: marked, and no notice posted.
-      announcer.turnEnded(agent, (
-        aborted: false,
-        replay: false,
-        subagent: false,
-        reply: news.reply,
-        tier: NoticeTier.list,
-      ), watching: () => false);
+      // A finished turn: marked, and no notice posted.
+      announcer.turnEnded(agent, news, watching: () => false);
       expect(system.shown, isEmpty);
       announcer.seen(ref);
       expect(announcer.unread.contains(ref), isFalse);
@@ -386,7 +412,12 @@ void main() {
 
     test('a notice is taken down once, not every time the agent is seen', () {
       front = false;
-      announcer.turnEnded(agent, news, watching: () => false);
+      announcer.questionAsked(
+        agent,
+        requestId: 'q1',
+        prompt: 'Which branch?',
+        watching: () => false,
+      );
       announcer
         ..seen(ref)
         ..seen(ref);
@@ -395,7 +426,12 @@ void main() {
 
     test('signing out takes every posted notice down', () {
       front = false;
-      announcer.turnEnded(agent, news, watching: () => false);
+      announcer.questionAsked(
+        agent,
+        requestId: 'q1',
+        prompt: 'Which branch?',
+        watching: () => false,
+      );
       announcer.reset();
       expect(system.cancelled, [ref]);
       expect(announcer.unread.count, 0);
@@ -432,7 +468,11 @@ void main() {
       expect(announcer.unread.contains(ref), isFalse);
       expect(system.cancelled, [ref]);
       expect(announcer.unread.kindFor(other), NoticeKind.question);
-      expect(announcer.unread.kindFor(elsewhere), NoticeKind.question, reason: 'another machine said nothing of it');
+      expect(
+        announcer.unread.kindFor(elsewhere),
+        NoticeKind.question,
+        reason: 'another machine said nothing of it',
+      );
       // Heard again later it is open again, and posted again — but the person
       // was told of this very request already: no second buzz.
       expect(ask(), AgentNotice.quiet);
@@ -462,7 +502,11 @@ void main() {
 
     test('the dialog moving to its next page is a new question, posted without a second buzz', () {
       ask();
-      expect(ask(id: 'q2'), AgentNotice.quiet, reason: 'the agent buzzed a moment ago');
+      expect(
+        ask(id: 'q2'),
+        AgentNotice.quiet,
+        reason: 'the agent buzzed a moment ago',
+      );
       expect(chimes, 1);
       expect(announcer.unread.kindFor(ref), NoticeKind.question);
       expect(system.shown.map((m) => m.quiet), [false, true]);
@@ -575,20 +619,23 @@ void main() {
 
     List<bool> quietness() => [for (final m in system.shown) m.quiet];
 
-    test('marked at once; it buzzes only once its grace runs out, still open', () {
-      inFakeTime((time, a) {
-        expect(ask(a), AgentNotice.filed);
-        expect(a.unread.kindFor(ref), NoticeKind.question);
-        expect(system.shown, isEmpty);
-        expect(chimes, 0);
-        time.elapse(grace - const Duration(milliseconds: 1));
-        expect(system.shown, isEmpty);
-        time.elapse(const Duration(milliseconds: 1));
-        expect(quietness(), [false]);
-        expect(system.shown.single.body, 'Approve Bash command: npm test');
-        expect(chimes, 1);
-      });
-    });
+    test(
+      'marked at once; it buzzes only once its grace runs out, still open',
+      () {
+        inFakeTime((time, a) {
+          expect(ask(a), AgentNotice.filed);
+          expect(a.unread.kindFor(ref), NoticeKind.question);
+          expect(system.shown, isEmpty);
+          expect(chimes, 0);
+          time.elapse(grace - const Duration(milliseconds: 1));
+          expect(system.shown, isEmpty);
+          time.elapse(const Duration(milliseconds: 1));
+          expect(quietness(), [false]);
+          expect(system.shown.single.body, 'Approve Bash command: npm test');
+          expect(chimes, 1);
+        });
+      },
+    );
 
     test('answered within its grace — at the desk, by an auto mode — it never buzzes', () {
       inFakeTime((time, a) {
@@ -602,32 +649,42 @@ void main() {
       });
     });
 
-    test('a run of approvals answered at the desk in seconds: nothing at all', () {
-      inFakeTime((time, a) {
-        for (var i = 0; i < 10; i++) {
-          ask(a, id: 'q$i');
-          time.elapse(const Duration(seconds: 2));
-          a.questionClosed(ref, requestId: 'q$i');
-        }
-        time.elapse(grace * 2);
-        expect(system.shown, isEmpty);
-        expect(chimes, 0);
-      });
-    });
+    test(
+      'a run of approvals answered at the desk in seconds: nothing at all',
+      () {
+        inFakeTime((time, a) {
+          for (var i = 0; i < 10; i++) {
+            ask(a, id: 'q$i');
+            time.elapse(const Duration(seconds: 2));
+            a.questionClosed(ref, requestId: 'q$i');
+          }
+          time.elapse(grace * 2);
+          expect(system.shown, isEmpty);
+          expect(chimes, 0);
+        });
+      },
+    );
 
-    test('a newer question replaces the one waiting, and is the one told, once', () {
-      inFakeTime((time, a) {
-        ask(a);
-        time.elapse(const Duration(seconds: 5));
-        expect(ask(a, id: 'q2'), AgentNotice.filed);
-        time.elapse(const Duration(seconds: 10));
-        expect(system.shown, isEmpty, reason: 'the first one\'s wait was dropped');
-        time.elapse(const Duration(seconds: 5));
-        expect(quietness(), [false]);
-        time.elapse(grace * 2);
-        expect(system.shown, hasLength(1));
-      });
-    });
+    test(
+      'a newer question replaces the one waiting, and is the one told, once',
+      () {
+        inFakeTime((time, a) {
+          ask(a);
+          time.elapse(const Duration(seconds: 5));
+          expect(ask(a, id: 'q2'), AgentNotice.filed);
+          time.elapse(const Duration(seconds: 10));
+          expect(
+            system.shown,
+            isEmpty,
+            reason: 'the first one\'s wait was dropped',
+          );
+          time.elapse(const Duration(seconds: 5));
+          expect(quietness(), [false]);
+          time.elapse(grace * 2);
+          expect(system.shown, hasLength(1));
+        });
+      },
+    );
 
     test('a dialog flickering off the pane buzzes once, then is only posted again quietly', () {
       inFakeTime((time, a) {
@@ -639,7 +696,11 @@ void main() {
           expect(a.unread.contains(ref), isFalse);
           time.elapse(const Duration(milliseconds: 1500));
           expect(ask(a), AgentNotice.quiet);
-          expect(a.unread.kindFor(ref), NoticeKind.question, reason: 'it is open again');
+          expect(
+            a.unread.kindFor(ref),
+            NoticeKind.question,
+            reason: 'it is open again',
+          );
           time.elapse(const Duration(seconds: 5));
         }
         expect(chimes, 1);
@@ -667,16 +728,19 @@ void main() {
       });
     });
 
-    test('one back after its grace ran out while off the pane is told at once', () {
-      inFakeTime((time, a) {
-        ask(a);
-        time.elapse(const Duration(seconds: 3));
-        a.questionClosed(ref, requestId: 'q1');
-        time.elapse(grace);
-        expect(ask(a), AgentNotice.alert);
-        expect(quietness(), [false]);
-      });
-    });
+    test(
+      'one back after its grace ran out while off the pane is told at once',
+      () {
+        inFakeTime((time, a) {
+          ask(a);
+          time.elapse(const Duration(seconds: 3));
+          a.questionClosed(ref, requestId: 'q1');
+          time.elapse(grace);
+          expect(ask(a), AgentNotice.alert);
+          expect(quietness(), [false]);
+        });
+      },
+    );
 
     test('another question of the agent within the cooldown is posted quietly; after it, it buzzes again', () {
       inFakeTime((time, a) {
@@ -722,18 +786,21 @@ void main() {
       });
     });
 
-    test('the same dialog asked again after the reopen window is news again', () {
-      inFakeTime((time, a) {
-        ask(a);
-        time.elapse(grace);
-        a.questionClosed(ref, requestId: 'q1');
-        time.elapse(reopen + const Duration(seconds: 1));
-        expect(ask(a), AgentNotice.filed);
-        time.elapse(grace);
-        expect(quietness(), [false, false]);
-        expect(chimes, 2);
-      });
-    });
+    test(
+      'the same dialog asked again after the reopen window is news again',
+      () {
+        inFakeTime((time, a) {
+          ask(a);
+          time.elapse(grace);
+          a.questionClosed(ref, requestId: 'q1');
+          time.elapse(reopen + const Duration(seconds: 1));
+          expect(ask(a), AgentNotice.filed);
+          time.elapse(grace);
+          expect(quietness(), [false, false]);
+          expect(chimes, 2);
+        });
+      },
+    );
 
     test('a question open longer than the window is still the same one when it flickers', () {
       inFakeTime((time, a) {
@@ -816,16 +883,19 @@ void main() {
       });
     });
 
-    test('a deleted agent forgets what it was told: its next question buzzes', () {
-      inFakeTime((time, a) {
-        ask(a);
-        time.elapse(grace);
-        a.forgetAgent(ref);
-        expect(ask(a), AgentNotice.filed);
-        time.elapse(grace);
-        expect(quietness(), [false, false]);
-      });
-    });
+    test(
+      'a deleted agent forgets what it was told: its next question buzzes',
+      () {
+        inFakeTime((time, a) {
+          ask(a);
+          time.elapse(grace);
+          a.forgetAgent(ref);
+          expect(ask(a), AgentNotice.filed);
+          time.elapse(grace);
+          expect(quietness(), [false, false]);
+        });
+      },
+    );
 
     test('signing out drops a question still waiting, and what was told', () {
       inFakeTime((time, a) {
@@ -844,7 +914,12 @@ void main() {
           inFront: () => true,
           now: () => start.add(time.elapsed),
         );
-        a.questionAsked(agent, requestId: 'q1', prompt: 'x', watching: () => false);
+        a.questionAsked(
+          agent,
+          requestId: 'q1',
+          prompt: 'x',
+          watching: () => false,
+        );
         expect(time.pendingTimers, hasLength(1));
         a.dispose();
         expect(time.pendingTimers, isEmpty);
@@ -854,7 +929,11 @@ void main() {
 
   group('a Harness Team account\'s agents (2026-11-05: Dee\'s phone buzzed for a teammate\'s tester)', () {
     const teamRef = (machineId: 'team-mac', agentId: 't');
-    const teamAgent = (ref: teamRef, name: 'Tester 3256', machine: 'Macs-Mac-Studio-2.local · Team');
+    const teamAgent = (
+      ref: teamRef,
+      name: 'Tester 3256',
+      machine: 'Macs-Mac-Studio-2.local · Team',
+    );
 
     late AgentAnnouncer withTeam;
 
@@ -905,21 +984,24 @@ void main() {
       expect(system.shown, isEmpty);
     });
 
-    test('the owner\'s own agent still tells, beside it', () {
+    test('the owner\'s own agent is still marked, beside it', () {
       front = false;
       withTeam.turnEnded(teamAgent, news, watching: () => false);
       final notice = withTeam.turnEnded(agent, news, watching: () => false);
 
-      expect(notice, AgentNotice.alert);
-      expect(system.shown.map((m) => m.agent), [ref]);
+      expect(notice, AgentNotice.filed);
       expect(withTeam.unread.contains(ref), isTrue);
       expect(withTeam.unread.contains(teamRef), isFalse);
     });
 
-    test('with no rule given every agent tells, as before', () {
+    test('with no rule given every agent is marked, as before', () {
       front = false;
-      final notice = announcer.turnEnded(teamAgent, news, watching: () => false);
-      expect(notice, AgentNotice.alert);
+      final notice = announcer.turnEnded(
+        teamAgent,
+        news,
+        watching: () => false,
+      );
+      expect(notice, AgentNotice.filed);
     });
   });
 

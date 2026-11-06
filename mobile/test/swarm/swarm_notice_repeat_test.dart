@@ -72,12 +72,9 @@ void main() {
       ..needsYou('g2');
   }
 
-  const all = [
-    'decision:d1',
-    'mention:t1',
-    'work:a:g1:attempt-g1:blocked',
-    'work:a:g2:attempt-g2:needs_human',
-  ];
+  // A decision and a task's stuck or needs-you show in the task's one
+  // notification (task #3607): the decision is in g9, the others in g1 and g2.
+  const all = ['mention:t1', 'task:a:g1', 'task:a:g2', 'task:a:g9'];
 
   test('read again and again, each ask is told once', () async {
     final h = host();
@@ -222,7 +219,7 @@ void main() {
       ..decisions = kept
       ..version += 1;
     await poll(h);
-    expect(told().where((k) => k == 'decision:d1'), hasLength(2));
+    expect(told().where((k) => k == 'task:a:g9'), hasLength(2));
   });
 
   test('a relaunch tells nothing again of what waits', () async {
@@ -253,7 +250,7 @@ void main() {
       ..decision('d1')
       ..version += 1;
     await poll(h);
-    expect(told(), ['decision:d1']);
+    expect(told(), ['task:a:g9']);
 
     await features.set(PhoneExperiment.swarm, false);
     await features.set(PhoneExperiment.swarm, true);
@@ -267,7 +264,7 @@ void main() {
       ..decision('d1')
       ..version += 1;
     await poll(h);
-    expect(told(), ['decision:d1', 'decision:d1']);
+    expect(told(), ['task:a:g9', 'task:a:g9']);
   });
 
   test('the record keeps the newest keys, at most its limit', () {
