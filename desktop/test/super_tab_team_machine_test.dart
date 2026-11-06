@@ -416,6 +416,88 @@ void main() {
     },
   );
 
+  // kelvin1295, 11-06 (#3684): the Team sign-in was revoked. The row said offline and offered Restart, whose Repair ran
+  // setup on the revoked sign-in, so it never came back. This Mac's daemon says the sign-in was ended
+  // (cli/src/team/autoSetup.ts `status`): the row says so and offers Sign in again, which asks for a new sign-in.
+  testWidgets(
+    'an offline Team account whose sign-in was ended offers its local owner Sign in again, which signs in again',
+    (tester) async {
+      final shots = Platform.environment['TEAM_RESTART_SHOTS'];
+      final previousBrightness = grid.AppTheme.brightness.value;
+      addTearDown(() => grid.AppTheme.brightness.value = previousBrightness);
+      final daemon = _TeamDaemon()
+        ..status = {
+          'ok': true,
+          'state': 'sign-in-again',
+          'detail': 'its sign-in was ended. Sign in again to bring it back',
+        };
+      final app = createApp(connectionForTest: (_) => daemon, connected: true)
+        ..teamAccountHereForTest = true;
+      app.machineStates['m']!.localOnly = true;
+      for (final brightness in [Brightness.light, Brightness.dark]) {
+        grid.AppTheme.brightness.value = brightness;
+        final server = _swarm();
+        server.state['machines'] = [
+          _pool('m', contributor: 'owner'),
+          _pool(
+            'm-team',
+            contributor: 'owner',
+            host: 'm',
+            age: _offlineAge,
+            teamWork: _refused('MACHINE_OFFLINE'),
+          ),
+        ];
+        final c = server.controller(account: 'owner');
+        await c.refresh();
+        await tester.pumpWidget(
+          MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: grid.buildAppTheme(brightness: brightness),
+            home: Scaffold(
+              body: SuperTabMachines(
+                controller: c,
+                app: app,
+                onAddAgent: (_) {},
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          _problemText(tester, 'm'),
+          "Teammates' agents paused: Harness Team signed out",
+        );
+        final button = find.byKey(const ValueKey('super-machine-team-setup-m'));
+        expect(
+          find.descendant(of: button, matching: find.text('Sign in again')),
+          findsOneWidget,
+        );
+        await captureWindow(
+          tester,
+          shots,
+          'team-sign-in-again-${brightness.name}',
+        );
+        await tester.tap(button);
+        await tester.pumpAndSettle();
+        expect(
+          find.textContaining('its sign-in was ended'),
+          findsOneWidget,
+        );
+        await tester.tap(find.byKey(const Key('team-account-setup-continue')));
+        await tester.pumpAndSettle();
+        expect(daemon.asked.where((a) => a['action'] == 'teamSetup').last, {
+          'action': 'teamSetup',
+          'reason': 'manual',
+          'signInAgain': true,
+        });
+        await tester.tap(find.byKey(const Key('team-account-setup-done')));
+        await tester.pumpAndSettle();
+        await _unmount(tester, c);
+      }
+      app.dispose();
+    },
+  );
+
   // Scholes, 2026-10-29: a Mac whose person cancelled the password prompt, or whose setup failed, said only "not set up".
   testWidgets(
     'this Mac\'s row says why it has no Harness Team account, for its person alone, with Set up to try again',
