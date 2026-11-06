@@ -843,7 +843,7 @@ describe('restarting an agent', () => {
       expect(vi.mocked(restartAgent).mock.calls[1][0]).toMatchObject({ sessionId: ID, resumeOnly: true })
       const recovery = vi.mocked(run.deps.paneSwapDeps).mock.calls[1]
       expect(recovery[0]).toMatchObject({ claudeHome: from, transcriptPath: join(from, 'projects', '-work', `${ID}.jsonl`) })
-      expect(recovery[2].env.CLAUDE_CONFIG_DIR).toBe(from)
+      expect(recovery[2]).toMatchObject({ env: { CLAUDE_CONFIG_DIR: from } })
       expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, 'none')
     })
 
