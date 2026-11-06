@@ -25,7 +25,7 @@ describe('what the Swarm adds to an engine\'s argv', () => {
     expect(swarmEngineArgs('codex')).toEqual(['-c', 'check_for_update_on_startup=false', ...codexShellGuardArgs()])
     const [flag, value] = codexShellGuardArgs('darwin', ['/opt/node', '/x/shellGuardHook.js'])
     expect(flag).toBe('-c')
-    expect(value).toBe('hooks.PreToolUse=[{matcher="*",hooks=[{type="command",command="/opt/node /x/shellGuardHook.js",timeout=30}]}]')
+    expect(value).toBe('hooks.PreToolUse=[{matcher="*",hooks=[{type="command",command="'/opt/node' '/x/shellGuardHook.js'",timeout=30}]}]')
   })
 
   it('starts the hook as each engine\'s runner on Windows takes it: exec form for Claude Code, a PowerShell line for Codex', () => {
