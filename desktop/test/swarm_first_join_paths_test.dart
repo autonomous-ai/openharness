@@ -107,6 +107,20 @@ void main() {
     expect(f.app.joinAccountRequest, isNull);
   });
 
+  test('a Swarm the person hid before the update and reopens is still never added or asked about', () async {
+    // Review of #3367: reopening clears the hidden state at once, so the reopened Swarm must still read as one they had.
+    final f = _freshComputer(chooseTeam: false);
+    await f.app.superTabs.setTabVisible(tabId, false);
+    expect(f.app.superTabs.hiddenIds, contains(tabId));
+    f.app.openSuperTab(tabId, 'Swarm');
+    f.app.teamAccountHereForTest = true;
+    // Not _discover: an add would wait for the person's answer.
+    await f.app.superTabs.refreshTabs();
+    await pumpEventQueue();
+    expect(f.app.joinAccountRequest, isNull);
+    expect(_contributions(f), isEmpty);
+  });
+
   test('a Swarm the person already had open before the update is still never added', () async {
     // The baseline's own job (#3115): a long-time member's Swarms stay as they chose.
     final f = _freshComputer();
