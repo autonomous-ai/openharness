@@ -62,7 +62,7 @@ function closedAsk(): never {
 
 /** Returns the main-budget owner, or null for thread-only posts and unlinked announcements. */
 export function requireChatPost(group: Conversation, command: Send, reply: Reply): string | null {
-  if (!inMainChat(command, reply) || !(command.replyTo || command.answers)) return null
+  if (reply?.agentOnly || !inMainChat(command, reply) || !(command.replyTo || command.answers)) return null
   const ledger = group.chatLimits
   const linked = command.replyTo || command.answers ? reply : undefined
   const personAsk = linked?.author.kind === 'person' ? linked : undefined
