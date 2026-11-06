@@ -855,6 +855,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   /// redraws only a row whose words moved, and the list only when rows move.
   final _rowsDrawn = <String, Object>{};
   List<String> _orderDrawn = const [];
+
+  /// Each row's group as drawn: a machine can change group with the order of rows unchanged (Online to Offline),
+  /// and its headings' counts must follow it (review of #3370).
+  List<String> _groupsDrawn = const [];
   final _rowBeats = <String, ValueNotifier<int>>{};
   final _tips = <String, GlobalKey<TooltipState>>{};
 
@@ -987,11 +991,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   void _redrawMoved() {
     if (!mounted || c.snapshot == null || c.accessRevoked) return;
     final views = _sortedViews();
-    final order = [
-      for (final (_, _, group) in _groups())
-        for (final v in group) v.id,
+    final groups = [
+      for (final (key, _, group) in _groups())
+        for (final v in group) '$key/${v.id}',
     ];
-    if (c.backendUnreachable || !listEquals(_orderDrawn, order)) {
+    if (c.backendUnreachable || !listEquals(_groupsDrawn, groups)) {
       _changed();
       return;
     }
@@ -2728,11 +2732,12 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     ),
   );
 
-  /// Before the Swarm is read, a loading list; a Swarm that cannot be read and holds no machine says so with Retry;
-  /// a read Swarm with none, the empty note (task #3801). Null when there are machines to list.
+  /// Before the Swarm is read, a loading list; a Swarm that cannot be read and holds no machine says so with Retry,
+  /// even when an earlier read found none; a read Swarm with none, the empty note (task #3801). Null when there are
+  /// machines to list.
   Widget? _stateNote(EdgeInsets emptyPadding) {
     if (_ids.isNotEmpty) return null;
-    if (c.snapshot == null && c.backendUnreachable) {
+    if (c.backendUnreachable) {
       return Padding(
         key: const ValueKey('super-machines-error'),
         padding: emptyPadding,
@@ -2775,6 +2780,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       for (final (_, _, views) in groups)
         for (final v in views) v.id,
     ];
+    _groupsDrawn = [
+      for (final (key, _, views) in groups)
+        for (final v in views) '$key/${v.id}',
+    ];
     _rowBeats.removeWhere((id, beat) {
       if (_orderDrawn.contains(id)) return false;
       beat.dispose();
@@ -2785,14 +2794,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         _groupHeading(key, label, views.length),
         for (final id in [for (final v in views) v.id])
           ValueListenableBuilder<int>(
-          key: ValueKey('super-machine-row-$id'),
-          valueListenable: _rowBeats.putIfAbsent(id, () => ValueNotifier(0)),
-          builder: (context, _, _) {
-            final view = _view(id);
-            _rowsDrawn[id] = _rowWords(view);
-            return _machine(view);
-          },
-        ),
+            key: ValueKey('super-machine-row-$id'),
+            valueListenable: _rowBeats.putIfAbsent(id, () => ValueNotifier(0)),
+            builder: (context, _, _) {
+              final view = _view(id);
+              _rowsDrawn[id] = _rowWords(view);
+              return _machine(view);
+            },
+          ),
       ],
     ];
   }

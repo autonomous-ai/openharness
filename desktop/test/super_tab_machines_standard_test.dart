@@ -50,8 +50,7 @@ Future<void> _end(WidgetTester tester, SuperTabController c) async {
   c.dispose();
 }
 
-double _top(WidgetTester tester, String key) =>
-    tester.getTopLeft(_key(key)).dy;
+double _top(WidgetTester tester, String key) => tester.getTopLeft(_key(key)).dy;
 
 void main() {
   // Status unknown is the Swarm's own state (it cannot be read), not a machine's: its group shows only then.
@@ -204,7 +203,12 @@ void main() {
     // Bravo goes quiet: the rows still read Alpha, Bravo, Charlie.
     final machines = (server.state['machines'] as List)
         .cast<Map<String, dynamic>>();
-    machines[1] = _machine('b', 'Bravo', 'peer', seen: const Duration(hours: 2));
+    machines[1] = _machine(
+      'b',
+      'Bravo',
+      'peer',
+      seen: const Duration(hours: 2),
+    );
     server.revision++;
     await tester.runAsync(c.refresh);
     for (var i = 0; i < 4; i++) {
