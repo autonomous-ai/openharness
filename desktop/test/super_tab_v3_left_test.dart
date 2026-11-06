@@ -50,6 +50,7 @@ void main() {
     void Function(ConversationServer server)? setup,
     List<String>? selected,
     List<SuperTabAgentKind>? created,
+    Widget? belowDecisions,
   }) async {
     final server = swarm();
     if (agents != null) server.state['agents'] = agents;
@@ -75,6 +76,7 @@ void main() {
                 c.select(id);
               },
               onNewAgent: created?.add,
+              belowDecisions: belowDecisions,
               onNewSwarm: () {},
               onNewProject: () {},
               onPage: (_) {},
@@ -106,6 +108,24 @@ void main() {
     ) async {
       await show(tester, board: false);
       expect(key('super-mentions'), findsOneWidget);
+    });
+  });
+
+  group('a row can sit directly below Decisions', () {
+    testWidgets('the Leaderboard\'s slot is under Decisions and above My '
+        'agents', (tester) async {
+      await show(
+        tester,
+        belowDecisions: const Text('Leaderboard', key: ValueKey('slot')),
+      );
+      double top(String k) => tester.getTopLeft(key(k)).dy;
+      expect(top('super-decisions'), lessThan(top('slot')));
+      expect(top('slot'), lessThan(top('project-sidebar-agents')));
+    });
+
+    testWidgets('with nothing given there is no slot', (tester) async {
+      await show(tester);
+      expect(key('slot'), findsNothing);
     });
   });
 
