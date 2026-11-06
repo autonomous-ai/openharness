@@ -378,6 +378,29 @@ void main() {
     });
   });
 
+  test('a swarm-N tab makes no project before the desk join', () async {
+    final f = SuperTabLaunchFixture();
+    f.app.machineStates['m']!.agents = [
+      _agent('notes'),
+      _agent('api', remote: 'github.com/acme/api'),
+    ];
+    final tab = _tab(f.app, 'swarm-1', [
+      _pane('m', 'notes'),
+      _pane('m', 'api'),
+    ], name: 'Notes');
+    final c = await _personal(f);
+    final projects = PersonalProjects.of(f.app);
+    await projects.sync(c);
+    expect(_commands(f), hasLength(1));
+    expect(c.snapshot!.projects.where((p) => p.name == 'Notes'), isEmpty);
+    expect(c.snapshot!.projects.where((p) => p.name == 'api'), hasLength(1));
+
+    tab.id = '0123456789abcdef0123456789abcdef';
+    await projects.sync(c);
+    expect(_commands(f), hasLength(2));
+    expect(c.snapshot!.projects.where((p) => p.name == 'Notes'), hasLength(1));
+  });
+
   group('the person\'s panes, by repo', () {
     test('every pane joins its repo whatever tab it is in, in tab order', () {
       final f = SuperTabLaunchFixture();
