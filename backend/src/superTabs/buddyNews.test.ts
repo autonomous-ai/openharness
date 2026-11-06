@@ -141,6 +141,16 @@ describe('the assignment notice a Buddy gets for work its person requested', () 
       text: `News for your owner: #${number} "Offline edits", which they requested, is assigned and working.` })])
   })
 
+  it('is sent once per task: a replacement agent taking the work over is no new news (task #4217)', () => {
+    const { f, group, assign } = requested()
+    expect(notices(assign())).toHaveLength(1)
+    const first = f.state.conversations.find(c => c.id === group)!.assignment!
+    f.run({ type: 'agent.alert', agentId: first.agentId, alert: 'model', active: true }, { kind: 'agent', agentId: first.agentId, machineOwnerId: 'host' })
+    expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('lost')
+    const replacement = f.add(group, 'replacement')
+    expect(notices(f.run({ type: 'work.assign', conversationId: group, agentId: replacement }).messages)).toEqual([])
+  })
+
   it('is not sent for a private task in a public project, though its person requested it (security review 2 of #2178)', () => {
     const { f, group, assign } = requested()
     assign()
