@@ -56,6 +56,12 @@ export interface SwarmProject {
    *  the daily tidy was last asked, and the instructions revision its last save made; `tidyPending`: asked, and no save has
    *  followed yet (pmSchedule.ts tidyRequest; tasks #3022, #3151). */
   schedule?: { lastSlot: number; wakeId?: string; heardAt?: number; tidiedOn?: string; tidiedRevision?: number; tidyPending?: boolean }
+  /** The Board way of working (boardRights.ts, task #3819): `boardMode` true once its owner switched it on, absent otherwise;
+   *  `canChat` the people its owner granted the right to write in its chat (its owners always have it); `decider` its top
+   *  decider, who sets P0 and pauses as its owners do. Every reader of the project reads them. */
+  boardMode?: true
+  canChat?: string[]
+  decider?: string
   /** The what-changed note for PMs (processNotes.ts, task #3581) its PM was last woken for, and the newest it confirmed. */
   processNote?: { told?: string; confirmed?: string }
   /** The oldest message a person sent its PM in the last day that the PM has not answered, and when it was sent, as the worker's
