@@ -242,6 +242,21 @@ describe('pull request events', () => {
       return { f, HEAD2, HEAD3, step, read }
     }
 
+    // Task #3953 (Hugo's review of #3435): closing a reviewed pull request and opening its replacement leaves no Yes behind.
+    it('stops counting at a pull request closed unmerged once another is linked and open, on the task and its steps, and counts again when it reopens', async () => {
+      const { f, read } = await reviewed()
+      const next = `https://github.com/acme/app/pull/${9700 + f.number}`, HEAD4 = 'dddddd4444444dddddd4444444dddddd4444444d'
+      f.pulls.set(next, { ...f.pull({ head: HEAD4 }), url: next, number: 9700 + f.number })
+      await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'working', result: `${f.PR} then ${next}` }, host, f.worker)
+      await f.pass()
+      f.pulls.set(f.PR, f.pull({ state: 'closed' }))
+      await f.pass()
+      for (const check of await read()) expect(check.passedBy).toBeNull()
+      f.pulls.set(f.PR, f.pull())
+      await f.pass()
+      for (const check of await read()) expect(check.passedBy).not.toBeNull()
+    })
+
     it('counts at its head, and its patch is read once a head', async () => {
       const { f, read } = await reviewed()
       for (const check of await read()) {
@@ -599,5 +614,15 @@ describe('a closed pull request is marked on the task', () => {
     f.pulls.set(duplicate, { ...f.pulls.get(duplicate)!, state: 'open' })
     await f.pass()
     expect((await heads())[duplicate]!.closed).toBeUndefined()
+  })
+
+  it('never marks a pull request GitHub shows merged', async () => {
+    const f = await swarm()
+    f.pulls.set(f.PR, f.pull())
+    await f.pass()
+    f.pulls.set(f.PR, f.pull({ state: 'closed', merged: true }))
+    await f.pass()
+    const heads = ((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.task } })).data as { pullRequestHeads: Record<string, { closed?: boolean }> }).pullRequestHeads
+    expect(heads[f.PR]!.closed).toBeUndefined()
   })
 })

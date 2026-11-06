@@ -39,6 +39,9 @@ export function verdictCounts(verdict: CheckVerdict, heads: PullRequestHeads | u
   const current = currentHead(verdict, heads)
   if (current === undefined) return true
   if (!current || !verdict.head) return false
+  // A pull request closed unmerged (task #3953) counts nothing while another linked one is open: closing a reviewed pull request
+  // and opening its replacement leaves no Yes behind.
+  if (current.closed && heads && Object.values(heads).some(other => other !== current && !other.closed)) return false
   // Its head counts only on the base it names (security review of #3218, round 4; review round 7): naming none, on none once a
   // base is watched. A patch id names its base. A head that is git's own merge of its head and main carries it, on that same
   // base only (mergeCarry.ts, task #3553).

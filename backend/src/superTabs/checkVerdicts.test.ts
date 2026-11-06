@@ -255,3 +255,28 @@ describe('checkedPullRequest', () => {
     expect(checkedPullRequest({}, repository)).toBeUndefined()
   })
 })
+
+// Task #3953 (Hugo's review of #3435): a Yes recorded at a pull request later closed unmerged stops counting once another
+// linked pull request is open; a merged one is never marked closed, and a task with nothing else open keeps its Yes.
+describe('a verdict at a pull request closed unmerged', () => {
+  const NEXT = 'https://github.com/acme/app/pull/8'
+  const heads = (closed: boolean, next = true): PullRequestHeads => ({ [PR]: { head: A, patch: 'p1', at: 1, ...closed ? { closed: true as const } : {} },
+    ...next ? { [NEXT]: { head: B, patch: 'p2', at: 2 } } : {} })
+
+  it('stops counting while another linked pull request is open, and the check is no longer passed', () => {
+    const c = check()
+    recordCheckVerdict(c, verdict('r', true, A, 'p1'), undefined, heads(false))
+    expect(c.passedBy).toBe('r')
+    deriveCheck(c, heads(true))
+    expect(c.passedBy).toBeNull()
+    expect(verdictCounts(verdict('r', true, A, 'p1'), heads(true))).toBe(false)
+  })
+  it('counts again once the pull request is open again', () => {
+    expect(verdictCounts(verdict('r', true, A, 'p1'), heads(false))).toBe(true)
+  })
+  it('keeps counting when no other pull request is open', () => {
+    expect(verdictCounts(verdict('r', true, A, 'p1'), heads(true, false))).toBe(true)
+    const bothClosed: PullRequestHeads = { [PR]: { head: A, patch: 'p1', at: 1, closed: true }, [NEXT]: { head: B, patch: 'p2', at: 2, closed: true } }
+    expect(verdictCounts(verdict('r', true, A, 'p1'), bothClosed)).toBe(true)
+  })
+})

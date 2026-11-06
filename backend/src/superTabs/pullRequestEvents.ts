@@ -17,6 +17,8 @@ export interface PullRequestWatch {
   url: string
   number: number
   state: 'open' | 'closed'
+  /** True once GitHub says it merged: a closed pull request without it was closed unmerged (task #3953). */
+  merged?: true
   draft: boolean
   /** The head commit's SHA. */
   head: string
@@ -154,6 +156,8 @@ export const PATCH_RETRY_MS = 15 * 60_000
  *  A new base branch is read again like a new head (security review of #3218, round 3): the id names the branch. */
 const patchNeeded = (known: PullRequestHead | undefined, watch: PullRequestWatch, now: number) =>
   known?.head !== watch.head || known.base !== watch.base || (known.patch === null && now - known.at >= PATCH_RETRY_MS)
+  // Open again after it was read closed: the task's steps are loaded to count their verdicts at it once more (task #3953).
+  || known.closed === true
 
 /** Reads with the Harness GitHub App: one read-only token per repository for the whole pass, revoked when it is done (as the
  *  archive pass's, archive.ts). A repository the app is not installed on, or any GitHub failure, reads as null. */
@@ -247,8 +251,8 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
     for (const row of rows) {
       for (const url of watchedLinks(row.urls)) {
         const watch = await watchOf(url)
-        // A pull request the watch read before and GitHub now shows closed stops capturing the task's checks (task #3953).
-        if (watch?.state === 'closed' && row.heads?.[url] && !row.heads[url]!.closed) closed.push({ row, url })
+        // A pull request the watch read before and GitHub now shows closed unmerged stops capturing the task's checks (task #3953).
+        if (watch?.state === 'closed' && !watch.merged && row.heads?.[url] && !row.heads[url]!.closed) closed.push({ row, url })
         if (watch?.state !== 'open') continue
         const known = row.heads?.[url] ?? undefined, newHead = known?.head !== watch.head || known.base !== watch.base
         seen.push({ row, watch, patch: patchNeeded(known, watch, now) ? await patchOf(url, watch.head, watch.base) : undefined,
@@ -262,7 +266,7 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
       return Object.keys(row.heads ?? {}).some(url => !window.has(url))
     })
     // A task from before steps were listed, at a new head or dropping one: its dormant steps are looked up once, then listed.
-    const unlisted = [...seen.filter(s => s.patch !== undefined).map(s => s.row), ...moved].filter(row => !Array.isArray(row.steps))
+    const unlisted = [...seen.filter(s => s.patch !== undefined).map(s => s.row), ...moved, ...closed.map(c => c.row)].filter(row => !Array.isArray(row.steps))
     const listed = await listedSteps(db, unlisted)
     for (const row of moved) {
       try {
@@ -274,7 +278,8 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
     }
     for (const { row, url } of closed) {
       try {
-        await store.pullRequestClosed(row.tabId, row.key, url)
+        const lookedUp = listed.get(`${row.tabId}:${row.key}`)
+        await store.pullRequestClosed(row.tabId, row.key, url, row.steps ?? lookedUp ?? [], lookedUp !== undefined)
       } catch (error) {
         logger.warn('[swarm-pr-events] group skipped', { tabId: row.tabId, group: row.key, error: error instanceof Error ? error.message : String(error) })
       }
