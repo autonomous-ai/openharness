@@ -490,17 +490,28 @@ describe('a release task the Swarm opened', () => {
     return { ...f, task, step, get state() { return f.state } }
   }
 
-  it('is never Team-written while it names no code of its own, whoever it was assigned to or whatever GitHub says of a branch', () => {
+  it('is not Team-written while it names no code of its own and no Team agent builds it, whatever GitHub says of a branch', () => {
     const f = releaseTask(), task = () => f.state.conversations.find(c => c.id === f.task)!
-    f.run({ type: 'work.assign', conversationId: f.task, agentId: f.member('team-builder', 'mac-team') })
+    f.run({ type: 'work.assign', conversationId: f.task, agentId: f.member('main-integrator', 'mac') })
     expect(task().teamWritten).toBeUndefined()
     expect(teamWrittenTask(f.state, task())).toBe(false)
-    markTeamWritten(f.state, task(), f.state.agents.find(a => a.id === 'team-builder')!)
     // A read that names no pull request of its own (a branch GitHub cannot place) marks nothing on a release task.
     applyPushOrigin(f.state, task(), 'team', [])
     expect(task().teamWritten).toBeUndefined()
     expect(stepMark(f.state, task())).toEqual({})
     expect(teamWrittenTask(f.state, f.state.conversations.find(c => c.id === f.step)!)).toBe(false)
+  })
+
+  // Security review 2 of #3324 (SecLarch): a Team agent building a release task can finish with "released, test at commit abc" and no
+  // pull request link, so nothing would be read. A Team builder keeps its task's steps in a Team account, as before.
+  it('keeps the steps of a release task a Team agent builds in a Team account: refused on an owner entry, taken on a Team account', () => {
+    const f = releaseTask()
+    f.run({ type: 'work.assign', conversationId: f.task, agentId: f.member('team-builder', 'mac-team') })
+    const task = f.state.conversations.find(c => c.id === f.task)!
+    expect(task.teamWritten).toBe(true)
+    expect(teamWrittenTask(f.state, f.state.conversations.find(c => c.id === f.step)!)).toBe(true)
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: f.step, agentId: f.member('main-tester', 'mac') }, owner, { pushOrigin: 'unknown' }))).toBe(TEAM_WRITTEN_WORK)
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: f.step, agentId: f.member('team-tester', 'mac-team') }, owner, { pushOrigin: 'unknown' }))).toBeNull()
   })
 
   it('takes its step on an owner entry and on a Team account, even while GitHub cannot say who pushed', () => {
@@ -570,7 +581,7 @@ describe('a release task the Swarm opened', () => {
   // Security review 2 of #3324 (round 2), Important 1: the mark itself ends the exemption, so the first mark tells the main account to stop.
   it('tells a main-account agent on a step to stop when its own Ready is the first to show a bot\'s push', () => {
     const f = releaseTask(), pull = 'https://github.com/acme/app/pull/77'
-    const builder = f.member('team-builder', 'mac-team'), tester = f.member('main-tester', 'mac')
+    const builder = f.member('main-integrator', 'mac'), tester = f.member('main-tester', 'mac')
     f.run({ type: 'work.assign', conversationId: f.task, agentId: builder })
     f.run({ type: 'work.assign', conversationId: f.step, agentId: tester })
     const assignmentId = f.state.conversations.find(c => c.id === f.task)!.assignment!.id
@@ -587,7 +598,7 @@ describe('a release task the Swarm opened', () => {
   it('counts a post\'s pull request as a release task\'s code unless it is on the project\'s release list', () => {
     const f = releaseTask(), task = () => f.state.conversations.find(c => c.id === f.task)!, repo = 'https://github.com/acme/app'
     const merged = 'https://github.com/acme/app/pull/77', mine = 'https://github.com/acme/app/pull/88'
-    f.run({ type: 'work.assign', conversationId: f.task, agentId: f.member('team-integrator', 'mac-team') })
+    f.run({ type: 'work.assign', conversationId: f.task, agentId: f.member('main-integrator', 'mac') })
     const onList = [merged]
     // What the store does with a post in a task: the links of a post by a person, the PM or the assignee, off the release list.
     const codeOf = (posts: string[]) => appendCodePullRequestUrls(task(), [task().brief, task().title, ...postedCode(task(), posts, onList, repo)], repo)
@@ -632,7 +643,7 @@ describe('a release task the Swarm opened', () => {
     const other = f.group()
     f.state.conversations.find(c => c.id === other)!.cards = { pullRequests: [{ url: shipped, mergedAt: 1000 }] } as never
     expect(mergedPullRequests(f.state)).toContain(shipped)
-    f.run({ type: 'work.assign', conversationId: f.task, agentId: f.member('team-integrator', 'mac-team') })
+    f.run({ type: 'work.assign', conversationId: f.task, agentId: f.member('main-integrator', 'mac') })
     const note = `Released web 1.4.2, carries ${shipped}.`
     appendCodePullRequestUrls(task(), [task().brief, ...postedCode(task(), [note], mergedPullRequests(f.state), repo)], repo)
     expect(task().codePullRequestUrls).toEqual([])
