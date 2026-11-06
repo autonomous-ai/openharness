@@ -75,6 +75,7 @@ void main() {
             onOpenTerminal: (_) {},
             machineName: (_) => 'Mac Studio',
             paneStore: store,
+            board: true,
           ),
         ),
       ),

@@ -137,11 +137,17 @@ class SuperTabView extends StatefulWidget {
     this.linkSwarms,
     this.voiceRecorder,
     this.paneStore,
+    this.board = false,
   });
   final SuperTabController controller;
 
   /// Where the hidden left rail and Buddy pane are remembered (task #3787); the app's local store when null.
   final LocalKeyValueStore? paneStore;
+
+  /// Desktop's layout of task #3787 (anh Dee): a project opens its Board with the person's Buddy beside it, the left
+  /// rail has no Buddy entry and no Threads, and a chat is one flat list (old thread replies inline in time order, a
+  /// reply quoting its message). The web keeps today's layout for now.
+  final bool board;
   final VoidCallback onInvite;
   final ValueChanged<SuperTabConversation> onAddAgent;
   final ValueChanged<SuperTabAgent> onOpenTerminal;
@@ -2065,6 +2071,7 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   Widget _sidebar() => ProjectSidebar(
+    board: widget.board,
     controller: c,
     compact: _phone,
     app: widget.app,
@@ -2084,7 +2091,7 @@ class _SuperTabViewState extends State<SuperTabView>
       final project = c.snapshot?.projects
           .where((p) => p.leadConversationId == id)
           .firstOrNull;
-      if (project != null) return _openBoard(project);
+      if (project != null && widget.board) return _openBoard(project);
       setState(() {
         _page = null;
         _showManage = _showTasks = false;
@@ -2569,9 +2576,9 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// The messages [id]'s list shows, in order.
   /// A thread reply shows in its thread, and here only when also sent.
-  /// No Threads on Desktop (anh Dee, task #3787): a chat is one flat list, old thread replies inline in time order,
-  /// and a reply quotes its message rather than opening a thread. The web keeps its threads for now.
-  static const _flatChat = !kIsWeb;
+  /// No Threads ([SuperTabView.threads]): a chat is one flat list, old thread replies inline in time order, and a
+  /// reply quotes its message rather than opening a thread.
+  bool get _flatChat => widget.board;
 
   List<SuperTabMessage> _shownMessages(String id, {bool replies = false}) {
     final messages = c.taskMessages(id);
