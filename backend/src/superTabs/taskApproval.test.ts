@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommand, authorizeCommandAccess, commandSchema, type CommandContext } from './commands.js'
+import { applyCommand, authorizeCommandAccess, commandSchema, withoutCredentials, type CommandContext } from './commands.js'
 import { fullSwarm, NOW, owner, peer, outsider } from './read/fixture.test-support.js'
 import type { Actor } from './model.js'
 import { openTasks } from './dispatch.js'
@@ -158,6 +158,13 @@ describe('personal approval enforced before work', () => {
     f.runCommand({ type: 'proposal.close', projectId: 'lead', messageId: row.id, reason: 'Not planned' }, f.pm,
       { proposal: { id: row.id, conversationId: row.conversationId, author: row.author, source: row.source ?? null } })
     expect(f.state.conversations.find(c => c.proposal?.legacyMessageId === row.id)?.archived).toBe(true)
+  })
+  it('redacts a pasted credential from a rejection before its reason reaches stored parts or messages', () => {
+    const token = 'sk-' + 'x'.repeat(48) // Synthetic fixture, never a provider credential.
+    const removed: Parameters<typeof withoutCredentials>[1] = []
+    const clean = withoutCredentials(commandSchema.parse({ type: 'task.reject', conversationId: 'task', reason: `Avoid ${token}` }), removed)
+    expect(JSON.stringify(clean)).not.toContain(token)
+    expect(removed.length).toBeGreaterThan(0)
   })
   it('guards the person and selected agent against concurrent changes, and keeps approval in light loads', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
