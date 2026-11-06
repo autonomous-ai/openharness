@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { lstatSync, readdirSync, readlinkSync, realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { isAbsolute, posix, resolve } from 'node:path'
 
 /**
@@ -21,10 +22,12 @@ const PREFIX = 'Harness shell guard:'
 export const GUARD_REASONS = {
   killByName: `${PREFIX} stop only processes you started, by the process id you recorded; never by name or pattern `
     + '(pkill, killall, kill $(pgrep …), taskkill /IM).',
+  killAll: `${PREFIX} kill -1 signals every process this account can reach, every other agent's work on a shared machine; `
+    + 'stop only processes you started, by the process id you recorded.',
   systemWide: `${PREFIX} no sudo and no system-wide installs on a shared machine; put the tools you need in your session folder.`,
   fixedTmp: `${PREFIX} a fixed name in /tmp can be read or planted by every account; make a folder with `
     + 'mktemp -d "${TMPDIR:-/tmp}/name.XXXXXX" and write inside it.',
-  liveWorktree: (path: string, pid: number) => `${PREFIX} process ${pid} still works in the worktree ${path}; never remove a `
+  liveWorktree: (path: string, pid: number) => `${PREFIX} process ${pid} still works in a worktree in ${path}; never remove a `
     + 'worktree a live process uses.',
   worktreeUnknown: (path: string) => `${PREFIX} could not tell whether a live process uses the worktree ${path}, so it is not `
     + 'removed; stop what runs there first.',
@@ -43,6 +46,10 @@ export interface GuardFacts {
   liveCwds: () => { pid: number; cwd: string }[] | null
   /** [path] with its links resolved; [path] itself when absent or when it cannot be. */
   realpath?: (path: string) => string
+  /** The account's home, for `~` and `~/…`; left as written without it. */
+  home?: string
+  /** The names of the folders (not links) in [path], for a glob and for the worktrees a folder holds; none when unread. */
+  entries?: (path: string) => string[]
 }
 
 /** One command in its own place: its words with quotes removed, and where its redirections write or read. */
@@ -53,6 +60,7 @@ export function shellRefusal(command: string, facts: GuardFacts): string | null 
   const commands = allCommands(command)
   if (commands.some(systemWide)) return GUARD_REASONS.systemWide
   if (killsByName(commands)) return GUARD_REASONS.killByName
+  if (commands.some(killsAll)) return GUARD_REASONS.killAll
   if (commands.some((simple) => fixedTmp(simple, facts))) return GUARD_REASONS.fixedTmp
   return liveWorktree(commands, facts)
 }
@@ -350,6 +358,22 @@ function killsByName(commands: Simple[]): boolean {
   return kills && looksUp
 }
 
+/**
+ * `kill … -1`: a target of -1 signals every process the account may signal (POSIX kill(2)), on a shared Team account every
+ * other agent's work (Rowan's security review, 11-06). The first word after `kill` that starts with `-` is the signal
+ * (`kill -1 4242` sends SIGHUP to 4242), unless it is `--`; every word after it is a target. A negative group id other than
+ * -1 is a process group the agent started, by its id, and passes.
+ */
+function killsAll({ words }: Simple): boolean {
+  if (programName(words[0]) !== 'kill') return false
+  let at = 1
+  if (words[at] === '-s' || words[at] === '-n') at += 2
+  else if (words[at] === '-l' || words[at] === '-L') return false
+  else if (words[at]?.startsWith('-') && words[at] !== '--') at += 1
+  if (words[at] === '--') at += 1
+  return words.slice(at).includes('-1')
+}
+
 const TMP_ROOTS = ['/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp']
 /** A path in /tmp inside a word: at its start, or after `=`, `:` or `,` (`--output=/tmp/x`, `PATH=a:/tmp/b`). */
 const TMP_PATH = /(?:^|[=:,])((?:\/private)?(?:\/var)?\/tmp\/[^\s"'`;|&<>()]+)/g
@@ -375,18 +399,24 @@ function tmpPathRefused(word: string, facts: GuardFacts): boolean {
   return false
 }
 
-/** `git worktree remove P` or `rm -r P` of a linked worktree some live process still works in. */
+/**
+ * `git worktree remove P`, or `rm -r P` of a folder holding a linked worktree, while a live process still works in it.
+ * Rowan's security review (11-06): naming the worktree's parent, a glob over the worktrees or a `~/` path removed a live
+ * worktree too, so the target is the folder after `~` and globs are read, and it counts when it holds a worktree at
+ * any depth the walk reaches. Live processes are read only then: they cost an lsof on a Mac.
+ */
 function liveWorktree(commands: Simple[], facts: GuardFacts): string | null {
   let cwd = facts.cwd
   for (const { words } of commands) {
     const program = programName(words[0])
-    if (program === 'cd' && words[1] && !words[1].startsWith('-') && !words[1].includes('$') && !words[1].startsWith('~')) {
-      cwd = resolveIn(cwd, words[1], facts.platform)
+    if (program === 'cd' && words[1] && !words[1].startsWith('-') && !words[1].includes('$')) {
+      const folder = expandHome(words[1], facts)
+      if (!folder.startsWith('~')) cwd = resolveIn(cwd, folder, facts.platform)
       continue
     }
-    for (const target of removedFolders(words, cwd, facts.platform)) {
+    for (const target of removedFolders(words, cwd, facts)) {
       const real = facts.realpath?.(target) ?? target
-      if (!facts.linkedWorktree(real) && !facts.linkedWorktree(target)) continue
+      if (!holdsWorktree(real, facts) && (real === target || !holdsWorktree(target, facts))) continue
       const live = facts.liveCwds()
       if (live === null) return GUARD_REASONS.worktreeUnknown(target)
       const user = live.find(({ cwd: there }) => within(there, real) || within(there, target))
@@ -400,8 +430,66 @@ const within = (path: string, folder: string) => path === folder || path.startsW
 const resolveIn = (cwd: string, path: string, platform: NodeJS.Platform) =>
   (platform === 'win32' ? resolve(cwd, path) : posix.resolve(cwd, path)).replace(/(.)\/+$/, '$1')
 
+/** How deep, and through how many folders, the walk looks for a worktree: ~/harnesses/worktrees/<project>/<id> is 4. */
+const WALK_DEPTH = 4
+const WALK_FOLDERS = 2000
+const WALK_SKIPS = new Set(['node_modules', '.git'])
+
+/** Whether [path] is a linked worktree or holds one; a walk too big to finish counts as holding one. */
+function holdsWorktree(path: string, facts: GuardFacts): boolean {
+  if (facts.linkedWorktree(path)) return true
+  if (!facts.entries) return false
+  let seen = 0
+  const walk = (folder: string, depth: number): boolean => {
+    if (depth === 0) return false
+    for (const name of facts.entries!(folder)) {
+      if (WALK_SKIPS.has(name)) continue
+      if (++seen > WALK_FOLDERS) return true
+      const inner = `${folder.replace(/\/+$/, '')}/${name}`
+      if (facts.linkedWorktree(inner) || walk(inner, depth - 1)) return true
+    }
+    return false
+  }
+  return walk(path, WALK_DEPTH)
+}
+
+const expandHome = (path: string, facts: GuardFacts): string =>
+  facts.home && (path === '~' || path.startsWith('~/')) ? `${facts.home}${path.slice(1)}` : path
+
+const GLOB = /[*?[]/
+/** A segment's shell glob as a pattern: `*`, `?` and `[…]`; a leading `*` or `?` matches no dot file, as the shell's. */
+function globPattern(segment: string): RegExp {
+  let source = ''
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment[i]
+    if (c === '*') source += '[^/]*'
+    else if (c === '?') source += '[^/]'
+    else if (c === '[') {
+      const close = segment.indexOf(']', i + 2)
+      if (close === -1) { source += '\\['; continue }
+      source += `[${segment.slice(i + 1, close).replace(/^!/, '^').replace(/\\/g, '\\\\')}]`
+      i = close
+    } else source += c.replace(/[.+^${}()|\\\]]/g, '\\$&')
+  }
+  return new RegExp(`^${/^[*?[]/.test(segment) ? '(?!\\.)' : ''}${source}$`)
+}
+
+/** The folders a path argument names: itself, or for a glob each folder its first glob segment matches (what is below
+ *  it counts, so the rest of the pattern is not needed). */
+function namedFolders(path: string, cwd: string, facts: GuardFacts): string[] {
+  const expanded = expandHome(path, facts)
+  if (expanded.startsWith('~') || expanded.includes('$')) return []
+  if (!GLOB.test(expanded)) return [resolveIn(cwd, expanded, facts.platform)]
+  const segments = expanded.split('/')
+  const at = segments.findIndex((segment) => GLOB.test(segment))
+  const base = resolveIn(cwd, segments.slice(0, at).join('/') || (expanded.startsWith('/') ? '/' : '.'), facts.platform)
+  const pattern = globPattern(segments[at])
+  return (facts.entries?.(base) ?? []).filter((name) => pattern.test(name)).map((name) => `${base.replace(/\/+$/, '')}/${name}`)
+}
+
 /** The folders [words] remove: `git [-C dir] worktree remove [-f] P`, or each target of a recursive `rm`. */
-function removedFolders(words: string[], cwd: string, platform: NodeJS.Platform): string[] {
+function removedFolders(words: string[], cwd: string, facts: GuardFacts): string[] {
+  const { platform } = facts
   const program = programName(words[0])
   if (program === 'git') {
     let at = 1, here = cwd
@@ -419,7 +507,7 @@ function removedFolders(words: string[], cwd: string, platform: NodeJS.Platform)
     const options = end === -1 ? args.filter((word) => word.startsWith('-')) : args.slice(0, end).filter((word) => word.startsWith('-'))
     if (!options.some((word) => word === '--recursive' || /^-[a-zA-Z]*[rR]/.test(word))) return []
     const paths = end === -1 ? args.filter((word) => !word.startsWith('-')) : [...args.slice(0, end).filter((word) => !word.startsWith('-')), ...args.slice(end + 1)]
-    return paths.map((path) => resolveIn(cwd, path, platform))
+    return paths.flatMap((path) => namedFolders(path, cwd, facts))
   }
   return []
 }
@@ -434,6 +522,12 @@ export function privateFolderOf(path: string): boolean {
     const uid = process.getuid?.()
     return stat.isDirectory() && (uid === undefined || stat.uid === uid) && (stat.mode & 0o077) === 0
   } catch { return false }
+}
+
+/** The folders (not links) in [path]; none when it cannot be read. */
+export function foldersIn(path: string): string[] {
+  try { return readdirSync(path, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name) }
+  catch { return [] }
 }
 
 /** Whether [path] is a linked git worktree: a folder whose `.git` is a file naming the main repository's. */
@@ -472,6 +566,8 @@ export function machineFacts(cwd: string): GuardFacts {
   return {
     cwd: isAbsolute(cwd) ? cwd : resolve(cwd),
     platform: process.platform,
+    home: homedir(),
+    entries: foldersIn,
     privateFolder: privateFolderOf,
     linkedWorktree: linkedWorktreeOf,
     liveCwds: () => (live === undefined ? (live = liveCwdsOf()) : live),
