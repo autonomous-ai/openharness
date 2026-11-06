@@ -68,6 +68,15 @@ it('accepts what a machine is ready for, and a reading from before it', () => {
   expect(machineObservationSchema.safeParse({ ...sent, readiness: { engines: [{ engine: 'claude', installed: 'yes', signedIn: null }] } }).success).toBe(false)
 })
 
+it('accepts readiness for the full pane-engine catalog while rejecting oversized or credential-bearing rows', () => {
+  const { receivedAt: _receivedAt, ...sent } = observation
+  const engines = ['claude', 'codex', 'cursor', 'opencode', 'pi', 'omp', 'hermes', 'commandcode',
+    'devin', 'muse', 'amp', 'kilo', 'grok', 'agy', 'copilot'].map(engine => ({ engine, installed: true, signedIn: null }))
+  expect(machineObservationSchema.safeParse({ ...sent, readiness: { engines } }).success).toBe(true)
+  expect(machineObservationSchema.safeParse({ ...sent, readiness: { engines: Array(17).fill(engines[0]) } }).success).toBe(false)
+  expect(machineObservationSchema.safeParse({ ...sent, readiness: { engines: [{ ...engines[0], token: 'test-secret' }] } }).success).toBe(false)
+})
+
 it('accepts each running agent’s token counts by model, counts only and bounded, and a reading from before them', () => {
   const { receivedAt: _receivedAt, ...sent } = observation
   const opus = { input: 10, output: 5, cacheRead: 100, cacheWrite: 20 }
