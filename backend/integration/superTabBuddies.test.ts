@@ -14,7 +14,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
-import type { Command } from '../src/superTabs/commands.js'
+import { commandSchema, type Command } from '../src/superTabs/commands.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
@@ -1328,5 +1328,36 @@ describe('Buddy input and sleep race (#3824)', () => {
     expect(injected).toBe(true)
     expect((await current(first.main)).asleep).toBeUndefined()
     expect((await f.store.deliveries(peer, f.tab, first.main)).some(d => d.status === 'queued')).toBe(true)
+  })
+})
+
+
+describe('a sleeping proposal sender (#3824)', () => {
+  it('wakes the card’s original Buddy for a PM question even when another Buddy is the default', async () => {
+    let now = Date.now()
+    const f = await swarm(() => now)
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    const first = await swarmBuddy(f), second = await swarmBuddy(f, true)
+    const approved = await f.execute({ type: 'message.send', conversationId: first.swarmChat, text: 'Preserve drafts', replyTo: null, recipientIds: [] }, peer)
+    const proposal = await f.execute(commandSchema.parse({ type: 'buddy.propose', conversationId: first.swarmChat, projectId: 'lead', ownerMessageId: approved.result.messageId,
+      title: 'Preserve drafts', text: 'Preserve drafts', goal: 'Preserve work', scope: 'Draft storage', priority: 'P2',
+      why: 'Reconnect loses work', doneWhen: 'Draft returns', evidence: ['Offline reproduction'] }), peer, first.main)
+    await f.execute({ type: 'buddy.default', conversationId: second.swarmChat }, peer)
+    const agents = (await f.store.read(peer, f.tab)).state.agents.filter(a => [first.main, second.main].includes(a.id))
+    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: { in: agents.map(a => a.id) } }, data: { status: 'answered' } })
+    const { receivedAt: _, sessionKind: __, ...report } = first.pool.machine.observation!
+    now += 3_600_001
+    await f.store.observeMachine(peer, f.tab, 'peer-mac', { ...report, runningHarnessIds: agents.map(a => a.harnessId), idleBuddyHarnessIds: agents.map(a => a.harnessId) })
+    const current = async (id: string) => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === id)!
+    expect((await current(first.main)).asleep).toBeDefined()
+    expect((await current(second.main)).asleep).toBeDefined()
+    await f.execute(commandSchema.parse({ type: 'proposal.ask', conversationId: proposal.result.conversationId, personId: peer.sub,
+      question: 'How long?', defaultAnswer: 'Seven days', deadline: now + 60_000 }), owner, f.lead)
+    expect((await current(first.main)).asleep).toBeUndefined()
+    expect((await current(second.main)).asleep).toBeDefined()
+    const waiting = (await f.store.deliveries(peer, f.tab, first.main)).find(d => d.conversationId === first.swarmChat)!
+    expect(waiting).toBeDefined()
+    const claim = await f.store.delivery(peer, f.tab, first.main, waiting.id, { type: 'claim', claimId: randomUUID() })
+    expect(claim).toMatchObject({ message: { source: { kind: 'proposal-notice' } } })
   })
 })
