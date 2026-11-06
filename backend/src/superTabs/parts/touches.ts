@@ -5,6 +5,8 @@ import { agentProjectId, canReadProject, groupProject, projectsOf } from '../pro
 import type { Touch } from './commit.js'
 import { waitsNow } from '../leaderboard/record.js'
 import { buddiesHearing } from '../buddyNews.js'
+import { defaultBuddy } from '../buddies.js'
+import { mainBuddyOf } from '../buddySessions.js'
 
 /**
  * The parts a command relies on without writing them (design section 1.2, column T). A part the command also writes is
@@ -46,7 +48,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   if ('roleId' in command && command.roleId) head()
   if (command.type === 'agent.start' && command.request.roleId) head()
 
-  // News for a Buddy relies on its person still reading there (buddyNews.ts): their part guards it, as a person.tell's does.
+  // Buddy input also guards an already awake recipient, so a concurrent sleep retries against that input (#3824).
   for (const buddy of buddiesHearing(effects.state, effects.messages)) { agent(buddy.id); member(buddy.buddyOf!.personId) }
 
   switch (command.type) {
@@ -60,6 +62,33 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       break
     case 'machine.contribute':
       if (!before.machines?.some(m => m.machineId === command.machineId)) head()
+      break
+    case 'buddy.engine': {
+      const chat = before.conversations.find(c => c.id === command.conversationId)
+      const buddy = command.conversationId ? chat && mainBuddyOf(before, chat)
+        : actor.kind === 'person' ? defaultBuddy(before, actor.userId) : undefined
+      if (buddy) machine(buddy.machineId)
+      break
+    }
+    case 'proposal.create':
+      head()
+      group(leadGroupOf(command.projectId))
+      break
+    case 'proposal.decide': case 'proposal.ask': case 'proposal.answer': case 'proposal.merge': {
+      head()
+      const card = before.conversations.find(c => c.id === command.conversationId)
+      leadCheck(card && groupProject(before, card).id)
+      for (const identity of card?.proposal?.senders ?? []) member(identity.personId)
+      if (command.type === 'proposal.merge') {
+        group(command.intoConversationId)
+        for (const id of card?.proposal?.mergedFrom ?? []) group(id)
+      }
+      break
+    }
+    case 'buddy.propose':
+      head()
+      leadCheck(command.projectId)
+      if (actor.kind === 'agent') member(before.agents.find(a => a.id === actor.agentId)?.buddyOf?.personId)
       break
     case 'buddy.create':
       // It may record a Buddy-only machine, or count on one that a concurrent removal of its last Buddy ends.
@@ -83,8 +112,14 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       break
     case 'project.report': case 'project.repository':
     // The coordinator's own writes check it leads the project, which a concurrent Lead change ends (review of phase 2).
-    case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName': case 'rules.set':
+    case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName':
       leadCheck(command.projectId)
+      break
+    // A rules save writes its own collection, no part of the project: by anyone, it guards on the project's Lead chat, which a
+    // project delete and a tab's close write, so a first save never lands on a project being deleted (security review 2 of
+    // #3929). The Lead check above is part of the same touch.
+    case 'rules.set':
+      group(leadGroupOf(command.projectId))
       break
     // An older CLI's rule is a save to its project's instructions, the coordinator's like instructions.save (commands.ts).
     case 'rule.set':

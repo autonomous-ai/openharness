@@ -297,6 +297,8 @@ export type HostRosterRow =
   | { tabId: string; cleanup: { machineId: string; removalId: string } }
   | { tabId: string; joinTeam: { machineId: string; name: string; maxAgents: number } }
 export interface HostAgentRow {
+  /** A main Buddy's private chat, used only by its own host to restart it on another engine. */
+  buddyConversationId?: string
   tabId: string
   tabName: string
   lastChangedAt: number | null
@@ -310,6 +312,8 @@ export interface HostAgentRow {
   /** A Buddy's own chat, its main one's or the thread session's (task #3818): its host ends a session and moves a model switch
    *  there. Absent on every other agent; null while its chat is not loaded. An older backend sends none: the person's main chat. */
   buddyChatId?: string | null
+  /** Main Buddy whose session may rest and resume in place (#3824). */
+  buddySleepManaged?: true
   joinSwarm: boolean
   skillMode: 'default' | 'orchestration'
   role?: { id: string; name: string; kind: string; version: string; projectId: string } | null
@@ -354,6 +358,8 @@ export interface HostPool {
   githubApp?: true
   /** The host may say what it launches beyond workers in its readings (leadStart.ts). */
   capabilitiesWanted?: true
+  /** Asks for positive idle Buddy activity in fresh machine readings (#3824). */
+  buddySleepWanted?: true
 }
 
 /** HTTP 426 on GET /api/super-tabs, /:tabId, /hosts/:m, /hosts/:m/pools and /hosts/:m/assignments. */

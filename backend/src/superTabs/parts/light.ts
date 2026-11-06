@@ -39,6 +39,7 @@ export const GROUP_FIELDS = {
     'kind',
     'leadId',
     'projectId',
+    'proposal',
     'pulse',
     'reviewOf',
   ],

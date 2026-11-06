@@ -34,6 +34,9 @@ import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
 
 // Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
 vi.mock('../../lib/buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => 'peer' }))
+// Nor does the account the gate runs under matter: a Harness Team account is refused by prepareBuddyFolder before any launch, which
+// lib/swarmSkills.spec.ts tests on its own. These launches are the owner's, so the account boundary is fixed to "not a Team account".
+vi.mock('../../team/config.js', async (original) => ({ ...await original<object>(), isTeamAccount: () => false }))
 vi.mock('../../lib/gitProject.js', async (real) => ({ ...await real<object>(), harnessMadeWorktree: vi.fn(async () => false) }))
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()

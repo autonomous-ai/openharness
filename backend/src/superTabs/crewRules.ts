@@ -19,17 +19,5 @@ export const DISK_FLOOR_BYTES = 10 * GB
 /** A machine that refused a member's move start (no token, no room) is not picked for that member again this long. */
 export const MOVE_REFUSED_WAIT_MS = HOUR
 
-/** A machine rule the project's owners gave, as the project rules record holds it (Ledger's task): by machine id, each
- *  machine of a Mac and its Harness Team account. Never written in source: people's machines and hours stay out of this
- *  public repository (River, 11-05). Until the record is on main, no machine rule applies to moves. */
-export interface MachineRule {
-  machineIds: string[]
-  /** Why, in the words the project chat shows. */
-  why: string
-  /** Engines no crew member is moved there with. */
-  noEngines?: string[]
-  /** When it is away: on these weekdays (0 Sunday … 6 Saturday), between these local times, in its owner's time zone. */
-  away?: { days: number[]; windows: Array<[string, string]>; timeZone: string }
-}
 /** How long after losing its task to its machine a crew member still counts as holding it, so it moves with it. */
 export const HELD_TASK_MS = HOUR
