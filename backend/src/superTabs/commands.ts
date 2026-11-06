@@ -2712,7 +2712,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
         // A task lists its steps from its start (#3394): only a task from before lists none, which its PR watch looks up once.
-        ...(!command.reviewOf && !command.audience ? { stepIds: [], process: processOf(project) } : {}),
+        ...(!command.reviewOf && !command.audience ? { stepIds: [], ...(processOf(project) === 'simple' ? { process: 'simple' as const } : {}) } : {}),
         number, title: command.title, leadId, agentIds: [...leadId ? [leadId] : [], ...creator],
         archived: false, brief, ...(brief ? { briefAt: context.now } : {}), ...(command.task ? { task: command.task } : {}), ...(command.reviewOf ? { reviewOf: command.reviewOf } : {}),
         // A step keeps its task's mark (teamWritten.ts, audit H2). Opening a task writes none of its code (#3304).
