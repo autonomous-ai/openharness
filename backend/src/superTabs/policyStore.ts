@@ -4,7 +4,7 @@
  */
 import type { Prisma } from '@prisma/client'
 import { stableId } from './model.js'
-import { MAX_RULES_REVISIONS, projectRulesSchema, SEED_RULES, type ProjectRules, type RulesChange, type RulesWrite } from './policy.js'
+import { MAX_RULES_REVISIONS, projectRulesSchema, seedRules, type ProjectRules, type RulesChange, type RulesWrite } from './policy.js'
 
 type Transaction = Prisma.TransactionClient
 
@@ -25,14 +25,14 @@ export interface RulesRevision {
 /** The project's newest revision, or null when none is saved (the seed, revision 0). One indexed read. */
 export async function readRules(tx: Transaction, tabId: string, projectId: string): Promise<{ revision: number; rules: ProjectRules } | null> {
   const row = await tx.superTabProjectRules.findFirst({ where: { tabId, projectId }, orderBy: { revision: 'desc' }, select: { revision: true, rules: true } })
-  return row && { revision: row.revision, rules: row.rules as unknown as ProjectRules }
+  return row && { revision: row.revision, rules: seedRules(tabId, projectId, row.rules as unknown as ProjectRules) }
 }
 
 /** The record a project runs on now, for a server worker (the merge train, the release schedule): its newest revision, or
  *  the seed at revision 0. Takes the client or a transaction. */
 export async function currentRules(tx: Transaction, tabId: string, projectId: string): Promise<{ revision: number; rules: ProjectRules }> {
   const saved = await readRules(tx, tabId, projectId)
-  if (!saved) return { revision: 0, rules: SEED_RULES }
+  if (!saved) return { revision: 0, rules: seedRules(tabId, projectId) }
   // Checked again on the way out (SecAlder, review of #3250): a stored row the schema refuses (one with no read count, a
   // pattern from a looser past schema) would read as fewer reads. It throws, and the caller holds: never a partial record.
   const parsed = projectRulesSchema.safeParse(saved.rules)

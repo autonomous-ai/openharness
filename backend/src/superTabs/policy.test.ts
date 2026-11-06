@@ -34,6 +34,22 @@ describe('the project rules record', () => {
     expect(projectRulesSchema.parse(rules)).toEqual(rules)
   })
 
+  it('accepts optional approval authority with explicit linked account IDs and rejects ambiguous links', () => {
+    const authority = { topDeciderId: 'dee-id', people: [{ name: 'Ken', accountIds: ['ken-id', 'other-ken-id'] }] }
+    expect(projectRulesSchema.parse({ ...copy(), instructionApprovals: authority })).toMatchObject({ instructionApprovals: authority })
+    expect(projectRulesSchema.parse({ ...copy(), instructionApprovals: null })).toMatchObject({ instructionApprovals: null })
+    expect(projectRulesSchema.parse(copy())).not.toHaveProperty('instructionApprovals')
+    const bad = [
+      { ...authority, people: [{ name: 'Ken', accountIds: [] }] },
+      { ...authority, people: [{ name: 'Ken', accountIds: ['a', 'a'] }] },
+      { ...authority, people: [{ name: 'Ken', accountIds: ['a'] }, { name: 'KEN', accountIds: ['b'] }] },
+      { ...authority, people: [{ name: 'Ken', accountIds: ['a'] }, { name: 'Other', accountIds: ['a'] }] },
+      { ...authority, people: [{ name: 'Ken', accountIds: Array.from({ length: 11 }, (_, i) => `a${i}`) }] },
+      { ...authority, people: Array.from({ length: 51 }, (_, i) => ({ name: `Person ${i}`, accountIds: [`a${i}`] })) },
+    ]
+    for (const instructionApprovals of bad) expect(projectRulesSchema.safeParse({ ...copy(), instructionApprovals }).success).toBe(false)
+  })
+
   it('refuses bad values', () => {
     expect(refused({ ...copy(), extra: 1 })).toBe(true)
     expect(refused({ ...copy(), releaseWindow: { ...SEED_RULES.releaseWindow, start: '25:00' } })).toBe(true)

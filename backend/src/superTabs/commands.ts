@@ -26,7 +26,7 @@ import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
-import { projectRulesSchema, rulesDiff, rulesEqual, SEED_RULES, type ProjectRules } from './policy.js'
+import { projectRulesSchema, rulesDiff, rulesEqual, seedRules, SEED_RULES, type ProjectRules } from './policy.js'
 import { accessRefusal, changeAccess, expireAccess, taskAccess } from './machineAccess.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
@@ -2095,18 +2095,18 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const summary = because && command.summary.length + because.length > 200 ? `${command.summary.slice(0, 199 - because.length)}…${because}` : command.summary + because
       // No part grows past its size budget: core, each role section, people notes, the whole (#3392).
       refuseOverBudget(before, command.text)
-      // A person's rule, or who gave it, is dropped only by that person or with their own message approving it (#3151).
-      const { told, rules } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [],
-        context.instructions?.at ?? 0, context.pullRequestMerges ?? {})
+      // A person's rule, or who gave it, needs their approval or the configured top decider's own message (#3151, #3710).
+      const { told, rules, deciderId } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [],
+        context.instructions?.at ?? 0, context.pullRequestMerges ?? {}, context.projectRules?.rules.instructionApprovals)
       // Every line it dropped, with its kind and who gave it, kept with the revision for the History (River, 11-05).
       saveInstructions(project, current, command.text, summary, askedBy, droppedLines(before, command.text, command.dropped ?? [], rules))
       // The coordinator's save that says it is the tidy is that tidy done (pmSchedule.ts tidyRequest); a correction it saves
       // meanwhile is not (review of #3112).
       if (actor.kind === 'agent' && command.tidy) tidySaved(projectOf(state, project.id), current + 1)
-      // Each approver is told in one line, privately, as person.tell does: in their one Buddy chat and their older one here.
+      // Approvers and authors affected by a decider's override hear privately, in their one Buddy chat and older one here.
       for (const [personId, rules] of told) {
         const to = person(state, personId)
-        const text = approvedDropNotice(who, project, rules)
+        const text = approvedDropNotice(who, project, rules, deciderId ? agentWrittenNameOf(state, deciderId) ?? 'the project top decider' : undefined)
         const id = stableId(operationId, 'rule-approved', personId)
         message(openSwarmBuddyChat(state, to).id, text, [], null, { kind: PM_LINE_KIND, projectId: project.id }, undefined, undefined, undefined, id)
         Object.assign(effects.messages.at(-1)!, { buddyProject: project.id })
@@ -2137,18 +2137,25 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         askedIn = { conversationId: command.askedIn!.conversationId, messageId: command.askedIn!.messageId }
       } else askedBy = (actor as Extract<Actor, { kind: 'person' }>).userId
       if (context.projectRules === undefined) fail('RULES_UNAVAILABLE', 'This project\'s rules cannot be read now. Try again in a moment.', 503)
-      const current = context.projectRules ?? { revision: 0, rules: SEED_RULES }
+      const current = context.projectRules ?? { revision: 0, rules: seedRules(state.id, project.id) }
       if (command.baseRevision !== current.revision) {
         // Refused with the record it missed, to merge and save again: never two writers' records kept silently.
         fail('RULES_STALE', `The project rules changed since revision ${command.baseRevision}. Merge your change into revision ${current.revision} and save again.`,
           409, { revision: current.revision, rules: current.rules })
       }
-      if (rulesEqual(current.rules, command.rules)) {
+      // Old clients omit the additive authority section. Preserve it; an explicit null removes it.
+      const next = command.rules.instructionApprovals === undefined && current.rules.instructionApprovals !== undefined
+        ? { ...command.rules, instructionApprovals: current.rules.instructionApprovals } : command.rules
+      if (JSON.stringify(current.rules.instructionApprovals ?? null) !== JSON.stringify(next.instructionApprovals ?? null)
+        && askedBy !== project.ownerId && askedBy !== current.rules.instructionApprovals?.topDeciderId) {
+        fail('RULES_APPROVAL_EDITOR_REQUIRED', 'Only the project owner or its current top decider may change who approves instruction rules or link their accounts.', 403)
+      }
+      if (rulesEqual(current.rules, next)) {
         Object.assign(result, { projectId: project.id, revision: current.revision, unchanged: true })
         break
       }
       const revision = current.revision + 1
-      effects.projectRules = { projectId: project.id, revision, rules: command.rules, diff: rulesDiff(current.rules, command.rules),
+      effects.projectRules = { projectId: project.id, revision, rules: next, diff: rulesDiff(current.rules, next),
         summary: command.summary, writtenBy: { kind: sender.kind, id: sender.id }, askedBy, askedIn, at: context.now }
       Object.assign(result, { projectId: project.id, revision })
       break

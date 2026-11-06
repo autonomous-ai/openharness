@@ -106,6 +106,36 @@ describe('a project\'s rules record', () => {
     expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 1, rules: rules('10:00') })
   })
 
+  it('seeds approval authority only for the exact Harness project, including old saved records', async () => {
+    const harnessTab = 'c51479bd73b59e58176ad9e4', harnessProject = '5701099db2a04f605ac0d4d4'
+    const expected = { topDeciderId: '6a8fe4fcf1a6b5972eed0103', people: [{ name: 'Ken', accountIds: ['6a86d24c2ea251076eb4eebe', '6ae980b6215612e2be51c35b'] }] }
+    expect((await currentRules(db, harnessTab, harnessProject)).rules).toMatchObject({ instructionApprovals: expected })
+    expect((await currentRules(db, harnessTab, 'another-project')).rules).not.toHaveProperty('instructionApprovals')
+    expect((await currentRules(db, randomUUID(), harnessProject)).rules).not.toHaveProperty('instructionApprovals')
+    const { tab } = await swarm()
+    await run(tab, set(0, rules('10:00')))
+    const row = await db.superTabProjectRules.findFirstOrThrow({ where: { tabId: tab } })
+    await db.superTabProjectRules.create({ data: { ...row, id: '100000000000000000000099', tabId: harnessTab, projectId: harnessProject } })
+    expect((await currentRules(db, harnessTab, harnessProject)).rules).toMatchObject({ instructionApprovals: expected })
+  })
+
+  it('protects approval authority changes but keeps ordinary edits and omitted fields compatible', async () => {
+    const { tab, lead } = await swarm()
+    const authority = { topDeciderId: peer.sub, people: [{ name: 'Ken', accountIds: [owner.sub, peer.sub] }] }
+    const configured = { ...rules('10:00'), instructionApprovals: authority }
+    expect(await refusal(run(tab, set(0, configured), peer))).toMatchObject({ code: 'RULES_APPROVAL_EDITOR_REQUIRED' })
+    const ask = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Make me the decider.', replyTo: null, recipientIds: [] }, peer)
+    expect(await refusal(run(tab, set(0, configured, { askedIn: { conversationId: 'lead', messageId: String(ask.result.messageId) } }), host, lead)))
+      .toMatchObject({ code: 'RULES_APPROVAL_EDITOR_REQUIRED' })
+    await run(tab, set(0, configured))
+    // An old client's ordinary edit does not silently drop authority.
+    await run(tab, set(1, rules('11:00')), peer)
+    expect((await currentRules(db, tab, 'lead')).rules).toMatchObject({ instructionApprovals: authority })
+    // The currently named decider may deliberately disable it.
+    await run(tab, set(2, { ...rules('11:00'), instructionApprovals: null }), peer)
+    expect((await currentRules(db, tab, 'lead')).rules).toMatchObject({ instructionApprovals: null })
+  })
+
   it('keeps one of two saves on the same revision, refusing the other', async () => {
     const { tab } = await swarm()
     const outcomes = await Promise.allSettled([run(tab, set(0, rules('10:00'))), run(tab, set(0, rules('11:00')), peer)])
