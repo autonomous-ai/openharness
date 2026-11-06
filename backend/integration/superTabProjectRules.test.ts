@@ -115,6 +115,12 @@ describe('a project\'s rules record', () => {
     expect(read).toHaveLength(1)
     expect(read[0]!.planSummary).toMatch(/IXSCAN/)
     expect(read[0]!.docsExamined).toBeLessThanOrEqual(1)
+    // A record broken elsewhere still gives the machine rules that pass, as the server applies them (security review 1).
+    await db.superTabProjectRules.updateMany({ where: { tabId: tab, projectId: 'lead' },
+      data: { rules: { ...rules('10:00'), dispatch: { ...SEED_RULES.dispatch, maxHanded: 0 }, machines: [rule, { machineIds: [], why: 'Bad' }] } } })
+    const broken = await machines(host, lead)
+    expect(broken.statusCode, broken.body).toBe(200)
+    expect(broken.json().data).toEqual({ projectId: 'lead', revision: 1, machines: [rule] })
     // Who may read the project reads them; nobody else.
     expect((await machines(peer)).statusCode).toBe(200)
     const stranger = await store.create(peer, randomUUID(), 'Other')
