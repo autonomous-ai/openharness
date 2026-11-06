@@ -103,7 +103,39 @@ describe('a project\'s rules record', () => {
     const { tab } = await swarm()
     expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 0, rules: SEED_RULES })
     await run(tab, set(0, rules('10:00')))
-    expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 1, rules: rules('10:00') })
+    const started = performance.now()
+    const entries = await profiled(db, async () => {
+      expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 1, rules: rules('10:00') })
+    })
+    const read = reads(entries, 'SuperTabProjectRules', ['tabId', 'projectId'])
+    expect(read).toHaveLength(1)
+    expect(read[0]!.planSummary).toMatch(/IXSCAN/)
+    expect(read[0]!.docsExamined).toBeLessThanOrEqual(1)
+    console.info('project dispatch policy read', { elapsedMs: performance.now() - started, returned: read[0]!.nreturned, examined: read[0]!.docsExamined, plan: read[0]!.planSummary })
+  })
+
+  it('normalizes legacy stored dispatch policy and keeps new empty lanes explicit', async () => {
+    const { tab } = await swarm()
+    await run(tab, set(0, rules('10:00')))
+    const { dispatch: _unused, ...legacy } = rules('10:00')
+    await db.superTabProjectRules.updateMany({ where: { tabId: tab }, data: { rules: { ...legacy, lanes: [] } } })
+    expect((await currentRules(db, tab, 'lead')).rules.lanes.map(l => l.name)).toEqual(['backend', 'CLI', 'Desktop', 'mobile', 'docs'])
+    const loaded = (await get(owner, tab)).json().data
+    expect(loaded.rules.dispatch).toEqual({ everyMs: 30_000, maxHanded: 3, nudgeAfterMs: 7_200_000, returnAfterMs: 10_800_000 })
+    await run(tab, set(1, { ...rules('10:00'), lanes: [] }))
+    expect((await currentRules(db, tab, 'lead')).rules.lanes).toEqual([])
+  })
+
+  it('holds workers on invalid stored policy while a person can read and repair it', async () => {
+    const { tab } = await swarm()
+    await run(tab, set(0, rules('10:00')))
+    await db.superTabProjectRules.updateMany({ where: { tabId: tab }, data: { rules: { ...rules('10:00'), dispatch: { ...SEED_RULES.dispatch, maxHanded: 0 } } } })
+    await expect(currentRules(db, tab, 'lead')).rejects.toThrow(/does not pass the schema/)
+    const read = await get(owner, tab)
+    expect(read.statusCode).toBe(200)
+    expect(read.json().data.rules.dispatch.maxHanded).toBe(0)
+    await run(tab, set(1, rules('10:00')))
+    expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 2, rules: rules('10:00') })
   })
 
   it('keeps one of two saves on the same revision, refusing the other', async () => {

@@ -35,7 +35,28 @@ const globs = z.array(glob).max(MAX_LIST)
 const distinct = <T extends z.ZodTypeAny>(item: T, key: (entry: z.infer<T>) => string, what: string) =>
   z.array(item).max(MAX_LIST).refine(list => new Set(list.map(e => key(e).toLowerCase())).size === list.length, `Each ${what} once.`)
 
-export const projectRulesSchema = z.object({
+/** Defaults for projects predating configurable dispatch (#3601); kept here with the rest of the project policy. */
+export const SEED_DISPATCH = deepFreeze({ everyMs: 30_000, maxHanded: 3, nudgeAfterMs: 7_200_000, returnAfterMs: 10_800_000 })
+export const SEED_LANES = deepFreeze([
+  { name: 'backend', owns: ['backend/'] }, { name: 'CLI', owns: ['cli/'] },
+  { name: 'Desktop', owns: ['desktop/'] }, { name: 'mobile', owns: ['mobile/'] }, { name: 'docs', owns: ['docs/'] },
+])
+const dispatchSchema = z.object({
+  everyMs: z.number().int().min(30_000).max(3_600_000),
+  maxHanded: z.number().int().min(1).max(1000),
+  nudgeAfterMs: z.number().int().min(60_000).max(604_800_000),
+  returnAfterMs: z.number().int().max(1_209_600_000),
+}).strict().refine(d => d.returnAfterMs > d.nudgeAfterMs, 'Return time is later than the nudge.')
+
+/** Old clients and stored revisions have no dispatch section; their unused empty lane table meant the fixed five lanes.
+ * An explicit dispatch section makes an empty list deliberate. No backfill or mutation of a saved revision. */
+const legacyDispatch = (value: unknown): unknown => {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || 'dispatch' in value) return value
+  const old = value as Record<string, unknown>
+  return { ...old, dispatch: SEED_DISPATCH, ...Array.isArray(old.lanes) && old.lanes.length === 0 ? { lanes: SEED_LANES } : {} }
+}
+
+export const projectRulesSchema = z.preprocess(legacyDispatch, z.object({
   /** When releases go out, in a local time of day; the end comes after the start, the same day. */
   releaseWindow: z.object({ start: clock, end: clock, timeZone }).strict()
     .refine(w => w.start < w.end, 'The release window ends after it starts, the same day.'),
@@ -60,6 +81,8 @@ export const projectRulesSchema = z.object({
   paths: distinct(z.object({ name: line(80), path: line(400) }).strict(), entry => entry.name, 'path name'),
   /** The crew roster: each role and who fills it. */
   crew: distinct(z.object({ role: line(40), names: z.array(line(80)).max(20) }).strict(), entry => entry.role, 'role'),
+  /** Periodic dispatch cadence, handed-work cap and progress clocks. */
+  dispatch: dispatchSchema,
   /** Lanes of work and the paths each owns. */
   lanes: distinct(z.object({ name: line(80), owns: z.array(line(400)).max(MAX_LIST) }).strict(), lane => lane.name, 'lane'),
 }).strict().refine(rules => Buffer.byteLength(JSON.stringify(rules)) <= MAX_RULES_BYTES,
@@ -68,7 +91,7 @@ export const projectRulesSchema = z.object({
   .refine(rules => {
     const pause = rules.releasePace.backendPause
     return !pause || (pause.start >= rules.releaseWindow.start && pause.end <= rules.releaseWindow.end)
-  }, 'The backend pause falls inside the release window.')
+  }, 'The backend pause falls inside the release window.'))
 
 export type ProjectRules = z.infer<typeof projectRulesSchema>
 
@@ -138,7 +161,8 @@ export const SEED_RULES: ProjectRules = deepFreeze({
   caps: [],
   paths: [],
   crew: [],
-  lanes: [],
+  lanes: SEED_LANES,
+  dispatch: SEED_DISPATCH,
 })
 
 /** One change a save made: a leaf of an object section, or a whole list. */
