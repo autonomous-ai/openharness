@@ -73,16 +73,23 @@ The fix is to split the two jobs:
 
 ## The Task Board
 
-What a person sees when they select a project. Five columns **[merge]** (Ken's; today's Board has Proposals, Next up, Working, Waiting, Shipped: Waiting folds into
-Working with a mark, and Merged is new):
+What a person sees when they select a project. Six columns **(Ken's decision, 2026-11-06, replacing the five)**; each
+column is one place where work waits, so where cards pile up is where the flow is stuck:
 
-| Column | Holds |
-|---|---|
-| Proposal | Proposals the PM has not decided yet, and those waiting on an answer from their sender |
-| Next | Accepted work not started yet, in priority order |
-| Working | Work being done, and work waiting (on review, test, CI, a person, a decision), marked on the card |
-| Merged | Merged, not yet released |
-| Shipped | Released |
+| Column | A card is here when | On the card |
+|---|---|---|
+| Proposal | the PM hasn't decided, or it waits on its sender's answer | who proposed and through which Buddy; an open question with its default and time |
+| Next up | accepted, not started | priority, in order |
+| Working | being done, including review, test, and waiting on a person or CI | one mark for where it is: in review, testing, waiting on X, CI red |
+| Done | review and test passed and the PR is green, waiting to merge; also finished work with no code | "waiting to merge" and for how long, turning to a warning past 1 hour so a merge bottleneck shows |
+| Merged | on main, waiting for a release | when the next release is due |
+| Shipped | in a release people have | the version (for example Desktop 1.3.84); leaves the Board after 7 days for the history |
+
+- A task with several PRs (backend and Desktop, say) sits in the column of its slowest PR; it is Shipped only when every
+  part is.
+- A proposal decided Later leaves Proposal and comes back on its date; one decided No goes to the history with its reason.
+- A project with no repository (GTM, research) shows four columns: Proposal → Next up → Working → Done.
+- Each column shows its count; "Mine" filters to the reader's cards.
 
 On each card a person can see:
 - the proposal's words, who proposed it, and through which Buddy;
@@ -116,7 +123,7 @@ work.
 +- left (hide/show) ---+ +- harness . Board -----------------------------------------+ +- right (hide/show) ------+
 | autonomous.ai v      | | Needs you: 2                     Search  Mine  Lane v    | | (*) Code  ( ) Planning   |
 | Decisions            | |                                                           | | [+ New Buddy]            |
-| Mentions             | | PROPOSAL   NEXT       WORKING     MERGED    SHIPPED       | |--------------------------|
+| Mentions             | | PROPOSAL  NEXT UP  WORKING  DONE  MERGED  SHIPPED       | |--------------------------|
 |                      | | +-------+  +-------+  +-------+   +------+  +------+      | | the selected Buddy's     |
 | Projects             | | |[CLI]  |  |[Desk] |  |[back] |   |#3628 |  |#3607 |      | | chat (the person's main  |
 |  > harness           | | |title  |  |#3765  |  |#3747  |   |      |  |1.3.84|      | | chat), or a clicked      |
@@ -156,6 +163,19 @@ work.
    Every other step is visible on the Board only.
 
 If the Buddy that sent a proposal has been removed, its messages go to the person's default Buddy.
+
+## Who can write in the project chat *(Ken, 2026-11-06)*
+
+The Chat tab stays, and writing in it is a per-project right:
+- By default only the project owner (and the Swarm owner) can write in the project chat; everyone else reads it.
+- The project owner grants "Can chat" to a person in Project settings → People, and can take it back.
+- Without it, a person still does everything else: their Buddies, proposals, the card's chat of tasks they take part
+  in, answering what is asked of them. Agents write as today.
+- The server enforces it, not just the app, so older apps can't write either.
+- This replaces "the PM chat becomes read-only after the switch": the chat stays open to the owner and the people
+  granted.
+- Why not the existing roles: they are Swarm-wide, set only when inviting (no command changes a role later), and
+  `viewer` refuses every write in the whole Swarm (READ_ONLY, model.ts:1040), Buddies and proposals included.
 
 ## Steering and teaching the PM without chat
 
@@ -215,7 +235,8 @@ Until they have any Buddy, they can propose straight from the Board.
   when it is ready.
 - **[merge]** Desktop first, today (anh Dee: "focus on building desktop only, ship desktop asap"); phone and web follow
   on the same spec, so in the end a person sees the same Board and the same Buddies on each.
-- The history of a switched project's chat with the PM stays readable, but nobody can write in it.
+- A switched project's chat stays readable to all and writable by the owner and the people granted "Can chat" (see
+  "Who can write in the project chat").
 - When a project switches on, every message to the PM still unanswered becomes a proposal on the Board, under its
   author's name, so nothing is dropped. When it switches back, undecided proposals stay open and the PM answers them
   in the chat as today.
@@ -245,9 +266,11 @@ chat and that rule is dropped.
    - any person may set any priority today (coordinatorOrPerson, commands.ts:728) and there is no pause command: the
      server enforces priority and pause rights by role, and gains pause and resume;
    - only crew members sleep (crewRules.ts): idle Buddies sleep and wake on their person or their proposal;
+   - a per-project "Can chat" right (Ken): owner and Swarm owner by default, granted and revoked by the project
+     owner in Project settings → People, enforced by the server on every app;
    - the built-in "Swarm process v2" text (pmSchedule.ts:17-22) is one text for all projects: it follows each project's
      switch, so a switched project's PM gets no inbox or answer-each-message lines.
-2. Desktop: Merged column and Waiting folded into Working; decision, question and "needs you" on the card; Needs you
+2. Desktop: the six columns (Ken) with Done's waiting-to-merge timer and warning; Project settings → People with the "Can chat" grant; the Chat tab read-only without it;  decision, question and "needs you" on the card; Needs you
    bar; propose from the Board; priority and pause by role; + New Buddy and Buddy list.
 3. Phone and web: the same Board and Buddies.
 4. Instructions and the PM: drop the chat rules (answer in threads, inbox, owed asks) for a project once it switches.

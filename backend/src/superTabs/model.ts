@@ -341,6 +341,9 @@ export interface WorkTask {
   constraints: string
   owns: string[]
   requires?: TaskRequirement
+  /** `strong`: big, hard or risky work, which the crew's dispatch hands only to a member on a strong model (dispatch.ts, #3576); a task
+   *  that wants two reviews counts as strong unless this says `standard`. */
+  strength?: 'standard' | 'strong'
   /** What its reviews check first, and how many independent reviews it wants: written into its brief (renderWorkTask), which
    *  whoever opens its review reads. The server opens and counts no review (project instructions, phase 4). */
   review?: ReviewPlan
@@ -443,6 +446,9 @@ export interface Conversation {
   /** Each linked pull request's head and patch id as the PR watch last read them (#3394): what check verdicts count against.
    *  Absent until the watch reads one. */
   pullRequestHeads?: Record<string, PullRequestHead>
+  /** Each linked pull request's check state as the PR watch last read it, `green`, `red` or `running` (pullRequestEvents.ts
+   *  checksStateOf, task #3827): what the board's Done cards say. Written only when it changes; absent until the watch reads one. */
+  pullRequestChecks?: Record<string, import('./pullRequestEvents.js').ChecksState>
   /** Its steps and reviews (groups whose reviewOf is this one), newest last, at most 200 (production's most was 14): what a new
    *  pull request head re-derives the checks of, dormant ones included (#3394). Empty from a task's start; absent on a task
    *  from before, whose PR watch looks them up once (pullRequestEvents.ts listedSteps). */
@@ -464,11 +470,19 @@ export interface Conversation {
   lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
   /** Counts reaction changes here (reactions.ts), so readers see a new reaction on an older message. */
   reactionSeq?: number
+  /** A durable proposal on this card (#3817); retained when its accepted work becomes a task. */
+  proposal?: import('./proposalCards.js').ProposalRecord
   /** A Buddy chat's owner messages its Buddy already proposed for (buddies.ts): each asks once. */
   proposals?: string[]
   /** The name a Buddy chat's owner chose for their Buddy (buddies.ts renameBuddy): kept here, which outlives the Buddy, so
    *  one added again takes it. Absent: the default, "<person>'s Buddy". */
   buddyName?: string
+  /** A person's main Buddy chat (buddies.ts swarmBuddyChatId) lists their other Buddies' chats, oldest first, so they load
+   *  with it, whose id every command can derive (task #3818). At most the Swarm's Buddy cap. Absent: one Buddy. */
+  buddyChats?: string[]
+  /** This Buddy chat's Buddy is its person's default (task #3818): their lines go to it. One per person; with none marked, the
+   *  main chat's. */
+  buddyDefault?: true
   /** A Buddy chat's live and starting thread sessions (buddySessions.ts); absent while it has none. */
   buddySessions?: BuddySessionEntry[]
   /** An older project Buddy chat whose person was told their one Buddy cannot start there now (commands.ts buddyDownLine):
@@ -498,6 +512,9 @@ export interface Conversation {
   notBefore?: string
   /** Why its not-before date holds it (heldReason.ts), set with the date by work.queue. Absent on a hold from before reasons. */
   hold?: import('./heldReason.js').HeldReason
+  /** A pause by someone who steers its project (boardRights.ts, task #3819): who (actorKey), when and why. While set, the task
+   *  is not handed out (dispatch.ts) or chased by the PM's sweep (pmSchedule.ts), and shows held (pulse.ts). */
+  paused?: { by: string; at: number; reason?: string }
   /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
    *  from before priorities, which reads as P2. */
   priority?: import('./taskPriority.js').TaskPriority
@@ -634,6 +651,8 @@ export interface SuperTabState {
   deletion?: { at: string; by: string; purgeAt: string }
   /** Idle workers stop and finished groups archive by themselves (tidy.ts); false once the owner turns it off. */
   tidy?: false
+  /** The most Buddies a person may have in this Swarm (buddies.ts BUDDY_CAP), set by its owner (task #3818). */
+  buddyCap?: number
   /** Buddies (buddies.ts) are on in every Swarm; readers are always told so (visibleState), as apps from before 10-29 hide
    *  Buddies and show Chat with PM without it. A stored value from the old switch is ignored. */
   buddies?: true
@@ -788,6 +807,8 @@ export const NOTICE_READERS = {
   // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
+  // Proposal history and private Buddy notices are visible to the people who can read their card/chat.
+  'proposal-card': 'people', 'proposal-answer': 'people', 'proposal-notice': 'people', 'proposal-merged': 'people', 'proposal-overdue': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
   // A computer signed in as another account now, told to its old owner in their Buddy chat (commands.ts machine.moved, #3122).
   'computer-moved': 'people',
@@ -1139,6 +1160,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // A failing privacy check's detail is its contributor's: an error from the check can name paths on their Mac. Everyone
   // else reads which item failed (machines.ts teamWorkRefusal).
   for (const pool of visible.machines ?? []) {
+    // Engine idle proof is for server lifecycle decisions alone, never a member's activity feed (#3824).
+    if (pool.observation) delete pool.observation.idleBuddyHarnessIds
     const privacy = pool.observation?.privacy
     if (privacy && 'detail' in privacy && !(actor.kind === 'person' && actor.userId === pool.contributorId)) delete (privacy as { detail?: string }).detail
   }

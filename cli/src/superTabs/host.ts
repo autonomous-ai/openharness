@@ -183,7 +183,7 @@ interface Journal { version: 1; machineId: string; entries: Record<string, Entry
 /** `skillMode` is the agent's project's skills; a row without it (an older backend, a project from before modes) is orchestration.
  *  `roleName` and `instructions` name its project's instructions (backend read/hostRows.ts); an older backend sends neither. */
 interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string; switchLanded?: { id?: unknown; candidateAgentId?: unknown } }; skillMode?: unknown; lead?: unknown; role?: unknown
-  leadsConversationId?: unknown; roleName?: unknown; instructions?: unknown }
+  buddySleepManaged?: true; leadsConversationId?: unknown; roleName?: unknown; instructions?: unknown }
 export interface SuperTabHostOptions {
   now?: () => number
   /** What restarts a Team agent stranded on an old relay grant (relayRecovery.ts), for a spec. */
@@ -899,10 +899,13 @@ export class SuperTabHost {
     const rows = data.map(object).filter(row => identifier(row.tabId) && object(row.agent).machineId === this.machineId
       && identifier(object(row.agent).harnessId) && object(row.agent).buddyOf)
     const ownerOf = (row: Record<string, unknown>) => { const of = object(object(row.agent).buddyOf); return `${row.tabId}\0${of.personId}\0${of.generation}` }
+    // A person may have several Buddies (task #3818): a Buddy's sessions are those in its own chat, which the backend names on
+    // each row; an older backend names none, and the person's sessions all go with their one Buddy.
+    const chatOf = (row: Record<string, unknown>) => identifier(row.buddyChatId) ? `${row.tabId}\0chat\0${row.buddyChatId}` : ownerOf(row)
     for (const row of rows) {
       const agent = object(row.agent)
       if (agent.buddySession || !agent.modelRequest) continue
-      const sessions = rows.filter(other => object(other.agent).buddySession && ownerOf(other) === ownerOf(row))
+      const sessions = rows.filter(other => object(other.agent).buddySession && chatOf(other) === chatOf(row))
       void this.buddyModels.serve(row as unknown as BuddyModelRow, sessions as unknown as BuddyModelRow[])
         .catch(error => this.log(`Buddy model: ${error instanceof Error ? error.name : typeof error}`))
     }
@@ -1274,10 +1277,12 @@ export class SuperTabHost {
         void this.crewRest(target, rest)
         continue
       }
+      this.buddyRestChecks.delete(restKey)
+      if (isBuddy(agent)) this.rested.delete(restKey)
       // Rested here, or dropped before this host restarted (its record is on disk): the folder comes back first.
       // One restore at a time, and the keep-alive below waits for it, so the session reopens in its folder, not a missing one.
       // A failed one waits CREW_RESTORE_RETRY_MS, so the keep-alive (which backs off itself) is never held back for good.
-      if (!this.restoring.has(restKey) && (this.restoreRetryAt.get(restKey) ?? 0) <= this.now() && (this.rested.delete(restKey)
+      if (!isBuddy(agent) && !this.restoring.has(restKey) && (this.restoreRetryAt.get(restKey) ?? 0) <= this.now() && (this.rested.delete(restKey)
         || ((target.agent as { crew?: unknown }).crew && this.crewFolders().remembers(target.tabId, target.agent.harnessId)))) {
         this.restoring.set(restKey, this.crewFolders().restore(target.tabId, target.agent.harnessId).catch(() => 'failed' as const)
           .then(result => { if (result === 'failed') this.restoreRetryAt.set(restKey, this.now() + CREW_RESTORE_RETRY_MS); else this.restoreRetryAt.delete(restKey) })
@@ -1292,7 +1297,11 @@ export class SuperTabHost {
       } else if (isCrewRow(row)) {
         // A project's crew is kept alive as its PM is (task #3397): reopened in place, then told to continue its task.
         leads.add(target.agent.harnessId)
-        if (!this.restoring.has(restKey)) this.keepAlive(target.agent.harnessId, true)
+        if (!this.restoring.has(restKey)) this.keepAlive(target.agent.harnessId, 'crew')
+      }
+      else if (row.buddySleepManaged === true && isBuddy(agent) && !agent.buddySession && !agent.modelRequest) {
+        leads.add(target.agent.harnessId)
+        this.keepAlive(target.agent.harnessId, 'buddy')
       }
       // Never adopt another live session as a replacement for the recorded harness.
       if (!this.core.agents.byAgent(target.agent.harnessId) || !this.core.agents.terminalAvailable(target.agent.harnessId)) continue
@@ -1454,6 +1463,7 @@ export class SuperTabHost {
    *  off, so an engine that cannot start never spins. */
   /** Crew members closed for rest, by tab and harness, with what closed them: closed once per rest, and when one wakes, its
    *  dropped folder comes back before its keep-alive reopens it (crewFolders.ts). */
+  private readonly buddyRestChecks = new Map<string, symbol>()
   private readonly rested = new Map<string, 'sleep' | 'drop' | 'moving'>()
   /** A dropped folder being brought back, by the same key: its keep-alive waits for it (review of #3229). */
   private readonly restoring = new Map<string, Promise<unknown>>()
@@ -1480,9 +1490,23 @@ export class SuperTabHost {
   private async crewRest(row: HostAgent, rest: 'sleep' | 'drop' | 'moving'): Promise<void> {
     const key = `${row.tabId}:${row.agent.harnessId}`
     if (this.rested.get(key) === rest) return
+    const buddy = isBuddy(object(row.agent)), agent = object(row.agent)
+    if (buddy && (row.buddySleepManaged !== true || agent.buddySession || agent.modelRequest || agent.teamAccount || isTeamDaemon() || rest !== 'sleep')) return
     this.rested.set(key, rest)
+    const check = Symbol()
+    if (buddy) this.buddyRestChecks.set(key, check)
     try {
-      if (this.core.agents.byAgent(row.agent.harnessId)) {
+      const live = this.core.agents.byAgent(row.agent.harnessId)
+      if (live) {
+        if (buddy) {
+          const activity = await this.core.agents.activity([row.agent.harnessId])
+          if (this.stopped || this.buddyRestChecks.get(key) !== check) return
+          const current = this.core.agents.byAgent(row.agent.harnessId)
+          if (activity[row.agent.harnessId] !== 'idle' || current?.sessionId !== live.sessionId || current?.registeredAt !== live.registeredAt) {
+            this.rested.delete(key)
+            return
+          }
+        }
         const closed = await this.core.agents.closeMember?.(row.agent.harnessId)
         if (closed && 'error' in closed && closed.error) throw new Error(closed.error)
       }
@@ -1490,11 +1514,12 @@ export class SuperTabHost {
     } catch (error) {
       // Tried again on the next roster: the server still says it rests.
       this.rested.delete(key)
-      this.log(`Crew rest: ${error instanceof Error ? error.message.slice(0, 80) : typeof error}`)
-    }
+      this.log(`${buddy ? 'Buddy' : 'Crew'} rest: ${error instanceof Error ? error.message.slice(0, 80) : typeof error}`)
+    } finally { if (this.buddyRestChecks.get(key) === check) this.buddyRestChecks.delete(key) }
   }
 
-  private keepAlive(harnessId: string, crew = false): void {
+  private keepAlive(harnessId: string, kind: 'pm' | 'crew' | 'buddy' = 'pm'): void {
+    const crew = kind === 'crew'
     const reopen = this.core.agents.keepLeadAlive
     if (!reopen) return
     const state = this.keepAlives.get(harnessId) ?? { running: false, failures: 0, retryAt: 0 }
@@ -1522,7 +1547,7 @@ export class SuperTabHost {
     state.running = true
     const failed = (reason: string) => {
       state.retryAt = this.now() + Math.min(LEAD_RETRY_MAX_MS, LEAD_RETRY_MS * 2 ** state.failures++)
-      if (reason !== state.reason) this.log(`Could not reopen the ${crew ? 'crew member' : 'Product Manager'} ${harnessId.slice(0, 8)}: ${reason}. Trying again with backoff.`)
+      if (reason !== state.reason) this.log(`Could not reopen the ${kind === 'buddy' ? 'Buddy' : crew ? 'crew member' : 'Product Manager'} ${harnessId.slice(0, 8)}: ${reason}. Trying again with backoff.`)
       state.reason = reason
     }
     void (async () => {
@@ -1657,7 +1682,9 @@ export class SuperTabHost {
       // the backend's stableId('buddy', 'swarm', person, generation); an older project chat's session is in that chat.
       const swarm = agent.buddyScope === 'swarm' || identifier(session.projectId)
       const projectId = swarm ? 'swarm' : identifier(agent.projectId) ? agent.projectId : 'lead'
-      const conversationId = buddyChatIdOf(projectId, buddyOf.personId, buddyOf.generation)
+      // With several Buddies (task #3818) the backend names the session's own chat on its row; an older backend names none.
+      const named = object(row).buddyChatId
+      const conversationId = identifier(named) ? named : buddyChatIdOf(projectId, buddyOf.personId, buddyOf.generation)
       state.running = true
       const ending = reason, short = String(agent.harnessId).slice(0, 8)
       // One id per session and reason: a retry is the same request, and a changed reason never reuses an id for another.

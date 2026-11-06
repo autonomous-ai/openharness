@@ -4,10 +4,11 @@
  * each free member gets, the two clocks and the capacity line. The store's pass (store.ts dispatchCrew) sends each pick
  * through work.assign, whose own write refuses a second assignment.
  */
-import { SEED_RULES, type ProjectRules } from './policy.js'
+import { SEED_RULES, type MachineRule, type ProjectRules } from './policy.js'
+import { firstMachines, isReview, machineRuleRefusal } from './machineRules.js'
 import { isBuddy } from './buddies.js'
 import { sessionClosed } from './closedAgents.js'
-import { activeWork, handed, occupiesAgent, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
+import { activeWork, handed, occupiesAgent, reviewsWanted, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
 import { agentProjectId, onTeamAccount, projectOf, projectsOf } from './projects.js'
 import { barredFromTeamWritten } from './teamWritten.js'
 import { digestOf, localNow } from './digest.js'
@@ -15,6 +16,7 @@ import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 import { queueOrder, queueSiblings } from './taskQueue.js'
 import { unavailableReason } from './liveness.js'
 import { FAILED, type PullRequestWatch } from './pullRequestEvents.js'
+import { modelMatches } from './rules.js'
 import { roleNameOf } from './instructions.js'
 import { reviewerCandidates } from './reviewerPick.js'
 import { stepName } from './steps.js'
@@ -25,8 +27,8 @@ const HOUR_MS = 3_600_000
 export interface Lane { name: string; owns: readonly string[] }
 
 /** The validated dispatch policy of one project; the default is only for legacy pure callers. */
-export interface DispatchRules extends Readonly<ProjectRules['dispatch']> { readonly lanes: readonly Lane[] }
-export const dispatchRules = (rules: ProjectRules): DispatchRules => ({ ...rules.dispatch, lanes: rules.lanes })
+export interface DispatchRules extends Readonly<ProjectRules['dispatch']> { readonly lanes: readonly Lane[]; readonly machines: readonly MachineRule[] }
+export const dispatchRules = (rules: ProjectRules): DispatchRules => ({ ...rules.dispatch, lanes: rules.lanes, machines: rules.machines ?? [] })
 /** Null holds only this project's configurable clocks and dispatch until its rules can be repaired/read. */
 export type DispatchLookup = (projectId: string) => DispatchRules | null
 export const DISPATCH_RULES: DispatchRules = Object.freeze(dispatchRules(SEED_RULES))
@@ -135,7 +137,9 @@ export function openTasks(state: SuperTabState, projectId: string, now: number):
     return !!task && !task.archived && (task.projectId ?? 'lead') === projectId && activeWork(task)
   })
   const open = [...queueSiblings(state, project), ...lostSteps].filter(group => (group.task || group.brief.trim())
-    && !activeWork(group) && !['done', 'cancelled'].includes(group.assignment?.status ?? '') && !(group.notBefore && group.notBefore > today))
+    && !activeWork(group) && !['done', 'cancelled'].includes(group.assignment?.status ?? '') && !(group.notBefore && group.notBefore > today)
+    // Paused by someone who steers its project (boardRights.ts, task #3819): until resumed.
+    && !group.paused)
   const ordered = queueOrder(open)
   return [...ordered.filter(g => g.priority === 'P0'), ...ordered.filter(g => g.priority !== 'P0')]
 }
@@ -149,6 +153,16 @@ function takes(state: SuperTabState, member: Agent, rules: DispatchRules): (lane
   return own ? lane => lane !== null && laneNamed(rules.lanes, own) === lane : () => true
 }
 
+/** Whether [group] is big, hard or risky work, which Routing puts on Opus or Astra: the PM marked it strong, or it wants two reviews
+ *  and the PM did not mark it standard (#3576). */
+const needsStrongModel = (group: Conversation): boolean => group.task?.strength === 'strong' || (group.task?.strength === undefined && reviewsWanted(group.task) === 2)
+/** Whether [member] runs a model Routing allows for big or risky work: Opus at high effort or above, or Astra at xhigh (an effort
+ *  not set is not known to be either). */
+const onStrongModel = (member: Agent): boolean => {
+  const effort = (member.configuration.effort ?? '').toLowerCase(), model = member.configuration.model
+  return (modelMatches('opus', model) && ['high', 'xhigh', 'max'].includes(effort)) || (modelMatches('astra', model) && ['xhigh', 'max'].includes(effort))
+}
+
 /** The tasks [member] could be handed now, best first: those pinned to it (oldest pin first), then its lane's open tasks.
  *  A task it just lost to the 3-hour clock is not offered to it. */
 export function candidatesFor(state: SuperTabState, member: Agent, rules: DispatchRules, now: number, open = openTasks(state, agentProjectId(state, member)!, now),
@@ -157,7 +171,10 @@ export function candidatesFor(state: SuperTabState, member: Agent, rules: Dispat
   const pinned = open.filter(g => pinOf(g)?.agentId === member.id).sort((a, b) => pinOf(a)!.at - pinOf(b)!.at)
   const members = new Set(state.agents.filter(a => a.workDecision !== 'stop' && !moving(a)).map(a => a.id))
   const acceptsLane = takes(state, member, rules)
-  const steps = open.filter(g => g.reviewOf && !lostByIt(g)).filter(step => {
+  // The project's machine rules (machineRules.ts): what its machine refuses now, it is not handed, pinned or not.
+  const refused = (review: boolean) => !!machineRuleRefusal(rules.machines, { machineId: member.machineId, engine: member.configuration.engine, review }, now)
+  const refusesWork = refused(false), refusesReview = refused(true)
+  const steps = open.filter(g => g.reviewOf && !lostByIt(g) && !(refusesReview && isReview(g))).filter(step => {
     const task = state.conversations.find(g => g.id === step.reviewOf)!
     const kind = /test/i.test(stepName(step)) ? 'test' : /security/i.test(stepName(step)) ? 'security' : 'review'
     const latest = task.pullRequestUrls?.at(-1)
@@ -167,9 +184,9 @@ export function candidatesFor(state: SuperTabState, member: Agent, rules: Dispat
   const lane = open.filter(g => (!g.lane || !!laneNamed(rules.lanes, g.lane)) && !g.reviewOf && !pinned.includes(g) && !(pinOf(g) && members.has(pinOf(g)!.agentId)) && !lostByIt(g)
     // Ordinary workers recover work; new tasks still need the PM's route or a standing crew lane.
     && (member.crew || (g.assignment?.status === 'lost' && g.lostAttempt))
-    && acceptsLane(laneOf(g, rules.lanes)))
+    && acceptsLane(laneOf(g, rules.lanes)) && (!needsStrongModel(g) || onStrongModel(member)))
   // Team-written code goes to Team accounts only (teamWritten.ts); a pick refused this round is not sent again (store.ts).
-  const allowed = (group: Conversation) => (!group.reviewOf || steps.includes(group)) && !barredFromTeamWritten(state, group, member) && !skip(group.id, member.id)
+  const allowed = (group: Conversation) => (group.reviewOf ? steps.includes(group) : !refusesWork) && !barredFromTeamWritten(state, group, member) && !skip(group.id, member.id)
   return [...pinned.filter(allowed).map(group => ({ group, why: 'pin' as const })),
     ...[...steps.filter(g => !pinned.includes(g)), ...lane].filter(allowed).map(group => ({ group, why: 'lane' as const }))]
 }
@@ -193,8 +210,16 @@ export interface DispatchPick { conversationId: string; agentId: string; why: 'p
 export function dispatchPlan(state: SuperTabState, projectId: string, rules: DispatchRules, now: number, skip: Skip = () => false): DispatchPick[] {
   if (state.paused) return []
   const open = openTasks(state, projectId, now), taken = new Set<string>(), picks: DispatchPick[] = []
-  for (const member of freeCrew(state, projectId, rules, now)) {
-    const next = candidatesFor(state, member, rules, now, open, skip).find(c => !taken.has(c.group.id))
+  const free = freeCrew(state, projectId, rules, now)
+  const candidates = new Map(free.map(member => [member.id, candidatesFor(state, member, rules, now, open, skip)]))
+  // A lane's work goes first to its machines (machineRules.ts firstMachines): a task a free member there could take waits for
+  // it; a member elsewhere takes it only when none there can.
+  const heldFor = new Map<string, string[]>()
+  for (const member of free) for (const { group, why } of candidates.get(member.id)!) {
+    if (why === 'lane' && firstMachines(rules.machines, laneOf(group, rules.lanes)).includes(member.machineId)) heldFor.set(group.id, [...heldFor.get(group.id) ?? [], member.id])
+  }
+  for (const member of free) {
+    const next = candidates.get(member.id)!.find(c => !taken.has(c.group.id) && (c.why === 'pin' || !heldFor.has(c.group.id) || heldFor.get(c.group.id)!.includes(member.id)))
     if (!next) continue
     taken.add(next.group.id)
     picks.push({ conversationId: next.group.id, agentId: member.id, why: next.why, lane: laneOf(next.group, rules.lanes) })

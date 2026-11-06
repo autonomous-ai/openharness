@@ -98,6 +98,36 @@ describe('a project\'s rules record', () => {
     expect((await get(host, tab, lead)).json().data).toMatchObject({ revision: 1 })
   })
 
+  // Task #3964: the route reads the project's machine rules alone, the newest revision by its index, never the history.
+  it('gives an agent of the project its machine rules from the newest revision, by one indexed read', async () => {
+    const { tab, lead } = await swarm()
+    const machines = (user: AuthUser, asAgentId?: string) => app.inject({ method: 'GET',
+      url: `/api/super-tabs/${tab}/projects/lead/machine-rules${asAgentId ? `?asAgentId=${asAgentId}` : ''}`, headers: { authorization: `Bearer ${user.sub}` } })
+    const seed = await machines(host, lead)
+    expect(seed.statusCode, seed.body).toBe(200)
+    expect(seed.json().data).toEqual({ projectId: 'lead', revision: 0, machines: [] })
+    const rule = { machineIds: ['test-host'], why: 'No Codex there', noEngines: ['codex' as const] }
+    await run(tab, set(0, { ...rules('10:00'), machines: [rule] }))
+    const entries = await profiled(db, async () => {
+      expect((await machines(host, lead)).json().data).toEqual({ projectId: 'lead', revision: 1, machines: [rule] })
+    })
+    const read = reads(entries, 'SuperTabProjectRules', ['tabId', 'projectId'])
+    expect(read).toHaveLength(1)
+    expect(read[0]!.planSummary).toMatch(/IXSCAN/)
+    expect(read[0]!.docsExamined).toBeLessThanOrEqual(1)
+    // A record broken elsewhere still gives the machine rules that pass, as the server applies them (security review 1).
+    await db.superTabProjectRules.updateMany({ where: { tabId: tab, projectId: 'lead' },
+      data: { rules: { ...rules('10:00'), dispatch: { ...SEED_RULES.dispatch, maxHanded: 0 }, machines: [rule, { machineIds: [], why: 'Bad' }] } } })
+    const broken = await machines(host, lead)
+    expect(broken.statusCode, broken.body).toBe(200)
+    expect(broken.json().data).toEqual({ projectId: 'lead', revision: 1, machines: [rule] })
+    // Who may read the project reads them; nobody else.
+    expect((await machines(peer)).statusCode).toBe(200)
+    const stranger = await store.create(peer, randomUUID(), 'Other')
+    expect((await app.inject({ method: 'GET', url: `/api/super-tabs/${stranger.id}/projects/lead/machine-rules`,
+      headers: { authorization: `Bearer ${owner.sub}` } })).statusCode).toBe(404)
+  })
+
   // The merge train (#3402) and the release schedule (#3405) read a project's rules from their workers.
   it('gives a worker the newest record, or the seed at revision 0', async () => {
     const { tab } = await swarm()

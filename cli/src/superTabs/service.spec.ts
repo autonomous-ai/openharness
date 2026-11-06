@@ -1017,15 +1017,11 @@ describe('the Swarm cards the devices ask for', () => {
     const t = withCards()
     await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', extra: 1 } }, owner)
     expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1' })
-    // A focus the device's own pick caused says so; anything but true is not that.
+    // Whether a device caused the move is no part of the focus any more (it only kept a dial's side, task #3908).
     await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', fromDevice: true } }, owner)
-    expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1', fromDevice: true })
-    await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', fromDevice: 'yes' } }, owner)
     expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1' })
-    // The thread open beside it, an id or nothing.
+    // A thread open beside it is no part of the focus any more.
     await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', threadRoot: 'm1' } }, owner)
-    expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1', threadRoot: 'm1' })
-    await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', threadRoot: 'bad id' } }, owner)
     expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1' })
     // A focus that is not two ids is none.
     for (const focus of [{ tabId: 'bad id', conversationId: 'g1' }, { tabId: 's1', conversationId: 'x'.repeat(48) }, { tabId: 's1' }, 'g1']) {
@@ -1043,18 +1039,9 @@ describe('the Swarm cards the devices ask for', () => {
     await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it' }, owner)
     expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', false)
   })
-  it('cardSide sets a swarmBuddy dial\'s side, and the buddy flag reaches recap, open and say', async () => {
+  it('answers an older dial\'s cardSide as no request, and the buddy flag reaches recap, open and say', async () => {
     const t = withCards()
-    expect(await t.ask({ action: 'cardSide', tabId: 't1', side: 'buddy' }, owner)).toEqual({ ok: true })
-    expect(t.cards.side).toHaveBeenLastCalledWith('t1', 'buddy')
-    expect(await t.ask({ action: 'cardSide', tabId: 't1', side: 'pm' }, owner)).toEqual({ ok: true })
-    expect(t.cards.side).toHaveBeenLastCalledWith('t1', 'pm')
-    for (const bad of [{ tabId: 'bad id', side: 'pm' }, { tabId: 'x'.repeat(48), side: 'pm' }, { tabId: 't1', side: 'up' }, { tabId: 't1' }]) {
-      expect(await t.ask({ action: 'cardSide', ...bad }, owner)).toEqual({ error: 'INVALID_REQUEST' })
-    }
-    // Only this computer's own devices set it.
-    expect(await t.ask({ action: 'cardSide', tabId: 't1', side: 'buddy' }, visitor)).toEqual({ error: 'OWNER_REQUIRED' })
-    expect(t.cards.side).toHaveBeenCalledTimes(2)
+    expect(await t.ask({ action: 'cardSide', tabId: 't1', side: 'buddy' }, owner)).toMatchObject({ error: expect.any(String) })
     await t.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'buddy' }, owner)
     expect(t.cards.recap).toHaveBeenLastCalledWith('t1', 'l1', 'buddy')
     await t.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: 'buddy' }, owner)
@@ -1072,27 +1059,16 @@ describe('the Swarm cards the devices ask for', () => {
     await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', reviewed: true }, owner)
     expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy')
   })
-  it('cardThreadLeave tells the cards and answers the project; cardSay answers the thread its words started', async () => {
+  // Task #3908: threads are gone from the dial. An older dial's frames still arrive and are answered as before they existed.
+  it('answers an older dial\'s thread frames without a thread: cardThreadLeave is no request, and cardSay passes no thread options', async () => {
     const t = withCards()
-    t.cards.threadLeave.mockReturnValueOnce({ tabId: 't1', conversationId: 'lead-web' })
-    expect(await t.ask({ action: 'cardThreadLeave', tabId: 't1', leadId: 'l1', chat: 'buddy' }, owner)).toEqual({ ok: true, conversationId: 'lead-web' })
-    expect(t.cards.threadLeave).toHaveBeenLastCalledWith('t1', 'l1', 'buddy')
-    expect(await t.ask({ action: 'cardThreadLeave', tabId: 't1', leadId: 'l1' }, owner)).toEqual({ ok: true })
-    for (const bad of [{ tabId: 'bad id', leadId: 'l1' }, { tabId: 't1', leadId: 'x'.repeat(48) }, { tabId: 't1' }]) {
-      expect(await t.ask({ action: 'cardThreadLeave', ...bad }, owner)).toEqual({ error: 'INVALID_REQUEST' })
-    }
-    expect(await t.ask({ action: 'cardThreadLeave', tabId: 't1', leadId: 'l1' }, visitor)).toEqual({ error: 'OWNER_REQUIRED' })
-    expect(t.cards.threadLeave).toHaveBeenCalledTimes(2)
-    expect(t.cards.threadLeave).toHaveBeenLastCalledWith('t1', 'l1', false)
+    expect(await t.ask({ action: 'cardThreadLeave', tabId: 't1', leadId: 'l1', chat: 'buddy' }, owner)).toMatchObject({ error: expect.any(String) })
     await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true, threaded: true, thread: null }, owner)
-    expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', true, undefined, false, { threaded: true, thread: null })
-    await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true, chatId: 'lead-web', reviewed: true, thread: 'm9' }, owner)
-    expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', true, 'lead-web', true, { thread: 'm9' })
-    await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true, thread: 'bad id' }, owner)
     expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', true)
-    t.cards.say.mockResolvedValueOnce({ said: true, thread: { tabId: 't1', conversationId: 'lead-web', root: 'm9' } })
-    expect(await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true }, owner))
-      .toEqual({ ok: true, said: true, thread: { tabId: 't1', conversationId: 'lead-web', root: 'm9' } })
+    await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true, chatId: 'lead-web', reviewed: true, thread: 'm9' }, owner)
+    expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', true, 'lead-web', true)
+    t.cards.say.mockResolvedValueOnce({ said: true })
+    expect(await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true }, owner)).toEqual({ ok: true, said: true })
   })
   it('cardSay passes a refused post\'s code and message on, and says nothing of a refusal otherwise', async () => {
     const t = withCards()

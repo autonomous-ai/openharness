@@ -27,7 +27,11 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
  *  (autoJoin.ts), from the sharing the head holds; who declined is never sent. */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'projects' | 'leadsConversationId' | 'ownerId'
   | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'workspaceId' | 'workspaceVisibility' | 'buddies' | 'removedMachines'
-  | 'autoJoin'>
+  | 'autoJoin'> & {
+  /** How many Buddies each person may have (task #3818): always sent, 5 unless the Swarm's owner set another. An older backend
+   *  sends none, so an app offers several Buddies only where this is present. */
+  buddyCap: number
+}
 /** A member's avatar says only `{ kind: 'upload' }` for an upload: its link comes signed in `derived.avatars`. */
 export type MemberView = Omit<Person, 'avatar'> & { avatar?: import('../profile.js').AvatarView }
 /** The stored agent. Time-based and cross-part values (`downSince`, `limitedUntil`, an awaiting decision, the custom
@@ -69,6 +73,10 @@ export interface ProgressView {
 export interface Derived {
   /** The board's pulse of each project the reader sees (pulse.ts, task #3384), by project id. Absent from an older backend. */
   pulse?: Record<string, import('../pulse.js').Pulse>
+  /** When each component's release may next open, by project id then component (releases.ts nextReleaseAt, task #3827): 0 is now,
+   *  absent one is left to people. Only for the projects the reader sees and that have a release list; the list itself is never
+   *  sent. A time already past is as good as 0: the settle writes a new one each minute it changes. Absent from an older backend. */
+  releaseTimes?: Record<string, import('../releases.js').ReleaseLedger['nextAt'] & object>
   /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
   /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
   agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null; roleName: string }>
@@ -299,6 +307,11 @@ export interface HostAgentRow {
    *  names that loss, since one task can be lost, resumed and lost again. */
   resume: { conversationId: string; assignmentId: string; lostAt: number; at: string } | null
   agent: Agent
+  /** A Buddy's own chat, its main one's or the thread session's (task #3818): its host ends a session and moves a model switch
+   *  there. Absent on every other agent; null while its chat is not loaded. An older backend sends none: the person's main chat. */
+  buddyChatId?: string | null
+  /** Main Buddy whose session may rest and resume in place (#3824). */
+  buddySleepManaged?: true
   joinSwarm: boolean
   skillMode: 'default' | 'orchestration'
   role?: { id: string; name: string; kind: string; version: string; projectId: string } | null
@@ -343,6 +356,8 @@ export interface HostPool {
   githubApp?: true
   /** The host may say what it launches beyond workers in its readings (leadStart.ts). */
   capabilitiesWanted?: true
+  /** Asks for positive idle Buddy activity in fresh machine readings (#3824). */
+  buddySleepWanted?: true
 }
 
 /** HTTP 426 on GET /api/super-tabs, /:tabId, /hosts/:m, /hosts/:m/pools and /hosts/:m/assignments. */
