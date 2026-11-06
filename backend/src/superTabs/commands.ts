@@ -1931,6 +1931,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId }, result: null }
     renewLease(group.assignment, context.now)
     leadActed(group.id, 'assign')
+    // Its requester's Buddy hears of the task's first assignment only: a replacement agent is no news (task #4217).
+    const firstAssignment = group.ledger?.firstAssignedAt == null && !group.ledger?.runs?.length
     recordRun(state, group, group.assignment, worker, context.now)
     const others = othersWorkNotice(state, group, worker, context.now, ENGINE_NAMES[worker.configuration.engine] ?? worker.configuration.engine)
     if (others) effects.messages.push({ id: stableId(assignmentId, 'others-work-notice'), conversationId: others.conversationId, author: sender,
@@ -1943,7 +1945,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       ...recovery ? [recovery] : [],
       ...group.checks.length ? [`Acceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`] : [],
       ...requestedBy ? [requestedBy] : []].join('\n\n'), [worker.id], null, SYSTEM_ROW, undefined, undefined, undefined, assignmentId)
-    const news = assignedNotice(state, group, sender, assignmentId)
+    const news = firstAssignment && assignedNotice(state, group, sender, assignmentId)
     if (news) effects.messages.push(news)
   }
   /** The kind of a step already open on a task, by its name, so a step its Engineer opened is reused, not doubled. */
