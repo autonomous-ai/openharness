@@ -61,11 +61,11 @@ grows to 7.
 - Modify: `desktop/lib/widgets/new_harness_form.dart` (`_desktopTaskBox`, `minLines`)
 - Test: `desktop/test/desktop_composer_layout_test.dart`
 
-- [ ] Write `the task opens three rows tall and grows to seven`: heights of 0, 1, 3, 4, 7 and 10 typed lines; empty
+- [x] Write `the task opens three rows tall and grows to seven`: heights of 0, 1, 3, 4, 7 and 10 typed lines; empty
   equals 1 and 3 lines, 4 is taller, 10 equals 7.
-- [ ] Run it: FAIL (empty 19 px, three lines 57 px).
-- [ ] `minLines: 3`, `maxLines: 7`.
-- [ ] Run the form's tests: PASS. Capture light and dark with `COMPOSER_LAYOUT_RENDER_DIR`.
+- [x] Run it: FAIL (empty 19 px, three lines 57 px).
+- [x] `minLines: 3`, `maxLines: 7`.
+- [x] Run the form's tests: PASS. Capture light and dark with `COMPOSER_LAYOUT_RENDER_DIR`.
 
 ### Task 2: Backend: a Member's chat for a session running on its own machine
 
@@ -78,14 +78,14 @@ grows to 7.
 - Produces: `agent.add {conversationId: <agent chat>, machineId, harnessId, name, configuration, initialMessage?}` →
   `{agentId}`; the agent has `regular: true` and no project.
 
-- [ ] Tests, failing first: local `agent.new` opens the chat and queues no start; it is refused with `kind: 'pm'`, on
+- [x] Tests, failing first: local `agent.new` opens the chat and queues no start; it is refused with `kind: 'pm'`, on
   another person's machine and for a viewer; `agent.add` into the chat adds a Regular agent once (same operation again
   adds nothing), refuses a second session, another person's chat and another person's machine.
-- [ ] Implement: `local: z.literal(true).optional()`; the local case skips the listed-machine and host-capability
+- [x] Implement: `local: z.literal(true).optional()`; the local case skips the listed-machine and host-capability
   checks (nothing starts there) and keeps the own-machine grant check. `agent.add` on an agent chat checks the chat's
   audience is the actor, the grant is their own machine and account, the chat has no agent, and pushes the agent as a
   started Regular agent is pushed.
-- [ ] Run `agentNew.test.ts` and the tests of `commands.ts` callers it touches: PASS.
+- [x] Run `agentNew.test.ts` and the tests of `commands.ts` callers it touches: PASS.
 
 ### Task 3: The form's Lead or Member choice and own machines
 
@@ -98,13 +98,13 @@ grows to 7.
 - Produces: `HarnessLaunchIntegration.agentKind` (`'lead' | 'member' | null`; null shows no choice),
   `agentKindLocked`, `ownMachinesOnly`; `NewHarnessController.setAgentKind(String kind)`.
 
-- [ ] Tests, failing first: with an integration whose `agentKind` is `member`, the header shows a `Member` capsule
+- [x] Tests, failing first: with an integration whose `agentKind` is `member`, the header shows a `Member` capsule
   after the project capsule; its menu offers Lead and Member and choosing Lead changes `integration.agentKind`; the
   computer menu lists this computer and a remote own machine, not a shared, guest or Team one; without an integration
   the header is unchanged. Light and dark pictures.
-- [ ] Implement the capsule as the computer capsule is built (`DesktopPill` in an `AppDropdown`), locked with
+- [x] Implement the capsule as the computer capsule is built (`DesktopPill` in an `AppDropdown`), locked with
   `box.locked || agentKindLocked`.
-- [ ] Run the test and the form's existing tests: PASS.
+- [x] Run the test and the form's existing tests: PASS.
 
 ### Task 4: New agent through Cmd-N, Lead or Member
 
@@ -116,13 +116,13 @@ grows to 7.
 - Consumes: Task 2's commands; Task 3's fields.
 - Produces: `SuperTabLaunch.open(app, tab, 'new-agent', newAgent: true)`.
 
-- [ ] Tests, failing first, with recorded Swarm requests and a fake local create: Member sends `agent.new` with
+- [x] Tests, failing first, with recorded Swarm requests and a fake local create: Member sends `agent.new` with
   `local: true`, then creates locally with a prompt naming the returned chat, then `agent.add` into it, then selects
   the chat; Lead sends `project.create`, creates locally, then `agent.add` as lead and `project.rename`; a lost
-  `agent.add` reply retried sends the same operation id; Discard after a failed Member start archives its chat; the
-  choice locks once the first command is sent; one timing log line names the kind and milliseconds, nothing else.
-- [ ] Implement; the journal keeps `agentKind` beside the New Project keys.
-- [ ] Run the test and `super_tab` launch tests: PASS.
+  `agent.add` reply retried sends the same operation id; reopened after a failed start it keeps its chat; Discard of a
+  start that never ran archives its chat; the choice locks once the first command is sent.
+- [x] Implement; the journal keeps `agentKind` beside the New Project keys.
+- [x] Run the test and `super_tab` launch tests: PASS.
 
 ### Task 5: + New agent and join open Cmd-N; the old dialog goes
 
@@ -134,14 +134,14 @@ grows to 7.
   join's Buddy still needs it; their tests.
 - Test: `desktop/test/swarm_v3_agent_entry_test.dart`
 
-- [ ] Tests, failing first: the left pane's + New agent opens the Cmd-N form with the Member capsule; after a join,
+- [x] Tests, failing first: the left pane's + New agent opens the Cmd-N form with the Member capsule; after a join,
   the same form opens for the person's own agent; no `SwarmAgentDialog` exists.
-- [ ] Implement. Join keeps its Buddy (River's ruling pending; Buddy start unchanged, only its form).
-- [ ] Run the entry, join and sidebar tests: PASS.
+- [x] Implement. Join keeps its Buddy (River, 11-07: the Buddy starts as today; only its form is Cmd-N's).
+- [x] Run the entry, join and sidebar tests: PASS.
 
 ### Task 6: Evidence
 
-- [ ] Before: server starts in this Swarm (118 on record, 2026-11-07): dispatch p50 18 s, p95 233 s; engine session
+- [x] Before: server starts in this Swarm (118 on record, 2026-11-07): dispatch p50 18 s, p95 233 s; engine session
   p50 23 s, p95 91 s, max 375 s; plus the old dialog's waits before it (engine probe, machine preparation, contribute).
-- [ ] After: the timing log of a Lead and a Member created through Cmd-N on this Mac.
-- [ ] Light and dark pictures of the form with the choice; the 3-row task box.
+- [x] After: local creates on this Mac (the Cmd-N path), from the daemon's receipts: p50 0.4 s; plus two Swarm commands. The timing log line measures the whole start once released.
+- [x] Light and dark pictures of the form with the choice; the 3-row task box.
