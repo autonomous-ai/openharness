@@ -41,17 +41,33 @@
 **Files:** policy.ts, policyStore.ts, commands.ts, store.ts; policy.test.ts, superTabProjectRules.test.ts.
 **Interfaces:** `ProjectRules.instructionApprovals?`; `seedRules(tabId, projectId): ProjectRules`; bound section schema, scoped Harness defaults and protected rules.set edits.
 
-- [ ] Commit tests for optional/disabled policy, bounds/ambiguous aliases, exact Harness seed scope, old saved records and indexed read; reject a collaborator/PM quoted collaborator changing authority, permit owner/current decider, preserve omitted field.
-- [ ] Observe failures before implementation.
-- [ ] Add optional section and scoped seed/read normalization; authorize section changes against the previous policy, not the proposed one. Keep existing rules revision/history semantics.
-- [ ] Run affected policy/command/integration tests and typecheck, commit and push.
+- [x] Commit tests for optional/disabled policy, bounds/ambiguous aliases, exact Harness seed scope, old saved records and indexed read; reject a collaborator/PM quoted collaborator changing authority, permit owner/current decider, preserve omitted field.
+- [x] Observe failures before implementation (`506ba8250`).
+- [x] Add optional section and scoped seed/read normalization; authorize section changes against the previous policy, not the proposed one. Keep existing rules revision/history semantics.
+- [x] Run affected policy/command/integration tests and typecheck, commit and push (`eb3316329`).
 
 ### Task 2: Apply approval authority and exact linked accounts
 
 **Files:** ruleGuard.ts, commands.ts, store.ts; instructions.test.ts, superTabInstructions.test.ts.
 **Interfaces:** `allowedDrops(..., merges, instructionApprovals?)`; `membersNamed(..., instructionApprovals?)` resolves explicit names and linked IDs. The same resolver identifies attribution moves. Store loads the project's current policy for saves.
 
-- [ ] Commit regressions: Dee's recent own message approves dropping/rewording Ken's rule; either Ken account approves; unrelated similar name, no approval, agent/Buddy, old/missing/foreign approval and removed account fail; original unconfigured behavior remains.
-- [ ] Observe the authority/alias failures before implementation.
-- [ ] Thread validated current policy into the guard; preserve all existing approval filters and notifications; explain who can approve in refusals.
-- [ ] Run changed/importer unit tests, affected real-store integration tests and typecheck. Record red/green and query-plan evidence; Ready for CI and two independent security reviews.
+- [x] Commit regressions: Dee's recent own message approves dropping/rewording Ken's rule; either Ken account approves; unrelated similar name, no approval, agent/Buddy, old/missing/foreign approval and removed account fail; original unconfigured behavior remains.
+- [x] Observe the authority/alias failures before implementation (`cef9654a7`: four unit failures and the store approval failure).
+- [x] Thread validated current policy into the guard; preserve all existing approval filters and notifications; explain who can approve in refusals (`d7b2a4e67`).
+- [x] Run changed/importer unit tests, affected real-store integration tests and typecheck. The save's new policy read uses IXSCAN, one document returned and examined. Red/green evidence is in the PR comment; full suites and two independent security reviews run at Ready.
+
+### Follow-up: Bound aliases must outrank display-name collisions
+
+**Files:** ruleGuard.ts, ruleApprovalAuthority.test.ts, superTabInstructions.test.ts.
+**Interfaces:** The configured canonical name or a linked account's unique handle/email expands to configured IDs; another account's display name never joins the group.
+
+- [x] Commit the exact-handle/display-name collision regression and observe it incorrectly accept the stranger (`e9460c1f3`).
+- [x] Give linked handles priority over display names, preserve unconfigured resolution, and pass the regression plus affected guard/importer tests (`2487d397b`).
+- [x] Profile the actual instructions.save policy read: IXSCAN, one document examined/returned; typecheck clean.
+
+## Validation notes
+
+- Task 1: policy tests 25/25; project-rules real-store tests 7/7; typecheck clean.
+- Task 2: authority/instructions/commands/policy tests 523/523 before the extra collision regression; real-store instructions/project-rules tests 30/30 after restoring Buddy refusal order. The first combined run hit an ephemeral Mongo port collision and exposed that Buddy refusal-order regression; the retry passed after the access check reused authorizeCommandAccess.
+- Collision follow-up: authority/instructions/commands tests 499/499 (including all 10 authority cases); the real-store authority/index-plan case passes; typecheck clean. Review-table/steps tests 27/27; merge-train/release importers 105/105.
+- No collection/index changes, backfill or production writes. Production read-only environment absent on this Team machine; no production counts or latency measurements claimed.
