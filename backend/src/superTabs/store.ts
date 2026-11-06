@@ -27,7 +27,7 @@ import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } from './deletion.js'
 import type { ApprovalRow, DroppedLine } from './ruleGuard.js'
-import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, SWARM_INVITATION_MS, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
+import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, SWARM_INVITATION_MS, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, refuseSecretTexts, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
@@ -2571,6 +2571,8 @@ export class SuperTabStore {
    * checked before a byte is stored; the row that makes it sendable is written only once the whole file is. */
   async upload(user: AuthUser, tabId: string, conversationId: string, file: { name: string; mime: string; body: Readable }, asAgentId?: string) {
     const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
+    // An agent's file named with a credential is refused, by kind, before a byte is stored; a person's is kept redacted (#3595).
+    if (asAgentId) refuseSecretTexts([file.name])
     // A file's name is shown in the chat like its message, so it never keeps a credential either.
     const name = attachmentName.transform(value => redactCredentials(value).text).safeParse(file.name), mime = attachmentMime.safeParse(file.mime)
     if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
@@ -2586,6 +2588,7 @@ export class SuperTabStore {
    *  signed. The row is written pending: no message can name it until completeUpload() has seen the stored bytes. An upload
    *  never completed, like an unsent file, is an unused row the unsent-file sweep removes with its object (#2268). */
   async uploadLink(user: AuthUser, tabId: string, conversationId: string, file: { name: string; mime: string; size: number }, asAgentId?: string) {
+    if (asAgentId) refuseSecretTexts([file.name])
     const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
     const direct = directUploads(attachments.store) ?? fail('ATTACHMENTS_UNAVAILABLE', 'Files this big cannot be sent to this server.', 503)
     const name = attachmentName.transform(value => redactCredentials(value).text).safeParse(file.name), mime = attachmentMime.safeParse(file.mime)
