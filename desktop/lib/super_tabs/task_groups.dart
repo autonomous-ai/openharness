@@ -29,13 +29,17 @@ class SuperTabProposal {
   final DateTime at;
 }
 
-/// The columns of a project's Tasks view, in this order (Dee, task #2569):
-/// where each ask is on its way from proposal to shipped.
+/// The columns of a project's Tasks view, in this order (Ken's Task Board,
+/// task #3812): each is one place where work waits, so where cards pile up is
+/// where the flow is stuck. Working holds a task whatever it waits on, with
+/// one mark for where it is; Done is finished and waiting to merge; Merged is
+/// on main and waiting for a release.
 enum SuperTabTaskColumn {
-  proposals('Proposals'),
+  proposals('Proposal'),
   nextUp('Next up'),
   working('Working'),
-  waiting('Waiting'),
+  done('Done'),
+  merged('Merged'),
   shipped('Shipped');
 
   const SuperTabTaskColumn(this.label);
@@ -82,10 +86,49 @@ String _parts(List<String> parts) => parts
         'desktop' => 'Desktop',
         'cli' => 'CLI',
         'web' => 'Web',
+        'backend' => 'Backend',
         _ => part,
       },
     )
     .join(', ');
+
+/// What a release tag carried (`v1.3.84_desktop` is "Desktop 1.3.84"), for
+/// every tag of [task]'s that reads so; null when it has none.
+String? _versions(List<String> tags) {
+  final named = [
+    for (final tag in tags)
+      if (RegExp(r'^v(\d+\.\d+\.\d+)_(\w+)$').firstMatch(tag) case final m?)
+        '${_parts([m[2]!])} ${m[1]}',
+  ];
+  return named.isEmpty ? null : named.join(', ');
+}
+
+/// How long [task], set done, has waited for its merge: since its first Done
+/// ([SuperTabConversation.shippedAt]); null when the server did not say.
+Duration? superTabMergeWait(SuperTabConversation task, DateTime now) {
+  final done = task.shippedAt;
+  return done == null ? null : now.difference(done);
+}
+
+/// Past this a merge waiting turns to a warning, so a merge bottleneck shows.
+const superTabMergeWarnAfter = Duration(hours: 1);
+
+/// Whether [task] is done, not merged, and has waited past the warning.
+bool superTabMergeOverdue(SuperTabConversation task, DateTime now) =>
+    task.assignment?['status'] == 'done' &&
+    !task.closed &&
+    !superTabTaskReleasing(task) &&
+    !superTabTaskShipped(task) &&
+    (superTabMergeWait(task, now) ?? Duration.zero) > superTabMergeWarnAfter;
+
+String _waited(Duration wait) {
+  final (hours, minutes) = (wait.inHours, wait.inMinutes % 60);
+  return hours == 0
+      ? '$minutes min'
+      : minutes == 0
+      ? '$hours h'
+      : '$hours h $minutes min';
+}
 
 /// [task]'s place for the reader [readerId] at [now]; null for one that is
 /// not listed: cancelled, stopped, closed without shipping, or shipped before
@@ -113,14 +156,16 @@ SuperTabTaskPlace? superTabTaskPlaceOf(
           (state == 'waiting' && why == 'person' || status == 'needs_human');
   SuperTabTaskPlace at(SuperTabTaskColumn column, [String? words]) =>
       (column: column, needsYou: needsYou, state: words);
-  SuperTabTaskPlace waiting(String words) =>
-      at(SuperTabTaskColumn.waiting, words);
+  // Where it is, in Working: a wait on review, a person, a machine or a block
+  // is a mark on the card, not a column of its own.
+  SuperTabTaskPlace mark(String words) => at(SuperTabTaskColumn.working, words);
   // Merged is Shipped only once a release carries it (#3452): until then it
-  // waits, whatever else the task is (it is often closed already).
+  // waits for one, whatever else the task is (it is often closed already).
   if (superTabTaskReleasing(task)) {
     final parts = _parts(task.releasing!);
-    return waiting(
-      parts.isEmpty ? 'merged, releasing' : 'merged, releasing ($parts)',
+    return at(
+      SuperTabTaskColumn.merged,
+      parts.isEmpty ? 'waiting for a release' : 'waiting for $parts',
     );
   }
   // Shipped means released; finished with nothing to merge is Done (#2872).
@@ -130,14 +175,26 @@ SuperTabTaskPlace? superTabTaskPlaceOf(
     final old = shipped == null
         ? task.closed
         : now.difference(shipped) > superTabBacklogShippedWindow;
-    return old
-        ? null
-        : at(SuperTabTaskColumn.shipped, merged ? pullRequest : 'Done');
+    if (old) return null;
+    return merged
+        ? at(
+            SuperTabTaskColumn.shipped,
+            _versions(task.releasedTags) ?? pullRequest,
+          )
+        : at(SuperTabTaskColumn.done, 'Done');
   }
   if (task.closed || status == 'cancelled' || status == 'stopped') {
     return null;
   }
-  if (status == 'done') return waiting('ready to merge');
+  if (status == 'done') {
+    final wait = superTabMergeWait(task, now);
+    return at(
+      SuperTabTaskColumn.done,
+      wait == null
+          ? 'waiting to merge'
+          : 'waiting to merge for ${_waited(wait)}',
+    );
+  }
   if (assignment == null) {
     final date = task.notBefore;
     return at(
@@ -147,23 +204,21 @@ SuperTabTaskPlace? superTabTaskPlaceOf(
   }
   return switch ((state, why)) {
     ('waiting', 'starting') => at(SuperTabTaskColumn.working, pullRequest),
-    ('waiting', 'review') => waiting('in review'),
-    ('waiting', 'revision') => waiting('changes requested'),
-    ('waiting', 'person') => waiting(
+    ('waiting', 'review') => mark('in review'),
+    ('waiting', 'revision') => mark('changes requested'),
+    ('waiting', 'person') => mark(
       '${(person == null ? null : personName?.call(person)) ?? 'someone'} to decide',
     ),
-    ('waiting', 'blocked') => waiting('blocked'),
-    ('waiting', 'queued') => waiting('waiting for a machine'),
-    ('quiet', _) => waiting('quiet'),
-    ('orphaned', _) => waiting('agent lost'),
+    ('waiting', 'blocked') => mark('blocked'),
+    ('waiting', 'queued') => mark('waiting for a machine'),
+    ('quiet', _) => mark('quiet'),
+    ('orphaned', _) => mark('agent lost'),
     _ => switch (status) {
-      'review' => waiting('in review'),
-      'needs_human' => waiting('someone to decide'),
-      'blocked' => waiting('blocked'),
-      'lost' => waiting('agent lost'),
-      _ when assignment['agentId'] is! String => waiting(
-        'waiting for a machine',
-      ),
+      'review' => mark('in review'),
+      'needs_human' => mark('someone to decide'),
+      'blocked' => mark('blocked'),
+      'lost' => mark('agent lost'),
+      _ when assignment['agentId'] is! String => mark('waiting for a machine'),
       _ => at(SuperTabTaskColumn.working, pullRequest),
     },
   };
@@ -204,11 +259,12 @@ List<SuperTabConversation> superTabQueueOrder(
 /// The project's Tasks view, read by Board, List and the badges alike: every
 /// column, in order and empty or not, each listing by priority, P0 first
 /// (task #3117); within a priority what needs the reader first, then
-/// proposals oldest first, Next up in the shared order, Working and Waiting
-/// newest first, and Shipped by when it shipped, newest first.
+/// proposals oldest first, Next up in the shared order, Working, Done and
+/// Merged newest first, and Shipped by when it shipped, newest first.
 Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
   Iterable<SuperTabConversation> tasks, {
   Iterable<SuperTabProposal> proposals = const [],
+  bool boardMode = false,
   required String readerId,
   required DateTime now,
   int Function(SuperTabConversation task)? mentions,
@@ -224,6 +280,21 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
       (task: null, proposal: proposal, needsYou: false, state: null),
   ]);
   for (final task in tasks) {
+    // On the Board (#3817) a proposal is its own card: in Proposals until the PM makes it a task, and marked when
+    // its question waits on the reader. A duplicate merged into another card is not shown.
+    final proposal = boardMode ? task.proposal : null;
+    final asked = proposal?.openQuestion?.personId == readerId;
+    if (proposal != null && proposal.mergedInto != null) continue;
+    if (proposal != null && !proposal.becameTask) {
+      if (task.closed) continue;
+      board[SuperTabTaskColumn.proposals]!.add((
+        task: task,
+        proposal: null,
+        needsYou: asked || (mentions?.call(task) ?? 0) > 0,
+        state: null,
+      ));
+      continue;
+    }
     final place = superTabTaskPlaceOf(
       task,
       readerId: readerId,
@@ -237,7 +308,7 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabTaskBoard(
     board[place.column]!.add((
       task: task,
       proposal: null,
-      needsYou: place.needsYou,
+      needsYou: place.needsYou || asked,
       state: place.state,
     ));
   }
@@ -299,6 +370,7 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabProjectBoard(
       ],
     ),
     proposals: c.proposalsOf(project.id),
+    boardMode: project.boardMode,
     readerId: c.accountId,
     now: now,
     mentions: (task) => tags.mentionsIn(task.id),
