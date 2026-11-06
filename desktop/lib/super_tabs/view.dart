@@ -29,6 +29,7 @@ import '../shortcuts/keymap.dart' show KeymapContext;
 import 'chat_find.dart';
 import 'chat_scroll.dart';
 import 'leaderboard/reader.dart';
+import 'leaderboard/weekly_page.dart';
 import 'jump_to_latest.dart';
 import 'unread_line.dart';
 import 'roster.dart';
@@ -113,6 +114,7 @@ import 'visible_tick.dart';
 import 'buddy_rows.dart';
 import 'task_groups.dart';
 import 'tasks_view.dart';
+import 'tasks/personal_tasks_pane.dart';
 import 'voice_length.dart';
 import '../widgets/dial_list_scroll.dart';
 import '../widgets/laid_out_list.dart';
@@ -3045,6 +3047,7 @@ class _SuperTabViewState extends State<SuperTabView>
         : _pageShown != null
         ? switch (_pageShown!) {
             SwarmPage.decisions => 'Decisions',
+            SwarmPage.leaderboard => 'Leaderboard',
             SwarmPage.mentions => 'Mentions',
             SwarmPage.threads => 'Threads',
           }
@@ -6157,7 +6160,9 @@ class _SuperTabViewState extends State<SuperTabView>
       final agentChat =
           widget.board && _agentChatId != null && c.selectedId == _agentChatId;
       // The chat is in the middle, by the reader's choice of an agent or once the right pane is the Tasks slot.
-      final chatInMiddle = agentChat || widget.rightPane != null;
+      final hasTasksPane =
+          widget.rightPane != null || c.personalTasks?.supported == true;
+      final chatInMiddle = agentChat || hasTasksPane;
       final boardLayout =
           widget.board &&
           (!_projectChatOnly || chatInMiddle) &&
@@ -6198,7 +6203,7 @@ class _SuperTabViewState extends State<SuperTabView>
       );
       // With the Tasks slot, a project that is selected shows its Board first, though its chat is the selected
       // conversation (Swarm v3, task #4118).
-      final impliedBoard = widget.rightPane != null && !agentChat
+      final impliedBoard = hasTasksPane && !agentChat
           ? c.snapshot?.projects
                 .where((p) => p.leadConversationId == c.selectedId)
                 .firstOrNull
@@ -6262,7 +6267,12 @@ class _SuperTabViewState extends State<SuperTabView>
                     ? null
                     : boardLayout
                     ? widget.rightPane?.call(context) ??
-                          (agentChat
+                          (c.personalTasks?.supported == true
+                              ? SuperTabPersonalTasksPane(
+                                  controller: c,
+                                  onOpenTask: (id) => unawaited(_openTask(id)),
+                                )
+                              : agentChat
                               ? const SizedBox.expand()
                               : _boardChat(chat))
                     : thread ??
@@ -6363,6 +6373,10 @@ class _SuperTabViewState extends State<SuperTabView>
                                       )
                                     : const SizedBox.shrink(),
                                 switch (_pageShown) {
+                                  SwarmPage.leaderboard =>
+                                    SuperTabWeeklyLeaderboardPage(
+                                      controller: c,
+                                    ),
                                   SwarmPage.decisions => SuperTabDecisionsPage(
                                     activity: SuperTabActivity.of(c),
                                     highlight: _highlight,
