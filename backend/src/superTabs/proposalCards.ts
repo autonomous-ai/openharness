@@ -15,6 +15,7 @@ export interface ProposalRecord {
   version: 1
   text: string
   goal: string
+  scope?: string
   why: string
   doneWhen: string
   evidence: string[]

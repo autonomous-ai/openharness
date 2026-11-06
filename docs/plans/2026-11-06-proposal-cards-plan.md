@@ -93,3 +93,17 @@
 
 - Final overlap verification at `1555a55c5`: 66 real-store checks across proposal cards, command loading and Swarm Buddy flows; 169 focused proposal/Buddy units; typecheck passed. Full component suites and all four integration shards remain PR CI responsibilities.
 - CI index repair after `f014e0915`: shard 2 passed 600 tests but its existing oldest-unanswered-delivery plan guard failed because Mongo chose the new priority index. The same focused test failed locally (2 documents, 3 keys, 1 row). Keep the worker on its existing chronological index with an aggregate hint, preserving the query, schema and rights. The original committed guard predates this fix; its new key bound also rejects a scan beyond the two recent rows plus one boundary key per unanswered status. Green: 39 real-store tests across worker plans, time checks and proposal cards, plus typecheck. The repaired query examines at most 2 documents and 7 keys in the same fixture; no production latency claim. No full local suite or manual CI run.
+
+## Security review repairs
+
+**Files:** `commands.ts`, `proposalCards.ts`, `proposalCards.test.ts`, `integration/superTabBuddies.test.ts`, `integration/superTabProposalCards.test.ts`.
+
+**Interfaces:** Keep validated Buddy attachments on the proposal root and optional bounded scope in its record. Return that root's message id so the existing attachment transaction consumes each upload once. Report excluded PM recipients in `message.send` results before delivery-dependent bookkeeping; preserve other recipients, server notices and unswitched behavior. No new query, index or collection.
+
+- [x] Commit and observe the lost-file/scope unit regression and real-store file-opening regression before code.
+- [x] Preserve files, scope and root id. Green: 34 proposal units and 3 real-store file flows (switched, legacy and expired uploads). Red unit `7c72f04bf`; red integration `8088bca73` failed because persisted attachments were absent.
+- [ ] Commit and observe missing-delivery-feedback regressions for person, agent and partial recipients before code.
+- [ ] Compute feedback from final recipients; run affected units, real-store proposal flows and typecheck.
+- [ ] Push one repair head including CI fixture repair, request focused independent re-reviews and platform confirmation.
+
+CI fixture repair `47da5780a`: nine automatic integration failures were expired reset holds fixed at 2026-11-06T09:00Z. Reproduced the phone needs-human case failing with HOLD_REASON_MISSING before replacing all 13 resets with each fixture clock plus its original interval. Green: 58 affected checks across seven integration files, then 10 host-attention/Stuck checks across two of those files. Full local suite and manual CI were not run.

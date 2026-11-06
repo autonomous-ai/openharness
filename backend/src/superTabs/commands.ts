@@ -3199,7 +3199,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           title: command.title ?? command.goal.slice(0, 160), text: words, goal: command.goal, why: command.why!,
           doneWhen: command.doneWhen!, evidence: command.evidence!, priority: cardPriority(state, project, owner.id, command.priority),
         }, operationId, context.now)
-        effects.messages.push(proposalRoot(state, card, stableId(operationId, 'root'), author(state, { kind: 'person', userId: owner.id, email: owner.email })))
+        card.proposal!.scope = command.scope
+        const root = proposalRoot(state, card, stableId(operationId, 'root'), author(state, { kind: 'person', userId: owner.id, email: owner.email }))
+        if (attachments.length) root.attachments = attachments
+        effects.messages.push(root)
+        result.messageId = root.id
         result.conversationId = card.id
         result.number = card.number
         break
