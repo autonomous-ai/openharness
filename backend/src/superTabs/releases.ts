@@ -253,12 +253,16 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
     if (now - step.endedAt >= STEP_GRACE_MS) delete ledger.steps![component.id]
   }
 
-  const due = RELEASE_COMPONENTS.filter(c => releaseDue(ledger, c.id, now, rules))
+  // A return to Full applies to new work only. Keep the old pending history for verified releases, but open no new
+  // release step for a task the switch made Simple. The ledger is bounded by PENDING_MAX.
+  const tasks = new Map(state.conversations.map(group => [group.id, group]))
+  const scheduled = { ...ledger, pending: ledger.pending.filter(entry => taskProcess(project, tasks.get(entry.groupId) ?? {}) === 'full') }
+  const due = RELEASE_COMPONENTS.filter(c => releaseDue(scheduled, c.id, now, rules))
   if (!due.length || state.paused || processOf(project) === 'simple') return outcome
   const id = stableId('release-step', state.id, projectId, due.map(c => c.id).join(','), String(now))
   if (state.conversations.some(c => c.id === id)) return outcome
   const integrator = integratorOf(state, projectId)
-  const waiting = [...new Set(due.flatMap(c => waitingFor(ledger, c.id).map(e => e.groupId)))].map(groupId => named(state, groupId))
+  const waiting = [...new Set(due.flatMap(c => waitingFor(scheduled, c.id).map(e => e.groupId)))].map(groupId => named(state, groupId))
   const names = joined(due.map(c => c.name)), window = rules.releaseWindow
   const brief = [`Release ${names}: ${waiting.length} merged ${waiting.length === 1 ? 'task waits' : 'tasks wait'} for it (${waiting.join('; ')}).`,
     `Release between ${window.start} and ${window.end} (${window.timeZone}), applying the merged pull requests' rollout notes first, and verify each release is live.`,

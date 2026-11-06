@@ -1038,9 +1038,13 @@ export function leadsRemoved(): never { fail('LEADS_CONVERSATION_REMOVED', LEADS
  * numbers are never reassigned; the store serializes concurrent additions. */
 export function numberConversations(state: SuperTabState): void {
   let next = nextConversationNumber(state)
-  const leads = new Set(projectsOf(state).map(p => p.leadConversationId))
+  const projects = projectsOf(state), leads = new Set(projects.map(p => p.leadConversationId))
   for (const group of state.conversations) {
-    if (!leads.has(group.id) && !isLeads(group) && group.number == null) state.groupCounter = group.number = next++
+    if (!leads.has(group.id) && !isLeads(group) && group.number == null) {
+      // An unnumbered dormant task predates a Simple→Full switch. Giving it a number now must not make it new work.
+      if (!group.kind && !group.audience && !group.reviewOf && projects.some(p => p.id === (group.projectId ?? 'lead') && p.simpleThrough !== undefined)) group.process = 'simple'
+      state.groupCounter = group.number = next++
+    }
   }
 }
 /** The store by parts keeps the highest number ever given (`groupCounter`): a dormant group is not loaded, and its

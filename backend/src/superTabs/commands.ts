@@ -2613,7 +2613,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         open(state, reviewed.id)
         // One level: a step's own work is a task's step, never a task with steps of its own (task steps design).
         if (command.step && isStep(reviewed)) fail('STEP_OF_STEP', 'A step belongs to a task, not to another step.', 400)
-        if (command.step && taskProcess(project, reviewed) === 'simple') {
+        if (taskProcess(project, reviewed) === 'simple') {
           fail('SIMPLE_PROCESS', 'Simple tasks finish when their agent marks them done; they have no process steps.', 409)
         }
         // Never doubled (task #3602: #3561 got its server's Security reviews and Test, then its Engineer's review, review and
