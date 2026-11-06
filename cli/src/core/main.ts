@@ -1018,6 +1018,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // asks, never now: the lifecycle is built further down, and one asked before then is refused, and asked again later.
     resumeAgent: async (agentId) => lifecycle.resumeAgent(agentId),
     restartAgent: (agentId, launchArgs, claudeHome) => restartAgent(agentId, launchArgs, claudeHome),
+    ...(swarm ? { retainedProjectLeads: () => swarm.retainedProjectLeads(env.ADAPTER_DATA_DIR) } : {}),
     // What it may close and reopen is decided in this process, on what its host retains (superTabs/inCore/agents.ts).
     ...(swarm ? { swarmAgents: (agentDeps) => swarm.createSwarmAgents({ ...agentDeps,
       members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR) },

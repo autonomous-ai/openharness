@@ -214,8 +214,9 @@ export interface CoreApi {
      *  the agent removed). Only a harness this machine's Super Tab host retains as a member, or one whose exact native
      *  creation receipt [creationId] (the Swarm's start) names it; a gone one is closed. */
     closeMember?(agentId: string, creationId?: string): Promise<AgentCloseResult>
-    /** Relaunch a Claude agent in its own pane on the same conversation under another of this machine's Claude accounts
+    /** Relaunch a retained Swarm PM in its own pane on the same conversation under another of this machine's Claude accounts
      *  (`claudeHome` null: the default account), as the Swarm host's PM account rotation asks (superTabs/pmRotation.ts).
+     *  The core resolves its canonical agent id and refuses a session not retained as a project Lead (INVALID_AGENT).
      *  The restarter decides: Claude agents only, and only a home this machine lists as a profile (INVALID_PROFILE). It
      *  resolves when the relaunch has ended, with its own code when it did not start. Not on any app's wire. */
     restartOnAccount?(agentId: string, claudeHome: string | null): Promise<{ ok: true } | { ok: false; code: string; message?: string }>
@@ -1981,6 +1982,8 @@ export interface CoreApiDeps {
   /** The core's restart of an agent (core/agents/restart.ts), for `restartOnAccount`; absent, a service restarts nothing. */
   restartAgent?: (agentId: string, launchArgs: undefined, claudeHome: string | null) => Promise<
     { ok: true } | { ok: false; error: string; detail?: string }>
+  /** Project Leads alone, from the Swarm's retention; absent while the Swarm is off. Crew retention grants no account move. */
+  retainedProjectLeads?: () => ReadonlySet<string>
   /** The Swarm's `closeSwarm`, `keepLeadAlive` and `closeMember` (superTabs/inCore/agents.ts), built on what the core
    *  reads its agents by; absent while the Swarm is off, and then the core offers none of them. */
   swarmAgents?: (deps: SwarmAgentDeps) => SwarmAgents
@@ -2016,7 +2019,7 @@ export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorVault, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, creationStatus, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText, activitySnapshot, activity, summaries,
-  closeAgent, activityAt, resumeAgent, restartAgent, swarmAgents,
+  closeAgent, activityAt, resumeAgent, restartAgent, retainedProjectLeads, swarmAgents,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, superTabs, superTabRequest, cloudRows, lastTurn, nativeTurns, turnCard, turnSummary,
   log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
@@ -2057,7 +2060,9 @@ export function createCoreApi({
       summaries: summaries ?? (async () => ({})),
       // The Swarm's own close and reopen (superTabs/inCore/agents.ts), handed in while it is on.
       ...(restartAgent ? { restartOnAccount: async (agentId: string, claudeHome: string | null) => {
-        const result = await restartAgent(agentId, undefined, claudeHome)
+        const session = registry.resolve(agentId)
+        if (!session || !retainedProjectLeads?.().has(session.agentId)) return { ok: false as const, code: 'INVALID_AGENT' }
+        const result = await restartAgent(session.agentId, undefined, claudeHome)
         return result.ok ? { ok: true as const } : { ok: false as const, code: result.error, ...(result.detail ? { message: result.detail } : {}) }
       } } : {}),
       ...swarmAgents?.({ byAgent: id => registry.byAgent(id), stoppedIds: () => stoppedAgents.ids(), closeAgent, resumeAgent, creationStatus }),
