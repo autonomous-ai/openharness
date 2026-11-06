@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Swarm Threads, easy to find</title>
+<style>
+/* Shell: a quiet review frame that follows the viewer's theme. The phone keeps the app's own palettes
+   (Graphite dark / Paper light) and switches with its own toggle. */
+:root{
+  --bg:#f5f5f2; --fg:#1b1b19; --muted:#5d5c56; --line:#dad9d3; --chip:#ebebe6; --mark:#2f5bea; --frame:#0d0d0d;
+  --ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,"Roboto Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#111110;--fg:#ecebe7;--muted:#a3a29b;--line:#2d2d2a;--chip:#1f1f1d;--mark:#7d98ff;--frame:#000;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#111110;--fg:#ecebe7;--muted:#a3a29b;--line:#2d2d2a;--chip:#1f1f1d;--mark:#7d98ff;--frame:#000;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 var(--ui);
+  padding:20px max(16px,env(safe-area-inset-right,0px)) 56px max(16px,env(safe-area-inset-left,0px))}
+.wrap{max-width:1180px;margin:0 auto}
+.top h1{font:650 18px/1.3 var(--ui);margin:0;text-wrap:balance}
+.top p{margin:4px 0 0;color:var(--muted);font-size:13px;max-width:86ch}
+code{font:12px var(--mono)}
+.wrap a{color:var(--mark)}
+.stage{display:grid;grid-template-columns:auto minmax(0,1fr);gap:40px;align-items:start;margin-top:20px}
+.side{min-width:0;display:grid;gap:22px;max-width:64ch}
+.side h2{font:650 12px/1.3 var(--ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+.side ul,.side ol{margin:0;padding-left:20px;display:grid;gap:6px}
+.side p{margin:0}
+.big{border-left:3px solid var(--mark);padding:2px 0 2px 12px;margin:10px 0 0}
+.ctl{display:grid;gap:10px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:2px;background:var(--chip);flex-wrap:wrap}
+.seg button{appearance:none;border:0;background:none;color:var(--muted);font:600 12.5px var(--ui);padding:6px 12px;border-radius:999px;cursor:pointer;white-space:nowrap}
+.seg button:hover{color:var(--fg)}
+.seg button[aria-pressed=true]{background:var(--fg);color:var(--bg)}
+.seg button:focus-visible,.jump button:focus-visible{outline:2px solid var(--mark);outline-offset:2px}
+.ctlrow{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.ctlrow > span{font-size:12.5px;color:var(--muted);min-width:64px}
+.jump{display:flex;flex-wrap:wrap;gap:6px}
+.jump button{border:1px solid var(--line);background:var(--chip);color:var(--fg);border-radius:999px;padding:6px 11px;font:500 12.5px var(--ui);cursor:pointer}
+.jump button:hover{border-color:var(--muted)}
+.chg{display:grid;gap:12px;margin:0}
+.chg div{border-top:1px solid var(--line);padding-top:10px}
+.chg dt{font-weight:650}
+.chg dd{margin:3px 0 0;color:var(--muted);font-size:13.5px}
+.chg dd b{color:var(--fg);font-weight:600}
+.src{font-size:12.5px;color:var(--muted)}
+@media (max-width:900px){.stage{grid-template-columns:minmax(0,1fr)}.phone{margin-inline:auto}}
+
+/* ───────────── Phone ───────────── */
+.phone{
+  --pbg:#181818; --card:#1e1e1e; --hover:#252525; --srf:#2c2c2c; --tabbar:#1c1c1c; --hair:rgba(255,255,255,.12);
+  --t1:#f5f5f5; --t2:#a8a8a2; --t3:#6e6e68; --accnow:#bdcbdc; --link:#7ea2ff; --blue:#2f5bea; --onblue:#fff;
+  --wash:rgba(47,91,234,.16); --bar:#7ea2ff; --warn:#ffb020; --ok:#3fb950; --press:rgba(255,255,255,.06); --row:#202020;
+  width:410px;max-width:100%;height:860px;border:10px solid var(--frame);border-radius:52px;background:var(--pbg);color:var(--t1);
+  position:relative;overflow:hidden;display:flex;flex-direction:column;font:15px/1.38 var(--ui);
+  box-shadow:0 1px 0 var(--line),0 24px 48px -24px rgba(0,0,0,.45)}
+.phone.light{
+  --pbg:#fafaf9; --card:#ffffff; --hover:#ebebe8; --srf:#e2e2df; --tabbar:#eeeeec; --hair:rgba(0,0,0,.09);
+  --t1:#1a1a18; --t2:#62615b; --t3:#7a7973; --accnow:#3d5a8a; --link:#2f5bea; --wash:rgba(47,91,234,.08); --bar:#2f5bea;
+  --warn:#9a4708; --ok:#146c34; --press:rgba(0,0,0,.05); --row:#f3f3f2}
+.phone *{box-sizing:border-box}
+:where(.phone) button{appearance:none;background:none;border:0;color:inherit;font:inherit;padding:0;cursor:pointer;text-align:left}
+.phone :focus-visible{outline:2px solid var(--link);outline-offset:-2px;border-radius:8px}
+.phone svg.i{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.phone svg.s14{width:14px;height:14px}.phone svg.s16{width:16px;height:16px}.phone svg.s18{width:18px;height:18px}.phone svg.s24{width:24px;height:24px}
+.sb{height:48px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:8px 30px 0;font:600 15px var(--ui);position:relative}
+.sb .island{position:absolute;left:50%;top:10px;width:112px;height:32px;margin-left:-56px;background:#000;border-radius:20px}
+.sb .sbr{display:flex;gap:5px;align-items:center}
+.sb .bat{width:24px;height:12px;border:1.5px solid currentColor;border-radius:4px;opacity:.9;position:relative}
+.sb .bat::after{content:"";position:absolute;inset:1.5px 5px 1.5px 1.5px;background:currentColor;border-radius:1.5px}
+#screen{flex:1;min-height:0;display:flex;flex-direction:column}
+.scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none}
+.scroll::-webkit-scrollbar{display:none}
+.hdr{display:flex;align-items:center;gap:4px;padding:2px 10px 2px 16px;min-height:52px;flex:none}
+.hdr.pushed{padding-left:4px}
+.ttl{font:600 20px var(--mono);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ttl2{display:grid;min-width:0;line-height:1.2}
+.ttl2 .ttl{font-size:18px}
+.ttl2 small{font-size:12.5px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ws{display:flex;align-items:center;gap:6px;min-height:44px;min-width:0;border-radius:10px;padding-right:4px}
+.ws:hover{background:var(--press)}
+.ib{width:44px;height:44px;display:grid;place-items:center;border-radius:12px;color:var(--t1);position:relative;flex:none}
+.ib:hover,.ib:active{background:var(--press)}
+.grow{flex:1;min-width:0}
+.av{display:inline-grid;place-items:center;border-radius:50%;color:#fff;font-weight:650;flex:none;background:var(--c);line-height:1}
+.av.ag{border-radius:28%}
+.me{width:30px;height:30px;font-size:13px;background:#1d5bd6}
+/* Home (swarm_page.dart): Swarm tile + title, Search · + · You; need line; Threads; projects card */
+.stile{width:32px;height:32px;border-radius:8px;background:var(--srf);display:grid;place-items:center;font:600 14px var(--mono);color:var(--accnow);flex:none}
+.list{padding:4px 12px 0}
+.need{display:flex;align-items:center;gap:8px;width:100%;min-height:44px;padding:0 16px;border-radius:12px;font:600 16px var(--ui);color:var(--t1)}
+.need:hover{background:var(--press)}
+.need .y{color:var(--warn)}
+.need .dn{color:var(--t2);font-weight:400}
+.need svg{color:var(--t3);margin-left:auto}
+.grp{border-radius:12px;background:var(--row);overflow:hidden;margin-top:8px}
+.grp > * + *{border-top:1px solid var(--hair)}
+.prow{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;padding:4px 16px}
+.prow:hover,.prow:active{background:var(--press)}
+.prow .pn{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:16px;color:var(--t2)}
+.prow.unread .pn{color:var(--t1);font-weight:600}
+.prow .lead{width:20px;display:grid;place-items:center;color:var(--t2);flex:none}
+.trow.unread .lead{color:var(--t1)}
+.trow.flash{animation:flash 1.2s ease-out}
+@keyframes flash{0%{background:var(--wash)}100%{background:transparent}}
+.tagp{min-width:22px;height:20px;padding:0 8px;border-radius:10px;background:var(--blue);color:#fff;display:inline-grid;place-items:center;font:600 12.5px var(--ui);font-variant-numeric:tabular-nums;flex:none}
+.udot{width:8px;height:8px;border-radius:50%;background:var(--t1);flex:none}
+.other{display:flex;align-items:center;gap:8px;width:100%;min-height:48px;padding:0 16px;color:var(--t2);font-size:16px}
+.other:hover{background:var(--press)}
+.other svg{color:var(--t3);width:18px;height:18px}
+.badge{min-width:22px;height:22px;border-radius:11px;padding:0 7px;display:inline-grid;place-items:center;font:650 12.5px var(--ui);font-variant-numeric:tabular-nums;flex:none;background:var(--blue);color:var(--onblue)}
+.tabbar{flex:none;display:flex;border-top:1px solid var(--hair);padding:7px 0 28px;background:var(--tabbar);position:relative}
+.tabbar::after{content:"";position:absolute;left:50%;bottom:9px;width:134px;height:5px;margin-left:-67px;border-radius:3px;background:var(--t1);opacity:.5}
+.tb{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--t2);font:500 12px var(--ui);min-height:50px;text-align:center}
+.tb[aria-current=page]{color:var(--t1);font-weight:650}
+.tb .gl{position:relative;height:26px;display:grid;place-items:center}
+.tb .gl .badge{position:absolute;left:14px;top:-6px;height:19px;min-width:19px;font-size:11px;padding:0 5px;background:var(--warn);color:#1a1200}
+.phone.light .tb .gl .badge{color:#fff}
+.homebar{height:34px;flex:none;position:relative}
+.homebar::after{content:"";position:absolute;left:50%;bottom:9px;width:134px;height:5px;margin-left:-67px;border-radius:3px;background:var(--t1);opacity:.5}
+/* Activity */
+.chips{display:flex;gap:8px;overflow-x:auto;padding:2px 16px 10px;flex:none;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;height:34px;border-radius:17px;background:var(--srf);padding:0 13px;display:flex;align-items:center;gap:6px;font:500 14px var(--ui);color:var(--t1);white-space:nowrap}
+.chip[aria-pressed=true]{background:var(--t1);color:var(--pbg)}
+.chip .n{font-variant-numeric:tabular-nums;opacity:.75}
+.arow{display:flex;gap:12px;padding:12px 16px;align-items:flex-start;width:100%;cursor:pointer}
+.arow:hover{background:var(--press)}
+.arow .b1{flex:1;min-width:0;display:grid;gap:2px}
+.arow .c1{font-size:13px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.arow .c2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:15px;font-weight:600}
+.arow .c2 .at{color:var(--link)}
+.abtn{flex:none;height:32px;padding:0 12px;border-radius:16px;background:var(--srf);font:500 14px var(--ui);align-self:center}
+/* Chat */
+.day{display:flex;align-items:center;gap:10px;padding:14px 16px 6px;color:var(--t2);font:600 12.5px var(--ui)}
+.day::before,.day::after{content:"";flex:1;height:1px;background:var(--hair)}
+.msg{display:flex;gap:10px;padding:8px 16px 8px 13px;border-left:3px solid transparent;cursor:default;outline-offset:-2px}
+.msg:hover{background:var(--press)}
+.msg.tag{background:var(--wash);border-left-color:var(--bar)}
+.msg.acting{background:var(--press)}
+.mbody{flex:1;min-width:0}
+.mhead{display:flex;align-items:baseline;gap:8px}
+.mhead b{font-weight:650}
+.mhead time{font-size:12.5px;color:var(--t3);font-variant-numeric:tabular-nums}
+.mtext{margin-top:2px;white-space:pre-wrap;overflow-wrap:anywhere}
+.mtext .at{color:var(--link);font-weight:600}
+.acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.sbtn{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px;border-radius:17px;background:var(--srf);font:500 14px var(--ui)}
+.sbtn:hover{filter:brightness(1.08)}
+.phone.light .sbtn:hover{filter:brightness(.96)}
+/* thread line: now (main) vs proposed */
+.tline{display:flex;align-items:center;gap:6px;min-height:44px;width:100%;margin-top:2px;border-radius:10px}
+.tline .faces{display:flex;gap:4px}
+.tline .tc{font:600 14px var(--ui);white-space:nowrap}
+.tline .ago{font-size:13px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.tline.now .tc{color:var(--accnow)}
+.tline.new{padding:0 6px;margin-left:-6px;width:calc(100% + 6px);gap:8px}
+.tline.new:hover,.tline.new:active{background:var(--press)}
+.tline.new .tc{color:var(--link);font-weight:650;font-size:14.5px}
+.newp{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:10px;background:var(--blue);color:#fff;font:650 11.5px var(--ui);letter-spacing:.01em;flex:none}
+.replied{font-size:12.5px;color:var(--t3);margin-top:2px}
+.comp{flex:none;margin:6px 12px 0;border-radius:18px;background:var(--card);border:1px solid var(--hair);padding:8px 8px 6px 14px}
+.comp input{width:100%;border:0;background:none;color:var(--t1);font:15px var(--ui);padding:4px 0 6px;outline:none}
+.comp input::placeholder{color:var(--t3)}
+.comp .row{display:flex;align-items:center;gap:2px;margin-left:-8px}
+.comp .ib{width:36px;height:36px;color:var(--t2)}
+.comp .send{color:var(--link)}
+.ropt{display:flex;align-items:center;gap:4px;padding:6px 18px 0;font-size:13px;color:var(--t2);min-height:30px}
+/* Thread page */
+.tdiv{display:flex;align-items:center;gap:10px;padding:8px 16px;color:var(--t2);font-size:13px}
+.tdiv::after{content:"";flex:1;height:1px;background:var(--hair)}
+.earlier{margin:0 16px 4px 58px;height:34px;padding:0 12px;border-radius:17px;background:var(--srf);font:500 13.5px var(--ui)}
+/* Threads page */
+.scap{padding:14px 20px 6px;font:600 13px var(--ui);color:var(--t2)}
+.group{margin:0 12px;border-radius:14px;background:var(--card);overflow:hidden}
+.phone.light .group{border:1px solid var(--hair)}
+.tcard{display:block;width:100%;padding:10px 6px 12px 16px}
+.tcard + .tcard{border-top:1px solid var(--hair)}
+.tcard:hover{background:var(--hover)}
+.tcard .where{display:flex;align-items:center;font-size:13px;color:var(--t2);min-height:30px}
+.tcard .where span{flex:1}
+.tcard .more{width:36px;height:30px;display:grid;place-items:center;color:var(--t3)}
+.tcard .r{display:flex;gap:12px;padding-right:10px}
+.tcard .r + .r{margin-top:10px}
+.tcard .rt{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.tcard .rt .at{color:var(--link);font-weight:600}
+.tcard .sub{margin:10px 0 0 44px;display:grid;gap:10px;padding-right:10px}
+.tcard .sub .r{gap:10px}
+.tcard .cnt{display:block;margin:8px 0 0 44px;font-size:13px;color:var(--t2)}
+.tcard span.grow{display:block}
+.tcard .where,.tcard .r,.tcard .sub{text-align:left}
+.toast{position:absolute;left:50%;bottom:110px;transform:translateX(-50%);background:var(--t1);color:var(--pbg);font:500 13px var(--ui);padding:8px 14px;border-radius:12px;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;z-index:5}
+.toast.on{opacity:.95}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>Swarm mobile: Threads, easy to find</h1>
+    <p>One prototype, drawn from the phone's code at <code>origin/main 5e268c223</code> (2026-11-06) · after Slack mobile · phone at 390 pt. Tap through it; switch to “Before” to compare with main. Made-up messages only.</p>
+  </header>
+
+  <div class="stage">
+    <div class="phone" id="phone" aria-label="Prototype phone">
+      <div class="sb" aria-hidden="true"><span>9:15</span><span class="island"></span>
+        <span class="sbr"><svg class="i s16" viewBox="0 0 24 24"><path d="M2 20h.01M7 20v-4M12 20v-8M17 20V8"/></svg><svg class="i s16" viewBox="0 0 24 24"><path d="M12 20h.01M2 8.82a15 15 0 0 1 20 0M5 12.86a10 10 0 0 1 14 0M8.5 16.43a5 5 0 0 1 7 0"/></svg><span class="bat"></span></span></div>
+      <div id="screen"></div>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+
+    <aside class="side">
+      <section class="ctl" aria-label="Prototype controls">
+        <div class="ctlrow"><span>Version</span>
+          <div class="seg" role="group" aria-label="Version">
+            <button type="button" data-variant="new" aria-pressed="true">Proposed (built)</button>
+            <button type="button" data-variant="now" aria-pressed="false">Before (main)</button>
+          </div></div>
+        <div class="ctlrow"><span>Theme</span>
+          <div class="seg" role="group" aria-label="Phone theme">
+            <button type="button" data-ptheme="dark" aria-pressed="true">Dark</button>
+            <button type="button" data-ptheme="light" aria-pressed="false">Light</button>
+          </div></div>
+        <div class="ctlrow"><span>Jump to</span>
+          <div class="jump">
+            <button type="button" data-jump="home">Home</button>
+            <button type="button" data-jump="threads">Threads</button>
+            <button type="button" data-jump="chat">#openharness</button>
+            <button type="button" data-jump="thread">Thread</button>
+            <button type="button" data-jump="activity">Activity</button>
+            <button type="button" data-jump="reset">Reset unread</button>
+          </div></div>
+      </section>
+
+      <section>
+        <h2>Why Threads felt hidden</h2>
+        <ol>
+          <li>Since 2026-11-04 Threads was only an <b>unlabelled icon</b> in Activity's top bar; Home had no way in.</li>
+          <li>New replies in a followed thread <b>gave no signal</b> anywhere: <code>SwarmThreadsMerge.unread</code> existed but nothing used it.</li>
+          <li>A tag inside a thread counts into the project's <b>“@2”</b>, which is read on opening the project, but the reply sits in yesterday's thread: the end of the chat shows nothing new.</li>
+          <li>Dark theme: “26 replies” used the palette accent <code>#bdcbdc</code>, close to body text, and looked the same read or unread.</li>
+        </ol>
+        <p class="big">Biggest issue: Threads had no name and no signal, so new replies sat unseen until someone went looking.</p>
+      </section>
+
+      <section>
+        <h2>What Slack does</h2>
+        <ul>
+          <li>Threads sits at the top of Home; threads with unread replies rise to the top of the list.</li>
+          <li>Activity gathers replies, mentions and invitations; Threads still has its own way in from Home.</li>
+          <li>Reply: tap a message → “Reply in thread”, or type in an existing thread's reply box. The phone already works this way.</li>
+        </ul>
+        <p class="src">Sources: <a href="https://slack.com/help/articles/115000769927-Use-threads-to-organize-discussions">Slack Help: Use threads</a> · <a href="https://slack.design/articles/re-designing-slack-on-mobile/">slack.design: Re-designing Slack on mobile</a></p>
+      </section>
+
+      <section>
+        <h2>What changes (three places)</h2>
+        <dl class="chg">
+          <div><dt>1 · Home: a “Threads” row</dt>
+            <dd>A one-row card between the need-you line and the projects, drawn like a project row (a glyph in place of <code>#</code>). <b>Bright with a dot</b> while a followed thread has unread replies, quiet otherwise. <b>No count</b>: tags already show as “@N” on the project row and in Activity. No tile bar.</dd></div>
+          <div><dt>2 · Activity: the Threads icon goes</dt>
+            <dd><b>One named way in</b>. Activity's top bar keeps only You.</dd></div>
+          <div><dt>3 · Chat: “N replies” reads as a link</dt>
+            <dd>A real link blue (not the palette accent), faces 20 → 24, and a <b>New</b> pill while a followed thread has unread replies; the whole line is a 44 pt target. Once read it says “Last reply …” as before.</dd></div>
+          <div><dt>Unchanged</dt>
+            <dd>Home's top bar (Swarm, Search, +, You), the need-you line, the projects and “Other projects”, the Threads page, the Thread page, tap a message → “Reply in thread”. “Threads” matches Desktop's sidebar. Desktop does not change.</dd></div>
+        </dl>
+      </section>
+
+      <section>
+        <h2>Try</h2>
+        <ul>
+          <li>Home → the <b>Threads</b> row (bright, with a dot) → back: the row goes quiet.</li>
+          <li>Home → <b>#openharness</b> (“@2”): the end of the chat shows nothing new; scroll up to “26 replies · New” → open the thread. Back on Home, “@2” is gone.</li>
+          <li>Tap Leo's message → “Reply in thread” opens an empty thread to start.</li>
+          <li>Type in the Reply box and send: the reply count goes up and the thread line updates.</li>
+          <li>Switch to “Before (main)”: Home has no Threads row; the Threads icon sits in Activity's top bar.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>How it is built</h2>
+        <ul>
+          <li>Home's row: the followed threads the server lists as unread (<code>SwarmThreadsMerge.unread</code>), less what this phone has read since. No backend change.</li>
+          <li>New pill: the same source, per thread (<code>SwarmThreads.hasNewReplies</code>): it knows “there is something new”, not how much, so it says “New”.</li>
+          <li>Scope: <code>swarm_page.dart</code>, <code>swarm_home_rows.dart</code>, <code>swarm_activity_page.dart</code>, <code>swarm_thread_line.dart</code>, <code>swarm_conversation_page.dart</code>, <code>swarm_threads.dart</code>, with widget tests.</li>
+        </ul>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-house" viewBox="0 0 24 24"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-threads" viewBox="0 0 24 24"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+  <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 19v3"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><rect x="9" y="2" width="6" height="13" rx="3"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></symbol>
+  <symbol id="i-sort" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></symbol>
+  <symbol id="i-vmore" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+  <symbol id="i-reply" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="m10 7-3 3 3 3"/><path d="M17 13v-1a2 2 0 0 0-2-2H7"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+</svg>
+
+<script>
+(function () {
+  'use strict';
+  const ic = (id, cls) => `<svg class="i ${cls || ''}" aria-hidden="true"><use href="#i-${id}"/></svg>`;
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const withTags = (s) => esc(s).replace(/@(me|River)\b/g, '<span class="at">@$1</span>');
+
+  const P = {
+    tony: { name: 'You', init: 'Y', c: '#1d5bd6' },
+    river: { name: 'River', init: 'R', c: '#0f766e', agent: true },
+    leo: { name: 'Leo', init: 'L', c: '#15803d' },
+    faye: { name: 'Faye', init: 'F', c: '#6d28d9', agent: true },
+  };
+  const av = (id, d) => {
+    const p = P[id];
+    return `<span class="av${p.agent ? ' ag' : ''}" style="--c:${p.c};width:${d}px;height:${d}px;font-size:${Math.round(d * 0.42)}px" aria-hidden="true">${p.init}</span>`;
+  };
+
+  // The chat #openharness: made-up messages, oldest first.
+  const ROOTS = [
+    { id: 'push', who: 'tony', at: '16:28', day: 'Yesterday',
+      text: 'River, please run the push notification tests and add a table of every notification type: Push or Local, when it arrives, its title and an example. Fix what you find on the way: no spam, and only what matters reaches the phone.' },
+    { id: 'faye', who: 'river', at: '08:16', day: 'Today',
+      text: 'Found it: Faye promoted a build without asking first and called it your rule, though you never set one. I am checking which model Faye runs and reading its hand-off notes to see where that rule came from.' },
+    { id: 'leo', who: 'leo', at: '08:21',
+      text: '@River Faye just wrote a rule it already has into its instructions again. Did you not fix that yesterday?' },
+    { id: 'r822', who: 'river', at: '08:22',
+      text: 'Not quite. Last night\'s fix caps the size of instructions: a save over the cap is refused. It reaches the server in this morning\'s release.' },
+  ];
+  // Threads by root: replies drawn (oldest first), how many are not drawn, which are unread.
+  const fresh = () => ({
+    push: { earlier: 23, faces: ['river', 'tony'], replies: [
+      { who: 'tony', at: '20:42', text: 'Is this for the phone only, or for Desktop too?' },
+      { who: 'river', at: '20:42', tag: true, unread: true, text: '@me The table is for the phone, push and local notices. The rule should hold everywhere: notify only when someone needs you or talks to you. I will list Desktop\'s notices so they ship together.' },
+      { who: 'river', at: '21:35', tag: true, unread: true, text: '@me Shall I build a TestFlight from main at 09:00 tomorrow? It has the Android push channel, pull to refresh and voice with photos. If I hear nothing I will start at 09:00.' },
+    ], ago: '11 h ago' },
+    faye: { earlier: 0, faces: ['tony', 'river', 'leo'], replies: [
+      { who: 'tony', at: '08:30', text: 'Add “when unsure, ask before promoting” to lamp\'s rules too.' },
+      { who: 'river', at: '08:31', text: 'Added to lamp\'s instructions. I will report back once Faye\'s model is checked.' },
+      { who: 'leo', at: '08:40', text: '👍' },
+    ], ago: '35 min ago' },
+    task: { earlier: 5, faces: ['river', 'tony'], replies: [], ago: '18 h ago' },
+    leo: { earlier: 0, faces: [], replies: [], ago: null },
+    r822: { earlier: 0, faces: [], replies: [], ago: null },
+  });
+
+  const S = {
+    variant: 'new', theme: 'dark', stack: ['home'], tab: 'home',
+    threads: fresh(), acting: null, open: 'push', chatExtra: [], flashThreads: false, projectRead: false, otherOpen: false,
+  };
+  const count = (t) => t.earlier + t.replies.length;
+  const unread = (t) => t.replies.some((r) => r.unread);
+  const tags = () => Object.values(S.threads).reduce((n, t) => n + t.replies.filter((r) => r.unread && r.tag).length, 0);
+  const anyUnread = () => Object.values(S.threads).some(unread);
+  const readThread = (id) => S.threads[id].replies.forEach((r) => { r.unread = false; });
+
+  const $screen = document.getElementById('screen');
+  const $phone = document.getElementById('phone');
+  const top = () => S.stack[S.stack.length - 1];
+
+  /* ── pieces ── */
+  function threadLine(id) {
+    const t = S.threads[id];
+    const n = count(t);
+    if (!n) return '';
+    const label = n === 1 ? '1 reply' : `${n} replies`;
+    const ago = t.ago ? `Last reply ${t.ago}` : '';
+    if (S.variant === 'now') {
+      return `<button type="button" class="tline now" data-go="thread:${id}" aria-label="${label}, ${ago}. Open thread">
+        <span class="faces">${t.faces.map((f) => av(f, 20)).join('')}</span>
+        <span class="tc">${label}</span><span class="ago">${ago}</span></button>`;
+    }
+    const isNew = unread(t);
+    return `<button type="button" class="tline new" data-go="thread:${id}" aria-label="${label}${isNew ? ', new replies' : ', ' + ago}. Open thread">
+      <span class="faces">${t.faces.map((f) => av(f, 24)).join('')}</span>
+      <span class="tc">${label}</span>${isNew ? '<span class="newp">New</span>' : `<span class="ago">${ago}</span>`}</button>`;
+  }
+
+  function msg(m, { root = false, inThread = false } = {}) {
+    const p = P[m.who];
+    const acting = S.acting === m.key;
+    const line = !inThread && S.threads[m.id] ? threadLine(m.id) : '';
+    const acts = acting ? `<div class="acts">
+        ${inThread ? '' : `<button type="button" class="sbtn" data-go="thread:${m.id}">${ic('reply', 's16')}Reply in thread</button>`}
+        <button type="button" class="sbtn" data-toast="Copied">${ic('copy', 's16')}Copy</button></div>` : '';
+    return `<div class="msg${m.tag ? ' tag' : ''}${acting ? ' acting' : ''}" tabindex="0" data-act="${m.key}" aria-label="${p.name}, ${m.at}">
+      ${av(m.who, 32)}
+      <div class="mbody">
+        <div class="mhead"><b>${p.name}</b><time>${m.at}</time></div>
+        <div class="mtext">${withTags(m.text)}</div>
+        ${line}${acts}
+      </div></div>`;
+  }
+
+  function header({ back, title, sub, right = '' }) {
+    if (back) {
+      return `<div class="hdr pushed"><button type="button" class="ib" data-back aria-label="Back">${ic('left', 's24')}</button>
+        <div class="ttl2 grow"><span class="ttl">${title}</span>${sub ? `<small>${sub}</small>` : ''}</div>${right}</div>`;
+    }
+    return `<div class="hdr">${title}<span class="grow"></span>${right}</div>`;
+  }
+
+  const youBtn = `<button type="button" class="ib" aria-label="You" data-toast="You">${'<span class="av me">Y</span>'}</button>`;
+
+  function tabbar() {
+    const tab = (id, label, icon, badge) => `<button type="button" class="tb" data-tab="${id}" ${S.tab === id ? 'aria-current="page"' : ''}>
+      <span class="gl">${ic(icon, 's24')}${badge ? `<span class="badge">${badge}</span>` : ''}</span>${label}</button>`;
+    return `<nav class="tabbar" aria-label="Tabs">${tab('home', 'Home', 'house')}${tab('buddy', 'Buddy', 'msg')}${tab('activity', 'Activity', 'bell', 2 + tags())}</nav>`;
+  }
+
+  /* ── screens ── */
+  function home() {
+    const hot = anyUnread();
+    // swarm_page.dart: one card of projects, alphabetical, "#name" bright with something new,
+    // "@N" (the Lead's tags in its chat, threads included) else a dot; quiet ones folded.
+    const projects = [
+      { name: 'computer' }, { name: 'lamp', dot: true }, { name: 'lamp-gtm' },
+      { name: 'openharness', live: true, tags: S.projectRead ? 0 : tags(), dot: !S.projectRead }, { name: 'pod' },
+    ];
+    const quiet = ['harness-gtm', 'pcb', 'radio'];
+    const row = (p) => {
+      const bright = !!(p.tags || p.dot);
+      const end = p.tags ? `<span class="tagp" aria-label="${p.tags} mentions">@${p.tags}</span>` : p.dot ? '<span class="udot" aria-hidden="true"></span>' : '';
+      return `<button type="button" class="prow${bright ? ' unread' : ''}" ${p.live ? 'data-go="chat"' : 'data-toast="Only #openharness is drawn"'}><span class="pn">#${p.name}</span>${end}</button>`;
+    };
+    const threadsRow = S.variant === 'new' ? `<div class="grp"><button type="button" class="prow trow${hot ? ' unread' : ''}${S.flashThreads ? ' flash' : ''}" data-go="threads"
+        aria-label="Threads${hot ? ', new replies' : ''}"><span class="lead">${ic('threads', 's18')}</span><span class="pn">Threads</span>${hot ? '<span class="udot" aria-hidden="true"></span>' : ''}</button></div>` : '';
+    return `<div class="hdr" style="padding-left:8px"><button type="button" class="ws" data-toast="Swarm switcher" aria-label="Swarm: autonomous.ai. Switch Swarm"><span class="stile">a</span><span class="ttl">autonomous.ai</span>${ic('down', 's18')}</button>
+        <span class="grow"></span><button type="button" class="ib" aria-label="Search" data-toast="Search">${ic('search')}</button><button type="button" class="ib" aria-label="New message" data-toast="New message">${ic('plus')}</button>${youBtn}</div>
+      <div class="scroll"><div class="list">
+        <button type="button" class="need" data-tab="activity" aria-label="2 need you, 1 done"><span><span class="y">2</span> need you<span class="dn"> · 1 done</span></span>${ic('right', 's18')}</button>
+        ${threadsRow}
+        <div class="grp">${projects.map(row).join('')}
+          <button type="button" class="other" data-other aria-expanded="${S.otherOpen}">${ic(S.otherOpen ? 'down' : 'right')}Other projects · ${quiet.length}</button>
+          ${S.otherOpen ? quiet.map((n) => row({ name: n })).join('') : ''}</div>
+        <div style="height:24px"></div></div></div>
+      ${tabbar()}`;
+  }
+
+  function activity() {
+    const icon = S.variant === 'now'
+      ? `<button type="button" class="ib" aria-label="Threads" data-go="threads">${ic('threads')}</button>` : '';
+    const n = tags();
+    // SwarmActivityRow: "#project · who · when" over what it is, bold while to handle, Approve or Reply at its end.
+    const rows = [
+      { who: 'faye', where: '#lamp · Faye · 12 min', text: 'Promote the lamp build to main?', btn: 'Approve' },
+      { who: 'river', where: '#pod · River · 40 min', text: 'Run make install-cli on Mac 3?', btn: 'Approve' },
+      ...Object.entries(S.threads).flatMap(([id, t]) => t.replies.filter((r) => r.unread && r.tag)
+        .map((r) => ({ who: r.who, where: `#openharness · ${P[r.who].name} · ${r.at === '21:35' ? '11 h' : '12 h'}`, text: r.text, btn: 'Reply', go: `thread:${id}` }))),
+    ];
+    return `${header({ title: '<span class="ttl">Activity</span>', right: icon + youBtn })}
+      <div class="chips" role="group" aria-label="Filters">
+        <button type="button" class="chip" aria-pressed="true">All <span class="n">${2 + n}</span></button>
+        <button type="button" class="chip" aria-pressed="false">Needs you <span class="n">2</span></button>
+        <button type="button" class="chip" aria-pressed="false">Mentions <span class="n">${n}</span></button>
+        <button type="button" class="chip" aria-pressed="false">Replies</button>
+        <button type="button" class="chip" aria-pressed="false">Reactions</button>
+      </div>
+      <div class="scroll">${rows.map((r) => `<div class="arow" tabindex="0" ${r.go ? `data-go="${r.go}"` : 'data-toast="Not drawn"'}>
+          ${av(r.who, 32)}<span class="b1"><span class="c1">${esc(r.where)}</span><span class="c2">${withTags(r.text)}</span></span>
+          <button type="button" class="abtn" ${r.go ? `data-go="${r.go}"` : 'data-toast="Not drawn"'}>${r.btn}</button></div>`).join('')}
+      </div>${tabbar()}`;
+  }
+
+  function threadsPage() {
+    const card = (id, root, where) => {
+      const t = S.threads[id];
+      const isNew = unread(t);
+      const sub = isNew ? `<span class="sub">${t.replies.filter((r) => r.unread).map((r) => `<span class="r">${av(r.who, 24)}
+          <span class="grow"><span class="mhead"><b>${P[r.who].name}</b><time>${r.at}</time></span><span class="rt">${withTags(r.text)}</span></span></span>`).join('')}</span>`
+        : `<span class="cnt">${count(t)} replies</span>`;
+      return `<button type="button" class="tcard" data-go="chat-thread:${id}">
+        <span class="where"><span>${where}</span><span class="more" aria-hidden="true">${ic('more', 's18')}</span></span>
+        <span class="r">${av(root.who, 32)}<span class="grow"><span class="mhead"><b>${P[root.who].name}</b><time>${root.at}</time></span><span class="rt">${withTags(root.text)}</span></span></span>
+        ${sub}</button>`;
+    };
+    const rootOf = (id) => ROOTS.find((r) => r.id === id);
+    const all = [
+      { id: 'push', root: rootOf('push') },
+      { id: 'faye', root: rootOf('faye') },
+      { id: 'task', root: { who: 'tony', at: '14:17', text: 'River, task 3144 is yours: run the simulator tests on the Mac. Xcode, the simulators and the Android SDK are installed.' } },
+    ];
+    const newOnes = all.filter((x) => unread(S.threads[x.id]));
+    const rest = all.filter((x) => !unread(S.threads[x.id]));
+    return `${header({ back: true, title: 'Threads' })}
+      <div class="scroll">
+        ${newOnes.length ? `<div class="scap">New replies</div><div class="group">${newOnes.map((x) => card(x.id, x.root, '#openharness')).join('')}</div>` : ''}
+        ${rest.length ? `<div class="scap">Earlier</div><div class="group">${rest.map((x) => card(x.id, x.root, '#openharness')).join('')}</div>` : ''}
+        <div style="height:24px"></div></div><div class="homebar"></div>`;
+  }
+
+  function chat() {
+    let day = null;
+    const rows = [...ROOTS, ...S.chatExtra].map((m) => {
+      const d = m.day && m.day !== day ? `<div class="day">${m.day}</div>` : '';
+      if (m.day) day = m.day;
+      return d + msg({ ...m, key: 'c-' + m.id });
+    }).join('');
+    return `${header({ back: true, title: '#openharness', sub: '5 humans · 4 agents',
+        right: `<button type="button" class="ib" aria-label="More" data-toast="Status · Team · Find · Notifications">${ic('vmore')}</button>` })}
+      <div class="scroll" id="chatScroll">${rows}<div style="height:8px"></div></div>
+      <form class="comp" data-send="chat"><label class="sr" for="chatIn">Message</label><input id="chatIn" placeholder="Message" autocomplete="off">
+        <div class="row"><button type="button" class="ib" aria-label="Attach" data-toast="Attach">${ic('plus', 's18')}</button><button type="button" class="ib" aria-label="Tag" data-toast="Tag">${ic('at', 's18')}</button><span class="grow"></span><button type="button" class="ib" aria-label="Voice" data-toast="Voice">${ic('mic', 's18')}</button><button type="submit" class="ib send" aria-label="Send">${ic('up', 's18')}</button></div></form>
+      <div class="homebar"></div>`;
+  }
+
+  function thread() {
+    const id = S.open;
+    const root = ROOTS.find((r) => r.id === id) || S.chatExtra.find((r) => r.id === id);
+    const t = S.threads[id];
+    const n = count(t);
+    const replies = t.replies.map((r, i) => msg({ ...r, id: id + '-' + i, key: 't-' + id + '-' + i }, { inThread: true })).join('');
+    return `${header({ back: true, title: 'Thread', sub: '#openharness',
+        right: `<button type="button" class="ib" aria-label="Find in thread" data-toast="Find in thread">${ic('search')}</button>` })}
+      <div class="scroll" id="threadScroll">
+        ${msg({ ...root, key: 't-root-' + id }, { inThread: true })}
+        ${n ? `<div class="tdiv">${n === 1 ? '1 reply' : n + ' replies'}</div>` : ''}
+        ${t.earlier ? `<button type="button" class="earlier" data-toast="Earlier replies are not drawn">Show earlier replies</button>` : ''}
+        ${replies}<div style="height:8px"></div></div>
+      <form class="comp" data-send="thread"><label class="sr" for="threadIn">Reply</label><input id="threadIn" placeholder="Reply" autocomplete="off">
+        <div class="row"><button type="button" class="ib" aria-label="Attach" data-toast="Attach">${ic('plus', 's18')}</button><button type="button" class="ib" aria-label="Tag" data-toast="Tag">${ic('at', 's18')}</button><span class="grow"></span><button type="button" class="ib" aria-label="Voice" data-toast="Voice">${ic('mic', 's18')}</button><button type="submit" class="ib send" aria-label="Send reply">${ic('up', 's18')}</button></div></form>
+      <button type="button" class="ropt" data-toast="Also send to #openharness · New session">Reply options ${ic('down', 's14')}</button>
+      <div class="homebar" style="height:26px"></div>`;
+  }
+
+  const SCREENS = { home, activity, threads: threadsPage, chat, thread, buddy: () => `${header({ title: '<span class="ttl">Buddy</span>' })}<div class="scroll"></div>${tabbar()}` };
+
+  function render(keepScroll) {
+    $phone.classList.toggle('light', S.theme === 'light');
+    const sc = $screen.querySelector('.scroll');
+    const y = keepScroll && sc ? sc.scrollTop : null;
+    $screen.innerHTML = SCREENS[top()]();
+    const s = $screen.querySelector('.scroll');
+    if (!s) return;
+    if (y !== null) s.scrollTop = y;
+    else if (top() === 'chat' || top() === 'thread') s.scrollTop = s.scrollHeight;
+  }
+
+  /* ── navigation ── */
+  function leave(screen) {
+    // What a page shows is read once it is left: Threads reads its new replies, a thread its own.
+    if (screen === 'threads') { Object.keys(S.threads).forEach(readThread); S.flashThreads = S.variant === 'new'; }
+    if (screen === 'thread') readThread(S.open);
+  }
+  function push(screen) { S.acting = null; S.stack.push(screen); render(); }
+  function back() {
+    if (S.stack.length < 2) return;
+    leave(S.stack.pop());
+    S.acting = null;
+    render();
+    if (S.flashThreads) setTimeout(() => { S.flashThreads = false; }, 50);
+  }
+  function go(target) {
+    if (target === 'threads') return push('threads');
+    if (target === 'chat') { S.projectRead = true; return push('chat'); }
+    if (target.startsWith('thread:')) {
+      S.open = target.slice(7);
+      if (!S.threads[S.open]) S.threads[S.open] = { earlier: 0, faces: [], replies: [], ago: null };
+      return push('thread');
+    }
+    if (target.startsWith('chat-thread:')) {
+      // As the app: Threads opens the chat, its thread over it.
+      S.open = target.slice(12);
+      S.projectRead = true;
+      S.stack.push('chat');
+      return push('thread');
+    }
+  }
+
+  let toastTimer;
+  function toast(text) {
+    const t = document.getElementById('toast');
+    t.textContent = text;
+    t.classList.add('on');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('on'), 1300);
+  }
+
+  $phone.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-go],[data-back],[data-tab],[data-toast],[data-act],[data-other]');
+    if (!el || !$phone.contains(el)) return;
+    if (el.hasAttribute('data-back')) return back();
+    if (el.hasAttribute('data-other')) { S.otherOpen = !S.otherOpen; return render(true); }
+    if (el.dataset.go) return go(el.dataset.go);
+    if (el.dataset.tab) {
+      if (el.dataset.tab === 'buddy') return toast('Buddy is not drawn');
+      S.tab = el.dataset.tab; S.stack = [S.tab]; S.acting = null; return render();
+    }
+    if (el.dataset.toast) return toast(el.dataset.toast);
+    if (el.dataset.act) {
+      if (window.getSelection && String(window.getSelection()).length) return;
+      S.acting = S.acting === el.dataset.act ? null : el.dataset.act;
+      return render(true);
+    }
+  });
+  $phone.addEventListener('keydown', (e) => {
+    const m = e.target.closest && e.target.closest('.msg');
+    if (m && e.target === m && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); m.click(); }
+  });
+  $phone.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const input = form.querySelector('input');
+    const text = input.value.trim();
+    if (!text) return;
+    if (form.dataset.send === 'thread') {
+      const t = S.threads[S.open];
+      t.replies.forEach((r) => { r.unread = false; });
+      t.replies.push({ who: 'tony', at: '09:15', text });
+      t.ago = 'just now';
+      if (!t.faces.includes('tony')) t.faces.unshift('tony');
+      t.faces = t.faces.slice(0, 3);
+    } else {
+      const id = 'mine-' + S.chatExtra.length;
+      S.chatExtra.push({ id, who: 'tony', at: '09:15', text });
+      S.threads[id] = { earlier: 0, faces: [], replies: [], ago: null };
+    }
+    render();
+    const again = $screen.querySelector('form input');
+    if (again) again.focus();
+  });
+
+  /* ── shell controls ── */
+  document.querySelectorAll('[data-variant]').forEach((b) => b.addEventListener('click', () => {
+    S.variant = b.dataset.variant;
+    document.querySelectorAll('[data-variant]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    render(true);
+  }));
+  document.querySelectorAll('[data-ptheme]').forEach((b) => b.addEventListener('click', () => {
+    S.theme = b.dataset.ptheme;
+    document.querySelectorAll('[data-ptheme]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    render(true);
+  }));
+  document.querySelectorAll('[data-jump]').forEach((b) => b.addEventListener('click', () => {
+    const j = b.dataset.jump;
+    S.acting = null;
+    if (j === 'reset') { S.threads = fresh(); S.chatExtra = []; S.projectRead = false; S.otherOpen = false; S.stack = ['home']; S.tab = 'home'; return render(); }
+    if (j === 'home' || j === 'activity') { S.tab = j; S.stack = [j]; return render(); }
+    S.tab = 'home';
+    if (j === 'threads') S.stack = ['home', 'threads'];
+    if (j === 'chat') { S.stack = ['home', 'chat']; S.projectRead = true; }
+    if (j === 'thread') { S.open = 'push'; S.stack = ['home', 'chat', 'thread']; S.projectRead = true; }
+    render();
+  }));
+
+  render();
+})();
+</script>
+</body>
+</html>

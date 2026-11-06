@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/parts.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart'
@@ -119,5 +120,101 @@ void main() {
     expect(builder.pm, isFalse);
     expect(swarmAgentRole(snapshot, 'agent-lead'), 'Coordinator');
     expect(swarmAgentRole(snapshot, 'agent-builder'), 'PM');
+  });
+
+  // Anh Dee, 2026-11-06: threads were hidden. The count reads as a link in a
+  // blue that holds 4.5:1 on both grounds, and a followed thread with unread
+  // replies says New where "Last reply" was.
+  group('the reply line reads as a link', () {
+    final replied = SuperTabThread.fromJson({
+      'id': 'm1',
+      'replies': 3,
+      'lastSequence': 4,
+      'lastAt': DateTime.now()
+          .subtract(const Duration(minutes: 3))
+          .toUtc()
+          .toIso8601String(),
+      'authors': [
+        {'kind': 'agent', 'id': 'agent-lead', 'name': 'Lead'},
+      ],
+      'people': <String>[],
+    });
+
+    Future<void> line(WidgetTester tester, {bool fresh = false}) =>
+        tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SwarmThreadLine(
+                thread: replied,
+                faces: swarmThreadFaces(swarm(), replied),
+                fresh: fresh,
+                onOpen: () {},
+              ),
+            ),
+          ),
+        );
+
+    Color countColor(WidgetTester tester) => tester
+        .widget<Text>(find.byKey(const ValueKey('swarm-thread-count-m1')))
+        .style!
+        .color!;
+
+    for (final brightness in Brightness.values) {
+      testWidgets('the count is the strong blue in ${brightness.name}', (
+        tester,
+      ) async {
+        final before = AppTheme.brightness.value;
+        addTearDown(() => AppTheme.brightness.value = before);
+        AppTheme.brightness.value = brightness;
+        await line(tester);
+        expect(countColor(tester), AppCard.accentStrong);
+        expect(
+          countColor(tester),
+          brightness == Brightness.dark
+              ? const Color(0xFF5C7CFF)
+              : const Color(0xFF1E40AF),
+        );
+      });
+    }
+
+    testWidgets('read: when the last reply came, no New', (tester) async {
+      await line(tester);
+      expect(find.text('3 replies'), findsOneWidget);
+      expect(find.text('Last reply 3 min ago'), findsOneWidget);
+      expect(find.byKey(const ValueKey('swarm-thread-new-m1')), findsNothing);
+      expect(find.byType(SwarmNewPill), findsNothing);
+      expect(
+        find.bySemanticsLabel('3 replies, Last reply 3 min ago'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('unread replies: a filled New in place of when, said aloud', (
+      tester,
+    ) async {
+      await line(tester, fresh: true);
+      final pill = find.byKey(const ValueKey('swarm-thread-new-m1'));
+      expect(pill, findsOneWidget);
+      expect(
+        find.descendant(of: pill, matching: find.text('New')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Last reply'), findsNothing);
+      expect(find.bySemanticsLabel('3 replies, new replies'), findsOneWidget);
+      // It follows the count on the same line.
+      final count = find.byKey(const ValueKey('swarm-thread-count-m1'));
+      expect(
+        tester.getTopLeft(pill).dx,
+        greaterThan(tester.getTopRight(count).dx),
+      );
+      expect(
+        (tester.getCenter(pill).dy - tester.getCenter(count).dy).abs(),
+        lessThan(2),
+      );
+      final shape = tester.widget<Container>(
+        find.descendant(of: pill, matching: find.byType(Container)).first,
+      );
+      expect((shape.decoration! as ShapeDecoration).color, AppPalette.accent);
+    });
   });
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
@@ -10,7 +11,6 @@ import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_thread_page.dart';
-import 'package:harness_mobile/swarm/swarm_threads_page.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_activity_fixture.dart';
@@ -98,26 +98,19 @@ void main() {
     }
   });
 
-  testWidgets("the tab's top bar has Threads before You, where Home's Threads "
-      'tile was (anh Dee, 2026-11-04); a tap opens the followed threads', (
-    tester,
-  ) async {
+  testWidgets("the tab's top bar has You alone: Threads moved back to Home "
+      'as a named row, as an unlabelled icon here was missed (anh Dee, '
+      '2026-11-06)', (tester) async {
     await pump(
       tester,
       activityBackend(page: activityPage),
       home: const Scaffold(body: SwarmActivityView()),
     );
 
-    final threads = tester.getRect(key('swarm-activity-threads'));
-    final you = tester.getRect(key('swarm-you-button'));
-    expect(threads.right, lessThanOrEqualTo(you.left));
-    expect(threads.center.dy, closeTo(you.center.dy, 0.5));
-    expect(threads.height, greaterThanOrEqualTo(44));
-    expect(find.bySemanticsLabel('Threads'), findsWidgets);
-
-    await tester.tap(key('swarm-activity-threads'));
-    await tester.pumpAndSettle();
-    expect(find.byType(SwarmThreadsPage), findsOneWidget);
+    expect(key('swarm-activity-threads'), findsNothing);
+    expect(key('swarm-you-button'), findsOneWidget);
+    expect(find.bySemanticsLabel('Threads'), findsNothing);
+    expect(find.byIcon(LucideIcons.messagesSquare300), findsNothing);
   });
 
   testWidgets('Needs you: where and who over the ask, Approve on a decision, '

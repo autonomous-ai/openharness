@@ -1526,8 +1526,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                       child: ListenableBuilder(
                         // Message links can target any conversation in the
                         // Swarm, not only this chat. Rebuild when that index
-                        // changes even if this chat's messages did not.
-                        listenable: Listenable.merge([c, session.inbox, _held]),
+                        // changes even if this chat's messages did not. The
+                        // followed threads say which thread lines are New:
+                        // read while the chat shows them ([SwarmThreads]).
+                        listenable: Listenable.merge([
+                          c,
+                          session.inbox,
+                          _held,
+                          ?session.inbox.threads(widget.swarmId),
+                        ]),
                         builder: (context, _) =>
                             _messages(context, session, c, view, tty),
                       ),
@@ -2113,6 +2120,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       }
     }
     final snapshot = c.reader.snapshot;
+    // The threads the person follows here: which thread lines say New.
+    final following = session.inbox.threads(widget.swarmId);
     final (:stream, :answered, rows: messages) = _drawnOf(c);
     // The notes hidden are part of what the rows were made from: a warning
     // goes once its agent's prompt is answered, with no new message.
@@ -2190,6 +2199,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final faces = line == null
               ? const <SwarmThreadFace>[]
               : swarmThreadFaces(snapshot, line);
+          // A thread the person follows with replies they have not read.
+          final fresh =
+              line != null &&
+              line.replies > 0 &&
+              (following?.hasNewReplies(m.conversationId, m.id) ?? false);
           final name = _nameOf(c, m);
           final look = _lookOf(c, m);
           final pm = swarmIsPmLine(c.reader, m);
@@ -2258,6 +2272,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               answerIn,
               view.project,
               line,
+              fresh,
               [
                 for (final who in faces)
                   '${who.id}:${who.name}:${who.pm}:${swarmLookKey(who.look)}',
@@ -2328,6 +2343,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                       key: ValueKey('swarm-thread-line-${m.id}'),
                       thread: line,
                       faces: faces,
+                      fresh: fresh,
                       onOpen: () => _openThread(c, m.id),
                     ),
               onAuthor: m.fromAgent

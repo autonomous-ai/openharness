@@ -2500,6 +2500,65 @@ void main() {
       expect(key('swarm-thread-line-m4'), findsNothing, reason: 'no replies');
     });
 
+    testWidgets('a followed thread with replies the person has not read says '
+        'New on its line until they read past the newest (anh Dee, '
+        '2026-11-06)', (tester) async {
+      final fake = threaded();
+      fake.routes['/api/super-tabs/$tab/threads'] = (_) => {
+        'unread': [
+          {
+            'conversationId': 'g1',
+            'rootId': 'm1',
+            'root': message('m1', 1, author: 'agent-lead', text: root),
+            'lastReplyAt': DateTime.now().toUtc().toIso8601String(),
+            'lastReplySequence': 3,
+            'unreadReplies': 2,
+            'replies': 2,
+          },
+        ],
+        'read': <Object>[],
+        'more': false,
+      };
+      final host = await pump(tester, fake);
+
+      final under = key('swarm-thread-line-m1');
+      expect(key('swarm-thread-new-m1'), findsOneWidget);
+      expect(
+        find.descendant(of: under, matching: find.text('New')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: under, matching: find.textContaining('Last reply')),
+        findsNothing,
+      );
+
+      host.session!.inbox.reader(tab)!.readMarks!.markThreadRead('g1', 'm1', 3);
+      await tester.pump();
+
+      expect(key('swarm-thread-new-m1'), findsNothing);
+      expect(
+        find.descendant(of: under, matching: find.text('Last reply 5 min ago')),
+        findsOneWidget,
+      );
+      // The mark's send and the list's quiet gap run out.
+      await tester.pump(const Duration(minutes: 2));
+    });
+
+    testWidgets('a thread the person does not follow never says New, though '
+        'its replies are newer than any mark', (tester) async {
+      final fake = threaded();
+      fake.routes['/api/super-tabs/$tab/threads'] = (_) => {
+        'unread': <Object>[],
+        'read': <Object>[],
+        'more': false,
+      };
+      await pump(tester, fake);
+
+      expect(key('swarm-thread-line-m1'), findsOneWidget);
+      expect(key('swarm-thread-new-m1'), findsNothing);
+      expect(find.text('Last reply 5 min ago'), findsOneWidget);
+    });
+
     testWidgets('a tap on the line opens the thread: the root, how many '
         'replies, each reply in order, and a box to reply in', (tester) async {
       final fake = threaded();

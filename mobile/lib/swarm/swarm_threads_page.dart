@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/fzf.dart' show fzfAge;
@@ -76,7 +77,7 @@ class _SwarmThreadsPageState extends State<SwarmThreadsPage> {
     final seen = session != null && !OutOfSight.of(context);
     if (!identical(session, _session)) {
       _see(false);
-      _threads?.dispose();
+      if (_threads case final old?) _afterFrame(old.dispose);
       _session = session;
       _threads = session == null
           ? null
@@ -96,15 +97,31 @@ class _SwarmThreadsPageState extends State<SwarmThreadsPage> {
       threads.opened();
       unawaited(session.inbox.refresh());
     } else {
-      threads.closed();
-      session.leave();
+      _afterFrame(() {
+        threads.closed();
+        session.leave();
+      });
+    }
+  }
+
+  /// [then] at once, or after the frame while the tree is being built or
+  /// torn down: Home's Threads row and a chat's thread lines listen to the
+  /// same threads, and hearing of the close then would rebuild them while
+  /// the tree is locked. Callbacks run in the order given, so the threads
+  /// are closed before they are disposed.
+  static void _afterFrame(VoidCallback then) {
+    final scheduler = SchedulerBinding.instance;
+    if (scheduler.schedulerPhase == SchedulerPhase.persistentCallbacks) {
+      scheduler.addPostFrameCallback((_) => then());
+    } else {
+      then();
     }
   }
 
   @override
   void dispose() {
     _see(false);
-    _threads?.dispose();
+    if (_threads case final threads?) _afterFrame(threads.dispose);
     super.dispose();
   }
 

@@ -12,15 +12,19 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/swarm/swarm_activity_page.dart';
+import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
+import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_threads_page.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
-/// Review screenshots of Threads on the phone: Home's Threads row and the
-/// Threads page, at 390 wide in both phone themes, with the app's own fonts,
-/// from made-up data only, to the folder `SWARM_THREADS_SHOTS` names.
+/// Review screenshots of Threads on the phone: Home's Threads row (new
+/// replies, then read), Activity's top bar, the Threads page and a chat whose
+/// followed thread says New, at 390 wide in both phone themes, with the app's
+/// own fonts, from made-up data only, to the folder `SWARM_THREADS_SHOTS`
+/// names.
 final shots = Platform.environment['SWARM_THREADS_SHOTS'];
 void main() {
   setUpAll(() async {
@@ -127,7 +131,7 @@ void main() {
           head: headData(name: 'autonomous.ai'),
           groups: [
             groupData(leadChat, title: 'Mobile', lastMessageSequence: 9),
-            groupData('fix-login', title: 'fix-login', lastMessageSequence: 20),
+            groupData('fix-login', title: 'fix-login', lastMessageSequence: 21),
             groupData('api', title: 'api', lastMessageSequence: 20),
           ],
           agents: [
@@ -135,7 +139,7 @@ void main() {
             agent('agent-builder', displayName: 'Nova'),
           ],
           derived: {
-            'readMarks': {leadChat: 9, 'fix-login': 20, 'api': 20},
+            'readMarks': {leadChat: 9, 'fix-login': 21, 'api': 20},
             'mentionsWaiting': 1,
           },
         ),
@@ -210,6 +214,44 @@ void main() {
         ),
       ],
     };
+    fake.routes['$path/conversations/fix-login/messages'] = (_) => {
+      'messages': [
+        {
+          ...reply(
+            'm4',
+            21,
+            who('agent-lead', 'River'),
+            'Pushed the retry. Login is green on CI.',
+          ),
+          'thread': 'm4',
+        },
+        {
+          ...reply(
+            'm1',
+            1,
+            who('agent-builder', 'Nova'),
+            'Can we retry the token refresh once before signing out?',
+          ),
+          'createdAt': now
+              .subtract(const Duration(minutes: 40))
+              .toIso8601String(),
+        },
+      ],
+      'next': null,
+      'threads': [
+        {
+          'id': 'm1',
+          'replies': 5,
+          'lastSequence': 20,
+          'lastAt': now.subtract(const Duration(minutes: 2)).toIso8601String(),
+          'authors': [
+            who('agent-builder', 'Nova'),
+            who('agent-lead', 'River'),
+          ],
+          'people': <String>[],
+        },
+      ],
+    };
     fake.routes['$path/conversations/$leadChat/messages'] = (_) => {
       'messages': <Object>[],
       'next': null,
@@ -217,7 +259,7 @@ void main() {
     return fake;
   }
 
-  testWidgets('Activity\'s Threads button and the Threads page', (
+  testWidgets('Home\'s Threads row, Activity, the Threads page and New', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
@@ -248,6 +290,47 @@ void main() {
         features: features,
         readMarks: MemoryKeyValueStore(),
       )..foreground = false;
+      // Home names Threads in a row of its own (anh Dee, 2026-11-06:
+      // Activity's unlabelled button was missed).
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: buildAppTheme(brightness: brightness),
+            key: const ValueKey('home'),
+            builder: (_, child) => SwarmScope(notifier: host, child: child!),
+            home: const SwarmPage(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('swarm-threads-row')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('swarm-threads-unread')),
+        findsOneWidget,
+      );
+      await capture('home');
+
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: buildAppTheme(brightness: brightness),
+            key: const ValueKey('chat'),
+            builder: (_, child) => SwarmScope(notifier: host, child: child!),
+            home: const SwarmConversationPage(
+              swarmId: tab,
+              conversationId: 'fix-login',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('swarm-thread-new-m1')), findsOneWidget);
+      await capture('chat-new');
+
       await tester.pumpWidget(
         RepaintBoundary(
           key: boundary,
@@ -262,11 +345,9 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      // Threads is in Activity's top bar since Home lost its tiles
-      // (anh Dee, 2026-11-04).
       expect(
         find.byKey(const ValueKey('swarm-activity-threads')),
-        findsOneWidget,
+        findsNothing,
       );
       await capture('activity');
 
@@ -285,6 +366,47 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('2 new replies'), findsOneWidget);
       await capture('page');
+
+      // Read past the newest reply: the row goes quiet, the chat's line
+      // says when the last came.
+      host.session!.inbox
+          .reader(tab)!
+          .readMarks!
+          .markThreadRead('fix-login', 'm1', 20);
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: buildAppTheme(brightness: brightness),
+            key: const ValueKey('home-read'),
+            builder: (_, child) => SwarmScope(notifier: host, child: child!),
+            home: const SwarmPage(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('swarm-threads-unread')), findsNothing);
+      await capture('home-read');
+
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: buildAppTheme(brightness: brightness),
+            key: const ValueKey('chat-read'),
+            builder: (_, child) => SwarmScope(notifier: host, child: child!),
+            home: const SwarmConversationPage(
+              swarmId: tab,
+              conversationId: 'fix-login',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('swarm-thread-new-m1')), findsNothing);
+      await capture('chat-read');
 
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 30));

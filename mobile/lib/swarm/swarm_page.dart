@@ -34,6 +34,8 @@ import 'swarm_session.dart';
 import 'swarm_start.dart';
 import 'swarm_style.dart';
 import 'swarm_tabs.dart';
+import 'swarm_threads.dart' show SwarmThreadsMerge;
+import 'swarm_threads_page.dart' show openSwarmThreads, swarmThreadsOf;
 import 'swarm_unread.dart';
 import 'swarm_you_page.dart' show SwarmYouButton;
 
@@ -70,7 +72,10 @@ bool swarmHomeListed(SwarmInbox inbox, String swarmId, String projectId) {
 /// is better), in place of three tiles; then the projects they pinned on this
 /// phone, one line each, then the others by their latest activity, those
 /// quiet for a day folded under "Other projects" ([swarmHomeLists]), Sort and
-/// filter at the right of their first caption. Every Swarm's, or
+/// filter at the right of their first caption. Threads sits between the
+/// need-you line and the projects, one row, bright with a dot while a followed
+/// thread has new replies ([SwarmHomeThreadsRow], anh Dee 2026-11-06: Threads
+/// was hidden). Every Swarm's, or
 /// the one picked ([SwarmHomePrefs.swarmId]). New message's + is in the top
 /// bar next to Search ([showSwarmNewMessage]), so nothing floats over the
 /// list (anh Dee, 2026-11-04). What needs the person, and the invitations to a
@@ -101,6 +106,10 @@ class _SwarmPageState extends State<SwarmPage> {
   /// Swarm screen meanwhile — a notice still tells what arrives — and draws
   /// nothing new. Shown again, it reads the Swarms as on any return to Home.
   bool _hidden = false;
+
+  /// Threads' row's threads, over the Swarms Home shows, while it is in
+  /// sight: out of sight, it asks for none.
+  SwarmThreadsMerge? _threads;
 
   /// Each project's "2m" moves on with the clock: Home is drawn again every
   /// minute while it is in sight.
@@ -166,7 +175,14 @@ class _SwarmPageState extends State<SwarmPage> {
     _hidden = hidden;
     _tick?.cancel();
     _tick = null;
+    _threads?.dispose();
+    _threads = null;
     if (hidden || session == null) return;
+    _threads = swarmThreadsOf(
+      session,
+      shown: () => _shown(session),
+      changed: session.home,
+    );
     session.enter();
     unawaited(session.inbox.refresh());
     _tick = Timer.periodic(const Duration(minutes: 1), (_) {
@@ -178,6 +194,7 @@ class _SwarmPageState extends State<SwarmPage> {
   void dispose() {
     _lifecycle.dispose();
     _tick?.cancel();
+    _threads?.dispose();
     if (!_hidden) _session?.leave();
     super.dispose();
   }
@@ -513,10 +530,49 @@ class _SwarmPageState extends State<SwarmPage> {
         : null;
     final now = widget.now();
     final needs = _needLine(context, session, shown, picked, now);
+    final threads = _threadsRow(context, session, shown, picked, top: needs);
     return [
       ?needs,
-      ..._projects(context, session, shown, now, first: needs == null),
+      ?threads,
+      ..._projects(
+        context,
+        session,
+        shown,
+        now,
+        first: needs == null && threads == null,
+      ),
     ];
+  }
+
+  /// Threads, one row in its own card under the need-you line ([top]), or
+  /// first: the followed threads of the Swarms shown, [picked]'s alone when
+  /// Home shows that one. None while the Swarms are still to come, or there
+  /// is none to show.
+  Widget? _threadsRow(
+    BuildContext context,
+    SwarmSession session,
+    List<SwarmListing> shown,
+    String? picked, {
+    required Widget? top,
+  }) {
+    final threads = _threads;
+    if (threads == null ||
+        shown.isEmpty ||
+        swarmHomeListing(session.inbox)) {
+      return null;
+    }
+    return Padding(
+      padding: EdgeInsets.only(top: top == null ? AppSpace.s : AppSpace.xs),
+      child: SwarmGroup(
+        children: [
+          SwarmHomeThreadsRow(
+            key: const ValueKey('swarm-threads-row'),
+            threads: threads,
+            onTap: () => openSwarmThreads(context, swarmId: picked),
+          ),
+        ],
+      ),
+    );
   }
 
   /// The need-you line over the projects: what needs the person in the

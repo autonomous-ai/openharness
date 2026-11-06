@@ -9,7 +9,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
-import 'package:harness_mobile/shared/theme/app_theme.dart' show AppFont;
+import 'package:harness_mobile/shared/theme/app_theme.dart'
+    show AppFont, AppPalette;
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_home_list.dart';
@@ -29,6 +30,7 @@ import 'package:harness_mobile/swarm/swarm_row.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
+import 'package:harness_mobile/swarm/swarm_threads_page.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import '../voice_fakes.dart';
@@ -578,6 +580,141 @@ void main() {
     });
   });
 
+  group('the Threads row (anh Dee, 2026-11-06: Threads was hidden)', () {
+    /// One followed thread of chat g1, as the server lists it.
+    Map<String, dynamic> followed(String root, {int last = 9, int unread = 0}) =>
+        {
+          'conversationId': 'g1',
+          'rootId': root,
+          'root': {
+            'id': root,
+            'sequence': 1,
+            'author': {'kind': 'agent', 'id': 'agent-lead', 'name': 'River'},
+            'text': 'Can we retry the refresh?',
+            'createdAt': '2026-10-27T00:00:00.000Z',
+          },
+          'lastReplyAt': '2026-10-27T01:00:00.000Z',
+          'lastReplySequence': last,
+          'unreadReplies': unread,
+          'replies': 3,
+        };
+
+    /// [backend] whose followed threads are [unread] and [read].
+    FakeSwarm withThreads({
+      List<Map<String, dynamic>> unread = const [],
+      List<Map<String, dynamic>> read = const [],
+    }) => backend()
+      ..routes['/api/super-tabs/$tab/threads'] = (_) => {
+        'unread': unread,
+        'read': read,
+        'more': false,
+      };
+
+    Text name(WidgetTester tester) =>
+        tester.widget<Text>(key('swarm-threads-row-name'));
+
+    testWidgets('one named row between the need-you line and the projects, '
+        'a thumb tall; quiet while no followed thread has new replies', (
+      tester,
+    ) async {
+      await pump(tester, withThreads(read: [followed('m1')]));
+
+      expect(key('swarm-threads-row'), findsOneWidget);
+      expect(
+        y(tester, 'swarm-need-line'),
+        lessThan(y(tester, 'swarm-threads-row')),
+      );
+      expect(
+        y(tester, 'swarm-threads-row'),
+        lessThan(y(tester, 'swarm-project-$tab-$project')),
+      );
+      expect(
+        tester.getSize(key('swarm-threads-row')).height,
+        greaterThanOrEqualTo(44),
+      );
+      expect(name(tester).data, 'Threads');
+      expect(name(tester).style?.color, AppPalette.textSecondary);
+      expect(key('swarm-threads-unread'), findsNothing);
+      expect(find.bySemanticsLabel('Threads'), findsOneWidget);
+      expect(
+        inside('swarm-threads-row', find.textContaining(RegExp(r'\d'))),
+        findsNothing,
+        reason: 'no count: tags are on the project row and in Activity',
+      );
+    });
+
+    testWidgets('bright with a dot while a followed thread has new replies; '
+        'a tap opens Threads', (tester) async {
+      await pump(
+        tester,
+        withThreads(unread: [followed('m1', unread: 2)]),
+      );
+
+      expect(key('swarm-threads-unread'), findsOneWidget);
+      expect(name(tester).style?.color, AppPalette.textPrimary);
+      expect(name(tester).style?.fontWeight, AppFont.semibold);
+      expect(find.bySemanticsLabel('Threads, new replies'), findsOneWidget);
+
+      await tester.tap(key('swarm-threads-row'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmThreadsPage), findsOneWidget);
+    });
+
+    testWidgets('back from Threads to Home: the row, still listening, is '
+        'told after the page goes, never while the tree is locked', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        withThreads(unread: [followed('m1', unread: 2)]),
+      );
+      await tester.tap(key('swarm-threads-row'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmThreadsPage), findsOneWidget);
+
+      await tester.tap(find.bySemanticsLabel('Back'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(SwarmThreadsPage), findsNothing);
+      expect(key('swarm-threads-row'), findsOneWidget);
+      await tester.pump(const Duration(minutes: 2));
+    });
+
+    testWidgets('the dot goes as soon as the phone reads the thread past its '
+        'newest reply, with no new read of the list', (tester) async {
+      final fake = withThreads(unread: [followed('m1', last: 9, unread: 2)]);
+      final host = await pump(tester, fake);
+      expect(key('swarm-threads-unread'), findsOneWidget);
+      final reads = fake.paths
+          .where((p) => p == '/api/super-tabs/$tab/threads')
+          .length;
+
+      host.session!.inbox.reader(tab)!.readMarks!.markThreadRead('g1', 'm1', 9);
+      await tester.pump();
+
+      expect(key('swarm-threads-unread'), findsNothing);
+      expect(name(tester).style?.color, AppPalette.textSecondary);
+      expect(
+        fake.paths.where((p) => p == '/api/super-tabs/$tab/threads').length,
+        reads,
+      );
+      // The mark's send and the list's quiet gap run out.
+      await tester.pump(const Duration(minutes: 2));
+    });
+
+    testWidgets('none while the Swarms are still to come', (tester) async {
+      final fake = backend();
+      final list = Completer<Object?>();
+      fake.routes['/api/super-tabs/list'] = (_) => list.future;
+      await pump(tester, fake, settle: false);
+
+      expect(key('swarm-threads-row'), findsNothing);
+      list.complete({'tabs': <Object>[], 'next': null});
+      await tester.pumpAndSettle();
+    });
+  });
+
   group('the need-you line', () {
     /// The app hidden, then shown again [later].
     Future<void> away(
@@ -644,8 +781,12 @@ void main() {
 
       expect(key('swarm-home-tiles'), findsNothing);
       expect(key('swarm-away'), findsNothing);
-      expect(key('swarm-threads-row'), findsNothing);
       expect(key('swarm-agents-tile'), findsNothing);
+      expect(
+        key('swarm-threads-row'),
+        findsOneWidget,
+        reason: 'Threads is back as one named row, no tile (anh Dee, 11-06)',
+      );
       expect(line(tester), '3 need you', reason: 'nothing done yet');
 
       final left = now;
@@ -668,6 +809,10 @@ void main() {
       );
       expect(
         y(tester, 'swarm-need-line'),
+        lessThan(y(tester, 'swarm-threads-row')),
+      );
+      expect(
+        y(tester, 'swarm-threads-row'),
         lessThan(y(tester, 'swarm-project-$tab-$project')),
       );
       expect(

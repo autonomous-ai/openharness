@@ -138,9 +138,34 @@ class SwarmThreads extends ChangeNotifier {
 
   String get _path => '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}';
 
-  /// Whether a followed thread has replies the reader has not read: the
-  /// Threads row is bold.
-  bool get threadsUnread => unread.isNotEmpty;
+  /// Whether a followed thread has replies the reader has not read: Home's
+  /// Threads row is bright, with a dot. A thread read on this phone since the
+  /// server's list goes at once ([_stillUnread]), not at the next read.
+  bool get threadsUnread => unread.any(_stillUnread);
+
+  /// Whether the followed thread of root [rootId] in [conversationId] has
+  /// replies the reader has not read: its line in the chat says New. On the
+  /// server's list alone, as Home's Threads row, so a thread the reader does
+  /// not follow never says it; less what this phone has read since.
+  bool hasNewReplies(String conversationId, String rootId) => unread.any(
+    (t) =>
+        t.conversationId == conversationId &&
+        t.rootId == rootId &&
+        _stillUnread(t),
+  );
+
+  /// [thread], listed unread by the server, is not read past its newest
+  /// reply since, on any device or this phone. The server's word stands
+  /// while the phone's marks are not back, or for a row that does not say
+  /// its newest reply (an older server).
+  bool _stillUnread(SwarmFollowedThread thread) {
+    if (thread.lastReplySequence <= 0) return true;
+    final through = reader.readMarks?.threadThrough(
+      thread.conversationId,
+      thread.rootId,
+    );
+    return through == null || thread.lastReplySequence > through;
+  }
 
   /// The Threads row's number: tags of the reader inside threads they have
   /// not read past, in chats this Swarm lists for them. A muted chat's

@@ -578,4 +578,126 @@ void main() {
       expect(r.threads.threadMentions, 1);
     });
   });
+
+  group('new replies, less what the phone read since (Home\'s Threads row, '
+      'the chat\'s New)', () {
+    test('a thread read on this phone past its newest reply stops counting at '
+        'once, before the server lists it again', () async {
+      final r = rig();
+      r.swarm.routes[threadsRoute] = (_) => {
+        'unread': [row('g1', 'm1', last: 6, unread: 2)],
+        'read': [row('g2', 'm5', follow: true)],
+      };
+      await show(r.threads);
+      await r.reader.refresh();
+      await settle();
+      final reads = threadReads(r.swarm);
+
+      expect(r.threads.threadsUnread, isTrue);
+      expect(r.threads.hasNewReplies('g1', 'm1'), isTrue);
+
+      var told = 0;
+      r.threads.addListener(() => told++);
+      r.marks.markThreadRead('g1', 'm1', 5);
+      expect(
+        r.threads.hasNewReplies('g1', 'm1'),
+        isTrue,
+        reason: 'read short of its newest reply',
+      );
+
+      r.marks.markThreadRead('g1', 'm1', 6);
+      expect(r.threads.hasNewReplies('g1', 'm1'), isFalse);
+      expect(r.threads.threadsUnread, isFalse);
+      expect(told, greaterThan(0), reason: 'the row and chat are told');
+      expect(
+        threadReads(r.swarm),
+        reads,
+        reason: 'no read of the list was needed',
+      );
+    });
+
+    test('only threads the server lists unread: a followed thread already '
+        'read, or one the person does not follow, is never new', () async {
+      final r = rig();
+      r.swarm.routes[threadsRoute] = (_) => {
+        'unread': [row('g1', 'm1', last: 6, unread: 1)],
+        'read': [row('g2', 'm5', follow: true, last: 8)],
+      };
+      await show(r.threads);
+      await r.reader.refresh();
+      await settle();
+
+      expect(r.threads.hasNewReplies('g2', 'm5'), isFalse, reason: 'read');
+      expect(
+        r.threads.hasNewReplies('g1', 'm7'),
+        isFalse,
+        reason: 'not followed: not listed',
+      );
+      expect(
+        r.threads.hasNewReplies('g2', 'm1'),
+        isFalse,
+        reason: 'the same root id in another chat is another thread',
+      );
+    });
+
+    test('read on another device since: the Swarm\'s thread mark past the '
+        'newest reply counts it read', () async {
+      final r = rig(
+        threadMarks: {
+          'g1': {'m1': 6},
+        },
+      );
+      // The list was read before the other device's mark came.
+      r.swarm.routes[threadsRoute] = (_) => {
+        'unread': [row('g1', 'm1', last: 6, unread: 2)],
+        'read': [],
+      };
+      await show(r.threads);
+      await r.reader.refresh();
+      await settle();
+
+      expect(r.threads.hasNewReplies('g1', 'm1'), isFalse);
+      expect(r.threads.threadsUnread, isFalse);
+    });
+
+    test('the server\'s word stands for a row that does not say its newest '
+        'reply (an older server)', () async {
+      final r = rig(
+        threadMarks: {
+          'g1': {'m1': 9},
+        },
+      );
+      r.swarm.routes[threadsRoute] = (_) => {
+        'unread': [row('g1', 'm1', last: 0, unread: 1)],
+        'read': [],
+      };
+      await show(r.threads);
+      await r.reader.refresh();
+      await settle();
+
+      expect(r.threads.hasNewReplies('g1', 'm1'), isTrue);
+      expect(r.threads.threadsUnread, isTrue);
+    });
+
+    test('nothing is new before the list is read, or once access is lost',
+        () async {
+      final r = rig();
+      r.swarm.routes[threadsRoute] = (_) => {
+        'unread': [row('g1', 'm1', last: 6, unread: 1)],
+        'read': [],
+      };
+      expect(r.threads.hasNewReplies('g1', 'm1'), isFalse);
+      expect(r.threads.threadsUnread, isFalse);
+
+      await show(r.threads);
+      await r.reader.refresh();
+      await settle();
+      expect(r.threads.hasNewReplies('g1', 'm1'), isTrue);
+
+      r.reader.revoke();
+      await settle();
+      expect(r.threads.hasNewReplies('g1', 'm1'), isFalse);
+      expect(r.threads.threadsUnread, isFalse);
+    });
+  });
 }

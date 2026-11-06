@@ -15,6 +15,7 @@ import 'swarm_home_list.dart';
 import 'swarm_inbox.dart';
 import 'swarm_row.dart';
 import 'swarm_style.dart';
+import 'swarm_threads.dart' show SwarmThreadsMerge;
 import 'team_glance.dart';
 
 /// The rows of Swarm Home: a project with how many people read it, how many
@@ -241,6 +242,86 @@ class SwarmHomeProjectRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Threads on Home, over the projects: the threads the person follows in the
+/// Swarms Home shows ([threads]), one line as a project's row draws it, its
+/// glyph in the # mark's place (anh Dee, 2026-11-06: Threads was hidden as an
+/// unlabelled icon in Activity's top bar). Bright with a dot while one has
+/// replies the person has not read, as Slack marks a thread reply with a dot
+/// and keeps numbers for what calls on the person; quiet otherwise. No
+/// count: the tags in a thread are counted on its project's row and in
+/// Activity already. A tap opens Threads ([onTap]).
+class SwarmHomeThreadsRow extends StatelessWidget {
+  const SwarmHomeThreadsRow({
+    super.key,
+    required this.threads,
+    required this.onTap,
+  });
+
+  final SwarmThreadsMerge threads;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: threads,
+    builder: (context, _) {
+      AppTheme.watch(context);
+      final unread = threads.unread;
+      final ink = unread ? AppPalette.textPrimary : AppPalette.textSecondary;
+      return Semantics(
+        button: true,
+        label: unread ? 'Threads, new replies' : 'Threads',
+        excludeSemantics: true,
+        child: _Tap(
+          onTap: onTap,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              minHeight: SwarmHomeProjectRow.height,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpace.l,
+                vertical: AppSpace.xs,
+              ),
+              child: Row(
+                children: [
+                  Icon(LucideIcons.messagesSquare300, size: 18, color: ink),
+                  const SizedBox(width: AppSpace.s),
+                  Expanded(
+                    child: Text(
+                      'Threads',
+                      key: const ValueKey('swarm-threads-row-name'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppType.label(
+                        color: ink,
+                        height: 1.3,
+                        fontWeight: unread ? AppFont.semibold : null,
+                      ),
+                    ),
+                  ),
+                  if (unread) ...[
+                    const SizedBox(width: 12),
+                    SizedBox.square(
+                      key: const ValueKey('swarm-threads-unread'),
+                      dimension: AppSpace.s,
+                      child: DecoratedBox(
+                        decoration: ShapeDecoration(
+                          color: AppPalette.textPrimary,
+                          shape: const CircleBorder(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
 }
 
 /// The projects quiet for a day, folded in one row at the foot of Projects,
