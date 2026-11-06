@@ -70,6 +70,18 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       if (buddy) machine(buddy.machineId)
       break
     }
+    case 'task.suggest': case 'task.approve': case 'task.reject': {
+      head()
+      const card = before.conversations.find(c => c.id === command.conversationId)
+      member(card?.taskApproval?.personId)
+      agent(card?.taskApproval?.suggestedAgentId)
+      leadCheck(card && groupProject(before, card).id)
+      break
+    }
+    case 'proposal.close':
+      head()
+      leadCheck(command.projectId)
+      break
     case 'proposal.create':
       head()
       group(leadGroupOf(command.projectId))
@@ -145,6 +157,8 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       group(leadGroupOf(projectId))
       group(command.reviewOf)
       member(command.requesterId)
+      for (const created of effects.state.conversations.filter(c => !before.conversations.some(b => b.id === c.id))) member(created.requesterId)
+      if (command.proposalMessageId) head()
       break
     }
     case 'conversation.merged':
