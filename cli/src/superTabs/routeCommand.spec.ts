@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { PM_ACCOUNT_NOTE } from './pmAccounts.js'
 import { ELSEWHERE, heldByStarts, heldLocalModels, leftOut, localProbes, NO_SWARM_AGENTS_ON, noteClause, offlineModels, routeAnswer, routeTask, routingSection, servedModels, STALL_RETRY_MS, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
-import { admission, quotaOf, RELAYED_QUOTA, USED_UP_WINDOW } from './capacity.js'
+import { admission, quotaOf, USED_UP_WINDOW } from './capacity.js'
 import { NONE_COVERS, OTHER_REPOSITORY, type Catalog, type Probe, type RoutePlugin } from './route.js'
 import { MAKER_TIMEOUT_MS, type PluginInput, type PluginMaker } from './routePlugins.js'
 import { placedHeavyWork } from './machineFit.js'
@@ -1817,12 +1817,12 @@ describe('routing contributed capacity', () => {
       expect(candidates.map(c => c.title)).toContain('New agent · Claude opus high · MacBook Pro')
     })
 
-    // 2026-10-30 overnight: Codex in Tony's team account was never offered for reviews. The account spends Tony's own
-    // subscription through the relay, so it reads its quota as unknown, and the route dropped every unknown candidate while
-    // another machine's quota fit. The Mac's own reading is that subscription's.
-    describe('a team account that spends its Mac\'s subscription through the relay', () => {
-      const relayed = (why = RELAYED_QUOTA) => ({ ...team(), observation: { ...team().observation, quotas: [{ engine: 'claude', known: false, windows: [] }],
-        quotaReasons: { claude: why } } })
+    // 2026-10-30 overnight: Codex in Tony's team account was never offered for reviews: its quota read as unknown, and the
+    // route dropped every unknown candidate while another machine's quota fit. Its allowance is its own CLIs' report now
+    // (#4137): nothing spends the Mac's subscription, so nothing borrows the Mac's reading.
+    describe('a team account whose allowance is unknown', () => {
+      const relayed = (why = 'No subscription sign-in is stored on this machine.') => ({ ...team(), observation: { ...team().observation,
+        quotas: [{ engine: 'claude', known: false, windows: [] }], quotaReasons: { claude: why } } })
       // Full readings, both windows, as every Claude account reports them.
       const full = <T extends ReturnType<typeof healthy>>(pool: T): T => ({ ...pool, observation: { ...pool.observation, quotas: [{ engine: 'claude', known: true,
         windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3_600_000 }, { name: 'weekly', usedPercent: 30, resetsAt: Date.now() + 4 * 86_400_000 }] }] } })
@@ -1839,12 +1839,11 @@ describe('routing contributed capacity', () => {
         return { answer: await routeTask(input, s, where, opener()), s }
       }
 
-      it('reads the Mac\'s quota for it, on the Mac\'s account, and says so in its line', async () => {
-        const { s } = await routeWith([fullMac(), relayed(), other()])
+      it('never reads the Mac\'s quota for it, even from a daemon that still says the account spends the Mac\'s subscription', async () => {
+        const { s } = await routeWith([fullMac(), relayed("This account runs on its owner's subscription; its allowance is read on the owner's machine."), other()])
         const row = fit(s, 'm1-team')
-        expect(row).toMatchObject({ fit: { status: 'fits', account: 'm1:claude' } })
-        expect(row!.label).toContain('quota read on MacBook Pro, whose subscription this account spends')
-        expect(row!.label).toContain('5-hour 80% left')
+        expect(row).toMatchObject({ fit: { status: 'unknown' } })
+        expect(row!.label).not.toContain('quota read on')
         expect(recorded(s).command.decision.excluded).not.toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('MacBook Pro') })]))
       })
 
@@ -1867,15 +1866,6 @@ describe('routing contributed capacity', () => {
         expect(none.answer.leftOut).toEqual(expect.arrayContaining([{ machine: 'MacBook Pro', reasons: [reason] }]))
         // A machine with a row offered is not left out, though its other rows were.
         expect((await routeWith([fullMac(), relayed(), other()])).answer.leftOut).toEqual([])
-      })
-
-      it('borrows nothing from a Mac whose reading is stale or that another person contributed', async () => {
-        const stale = fullMac(); stale.observation = { ...stale.observation, receivedAt: 0 }
-        for (const host of [stale, { ...fullMac(), contributorId: 'someone-else' }]) {
-          const { s } = await routeWith([host, relayed(), other()])
-          expect(fit(s, 'm1-team')).toMatchObject({ fit: { status: 'unknown' } })
-          expect(fit(s, 'm1-team')!.label).not.toContain('quota read on')
-        }
       })
     })
   })
