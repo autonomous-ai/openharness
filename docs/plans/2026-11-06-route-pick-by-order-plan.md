@@ -13,8 +13,9 @@ the pick. No new stored data.
 **Tech Stack:** TypeScript; CLI vitest specs (`cli/src/superTabs/*.spec.ts`), backend vitest.
 
 **Spec:** the task brief (#3576), part 1. Part 2 (the four machine rules as rules-record kinds: hours a machine is off,
-phone work on the phone Mac, no Codex on a named Mac, no reviewer on a local-model Codex) is a separate task; step 1 here
-reads the record kinds that exist (forbidModel, machines, minEffort) through the refusals the route already makes.
+phone work on the phone Mac, no Codex on a named Mac, no reviewer on a local-model Codex) is a separate task. Until then the route
+reads none of them (the server enforces no rule of the record): the route's `next` says the instructions' Machines rules still apply
+and a pick that breaks one is overridden with that rule as the reason.
 
 ## Global Constraints
 - Swarm code stays out of `cli/src/core`. Backend change is limited to `backend/src/superTabs/`.

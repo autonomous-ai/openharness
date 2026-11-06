@@ -1279,7 +1279,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     return decision
   }
   /** The candidate a start or assignment should match, and whether it does. Following another needs no reason (project
-   *  instructions, phase 4: the route is advice); it is still recorded as an override, with the reason when one is given.
+   *  instructions, phase 4: the route is advice); it is still recorded as an override. A route that picked (task #3576) asks for the
+   *  reason when the start or assignment leaves its pick.
    *  A route that names no pick (task #2901, Ken 2026-11-04) leaves the choice to the coordinator, by the project's Routing
    *  instructions: until a person or an earlier start chose, the start or assignment gives the rule that chose it, and the
    *  candidate it matches, any of them, is recorded and said in the route row the released apps draw. */

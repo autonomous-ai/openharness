@@ -153,9 +153,12 @@ function takes(member: Agent, lane: string | null, rules: DispatchRules): boolea
 /** Whether [group] is big, hard or risky work, which Routing puts on Opus or Astra: the PM marked it strong, or it wants two reviews
  *  and the PM did not mark it standard (#3576). */
 const needsStrongModel = (group: Conversation): boolean => group.task?.strength === 'strong' || (group.task?.strength === undefined && reviewsWanted(group.task) === 2)
-/** Whether [member] runs a model Routing allows for big or risky work: Opus or Astra, at high effort or above. */
-const onStrongModel = (member: Agent): boolean => (modelMatches('opus', member.configuration.model) || modelMatches('astra', member.configuration.model))
-  && !['minimal', 'low', 'medium'].includes((member.configuration.effort ?? '').toLowerCase())
+/** Whether [member] runs a model Routing allows for big or risky work: Opus at high effort or above, or Astra at xhigh (an effort
+ *  not set is not known to be either). */
+const onStrongModel = (member: Agent): boolean => {
+  const effort = (member.configuration.effort ?? '').toLowerCase(), model = member.configuration.model
+  return (modelMatches('opus', model) && ['high', 'xhigh', 'max'].includes(effort)) || (modelMatches('astra', model) && ['xhigh', 'max'].includes(effort))
+}
 
 /** The tasks [member] could be handed now, best first: those pinned to it (oldest pin first), then its lane's open tasks.
  *  A task it just lost to the 3-hour clock is not offered to it. */

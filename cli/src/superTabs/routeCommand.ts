@@ -587,7 +587,9 @@ function nextOf(rows: Shown[], conversationId: string, routeDecisionId: string |
   // Said once and short (task #3294): it rode on every route, 467 a day in one PM's context.
   const choose = pick
     ? `Use the pick (${pick}), chosen by the project's Routing order: start or assign it as listed, with no overrideReason. `
-      + 'For another candidate, give the reason as overrideReason (urgency, context, a machine the work needs; "idle" is not one).'
+      + 'The pick does not apply the instructions\' Machines rules (hours a machine is off, phone work on the phone Mac, no Codex on a named Mac, no reviewing on a local-model Codex): '
+      + 'they still apply, and a pick that breaks one is not used; choose another candidate and give that rule as overrideReason. '
+      + 'For any other candidate, give the reason as overrideReason (urgency, context, a machine the work needs; "idle" is not one).'
     : 'Not ranked: listed by machine name. Choose one by the project\'s Routing instructions (Order and quota), and give the rule that chose it as overrideReason.'
   const decided = routeDecisionId ? pick ? { routeDecisionId } : { routeDecisionId, overrideReason: 'RULE' } : {}
   const assign = `Assign a member: command OPERATION_ID ${JSON.stringify({ type: 'work.assign', conversationId, agentId: 'AGENT', ...decided })}`
