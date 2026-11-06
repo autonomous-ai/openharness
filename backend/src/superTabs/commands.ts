@@ -544,6 +544,8 @@ export interface CommandContext {
   /** For `decision.answer`: the hourly sweep leaves a decision unanswered for 24 hours to the PM (overdueDecisions.ts). Set by the
    *  store alone; a client cannot send it. */
   overdue?: boolean
+  /** Server-only timed recommendation application; a client cannot send it. */
+  defaulted?: boolean
   /** For a restore: the people no longer in the Swarm's Workspace, read by the store. They do not come back with it. */
   workspaceLost?: string[]
   /** The machines of this Swarm's pending cleanups whose machine account is deleted, read by the store: no host will ever
@@ -2625,7 +2627,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'decision.answer': {
       const { answer, noticeIn, notice, recipients, source, line } = answerDecision(state, actor, context.decision,
-        { choice: command.choice, note: command.note ?? null, delegate: command.delegate === true, overdue: context.overdue === true })
+        { choice: command.choice, note: command.note ?? null, delegate: command.delegate === true, overdue: context.overdue === true, defaulted: context.defaulted === true, now: context.now })
       effects.decisionAnswer = answer
       recordDecision(conversation(state, context.decision!.conversationId), context.decision!, context.now, answer.delegated === true)
       if (recipients.length) message(noticeIn, notice, recipients, null, source)

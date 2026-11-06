@@ -58,7 +58,7 @@ export interface DecisionTarget {
 /** `choice` null with a `note`: the person typed their own answer instead of choosing an option (task #2996). */
 export interface DecisionAnswer { id: string; choice: number | null; note: string | null; delegated?: true
   /** Left to the PM by the hourly sweep after 24 hours unanswered, not by the person (overdueDecisions.ts). */
-  overdue?: true }
+  overdue?: true; defaulted?: true }
 
 /** Questions for one person in one conversation they read, from `asker`. One batch: one id ties them, no ping per question. */
 export function askDecisions(state: SuperTabState, group: Conversation, personId: string, questions: Question[],
@@ -115,6 +115,7 @@ export const ANSWERED_NOTICE = 'A decision asked in this conversation was answer
 export const delegatedNotice = (name: string) => `A decision asked in this conversation was left to the ${name}, who took its recommended option. `
   + 'Read it with: harness super-tab decisions --answered'
 /** The notice for a decision left to the PM by the sweep, not the person: it says why, so nobody reads it as their choice. */
+export const defaultedNotice = 'A decision you asked reached its default time. The server applied its recommended option. Read it with: harness super-tab decisions --answered'
 export const overdueNotice = (name: string) => `A decision asked in this conversation waited 24 hours, so it was left to the ${name}, who took its recommended option. `
   + 'Read it with: harness super-tab decisions --answered'
 /** The notices for a decision asked in a closed Chat with PM, told in the project chat instead: never "in this conversation". */
@@ -130,7 +131,7 @@ const answerText = (option: string, delegated: boolean) => delegated ? `PM decid
  *  for the asking agent and the Lead, in the conversation it was asked in or, for a closed Chat with PM nobody reads, in
  *  the project chat (`noticeIn`); and for a delegated one, the Lead's line in the person's Buddy chat. */
 export function answerDecision(state: SuperTabState, actor: Actor, decision: DecisionTarget | undefined,
-  given: { choice?: number; note: string | null; delegate: boolean; overdue?: boolean }) {
+  given: { choice?: number; note: string | null; delegate: boolean; overdue?: boolean; defaulted?: boolean; now?: number }) {
   if (given.choice !== undefined ? given.delegate : !given.delegate && given.note === null) {
     fail('INVALID_DECISION', 'Choose one of its options, type an answer, or leave it to the PM.', 400)
   }
@@ -142,6 +143,10 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
   if (given.delegate && !(asked.recommended >= 0 && asked.recommended < asked.options.length)) {
     fail('INVALID_DECISION', 'This decision has no recommended option to leave to the PM.', 400)
   }
+  if (given.defaulted && (!given.delegate || asked.kind === REFLECTION_DECISION || asked.defaultAt == null || given.now == null || asked.defaultAt > given.now)) {
+    fail('INVALID_DECISION', 'This decision has not reached its default time.', 400)
+  }
+  if (given.overdue && asked.defaultAt != null) fail('INVALID_DECISION', 'This decision uses its explicit default time.', 400)
   const choice = given.delegate ? asked.recommended : given.choice ?? null
   if (choice !== null && choice >= asked.options.length) fail('INVALID_DECISION', 'Choose one of its options.', 400)
   const project = groupProject(state, group)
@@ -149,25 +154,25 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
   const closed = isClosedPmChat(group)
   const noticeIn = closed ? state.conversations.find(c => c.id === project.leadConversationId)! : group
   const delegatedText = closed ? closedChatDelegatedNotice : given.overdue ? overdueNotice : delegatedNotice
-  const notice = given.delegate ? delegatedText(coordinatorNameOf(project))
+  const notice = given.defaulted ? defaultedNotice : given.delegate ? delegatedText(coordinatorNameOf(project))
     : closed ? CLOSED_CHAT_ANSWERED_NOTICE : ANSWERED_NOTICE
   const recipients = [...new Set([asked.askerAgentId, ...lead ? [lead] : []])].filter(id => noticeIn.agentIds.includes(id))
-  const answer: DecisionAnswer = { id: asked.id, choice, note: given.note, ...given.delegate ? { delegated: true as const, ...given.overdue ? { overdue: true as const } : {} } : {} }
+  const answer: DecisionAnswer = { id: asked.id, choice, note: given.note, ...given.delegate ? { delegated: true as const, ...given.overdue ? { overdue: true as const } : {}, ...given.defaulted ? { defaulted: true as const } : {} } : {} }
   // A routing reflection's never reaches the Buddy chat: the person's Buddy reads it (review of #2276).
-  const line = given.delegate && lead && asked.kind !== REFLECTION_DECISION ? delegatedLine(state, project.id, lead, asked, asked.recommended) : null
+  const line = given.delegate && lead && asked.kind !== REFLECTION_DECISION ? delegatedLine(state, project.id, lead, asked, asked.recommended, given.defaulted) : null
   return { answer, noticeIn: noticeIn.id, notice, recipients, source: { ...AGENT_ONLY, decisionId: asked.id }, line }
 }
 
 /** The Lead's one line saying what it chose, in the person's own Buddy chat of that project: only they and their Buddy read
  *  it, and they were asked the question. Opened for the line when they have none (buddies.ts openBuddyChat), so it never
  *  drops: Buddies replaced Chat with PM (Ken, 10-29). */
-function delegatedLine(state: SuperTabState, projectId: string, leadId: string, asked: DecisionTarget, choice: number) {
+function delegatedLine(state: SuperTabState, projectId: string, leadId: string, asked: DecisionTarget, choice: number, defaulted = false) {
   const lead = state.agents.find(a => a.id === leadId)
   if (!lead) return null
   const to = person(state, asked.personId)
   const author: Author = { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration }
   const question = asked.question.replace(/\s+/g, ' ')
-  const text = `${answerText(asked.options[choice]!, true)} — ${question}`
+  const text = `${defaulted ? `Default applied: ${asked.options[choice]!}` : answerText(asked.options[choice]!, true)} — ${question}`
   // In their one Buddy chat, marked with its project (Dee, 10-31), and in their older chat there for older apps.
   return [{ conversationId: openSwarmBuddyChat(state, to).id, author, text, source: { kind: 'decision-delegated', decisionId: asked.id, projectId }, buddyProject: projectId },
     { conversationId: openBuddyChat(state, projectId, to).id, author, text, source: { kind: 'decision-delegated', decisionId: asked.id } }]
@@ -285,7 +290,7 @@ export async function readAskedDecision(tx: Tx, tabId: string, id: string): Prom
 export async function recordAnswer(tx: Tx, tabId: string, answer: DecisionAnswer, now: number): Promise<void> {
   const taken = await tx.superTabDecision.updateMany({ where: { id: answer.id, tabId, ...waiting },
     data: { choice: answer.choice, note: answer.note, answeredAt: new Date(now), ...answer.delegated ? { delegated: true } : {},
-      ...answer.overdue ? { overdue: true } : {} } })
+      ...answer.overdue ? { overdue: true } : {}, ...answer.defaulted ? { defaulted: true } : {} } })
   if (!taken.count) fail('DECISION_ANSWERED', 'This decision is already answered.')
 }
 
@@ -405,6 +410,6 @@ export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState,
       pmTakesOver: row.kind !== REFLECTION_DECISION && row.recommended >= 0 && row.recommended < row.options.length,
       // A typed answer (no option) reads as its words.
       answer: row.choice == null ? (row.answeredAt ? row.note ?? null : null)
-        : row.options[row.choice] === undefined ? null : answerText(row.options[row.choice]!, row.delegated === true) }
+        : row.options[row.choice] === undefined ? null : row.defaulted ? `Default applied: ${row.options[row.choice]!}` : answerText(row.options[row.choice]!, row.delegated === true) }
   }) }
 }
