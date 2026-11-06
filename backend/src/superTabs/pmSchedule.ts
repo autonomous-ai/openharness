@@ -105,7 +105,8 @@ export function sweepDue(state: SuperTabState, projectId: string, now: number): 
       const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
       return archivable(state, group, now) && !group.pullRequestUrls?.length && !task?.pullRequestUrls?.length
     }
-    if (group.reviewOf) return false
+    // A paused task waits on whoever paused it, not on the PM (boardRights.ts, task #3819).
+    if (group.reviewOf || group.paused) return false
     if (!group.assignment) return true
     const liveness = taskLiveness(state, group, now)
     return liveness?.state === 'orphaned' || (liveness?.state === 'waiting' && (liveness.why === 'person' || liveness.why === 'blocked'))

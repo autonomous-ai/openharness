@@ -10,7 +10,7 @@ import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_LANES, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { noteIndex } from './processNotes.js'
-import { ownsBoard, readsProject, requireCanChat, requirePriorityRight } from './boardRights.js'
+import { ownsBoard, readsProject, requireCanChat, requirePriorityRight, steers } from './boardRights.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
 import { z } from 'zod'
@@ -309,6 +309,10 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
   // A task's priority, changed by the PM or a person (taskPriority.ts); each change writes a line into the task.
   z.object({ type: z.literal('work.priority'), conversationId: id, priority: z.enum(TASK_PRIORITIES) }).strict(),
+  // A pause (paused true) or resume (false) by someone who steers the task's project (boardRights.ts, task #3819). Not work.resume,
+  // which carries lost work on.
+  z.object({ type: z.literal('work.pause'), conversationId: id, paused: z.boolean(), reason: z.string().trim().min(1).max(500).optional() }).strict()
+    .refine(c => c.paused || c.reason === undefined, 'A reason goes with a pause.'),
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
   // A task's place in its project's Next up (taskQueue.ts): `after` the open task it goes right after, null for the top, absent
   // to stay; `notBefore` a day it should not start before, null to clear.
@@ -2790,6 +2794,30 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const name = actor.kind === 'person' ? shownNameOf(state, actor.userId) ?? 'Someone'
         : agentDisplayName(state.agents, actor.agentId) ?? state.agents.find(a => a.id === actor.agentId)?.name ?? 'An agent'
       message(task.id, priorityLine(name, command.priority, previous), [], null, SYSTEM_ROW)
+      break
+    }
+    case 'work.pause': {
+      chatOnly(command.conversationId)
+      const task = open(state, command.conversationId)
+      readConversation(state, actor, task.id)
+      const project = groupProject(state, task)
+      if (task.id === project.leadConversationId || task.kind || task.audience || task.step) {
+        fail('PAUSE_TASK_ONLY', 'Only a task pauses: name a task, not a chat or a step.', 400)
+      }
+      if (actor.kind !== 'person' || !steers(state, project, actor.userId)) {
+        fail('PAUSE_FORBIDDEN', 'Only the project owner and its decider pause or resume a task.', 403)
+      }
+      author(state, actor, true)
+      const name = shownNameOf(state, actor.userId) ?? 'Someone'
+      const worker = activeWork(task) && task.assignment ? [task.assignment.agentId] : []
+      if (command.paused) {
+        task.paused = { by: actorKey(actor), at: context.now, ...command.reason ? { reason: command.reason } : {} }
+        message(task.id, `${name} paused this task${command.reason ? `: ${command.reason}` : '.'}`
+          + (worker.length ? ' Stop at a safe point, then set your status to blocked until it is resumed.' : ''), worker, null, SYSTEM_ROW)
+      } else if (task.paused) {
+        delete task.paused
+        message(task.id, `${name} resumed this task.${worker.length ? ' Carry on where you stopped.' : ''}`, worker, null, SYSTEM_ROW)
+      }
       break
     }
     case 'conversation.merged': {

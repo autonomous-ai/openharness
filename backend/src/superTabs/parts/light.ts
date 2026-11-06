@@ -89,6 +89,7 @@ export const GROUP_FIELDS = {
     'number',
     'openedBy',
     'owed',
+    'paused',
     'pin',
     'priority',
     'proposals',

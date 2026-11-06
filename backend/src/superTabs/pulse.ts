@@ -129,6 +129,8 @@ export function heldWords(reason: HeldReason): string {
  * with #3390: the agent's result text decided it before, a second way to decide one thing.
  */
 export function holdOf(group: Conversation, today: string): { reason: string | null } | null {
+  // A pause by someone who steers its project (boardRights.ts, task #3819), with its reason when one was given.
+  if (group.paused) return { reason: group.paused.reason ? `paused: ${group.paused.reason}` : 'paused' }
   const assignment = group.assignment
   const dated = !assignment && !!group.notBefore && group.notBefore > today
   const stated = !!assignment && (assignment.status === 'blocked' || assignment.status === 'needs_human')
