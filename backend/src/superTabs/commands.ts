@@ -21,7 +21,7 @@ import {
 import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
 import { reviewPlan, stepBrief, stepCheck, type PlannedStep, type StepKind } from './reviewTable.js'
-import { reviewerCandidates } from './reviewerPick.js'
+import { builtBy, reviewerCandidates } from './reviewerPick.js'
 import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
@@ -74,6 +74,7 @@ import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROP
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { repeatedRules } from './instructionsDiff.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
+import { BASE_DOCUMENT, BASE_VERSION } from './instructionsRebase.js'
 import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
 import { contractRefusal, missingContract } from './taskContract.js'
 import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
@@ -1711,6 +1712,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** [worker] takes [group]'s work as assignment [assignmentId], after assignRefusal let it: what work.assign writes, and its
    *  brief to the worker. */
   const assignTo = (group: Conversation, worker: Agent, assignmentId: string) => {
+    // The PR ref is fetchable on another machine; a local worktree path is not. The previous agent's free-text result stays
+    // in its own status message, where deliveries retain its attribution and cross-account warning.
+    const recovery = group.assignment?.status === 'lost' ? [
+      'Continue the previous attempt from its pushed work; read this task’s conversation before changing it.',
+      'The previous agent’s last status is in this task’s conversation.',
+      ...(group.pullRequestUrls ?? []).map(url => {
+        const number = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)$/.exec(url)?.[1]
+        const head = group.pullRequestHeads?.[url]?.head
+        return `Pushed work: ${url}${number ? ` (refs/pull/${number}/head)` : ''}${head ? ` at ${head}` : ''}`
+      }),
+    ].join('\n') : null
     // An asleep crew member wakes for it: its host reopens the session in place (crewKeep.ts). The wake is timed from here to
     // the first reading that shows it running (crewTimes.ts, task #3462).
     if (wakeCrewMember(worker, context.now)) startWake(worker, group.id, context.now)
@@ -1740,6 +1752,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // whom this task's pull requests are for, from its own requester (projects.ts requestedByLine).
     const requestedBy = requestedByLine(state, groupProject(state, group), group, worker)
     message(group.id, [group.brief || group.title,
+      ...recovery ? [recovery] : [],
       ...group.checks.length ? [`Acceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`] : [],
       ...requestedBy ? [requestedBy] : []].join('\n\n'), [worker.id], null, SYSTEM_ROW, undefined, undefined, undefined, assignmentId)
     const news = assignedNotice(state, group, sender, assignmentId)
@@ -1762,7 +1775,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     state.conversations.push({ id, ...(state.projects ? { projectId: project.id } : {}), number, title: planned.name, leadId,
       agentIds: leadId ? [leadId] : [], archived: false, brief, reviewOf: task.id,
       // A step keeps its task's mark, as conversation.create's does (teamWritten.ts stepMark).
-      ...stepMark(state, task), step: planned.name,
+      ...stepMark(state, task), step: planned.name, openedBy: 'server',
       assignment: null, lastMessageSequence: 0, codePullRequestUrls: [], checks: storedChecks([{ description: stepCheck(planned), independent: true }], id) })
     const step = state.conversations.at(-1)!
     listStep(task, id)
@@ -1790,7 +1803,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         && (check.verdicts ?? []).some(verdict => verdict.passed && (verdict as { head?: string }).head === read.head))) continue
       step ??= openStep(task, planned, read)
       const previous = step.assignment?.agentId
-      const ranked = reviewerCandidates(state, task, planned.kind, read.head, context.now)
+      const ranked = reviewerCandidates(state, task, planned.kind, read.head, context.now, planned.os)
       const ordered = [...ranked.filter(a => a.id === previous), ...ranked.filter(a => a.id !== previous)]
       const target = step
       const worker = ordered.find(candidate => {
@@ -1881,9 +1894,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (projects.length >= 100) fail('PROJECTS_FULL', 'A swarm can have up to 100 projects.')
       const leadConversationId = `project-${operationId}`
       // It starts on a copy of the built-in instructions as revision 1, the team's own to change (design, The built-in template).
+      // In a Swarm whose projects moved onto the base (#3600), on the base, marked: one way to start a project (review of #3300).
+      const onBase = projects.some(p => (p.instructionsBase ?? 0) >= BASE_VERSION)
+      const first = onBase ? { instructionsRevision: 1, instructionsHash: instructionsHash(BASE_DOCUMENT), instructionsBase: BASE_VERSION } : FIRST_INSTRUCTIONS
       projects.push({ id: operationId, name: command.name, ownerId: actor.userId, ownerGeneration: person(state, actor.userId).generation, leadConversationId,
-        visibility: command.visibility, members: [], updateMinutes: 5, skillMode: 'default', ...FIRST_INSTRUCTIONS })
-      effects.instructions = { projectId: operationId, revision: 1, hash: FIRST_INSTRUCTIONS.instructionsHash, text: INSTRUCTIONS_TEMPLATE,
+        visibility: command.visibility, members: [], updateMinutes: 5, skillMode: 'default', ...first })
+      effects.instructions = { projectId: operationId, revision: 1, hash: first.instructionsHash, text: onBase ? BASE_DOCUMENT : INSTRUCTIONS_TEMPLATE,
         summary: FIRST_SUMMARY, writtenBy: { kind: 'person', id: actor.userId }, askedBy: actor.userId, at: context.now }
       state.conversations.push({ id: leadConversationId, projectId: operationId, title: 'Lead', leadId: null,
         agentIds: [], archived: false, brief: command.brief, checks: [], assignment: null, lastMessageSequence: 0 })
@@ -2544,6 +2560,20 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         open(state, reviewed.id)
         // One level: a step's own work is a task's step, never a task with steps of its own (task steps design).
         if (command.step && isStep(reviewed)) fail('STEP_OF_STEP', 'A step belongs to a task, not to another step.', 400)
+        // Never doubled (task #3602: #3561 got its server's Security reviews and Test, then its Engineer's review, review and
+        // test): the task's own Engineer is refused a step when one of the same name is open, or the server opened one of that
+        // kind, while its work is open. Its own second step of a kind under another name ("Security review 2") still opens. The
+        // PM, the Integrator and people open their later checks (a main merge check, a combination read) as before, and a done
+        // step blocks nobody (review of #3312).
+        const engineer = actor.kind === 'agent' && (reviewed!.assignment?.agentId === actor.agentId || builtBy(reviewed!).has(actor.agentId))
+        if (command.step && engineer) {
+          const name = (text: string) => text.trim().replace(/\s+/g, ' ').toLowerCase()
+          const kind = (text: string) => /security/i.test(text) ? 'security' : /test/i.test(text) ? 'test' : /review|read/i.test(text) ? 'review' : null
+          const wanted = kind(command.step)
+          const same = stepsOf(state, reviewed!.id).find(step => !step.archived && (!step.assignment || activeWork(step)) && (name(stepName(step)) === name(command.step!)
+            || (step.openedBy === 'server' && wanted !== null && kind(stepName(step)) === wanted)))
+          if (same) fail('STEP_OPEN', `"${stepName(same)}"${same.number ? ` (#${same.number})` : ''} is already open on this task: use it rather than opening another.`, 409)
+        }
       }
       // Who asked: the person named, else the one a Buddy's proposal was sent for, else a person opening it themselves.
       const proposal = command.proposalMessageId ? proposalOf(state, project, proposalNamed(context.proposal)) : undefined

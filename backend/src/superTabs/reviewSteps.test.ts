@@ -63,6 +63,11 @@ describe('a handed task opens its review steps', () => {
     const f = fixture()
     f.add('rev', f.task, 'Reviewer')
     const tester = f.add('tst', f.task, 'Tester')
+    // A Desktop test runs on a Mac: its Tester's machine says it is one (task #3602; an unlisted machine takes no OS step).
+    f.state.machines = [{ machineId: 'host', name: 'host', contributorId: 'owner', membershipGeneration: 'g', generation: 'g1', cwd: '/swarm', scope: 'swarm',
+      engines: ['claude'], maxAgents: 8, paused: false, observation: { generation: 'g1', receivedAt: 1_000_000 - 1000, sessionKind: 'computer', resources: { os: 'macOS' },
+        tools: {}, runningHarnessIds: [], stoppedHarnessIds: [], readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
+        quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } }] as never
     f.ready(['desktop/lib/super_tabs/view.dart'])
     expect(f.steps().map(s => s.name)).toEqual(['Review', 'Test'])
     expect(f.steps()[1]!.agent).toBe(tester)
@@ -118,6 +123,67 @@ describe('a handed task opens its review steps', () => {
     f.ready(['backend/src/routes/auth.ts'])
     expect(stepsOf(f.state, f.task).map(s => s.step)).toEqual(['Security review', 'Security review 2'])
     expect(f.group(own).assignment?.status).toBe('working')
+  })
+
+  // Task #3602: #3561 got Security review 1, 2 and Test from the server, then review, review and test from its Engineer.
+  it('refuses an agent\'s step of a kind the server already opened, or of a name already open, naming the open one', () => {
+    const f = fixture()
+    f.add('rev-a', f.task, 'Reviewer'); f.add('rev-b', f.task, 'Reviewer'); f.add('tst', f.task, 'Tester')
+    f.ready(['backend/src/routes/auth.ts', 'desktop/lib/a.dart'])
+    expect(f.steps().map(s => s.name)).toEqual(['Security review 1', 'Security review 2', 'Test'])
+    const open = (step: string) => () => f.run({ type: 'conversation.create', title: step, reviewOf: f.task, step, brief: 'Read it.', checks: [] } as Command, f.as(f.dev))
+    for (const step of ['Security review', 'Test']) {
+      expect(open(step), step).toThrow(expect.objectContaining({ code: 'STEP_OPEN' }))
+    }
+    expect(open('Test')).toThrow(/Test/)
+    expect(f.steps()).toHaveLength(3)
+  })
+
+  it('refuses an agent\'s step of a name it already has open, and opens its own second step of a kind under another name', () => {
+    const f = fixture()
+    const open = (step: string) => f.run({ type: 'conversation.create', title: step, reviewOf: f.task, step, brief: 'Read it.', checks: [] } as Command, f.as(f.dev))
+    open('Review')
+    expect(() => open('Review')).toThrow(expect.objectContaining({ code: 'STEP_OPEN' }))
+    open('Security review 1')
+    expect(() => open('Security review 2')).not.toThrow()
+    expect(f.steps().map(s => s.name)).toEqual(['Review', 'Security review 1', 'Security review 2'])
+  })
+
+  // ReviewLinnea's review of #3312: the PM and the Integrator open merge, combination and row checks after a main merge, once
+  // the server's review is done. Only the task's own Engineer is refused, and only for a step whose work is still open.
+  it('lets the PM or another agent open a later check after a done server step, and refuses only the Engineer while it is open', () => {
+    const f = fixture()
+    const rev = f.add('rev', f.task, 'Reviewer')
+    f.ready(['docs/a.md'])
+    const open = (step: string, by: string) => () => f.run({ type: 'conversation.create', title: step, reviewOf: f.task, step, brief: 'Read it.', checks: [] } as Command, f.as(by))
+    // While the server's Review is working, a PM's own check still opens; the Engineer's double does not.
+    expect(open('Review: main merge check', f.lead)).not.toThrow()
+    expect(open('Review', f.dev)).toThrow(expect.objectContaining({ code: 'STEP_OPEN' }))
+    // Done, it blocks nobody: the Engineer may open another review step of its own.
+    const review = stepsOf(f.state, f.task).find(s => s.step === 'Review')!
+    f.run({ type: 'work.status', conversationId: review.id, assignmentId: review.assignment!.id, status: 'done', result: 'Ready to merge: Yes' } as Command, f.as(rev))
+    expect(open('Review: combination read', f.dev)).not.toThrow()
+  })
+
+  // #3576's Test went to a Mac only when its check needed a Mac and a Linux machine.
+  it('opens one test step per machine its check names, each to a Tester on that OS', () => {
+    const f = fixture()
+    f.add('rev', f.task, 'Reviewer')
+    const tester = (name: string, machineId: string) => f.run({ type: 'agent.add', conversationId: f.task, machineId, harnessId: name, name, configuration: opus,
+      lead: false, roleName: 'Tester' } as Command, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
+    const mac = tester('mac-tst', 'mac1'), linux = tester('linux-tst', 'linux1')
+    const machine = (machineId: string, os: string) => ({ machineId, name: machineId, contributorId: 'owner', membershipGeneration: 'g', generation: 'g1', cwd: '/swarm',
+      scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
+      observation: { generation: 'g1', receivedAt: 1_000_000 - 1000, sessionKind: 'computer', resources: { os }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+        readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
+        quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } })
+    f.state.machines = [machine('mac1', 'macOS'), machine('linux1', 'Linux')] as never
+    // A Tester on a machine the Swarm does not list says no OS, so it takes neither (review of #3312, Minor 1).
+    tester('unlisted-tst', 'unlisted')
+    f.ready(['cli/src/superTabs/host.ts'])
+    expect(f.steps()).toEqual([{ name: 'Review', agent: expect.any(String), status: 'working' },
+      { name: 'Test on a Mac', agent: mac, status: 'working' }, { name: 'Test on a Linux machine', agent: linux, status: 'working' }])
+    expect(stepsOf(f.state, f.task).find(s => s.step === 'Test on a Linux machine')!.brief).toContain('a Linux machine')
   })
 
   it('with nobody free, the step stays open and the PM is told once; the Ready itself goes through', () => {
