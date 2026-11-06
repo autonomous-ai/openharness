@@ -2067,6 +2067,26 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   /// A machine row's right-click: its details, for its owner where teammates' work runs (#2806), and Remove from Swarm
   /// for whoever may.
+  Future<void> _setUpTeam(_MachineView view) async {
+    if (view.retryJoin) {
+      await widget.app!.retryTeamJoin();
+    } else if (view.setUpTeam) {
+      await showTeamAccountSetup(
+        context,
+        widget.app!,
+        restart: view.setUpTeamLabel == 'Restart',
+        missing: view.setUpTeamLabel == 'Restart'
+            ? 'Harness Team account offline'
+            : _teamSetup?.state == 'incomplete'
+            ? _teamSetup?.detail ?? ''
+            : null,
+        signInAgain:
+            view.setUpTeamLabel != 'Restart' && _teamSetup?.state == 'exists',
+      );
+    }
+    await _readTeamSetup();
+  }
+
   Future<void> _menu(_MachineView view, Offset at) async {
     // The menu's barrier takes the pointer from the row, so a second right-click would bring up the browser's menu
     // over this one. Off until it closes; dispose lets go too, for a screen that goes with the menu still up.
@@ -2086,6 +2106,13 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             leadingSlot: false,
             onPressed: () => close('details'),
           ),
+          if (widget.manage && (view.retryJoin || view.setUpTeam))
+            AppMenuItem(
+              key: const ValueKey('super-machine-menu-team-setup'),
+              label: view.setUpTeamLabel,
+              leadingSlot: false,
+              onPressed: () => close('team-setup'),
+            ),
           if (_canChooseOwnAccount(view.id))
             AppMenuItem(
               key: const ValueKey('super-machine-menu-own-account'),
@@ -2115,6 +2142,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     }
     if (!mounted) return;
     if (choice == 'details') await _openDetails(view);
+    if (choice == 'team-setup') await _setUpTeam(view);
     if (choice == 'own-account-on' || choice == 'own-account-off') {
       await _setOwnAccount(view, allowed: choice == 'own-account-on');
     }
@@ -2349,28 +2377,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                           onMore: BrowserMenuGuard.inBrowser
                               ? (at) => _menu(view, at)
                               : null,
-                          onSetUpTeam: view.retryJoin
-                              ? () async {
-                                  await widget.app!.retryTeamJoin();
-                                  await _readTeamSetup();
-                                }
-                              : view.setUpTeam
-                              ? () async {
-                                  await showTeamAccountSetup(
-                                    context,
-                                    widget.app!,
-                                    restart: view.setUpTeamLabel == 'Restart',
-                                    missing: view.setUpTeamLabel == 'Restart'
-                                        ? 'Harness Team account offline'
-                                        : _teamSetup?.state == 'incomplete'
-                                        ? _teamSetup?.detail ?? ''
-                                        : null,
-                                    signInAgain:
-                                        view.setUpTeamLabel != 'Restart' &&
-                                        _teamSetup?.state == 'exists',
-                                  );
-                                  await _readTeamSetup();
-                                }
+                          onSetUpTeam: view.retryJoin || view.setUpTeam
+                              ? () => _setUpTeam(view)
                               : null,
                         ),
                 ),
