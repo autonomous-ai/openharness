@@ -3082,6 +3082,14 @@ describe('fresh Buddy idle proof (#3824)', () => {
     expect(f.core.agents.activity).toHaveBeenCalledTimes(1)
     expect(f.core.agents.activity).toHaveBeenCalledWith(['idle', 'busy', 'unknown'])
   })
+  it('reads every Buddy past the core’s 64-session activity limit in bounded batches', async () => {
+    const f = buddies(), ids = Array.from({ length: 100 }, (_, i) => `buddy-${i}`)
+    Object.assign(f.pool, { harnessIds: ids })
+    f.core.agents.activity = vi.fn(async (batch: string[]) => Object.fromEntries(batch.slice(0, 64).map(id => [id, 'idle']))) as never
+    await f.machine.tick()
+    expect(posts(f)[0]).toHaveProperty('idleBuddyHarnessIds', ids)
+    expect(vi.mocked(f.core.agents.activity).mock.calls.map(([batch]) => batch.length)).toEqual([64, 36])
+  })
   it('does not ask for activity or send proof without the server request or running Buddies', async () => {
     const older = buddies()
     Object.assign(older.pool, { buddySleepWanted: undefined })
