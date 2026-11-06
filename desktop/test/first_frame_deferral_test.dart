@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/app_shell.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/theme/appearance_prefs_store.dart';
+import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/widgets/bootstrapping_screen.dart';
 
@@ -71,6 +74,32 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     expect(find.text('Workspace'), findsOneWidget);
     expect(find.byKey(const Key('first-frame-placeholder')), findsNothing);
+  });
+
+  testWidgets('a light palette gets a light first frame, not a dark flash', (
+    tester,
+  ) async {
+    final saved = appearancePrefsStore.value;
+    addTearDown(() {
+      appearancePrefsStore.value = saved;
+      grid.AppTheme.brightness.value = Brightness.dark;
+      grid.AppTheme.palette.value = HarnessPalette.graphite;
+    });
+    appearancePrefsStore.value = AppearancePrefs(
+      palette: HarnessPalette.paper,
+      mode: AppearanceMode.light,
+    );
+    await mount(tester, AppStatus.bootstrapping);
+    final placeholder = tester.widget<ColoredBox>(
+      find.byKey(const Key('first-frame-placeholder')),
+    );
+    expect(HarnessPalette.paper.brightness, Brightness.light);
+    // The colour the boot screen draws on (`AppPalette.windowBg`) in a light app.
+    expect(
+      placeholder.color,
+      grid.AppTheme.paletteFor(Brightness.light).background,
+    );
+    expect(placeholder.color, isNot(HarnessPalette.graphite.background));
   });
 
   testWidgets('without deferral the first frame holds the whole screen', (
