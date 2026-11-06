@@ -552,7 +552,7 @@ function modelTier(p: Probe, catalog: Catalog): Tier | null {
 }
 /** How well a candidate fits [tier]: 0 on the tier's model and effort, 1 on neither tier's model or the tier's at another
  *  effort, 2 on the other tier's model. */
-function fitRank(p: Probe, catalog: Catalog, tier: Tier): 0 | 1 | 2 {
+export function fitRank(p: Probe, catalog: Catalog, tier: Tier): 0 | 1 | 2 {
   const runs = modelTier(p, catalog)
   if (runs === null) return 1
   if (runs !== tier) return 2
@@ -591,7 +591,7 @@ export function machineBrief(room: MachineRoom): string {
 
 /** A quota's weekly window, the one the project's order compares: its percent left and reset, or a reading with no windows
  *  named as one; null left when it was not read. */
-function weekly(q: Quota): { left: number | null; resetsAt: number | null } {
+export function weekly(q: Quota): { left: number | null; resetsAt: number | null } {
   const week = q.windows?.find(w => w.name === 'weekly')
   const left = !q.known ? null : week ? week.leftPercent : q.windows?.length ? null : q.leftPercent
   return { left, resetsAt: week ? week.resetsAt : q.resetsAt }
