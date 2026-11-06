@@ -322,53 +322,63 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
             ),
           ),
         ],
-        const Spacer(),
-        DesktopPill(
-          key: const ValueKey('super-tasks-layout-board'),
-          label: 'Board',
-          selected: _layout == _Layout.board,
-          onPressed: () => _choose(layout: _Layout.board),
-        ),
-        const SizedBox(width: grid.AppDesktop.listRowGap),
-        DesktopPill(
-          key: const ValueKey('super-tasks-layout-list'),
-          label: 'List',
-          selected: _layout == _Layout.list,
-          onPressed: () => _choose(layout: _Layout.list),
-        ),
-        const SizedBox(width: grid.AppDesktop.listRowGap),
-        DesktopPill(
-          key: const ValueKey('super-tasks-layout-members'),
-          label: 'Members',
-          selected: _layout == _Layout.members,
-          tooltip: 'Tasks by crew member',
-          onPressed: () => _choose(layout: _Layout.members),
-        ),
-        const SizedBox(width: grid.AppDesktop.groupGap),
-        DesktopPill(
-          key: const ValueKey('super-tasks-mine'),
-          label: 'Mine',
-          selected: _mine,
-          tooltip: 'Only the tasks you asked for',
-          onPressed: () => _choose(mine: !_mine),
-        ),
-        const SizedBox(width: grid.AppDesktop.controlGap),
-        SizedBox(
-          width: _searchWidth,
-          child: TextField(
-            key: const ValueKey('super-tasks-search'),
-            onChanged: (query) => setState(() => _query = query.trim()),
-            textInputAction: TextInputAction.search,
-            style: grid.kFieldTextStyle,
-            decoration: InputDecoration(
-              hintText: 'Search',
-              isDense: true,
-              prefixIcon: Icon(
-                AppIcons.search,
-                size: grid.kFieldIconSize,
-                color: grid.AppPalette.textFaint,
+        // The controls keep to the right; beside the Board's wide chat the search
+        // narrows rather than overflow (task #3881).
+        Expanded(
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              DesktopPill(
+                key: const ValueKey('super-tasks-layout-board'),
+                label: 'Board',
+                selected: _layout == _Layout.board,
+                onPressed: () => _choose(layout: _Layout.board),
               ),
-            ),
+              const SizedBox(width: grid.AppDesktop.listRowGap),
+              DesktopPill(
+                key: const ValueKey('super-tasks-layout-list'),
+                label: 'List',
+                selected: _layout == _Layout.list,
+                onPressed: () => _choose(layout: _Layout.list),
+              ),
+              const SizedBox(width: grid.AppDesktop.listRowGap),
+              DesktopPill(
+                key: const ValueKey('super-tasks-layout-members'),
+                label: 'Members',
+                selected: _layout == _Layout.members,
+                tooltip: 'Tasks by crew member',
+                onPressed: () => _choose(layout: _Layout.members),
+              ),
+              const SizedBox(width: grid.AppDesktop.groupGap),
+              DesktopPill(
+                key: const ValueKey('super-tasks-mine'),
+                label: 'Mine',
+                selected: _mine,
+                tooltip: 'Only the tasks you asked for',
+                onPressed: () => _choose(mine: !_mine),
+              ),
+              const SizedBox(width: grid.AppDesktop.controlGap),
+              Flexible(
+                child: SizedBox(
+                  width: _searchWidth,
+                  child: TextField(
+                    key: const ValueKey('super-tasks-search'),
+                    onChanged: (query) => setState(() => _query = query.trim()),
+                    textInputAction: TextInputAction.search,
+                    style: grid.kFieldTextStyle,
+                    decoration: InputDecoration(
+                      hintText: 'Search',
+                      isDense: true,
+                      prefixIcon: Icon(
+                        AppIcons.search,
+                        size: grid.kFieldIconSize,
+                        color: grid.AppPalette.textFaint,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ],
