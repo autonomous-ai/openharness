@@ -71,7 +71,7 @@ export interface Agent {
   keptAt?: number
   /** When its last idle spell began, once its coordinator was told of it (tidy.ts idleNotices): one notice per spell. */
   idleNoticedAt?: number
-  /** Set while its stop was the server's idle stop, written before project instructions (phase 4: idle agents are a notice),
+  /** Set while its stop is the server's idle stop (tidy.ts, Dee's rules-to-code decision, 2026-11-06),
    *  with the decision it had before: its host withdraws that stop when the session's folder has changes by the time it would
    *  close it (agent.stopRefused). */
   idleStop?: { previous: 'awaiting' | 'keep' | null }
