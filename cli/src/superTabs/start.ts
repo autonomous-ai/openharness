@@ -434,7 +434,11 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // own, made, marked and trusted here, and removed when it stops (agentFolder.ts, machines.ts).
       const agentFolder = !homeFolder && request.worktree !== true && typeof request.cwd === 'string' && temporaryFolder(request.cwd)
         ? agentFolderFor(projectsRoot(), startId) : null
-      if (agentFolder) await prepareAgentFolder(agentFolder, request.engine)
+      // A folder there Harness did not make is refused, and so is the start: it never runs, or trusts, in someone else's folder.
+      if (agentFolder) {
+        try { await prepareAgentFolder(agentFolder, request.engine) }
+        catch { return { error: 'START_FAILED', startId, detail: 'This agent\'s folder could not be made safely on this machine.' } }
+      }
       // A project's Product Manager (backend leadStart.ts): the Lead of its project's conversation once it runs.
       const lead = !buddy && !!request.leadFor && typeof request.leadFor === 'object'
       const handoffNote = lead && typeof request.handoffNote === 'string' && request.handoffNote.length <= 32_000

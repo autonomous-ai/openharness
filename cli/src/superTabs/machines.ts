@@ -20,7 +20,7 @@ import { readAuthSession } from '../lib/authSession.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
 import { git, sweepOne, WorktreeKept } from '../lib/worktreeSweep.js'
 import { projectsRoot } from '../lib/projectFolder.js'
-import { removableAgentFolder } from './agentFolder.js'
+import { agentFolderEmpty, removableAgentFolder } from './agentFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { teamPrivacyObserver } from '../team/observer.js'
 import { teamRelayed } from '../team/relay.js'
@@ -1165,6 +1165,9 @@ export class ContributedMachines {
     const used = this.core.agents.live().some(a => !!a.cwd && within(record.path, a.cwd))
       || this.core.agents.all().some(a => a.agentId !== record.harnessId && !!a.cwd && within(record.path, a.cwd))
     if (used) return
+    // The agent's work is never deleted with its folder (security review of #3341): one that holds any is kept, with its
+    // record, for its person, as a worktree with uncommitted changes is.
+    if (!agentFolderEmpty(record.path)) { this.log('Kept an agent folder: AGENT_FOLDER_HAS_WORK'); return }
     try { rmSync(record.path, { recursive: true, force: true }) } catch { this.log('Kept an agent folder: AGENT_FOLDER_REMOVAL_FAILED'); return }
     writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
   }

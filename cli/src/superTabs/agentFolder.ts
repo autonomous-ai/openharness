@@ -5,11 +5,12 @@
  * or a Harness worktree (core/agents/create.ts `swarmFolder`), and a scratchpad is neither.
  *
  * As a Buddy's home (buddyHome.ts), the folder is Harness's, made for this start in its worktrees folder and marked as its,
- * and trusted alone: never a parent, the home folder or a folder a person made. It goes when its agent stops (machines.ts).
+ * and trusted alone: never a parent, the home folder or a folder a person made. It goes when its agent stops, once nothing
+ * of the agent's work is left in it (machines.ts).
  */
-import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, normalize, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, normalize, sep } from 'node:path'
 import { folderTrust } from '../engines/launchPrep.js'
 import { launchEnvironment } from '../engines/kit/launchExecutable.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
@@ -36,16 +37,34 @@ export function agentFolderFor(root: string, startId: string): string {
   return join(root, 'worktrees', AGENT_FOLDERS, worktreeFolderName(`super-tab/${startId}`))
 }
 
-/** Makes [folder] private and marked as Harness's, and answers Claude Code's folder question for it alone. A failed answer
- *  only leaves the question. */
+/**
+ * Makes [folder] private and marked as Harness's, and answers Claude Code's folder question for it alone. Only a folder this
+ * makes now, or one it made and marked for the same start before, is used: a link or an unmarked folder already there, or a
+ * link in place of agent-home, is refused before anything is written, so neither a mark nor a trust lands elsewhere (security
+ * review of #3341). Throws when it refuses; a failed trust write only leaves the question.
+ */
 export async function prepareAgentFolder(folder: string, engine: unknown, environment?: NodeJS.ProcessEnv): Promise<void> {
-  mkdirSync(folder, { recursive: true, mode: 0o700 })
+  const home = dirname(folder), worktrees = dirname(home)
+  mkdirSync(worktrees, { recursive: true, mode: 0o700 })
+  try { mkdirSync(home, { mode: 0o700 }) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+  if (!realDirectory(home) || realpathSync(home) !== join(realpathSync(worktrees), basename(home))) throw new Error('the agent-home folder is not Harness\'s own')
+  let made = false
+  try { mkdirSync(folder, { mode: 0o700 }); made = true } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+  if (!realDirectory(folder) || realpathSync(folder) !== join(realpathSync(home), basename(folder))) throw new Error('the agent folder is not one Harness made')
   const mark = join(folder, AGENT_FOLDER_MARK)
-  if (!existsSync(mark)) writeFileSync(mark, 'A Swarm agent\'s folder, made by Harness; removed when the agent stops.\n', { mode: 0o600 })
+  if (made) writeFileSync(mark, 'A Swarm agent\'s folder, made by Harness; removed when the agent stops and nothing of its work is left.\n', { flag: 'wx', mode: 0o600 })
+  else if (!lstatSync(mark, { throwIfNoEntry: false })?.isFile()) throw new Error('the agent folder is not one Harness made')
   if (engine !== 'claude') return
   // The environment the launch reads its Claude home from (a CLAUDE_CONFIG_DIR its login shell sets), as a Buddy's home is.
   try { folderTrust('claude', undefined, environment ?? await launchEnvironment() ?? undefined)?.record(folder) }
   catch (error) { console.warn(`[super-tabs] could not answer the folder question for an agent: ${(error as Error).message}`) }
+}
+
+const realDirectory = (path: string): boolean => { const info = lstatSync(path, { throwIfNoEntry: false }); return !!info && info.isDirectory() && !info.isSymbolicLink() }
+
+/** Whether [folder] holds nothing but Harness's mark: an agent folder whose work is all gone, which a stop may remove. */
+export function agentFolderEmpty(folder: string): boolean {
+  try { const names = readdirSync(folder); return names.length === 1 && names[0] === AGENT_FOLDER_MARK } catch { return false }
 }
 
 /** Whether [path] is an agent folder Harness may remove: a real folder (no link) directly in its agent-home folder, marked. */
