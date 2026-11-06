@@ -31,6 +31,7 @@ class SuperTabPersonalTaskCard extends StatefulWidget {
     required this.onOpen,
     this.requester,
     this.agent,
+    this.waiting = false,
     this.onApprove,
     this.onReject,
   });
@@ -43,8 +44,8 @@ class SuperTabPersonalTaskCard extends StatefulWidget {
   final VoidCallback onOpen;
   final Widget? requester, agent;
 
-  /// Set while the task waits for the reader; null leaves the buttons out. A disabled one is a no-op callback the
-  /// pane withholds by passing [enabled] false.
+  /// The task waits for the reader: Approve and Reject show, disabled while [onApprove] and [onReject] are null.
+  final bool waiting;
   final VoidCallback? onApprove, onReject;
 
   @override
@@ -65,7 +66,7 @@ class _CardState extends State<SuperTabPersonalTaskCard> {
     grid.AppTheme.watch(context);
     final w = widget;
     final radius = BorderRadius.circular(grid.AppCard.insetRadius);
-    final waiting = w.onApprove != null || w.onReject != null;
+    final waiting = w.waiting;
     final avatars = [?w.requester, ?w.agent];
     return Semantics(
       selected: w.selected ? true : null,

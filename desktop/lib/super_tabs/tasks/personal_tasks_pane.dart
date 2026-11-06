@@ -333,18 +333,15 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                                 ),
                                             pattern: true,
                                           ),
-                                    onApprove: waiting
-                                        ? enabled
-                                              ? () => _send({
-                                                  'type': 'task.approve',
-                                                  'conversationId': task.id,
-                                                })
-                                              : () {}
+                                    waiting: waiting,
+                                    onApprove: waiting && enabled
+                                        ? () => _send({
+                                            'type': 'task.approve',
+                                            'conversationId': task.id,
+                                          })
                                         : null,
-                                    onReject: waiting
-                                        ? enabled
-                                              ? () => _reject(task)
-                                              : () {}
+                                    onReject: waiting && enabled
+                                        ? () => _reject(task)
                                         : null,
                                   ),
                                 );
