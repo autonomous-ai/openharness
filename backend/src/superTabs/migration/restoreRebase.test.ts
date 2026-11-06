@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { removedLines } from '../instructionsDiff.js'
 import { rebasedDocument } from '../instructionsRebase.js'
-import { restoredDocument } from './restoreRebase.js'
+import { moveLoss, restoredDocument, stillMissing } from './restoreRebase.js'
 
 // Task #3679 (anh Dee, P0): the first move onto the new base lost the lines no person's name guarded. A project moved by it is given
 // those lines back, word for word, appended to the document it has now.
@@ -66,4 +66,29 @@ describe('the lines a project is given back after the first move (#3679)', () =>
     expect(removedLines(BEFORE, withoutOwn)).toContain('Owns the product (Dee, 2026-11-03).')
     expect(restoredDocument(BEFORE, withoutOwn, 80, new Set(lostByMove)).lines).not.toContain('Owns the product (Dee, 2026-11-03).')
   })
+
+  // Review round 2 of #3327 (Rowan): the move's loss is counted per line, since a line may sit in two sections.
+  it('puts back a line only as often as the move lost it, never a copy a later save dropped', () => {
+    const before = '# P\n\n## A\n\n- Never X.\n\n## B\n\n- Never X.\n- Keep Y (Ken, 2026-11-02).\n'
+    // The move kept A's copy of X and lost B's.
+    const moved = '# P\n\n## A\n\n- Never X.\n\n## B\n\n- Keep Y (Ken, 2026-11-02).\n'
+    const loss = moveLoss(before, moved)
+    expect([...loss]).toEqual([['Never X.', 1]])
+    // The PM's later save dropped A's copy too: only the move's one copy comes back, once.
+    const later = '# P\n\n## B\n\n- Keep Y (Ken, 2026-11-02).\n'
+    expect(restoredDocument(before, later, 80, loss).lines).toEqual(['Never X.'])
+    expect(stillMissing(before, later, loss).map(l => l.text)).toEqual(['Never X.'])
+  })
+
+  it('knows a PM that put one lost line back by hand, though another was lost twice', () => {
+    const before = '# P\n\n## A\n\n- Never X.\n- Keep Y.\n\n## B\n\n- Never X.\n'
+    const moved = '# P\n'
+    const loss = moveLoss(before, moved)
+    expect([...loss]).toEqual([['Never X.', 2], ['Keep Y.', 1]])
+    // The PM restored Y alone: two of the three lost lines are still missing, so it is not the move's whole loss.
+    const byHand = '# P\n\n- Keep Y.\n'
+    expect(stillMissing(before, byHand, loss)).toHaveLength(2)
+    expect([...loss.values()].reduce((a, b) => a + b, 0)).toBe(3)
+  })
 })
+
