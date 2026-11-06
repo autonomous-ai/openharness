@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { PM_ACCOUNT_NOTE } from './pmAccounts.js'
 import { pickByOrder, type PickInput } from './routePick.js'
-import type { Assessment, Catalog, Shown } from './route.js'
+import { decide, decideByOrder, recordOf, type Assessment, type Catalog, type Choice, type Shown } from './route.js'
 
 const NOW = 1_000_000_000, H = 3_600_000, D = 86_400_000
 const catalog: Catalog = { grid: { strength: 2, models: [{ model: 'kimi k3', strength: 2 }] }, models: [
@@ -153,5 +153,26 @@ describe('pickByOrder reasons', () => {
 
   it('names nothing for a route with no candidate', () => {
     expect(pick([])).toBeNull()
+  })
+})
+
+describe('the pick in the verdict and the record', () => {
+  const choice = (shown: Shown[]): Choice => ({ shown, excluded: [], floor: 1, belowFloor: false })
+
+  it('a route with a pick says via order, names the pick and its reasons, and records both', () => {
+    const a = row({ left: 20, resets: NOW + 1 * D }), b = row({ left: 60, resets: NOW + 4 * D })
+    const c = choice([b, a]), picked = pick(c.shown)
+    const verdict = decideByOrder(c, picked)
+    expect(verdict).toMatchObject({ via: 'order', p: null, pick: a.id, reasons: picked!.reasons })
+    expect(verdict.why.length).toBeLessThanOrEqual(300)
+    for (const shape of ['current', 'unquoted'] as const) expect(recordOf(c, verdict, small(), shape)).toMatchObject({ pick: a.id, via: 'order', why: verdict.why })
+  })
+
+  it('a route with nothing to pick, or one candidate, is as it was: no pick', () => {
+    const only = choice([row()])
+    expect(decideByOrder(only, pick(only.shown))).toEqual(decide(only))
+    const two = choice([row({ left: 0 }), row({ left: 1 })])
+    expect(decideByOrder(two, pick(two.shown))).toEqual(decide(two))
+    expect(recordOf(two, decide(two), small())).not.toHaveProperty('pick')
   })
 })
