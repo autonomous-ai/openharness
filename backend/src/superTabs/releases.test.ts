@@ -112,6 +112,13 @@ describe('shipping', () => {
 describe('notePendingRelease', () => {
   const project = () => ({ id: 'p1' }) as SwarmProject
 
+  it('does not schedule a release for a Simple task after its project switches to Full', () => {
+    const p = project(), group = { id: 'simple', process: 'simple' } as Conversation
+    notePendingRelease(p, group, 'https://github.com/o/r/pull/1', vn(10))
+    expect(p.releases).toBeUndefined()
+    expect(group.releasing).toBeUndefined()
+  })
+
   it('marks the task releasing, its parts not known yet', () => {
     const p = project(), group = { id: 'a' } as Conversation
     notePendingRelease(p, group, 'https://github.com/o/r/pull/1', vn(10))
@@ -169,6 +176,25 @@ describe('settleReleases', () => {
   const desktopRelease = (carries = [key12], tag = 'v1.3.78_desktop', at = T - 5 * MINUTE) => ({ tag, sha: 'd1', at, carries })
   const webRelease = { tag: 'v1.3.98_web', sha: 'w1', at: T - 5 * MINUTE, carries: [key12] }
   const noFacts = { resolved: [], releases: {} }
+
+  it('opens no new release step after switching a project to Simple, preserving its existing ledger', () => {
+    const state = swarm([entry({ groupId: 'g12' })])
+    Object.assign(state.projects![0]!, { process: 'simple' })
+    const outcome = settleReleases(state, 'p1', noFacts, T)
+    expect(outcome.opened).toBeNull()
+    expect(ledgerOf(state).pending).toHaveLength(1)
+    expect(state.conversations.map(c => c.id)).toEqual(['lead-p1', 'g12', 'g13'])
+  })
+
+  it('still records a verified release for an existing step after switching to Simple', () => {
+    const state = swarm([entry({ groupId: 'g12' })], { steps: { desktop: { groupId: 'step', at: T - 10 * MINUTE } } })
+    state.conversations.push({ ...task(14), id: 'step' })
+    Object.assign(state.projects![0]!, { process: 'simple' })
+    const outcome = settleReleases(state, 'p1', { resolved: [], releases: { desktop: desktopRelease() } }, T)
+    expect(outcome.shipped).toContain('g12')
+    expect(outcome.opened).toBeNull()
+    expect(state.conversations.some(c => c.id === 'step')).toBe(true)
+  })
 
   it('marks a task released once every release it needs carries it, and takes it off the list', () => {
     const state = swarm([entry({ groupId: 'g12', mergedAt: T - 20 * MINUTE, components: ['desktop', 'web'] })])
