@@ -4,13 +4,14 @@ import { isCrew } from './crew.js'
 import { expiredModelRequests, unservedBuddyModels } from './buddyModel.js'
 import { agentDisplayName } from './agentNames.js'
 import { githubRepository, type GitHubRepository } from '../github/repository.js'
-import { activeWork, occupiesAgent, appendPullRequestUrls, stableId, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { activeWork, appendPullRequestUrls, stableId, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, canReadGroup, groupProject, ledProject, projectsOf } from './projects.js'
 import { toLead } from './terminal.js'
+import { roleNameOf } from './instructions.js'
 
-// Nobody has to tidy a Swarm by hand (roadmap, December). The server stops no agent (project instructions, phase 4): an agent
-// with no open task for 15 minutes is told to its project's coordinator once per idle spell, whether tidying is on or off,
-// and the instructions say whether the coordinator stops or keeps it. Tidying (tab.tidy) governs only the auto-archive.
+// Dee, 2026-11-06: the server handles routine idle decisions. After 15 minutes it requests a host-confirmed stop for an
+// idle non-crew Engineer and keeps Reviewers/Testers; standing crew use their existing sleep/wake keeper. Tidying governs
+// auto-archive only. The PM's notice is information, not work it has to carry out.
 
 /** How long an agent has no open task before its coordinator is told. */
 export const IDLE_NOTICE_MS = 15 * 60_000
@@ -52,9 +53,11 @@ function waitingToResume(state: SuperTabState, target: Agent): boolean {
  * is assigned again, which clears it, and finishes that work), with no delivery waiting for it (`busy`), not
  * waiting to resume after a usage limit, and in no loaded group with active work. One row in the coordinator's chat, to it
  * alone (model.ts NOTICE_READERS `idle`); the agent's `idleNoticedAt` records the spell, so the next poll says nothing until
- * new activity starts another. Nothing else about the agent changes. Run on the coordinator's poll, which knows what waits.
+ * new activity starts another. It also records host-confirmed idle stops or role retention. Run by the backend's time
+ * checks, which know what deliveries wait even when the PM is hung.
  */
 export function idleNotices(state: SuperTabState, projectId: string, now: number, busy: ReadonlySet<string>): MessageDraft[] {
+  if (state.paused) return []
   const project = projectsOf(state).find(p => p.id === projectId)
   const coordinatorId = project && state.conversations.find(c => c.id === project.leadConversationId)?.leadId
   const coordinator = coordinatorId ? state.agents.find(a => a.id === coordinatorId) : undefined
@@ -64,15 +67,26 @@ export function idleNotices(state: SuperTabState, projectId: string, now: number
     if (target.id === coordinator.id || isBuddy(target) || isCrew(target) || target.workDecision === 'stop' || target.workDecision === 'keep' || busy.has(target.id)
       || agentProjectId(state, target) !== projectId || waitingToResume(state, target)) continue
     const groups = groupsOf(state, target)
-    // Its own work in its hands, or a member of a task whose work is going (a Reviewer or a Tester linked to it). Its own task
-    // handed over (task #3399) leaves it free, so the coordinator hears it is idle.
-    if (groups.some(c => c.assignment?.agentId === target.id ? occupiesAgent(c) : activeWork(c))) continue
+    // Handed work leaves an Engineer free for dispatch, but review/CI can return work to it. Its host cannot confirm an
+    // agent.remove while it owns active work, so it must not receive an idle stop either.
+    if (groups.some(activeWork)) continue
     // A Reviewer or Tester, by what it worked on: the instructions keep it while the work it checked is open (Ken,
     // 2026-11-02: "Tester has had no open task" twice in 8 minutes, nothing for the PM to do), and no longer.
     if (checksOpenWork(state, groups, target.id)) continue
     const since = idleSince(target, groups)
     if (since === undefined || now - since < IDLE_NOTICE_MS || target.idleNoticedAt === since) continue
     target.idleNoticedAt = since
+    const role = roleNameOf(state, target)
+    if (/review|test|guide|integrator/i.test(role) || /^(guide|integrator)\d*$/i.test(target.name)) {
+      target.workDecision = 'keep'
+      target.keptAt = now
+      continue
+    }
+    if (target.startedSession && /^(engineer|builder)$/i.test(role.trim())) {
+      target.idleStop = { previous: target.workDecision ?? null }
+      target.releaseId = stableId('idle-stop', target.id, String(since))
+      target.workDecision = 'stop'
+    }
     rows.push(...toLead(state, target, { id: stableId('idle', target.id, String(since)), conversationId: project.leadConversationId, replyTo: null,
       recipients: [], author: { kind: 'agent', id: coordinator.id, name: coordinator.name, displayName: agentDisplayName(state.agents, coordinator.id),
         membershipGeneration: coordinator.membershipGeneration },

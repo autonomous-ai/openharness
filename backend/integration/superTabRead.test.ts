@@ -507,6 +507,9 @@ describe('host form (design 4.10)', () => {
     s.edit(state => {
       const pool = state.machines!.find(m => m.machineId === machine)!
       state.conversations.find(c => c.id === ids.web)!.requesterId = webRequester
+      // These checks send real-time host readings. Keep their running task fresh: its migrated timestamp would now trigger
+      // the all-worker 3-hour return clock, a real work change rather than the unchanged heartbeat this fixture tests.
+      state.conversations.find(c => c.id === ids.web)!.assignment!.progressAt = Date.now()
       // One in a running group, one in a dormant group none of its agents is in: the host still has to settle it.
       state.starts = [[ids.web, 'queued'], [archived, 'queued-in-dormant']].map(([conversationId, id]) => ({ id: id!, creationId: 'c',
         actorKey: `person:${owner.sub}`, contributorId: owner.sub, membershipGeneration: pool.membershipGeneration,
