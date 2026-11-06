@@ -416,11 +416,11 @@ describe('contributed machine executor', () => {
     }
     const probes = (f: ReturnType<typeof fixture>) => f.request.mock.calls.filter(c => c[0] === 'engines_probe')
 
-    it('says whether each engine is installed and signed in, probing again only after ten minutes', async () => {
+    it('probes only engines with account readers periodically, and repeats only after ten minutes', async () => {
       const f = fixture()
       withEngines(f)
       await f.machine.tick()
-      expect(f.request).toHaveBeenCalledWith('engines_probe', { engines: expect.arrayContaining(['claude', 'codex', 'cursor', 'hermes', 'copilot']), accounts: true }, 30_000)
+      expect(f.request).toHaveBeenCalledWith('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000)
       // An engine that says nothing about its sign-in is unknown, never signed out.
       expect(readings(f)[0]!.readiness).toEqual({ engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }] })
       f.advance(); await f.machine.tick()
