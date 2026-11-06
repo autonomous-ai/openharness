@@ -83,6 +83,14 @@ void main() {
     final title = t.widget<Text>(inHeader(find.text(_title)));
     expect(title.maxLines, isNull);
     expect(title.overflow, isNot(TextOverflow.ellipsis));
+    // It spans the middle from its left edge, never centred in it, a short title too.
+    f.rows.single
+      ..['title'] = 'Short'
+      ..['version'] = 2;
+    await f.controller.refresh();
+    await t.pump();
+    expect(t.getRect(header).left, t.getRect(middle).left);
+    expect(t.getRect(header).width, t.getRect(middle).width);
     expect(
       inHeader(find.text(superTabTaskStatusLabel('working'))),
       findsOneWidget,

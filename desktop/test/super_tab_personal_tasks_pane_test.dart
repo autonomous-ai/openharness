@@ -13,6 +13,7 @@ import 'package:harness/state/harness_activity.dart';
 import 'swarm_state_test.dart' show createApp;
 
 import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/task_card.dart';
 import 'package:harness/super_tabs/tasks/personal_task_card.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks_pane.dart';
 
@@ -477,7 +478,10 @@ void main() {
         );
         // The mark sits top right: above the title, at the card's right side.
         expect(t.getRect(mark).bottom, lessThanOrEqualTo(t.getRect(title).top));
-        expect(t.getRect(mark).left, greaterThan(t.getRect(card).center.dx));
+        expect(
+          t.getRect(mark).right,
+          closeTo(t.getRect(card).right - SuperTabTaskCard.tilePadding, 2),
+        );
         // Two avatars bottom left, who asked first; no names, priority or checks.
         final avatars = inCard('new', find.byType(SuperTabAvatar));
         expect(avatars, findsNWidgets(2));
