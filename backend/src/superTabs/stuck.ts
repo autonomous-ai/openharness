@@ -107,12 +107,15 @@ export function stuckAlerts(state: SuperTabState, now: number): { rows: MessageD
         const person = state.people.find(p => p.id === id)
         return !!person && canReadGroup(state, { kind: 'person', userId: person.id, email: person.email }, task)
       }).slice(0, MAX_MENTIONS)
-      const id = stableId('stuck', task.id, reason.key)
+      // One id an episode: the same reason coming back after its fix is a new line, and its tags new rows (security review 1 of
+      // #3431: a repeated id made writeMentions refuse the tags and stopped the Swarm's time checks). The record is in this same
+      // write, so a pass racing it on another server conflicts and retries instead of writing it twice.
+      const id = stableId('stuck', task.id, reason.key, String(now))
       rows.push({ id, conversationId: task.id, author, text: reason.text, replyTo: null, recipients, ...tagged.length ? { mentions: tagged } : {},
         source: { kind: 'system' } })
       task.stuck = { key: reason.key, messageId: id, tagged, fixed: reason.fixed }
     } else if (was) {
-      rows.push({ id: stableId('stuck-fixed', task.id, was.key), conversationId: task.id, author, text: `No longer stuck: ${was.fixed}.`, replyTo: null,
+      rows.push({ id: stableId('stuck-fixed', was.messageId), conversationId: task.id, author, text: `No longer stuck: ${was.fixed}.`, replyTo: null,
         recipients, source: { kind: 'system' } })
     }
   }
