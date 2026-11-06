@@ -366,6 +366,8 @@ function killsByName(commands: Simple[]): boolean {
  */
 function killsAll({ words }: Simple): boolean {
   if (programName(words[0]) !== 'kill') return false
+  // A bare `kill -1` is a usage error to a shell's kill, but a kill program may take -1 as its target: never useful, so refused.
+  if (words.length === 2 && words[1] === '-1') return true
   let at = 1
   if (words[at] === '-s' || words[at] === '-n') at += 2
   else if (words[at] === '-l' || words[at] === '-L') return false
