@@ -5,7 +5,9 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/buddy_rows.dart' show SuperTabCountBadge;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/my_agents.dart';
+import 'package:harness/super_tabs/model.dart' show SuperTabConversation;
 import 'package:harness/super_tabs/project_sidebar.dart';
+import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_activity_lists_test.dart' show load, swarm;
 import 'support/super_tab_fixture.dart';
@@ -305,6 +307,80 @@ void main() {
     ) async {
       await show(tester, agents: mine, setup: agents, board: false);
       expect(key('project-sidebar-agents'), findsNothing);
+    });
+  });
+
+  group('the view hands + New agent on', () {
+    Future<(SuperTabController, List<String>)> view(
+      WidgetTester tester, {
+      bool withNewProject = true,
+    }) async {
+      final calls = <String>[];
+      final server = swarm()..state['agents'] = [_agent('kestrel', 'Kestrel')];
+      final c = server.controller(
+        account: 'owner',
+        initial: {
+          'tabId': 'tab',
+          'accountId': 'owner',
+          'selectedId': 'lead',
+          'projectsGroupOpen': true,
+        },
+      );
+      await tester.runAsync(c.refresh);
+      await tester.binding.setSurfaceSize(const Size(1500, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.light),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              onInvite: () {},
+              onAddAgent: (SuperTabConversation group) =>
+                  calls.add('add-agent:${group.id}'),
+              onNewProject: withNewProject
+                  ? () => calls.add('new-project')
+                  : null,
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Mac Studio',
+              board: true,
+            ),
+          ),
+        ),
+      );
+      for (var i = 0; i < 3; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 30)),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      return (c, calls);
+    }
+
+    testWidgets('a PM names and starts a project: New project opens', (
+      tester,
+    ) async {
+      final (c, calls) = await view(tester);
+      await tester.tap(find.byTooltip('New agent'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('super-new-agent-pm'));
+      await tester.pumpAndSettle();
+      expect(calls, ['new-project']);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    });
+
+    testWidgets('a Regular agent starts from the open chat\'s creation flow', (
+      tester,
+    ) async {
+      final (c, calls) = await view(tester);
+      await tester.tap(find.byTooltip('New agent'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('super-new-agent-regular'));
+      await tester.pumpAndSettle();
+      expect(calls, ['add-agent:lead']);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
     });
   });
 }
