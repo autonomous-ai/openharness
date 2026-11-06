@@ -88,3 +88,15 @@ path; the scrollbar and the wheel and trackpad paths are tested for macOS and Wi
 
 - [ ] Light and dark screenshots of the board at 1280, 1920 and 2560, written when the capture directory is set; spacing from the
   scale only (`check-ui-style.py` clean). Red/green evidence and the PNGs in the pull request and the task thread.
+
+## Review correction: comment counts
+
+Hazel found that `lastMessageSequence` begins at the tab's sequence baseline, so it is not a count of comments.
+The snapshot provides no real comment count. Omit that fact from the footer and its semantics; keep PR/checks/avatars.
+The reviewer accepted this bounded fix, and the PM has been informed of the omitted count.
+
+- [x] Commit a regression test with `lastMessageSequence: 241397`; watch it fail on the original footer.
+- [x] Remove the invented count and the unused comment fact from the card.
+- [x] Run affected widget tests (128 passed) and regenerate light/dark Board screenshots at all three widths (8 capture tests passed).
+
+Six columns retain a 240 px minimum and scroll below about 1530 px of pane width, including a 1280 px window.

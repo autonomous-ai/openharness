@@ -16,15 +16,13 @@ import 'identity.dart';
 import 'model.dart';
 import 'task_groups.dart';
 
-/// What a Board card counts in its footer: its pull request ("#3480"), the acceptance checks done of all, and the messages in
-/// its task's chat. None of a kind shows nothing (task #3869).
+/// A Board card's pull request ("#3480") and acceptance checks done of all.
+/// None of a kind shows nothing (task #3869).
 class SuperTabCardFacts {
-  const SuperTabCardFacts({this.pullRequest, this.checks, this.comments = 0});
+  const SuperTabCardFacts({this.pullRequest, this.checks});
   final String? pullRequest;
   final ({int done, int total})? checks;
-  final int comments;
-
-  bool get isEmpty => pullRequest == null && checks == null && comments == 0;
+  bool get isEmpty => pullRequest == null && checks == null;
 }
 
 /// One card of a project's Tasks view, on the Board and as a List row alike:
@@ -79,7 +77,7 @@ class SuperTabTaskCard extends StatefulWidget {
   /// The caption is a warning (a merge that has waited too long).
   final bool warn;
 
-  /// A tile's state chips, its pull request, checks and comments, and the agent on it and who asked, which sit in its
+  /// A tile's state chips, its pull request and checks, and the agent on it and who asked, which sit in its
   /// footer, the avatars bottom right (task #3869). A List row shows none of them.
   final List<SuperTabStateChip> chips;
   final SuperTabCardFacts facts;
@@ -139,7 +137,6 @@ class _SuperTabTaskCardState extends State<SuperTabTaskCard> {
         ?w.facts.pullRequest,
         if (w.facts.checks case final checks?)
           '${checks.done} of ${checks.total} checks done',
-        if (w.facts.comments > 0) '${w.facts.comments} comments',
       ].join(', '),
       excludeSemantics: true,
       child: _surface(
@@ -259,7 +256,7 @@ class _SuperTabTaskCardState extends State<SuperTabTaskCard> {
         SuperTabStateChip.needsYou => grid.AppPalette.warn,
       }, key: ValueKey('super-card-chip-${chip.name}'));
 
-  /// The pull request, the checks and the comments on the left, and on the right the agent's avatar with the requester's
+  /// The pull request and checks on the left, and on the right the agent's avatar with the requester's
   /// small beside it, bottom right, where a Trello card puts its members.
   Widget _footer() {
     final w = widget;
@@ -298,16 +295,6 @@ class _SuperTabTaskCardState extends State<SuperTabTaskCard> {
             'super-card-checks',
             Icon(AppIcons.check, size: iconSize, color: DesktopChrome.muted),
             '${checks.done}/${checks.total}',
-          ),
-        if (w.facts.comments > 0)
-          fact(
-            'super-card-comments',
-            Icon(
-              AppIcons.messagesSquare,
-              size: iconSize,
-              color: DesktopChrome.muted,
-            ),
-            '${w.facts.comments}',
           ),
         const Spacer(),
         if (w.requester case final person?) ...[

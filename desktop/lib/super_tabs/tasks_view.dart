@@ -552,8 +552,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     );
   }
 
-  /// What a tile counts in its footer: its pull request, the acceptance checks done, and the messages in its chat. The
-  /// message count is the task's own counter the Swarm already holds, so it reads nothing more (task #3869).
+  /// The footer uses only facts the snapshot provides. A message sequence
+  /// includes the tab's baseline, so it cannot serve as a comment count.
   SuperTabCardFacts _facts(SuperTabConversation task) {
     final url =
         task.cards.pullRequests.firstOrNull?.url ??
@@ -569,7 +569,6 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
               done: task.checks.where((c) => c['passedBy'] != null).length,
               total: task.checks.length,
             ),
-      comments: task.lastMessageSequence,
     );
   }
 
