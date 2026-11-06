@@ -49,8 +49,8 @@ export function updateDismissKeys(capture: string): string[] | null {
 }
 
 /**
- * The key that opens an untrusted folder restricted, or null unless the capture is exactly Codex's screen for it. Only for a
- * Team-written Swarm start (superTabs/machines.ts), whose engine home names its checkout untrusted (superTabs/start.ts): in
+ * The key that opens an untrusted folder restricted, or null unless the capture is exactly Codex's screen for it. For a
+ * Swarm start or resume, whose engine home names its checkout untrusted (superTabs/start.ts): in
  * a home that names nothing, codex-cli 0.165 asks "Trust this folder?" instead, nobody answers it, and every such start
  * timed out at 3 minutes (task #3009). "Open restricted" keeps the folder's config, hooks and exec policies off and saves no
  * trust, which is what that home is for. It is Enter on the highlighted first row, so the screen must say so word for word:
@@ -63,8 +63,12 @@ export function openRestrictedKeys(capture: string): string[] | null {
   const text = lines.join(' ')
   if (/Trust this folder\?|Do you trust the contents/.test(text) || !text.includes(RESTRICTED_SENTENCE)) return null
   const rows = lines.filter(line => /^[›>]?\s*\d+\./.test(line))
-  const menu = rows.length === 2 && /^[›>]\s*1\. Open restricted$/.test(rows[0]) && rows[1] === '2. Quit'
-  return menu && lines[lines.length - 1] === 'enter continue · esc quit' ? ['Enter'] : null
+  if (rows.length !== 2 || !/^[›>]\s*1\. Open restricted$/.test(rows[0])) return null
+  const footer = lines[lines.length - 1]
+  // 0.166 returns to Agent Command Center instead of quitting (#3904); both screens open restricted with Enter.
+  const menu = (rows[1] === '2. Quit' && footer === 'enter continue · esc quit')
+    || (rows[1] === '2. Back to Agent Command Center' && footer === 'enter continue · esc back')
+  return menu ? ['Enter'] : null
 }
 const RESTRICTED_SENTENCE = 'Config, hooks, and exec policies from untrusted folders stay disabled.'
 
