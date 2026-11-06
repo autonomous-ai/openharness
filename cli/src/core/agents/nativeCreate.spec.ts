@@ -68,7 +68,7 @@ it.each([true, false])('completes native Codex preparation before its dispatch c
   const receipts = new AgentCreationReceipts(join(root, 'receipts'))
   const requests = createLaunchRequests({ receipts, createAgent: () => creator, prepareCreate: creator.prepare,
     forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
-    byAgent: () => pending, setLaunchArgs: () => true, toProject: async () => ({ agentId: pending.agentId }) as never, modelTarget: async () => null })
+    byAgent: () => pending, stoppedAgent: () => undefined, toProject: async () => ({ agentId: pending.agentId }) as never, modelTarget: async () => null })
   stop = requests.stop
   const replies: Record<string, unknown>[] = []
   const input = { creationId: 'native_trust_fixture_1', engine: 'codex', cwd, bypassPermission: false, prompt: 'original prompt' }

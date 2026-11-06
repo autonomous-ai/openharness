@@ -2515,7 +2515,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     workspaceMissing, relaunchOverrides, prepareSessionResume, refreshGridWebSearch,
     downgradedPermission: (entry, native) => downgradedPermission(entry, entry.bypassPermission === true, 'restore', native),
     launch: (entry, opts, overrides, permission) => {
-      const { env: launchEnv, extraArgs, clearEnv } = overrides
+      const { env: launchEnv, extraArgs, ownerArgs, clearEnv } = overrides
       const argv = buildEngineLaunchArgv(entry.engine, {
         ...opts,
         ...(overrides.native ? { native: overrides.native } : {}),
@@ -2525,6 +2525,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         installIfMissing: enginePathOverride(entry.engine) ? undefined : engineInstallRecipe(entry.engine),
         ...(entry.cwd ? { cwd: entry.cwd } : {}),
         ...(extraArgs.length ? { extraArgs } : {}),
+        // The owner's own launch words, last on the command line (engineLaunch.ts `ownerArgs`).
+        ...(ownerArgs?.length ? { ownerArgs } : {}),
         ...(clearEnv.length ? { clearEnv } : {}),
         ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
       })
@@ -3056,7 +3058,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     createAgent: () => backend.onCreateAgent, forkAgent: () => backend.onForkAgent,
     prepareCreate: creator.prepare, prepareEngine: prepareNativeLaunch,
     resumeAgent: () => lifecycle.resumeAgent, restartAgent: () => restartAgent,
-    byAgent: (id) => registry.byAgent(id), setLaunchArgs: (id, a) => registry.setLaunchArgs(id, a), toProject: (s) => backend.toProject(s),
+    byAgent: (id) => registry.byAgent(id), stoppedAgent: (id) => stoppedAgents.get(id) ?? undefined, toProject: (s) => backend.toProject(s),
     modelTarget: (selection) => (ports.models ?? MODELS_OFF).launchTarget(selection),
     // A guest's New Harness: built by shared machines, as the guest's own OS user (core/agents/guestCreate.ts).
     guestCreate: () => guestCreate,

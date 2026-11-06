@@ -147,7 +147,7 @@ export function bindLaunchRequests(socket: BackendSocket, over: Partial<Launcher
       receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations')),
       createAgent: () => socket.onCreateAgent, forkAgent: () => socket.onForkAgent,
       resumeAgent: () => state.resume, restartAgent: () => state.restart,
-      byAgent: (id) => registry.byAgent(id), setLaunchArgs: (id, a) => registry.setLaunchArgs(id, a), toProject: (s) => socket.toProject(s),
+      byAgent: (id) => registry.byAgent(id), stoppedAgent: (id) => stoppedAgents.get(id) ?? undefined, toProject: (s) => socket.toProject(s),
       modelTarget: (selection) => (state.modelTarget ?? MODELS_OFF.launchTarget)(selection),
     })
     socket.createProvider = launches.create

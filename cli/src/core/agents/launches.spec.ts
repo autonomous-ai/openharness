@@ -93,7 +93,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
     byAgent: (id) => known.get(id), toProject: vi.fn(async (s: RegisteredSession) => frameOf(s)),
     modelTarget: resolveNewAgentModel,
     swarmLaunch: SWARM_LAUNCH,
-    setLaunchArgs: vi.fn(() => true),
+    stoppedAgent: () => undefined,
     ...over,
   }
   const requests = createLaunchRequests(deps)
@@ -104,7 +104,8 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
     deps, create, fork, resume, restart, replies, requests,
     ask: async (payload: Record<string, unknown>, local = true) => { await requests.create(payload, { local }, reply); return replies.at(-1) },
     status: async (payload: Record<string, unknown>) => { await requests.createStatus(payload, { local: true }, reply); return replies.at(-1) },
-    relaunch: async (type: string, payload: Record<string, unknown>) => { await requests.relaunch(type, payload, reply); return replies.at(-1) },
+    // An app of the owner's own unless a test says otherwise: only that asker may change an agent's launch flags.
+    relaunch: async (type: string, payload: Record<string, unknown>, asker: { ownerApp: boolean } = { ownerApp: true }) => { await requests.relaunch(type, payload, reply, asker); return replies.at(-1) },
     forkAsk: async (payload: Record<string, unknown>) => { await requests.fork(payload, reply); return replies.at(-1) },
   }
 }
@@ -1195,45 +1196,70 @@ describe('agent_resume and agent_restart', () => {
 })
 
 describe('agent_restart with launchArgs', () => {
-  it('saves the parsed words before the restart runs and echoes them, directly and through a receipt', async () => {
-    const order: string[] = []
-    const setLaunchArgs = vi.fn(() => { order.push('save'); return true })
-    const restart = vi.fn(async () => { order.push('restart'); return { ok: true as const, session: session('a1'), resumed: false } })
-    const run = setup({ setLaunchArgs }, { restart })
+  /** A record the launch itself writes, as a real restart does once the engine is back: the daemon saves on success. */
+  const records = (flags?: string[]) => {
+    const row = { ...session('a1'), ...(flags ? { launchArgs: flags } : {}) }
+    return { row, byAgent: (id: string) => id === 'a1' ? row : undefined }
+  }
+
+  it('hands the parsed words to the restart, saving nothing itself, and echoes what the record then holds, directly and through a receipt', async () => {
+    const store = records()
+    const restart = vi.fn(async (_id: string, words?: string[]) => { store.row.launchArgs = words; return { ok: true as const, session: store.row, resumed: false } })
+    const run = setup({ byAgent: store.byAgent }, { restart })
     expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome' })).toStrictEqual({ agent: { id: 'a1' }, resumed: false, launchArgs: ['--chrome'] })
-    expect(setLaunchArgs).toHaveBeenCalledWith('a1', ['--chrome'])
-    expect(order).toEqual(['save', 'restart'])
+    expect(restart).toHaveBeenCalledWith('a1', ['--chrome'])
     run.replies.length = 0
     await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome', creationId: CREATION })
     await vi.waitFor(() => expect(run.replies).toHaveLength(1))
     expect(run.replies[0]).toMatchObject({ creationId: CREATION, state: 'created', launchArgs: ['--chrome'] })
-    // The same receipt asked again does not save a second time.
+    // The same receipt asked again does not restart a second time.
     await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome', creationId: CREATION })
     expect(run.replies.at(-1)).toMatchObject({ launchArgs: ['--chrome'] })
-    expect(setLaunchArgs).toHaveBeenCalledTimes(2)
+    expect(restart).toHaveBeenCalledTimes(2)
   })
 
   it('clears with an empty string and echoes an empty list', async () => {
-    const run = setup()
+    const store = records(['--old'])
+    const restart = vi.fn(async (_id: string, words?: string[]) => { store.row.launchArgs = words?.length ? words : undefined; return { ok: true as const, session: store.row, resumed: false } })
+    const run = setup({ byAgent: store.byAgent }, { restart })
     expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '' })).toMatchObject({ launchArgs: [] })
-    expect(run.deps.setLaunchArgs).toHaveBeenCalledWith('a1', [])
+    expect(restart).toHaveBeenCalledWith('a1', [])
   })
 
-  it('refuses a flag Harness sets, a non-string, a Team-written agent and an unknown agent, saving and restarting nothing', async () => {
+  it('refuses a flag Harness sets, a non-string, a Team-written agent, an unknown agent and a non-owner, restarting nothing', async () => {
     const run = setup({ byAgent: (id: string) => id === 'written' ? { ...session('written'), permissionMode: 'teamWritten' } : id === 'a1' ? session('a1') : undefined })
     expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--model x' }))
       .toStrictEqual({ error: 'INVALID_LAUNCH_ARGS', detail: '--model is set by Harness and can\'t be added here.' })
     expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: 5 })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
     expect(await run.relaunch('agent_restart', { agentId: 'written', launchArgs: '--chrome' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
     expect(await run.relaunch('agent_restart', { agentId: 'gone', launchArgs: '--chrome' })).toStrictEqual({ error: 'AGENT_NOT_FOUND' })
-    expect(run.deps.setLaunchArgs).not.toHaveBeenCalled()
     expect(run.restart).not.toHaveBeenCalled()
   })
 
-  it('takes them on a resume too: validated, saved, echoed and fingerprinted', async () => {
+  // The words are run by the engine as the owner: a device (dial, Pro), an agent's own CLI and a guest may not set them.
+  it('takes them only from the owner\'s own app, whichever way the others ask', async () => {
     const run = setup()
+    for (const type of ['agent_restart', 'agent_resume']) {
+      expect(await run.relaunch(type, { agentId: 'a1', launchArgs: '--chrome' }, { ownerApp: false }))
+        .toStrictEqual({ error: 'INVALID_LAUNCH_ARGS', detail: 'Launch flags can only be changed from your own Harness app.' })
+      expect(await run.relaunch(type, { agentId: 'a1', launchArgs: '--chrome', creationId: CREATION }, { ownerApp: false })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
+    }
+    expect(run.restart).not.toHaveBeenCalled()
+    expect(run.resume).not.toHaveBeenCalled()
+    // The same asker still restarts and resumes without them.
+    expect(await run.relaunch('agent_restart', { agentId: 'a1' }, { ownerApp: false })).toMatchObject({ resumed: false })
+    expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome' })).toMatchObject({ resumed: false })
+    expect(run.restart).toHaveBeenCalledTimes(2)
+  })
+
+  it('takes them on a resume too, validated, handed over and fingerprinted, with a permission mode beside them', async () => {
+    const store = records()
+    const resume = vi.fn(async (_id: string, _mode?: string, words?: string[]) => { store.row.launchArgs = words; return { ok: true as const, session: store.row, resumed: true } })
+    const run = setup({ byAgent: store.byAgent }, { resume })
     expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--chrome' })).toStrictEqual({ agent: { id: 'a1' }, resumed: true, launchArgs: ['--chrome'] })
-    expect(run.deps.setLaunchArgs).toHaveBeenCalledWith('a1', ['--chrome'])
+    expect(resume).toHaveBeenLastCalledWith('a1', undefined, ['--chrome'])
+    await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--chrome', permissionMode: 'plan' })
+    expect(resume).toHaveBeenLastCalledWith('a1', 'plan', ['--chrome'])
     expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--model x' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
     run.replies.length = 0
     await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--chrome', creationId: CREATION })
@@ -1242,33 +1268,32 @@ describe('agent_restart with launchArgs', () => {
     expect(run.replies.at(-1)).toStrictEqual({ error: 'CREATION_CONFLICT' })
   })
 
-  // An early refusal stopped nothing, so a reboot must not apply flags the owner saw fail; a failure that may have
-  // replaced the process keeps them.
-  it('puts the previous flags back on an early refusal, directly and through a receipt, and keeps them when the process may be gone', async () => {
-    const withPrevious = (previous: string[] | undefined) => (id: string) => id === 'a1' ? { ...session('a1'), ...(previous ? { launchArgs: previous } : {}) } : undefined
-    const refuse = (error: string) => vi.fn(async () => ({ ok: false as const, error }))
-    const direct = setup({ byAgent: withPrevious(['--old']) }, { restart: refuse('NO_ACTIVE_PROCESS') })
-    await direct.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome' })
-    expect(vi.mocked(direct.deps.setLaunchArgs).mock.calls).toEqual([['a1', ['--chrome']], ['a1', ['--old']]])
-    const none = setup({ byAgent: withPrevious(undefined) }, { resume: refuse('AGENT_BUSY') })
-    await none.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--chrome' })
-    expect(vi.mocked(none.deps.setLaunchArgs).mock.calls).toEqual([['a1', ['--chrome']], ['a1', []]])
-    const receipt = setup({ byAgent: withPrevious(['--old']) }, { restart: refuse('NO_ACTIVE_PROCESS') })
-    await receipt.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome', creationId: CREATION })
-    await vi.waitFor(() => expect(receipt.replies).toHaveLength(1))
-    expect(vi.mocked(receipt.deps.setLaunchArgs).mock.calls).toEqual([['a1', ['--chrome']], ['a1', ['--old']]])
-    for (const error of ['RESTART_FAILED', 'RESUME_UNCONFIRMED']) {
+  // A harness a bad flag left stopped lives in the stopped-agents store, not the registry (resumeAgentService.ts).
+  it('resumes a stopped agent with them: its engine and Team-written mode are read from the stopped store', async () => {
+    const stopped = { ...session('a1'), engine: 'codex' as const }
+    const resume = vi.fn(async () => ({ ok: true as const, session: stopped, resumed: true }))
+    const run = setup({ byAgent: () => undefined, stoppedAgent: (id) => id === 'a1' ? stopped : undefined }, { resume })
+    // Codex's own -c is the owner's to use; a key Harness sets is not, and the engine is the stopped row's.
+    expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '-c model=x' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
+    expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '-c model_reasoning_effort=high' })).toMatchObject({ resumed: true })
+    expect(resume).toHaveBeenCalledExactlyOnceWith('a1', undefined, ['-c', 'model_reasoning_effort=high'])
+    const written = setup({ byAgent: () => undefined, stoppedAgent: () => ({ ...stopped, permissionMode: 'teamWritten' }) })
+    expect(await written.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--chrome' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
+    expect(await run.relaunch('agent_resume', { agentId: 'nowhere', launchArgs: '--chrome' })).toStrictEqual({ error: 'AGENT_NOT_FOUND' })
+  })
+
+  // Nothing is saved here: the launch saves on success. A refusal, a missing process or an engine that does not start
+  // carries no echo, because there is nothing new on the record to report.
+  it('echoes nothing on a failed reply, directly or through a receipt, whatever the failure', async () => {
+    for (const error of ['AGENT_BUSY', 'NO_ACTIVE_PROCESS', 'RESTART_FAILED', 'RESUME_UNCONFIRMED']) {
       for (const creationId of [undefined, CREATION]) {
-        const kept = setup({ byAgent: withPrevious(['--old']) }, { restart: refuse(error) })
-        await kept.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome', ...(creationId ? { creationId } : {}) })
-        await vi.waitFor(() => expect(kept.replies).toHaveLength(1))
-        expect(vi.mocked(kept.deps.setLaunchArgs).mock.calls).toEqual([['a1', ['--chrome']]])
+        const run = setup({}, { restart: vi.fn(async () => ({ ok: false as const, error })) })
+        await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--chrome', ...(creationId ? { creationId } : {}) })
+        await vi.waitFor(() => expect(run.replies).toHaveLength(1))
+        expect(run.replies[0], `${error} ${creationId}`).not.toHaveProperty('launchArgs')
+        expect(run.replies[0]).not.toHaveProperty('agent')
       }
     }
-    // No new flags given: nothing was saved, so nothing is put back.
-    const plain = setup({ byAgent: withPrevious(['--old']) }, { restart: refuse('NO_ACTIVE_PROCESS') })
-    await plain.relaunch('agent_restart', { agentId: 'a1' })
-    expect(plain.deps.setLaunchArgs).not.toHaveBeenCalled()
   })
 
   it('treats the same receipt with different flags as a different request', async () => {
