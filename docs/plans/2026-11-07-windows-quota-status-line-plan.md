@@ -41,7 +41,7 @@ Tester runs it on a Windows machine with Git for Windows, with and without the p
 
 ## Tasks (all test first)
 
-- [ ] `claudeCodeGitBash` finds the Git Bash Claude Code finds, in its order, and none without one.
-- [ ] Windows with Git Bash: Harness's line quoted for bash (a path with a space), the person's own line passed with `--bash`.
-- [ ] Windows without Git Bash: Harness's line in PowerShell's form; a person's own line left alone, said in the log.
-- [ ] The script with `--bash` runs the person's line in that bash, its folder first on PATH, and a `.sh` line as `bash <line>`.
+- [x] `claudeCodeGitBash` finds the Git Bash Claude Code finds, in its order, and none without one.
+- [x] Windows with Git Bash: Harness's line quoted for bash (a path with a space), the person's own line passed with `--bash`.
+- [x] Windows without Git Bash: Harness's line in PowerShell's form; a person's own line left alone, said in the log.
+- [x] The script with `--bash` runs the person's line in that bash, its folder first on PATH, and a `.sh` line as `bash <line>`.
