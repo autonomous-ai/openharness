@@ -2727,6 +2727,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const pullRequestUrl = projectPullRequestUrl(command.pullRequestUrl, repositoryUrl)
         ?? fail('PULL_REQUEST_REPOSITORY', `This pull request is not in the project's repository (${own!.fullName}).`, 400)
       const shippedAt = group.ledger?.shippedAt, linked = group.pullRequestUrls?.includes(pullRequestUrl)
+      // Whether the task itself named this pull request before the record: in its result or a check's evidence (the Ready line), or in
+      // its code list (its brief, its builder's or the project's own posts). A builder lost before its Ready line has only the
+      // posts, and its merged task must still close (task #3574). Read before the record links anything.
+      const assignment = group.assignment
+      // Only the code list: a task stored before it existed reads every link it held as its code, posts' and earlier merge records' included.
+      const namedBefore = group.codePullRequestUrls?.includes(pullRequestUrl) ?? false
+      const ownPullRequest = (namedBefore && !group.cards?.recorded?.includes(pullRequestUrl))
+        || (!!assignment && [assignment.result, ...group.checks.map(check => check.evidence)].some(text => !!text && pullRequestLinks(text, repositoryUrl).includes(pullRequestUrl)))
+      // What only this record linked stays marked, so a repeated record of an unrelated pull request closes nothing (Aster, #3259).
+      if (!ownPullRequest && !group.cards?.recorded?.includes(pullRequestUrl)) group.cards = { ...group.cards, recorded: [...group.cards?.recorded ?? [], pullRequestUrl] }
       appendPullRequestUrls(group, [pullRequestUrl], repositoryUrl)
       // The pull request that merged is the task's own code.
       appendCodePullRequestUrls(group, [pullRequestUrl], repositoryUrl)
@@ -2749,11 +2759,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A merged task whose builder is gone closes itself with the merge as its result (task #3510): a released builder can
       // no longer set its own Done, and the task would stay in review for good. A live builder still closes its own task, and
       // a step never closes here, nor its parent through it. Only the task's own pull request closes it: one its builder named in
-      // its result (the Ready line) or a check's evidence names, which a merge record never writes. A merge of an unrelated one
-      // recorded here, even twice, only links it (Aster, review of #3259).
-      const assignment = group.assignment
-      const ownPullRequest = assignment && [assignment.result, ...group.checks.map(check => check.evidence)]
-        .some(text => !!text && pullRequestLinks(text, repositoryUrl).includes(pullRequestUrl))
+      // its result (the Ready line), a check's evidence or its own posts, which a merge record never writes. A merge of an unrelated
+      // one recorded here, even twice, only links it (Aster, review of #3259). Closed whenever the record is made: a lost attempt, a
+      // merge recorded again later (#3574).
       if (ownPullRequest && !isStep(group) && assignment && !['done', 'cancelled'].includes(assignment.status) && builderGone(state, assignment)) {
         const previous = assignment.status
         assignment.status = 'done'

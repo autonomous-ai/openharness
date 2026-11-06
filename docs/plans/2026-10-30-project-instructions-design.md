@@ -80,7 +80,16 @@ lead is always the PM. A team cannot define "QA on the device", "Designer" or "d
 - Agents talking in a loop with nobody noticing, burning quota.
 - Losing what teams already set: rules, policy notes and custom role texts survive in the document, in their own words.
 
-## What the server still enforces: facts and access only
+## Phase-4 enforcement policy (superseded 2026-11-06)
+
+Dee's 2026-11-06 decision supersedes the facts/access-only policy below and the blanket refusal-removal
+requirements in this design: every rule a program can check belongs in code; project instructions keep judgment
+and project facts. Rule refusals may use plain code names again. Task #3591 narrows `removedRefusals.test.ts`
+to the retired role-registry codes, each with its reason; it adds no runtime refusals. The facts and access checks
+below remain required. The role registry remains retired. The inventory and removal notes below record the
+historical phase-4 implementation, not a ban on future rule enforcement.
+
+### Original phase-4 policy
 
 A start, assignment or message is refused only when it cannot happen or breaks an access rule:
 

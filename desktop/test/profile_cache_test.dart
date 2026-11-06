@@ -391,8 +391,32 @@ void main() {
       test('reads as none when it is $name', () async {
         storage.values[ProfileCache.key] = stored;
         expect(await ProfileCache(storage).read('machine-a'), isNull);
+        expect(await ProfileCache(storage).readKept(), isNull);
       });
     }
+
+    test(
+      'the record reads back with the machine it was proven under (task #3561)',
+      () async {
+        storage.values[ProfileCache.key] = jsonEncode(good);
+        final kept = await ProfileCache(storage).readKept();
+        expect(kept?.machineId, 'machine-a');
+        expect(kept?.profile.id, 'ada');
+        expect(kept?.profile.email, 'ada@example.invalid');
+        expect(kept?.profile.name, 'Ada');
+        expect(await ProfileCache(null).readKept(), isNull);
+      },
+    );
+
+    test('a record with no machine id reads as none', () async {
+      storage.values[ProfileCache.key] = jsonEncode({
+        ...good,
+        'machineId': null,
+      });
+      expect(await ProfileCache(storage).readKept(), isNull);
+      storage.values[ProfileCache.key] = jsonEncode({...good, 'machineId': ''});
+      expect(await ProfileCache(storage).readKept(), isNull);
+    });
 
     test('holds no more than who the person is', () async {
       await ProfileCache(storage).write(
