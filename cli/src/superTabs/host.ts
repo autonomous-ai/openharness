@@ -899,10 +899,13 @@ export class SuperTabHost {
     const rows = data.map(object).filter(row => identifier(row.tabId) && object(row.agent).machineId === this.machineId
       && identifier(object(row.agent).harnessId) && object(row.agent).buddyOf)
     const ownerOf = (row: Record<string, unknown>) => { const of = object(object(row.agent).buddyOf); return `${row.tabId}\0${of.personId}\0${of.generation}` }
+    // A person may have several Buddies (task #3818): a Buddy's sessions are those in its own chat, which the backend names on
+    // each row; an older backend names none, and the person's sessions all go with their one Buddy.
+    const chatOf = (row: Record<string, unknown>) => identifier(row.buddyChatId) ? `${row.tabId}\0chat\0${row.buddyChatId}` : ownerOf(row)
     for (const row of rows) {
       const agent = object(row.agent)
       if (agent.buddySession || !agent.modelRequest) continue
-      const sessions = rows.filter(other => object(other.agent).buddySession && ownerOf(other) === ownerOf(row))
+      const sessions = rows.filter(other => object(other.agent).buddySession && chatOf(other) === chatOf(row))
       void this.buddyModels.serve(row as unknown as BuddyModelRow, sessions as unknown as BuddyModelRow[])
         .catch(error => this.log(`Buddy model: ${error instanceof Error ? error.name : typeof error}`))
     }
@@ -1657,7 +1660,9 @@ export class SuperTabHost {
       // the backend's stableId('buddy', 'swarm', person, generation); an older project chat's session is in that chat.
       const swarm = agent.buddyScope === 'swarm' || identifier(session.projectId)
       const projectId = swarm ? 'swarm' : identifier(agent.projectId) ? agent.projectId : 'lead'
-      const conversationId = buddyChatIdOf(projectId, buddyOf.personId, buddyOf.generation)
+      // With several Buddies (task #3818) the backend names the session's own chat on its row; an older backend names none.
+      const named = object(row).buddyChatId
+      const conversationId = identifier(named) ? named : buddyChatIdOf(projectId, buddyOf.personId, buddyOf.generation)
       state.running = true
       const ending = reason, short = String(agent.harnessId).slice(0, 8)
       // One id per session and reason: a retry is the same request, and a changed reason never reuses an id for another.

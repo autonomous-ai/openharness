@@ -3130,7 +3130,12 @@ class SuperTabController extends ChangeNotifier {
     for (final g in snapshot.conversations) {
       byProject.putIfAbsent(g.projectId, () => []).add(g);
       if (g.isBuddyChat && g.buddyOwnerId == accountId) {
-        buddyChats.putIfAbsent(g.projectId, () => g);
+        // Of several Buddies (#3818) the default is the one the app opens; with none flagged, the first.
+        if (g.buddyDefault) {
+          buddyChats[g.projectId] = g;
+        } else {
+          buddyChats.putIfAbsent(g.projectId, () => g);
+        }
       }
     }
     return _index = (
@@ -3165,6 +3170,18 @@ class SuperTabController extends ChangeNotifier {
   /// ([openBuddyChat]), and stays after one is removed.
   SuperTabConversation? buddyChat(String projectId) =>
       _indexed()?.buddyChats[projectId];
+
+  /// The signed-in person's Buddies, each its own chat (#3818), the default first ([buddyChat]); one, or none, from
+  /// a backend before several Buddies.
+  List<SuperTabConversation> buddies([String projectId = kSwarmBuddyKey]) {
+    final first = buddyChat(projectId);
+    return [
+      ?first,
+      for (final g in projectConversations(projectId))
+        if (g.isBuddyChat && g.buddyOwnerId == accountId && g.id != first?.id)
+          g,
+    ];
+  }
 
   /// The signed-in person's Buddy in [projectId]; null when they have none.
   /// Its main session only: a thread's own session is never "the Buddy".
@@ -3202,6 +3219,7 @@ class SuperTabController extends ChangeNotifier {
     required String machineId,
     required String engine,
     Map<String, dynamic>? setup,
+    String? name,
   }) async {
     final result = await command({
       'type': 'buddy.create',
@@ -3209,6 +3227,8 @@ class SuperTabController extends ChangeNotifier {
       'machineId': machineId,
       'engine': engine,
       'setup': ?setup,
+      // A name and no chat: a new Buddy in a chat of its own (#3818).
+      'name': ?name,
     });
     if (result == null) return false;
     final id = result['conversationId'];
@@ -3216,19 +3236,37 @@ class SuperTabController extends ChangeNotifier {
     return true;
   }
 
-  /// Removes the reader's Buddy in [projectId]; its chat stays.
-  Future<bool> removeBuddy(String projectId) async =>
+  /// Removes the reader's Buddy in [projectId], or the one of [conversationId] of several (#3818); its chat stays.
+  Future<bool> removeBuddy(String projectId, {String? conversationId}) async =>
       await command({
         'type': 'buddy.remove',
-        if (projectId != kSwarmBuddyKey) 'projectId': projectId,
+        if (conversationId != null)
+          'conversationId': conversationId
+        else if (projectId != kSwarmBuddyKey)
+          'projectId': projectId,
+      }) !=
+      null;
+
+  /// Makes the Buddy of [conversationId] the reader's default of several (#3818): it opens first and takes what is
+  /// addressed to them. False when refused: [operationError] says why.
+  Future<bool> setDefaultBuddy(String conversationId) async =>
+      await command({
+        'type': 'buddy.default',
+        'conversationId': conversationId,
       }) !=
       null;
 
   /// Names the reader's Buddy in [projectId] from its chat, or clears the
   /// name for the default when [name] is empty. Everyone in the Swarm sees it.
   /// False when refused: [operationError] says why.
-  Future<bool> renameBuddy(String projectId, String name) async {
-    final chat = buddyChat(projectId);
+  Future<bool> renameBuddy(
+    String projectId,
+    String name, {
+    String? conversationId,
+  }) async {
+    final chat = conversationId == null
+        ? buddyChat(projectId)
+        : snapshot?.conversation(conversationId);
     if (chat == null) return false;
     final trimmed = name.trim();
     return await command({
@@ -3282,6 +3320,107 @@ class SuperTabController extends ChangeNotifier {
     return done != null
         ? null
         : operationError ?? 'Another change is on its way. Try again.';
+  }
+
+  /// Pauses [taskId], or resumes it (#3819, a project on the Board): the server lets its project's owner, the Swarm's
+  /// owner and its decider do it. Null when done, else the server's sentence.
+  Future<String?> setTaskPaused(String taskId, {required bool paused}) async {
+    // One command both ways: `work.resume` resumes lost work (#3819).
+    final done = await command({
+      'type': 'work.pause',
+      'conversationId': taskId,
+      'paused': paused,
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
+  /// Proposes work to [projectId] from its Board (#3817 `proposal.create`), for a person with or without a Buddy.
+  /// Null when done, else the server's sentence (what is missing, or who may set P0).
+  Future<String?> propose(
+    String projectId, {
+    required String title,
+    required String goal,
+    required String why,
+    required String doneWhen,
+    required List<String> evidence,
+    required SuperTabTaskPriority priority,
+  }) async {
+    final done = await command({
+      'type': 'proposal.create',
+      'projectId': projectId,
+      'title': title,
+      // What the person wrote is the proposal's words: its goal.
+      'text': goal,
+      'goal': goal,
+      'why': why,
+      'doneWhen': doneWhen,
+      'evidence': evidence,
+      'priority': priority.badge,
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
+  /// Grants or takes back Can chat in [projectId] for [personId] (#3819 `project.canChat`): its owner or the Swarm's
+  /// owner does. Null when done, else the server's sentence.
+  Future<String?> setCanChat(
+    String projectId,
+    String personId, {
+    required bool granted,
+  }) async {
+    final done = await command({
+      'type': 'project.canChat',
+      'projectId': projectId,
+      'personId': personId,
+      'granted': granted,
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
+  /// Whether the reader may write in [group]: in a project on the Board its chat takes only its owner, the Swarm's
+  /// owner and people granted Can chat (#3819); everything else is as today.
+  bool mayChatIn(SuperTabConversation? group) {
+    if (group == null) return true;
+    final project = snapshot?.projectById(group.projectId);
+    if (project == null || project.leadConversationId != group.id) return true;
+    return project.canChat(accountId, swarmOwner: isOwner);
+  }
+
+  /// Answers the question [questionId] the PM asked the reader on the card [conversationId] (#3817). Null when done,
+  /// else the server's sentence.
+  Future<String?> answerQuestion(
+    String conversationId,
+    String questionId,
+    String text,
+  ) async {
+    final done = await command({
+      'type': 'proposal.answer',
+      'conversationId': conversationId,
+      'questionId': questionId,
+      'text': text,
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
+  /// Whether the reader may set P0 and pause or resume any task of [project] (spec "Who may do what on the Board").
+  bool maySteer(SuperTabProject project) =>
+      project.canSteer(accountId, swarmOwner: isOwner);
+
+  /// Whether the reader may give [task] [priority]: anyone who may write, in a project not on the Board; on the
+  /// Board, P1 to P3 on their own card, and anything when they steer ([maySteer]). The server decides (#3819).
+  bool mayPrioritize(SuperTabConversation task, SuperTabTaskPriority priority) {
+    if (!canWrite) return false;
+    final project = snapshot?.projectById(task.projectId);
+    if (project == null || !project.boardMode) return true;
+    if (maySteer(project)) return true;
+    return task.requesterId == accountId && priority != SuperTabTaskPriority.p0;
   }
 
   /// Moves the reader's one Buddy onto [gridModel], a model shared in the

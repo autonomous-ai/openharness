@@ -65,6 +65,8 @@ export const GROUP_FIELDS = {
     'assignment.verdicts',
     'brief',
     'briefAt',
+    'buddyChats',
+    'buddyDefault',
     'buddyDownTold',
     'buddyName',
     'buddySessions',
