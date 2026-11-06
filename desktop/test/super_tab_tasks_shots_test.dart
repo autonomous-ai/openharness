@@ -36,7 +36,10 @@ void main() {
       testWidgets('screenshots for review ($layout, ${brightness.name})', (
         tester,
       ) async {
-        await tester.binding.setSurfaceSize(const Size(1900, 900));
+        await tester.binding.setSurfaceSize(
+          // Six columns of 280 beside the sidebar: the whole Board in one picture.
+          layout == 'list' ? const Size(1900, 1500) : const Size(2300, 900),
+        );
         addTearDown(() => tester.binding.setSurfaceSize(null));
         final before = grid.AppTheme.brightness.value;
         grid.AppTheme.brightness.value = brightness;
@@ -90,6 +93,62 @@ void main() {
             merged: true,
             pullRequest: 3007,
             shippedAt: DateTime(2026, 11, 5),
+          ),
+          // The six columns (task #3812): done and waiting for a merge, one of
+          // them past an hour; merged and waiting for a release; released.
+          taskFixture(
+            'done-fresh',
+            'Review and test passed',
+            22,
+            requester: 'tony',
+            status: 'done',
+            pullRequest: 3500,
+            shippedAt: DateTime.now().subtract(const Duration(minutes: 12)),
+          ),
+          taskFixture(
+            'done-stuck',
+            'Waiting on the merge train',
+            23,
+            requester: 'scholes',
+            status: 'done',
+            pullRequest: 3501,
+            shippedAt: DateTime.now().subtract(const Duration(minutes: 90)),
+          ),
+          taskFixture(
+            'merged-two',
+            'Dial recap on main',
+            24,
+            requester: 'owner',
+            status: 'done',
+            merged: true,
+            pullRequest: 3498,
+            shippedAt: DateTime.now().subtract(const Duration(hours: 1)),
+            releasing: ['desktop', 'cli'],
+          ),
+          taskFixture(
+            'merged-backend',
+            'A backend read on main',
+            25,
+            requester: 'ken',
+            status: 'done',
+            merged: true,
+            pullRequest: 3499,
+            shippedAt: DateTime.now().subtract(const Duration(minutes: 30)),
+            releasing: ['backend'],
+          ),
+          taskFixture(
+            'released',
+            'Chat limits out in a release',
+            26,
+            requester: 'scholes',
+            status: 'done',
+            merged: true,
+            pullRequest: 3480,
+            shippedAt: DateTime.now().subtract(const Duration(hours: 3)),
+            released: {
+              'at': DateTime.now().millisecondsSinceEpoch,
+              'tags': ['v1.3.84_desktop'],
+            },
           ),
         ]);
         final conversations = (server.state['conversations'] as List)

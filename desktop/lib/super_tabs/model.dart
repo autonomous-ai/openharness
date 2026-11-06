@@ -424,6 +424,11 @@ class SuperTabConversation {
       releasing = row['releasing'] is List
           ? List.unmodifiable((row['releasing'] as List).whereType<String>())
           : null,
+      releasedTags = row['released'] is Map && row['released']['tags'] is List
+          ? List.unmodifiable(
+              (row['released']['tags'] as List).whereType<String>(),
+            )
+          : const [],
       shippedAt = row['shippedAt'] is num
           ? DateTime.fromMillisecondsSinceEpoch(
               (row['shippedAt'] as num).toInt(),
@@ -535,6 +540,12 @@ class SuperTabConversation {
   /// released, for work merged before the server recorded releases, and from
   /// an older server: each reads as released, as it did.
   final List<String>? releasing;
+
+  /// The release tags (`v1.3.84_desktop`) that carried it to people, once they
+  /// have (backend releases.ts `released`): what Shipped names. Empty before,
+  /// for work merged before the server recorded releases, and from an older
+  /// server.
+  final List<String> releasedTags;
 
   /// Its first Done, or its merge once one is recorded: not proof that it merged
   /// (a pull request card's `merged` is); null until then, and from a server
