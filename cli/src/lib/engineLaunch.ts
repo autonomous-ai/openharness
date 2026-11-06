@@ -1378,7 +1378,8 @@ export async function commandAvailableInInteractiveShell(
   const interactive = interactiveEngineShell(shell)
   if (!interactive) {
     const found = binaryOnPath(command) || (recipe ? engineInstallPaths(recipe).some((candidate) => binaryOnPath(candidate)) : false)
-    return detailed ? { status: found ? 'available' : 'missing' } : found
+    return detailed ? found ? { status: 'available' } : { status: 'missing',
+      detail: `Checked the ${process.platform === 'win32' ? 'Windows process' : 'daemon'} PATH.` } : found
   }
   const [file, ...args] = engineShellArgv(interactive, [availabilityScript(recipe), 'harness-engine-probe', command])
   const result = await new Promise<CommandAvailability>((resolve) => {
@@ -1388,7 +1389,7 @@ export async function commandAvailableInInteractiveShell(
       { timeout: 5_000 },
       (error) => {
         if (!error) return resolve({ status: 'available' })
-        if (Number(error.code) === 42) return resolve({ status: 'missing' })
+        if (Number(error.code) === 42) return resolve({ status: 'missing', detail: `Checked the ${interactive.label} PATH.` })
         if (error.killed) return resolve({ status: 'unverified', detail: 'Interactive shell tool probe timed out after 5 seconds.' })
         resolve({ status: 'unverified', detail: `Interactive shell tool probe failed (${String(error.code ?? error.signal ?? 'unknown error')}).` })
       },

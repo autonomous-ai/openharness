@@ -616,13 +616,17 @@ export class ContributedMachines {
         const measuredErrors = object('toolProbeErrors' in observed ? observed.toolProbeErrors : null)
         for (const name of probeTools) {
           const value = typeof measuredTools[name] === 'boolean' ? measuredTools[name] as boolean : null
-          const detail = value === null ? String(measuredErrors[name] ?? 'The tool probe did not complete.') : undefined
+          const detail = value === null ? String(measuredErrors[name] ?? 'The tool probe did not complete.')
+            : value === false && typeof measuredErrors[name] === 'string' ? measuredErrors[name] as string : undefined
           this.toolCache.set(name, { value, detail, until: sampledAt + (value === null ? UNVERIFIED_TOOL_TTL_MS : VERIFIED_TOOL_TTL_MS) })
         }
         const reportedTools: Record<string, boolean> = {}, toolProbeErrors: Record<string, string> = {}
         for (const name of tools) {
           const result = this.toolCache.get(name)
-          if (result?.value !== null && result?.value !== undefined) reportedTools[name] = result.value
+          if (result?.value !== null && result?.value !== undefined) {
+            reportedTools[name] = result.value
+            if (result.value === false && result.detail) toolProbeErrors[name] = result.detail
+          }
           else toolProbeErrors[name] = result?.detail ?? 'The tool probe did not complete.'
         }
         const listedEngines = Array.isArray(pool.engines) ? pool.engines.filter((engine): engine is string => typeof engine === 'string') : []
