@@ -1038,13 +1038,13 @@ class _SuperTabViewState extends State<SuperTabView>
   void _jumpToLatest() {
     final id = c.selectedId;
     _focus.requestFocus();
-    if (!c.hasNewer(id)) {
-      if (_farFromEnd(id)) _restartAtEnd(id);
-      return _followEnd(id);
-    }
-    // More are waiting than were read: the latest page first, then its end.
+    final far = _farFromEnd(id);
+    if (!c.hasNewer(id) && !far) return _followEnd(id);
+    // More are waiting than were read, or the reader is far up: the latest
+    // page replaces the rows read back, then its end shows. The rows on screen
+    // stay until it lands, so the list is never empty (task #3630).
     unawaited(
-      c.showLatest(id).then((_) {
+      c.showLatest(id, replace: far).then((_) {
         if (!mounted || c.selectedId != id) return;
         _restartAtEnd(id);
         _followEnd(id);

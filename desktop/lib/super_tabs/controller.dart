@@ -2256,10 +2256,12 @@ class SuperTabController extends ChangeNotifier {
   bool hasNewer(String id) => _newer.contains(id);
 
   /// Brings [id]'s newest messages: when more are waiting than reads
-  /// brought, the latest page replaces what is held; otherwise what came
-  /// after it is read. Its own read: one already under way may have asked
-  /// for less (the rows held below a reader scrolled up).
-  Future<void> showLatest(String id) async {
+  /// brought, or [replace] asks it, the latest page replaces what is held;
+  /// otherwise what came after it is read. Its own read: one already under
+  /// way may have asked for less (the rows held below a reader scrolled up).
+  /// [replace] is Jump to latest from far up (task #3630): the rows read back
+  /// go, and earlier history is read again from the latest page.
+  Future<void> showLatest(String id, {bool replace = false}) async {
     _readingBack.remove(id);
     for (
       var under = _reading[(id, false)];
@@ -2269,7 +2271,7 @@ class SuperTabController extends ChangeNotifier {
       await under;
     }
     if (_disposed) return;
-    if (_newer.contains(id)) _latestWanted.add(id);
+    if (replace || _newer.contains(id)) _latestWanted.add(id);
     await _readMessages(id);
   }
 
