@@ -104,8 +104,9 @@ class ProjectSidebar extends StatelessWidget {
   /// Mentions read what the server says waits, and Threads nothing.
   final SuperTabActivity? activity;
 
-  /// The reader's places, for the back and forward arrows at the top;
-  /// without it there are none.
+  /// The reader's places, for the back and forward arrows at the top of a
+  /// layout that is not the Desktop's; without it there are none. The
+  /// Desktop has none (anh Dee, task #4192): ⌘[ and ⌘] still step.
   final SuperTabPlaces? places;
 
   /// What needs the reader, as Slack shows it: each row's red number counts
@@ -590,6 +591,26 @@ class ProjectSidebar extends StatelessWidget {
     // (Tony, 11-02: it vanished from the latest Desktop under the filter).
     final agent = controller.buddy(key);
     final busy = controller.saving || controller.hasPendingAction;
+    // The Desktop's My agents draws it as every agent, its face and name, never the robot icon (anh Dee, task #4192).
+    if (board) {
+      final muted =
+          chat != null && controller.notifyOf(chat.id) == SuperTabNotify.muted;
+      return SuperTabBuddyRow(
+        key: const ValueKey('super-swarm-buddy'),
+        agentId: agent?.id,
+        name: 'Buddy',
+        tooltip: 'Your Buddy',
+        status: agent == null ? null : _buddyMark(agent),
+        selected:
+            chat != null && !_paneCovered && controller.selectedId == chat.id,
+        unread: chat != null && !muted && controller.unreadShown(chat),
+        onTap: switch (chat) {
+          null when busy => null,
+          null => () => _openBuddyChat(key),
+          final chat => () => (onOpenAgentChat ?? onSelect)(chat.id),
+        },
+      );
+    }
     return _drawRow(
       chat ?? _unopenedSwarmBuddyChat,
       label: 'Buddy',
@@ -599,12 +620,7 @@ class ProjectSidebar extends StatelessWidget {
       // Muted, it is greyed and never bold, as every chat (_drawRow).
       unread: chat != null && controller.unreadShown(chat),
       trailing: agent == null ? null : _buddyMark(agent),
-      // On the Desktop its chat opens in the middle (Swarm v3, task #4118), like any agent's.
-      onTap: chat == null
-          ? () => _openBuddyChat(key)
-          : board && onOpenAgentChat != null
-          ? () => onOpenAgentChat!(chat.id)
-          : null,
+      onTap: chat == null ? () => _openBuddyChat(key) : null,
       tappable: chat != null || !busy,
     );
   }
@@ -627,20 +643,25 @@ class ProjectSidebar extends StatelessWidget {
         'My agents',
         titleStyle: _headingStyle,
         endInset: 0,
+        // It folds as Projects does, remembered (task #4192).
+        collapsed: !controller.agentsGroupOpen,
+        onToggleCollapsed: controller.toggleAgentsGroup,
       ),
-      if (controller.oneBuddy)
-        ?_swarmBuddyRow()
-      else
-        ..._buddies([...snapshot.projects], reading),
-      for (final agent in mine) _agentRow(snapshot, agent),
-      // The last row opens the creation dialog, where Regular or PM is chosen.
-      if (controller.canWrite && onNewAgent != null)
-        _navigationRow(
-          key: 'super-new-agent-row',
-          label: 'New agent',
-          icon: AppIcons.plus,
-          onTap: onNewAgent,
-        ),
+      if (controller.agentsGroupOpen) ...[
+        if (controller.oneBuddy)
+          ?_swarmBuddyRow()
+        else
+          ..._buddies([...snapshot.projects], reading),
+        for (final agent in mine) _agentRow(snapshot, agent),
+        // The last row opens the creation dialog, where Regular or PM is chosen.
+        if (controller.canWrite && onNewAgent != null)
+          _navigationRow(
+            key: 'super-new-agent-row',
+            label: 'New agent',
+            icon: AppIcons.plus,
+            onTap: onNewAgent,
+          ),
+      ],
       const SizedBox(height: 16),
     ];
   }
@@ -798,11 +819,14 @@ class ProjectSidebar extends StatelessWidget {
             child: LaidOutListView(
               padding: const EdgeInsets.all(8),
               children: [
-                // The Desktop's org switcher is the first thing in the pane (Swarm v3 spec); elsewhere it follows the
-                // back and forward arrows.
-                if (board) ?switcher,
-                if (places case final places?) _arrows(places),
-                if (!board) ?switcher,
+                // The Desktop's org switcher is the first thing in the pane (Swarm v3 spec), with no arrows under it
+                // (task #4192); elsewhere it follows the back and forward arrows.
+                if (board)
+                  ?switcher
+                else ...[
+                  if (places case final places?) _arrows(places),
+                  ?switcher,
+                ],
                 // Three rows, each one thing, in anh Dee's order (11-05, task
                 // #2996): bold when something waits, grey when not, and no
                 // numbers (task #3128). The Swarm switcher stands apart from
