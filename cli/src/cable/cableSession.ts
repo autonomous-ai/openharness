@@ -753,8 +753,8 @@ export class CableSession {
    *  open in its project, its recap is that chat's, `work` only for a working group, and the alerts are the Lead's new
    *  messages (`supertab.notice`). Any other device gets today's frames byte for byte. */
   private swarmChat = false
-  /** `swarmBuddy: 'v1'` beside swarmChat (spec 2026-10-29-round-dial-pm-buddy): the dial keeps a PM and a Buddy side per Swarm
-   *  (`supertab.side`), each Lead carries `buddies` and the reader's Buddy, and the Buddy's word is a quiet notice. A
+  /** `swarmBuddy: 'v1'` beside swarmChat (spec 2026-10-29-round-dial-pm-buddy): the dial shows the reader's Buddy only (task #3908; its
+   *  side swipes are ignored), each Lead carries `buddies` and the reader's Buddy, and the Buddy's word is a quiet notice. A
    *  swarmChat dial without it gets today's frames byte for byte. */
   private swarmBuddy = false
   /** `swarmNeedsYou: 'v1'` beside swarmChat (spec 2026-11-05-dial-lead-pm-buddy-pair): the bell and inbox hold only what needs the
