@@ -3,6 +3,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/machines.dart';
@@ -36,7 +37,16 @@ Map<String, dynamic> _machine(
 };
 
 void main() {
-  setUpAll(() => loadCaptureFonts(shots));
+  setUpAll(() async {
+    await loadCaptureFonts(shots);
+    const mono = '/System/Library/Fonts/SFNSMono.ttf';
+    if (shots != null && Platform.isMacOS && File(mono).existsSync()) {
+      final bytes = ByteData.sublistView(await File(mono).readAsBytes());
+      await (FontLoader(
+        grid.AppType.monoFamily,
+      )..addFont(Future.value(bytes))).load();
+    }
+  });
 
   for (final brightness in Brightness.values) {
     testWidgets('Machines grouped in ${brightness.name}', (tester) async {
