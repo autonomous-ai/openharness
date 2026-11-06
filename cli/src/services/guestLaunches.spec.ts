@@ -209,3 +209,32 @@ describe('a guest\'s harness, as shared machines builds it', () => {
     expect((await launched).ok).toBe(false)
   })
 })
+
+// No owner subscription relay (anh Dee, 2026-11-07, task #4137): nothing is started or minted for a guest, and its engine
+// launches on the guest's own sign-in, with none of the relay's variables or Codex provider arguments.
+describe('a guest\'s harness on the guest\'s own sign-in', () => {
+  const guestAccounts = (workspace: string) =>
+    ({ ensureGuest: async () => ({ user: KIM, home: '/g', workspace }), shareFolders: async () => {}, guests: () => [KIM] }) as unknown as GuestAccounts
+  const relayFree = (launched: Awaited<ReturnType<ReturnType<typeof createGuestLaunches>['launch']>>) => {
+    expect(launched.ok).toBe(true)
+    if (!launched.ok) return
+    for (const name of ['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'HARNESS_RELAY_TOKEN']) {
+      expect(launched.env).not.toHaveProperty(name)
+      expect(launched.argv).not.toContain(name)
+    }
+    expect(launched.argv.join(' ')).not.toMatch(/model_provider|harness_owner|127\.0\.0\.1/)
+  }
+
+  it('launches Claude Code and Codex with no relay, on every platform', async () => {
+    for (const platform of ['darwin', 'linux', 'win32'] as const) {
+      const launches = createGuestLaunches({ accounts: guestAccounts('/g/work'), helperState: async () => 'ready', platform })
+      for (const engine of ['claude', 'codex']) relayFree(await launches.launch({ ...input, engine }))
+    }
+  })
+
+  it('on Windows hands the guest\'s host the engine alone', async () => {
+    const launches = createGuestLaunches({ accounts: guestAccounts('C:\\g\\work'), helperState: async () => 'ready', platform: 'win32' })
+    expect(await launches.launch({ ...input, engine: 'codex' }))
+      .toEqual({ ok: true, workspace: 'C:\\g\\work', argv: ['codex', '--dangerously-bypass-approvals-and-sandbox'], env: {}, guestHostUser: KIM })
+  })
+})

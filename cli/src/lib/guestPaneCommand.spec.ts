@@ -71,6 +71,36 @@ describe('a guest\'s pane', () => {
   })
 })
 
+// No owner subscription relay (anh Dee, 2026-11-07, task #4137): a guest's engine starts on the guest's own sign-in and
+// settings, with nothing of the owner's subscription in its environment or on its command line.
+describe('a guest\'s pane on the guest\'s own sign-in', () => {
+  const relayFree = ({ argv, env }: { argv: string[]; env: Record<string, string> }) => {
+    for (const name of ['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'HARNESS_RELAY_TOKEN']) {
+      expect(env).not.toHaveProperty(name)
+      expect(argv).not.toContain(name)
+    }
+    expect(argv.join(' ')).not.toMatch(/model_provider|harness_owner|127\.0\.0\.1/)
+  }
+
+  it('passes only the terminal\'s variables to Claude Code and Codex, on macOS and Linux', () => {
+    for (const engine of ['claude', 'codex'] as const) {
+      const command = guestPaneCommand({ account, engine, bypassPermission: true, lang: 'vi_VN.UTF-8' })
+      relayFree(command)
+      expect(command.env).toEqual({ TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'vi_VN.UTF-8' })
+      expect(command.argv.slice(command.argv.indexOf('--') + 1))
+        .toEqual([engine, engine === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox'])
+    }
+  })
+
+  it('runs the engine itself with nothing added on Windows', () => {
+    for (const engine of ['claude', 'codex'] as const) {
+      const command = guestPaneCommand({ account, engine, bypassPermission: false, platform: 'win32', prompt: 'hi' })
+      relayFree(command)
+      expect(command).toEqual({ argv: [engine, 'hi'], env: {} })
+    }
+  })
+})
+
 // The bootstrap runs for real, with a fake `sudo` on PATH that logs what it is asked and answers whether the
 // guest has the engine as the test says.
 describe('the pane\'s first moments', () => {
