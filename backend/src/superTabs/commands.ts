@@ -250,6 +250,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.create'), name: title, visibility: z.enum(['public', 'private']), brief: z.string().trim().max(8000).default('') }).strict(),
   z.object({ type: z.literal('project.rename'), projectId: id, name: title }).strict(),
   z.object({ type: z.literal('project.delete'), projectId: id }).strict(),
+  // A closed tab's project in the person's own Personal Swarm (task #3929, desktop personal_projects.dart): deleted when none of
+  // its conversations has a message, archived otherwise. `tabOperation`: the request that created it, `personal-tab-…`.
+  z.object({ type: z.literal('project.closeTab'), projectId: id, tabOperation: z.string().regex(/^personal-tab-[A-Za-z0-9_-]{1,120}$/) }).strict(),
   z.object({ type: z.literal('project.sharing'), projectId: id, visibility: z.enum(['public', 'private']), memberIds: z.array(id).max(200) }).strict(),
   // A project's Board settings (boardRights.ts, task #3819), set by its owner or the Swarm's owner.
   z.object({ type: z.literal('project.boardMode'), projectId: id, on: z.boolean() }).strict(),
@@ -1039,6 +1042,18 @@ function placeAnswer(command: Command, context: CommandContext): Command {
   return reply && reply.id === command.answers && inThread(reply) ? { ...command, replyTo: command.answers, answers: undefined } : command
 }
 
+/** The project `project.closeTab` may close (task #3929): a no-repo tab's, in the caller's own Personal Swarm, by that person.
+ *  Desktop creates a tab's project with the request `personal-tab-…` (desktop personal_projects.dart personalProjectOperation),
+ *  and `project.create` makes its id from that request and its sender (applyCommandOnce `operationId`), so [tabOperation]
+ *  proves the project is that person's tab's: it must make exactly [projectId]. Anything else reads as a project not there. */
+function closingTabProject(state: SuperTabState, actor: Actor, projectId: string, tabOperation: string): SwarmProject {
+  const tabs = actor.kind === 'person' && actor.userId === state.ownerId && isPersonalSwarm(state)
+    && stableId(state.id, actorKey(actor), tabOperation) === projectId
+  const project = tabs ? projectsOf(state).find(p => p.id === projectId) : undefined
+  if (!project || project.repository) fail('NOT_FOUND', 'This project is unavailable.', 404)
+  return project
+}
+
 function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
   // A credential someone pasted, or an agent echoed from its terminal, is gone before anything is stored or delivered
   // (Oct 2026: a Harness access token in a shared Lead chat). The sender's result says what went.
@@ -1616,6 +1631,20 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     ?? state.conversations.find(c => c.id === start.request.conversationId && !isSwarmBuddyChat(c))?.projectId
 
   /** Deleting its project is the only removal that takes a Lead. `close: false` when its host already closed the session. */
+  /** [project] deleted with its own agents, its Lead included (their hosts close their sessions), its starts and machines' lists. */
+  const deleteWholeProject = (project: SwarmProject) => {
+    // Read before its agents go: a contributed start still settling whose agent is already gone never settles (projects.ts).
+    const orphaned = new Set((state.starts ?? []).filter(s => s.poolGeneration && s.harnessId && !s.poolSettled && !s.error
+      && !state.agents.some(a => a.machineId === s.request.machineId && a.harnessId === s.harnessId)).map(s => s.id))
+    for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id)) removeAgent(target, { lead: true })
+    // Its sessions still starting in people's one Buddy chats go with it (their chats belong to no project).
+    for (const start of state.starts ?? []) {
+      if (start.request.buddySession?.projectId === project.id && !start.harnessId && !start.error) start.error = 'Its project was deleted.'
+    }
+    deleteProject(state, actor, project.id, orphaned, context.now)
+    // No machine keeps it any more; one kept only for it now serves none (machines.ts machineProjectRefusal).
+    for (const pool of state.machines ?? []) if (pool.projects) pool.projects = pool.projects.filter(id => id !== project.id)
+  }
   const removeAgent = (target: Agent, { lead = false, close = true } = {}) => {
     // A person's removal stands: a record of this session must not bring it back when it reopens (closedAgents.ts).
     dropRemovedRecord(state, target.machineId, target.harnessId)
@@ -2115,18 +2144,30 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'project.delete': {
       // Its owner confirmed a permanent delete, so the project takes its own agents with it, its Lead included, and their
       // hosts close their sessions. The Swarm's owner deletes one nobody owns (task #3073).
-      const project = deletableProject(state, actor, command.projectId)
-      // Read before its agents go: a contributed start still settling whose agent is already gone never settles (projects.ts).
-      const orphaned = new Set((state.starts ?? []).filter(s => s.poolGeneration && s.harnessId && !s.poolSettled && !s.error
-        && !state.agents.some(a => a.machineId === s.request.machineId && a.harnessId === s.harnessId)).map(s => s.id))
-      for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id)) removeAgent(target, { lead: true })
-      // Its sessions still starting in people's one Buddy chats go with it (their chats belong to no project).
-      for (const start of state.starts ?? []) {
-        if (start.request.buddySession?.projectId === project.id && !start.harnessId && !start.error) start.error = 'Its project was deleted.'
+      deleteWholeProject(deletableProject(state, actor, command.projectId))
+      break
+    }
+    case 'project.closeTab': {
+      // The Personal Swarm's owner closes a tab's project (task #3929): deleted only if none of its conversations, dormant ones
+      // loaded with it, has a message now. A message written meanwhile changes one of those parts, so this write conflicts and
+      // runs again on it, and archives instead.
+      const project = closingTabProject(state, actor, command.projectId, command.tabOperation)
+      const groups = state.conversations.filter(c => c.projectId === project.id || c.id === project.leadConversationId)
+      // What the person wrote without a message is theirs too (security review 2, review of #3929): instructions saved past the
+      // built-in first revision, a note told to its PM, or any rules record. A save meanwhile changes the project's part, or is
+      // read in this write (store.ts). Rules that could not be read (undefined) count as written: nothing is deleted unchecked.
+      const written = (project.instructionsRevision ?? 0) > 1 || (project.notesRevision ?? 0) > 0 || context.projectRules !== null
+      if (!written && groups.every(c => !c.lastMessageSequence)) {
+        deleteWholeProject(project)
+        result.outcome = 'deleted'
+        break
       }
-      deleteProject(state, actor, command.projectId, orphaned, context.now)
-      // No machine keeps it any more; one kept only for it now serves none (machines.ts machineProjectRefusal).
-      for (const pool of state.machines ?? []) if (pool.projects) pool.projects = pool.projects.filter(id => id !== project.id)
+      // Kept, read-only (an archived conversation is written no more: store.ts) and out of the sidebar; its agents leave.
+      for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id)) removeAgent(target, { lead: true })
+      mutableProjects(state)
+      projectOf(state, project.id).archived = true
+      for (const group of groups) group.archived = true
+      result.outcome = 'archived'
       break
     }
     case 'project.sharing': {
