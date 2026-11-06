@@ -11,6 +11,7 @@ import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
 import { visibleAccess } from './machineAccess.js'
+import { processOf, projectColumns } from './process.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
@@ -1210,7 +1211,10 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // One index for every project: the loop sets only workDecision, which the index does not hold.
   const workers = workerIndex(visible)
   for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id, workers)) target.workDecision = 'awaiting'
-  for (const project of visible.projects ?? []) project.skillSet = skillSetOf(project)
+  for (const project of visible.projects ?? []) {
+    project.skillSet = skillSetOf(project)
+    Object.assign(project, { process: processOf(project), columns: projectColumns(project) })
+  }
   // An uploaded avatar's stored key stays on the server; readers get a link with each parts read (avatarLinks.ts).
   // Each person as the Swarm names them (usernames.ts), their default included.
   const names = swarmUsernames(state)

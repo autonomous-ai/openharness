@@ -46,10 +46,10 @@
 
 **Interfaces:** `ProjectProcess = 'simple' | 'full'`; `project.create` gains optional `process`; `project.process {projectId, process}` changes the preset. `processOf(project)` supplies the Full default. `projectColumns(project)` returns fixed `{id, title}` columns. Head projects expose `process` and `columns`.
 
-- [ ] Commit command/read tests: creation default and explicit Simple; owner and Swarm owner can change; other people/agents and stale owners cannot; invalid values fail; three/six columns and private filtering.
-- [ ] Run `npm test -- src/superTabs/process.test.ts` and record red.
-- [ ] Implement the additive setting, authority and board read contract; announce the contract to the PM for Desktop coordination.
-- [ ] Run the new tests plus `projects.test.ts`, `read/views.test.ts` and typecheck; commit and push.
+- [x] Commit command/read tests: creation default and explicit Simple; owner and Swarm owner can change; other people/agents and stale owners cannot; invalid values fail; three/six columns and private filtering.
+- [x] Run `npm test -- src/superTabs/process.test.ts` and record red.
+- [x] Implement the additive setting, authority and board read contract; announce the contract to the PM for Desktop coordination.
+- [x] Run the new tests plus `projects.test.ts`, `read/views.test.ts` and typecheck; commit and push.
 
 ## Task 2: Task process and step lifecycle
 
@@ -73,3 +73,9 @@
 - [ ] Run and record red; implement the bounded seed helper; run and record green.
 - [ ] Document authorized release application and rollback, final command/read examples, platforms, red/green and timing evidence in the PR.
 - [ ] Mark the stable head Ready and record its acceptance evidence; let automatic CI and independent review finish before handing it back.
+
+## Settings and read contract
+
+Creation accepts `{"type":"project.create","name":"Scout","visibility":"public","process":"simple"}`; omission keeps Full. Settings accepts `{"type":"project.process","projectId":"PROJECT","process":"simple"}`. The Swarm owner can set a private project’s preset without gaining read access to it. Parts head projects and the legacy status read include `process` and `columns` (`[{id,title}]`): Simple ids `todo`, `doing`, `done`; Full ids `proposals`, `nextUp`, `working`, `done`, `merged`, `shipped`. The Desktop follow-up defaults missing fields to Full. No change to assignment status values.
+
+Task 1 evidence: test-only commit `e890f351a`, 10 failed / 1 passed before implementation; afterward 81 passed across process, projects and read/views, with backend typecheck clean.

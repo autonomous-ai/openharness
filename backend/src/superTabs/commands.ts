@@ -233,7 +233,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('tab.tidy'), enabled: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.set'), projectId: id.optional(), rule: ruleSchema, text: ruleTextSchema, askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.remove'), projectId: id.optional(), ruleId: id, askedIn: askedInSchema.optional() }).strict(),
-  z.object({ type: z.literal('project.create'), name: title, visibility: z.enum(['public', 'private']), brief: z.string().trim().max(8000).default('') }).strict(),
+  z.object({ type: z.literal('project.create'), name: title, visibility: z.enum(['public', 'private']), brief: z.string().trim().max(8000).default(''), process: z.enum(['simple', 'full']).optional() }).strict(),
+  z.object({ type: z.literal('project.process'), projectId: id, process: z.enum(['simple', 'full']) }).strict(),
   z.object({ type: z.literal('project.rename'), projectId: id, name: title }).strict(),
   z.object({ type: z.literal('project.delete'), projectId: id }).strict(),
   z.object({ type: z.literal('project.sharing'), projectId: id, visibility: z.enum(['public', 'private']), memberIds: z.array(id).max(200) }).strict(),
@@ -827,7 +828,9 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
     }
   }
   // A project nobody owns is the Swarm owner's to delete though they read nothing of it: its delete checks that (deletableProject).
-  if ('projectId' in command && command.projectId && command.type !== 'project.delete') readProject(state, actor, command.projectId)
+  // The Swarm owner may choose even a private project's process, but gains no access to its conversations or reads.
+  const processOwner = command.type === 'project.process' && actor.kind === 'person' && actor.userId === state.ownerId
+  if ('projectId' in command && command.projectId && command.type !== 'project.delete' && !processOwner) readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
   if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
@@ -1920,7 +1923,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const onBase = projects.some(p => (p.instructionsBase ?? 0) >= BASE_VERSION)
       const first = onBase ? { instructionsRevision: 1, instructionsHash: instructionsHash(BASE_DOCUMENT), instructionsBase: BASE_VERSION } : FIRST_INSTRUCTIONS
       projects.push({ id: operationId, name: command.name, ownerId: actor.userId, ownerGeneration: person(state, actor.userId).generation, leadConversationId,
-        visibility: command.visibility, members: [], updateMinutes: 5, skillMode: 'default', ...first })
+        visibility: command.visibility, members: [], updateMinutes: 5, skillMode: 'default', process: command.process ?? 'full', ...first })
       effects.instructions = { projectId: operationId, revision: 1, hash: first.instructionsHash, text: onBase ? BASE_DOCUMENT : INSTRUCTIONS_TEMPLATE,
         summary: FIRST_SUMMARY, writtenBy: { kind: 'person', id: actor.userId }, askedBy: actor.userId, at: context.now }
       state.conversations.push({ id: leadConversationId, projectId: operationId, title: 'Lead', leadId: null,
@@ -2036,6 +2039,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       manageProject(state, actor, command.projectId)
       ignored()
       break
+    case 'project.process': {
+      const project = projectOf(state, command.projectId)
+      if (actor.kind !== 'person' || (actor.userId !== state.ownerId && !ownsProject(state, actor.userId, project))) {
+        fail('PROJECT_OWNER_REQUIRED', 'Only the project owner or Swarm owner can change its process.', 403)
+      }
+      mutableProjects(state)
+      projectOf(state, command.projectId).process = command.process
+      break
+    }
     case 'project.rename': {
       const project = manageProject(state, actor, command.projectId)
       project.name = command.name

@@ -25,12 +25,16 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
 /** The head as a reader sees it: no sharing, overlap alerts, retired number or parked groups; projects, rules and
  *  invitations filtered (invitations only for the Swarm owner). `autoJoin`: people at the owner's domain join by themselves
  *  (autoJoin.ts), from the sharing the head holds; who declined is never sent. */
-export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'projects' | 'leadsConversationId' | 'ownerId'
+export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'leadsConversationId' | 'ownerId'
   | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'workspaceId' | 'workspaceVisibility' | 'buddies' | 'removedMachines'
   | 'autoJoin'> & {
   /** How many Buddies each person may have (task #3818): always sent, 5 unless the Swarm's owner set another. An older backend
    *  sends none, so an app offers several Buddies only where this is present. */
   buddyCap: number
+  /** Fixed columns for the chosen preset (task #3896); an older server omits both, meaning Full. */
+  projects?: Array<import('../projects.js').SwarmProject & {
+    process: import('../process.js').ProjectProcess; columns: readonly import('../process.js').BoardColumn[]
+  }>
 }
 /** A member's avatar says only `{ kind: 'upload' }` for an upload: its link comes signed in `derived.avatars`. */
 export type MemberView = Omit<Person, 'avatar'> & { avatar?: import('../profile.js').AvatarView }

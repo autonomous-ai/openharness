@@ -44,6 +44,8 @@ export interface SwarmProject {
   visibility: ProjectVisibility
   members: Array<{ id: string; generation: string }>
   updateMinutes: 1 | 5 | 15 | 30
+  /** The project's board and work process; absent on older projects, which keep Full (task #3896). */
+  process?: import('./process.js').ProjectProcess
   /** The morning digest (digest.ts): its local time ("08:00") and zone, and the local date and time of the last one sent.
    *  On by default: a project without one gets the default on its coordinator's next poll, unless a person turned it off. */
   digest?: { time: string; timeZone: string; lastOn?: string; lastAt?: number }
