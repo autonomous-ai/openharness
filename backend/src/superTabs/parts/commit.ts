@@ -101,6 +101,21 @@ function toCoordinator(state: SuperTabState, group: Conversation, message: Messa
   return !!coordinator && message.recipients.includes(coordinator)
 }
 
+/** How long a chat remembers that a person talked with an agent there: well past the 15 minutes an idle agent waits. */
+export const TALKED_KEEP_MS = 60 * 60_000
+
+/** Who a person talked with in [group] (task #3816): each agent a person's message reaches, and that agent again when it posts
+ *  here after one, which is its answer. Who wrote and whom it reached, never the words; a system row or notice marks nobody.
+ *  Entries older than TALKED_KEEP_MS go on this write, so the map holds only the last hour's agents. */
+function markTalked(group: Conversation, message: MessageDraft, now: number): void {
+  if (message.source) return
+  const talked = message.author.kind === 'person' ? message.recipients
+    : message.author.kind === 'agent' && group.talkedAt?.[message.author.id] !== undefined ? [message.author.id] : []
+  if (!talked.length) return
+  const kept = Object.entries(group.talkedAt ?? {}).filter(([, at]) => now - at <= TALKED_KEEP_MS)
+  group.talkedAt = Object.fromEntries([...kept, ...talked.map(id => [id, now] as const)])
+}
+
 /**
  * Numbers each message in its conversation (design section 1.1 D4): the conversation's counter moves by one per message, in
  * draft order. A shown message is the conversation's latest and wakes a dormant one; an agent-only notice is numbered but
@@ -120,6 +135,7 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
       if (message.author.kind === 'person' && !message.source) group.lastPersonSequence = sequence
     }
     if (toCoordinator(state, group, message)) group.heardAt = now
+    markTalked(group, message, now)
     group.lastActivityAt = new Date(now).toISOString()
     delete group.dormant
   }

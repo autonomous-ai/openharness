@@ -29,10 +29,12 @@ export const groupsOf = (state: SuperTabState, target: Agent): Conversation[] =>
  *  groups. An agent the Swarm started that never had an assignment (no task of its own, never lost one) only sits in its
  *  groups, whose messages are about others' work: it is idle from its start or keep (Swarm autonomous-harness, 2026-10-29:
  *  one sat idle 18+ minutes, its time renewed by every message in a busy chat). One a person added by hand has no start of
- *  record, so its groups' messages count, from the one it joined in. Undefined when nothing tells when. */
+ *  record, so its groups' messages count, from the one it joined in. A person talking with it counts either way: an agent
+ *  a person is chatting with is never idle (hieule, 11-06, task #3816). Undefined when nothing tells when. */
 export function idleSince(target: Agent, groups: Conversation[]): number | undefined {
   const worked = !!target.lostTask || groups.some(g => g.assignment?.agentId === target.id) || !target.startedSession
-  const seen = [time(target.startedSession?.createdAt), target.keptAt, ...(worked ? groups : []).flatMap(g => [time(g.lastActivityAt),
+  const seen = [time(target.startedSession?.createdAt), target.keptAt, ...groups.map(g => g.talkedAt?.[target.id]),
+    ...(worked ? groups : []).flatMap(g => [time(g.lastActivityAt),
     ...g.assignment?.agentId === target.id ? [g.assignment.progressAt, g.assignment.lost?.at] : []])]
     .filter((t): t is number => t !== undefined && Number.isFinite(t))
   return seen.length ? Math.max(...seen) : undefined
