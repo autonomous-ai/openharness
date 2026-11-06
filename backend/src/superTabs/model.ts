@@ -802,6 +802,8 @@ export const NOTICE_READERS = {
   'notice-digest': 'recipients',
   // An agent's tag, ask or line to a person, routed to the PM instead (crewNeeds.ts): the PM's alone. Never gathered.
   'crew-need': 'recipients',
+  // A person's decision wakes the task's PM; people read the decision in Tasks.
+  'task-approval': 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
   system: 'people',
   // A save of the project's instructions was posted in the project chat until #3132 (Dee and Ken, 11-05): the rows stored
