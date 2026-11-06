@@ -110,9 +110,11 @@ export const GROUP_FIELDS = {
     'step',
     'stepIds',
     'stepUp',
+    'stuck',
     'talkedAt',
     'teamWritten',
     'teamWrittenBy',
+    'writers',
   ],
 } as const
 const LIGHT_GROUP = {
