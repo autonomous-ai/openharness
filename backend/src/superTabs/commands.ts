@@ -30,7 +30,7 @@ import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type Rout
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
 import { projectRulesSchema, rulesDiff, rulesEqual, SEED_RULES, type ProjectRules } from './policy.js'
-import { machineRuleRefusal } from './machineRules.js'
+import { isReview, machineRuleRefusal } from './machineRules.js'
 import { accessRefusal, changeAccess, expireAccess, taskAccess } from './machineAccess.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
@@ -3128,7 +3128,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       requireRepositoryReach(state, teamAccountPool(state.machines?.find(m => m.machineId === request.machineId)), grant.machineOwnerId, home, context.repositoryReach)
       // The project's machine rules (machineRules.ts), on the machine named and the one the start lands on (a Mac's Team account).
       for (const machineId of new Set([named.machineId, request.machineId])) {
-        refuseByMachineRules(context, { machineId, engine: request.engine, review: !!startGroup.reviewOf })
+        refuseByMachineRules(context, { machineId, engine: request.engine, review: isReview(startGroup) })
       }
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
@@ -4337,7 +4337,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const group = open(state, command.conversationId)
       const worker = agent(state, command.agentId)
       assignRefusal(group, worker)
-      refuseByMachineRules(context, { machineId: worker.machineId, engine: worker.configuration.engine, review: !!group.reviewOf })
+      refuseByMachineRules(context, { machineId: worker.machineId, engine: worker.configuration.engine, review: isReview(group) })
       const home = groupProject(state, group)
       // An older client assigns in a custom role: kept for older readers, and the role name it means for a worker without
       // one (instructions.ts legacyRoleName). No command reads the role.

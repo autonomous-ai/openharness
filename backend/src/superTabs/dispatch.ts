@@ -5,7 +5,7 @@
  * through work.assign, whose own write refuses a second assignment.
  */
 import { SEED_RULES, type MachineRule, type ProjectRules } from './policy.js'
-import { firstMachines, machineRuleRefusal } from './machineRules.js'
+import { firstMachines, isReview, machineRuleRefusal } from './machineRules.js'
 import { isBuddy } from './buddies.js'
 import { sessionClosed } from './closedAgents.js'
 import { activeWork, handed, occupiesAgent, reviewsWanted, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
@@ -174,7 +174,7 @@ export function candidatesFor(state: SuperTabState, member: Agent, rules: Dispat
   // The project's machine rules (machineRules.ts): what its machine refuses now, it is not handed, pinned or not.
   const refused = (review: boolean) => !!machineRuleRefusal(rules.machines, { machineId: member.machineId, engine: member.configuration.engine, review }, now)
   const refusesWork = refused(false), refusesReview = refused(true)
-  const steps = open.filter(g => g.reviewOf && !lostByIt(g) && !refusesReview).filter(step => {
+  const steps = open.filter(g => g.reviewOf && !lostByIt(g) && !(refusesReview && isReview(g))).filter(step => {
     const task = state.conversations.find(g => g.id === step.reviewOf)!
     const kind = /test/i.test(stepName(step)) ? 'test' : /security/i.test(stepName(step)) ? 'security' : 'review'
     const latest = task.pullRequestUrls?.at(-1)
