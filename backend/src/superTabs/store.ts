@@ -241,7 +241,7 @@ function namedFor(command: Command): Named {
   // Deleting a project or changing who reads it reaches every one of its groups, dormant ones too: their terminal
   // contexts are revoked from the groups the command loaded (native.ts revokeNativeContexts).
   return { groupIds, startIds: has('startId') ? [field('startId')!] : [],
-    projectIds: command.type === 'project.delete' || command.type === 'project.sharing' ? [command.projectId] : [] }
+    projectIds: command.type === 'project.delete' || command.type === 'project.sharing' || command.type === 'project.closeTab' ? [command.projectId] : [] }
 }
 
 /** What a receipt keeps of a command's reply besides its result: the parts it wrote and when (design section 4.7). */
@@ -1815,7 +1815,7 @@ export class SuperTabStore {
         const selfLeave = actor.kind === 'person' && command.type === 'member.remove' && command.userId === actor.userId
         if (!selfLeave) {
           if (command.type === 'agent.remove' && !original.agents.some(a => a.id === command.agentId) ||
-              command.type === 'project.delete' && !projectsOf(original).some(p => p.id === command.projectId)) {
+              (command.type === 'project.delete' || command.type === 'project.closeTab') && !projectsOf(original).some(p => p.id === command.projectId)) {
             // Retrying one's own completed removal returns only its empty
             // receipt. The removed object no longer exists to authorize against.
             author(original, actor, true)
@@ -2256,13 +2256,15 @@ export class SuperTabStore {
           stableId(s.request.machineId, s.harnessId) === command.agentId)
         if (start?.routeDecisionId) await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'stopped', context.now)
       }
-      // Role texts are written no more (project instructions): a deleted project takes the ones it had.
-      if (command.type === 'project.delete') await tx.superTabRoleText.deleteMany({ where: { tabId, projectId: command.projectId } })
+      // Role texts are written no more (project instructions): a deleted project takes the ones it had. A closed tab's project
+      // deleted because it was empty is a deleted project too (task #3929).
+      const deleted = command.type === 'project.delete' || (command.type === 'project.closeTab' && effects.result.outcome === 'deleted') ? command.projectId : null
+      if (deleted) await tx.superTabRoleText.deleteMany({ where: { tabId, projectId: deleted } })
       if (effects.instructions) await writeInstructions(tx, tabId, effects.instructions)
       if (effects.notes) await writeNotes(tx, tabId, effects.notes, context.now)
       if (effects.projectRules) await writeRules(tx, tabId, effects.projectRules)
-      if (command.type === 'project.delete') await deleteInstructions(tx, tabId, command.projectId)
-      if (command.type === 'project.delete') await deleteRules(tx, tabId, command.projectId)
+      if (deleted) await deleteInstructions(tx, tabId, deleted)
+      if (deleted) await deleteRules(tx, tabId, deleted)
       if (effects.terminal) await this.writeTerminal(tx, tabId, effects.terminal, context.now)
       // A deleted Swarm's observer sockets, on any instance, check again and close (deletion.ts).
       if (this.hooks.accessChanged && (watchersLost.length || command.type === 'swarm.delete')) {

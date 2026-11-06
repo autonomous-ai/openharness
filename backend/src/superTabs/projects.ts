@@ -112,6 +112,8 @@ export interface SwarmProject {
   /** Its owner's last "New repository" from New Project (task #1788): asked, then what GitHub's sign-in made of it. The
    *  app that asked starts the Product Manager in it once `created`; the next ask replaces it. */
   repositoryCreation?: RepositoryCreation
+  /** A closed tab's project that had messages (commands.ts project.closeTab, task #3929): read-only and out of the sidebar. */
+  archived?: true
 }
 
 /** A new repository asked for a project (store.ts startRepositoryCreation, finishRepositoryCreation). [at] (ms) and [by]
