@@ -1821,6 +1821,41 @@ void main() {
     },
   );
 
+  for (final process in ['simple', 'full']) {
+    test(
+      'New Project sends its process only when it is Simple: $process',
+      () async {
+        final f = SuperTabLaunchFixture();
+        addDiego(f);
+        knownRepo(f);
+        f.connection.server.state['machines'] = [
+          machineRow('diego-mac', 'Diego MacBook'),
+          machineRow(
+            'diego-team',
+            'Diego MacBook',
+            host: 'diego-mac',
+            kind: 'team',
+            lead: true,
+          ),
+        ];
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+        final box = await f.box(newProject: true);
+        box.chooseLeadMachine('diego-mac');
+        box.integration!.projectProcess = process;
+        expect(
+          await box.create(),
+          NewHarnessOutcome.created,
+          reason: box.error,
+        );
+        final project = commandsOf(f, 'project.create').single;
+        // Full is what an older server already does: it is sent nothing.
+        expect(project['process'], process == 'simple' ? 'simple' : isNull);
+        final created = f.app.superTabs.peek(tabId)!.snapshot!.projects.last;
+        expect(created.isSimple, process == 'simple');
+      },
+    );
+  }
+
   test(
     'New Project starts the PM only once its person chose the machine',
     () async {
