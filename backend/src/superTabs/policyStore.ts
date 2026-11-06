@@ -3,7 +3,7 @@
  * Every filter is an equality or a range on the indexed fields (tabId, projectId, revision): never `in` (hotFilters.test.ts).
  */
 import type { Prisma } from '@prisma/client'
-import { stableId } from './model.js'
+import { fail, stableId } from './model.js'
 import { MAX_RULES_REVISIONS, projectRulesSchema, SEED_RULES, type ProjectRules, type RulesChange, type RulesWrite } from './policy.js'
 
 type Transaction = Prisma.TransactionClient
@@ -29,7 +29,7 @@ export async function readRules(tx: Transaction, tabId: string, projectId: strin
   if (!row) return null
   // Normalize legacy dispatch; only the repair path may read an invalid saved record.
   const parsed = projectRulesSchema.safeParse(row.rules)
-  if (!parsed.success && !forEdit) throw new Error(`project rules revision ${row.revision} does not pass the schema; save the rules again`)
+  if (!parsed.success && !forEdit) fail('RULES_INVALID', `Project ${projectId} rules revision ${row.revision} does not pass the schema; repair the project rules by saving them again.`, 409)
   return { revision: row.revision, rules: parsed.success ? parsed.data : row.rules as unknown as ProjectRules }
 }
 

@@ -27,7 +27,8 @@ export interface Lane { name: string; owns: readonly string[] }
 /** The validated dispatch policy of one project; the default is only for legacy pure callers. */
 export interface DispatchRules extends Readonly<ProjectRules['dispatch']> { readonly lanes: readonly Lane[] }
 export const dispatchRules = (rules: ProjectRules): DispatchRules => ({ ...rules.dispatch, lanes: rules.lanes })
-export type DispatchLookup = (projectId: string) => DispatchRules
+/** Null holds only this project's configurable clocks and dispatch until its rules can be repaired/read. */
+export type DispatchLookup = (projectId: string) => DispatchRules | null
 export const DISPATCH_RULES: DispatchRules = Object.freeze(dispatchRules(SEED_RULES))
 
 /** The lane [name] means, matched in any case, as the table writes it; undefined when the table has none by that name. */

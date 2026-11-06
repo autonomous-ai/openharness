@@ -344,6 +344,7 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
   if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return null
   // A crew member 3 hours without progress of its own puts its task back in its lane (task #3400), however busy its screen.
   const rules = rulesFor(group.projectId ?? 'lead')
+  if (!rules) return null
   if (crewClock(group, worker, assignment, now, rules) === 'return') return returnReason(laneOf(group, rules.lanes), rules)
   const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {
@@ -390,6 +391,7 @@ function crewNudges(state: SuperTabState, now: number, rulesFor: DispatchLookup)
     const assignment = group.assignment, worker = assignment && workers.get(assignment.agentId)
     if (!worker || !activeWork(group)) return []
     const rules = rulesFor(group.projectId ?? 'lead')
+    if (!rules) return []
     if (crewClock(group, worker, assignment, now, rules) !== 'nudge') return []
     leaders ??= new Set(state.conversations.flatMap(c => c.leadId ? [c.leadId] : []))
     if (leaders.has(worker.id)) return []

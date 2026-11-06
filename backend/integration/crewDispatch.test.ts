@@ -115,7 +115,7 @@ describe('the crew dispatch pass', () => {
       expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
       expect((await readGroup(s.tab, s.tasks.Api!)).assignment).toBeNull()
       expect((await readGroup(s.tab, s.phone)).assignment?.agentId).toBe(s.worker)
-      expect(errors.mock.calls).toContainEqual([expect.any(String), expect.objectContaining({ tabId: s.tab, projectId: 'lead' })])
+      expect(errors.mock.calls).toContainEqual([expect.any(String), expect.anything(), expect.objectContaining({ tabId: s.tab, projectId: 'lead' })])
     } finally { errors.mockRestore() }
   })
 
@@ -128,11 +128,13 @@ describe('the crew dispatch pass', () => {
     const agents = (await db.swarmAgent.findMany({ where: { tabId: s.tab } })).map(row => row.data as unknown as Agent)
     await s.corrupt()
     s.advance(60_000)
-    await s.store.observeMachine(owner, s.tab, 'owner-mac', { generation: pool.generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null }, quotas: [], tools: {},
+    const report = () => s.store.observeMachine(owner, s.tab, 'owner-mac', { generation: pool.generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null }, quotas: [], tools: {},
       runningHarnessIds: agents.map(a => a.harnessId), stoppedHarnessIds: [] })
-    const messages = (await s.store.messages(owner, s.tab, s.phone, {})).messages
+    await report()
+    const messages = (await s.store.messages(owner, s.tab, s.phone, {}, s.worker)).messages
     expect(messages.filter(m => (m.source as { kind?: string })?.kind === 'crew-nudge')).toHaveLength(1)
-    s.advance(60_000)
+    s.advance(3 * 3_600_000)
+    await report()
     await s.store.runTimeChecks(s.tab)
     expect((await readGroup(s.tab, s.phone)).assignment?.status).toBe('lost')
     expect((await readGroup(s.tab, s.tasks.Api!)).assignment?.status).toBe('working')
