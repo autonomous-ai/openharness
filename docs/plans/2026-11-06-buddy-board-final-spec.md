@@ -237,6 +237,16 @@ chat and that rule is dropped.
    card with a default and a time, duplicate merge; many Buddies per person with a default and a cap; an agent's ask
    goes to the person's default Buddy and the "Needs you" bar; the PM's inputs become proposals, answers and notices
    only; the per-project switch; the Board read returns only what changed.
+   Rules on main (3bfd989a7) that Phase 2 must change first, found by Ken:
+   - a Buddy is refused on a Harness Team account (commands.ts:3153, the 10-28 ruling), but "People without their own
+     machine" runs one there: allow one Buddy per person on a Team machine, acting as its person;
+   - a Buddy may only post in its own chat (BUDDY_FORBIDDEN, buddies.ts:178): let it answer the PM on the cards it sent;
+   - a proposal never reaches P0 (taskPriority.ts:19): allow P0 and hotfix proposals, from the people allowed to set P0;
+   - any person may set any priority today (coordinatorOrPerson, commands.ts:728) and there is no pause command: the
+     server enforces priority and pause rights by role, and gains pause and resume;
+   - only crew members sleep (crewRules.ts): idle Buddies sleep and wake on their person or their proposal;
+   - the built-in "Swarm process v2" text (pmSchedule.ts:17-22) is one text for all projects: it follows each project's
+     switch, so a switched project's PM gets no inbox or answer-each-message lines.
 2. Desktop: Merged column and Waiting folded into Working; decision, question and "needs you" on the card; Needs you
    bar; propose from the Board; priority and pause by role; + New Buddy and Buddy list.
 3. Phone and web: the same Board and Buddies.
