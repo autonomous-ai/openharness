@@ -11,6 +11,7 @@ import { homedir } from 'node:os'
 import { buildEngineInstallationArgv } from '../lib/engineLaunch.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
 import { firstRunAnswered } from '../engines/launchPrep.js'
+import { ownProcessGroup } from '../lib/windows/noWindow.js'
 import { repairSwarmCloneTrust, swarmCloneRoot, swarmCloneRoots } from './cloneTrust.js'
 import { SwarmReads } from './swarmReads.js'
 
@@ -49,7 +50,7 @@ async function runClaudeCodeInstall(run: typeof spawn): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     // A group of its own, ended whole at the deadline as the pane's installer is (engines/kit/nativeInstall.ts): the shell
     // alone killed left npm running, and the next try's install fought it over the prefix.
-    const child = run(command!, args, { stdio: 'ignore', detached: true })
+    const child = run(command!, args, { stdio: 'ignore', ...ownProcessGroup() })
     const deadline = setTimeout(() => {
       try { process.kill(-child.pid!, 'SIGKILL') } catch { child.kill('SIGKILL') }
       reject(new Error('Installing Claude Code took too long. Try again.'))
