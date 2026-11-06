@@ -128,7 +128,7 @@ describe('the crew dispatch pass', () => {
     const agents = (await db.swarmAgent.findMany({ where: { tabId: s.tab } })).map(row => row.data as unknown as Agent)
     await s.corrupt()
     s.advance(60_000)
-    await s.store.observeMachine(owner, s.tab, 'owner-mac', { generation: pool.generation, resources: null, quotas: [], tools: {},
+    await s.store.observeMachine(owner, s.tab, 'owner-mac', { generation: pool.generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null }, quotas: [], tools: {},
       runningHarnessIds: agents.map(a => a.harnessId), stoppedHarnessIds: [] })
     const messages = (await s.store.messages(owner, s.tab, s.phone, {})).messages
     expect(messages.filter(m => (m.source as { kind?: string })?.kind === 'crew-nudge')).toHaveLength(1)
@@ -142,9 +142,9 @@ describe('the crew dispatch pass', () => {
   it('lets a review step open under invalid rules but refuses new tasks with a repair instruction', async () => {
     const s = await twoProjects()
     await s.corrupt()
-    const step = await s.execute({ type: 'conversation.create', title: 'Review', reviewOf: s.tasks.Api!, step: 'Review', checks: [] })
+    const step = await s.execute({ type: 'conversation.create', title: 'Review', brief: 'Review the change.', reviewOf: s.tasks.Api!, step: 'Review', checks: [] })
     expect((await readGroup(s.tab, String(step.result.conversationId))).reviewOf).toBe(s.tasks.Api)
-    await expect(s.execute({ type: 'conversation.create', title: 'New task', checks: [] })).rejects.toMatchObject({
+    await expect(s.execute({ type: 'conversation.create', title: 'New task', brief: 'A new task.', checks: [] })).rejects.toMatchObject({
       code: 'RULES_INVALID', message: expect.stringMatching(/lead.*repair.*rules/i),
     })
   })
