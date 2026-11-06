@@ -4,7 +4,9 @@
  * (project instructions, Rules for every agent: Ken, 2026-10-29); a test step where the change runs (Workflow 2). The table is
  * the project's rules record (policy.ts, #3393): its review rows, test rows and untested paths, read through its own matcher.
  */
+import type { Conversation, SuperTabState } from './model.js'
 import { requiredReads, SEED_RULES, testsFor, touchedRows, type ProjectRules } from './policy.js'
+import { stepName } from './steps.js'
 
 export type StepKind = 'review' | 'security' | 'test'
 /** A step a pull request needs: its name in the task, its kind, the sensitive areas it touched, where a test runs, and
@@ -19,6 +21,31 @@ const OS_WORDS: Record<StepOs, RegExp> = { mac: /\bmac(?:os|book)?\b/i, linux: /
 export const osesIn = (where: readonly string[]): StepOs[] => (['mac', 'linux', 'windows'] as const).filter(os => where.some(line => OS_WORDS[os].test(line)))
 /** Whether a machine's reported OS (machines.ts resources.os: "macOS", "Linux", "Windows") is [os]. */
 export const reportsOs = (reported: string | null | undefined, os: StepOs): boolean => !!reported && OS_WORDS[os].test(reported)
+const OS_NAME: Record<StepOs, string> = { mac: 'Mac', linux: 'Linux', windows: 'Windows' }
+
+/** The OS a step's name names, when it names exactly one (task #3926): "Test on a Linux machine" is Linux's; a plain "Test",
+ *  or anything that is not a step, names none and is matched to no OS. */
+export function stepOs(group: Pick<Conversation, 'reviewOf' | 'step' | 'title'>): StepOs | undefined {
+  const oses = group.reviewOf ? osesIn([stepName(group)]) : []
+  return oses.length === 1 ? oses[0] : undefined
+}
+
+/** The words for a step of [os] nobody of that OS can take: "No Linux Tester free". */
+export const noTesterFree = (os: StepOs): string => `No ${OS_NAME[os]} Tester free`
+
+/**
+ * Why [group], a step named for an OS, cannot run on [machineId], or null (task #3926: with the Linux Testers down, two Linux
+ * steps went to a Windows and a Mac Tester, and stalled). The machine's own reading says its OS, as reviewerPick.ts reads it;
+ * one the Swarm does not list, or with no reading, reports none and takes no OS step. [contributorId] picks an agent's own pool.
+ */
+export function stepOsRefusal(state: SuperTabState, group: Pick<Conversation, 'reviewOf' | 'step' | 'title'>, machineId: string, contributorId?: string): string | null {
+  const os = stepOs(group)
+  if (!os) return null
+  const pool = state.machines?.find(m => m.machineId === machineId && (!contributorId || m.contributorId === contributorId))
+  const reported = pool?.observation?.resources?.os
+  if (reportsOs(reported, os)) return null
+  return `${stepName(group)} runs only on a ${OS_NAME[os]} machine, and ${pool?.name ?? 'this machine'} reports ${reported ? reported : 'no OS'}.`
+}
 
 /**
  * The steps a change to [files] needs by the project's [rules], reads first: as many reads as requiredReads asks, each a

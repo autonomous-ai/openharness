@@ -21,7 +21,7 @@ import {
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
-import { reviewPlan, stepBrief, stepCheck, type PlannedStep, type StepKind } from './reviewTable.js'
+import { reviewPlan, stepBrief, stepCheck, stepOsRefusal, type PlannedStep, type StepKind } from './reviewTable.js'
 import { builtBy, reviewerCandidates } from './reviewerPick.js'
 import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
@@ -1723,6 +1723,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // And what the task needs to reach, where it runs (machineAccess.ts): an assignment is held to it as a start is.
     const unreached = accessRefusal(state, worker.machineId, home, taskAccess(group))
     if (unreached) failTeamWork(unreached)
+    // A step named for an OS runs on a machine of that OS (reviewTable.ts, task #3926).
+    const wrongOs = stepOsRefusal(state, group, worker.machineId, worker.contributorId)
+    if (wrongOs) fail('STEP_OS', wrongOs)
     requireRepositoryReach(state, onTeamAccount(state, worker), worker.machineOwnerId, home, context.repositoryReach)
     // Team-written code runs only in a Team account (teamWritten.ts, audit H2).
     pushedRefusal(group, worker)

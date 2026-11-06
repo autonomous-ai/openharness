@@ -17,6 +17,7 @@ import { unavailableReason } from './liveness.js'
 import { FAILED, type PullRequestWatch } from './pullRequestEvents.js'
 import { roleNameOf } from './instructions.js'
 import { reviewerCandidates } from './reviewerPick.js'
+import { stepOs } from './reviewTable.js'
 import { stepName } from './steps.js'
 
 const HOUR_MS = 3_600_000
@@ -162,7 +163,8 @@ export function candidatesFor(state: SuperTabState, member: Agent, rules: Dispat
     const kind = /test/i.test(stepName(step)) ? 'test' : /security/i.test(stepName(step)) ? 'security' : 'review'
     const latest = task.pullRequestUrls?.at(-1)
     const head = latest ? task.pullRequestHeads?.[latest]?.head ?? null : null
-    return reviewerCandidates(state, task, kind, head, now).some(a => a.id === member.id)
+    // A step named for an OS goes to an agent of that OS only (task #3926), as it went when first opened.
+    return reviewerCandidates(state, task, kind, head, now, stepOs(step)).some(a => a.id === member.id)
   })
   const lane = open.filter(g => (!g.lane || !!laneNamed(rules.lanes, g.lane)) && !g.reviewOf && !pinned.includes(g) && !(pinOf(g) && members.has(pinOf(g)!.agentId)) && !lostByIt(g)
     // Ordinary workers recover work; new tasks still need the PM's route or a standing crew lane.
