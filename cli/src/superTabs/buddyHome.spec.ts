@@ -3,6 +3,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+// The login shell's environment is captured once and kept for minutes: each test here moves the engine homes in its own process.env.
+vi.mock('../engines/kit/launchExecutable.js', async (original) => ({ ...await original<object>(),
+  launchEnvironment: async () => Object.fromEntries(['HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'].filter(k => process.env[k] !== undefined).map(k => [k, process.env[k]])) }))
 import { BUDDY_COPIES_FILE, buddyProjectsOf, folderName, prepareBuddyHome, pruneBuddyHome, buddyHomeDue, refreshBuddyHome, removeBuddyHome, trustBuddyHome } from './buddyHome.js'
 
 /** A link to a folder: a junction on Windows, which needs no Developer Mode or administrator (Window of Tim, #3815) and which
@@ -70,6 +73,22 @@ describe('a person\'s one Buddy\'s folder', { timeout: GIT_TIMEOUT }, () => {
     } finally {
       if (moved.claude === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = moved.claude
       if (moved.codex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = moved.codex
+    }
+  })
+
+  // The reported machine (tuan.dev, 11-06): Claude Code never ran, so there is no .claude.json to extend and its trust question
+  // was asked in a terminal nobody sees.
+  it('trusts the folder alone on a computer where Claude Code never ran', async () => {
+    const claude = root(), home = join(root(), 'home')
+    mkdirSync(home)
+    const moved = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = claude
+    try {
+      await trustBuddyHome(home, 'claude')
+      const saved = JSON.parse(readFileSync(join(claude, '.claude.json'), 'utf8')).projects as Record<string, { hasTrustDialogAccepted: boolean }>
+      expect(saved).toEqual({ [home]: { allowedTools: [], hasTrustDialogAccepted: true } })
+    } finally {
+      if (moved === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = moved
     }
   })
 

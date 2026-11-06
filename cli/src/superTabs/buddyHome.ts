@@ -260,11 +260,12 @@ export async function pruneBuddyHome(home: string, readable: ReadonlySet<string>
  * This is an exception to "never a folder with content" (engines/kit/folderTrust.ts): the folder is Harness's, made for the
  * start its person pressed, and what the question guards against cannot happen in it: its own root holds no project's settings,
  * hooks or MCP servers (each project's copy is a folder below it), and the folder goes with the Buddy. Claude Code and Codex
- * alike, as both run a Buddy (task #2832). A failure here only leaves the question.
+ * alike, as both run a Buddy (task #2832). On a computer where Claude Code never ran there is no settings file to extend: it is
+ * made, holding this folder alone (task #3737). A failure here only leaves the question.
  */
 export async function trustBuddyHome(home: string, engine: unknown): Promise<void> {
   if (engine !== 'claude' && engine !== 'codex') return
-  try { folderTrust(engine, undefined, await launchEnvironment() ?? undefined)?.record(home) }
+  try { folderTrust(engine, undefined, await launchEnvironment() ?? undefined)?.record(home, { create: true }) }
   catch (error) { console.warn(`[super-tabs] could not answer the folder question for a Buddy: ${(error as Error).message}`) }
 }
 
