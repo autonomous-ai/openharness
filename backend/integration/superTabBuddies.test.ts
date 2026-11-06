@@ -19,6 +19,7 @@ import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { quotaReset } from './holds.test-support.js'
+import { profiled, reads, plan } from './plans.test-support.js'
 
 // Buddies end to end through the store (buddies.ts): a person adds one on their own Swarm machine, its host starts it, they
 // talk to it alone, and it sends their proposal to the PM. A fresh loopback replica set, created here.
@@ -72,9 +73,9 @@ async function closedPmChat(f: { store: SuperTabStore; tab: string }, conversati
 }
 
 /** A Swarm whose PM runs on the owner's Mac, and peer a member with their own Mac in the Machines list. */
-async function swarm() {
+async function swarm(now: () => number = () => Date.now()) {
   const files = new MemoryAttachmentStore()
-  const store = new SuperTabStore(db, () => Date.now(), { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
+  const store = new SuperTabStore(db, now, { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
   const tab = (await store.create(owner, randomUUID(), 'Buddies', 'public')).id
   const execute = (command: Command, user = owner, asAgentId?: string, hostMachineId?: string) =>
     store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId, hostMachineId)
@@ -1173,7 +1174,7 @@ describe('a Buddy on its person\'s own machine outside the Swarm, through the st
   it('is no contribution another Swarm sees: the Mac it shares elsewhere still takes teammates\' work there', async () => {
     const a = await swarm()
     const files = new MemoryAttachmentStore()
-    const store = new SuperTabStore(db, () => Date.now(), { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
+    const store = new SuperTabStore(db, now, { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
     const b = (await store.create(peer, randomUUID(), 'Peer\'s own', 'public')).id
     const stateA = (await a.store.read(owner, a.tab)).state, stateB = (await store.read(peer, b)).state
     expect(stateB.workspaceId).not.toBe(stateA.workspaceId)
@@ -1251,5 +1252,42 @@ describe('the person\'s own browser, reading and writing the Swarm straight from
     }
     expect(await refusal(f.store.messages(peerWeb, f.tab, 'lead', {}, f.lead))).toMatchObject({ code: 'FORBIDDEN', status: 403 })
     expect(await refusal(new SwarmReads(f.store).firstLoad(peerTeam, f.tab))).toMatchObject(LIMITED)
+  })
+})
+
+
+describe('idle Buddy sleep (#3824)', () => {
+  it('sleeps only after an idle hour and no open delivery, using the agent status index', async () => {
+    let now = Date.now()
+    const f = await swarm(() => now)
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    const { main, swarmChat, pool } = await swarmBuddy(f)
+    const agent = (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === main)!
+    const sent = await f.execute({ type: 'message.send', conversationId: swarmChat, text: 'Remember this', replyTo: null, recipientIds: [] }, peer)
+    const { receivedAt: _, sessionKind: __, ...report } = pool.machine.observation!
+    const idle = { ...report, runningHarnessIds: [agent.harnessId], idleBuddyHarnessIds: [agent.harnessId] }
+    const current = async () => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === main)!
+    now += 3_600_000 - 1
+    await f.store.observeMachine(peer, f.tab, 'peer-mac', idle)
+    expect((await current()).asleep).toBeUndefined()
+    now++
+    for (const status of ['queued', 'claimed', 'uncertain']) {
+      await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: main, messageId: String(sent.result.messageId) }, data: { status } })
+      await f.store.observeMachine(peer, f.tab, 'peer-mac', idle)
+      expect((await current()).asleep, status).toBeUndefined()
+      now += 30_001
+    }
+    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: main }, data: { status: 'answered' } })
+    const entries = await profiled(db, () => f.store.observeMachine(peer, f.tab, 'peer-mac', idle))
+    expect((await current()).asleep).toEqual({ since: now })
+    const pending = reads(entries, 'SuperTabDelivery', ['tabId', 'agentId', 'status'])
+    expect(pending.length).toBeGreaterThan(0)
+    for (const row of plan(pending)) {
+      expect(row.plan).toContain('IXSCAN { tabId: 1, agentId: 1, status: 1, createdAt: 1 }')
+      expect(row.docsExamined).toBe(0)
+      expect(row.keysExamined).toBeLessThanOrEqual(3)
+    }
+    const row = (await rosterRows(f.store, peer, 'peer-mac')).find(r => 'agent' in r && r.agent.id === main)
+    expect(row).toMatchObject({ buddySleepManaged: true, agent: { harnessId: agent.harnessId, buddyOf: agent.buddyOf } })
   })
 })
