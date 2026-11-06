@@ -35,8 +35,13 @@ class _Memory implements LocalKeyValueStore {
 class _Api extends ApiClient {
   _Api() : super(config: AppConfig.dev, session: AuthSession());
   final profiles = <Completer<Map<String, dynamic>?>>[];
+  int desks = 0, lists = 0;
   @override
-  Future<Map<String, dynamic>?> desk() async => null;
+  Future<Map<String, dynamic>?> desk() async {
+    desks++;
+    return null;
+  }
+
   @override
   Future<Map<String, dynamic>?> me() {
     final answer = Completer<Map<String, dynamic>?>();
@@ -45,7 +50,10 @@ class _Api extends ApiClient {
   }
 
   @override
-  Future<List<Machine>> machines() async => const [];
+  Future<List<Machine>> machines() async {
+    lists++;
+    return const [];
+  }
 }
 
 /// `harness auth status`, held until the test answers it.
@@ -183,7 +191,8 @@ void main() {
       addTearDown(() => appLog = before);
       speedMarks.restart();
 
-      await app.bootstrap();
+      final boot = app.bootstrap();
+      await _ticks();
       expect(cli.answer.isCompleted, isFalse);
       expect(_screen(app), 'workspace');
       expect(app.signedIn, isTrue);
@@ -192,6 +201,7 @@ void main() {
       cli.answer.complete(
         const CliAuthStatus(loggedIn: true, machineId: 'machine-a'),
       );
+      await boot;
       await _ticks();
       expect(_screen(app), 'workspace');
       expect(app.currentUser?.id, 'ada');
@@ -246,7 +256,8 @@ void main() {
     'kept, but the check says signed out: ends on the sign-in page, nobody shown, nothing kept',
     () async {
       await keptFrom('machine-a');
-      await app.bootstrap();
+      unawaited(app.bootstrap());
+      await _ticks();
       expect(_screen(app), 'workspace');
       cli.answer.complete(const CliAuthStatus(loggedIn: false));
       await _ticks();
@@ -280,7 +291,8 @@ void main() {
     'kept, but the check names another machine: signed in, nobody shown until the server answers, the old record gone',
     () async {
       await keptFrom('machine-a');
-      await app.bootstrap();
+      unawaited(app.bootstrap());
+      await _ticks();
       final first = api.profiles.toList();
       cli.answer.complete(
         const CliAuthStatus(loggedIn: true, machineId: 'machine-b'),
@@ -312,23 +324,72 @@ void main() {
   );
 
   test(
-    'nothing is kept before the check proves the machine; once proven, the server\'s answer is',
+    'nothing of the account is asked before the check proves it: the CLI may be signed in as someone else (review of #3293)',
     () async {
       await keptFrom('machine-a');
-      await app.bootstrap();
+      unawaited(app.bootstrap());
       await _ticks();
-      api.profiles.last.complete(_me('ada', 'Ada Two'));
+      expect(_screen(app), 'workspace');
+      expect(api.lists, 0, reason: 'no machine list');
+      expect(api.desks, 0, reason: 'no desk joined or seeded');
+      expect(api.profiles, isEmpty, reason: 'no profile asked');
+      cli.answer.complete(
+        const CliAuthStatus(loggedIn: true, machineId: 'machine-b'),
+      );
       await _ticks();
-      expect(app.currentUser?.name, 'Ada Two');
-      Map<String, dynamic> kept() =>
-          jsonDecode(storage.values[ProfileCache.key]!) as Map<String, dynamic>;
-      expect(kept()['name'], 'Ada', reason: 'not proven yet');
+      // Only the launch that started again from the CLI's answer reads them, as a launch with nothing kept does.
+      expect(app.currentUser, isNull);
+      expect(storage.values, isNot(contains(ProfileCache.key)));
+    },
+  );
+
+  test(
+    'once the check proves the machine, the account work runs and the server\'s answer is kept',
+    () async {
+      await keptFrom('machine-a');
+      unawaited(app.bootstrap());
+      await _ticks();
+      expect(api.profiles, isEmpty);
       cli.answer.complete(
         const CliAuthStatus(loggedIn: true, machineId: 'machine-a'),
       );
       await _ticks();
-      expect(kept()['name'], 'Ada Two');
-      expect(kept()['machineId'], 'machine-a');
+      expect(api.lists, greaterThan(0));
+      api.profiles.last.complete(_me('ada', 'Ada Two'));
+      await _ticks();
+      expect(app.currentUser?.name, 'Ada Two');
+      final kept =
+          jsonDecode(storage.values[ProfileCache.key]!) as Map<String, dynamic>;
+      expect(kept['name'], 'Ada Two');
+      expect(kept['machineId'], 'machine-a');
     },
   );
+
+  test(
+    'another machine, and the kept record cannot be deleted: the launch starts again once, never from it (review of #3293)',
+    () async {
+      final stuck = _Undeletable();
+      await ProfileCache(stuck).write('machine-a', _ada);
+      final again = _App(cli, stuck)..api = api;
+      again.cliSessionOnDisk = () => true;
+      addTearDown(again.dispose);
+      unawaited(again.bootstrap());
+      await _ticks();
+      cli.answer.complete(
+        const CliAuthStatus(loggedIn: true, machineId: 'machine-b'),
+      );
+      await _ticks();
+      expect(_screen(again), 'workspace');
+      expect(again.signedIn, isTrue);
+      expect(again.currentUser, isNull);
+      // The early check, then at most the restarted launch's own.
+      expect(cli.asked, lessThanOrEqualTo(2));
+    },
+  );
+}
+
+/// A store whose deletes fail, as a full disk fails the native store's rewrite, while its reads still work.
+class _Undeletable extends _Memory {
+  @override
+  Future<void> delete(String key) async => throw StateError('disk full');
 }
