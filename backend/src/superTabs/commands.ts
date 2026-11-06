@@ -70,7 +70,7 @@ import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { ACK_ONLY_HINT, isAcknowledgement } from './acknowledgements.js'
-import { isProjectChat, inMainChat, requireChatContent, requireChatPost, recordChatAsk, recordChatPost } from './chatLimits.js'
+import { isProjectChat, inMainChat, requireChatContent, requireChatPost, recordChatAsk, recordChatPost, requireChatAnswer, recordChatAnswer } from './chatLimits.js'
 import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, refuseOverBudget, refuseRepeats, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { repeatedRules } from './instructionsDiff.js'
@@ -3780,10 +3780,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       const chatPost = actor.kind === 'agent' && !command.agentOnly && isProjectChat(state, group)
       const chatAsk = chatPost ? requireChatPost(group, command, context.reply) : null
+      const chatAnswer = chatPost ? requireChatAnswer(group, command, context.reply) : null
       if (chatPost && inMainChat(command, context.reply)) {
         requireChatContent(state, group, command.text)
       }
-      // A second answer to a message the PM answered is refused with where the first is; a plain post is not (answers.ts).
+      // The answer command also keeps its existing guard outside project chats (answers.ts).
       if (command.answer) requireUnanswered(group, (command.answers ?? command.replyTo)!)
       const replyAgent = context.reply?.author.kind === 'agent' ? context.reply.author.id : null
       // An agent's post reaches the agents it names, by --to or by @Name, the agent whose message it answers, and, when it names
@@ -3905,7 +3906,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           recordAnswered(group, [...settled, ...asked.filter(a => !settled.some(s => s.id === a.id))], sent.id, root, context.now)
         }
       }
-      if (chatPost) recordChatPost(group, chatAsk, operationId)
+      if (chatPost) {
+        recordChatPost(group, chatAsk, operationId)
+        const root = command.replyTo && context.reply && !context.reply.agentOnly ? context.reply.thread ?? context.reply.id : null
+        recordChatAnswer(group, chatAnswer, operationId, root, context.now)
+      }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       // A post to an Engineer waiting on this review: its own step then waits for the new revision (liveness.ts waitingForRevision).
       if (actor.kind === 'agent') toldEngineer(state, group, actor.agentId, recipients, context.now)

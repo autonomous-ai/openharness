@@ -1,6 +1,7 @@
 /** Deterministic project-chat limits (Dee 11-04/11-05, task #3598). Threads carry work details; main carries decisions/results. */
 import type { Command, CommandContext } from './commands.js'
 import { fail, type Conversation, type SuperTabState } from './model.js'
+import { requireUnanswered, type AnsweredAsk } from './answers.js'
 import { groupProject } from './projects.js'
 
 type Send = Extract<Command, { type: 'message.send' }>
@@ -29,8 +30,8 @@ export function requireChatContent(state: SuperTabState, group: Conversation, te
 export interface ChatAsk {
   id: string
   at: number
-  root: string
   main: string[]
+  answer?: AnsweredAsk
 }
 export interface ChatLimits {
   asks: ChatAsk[]
@@ -40,18 +41,18 @@ export interface ChatLimits {
 }
 const MAX_ASKS = 50
 
-function remember(group: Conversation, id: string, at: number, root = id): ChatAsk {
+function remember(group: Conversation, id: string, at: number): ChatAsk {
   const ledger = group.chatLimits ??= { asks: [] }
   const known = ledger.asks.find(ask => ask.id === id)
   if (known) return known
-  const ask: ChatAsk = { id, at, root, main: [] }
+  const ask: ChatAsk = { id, at, main: [] }
   ledger.asks.push(ask)
   if (ledger.asks.length > MAX_ASKS) ledger.closedThrough = Math.max(ledger.closedThrough ?? 0, ledger.asks.shift()!.at)
   return ask
 }
 
 export function recordChatAsk(group: Conversation, id: string, at: number, root: string | null): void {
-  remember(group, id, at, root ?? id)
+  remember(group, id, at)
   if (!root) group.chatLimits!.latest = id
 }
 
@@ -80,4 +81,21 @@ export function requireChatPost(group: Conversation, command: Send, reply: Reply
 
 export function recordChatPost(group: Conversation, askId: string | null, messageId: string): void {
   if (askId) group.chatLimits!.asks.find(ask => ask.id === askId)!.main.push(messageId)
+}
+
+/** Explicit answer links and a direct response to a person are answers; replies to an agent response are discussion. */
+export function requireChatAnswer(group: Conversation, command: Send, reply: Reply): string | null {
+  if (!reply || reply.agentOnly || !(command.answers || command.answer || (command.replyTo && reply.author.kind === 'person'))) return null
+  let ask = group.chatLimits?.asks.find(ask => ask.id === reply.id)
+  requireUnanswered(group, reply.id, ask?.answer)
+  if (!ask) {
+    if (group.chatLimits?.closedThrough !== undefined && reply.createdAt <= group.chatLimits.closedThrough) return closedAsk()
+    ask = remember(group, reply.id, reply.createdAt)
+  }
+  return ask.id
+}
+
+export function recordChatAnswer(group: Conversation, askId: string | null, messageId: string, thread: string | null, at: number): void {
+  const ask = askId && group.chatLimits?.asks.find(ask => ask.id === askId)
+  if (ask) ask.answer = { id: askId, answerId: messageId, thread, at }
 }

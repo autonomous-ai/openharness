@@ -88,8 +88,9 @@ describe('two main posts per ask', () => {
     const { send, ask } = setup()
     const question = ask()
     send('I can fix login.')
-    send('Login works offline now.', { reply: question, extra: { replyTo: question.id, alsoSend: true } })
-    expect(() => send('Expired tokens work too.', { reply: question, extra: { replyTo: question.id } })).not.toThrow()
+    const first = send('Login works offline now.', { reply: question, extra: { replyTo: question.id, alsoSend: true } })
+    const response = { ...question, id: String(first.result.messageId), author: first.messages[0]!.author }
+    expect(() => send('Expired tokens work too.', { reply: response, extra: { replyTo: response.id } })).not.toThrow()
     expect(() => send('The mobile build also has the fix.', { reply: question, extra: { replyTo: question.id, alsoSend: true } }))
       .toThrow(expect.objectContaining({ code: 'CHAT_MAIN_LIMIT' }))
   })
@@ -166,7 +167,7 @@ describe('one answer across main and thread', () => {
   it('does not reopen a formal answer after its ask has left the active ledger', () => {
     const { f, send, ask } = setup()
     const first = ask()
-    send('Login works offline.', { reply: first, extra: { replyTo: first.id } })
+    send('Login works offline.', { by: f.dev, reply: first, extra: { replyTo: first.id } })
     for (let i = 0; i < 51; i++) { f.tick(1); ask() }
     expect(() => send('Yes, offline works.', { reply: first, extra: { replyTo: first.id, answers: undefined } }))
       .toThrow(expect.objectContaining({ code: 'CHAT_ASK_CLOSED' }))
