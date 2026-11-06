@@ -989,7 +989,8 @@ export class SuperTabStore {
       }
       agentIds.push(...card.proposal.senders.flatMap(s => s.buddyId ? [s.buddyId] : []))
     }
-    return this.ensure(tx, loaded, { groupIds, agentIds })
+    const named = await this.ensure(tx, loaded, { groupIds, agentIds })
+    return this.ensure(tx, named, { groupIds: listedBuddyChats(named.state) })
   }
 
   /** Loads again with more named groups, agents or starts when the first load lacks one a command needs. */
@@ -999,7 +1000,10 @@ export class SuperTabStore {
     if (!named.allGroups && has(named.groupIds, id => state.conversations.some(c => c.id === id)) && has(named.startIds, id => !!state.starts?.some(s => s.id === id))
       && !named.agentIds?.length && !named.projectIds?.length && !named.startAgentIds?.length) return loaded
     recordReload()
-    return loadRow(tx, loaded.row, named)
+    // An additional named read must retain quiet groups already needed by this transaction, such as a proposal or merge source.
+    // Awake groups load automatically; only quiet keys need carrying through the next indexed read.
+    const groupIds = [...new Set([...named.groupIds ?? [], ...loaded.parts.groups.filter(g => g.dormant).map(g => g.key)])]
+    return loadRow(tx, loaded.row, { ...named, groupIds })
   }
 
   /** A Swarm with one start loaded even when finished, and the start's group even when dormant. */
