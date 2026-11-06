@@ -137,6 +137,7 @@ class SuperTabView extends StatefulWidget {
     this.app,
     this.onNewProject,
     this.rightPane,
+    this.belowDecisions,
     this.onNewSwarm,
     this.onChooseAgentTerminal,
     this.linkSwarms,
@@ -171,6 +172,9 @@ class SuperTabView extends StatefulWidget {
   /// slot. Given, the chat of the selected agent or project is in the middle; without it the right pane keeps the Board's
   /// chat as before.
   final Widget Function(BuildContext context)? rightPane;
+
+  /// A row directly below Decisions in the left pane (the Leaderboard, task #4122).
+  final Widget? belowDecisions;
 
   /// The existing New Swarm, for the Swarm dropdown atop the left bar; none
   /// without it.
@@ -2100,6 +2104,7 @@ class _SuperTabViewState extends State<SuperTabView>
     app: widget.app,
     onNewProject: widget.onNewProject,
     onNewAgent: _newAgent,
+    belowDecisions: widget.belowDecisions,
     onOpenAgentChat: _openAgentChat,
     onNewSwarm: widget.onNewSwarm,
     page: _pageShown,

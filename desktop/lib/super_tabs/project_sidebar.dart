@@ -67,6 +67,7 @@ class ProjectSidebar extends StatelessWidget {
     this.board = false,
     this.onNewAgent,
     this.onOpenAgentChat,
+    this.belowDecisions,
   });
   final SuperTabController controller;
 
@@ -79,6 +80,10 @@ class ProjectSidebar extends StatelessWidget {
   /// + New agent's choice, Regular or PM (Swarm v3, task #4118): the creation flow takes it from here. Without it the
   /// section has no + .
   final ValueChanged<SuperTabAgentKind>? onNewAgent;
+
+  /// A row the Desktop's left pane keeps directly below Decisions, such as the Leaderboard (Swarm v3, task #4122); nothing
+  /// is reserved while it is not given.
+  final Widget? belowDecisions;
 
   /// Opens the chat of an agent chosen in My agents in the middle; [onSelect] when not given.
   final ValueChanged<String>? onOpenAgentChat;
@@ -874,6 +879,7 @@ class ProjectSidebar extends StatelessWidget {
                       waiting: threads,
                     ),
                 ],
+                if (board) ?belowDecisions,
                 const SizedBox(height: 20),
                 if (board) ..._myAgents(context, snapshot, reading),
                 SuperTabSectionHeading(
