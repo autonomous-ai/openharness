@@ -13,6 +13,8 @@ import 'package:harness/models/model_manager_controller.dart';
 import 'package:harness/models/models_panel.dart';
 import 'package:harness/widgets/api_picker_form.dart';
 import 'package:harness/usage/models_menu_controller.dart';
+import 'package:harness/usage/usage_accounts.dart';
+import 'package:harness/usage/usage_window.dart';
 import 'package:harness/ws/ws_conn.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 
@@ -453,7 +455,18 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final app = _ApiApp();
     final controller = ModelManagerController(app, poll: false);
-    final subscriptions = ModelsMenuController();
+    final subscriptions = ModelsMenuController(
+      remote: () async => [
+        MachineUsage(
+          machineName: 'This computer',
+          isLocal: true,
+          readings: [
+            for (final provider in UsageProvider.values)
+              ProviderUsage.loading(provider),
+          ],
+        ),
+      ],
+    );
     addTearDown(() {
       controller.dispose();
       subscriptions.dispose();
@@ -517,7 +530,7 @@ void main() {
     expect(find.byTooltip('Add OpenRouter'), findsNothing);
     final search = find.byKey(const ValueKey('models-search'));
     for (final (query, match) in [
-      ('anthropic', 'Anthropic'),
+      ('claude', 'Claude'),
       ('qwen3.8-27b', 'Qwen3.8-27B'),
       ('TEAM COMPUTER', 'Shared DeepSeek'),
       ('openrouter.ai', 'OpenRouter'),
@@ -965,7 +978,18 @@ void main() {
     ];
     app.allPresets = true;
     final controller = ModelManagerController(app, poll: false);
-    final subscriptions = ModelsMenuController();
+    final subscriptions = ModelsMenuController(
+      remote: () async => [
+        MachineUsage(
+          machineName: 'This computer',
+          isLocal: true,
+          readings: [
+            for (final provider in UsageProvider.values)
+              ProviderUsage.loading(provider),
+          ],
+        ),
+      ],
+    );
     addTearDown(() {
       controller.dispose();
       subscriptions.dispose();
