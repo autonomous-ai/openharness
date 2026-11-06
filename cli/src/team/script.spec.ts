@@ -118,6 +118,28 @@ describe('setup script', () => {
     expect(buildSetupScript(input())).toContain('if [ "$SIGN_IN" = always ] || [ ! -s "$TEAM_SESSION" ]; then')
   })
 
+  // #3684 (kelvin1295, 11-06): a revoked sign-in is kept on disk, marked signed out (lib/authSession.ts), so the file is not
+  // empty and Repair started the daemon again on the revoked sign-in. The step's own condition, run by /bin/sh.
+  it('hands over a new sign-in when the team account\'s sign-in is marked signed out, and keeps one that works', () => {
+    const line = buildSetupScript(input()).split('\n').find((text) => text.startsWith('if [ "$SIGN_IN" = always ]'))!
+    const dir = mkdtempSync(join(tmpdir(), 'team-sign-in-'))
+    try {
+      const handsOver = (content: string, mode = 'missing') => {
+        const file = join(dir, 'session.json')
+        writeFileSync(file, content)
+        return execFileSync('/bin/sh', ['-c', `${line} echo yes; else echo no; fi`], {
+          env: { PATH: '/usr/bin:/bin', SIGN_IN: mode, TEAM_SESSION: file }, encoding: 'utf8', windowsHide: true }).trim()
+      }
+      expect(handsOver('')).toBe('yes')
+      expect(handsOver('{"accessToken":"a","refreshToken":"r"}\n')).toBe('no')
+      expect(handsOver('{"accessToken":"a","refreshToken":"r","signedOut":{"at":1,"reason":"revoked"}}\n')).toBe('yes')
+      expect(handsOver('{"accessToken":"a","refreshToken":"r","signedOut":{"at":1,"reason":"refresh-refused","retryAt":2}}\n')).toBe('yes')
+      expect(handsOver('{"accessToken":"a","refreshToken":"r"}\n', 'always')).toBe('yes')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('starts the daemon it stopped again when no sign-in code can be had, then says why', () => {
     // In the VM rig (24 Oct 2026) a repair run whose mint was refused died at step 7, after step 4 had stopped the daemon:
     // the team machine stayed down until the Mac restarted.
