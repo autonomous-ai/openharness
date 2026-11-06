@@ -72,6 +72,7 @@ import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, 
 import { ACK_ONLY_HINT, isAcknowledgement } from './acknowledgements.js'
 import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, refuseOverBudget, refuseRepeats, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
+import { repeatedRules } from './instructionsDiff.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
 import { contractRefusal, missingContract } from './taskContract.js'
@@ -253,7 +254,9 @@ export const commandSchema = z.discriminatedUnion('type', [
     dropped: z.array(z.object({ text: z.string().trim().min(1).max(2000), kind: z.enum(['merged', 'expired', 'rule']) }).strict())
       .max(MAX_DROPPED_LINES).optional(),
     // The coordinator's daily tidy, done by this save (pmSchedule.ts tidyRequest).
-    tidy: z.literal(true).optional() }).strict(),
+    tidy: z.literal(true).optional(),
+    // A person keeping a line that repeats one the document has, and why (ruleGuard.ts refuseRepeats; the coordinator's is ignored).
+    repeatReason: z.string().trim().min(1).max(100).regex(/^[^\r\n]*$/, 'Give the reason in one line.').optional() }).strict(),
   // The project's rules record, saved on the revision the writer read (policy.ts). A person writes in their own name; the
   // project's PM only with `askedIn`, the person's own chat message it passes on.
   z.object({ type: z.literal('rules.set'), projectId: id, baseRevision: z.number().int().nonnegative().safe(), rules: projectRulesSchema,
@@ -490,7 +493,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'project.create': ['name', 'brief'],
   'project.rename': ['name'],
   'project.report': ['text'],
-  'instructions.save': ['text', 'summary', 'dropped[].text'],
+  'instructions.save': ['text', 'summary', 'repeatReason', 'dropped[].text'],
   'note.add': ['text'],
   'project.coordinatorName': ['name'],
   'rule.set': ['text'],
@@ -2066,14 +2069,18 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const before = context.instructions?.revision === current ? context.instructions.text : onTemplate ? INSTRUCTIONS_TEMPLATE
         : fail('INSTRUCTIONS_UNAVAILABLE', 'This project\'s instructions cannot be read now. Try again in a moment.', 503)
       // A line the save adds that the document already has is refused with the existing line quoted (#3283).
-      refuseRepeats(before, command.text)
+      // A person may keep both lines with a reason, which the History's summary records; the coordinator may not (#3568).
+      const kept = actor.kind === 'person' && command.repeatReason && repeatedRules(before, command.text).length > 0
+      refuseRepeats(before, command.text, !!kept)
+      const because = kept ? ` (kept a repeated line: ${command.repeatReason})` : ''
+      const summary = because && command.summary.length + because.length > 200 ? `${command.summary.slice(0, 199 - because.length)}…${because}` : command.summary + because
       // No part grows past its size budget: core, each role section, people notes, the whole (#3392).
       refuseOverBudget(before, command.text)
       // A person's rule, or who gave it, is dropped only by that person or with their own message approving it (#3151).
       const { told, rules } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [],
         context.instructions?.at ?? 0, context.pullRequestMerges ?? {})
       // Every line it dropped, with its kind and who gave it, kept with the revision for the History (River, 11-05).
-      saveInstructions(project, current, command.text, command.summary, askedBy, droppedLines(before, command.text, command.dropped ?? [], rules))
+      saveInstructions(project, current, command.text, summary, askedBy, droppedLines(before, command.text, command.dropped ?? [], rules))
       // The coordinator's save that says it is the tidy is that tidy done (pmSchedule.ts tidyRequest); a correction it saves
       // meanwhile is not (review of #3112).
       if (actor.kind === 'agent' && command.tidy) tidySaved(projectOf(state, project.id), current + 1)
