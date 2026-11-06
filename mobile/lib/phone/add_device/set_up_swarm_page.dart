@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard;
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:harness_mobile/state/app_state.dart';
@@ -11,6 +12,7 @@ import '../../swarm/swarm_buddy_chat.dart' show openSwarmBuddy;
 import '../../swarm/swarm_session.dart';
 import '../../swarm/swarm_start.dart' show SwarmComputers;
 import '../browser_handoff.dart';
+import '../settings_row.dart';
 import '../tty.dart';
 import '../tty_controls.dart';
 import 'add_device_page.dart' show SetupLine;
@@ -223,6 +225,7 @@ class _SetUpSwarmPageState extends State<SetUpSwarmPage> {
       'Your Swarm',
       'Claude Code on $name, and $name in your Swarm',
       'Signed in to Claude',
+      'Claude set up for your Buddy',
       swarm.keptBuddy ? 'Your Buddy, as it runs now' : 'Your Buddy on $name',
     ];
     return [
@@ -261,7 +264,62 @@ class _SetUpSwarmPageState extends State<SetUpSwarmPage> {
           ),
         ],
       ],
+      if (swarm.step == Intern3SwarmStep.firstRun && !swarm.done) ...[
+        const SizedBox(height: 12),
+        Text(
+          'Claude Code asks two things the first time it runs on $name. Answer them here.',
+          key: const Key('set-up-swarm-first-run'),
+          style: tty.style(color: tty.dim),
+        ),
+        const SizedBox(height: 8),
+        SettingsGroup(
+          children: [
+            for (final (theme, label) in _themes)
+              SettingsRow(
+                key: ValueKey('set-up-swarm-theme-$theme'),
+                title: label,
+                detail: 'Its text style, for its terminal',
+                trailing: _theme == theme ? _checked(tty) : null,
+                onTap: swarm.busy ? null : () => setState(() => _theme = theme),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SettingsGroup(
+          children: [
+            SettingsRow(
+              key: const Key('set-up-swarm-full-mode'),
+              title: 'Let Claude run commands on $name without asking',
+              detail:
+                  'Your Buddy needs this: it works on its own, with nobody there to say yes to each command.',
+              detailLines: 3,
+              trailing: _fullMode ? _checked(tty) : null,
+              onTap: swarm.busy
+                  ? null
+                  : () => setState(() => _fullMode = !_fullMode),
+            ),
+          ],
+        ),
+      ],
     ];
+  }
+
+  /// Claude Code's text styles offered here, its own words (cli engines/claude/launch.ts `onboarding.theme`).
+  static const _themes = [('dark', 'Dark mode'), ('light', 'Light mode')];
+
+  /// The theme picked for Claude Code on Intern 3: dark, as its screen first offers.
+  String _theme = 'dark';
+
+  /// Full mode accepted by the person: the Buddy starts only then.
+  bool _fullMode = false;
+
+  static Widget _checked(Tty tty) =>
+      Icon(LucideIcons.check300, size: 18, color: tty.green);
+
+  /// Continue: the answers to Intern 3, then the Buddy starts and its tab opens.
+  Future<void> _answerFirstRun() async {
+    await _swarm.answerFirstRun(theme: _theme);
+    if (mounted && _swarm.done) await _openBuddy();
   }
 
   List<Widget> _actions() {
@@ -295,6 +353,17 @@ class _SetUpSwarmPageState extends State<SetUpSwarmPage> {
             label: 'Open Claude\'s page again',
             onPressed: () => unawaited(_signIn()),
           ),
+      ];
+    }
+    if (swarm.step == Intern3SwarmStep.firstRun && swarm.needsFirstRun) {
+      return [
+        TtyPrimaryButton(
+          key: const Key('set-up-swarm-first-run-continue'),
+          label: 'Continue',
+          busy: swarm.busy,
+          busyLabel: 'Starting your Buddy…',
+          onPressed: _fullMode ? () => unawaited(_answerFirstRun()) : null,
+        ),
       ];
     }
     if (swarm.busy || swarm.error == null) return const [];
