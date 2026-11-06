@@ -52,11 +52,50 @@ Buddy's chat instead, through three helpers (buddies.ts): `defaultBuddy`, `defau
 **Interfaces:** `defaultBuddy(state, personId): Agent | undefined`; `defaultBuddyChat(state, person): Conversation`;
 `buddyFor(state, person, senderBuddyId | null): { agent?: Agent; chat: Conversation }`. None throws.
 
-- [ ] Test: the default is the person's Buddy (never a session's, an older membership's or another person's); there is
+- [x] Test: the default is the person's Buddy (never a session's, an older membership's or another person's); there is
   always a chat; a notice goes to the sender while it is still theirs, else the default.
-- [ ] Watch it fail; commit.
-- [ ] Code (today's behaviour: the one Buddy); watch it pass; commit.
+- [x] Watch it fail; commit.
+- [x] Code (today's behaviour: the one Buddy); watch it pass; commit.
 
-## Task 2: several Buddies, each with its own chat; default; cap
+## Storage
 
-To be detailed once the inventory of one-Buddy assumptions is in (this plan's next commit).
+- The person's **main Buddy chat** keeps today's derived id (`swarmBuddyChatId`), so every command can load it by id. It lists
+  the person's other Buddy chats (`Conversation.buddyChats`, at most the cap), so they load with it (store.ts loads the
+  person's Buddy chats through it wherever it loaded the one chat).
+- A new Buddy's chat id is `stableId('buddy', 'swarm', person, generation, operationId)`: unique, never derived by others.
+- The **default** chat carries `buddyDefault: true` (one per person). With none marked, the main chat is the default, so a
+  person from before has their one Buddy as default with no migration.
+- The **cap** is `SuperTabState.buddyCap` (default 5), set by the Swarm owner with `tab.buddyCap`, read by apps in the head.
+
+## Task 2: several Buddies: create with a name, remove one, set the default, the cap
+
+**Files:** backend/src/superTabs/{model.ts, buddies.ts, commands.ts, store.ts, read/views.ts, read/contract.ts,
+parts/touches.ts}, backend/src/superTabs/buddies.test.ts, backend/integration/superTabSwarmBuddy.test.ts
+
+**Interfaces:** `buddy.create { …, name?, conversationId? }` (a name and no chat: a new Buddy in a new chat; a chat: that
+Buddy again; neither: as today on the default); `buddy.remove { conversationId? }` (that Buddy, else the default; the
+default's role passes to the oldest remaining); `buddy.default { conversationId }`; `tab.buddyCap { cap }`; refusal
+`BUDDY_CAP`. `defaultBuddy` reads the marked default.
+
+- [ ] Test: a second Buddy is created with its name in its own chat; the cap refuses one more; remove and default behave as
+  above; only the person acts on their Buddies; a person with one Buddy sees no change.
+- [ ] Watch it fail; commit. Code; watch it pass; commit.
+
+## Task 3: lines for a person go to their default Buddy; a proposal's news to its sender
+
+**Files:** backend/src/superTabs/{commands.ts (person.tell, instructions notice, machine.moved, switch notice, proposalOf,
+startOldChatBuddy, buddyDownLine), decisions.ts, othersWork.ts, buddyNews.ts, leaderboard/stats.ts, buddyModel.ts}
+
+- [ ] Test: with two Buddies and the second as default, a PM line, a delegated decision and a move notice go to the second's
+  chat; a proposal's news goes to the Buddy that sent it, and to the default once it is removed; a model switch moves only
+  the chosen Buddy and its own sessions.
+- [ ] Watch it fail; commit. Code; watch it pass; commit.
+
+## Task 4: the CLI host with several Buddies
+
+**Files:** cli/src/superTabs/{host.ts (session end's chat, model serve grouping), cards.ts (the dial's default),
+start.ts (prompt names the Buddy)}
+
+- [ ] Test: a second Buddy's thread session ends in its own chat; a model switch groups by the Buddy's chat; the dial shows
+  the default Buddy.
+- [ ] Watch it fail; commit. Code; watch it pass; commit.
