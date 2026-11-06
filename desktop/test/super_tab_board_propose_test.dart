@@ -199,6 +199,21 @@ void main() {
     await end(tester, c);
   });
 
+  // The header's name and tabs were a Flexible beside a Spacer, which split the free space and left what follows
+  // mid-bar (Tony and Kelvin, 11-06, #3846): + New proposal sits at the Board's right edge.
+  testWidgets('+ New proposal sits at the right edge of the Board\'s top bar', (
+    tester,
+  ) async {
+    final (c, _) = await show(tester);
+    final button = tester.getRect(_key('super-board-new-proposal'));
+    final board = tester.getRect(_key('super-tasks-lead'));
+    expect(
+      board.right - button.right,
+      lessThanOrEqualTo(grid.AppDesktop.groupGap),
+    );
+    await end(tester, c);
+  });
+
   testWidgets('a project not on the Board has no + New proposal', (
     tester,
   ) async {
