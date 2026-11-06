@@ -463,6 +463,20 @@ class SuperTabController extends ChangeNotifier {
     return _uploadErrors[conversationId];
   }
 
+  /// Takes the last action's refusal for a caller that says it in its own place, the instructions panel's Save (task
+  /// #3652): no composer says it after. An action whose answer was lost keeps it, since every composer waits on it
+  /// with Retry.
+  String? takeOperationError() {
+    final failure = operationError;
+    if (failure == null || _pending != null) return failure;
+    operationError = null;
+    operationErrorCode = null;
+    _operationErrorFor = null;
+    _operationErrorRoot = null;
+    _changed();
+    return failure;
+  }
+
   /// The thread the last failed reply was going to: the thread of the message
   /// it answers, or that message itself, as the backend files a reply. Null
   /// when the failure was not a reply.
