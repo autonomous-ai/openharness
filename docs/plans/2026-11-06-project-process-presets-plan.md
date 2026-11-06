@@ -4,11 +4,11 @@
 
 **Goal:** Let a project choose Simple or Full, keeping existing history and making Simple work finish without review, test, merge or release requirements.
 
-**Architecture:** Keep the process beside the project in the existing head part; missing values mean Full. The command reducer enforces who changes it, and the board read publishes the preset's fixed columns. Task creation and automated steps use one shared process rule, including preservation of old Simple tasks after switching to Full.
+**Architecture:** Keep the process beside the project in the existing head part; missing values mean Full. The command reducer enforces who changes it, and the board read publishes the preset's fixed columns. Task creation and automated steps use one shared process rule, including preservation of old Simple tasks after switching to Full. A single task-number watermark on the project preserves old tasks across repeated switches without loading or rewriting them.
 
 **Tech Stack:** TypeScript, Zod, Vitest, existing MongoDB Swarm parts and version guards. No dependencies or collections.
 
-**Spec:** Harness task #3896, conversation `e39be2ce9fc6e4dad2f0d9a7`: Simple has To do / Doing / Done; Full has Proposal / Next up / Working / Done / Merged / Shipped. Backend only; Desktop is separate. The scope question in that conversation asks whether Full→Simple simplifies existing tasks and requests the exact seed project identities; those two dependent changes wait for its ruling.
+**Spec:** Harness task #3896, conversation `e39be2ce9fc6e4dad2f0d9a7`: Simple has To do / Doing / Done; Full has Proposal / Next up / Working / Done / Merged / Shipped. Backend only; Desktop is separate. The implementation follows the brief’s asymmetric switch rule: Full→Simple simplifies existing tasks without changing open steps; Simple→Full affects only new tasks. The exact seed project identities are requested in the task conversation before seed application.
 
 ## Global Constraints
 
@@ -57,7 +57,7 @@
 
 **Interfaces:** One `taskProcess(project, task)` rule used by every step producer; additive task metadata preserves Simple semantics when the project returns to Full. Existing `work.status done` remains the completion command, requiring no merge. Settings never mutate existing step records.
 
-- [ ] Read the Full→Simple ruling before finalizing the preservation representation.
+- [x] Preserve existing tasks with a task-number watermark when switching Simple→Full; follow the brief’s asymmetric rule while the optional clarification remains unanswered.
 - [ ] Commit tests for Simple Ready opening no review/test steps, manual step refusal, Doing→Done without a merge, unchanged Full steps, preserved open steps, old Simple tasks after switching and reloading, and no new Simple release steps.
 - [ ] Run the affected tests and record red.
 - [ ] Implement the shared lifecycle rule and necessary concurrency guards.
@@ -79,3 +79,5 @@
 Creation accepts `{"type":"project.create","name":"Scout","visibility":"public","process":"simple"}`; omission keeps Full. Settings accepts `{"type":"project.process","projectId":"PROJECT","process":"simple"}`. The Swarm owner can set a private project’s preset without gaining read access to it. Parts head projects and the legacy status read include `process` and `columns` (`[{id,title}]`): Simple ids `todo`, `doing`, `done`; Full ids `proposals`, `nextUp`, `working`, `done`, `merged`, `shipped`. The Desktop follow-up defaults missing fields to Full. No change to assignment status values.
 
 Task 1 evidence: test-only commit `e890f351a`, 10 failed / 1 passed before implementation; afterward 81 passed across process, projects and read/views, with backend typecheck clean.
+
+Task 2 initial evidence: corrected test-only commit `832dde613` has 11 failed / 17 passed in process and light projection; release regressions have 2 failed / 30 passed at `c393fb7b2`. The initial implementation passes 86 tests across process, reviewSteps, releases, touches and light, with backend typecheck clean. Repeated-switch coverage follows before the watermark implementation.

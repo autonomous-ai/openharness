@@ -41,6 +41,7 @@ import { DELETED_SWARM_COMMANDS, isPersonalSwarm, notThere, SWARM_DELETE_GRACE_M
 import { ABANDONED, askedModel, coordinatorCopy, failureNotice, failureRecipients, MACHINE_MOVED, MACHINE_REMOVED, publicReason } from './startFailure.js'
 import { noteStartFailed, noteStartSucceeded, resumeEngine } from './engineHealth.js'
 import { reviewCapacityNotice } from './reviewCapacity.js'
+import { processOf, taskProcess } from './process.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
@@ -2610,6 +2611,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         open(state, reviewed.id)
         // One level: a step's own work is a task's step, never a task with steps of its own (task steps design).
         if (command.step && isStep(reviewed)) fail('STEP_OF_STEP', 'A step belongs to a task, not to another step.', 400)
+        if (command.step && taskProcess(project, reviewed) === 'simple') {
+          fail('SIMPLE_PROCESS', 'Simple tasks finish when their agent marks them done; they have no process steps.', 409)
+        }
         // Never doubled (task #3602: #3561 got its server's Security reviews and Test, then its Engineer's review, review and
         // test): the task's own Engineer is refused a step when one of the same name is open, or the server opened one of that
         // kind, while its work is open. Its own second step of a kind under another name ("Security review 2") still opens. The
@@ -2654,7 +2658,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
         // A task lists its steps from its start (#3394): only a task from before lists none, which its PR watch looks up once.
-        ...(!command.reviewOf && !command.audience ? { stepIds: [] } : {}),
+        ...(!command.reviewOf && !command.audience ? { stepIds: [], process: processOf(project) } : {}),
         number, title: command.title, leadId, agentIds: [...leadId ? [leadId] : [], ...creator],
         archived: false, brief, ...(brief ? { briefAt: context.now } : {}), ...(command.task ? { task: command.task } : {}), ...(command.reviewOf ? { reviewOf: command.reviewOf } : {}),
         // A step keeps its task's mark (teamWritten.ts, audit H2). Opening a task writes none of its code (#3304).
@@ -4307,7 +4311,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // The server opens a task's review steps when its pull request's files were read (openReviewSteps, below); when
         // they were not, the agent whose work is ready opens and assigns them (project instructions, phase 4). When no machine the project may use can start either engine, or soon none
         // will, the project's coordinator hears it once, in its chat (reviewCapacity.ts).
-        const short = command.status === 'review' && !group.reviewOf ? reviewCapacityNotice(state, group, context.now, (machineId, contributorId) =>
+        const short = command.status === 'review' && !group.reviewOf && taskProcess(groupProject(state, group), group) === 'full' ? reviewCapacityNotice(state, group, context.now, (machineId, contributorId) =>
           !teamWorkCheck(state, machineId, contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)) : null
         // A row of its own beside the command's, as the ship notice is: written as the Engineer who handed over. A server notice,
         // the coordinator's alone (model.ts NOTICE_READERS), untagged, since people cannot read it; with no coordinator in the
@@ -4323,7 +4327,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         }
       }
       // A task's Ready hands it over: the server opens its review steps from the files it changes (task #3401).
-      if (command.status === 'review' && !isStep(group) && context.pullRequestFiles) openReviewSteps(group, context.pullRequestFiles)
+      if (command.status === 'review' && !isStep(group) && context.pullRequestFiles && taskProcess(groupProject(state, group), group) === 'full') openReviewSteps(group, context.pullRequestFiles)
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       // The time it waited for its review never counts, whoever moved it on.
       if (waited && activeWork(group) && !waitingForReview(assignment)) restartQuietTime(assignment, context.now)

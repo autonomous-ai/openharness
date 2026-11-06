@@ -115,6 +115,10 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'conversation.merged':
       leadCheck(projectOfGroup(command.conversationId)?.id)
       break
+    case 'work.status':
+      // Ready decides whether to open steps from the project's preset; a concurrent switch must make it retry.
+      if (command.status === 'review') head()
+      break
     // Whether an agent may change a priority is whether it is still its project's PM (commands.ts coordinatorOrPerson).
     case 'work.priority':
     case 'work.lane':

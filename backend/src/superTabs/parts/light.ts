@@ -93,6 +93,7 @@ export const GROUP_FIELDS = {
     'owed',
     'pin',
     'priority',
+    'process',
     'proposals',
     'pullRequestEvents',
     'pullRequestHeads',

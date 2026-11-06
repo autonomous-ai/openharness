@@ -1,4 +1,5 @@
 import type { SwarmProject } from './projects.js'
+import type { Conversation } from './model.js'
 
 export type ProjectProcess = 'simple' | 'full'
 export interface BoardColumn { id: string; title: string }
@@ -12,3 +13,6 @@ const COLUMNS: Record<ProjectProcess, readonly BoardColumn[]> = {
 /** Projects from before presets keep the Full process until their owner chooses. */
 export const processOf = (project: SwarmProject): ProjectProcess => project.process ?? 'full'
 export const projectColumns = (project: SwarmProject): readonly BoardColumn[] => COLUMNS[processOf(project)]
+
+/** A task keeps the process it was opened with when its project changes later. */
+export const taskProcess = (project: SwarmProject, task: Pick<Conversation, 'process'>): ProjectProcess => task.process ?? processOf(project)

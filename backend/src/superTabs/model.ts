@@ -395,6 +395,8 @@ export interface Conversation {
   archived: boolean
   brief: string
   task?: WorkTask
+  /** The process when this task was opened; a Simple task stays Simple if the project returns to Full (#3896). */
+  process?: import('./process.js').ProjectProcess
   /** A review group names the group whose work it reviews; only a Reviewer is assigned it, and a Reviewer nothing else. */
   reviewOf?: string
   /** A Harness Team agent was assigned to build this task, or GitHub shows the app's bot pushed to its branch: its code runs
