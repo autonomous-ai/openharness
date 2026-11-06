@@ -23,6 +23,8 @@ let db: PrismaClient
 let store: SuperTabStore
 const now = Date.parse('2026-11-06T04:00:00.000Z')
 const owner: AuthUser = { sub: '100000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
+/** Who asked for the move, named per Swarm: never its owner by default (review round 2 of #3300). */
+const DEE = '6a8fe4fcf1a6b5972eed0103'
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const run = (tab: string, command: Command, asAgentId?: string) => store.execute(owner, tab, { operationId: randomUUID(), command }, asAgentId)
 
@@ -83,7 +85,7 @@ const projects = async (tab: string) => (await store.read(owner, tab)).state.pro
 describe('every project on the new base, once, by itself', () => {
   it('writes each project\'s new revision with every person\'s rule, keeps the before in its History, and tells its agents', async () => {
     const { tab, pm, app } = await swarm()
-    const report = await rebaseAll(db, { now: () => now, swarms: [tab] })
+    const report = await rebaseAll(db, { now: () => now, swarms: [{ tabId: tab, askedBy: DEE }] })
     expect(report.failed).toEqual([])
     expect(report.held).toEqual([])
     expect(rebaseDone(report)).toBe(true)
@@ -97,7 +99,7 @@ describe('every project on the new base, once, by itself', () => {
     // The run's record: the before and after both readable in the History, the lines that went listed, written by the Swarm.
     expect((await store.instructionRevision(owner, tab, 'lead', 2)).text).toBe(BEFORE)
     const revision = await store.instructionRevision(owner, tab, 'lead', 3)
-    expect(revision).toMatchObject({ text: after.text, summary: REBASE_SUMMARY, writtenBy: { kind: 'system', id: 'rebase' }, askedBy: owner.sub })
+    expect(revision).toMatchObject({ text: after.text, summary: REBASE_SUMMARY, writtenBy: { kind: 'system', id: 'rebase' }, askedBy: DEE })
     expect(JSON.stringify(revision)).toContain('Talks with people in the project chat')
     expect((await store.instructions(owner, tab, app)).text).toBe(rebasedDocument(INSTRUCTIONS_TEMPLATE).text)
     // The new revision and hash on the head are what every agent's host compares: its PM is told the instructions changed and
@@ -109,13 +111,13 @@ describe('every project on the new base, once, by itself', () => {
 
   it('runs once: a second run writes nothing, and a later save by a person stays', async () => {
     const { tab } = await swarm()
-    await rebaseAll(db, { now: () => now, swarms: [tab] })
+    await rebaseAll(db, { now: () => now, swarms: [{ tabId: tab, askedBy: DEE }] })
     await run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 3, text: `${(await store.instructions(owner, tab, 'lead')).text}\n## This project\n\n- Repository: acme/app.\n`, summary: 'Facts.' })
-    const again = await rebaseAll(db, { now: () => now, swarms: [tab] })
+    const again = await rebaseAll(db, { now: () => now, swarms: [{ tabId: tab, askedBy: DEE }] })
     expect(again.written).toEqual([])
     // A project made after the move starts on the base already (commands.ts project.create): nothing to move.
     const later = (await run(tab, { type: 'project.create', name: 'Later', visibility: 'public', brief: '' })).result.projectId as string
-    expect((await rebaseAll(db, { now: () => now, swarms: [tab] })).written).toEqual([])
+    expect((await rebaseAll(db, { now: () => now, swarms: [{ tabId: tab, askedBy: DEE }] })).written).toEqual([])
     expect((await store.instructions(owner, tab, later)).text).toBe(rebasedDocument(INSTRUCTIONS_TEMPLATE).text)
     expect((await projects(tab))[0]!.instructionsRevision).toBe(4)
     expect((await store.instructions(owner, tab, 'lead')).text).toContain('Repository: acme/app.')
@@ -130,7 +132,7 @@ describe('every project on the new base, once, by itself', () => {
       return { ...built, text: built.text.replace(/^.*Merges and releases.*$/m, ''), lost: [] }
     }
     for (let attempt = 0; attempt < 2; attempt++) {
-      const report = await rebaseAll(db, { now: () => now, build: faulty, swarms: [tab] })
+      const report = await rebaseAll(db, { now: () => now, build: faulty, swarms: [{ tabId: tab, askedBy: DEE }] })
       expect(report.held.filter(h => h.tabId === tab)).toEqual([expect.objectContaining({ projectId: 'lead',
         rules: [expect.stringContaining('Merges and releases, in place of the PM (Ken, 2026-11-05).')] })])
       expect(rebaseDone(report)).toBe(false)
@@ -146,20 +148,21 @@ describe('every project on the new base, once, by itself', () => {
   })
 
   // Review of #3300, Critical: Dee's "ALL OF THEM" is this Swarm's projects. Another team's Swarm is never touched.
-  it('moves only the Swarm that asked for it, as asked by its owner, and leaves every other Swarm as it was', async () => {
-    expect(REBASE_SWARMS).toEqual(['c51479bd73b59e58176ad9e4'])
+  it('moves only the Swarm that asked for it, as asked by the person named for it, and leaves every other Swarm as it was', async () => {
+    // Asked by anh Dee, a collaborator there, not by the Swarm's owner (ken15): review round 2 of #3300.
+    expect(REBASE_SWARMS).toEqual([{ tabId: 'c51479bd73b59e58176ad9e4', askedBy: '6a8fe4fcf1a6b5972eed0103' }])
     const ours = await swarm()
     const theirs = await swarm()
     // By default it reads only the Swarm that asked, which is none of these: nothing on the server is scanned or written.
     const none = await rebaseAll(db, { now: () => now })
     expect(none).toMatchObject({ swarms: 0, written: [], held: [], failed: [], skipped: [] })
     expect(rebaseDone(none)).toBe(true)
-    const report = await rebaseAll(db, { now: () => now, swarms: [ours.tab] })
+    const report = await rebaseAll(db, { now: () => now, swarms: [{ tabId: ours.tab, askedBy: DEE }] })
     expect(report.swarms).toBe(1)
     expect(report.written.map(w => w.tabId)).toEqual([ours.tab, ours.tab])
     expect((await projects(theirs.tab)).map(p => [p.instructionsRevision, p.instructionsBase])).toEqual([[2, undefined], [1, undefined]])
     expect((await store.instructions(owner, theirs.tab, 'lead')).text).toBe(BEFORE)
-    expect((await store.instructionRevision(owner, ours.tab, 'lead', 3)).askedBy).toBe(owner.sub)
+    expect((await store.instructionRevision(owner, ours.tab, 'lead', 3)).askedBy).toBe(DEE)
   })
 
   // Review of #3300, Important 3: the hourly retries end. A held project is tried a bounded number of times, then the job
@@ -169,14 +172,14 @@ describe('every project on the new base, once, by itself', () => {
     const error = vi.spyOn(logger, 'error').mockImplementation(() => logger)
     const faulty = (before: string) => ({ ...rebasedDocument(before), text: rebasedDocument(before).text.replace(/^.*Merges and releases.*$/m, '') })
     const waits: number[] = []
-    const report = await rebaseUntilDone(db, { swarms: [tab], build: faulty, passes: 3, wait: async ms => { waits.push(ms) } })
+    const report = await rebaseUntilDone(db, { swarms: [{ tabId: tab, askedBy: DEE }], build: faulty, passes: 3, wait: async ms => { waits.push(ms) } })
     expect(report?.held).toHaveLength(1)
     expect(waits).toHaveLength(2)
     expect(error.mock.calls.some(call => JSON.stringify(call).includes('gave up'))).toBe(true)
     error.mockRestore()
     // Done at once when nothing is held: one pass, no wait.
     const done: number[] = []
-    expect(rebaseDone((await rebaseUntilDone(db, { swarms: [tab], wait: async ms => { done.push(ms) } }))!)).toBe(true)
+    expect(rebaseDone((await rebaseUntilDone(db, { swarms: [{ tabId: tab, askedBy: DEE }], wait: async ms => { done.push(ms) } }))!)).toBe(true)
     expect(done).toEqual([])
   })
 })
