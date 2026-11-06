@@ -2,12 +2,12 @@
 import type { Command, CommandContext } from './commands.js'
 import { fail, type Conversation, type SuperTabState } from './model.js'
 import { requireUnanswered, type AnsweredAsk } from './answers.js'
-import { groupProject } from './projects.js'
+import { projectsOf } from './projects.js'
 
 type Send = Extract<Command, { type: 'message.send' }>
 type Reply = CommandContext['reply']
 
-export const isProjectChat = (state: SuperTabState, group: Conversation): boolean => groupProject(state, group).leadConversationId === group.id
+export const isProjectChat = (state: SuperTabState, group: Conversation): boolean => projectsOf(state).some(project => project.leadConversationId === group.id)
 export const inMainChat = (command: Send, reply: Reply): boolean => !command.replyTo || !!reply?.agentOnly || !reply?.thread || !!command.alsoSend
 
 // Anchored labels, not words like "CI" appearing in a real question or result. No semantic classifier on the posting path.
