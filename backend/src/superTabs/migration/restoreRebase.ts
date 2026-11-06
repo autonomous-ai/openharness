@@ -7,8 +7,10 @@
  *
  * For each project the move wrote a revision for, it reads the revision before (the History keeps it) and appends what the document
  * lost, word for word and under the section it came from, as one saved revision that says it is the restore. A project saved
- * since the move is left alone and reported: its PM already acted (harness's did, at revision 81, with anh Dee's approval to drop
- * what v2 repeats), and appending to it would undo that. Nothing the project has is removed or reworded. Once: a project is
+ * since the move gets the lines the move lost that are still missing (the daily tidy is a save, and no later save can have chosen to
+ * drop a line the move lost). Only a project whose PM already put some back by hand and chose what to leave out (harness's did, at
+ * revision 81, with anh Dee's approval to drop what v2 repeats) is left alone, reported and told by a PM note which lines are still
+ * missing. Nothing the project has is removed or reworded. Once: a project is
  * recognised as restored by its own History (a revision after the move with the restore's summary).
  *
  * The same scope and guards as the move: REBASE_SWARMS only, a Swarm per transaction guarded by the head's version, asked by
@@ -23,6 +25,8 @@ import { projectsOf } from '../projects.js'
 import { instructionsHash, MAX_INSTRUCTIONS_BYTES } from '../instructions.js'
 import { instructionsId, writeInstructions } from '../instructionsStore.js'
 import { removedLineItems, removedLines } from '../instructionsDiff.js'
+import { writeNotes } from '../instructionsStore.js'
+import { stableId } from '../model.js'
 import { BASE_VERSION } from '../instructionsRebase.js'
 import { logger } from '../../utils/logger.js'
 import { sleeper } from './dropLegacyJob.js'
@@ -33,11 +37,14 @@ const TRANSACTION = { maxWait: 5_000, timeout: 60_000 }
 /** A revision's summary begins with this when it is the restore, which is how a project is known to be restored. */
 export const RESTORE_PREFIX = 'Restored the lines the move onto the new base lost'
 export const MAX_PASSES = 24
+/** What a note to a PM that restored by hand begins with, which is how it is told once. */
+const NOTE_PREFIX = 'Restore (task #3679):'
 
 /** [current] with the lines of [before] it lacks appended under "Restored lines", by section; [lines] is what came back, none when
  *  nothing was missing (then [text] is [current] as it was). Pure. [revision] names the revision [before] is, in the section's note. */
-export function restoredDocument(before: string, current: string, revision: number): { text: string; lines: string[] } {
-  const lost = removedLineItems(before, current)
+export function restoredDocument(before: string, current: string, revision: number, only?: ReadonlySet<string>): { text: string; lines: string[] } {
+  // [only]: just these lines (what the move lost), so a line a later save of the project chose to drop is never put back.
+  const lost = removedLineItems(before, current).filter(line => !only || only.has(line.text))
   if (!lost.length) return { text: current, lines: [] }
   const byPath = new Map<string, string[]>()
   for (const line of lost) byPath.set(line.path, [...byPath.get(line.path) ?? [], line.text])
@@ -66,6 +73,7 @@ async function restoreSwarm(tx: Transaction, { tabId, askedBy }: RebaseSwarm, no
   const state = reassemble(parts) as SuperTabState
   const projects = projectsOf(state)
   const writes: Array<{ projectId: string; revision: number; text: string; lines: string[] }> = []
+  const noted: Array<{ projectId: string; text: string }> = []
   for (const project of projects) {
     if ((project.instructionsBase ?? 0) < BASE_VERSION) continue
     const current = project.instructionsRevision ?? 0
@@ -78,22 +86,35 @@ async function restoreSwarm(tx: Transaction, { tabId, askedBy }: RebaseSwarm, no
     if (!before) { report.held.push({ tabId, projectId: project.id, why: `revision ${moved.revision - 1}, from before the move, is no longer in its History` }); continue }
     const stored = await tx.superTabInstructions.findUnique({ where: { id: instructionsId(tabId, project.id) } })
     if (!stored || stored.revision !== current) { report.held.push({ tabId, projectId: project.id, why: 'its stored document does not match its revision' }); continue }
+    // What the move itself lost, which no later save of the project can have chosen to drop (it was never in a later revision).
+    const lostByMove = new Set(removedLines(before.text, moved.text))
     if (current !== moved.revision) {
-      report.left.push({ tabId, projectId: project.id, why: `saved since the move (revision ${current}, the move is ${moved.revision})`, missing: removedLines(before.text, stored.text).length })
-      continue
+      // Saved since the move (the daily tidy is a save): the lines the move lost that are still missing come back. Unless its PM already
+      // put some back by hand and chose what to leave out (harness's did, revision 81): that one is left alone and told by a note.
+      const missing = removedLineItems(before.text, stored.text).filter(line => lostByMove.has(line.text))
+      if (!missing.length) { report.unchanged++; continue }
+      if (missing.length < lostByMove.size) {
+        report.left.push({ tabId, projectId: project.id, why: `its PM restored some of the lost lines by hand since the move (revision ${current}, the move is ${moved.revision})`, missing: missing.length })
+        if (!await tx.superTabPmNote.findFirst({ where: { tabId, projectId: project.id, text: { startsWith: NOTE_PREFIX } } })) {
+          noted.push({ projectId: project.id, text: `${NOTE_PREFIX} ${missing.length} of the ${lostByMove.size} lines the move onto the new base lost are still missing from your instructions: they are in revision ${before.revision} of your History. You decide what to restore.` })
+        }
+        continue
+      }
     }
-    const { text, lines } = restoredDocument(before.text, stored.text, before.revision)
+    const { text, lines } = restoredDocument(before.text, stored.text, before.revision, lostByMove)
     if (!lines.length) { report.unchanged++; continue }
     if (Buffer.byteLength(text) > MAX_INSTRUCTIONS_BYTES) { report.held.push({ tabId, projectId: project.id, why: `with its ${lines.length} lines back it would pass 64 KB` }); continue }
     // The job's own check, never the builder's word: every line of the old document is in the new one, and nothing the project has went.
     if (removedLines(before.text, text).length || removedLines(stored.text, text).length) { report.held.push({ tabId, projectId: project.id, why: 'the restored document would still miss a line' }); continue }
     writes.push({ projectId: project.id, revision: current, text, lines })
   }
-  if (!writes.length) return
-  const written = new Map(writes.map(w => [w.projectId, w]))
+  if (!writes.length && !noted.length) return
+  const written = new Map(writes.map(w => [w.projectId, w])), told = new Set(noted.map(n => n.projectId))
   const next = projects.map(({ progress: _progress, ...project }) => {
     const write = written.get(project.id)
-    return write ? { ...project, instructionsRevision: write.revision + 1, instructionsHash: instructionsHash(write.text) } : project
+    const moved = write ? { ...project, instructionsRevision: write.revision + 1, instructionsHash: instructionsHash(write.text) } : project
+    // A note moves the notes revision, so an open Instructions panel reads them again (commands.ts noteChanged).
+    return told.has(project.id) ? { ...moved, notesRevision: (project.notesRevision ?? 0) + 1 } : moved
   })
   await guardedWrite(tx, tabId, { op: 'update', kind: 'head', key: 'head', seen: parts.head.version, data: { ...parts.head.data!, projects: next },
     head: { groupCounter: parts.groupCounter, visibilityEpoch: parts.visibilityEpoch, sequenceBase: parts.sequenceBase } }, clock.next())
@@ -101,6 +122,9 @@ async function restoreSwarm(tx: Transaction, { tabId, askedBy }: RebaseSwarm, no
     await writeInstructions(tx, tabId, { projectId: write.projectId, revision: write.revision + 1, hash: instructionsHash(write.text), text: write.text,
       summary: `${RESTORE_PREFIX}: ${write.lines.length} ${write.lines.length === 1 ? 'line' : 'lines'}, word for word (task #3679).`,
       writtenBy: { kind: 'system', id: 'restore' }, askedBy, at: now })
+  }
+  for (const note of noted) {
+    await writeNotes(tx, tabId, { projectId: note.projectId, add: { id: stableId(tabId, note.projectId, 'restore-note'), text: note.text, askedBy, at: now, expiresAt: null } }, now)
   }
   report.restored.push(...writes.map(w => ({ tabId, projectId: w.projectId, from: w.revision, to: w.revision + 1, lines: w.lines })))
 }
