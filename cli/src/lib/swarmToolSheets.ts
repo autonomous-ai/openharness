@@ -145,6 +145,11 @@ const ENTRIES: readonly SheetEntry[] = [
 ]
 export const sheetEntries = (): readonly SheetEntry[] => ENTRIES
 
+/** The what-changed note for PMs the PM sheet was last announced with (backend superTabs/processNotes.ts, task #3581), and the
+ *  sheet's fingerprint then. A change to the PM sheet fails swarmToolSheets.spec.ts until a new note is added there and pinned
+ *  here, so every running PM hears what changed. */
+export const PM_SHEET_NOTE = { id: '2026-11-06-crew', sheet: '72d9395bf968' } as const
+
 /** The role a session's sheet is for: the coordinator is the PM; an agent by its project role's name (anything unknown is an
  *  Engineer, whose sheet points to the full manual); a Reviewer started as the fallback role is a Reviewer. */
 export function toolsRoleFor(session: { coordinator: boolean; roleName?: string; fallback?: 'review' }): ToolsRole {
