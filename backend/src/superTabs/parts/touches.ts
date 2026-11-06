@@ -5,6 +5,8 @@ import { agentProjectId, canReadProject, groupProject, projectsOf } from '../pro
 import type { Touch } from './commit.js'
 import { waitsNow } from '../leaderboard/record.js'
 import { buddiesHearing } from '../buddyNews.js'
+import { defaultBuddy } from '../buddies.js'
+import { mainBuddyOf } from '../buddySessions.js'
 
 /**
  * The parts a command relies on without writing them (design section 1.2, column T). A part the command also writes is
@@ -62,7 +64,9 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       if (!before.machines?.some(m => m.machineId === command.machineId)) head()
       break
     case 'buddy.engine': {
-      const buddy = before.agents.find(a => actor.kind === 'person' && a.buddyOf?.personId === actor.userId && !a.buddySession)
+      const chat = before.conversations.find(c => c.id === command.conversationId)
+      const buddy = command.conversationId ? chat && mainBuddyOf(before, chat)
+        : actor.kind === 'person' ? defaultBuddy(before, actor.userId) : undefined
       if (buddy) machine(buddy.machineId)
       break
     }
