@@ -152,6 +152,10 @@ class HarnessApp extends StatelessWidget {
 
   Widget _app(AppearancePrefs prefs) {
     grid.AppTheme.palette.value = prefs.palette;
+    // Also the brightness `AppPalette.windowBg` resolves against: the
+    // placeholder of the first frame is drawn before `_GridTokenScope` (inside
+    // the deferred shell) would set it, and a light palette must not flash dark.
+    grid.AppTheme.brightness.value = prefs.palette.brightness;
     return MaterialApp(
       title: 'Harness',
       // OAuth callback paths are consumed by the sign-in adapter during boot.
