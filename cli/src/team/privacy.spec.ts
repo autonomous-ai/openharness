@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readTeamConfig, teamConfigJson, type TeamConfig } from './config.js'
 import {
   PRIVACY_RECHECK_MS, TeamPrivacyObserver, readStatusFile, readTeamStatusOffThread, resetStatusChild, adminGroupIds, privacyProbes, readTeamStatus, realPrivacyDeps, runPrivacyCheck, writeTeamStatus,
-  type PrivacyDeps, type PrivacyResult,
+  type PrivacyDeps, type PrivacyResult, type TeamStatus,
 } from './privacy.js'
 
 const OWNER_HOME = '/Users/owner-placeholder'
@@ -256,6 +256,37 @@ describe('privacy observer', () => {
     const calls = writeStatus.mock.calls.length
     o.observe()
     expect(writeStatus).toHaveBeenCalledTimes(calls)
+  })
+
+  // Linuxtest2 on daniel-pc (#3684): a status left signed-out by an earlier start or a revoke stuck while the session
+  // worked, and the owner's card offered Sign in again for an account that was fine. A working sign-in says so, once; a
+  // hand-over that failed this start is kept, so setup still says the new sign-in did not take.
+  it('reports a working sign-in over a signed-out one left from before, and keeps a failed hand-over', () => {
+    let signedIn = false
+    let status: TeamStatus = { version: 1, signIn: { state: 'signed-out', at: 1 } }
+    const writeStatus = vi.fn()
+    const o = new TeamPrivacyObserver({ config: () => teamConfig, user: () => 'harnessteam', readStatus: () => status,
+      teamSession: () => signedIn, check: () => ({ passed: true, checkedAt: 7 }), writeStatus, now: () => 7 })
+    o.observe()
+    signedIn = true
+    o.observe()
+    expect(writeStatus).toHaveBeenCalledWith(teamConfig.statusFile, { signIn: { state: 'signed-in', at: 7 } })
+    const calls = writeStatus.mock.calls.length
+    o.observe()
+    expect(writeStatus).toHaveBeenCalledTimes(calls)
+    // The first reading of a working sign-in fixes another start's signed-out too.
+    const fresh = vi.fn()
+    new TeamPrivacyObserver({ config: () => teamConfig, user: () => 'harnessteam', readStatus: () => status, teamSession: () => true,
+      check: () => ({ passed: true, checkedAt: 7 }), writeStatus: fresh, now: () => 7 }).observe()
+    expect(fresh).toHaveBeenCalledWith(teamConfig.statusFile, { signIn: { state: 'signed-in', at: 7 } })
+    // A failed hand-over, or one already signed in, is left as it is.
+    for (const state of ['failed', 'signed-in'] as const) {
+      status = { version: 1, signIn: { state, at: 1 } }
+      const kept = vi.fn()
+      new TeamPrivacyObserver({ config: () => teamConfig, user: () => 'harnessteam', readStatus: () => status, teamSession: () => true,
+        check: () => ({ passed: true, checkedAt: 7 }), writeStatus: kept, now: () => 7 }).observe()
+      expect(kept, state).not.toHaveBeenCalledWith(teamConfig.statusFile, { signIn: expect.anything() })
+    }
   })
 
   it('checks in the team account, at most every five minutes, and reports it for the owner', () => {
