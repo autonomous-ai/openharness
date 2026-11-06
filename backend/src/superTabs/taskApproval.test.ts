@@ -152,6 +152,13 @@ describe('personal approval enforced before work', () => {
       doneWhen: 'Other', evidence: ['Reproduction'], priority: 'P2' }, owner).result.conversationId
     expect(() => f.runCommand({ type: 'proposal.merge', conversationId: card.id, intoConversationId: target, reason: 'Same' }, f.pm)).toThrow()
   })
+  it('removes a closed legacy proposal mirror from active Tasks', () => {
+    const f = fixture(false); const sent = f.propose()
+    const row = sent.messages.find(m => m.source?.kind === 'buddy-proposal')!
+    f.runCommand({ type: 'proposal.close', projectId: 'lead', messageId: row.id, reason: 'Not planned' }, f.pm,
+      { proposal: { id: row.id, conversationId: row.conversationId, author: row.author, source: row.source ?? null } })
+    expect(f.state.conversations.find(c => c.proposal?.legacyMessageId === row.id)?.archived).toBe(true)
+  })
   it('guards the person and selected agent against concurrent changes, and keeps approval in light loads', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
     f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate })
