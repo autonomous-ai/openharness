@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { removedLines } from '../instructionsDiff.js'
 import { rebasedDocument } from '../instructionsRebase.js'
 import { INSTRUCTIONS_TEMPLATE } from '../instructionsTemplate.js'
+import { PAST_TEMPLATE_LINES } from '../instructionsTemplateHistory.js'
 import { moveLoss, restoredDocument, stillMissing, templateLines } from './restoreRebase.js'
 
 // Task #3679 (anh Dee, P0): the first move onto the new base lost the lines no person's name guarded. A project moved by it is given
@@ -106,6 +107,19 @@ describe('the lines a project is given back after the first move (#3679)', () =>
     expect(restoredDocument(before, moved, 80, loss).lines).toEqual(['Never run a test that signs the Mac out of the real CLI.'])
     // The template's lines are really the template's.
     expect(INSTRUCTIONS_TEMPLATE).toContain(template.slice(0, 30))
+  })
+
+  // Second review round 2 of #3327 (Linuxtest2): a project keeps the template it was made from, and the template changed 22 times, so a
+  // line of an older template is process too.
+  it('does not give back a line of any older version of the template either', () => {
+    const today = removedLines(INSTRUCTIONS_TEMPLATE, '')
+    const older = PAST_TEMPLATE_LINES.filter(line => !today.includes(line))
+    expect(older.length).toBeGreaterThan(20)
+    const old = older[0]!
+    const before = `# P\n\n## Process\n\n- ${old}\n\n## Rules for every agent\n\n- Never run a test that signs the Mac out of the real CLI.\n`
+    const loss = moveLoss(before, '# P\n')
+    expect([...loss.keys()]).toEqual(['Never run a test that signs the Mac out of the real CLI.'])
+    expect(templateLines().has(old)).toBe(true)
   })
 })
 
