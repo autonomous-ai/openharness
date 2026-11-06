@@ -1596,11 +1596,13 @@ describe('several Buddies', () => {
   // Review of #3818 (Readycheck, P1): the cap counts every start that adds a Buddy, also into one of the person's chats with none.
   it('refuses a Buddy past the cap into a chat of theirs that has none: a failed start retried, or an empty main chat', () => {
     const f = fresh()
-    f.run({ type: 'tab.buddyCap', cap: 2 } as Command, owner)
+    f.run({ type: 'tab.buddyCap', cap: 3 } as Command, owner)
     add(f)
+    add(f, { name: 'Planning' })
     const failed = f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' } as Command, peer, host)
     f.run({ type: 'agent.startFailed', startId: failed.result.startId as string, error: 'It did not launch.' }, peer, host)
-    add(f, { name: 'Planning' })
+    // At the cap once its owner lowers it: retrying the failed Buddy's chat would be a third.
+    f.run({ type: 'tab.buddyCap', cap: 2 } as Command, owner)
     const starts = f.state.starts!.length
     expect(refusal(() => f.run({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', conversationId: failed.result.conversationId } as Command, peer, host))?.code).toBe('BUDDY_CAP')
     // A refusal starts nothing.

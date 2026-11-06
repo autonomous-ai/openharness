@@ -66,7 +66,7 @@ import { recordClosing, sessionClosed } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
 import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liveSessions, mainBuddyOf, MAX_SESSION_WAITING, requireChatOwner, SESSION_ENDED_KIND, sessionAgentsOf, sessionOf, setSessions, type SessionEndReason } from './buddySessions.js'
-import { BUDDY_REQUIREMENTS, buddyCapOf, buddyCapRefusal, buddyChatId, buddyChatOf, buddyChatsOf, buddyCount, defaultBuddy, defaultBuddyChat, dropBuddyChat, MAX_BUDDY_CAP, openNewBuddyChat, setDefaultBuddy, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, okayedWords, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalBrief, proposalSentText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyCapOf, buddyCapRefusal, buddyChatId, buddyChatOf, buddyChatsOf, buddyCount, defaultBuddy, defaultBuddyChat, hasBuddy, dropBuddyChat, MAX_BUDDY_CAP, openNewBuddyChat, setDefaultBuddy, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, okayedWords, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalBrief, proposalSentText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
@@ -3103,6 +3103,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const chatId = project ? buddyChatId(project.id, me) : chosen!.id
       const target = state.agents.find(a => a.buddyOf?.personId === me.id && !a.buddySession && state.conversations.some(c => c.id === chatId && c.agentIds.includes(a.id)))
       const starting = state.starts?.filter(s => s.request.conversationId === chatId && !s.harnessId && !s.error) ?? []
+      // A chat of theirs with no Buddy left in it (its start failed) is cleared when they remove it; their main chat stays.
+      if (!target && !starting.length && chosen && chosen.id !== swarmBuddyChatId(me)) {
+        dropBuddyChat(state, me, chosen)
+        break
+      }
       if (!target && !starting.length) fail('NOT_FOUND', project ? 'You have no Buddy in this project.' : 'You have no Buddy.', 404)
       for (const start of starting) start.error = 'Removed by its owner before it started.'
       // Its session closes. The main chat stays, and adding a Buddy again reopens it; another Buddy's chat is archived, and a
@@ -3115,6 +3120,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person picks their own default Buddy.', 403)
       const me = person(state, actor.userId)
       const chat = buddyChatsOf(state, me).find(c => c.id === command.conversationId) ?? fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+      // Their lines go to the default: never a chat with no Buddy running or starting in it (review of #3818).
+      if (!hasBuddy(state, me, chat)) fail('NO_BUDDY', 'That chat has no Buddy. Add one there first.', 409)
       setDefaultBuddy(state, me, chat)
       break
     }
@@ -3187,11 +3194,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Which Buddy (task #3818): one of the person's own, by its chat; a new one, named, in the main chat while no Buddy is there,
       // else in a chat of its own, within the Swarm's cap; neither, the default, as before several.
       const own = buddyChatsOf(state, me)
-      const occupied = (chat: Conversation) => state.agents.some(a => isSwarmBuddy(a) && a.buddyOf!.personId === me.id && !a.buddySession && chat.agentIds.includes(a.id))
-        || !!state.starts?.some(s => s.request.conversationId === chat.id && !s.request.buddySession && !s.harnessId && !s.error)
+      const occupied = (chat: Conversation) => hasBuddy(state, me, chat)
       const main = own.find(c => c.id === swarmBuddyChatId(me))
+      // A new one takes the first of their chats with no Buddy in it (the main chat first, then one whose start failed: review of
+      // #3818), so failed starts never pile up chats; else a chat of its own.
       const picked = command.conversationId ? own.find(c => c.id === command.conversationId) ?? fail('NOT_FOUND', 'This conversation is unavailable.', 404)
-        : command.name === undefined ? defaultBuddyChat(state, me) : main && !occupied(main) ? main : undefined
+        : command.name === undefined ? defaultBuddyChat(state, me) : own.find(c => !occupied(c))
       // The cap counts every start that adds a Buddy: into a new chat, or into one of theirs with none in it (a failed start
       // retried, their main chat left empty). Only a start that replaces a Buddy already there adds none (review of #3818).
       if ((!picked || !occupied(picked)) && buddyCount(state, me) >= buddyCapOf(state)) fail('BUDDY_CAP', buddyCapRefusal(buddyCapOf(state)), 409)

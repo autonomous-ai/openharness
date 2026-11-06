@@ -132,11 +132,15 @@ export function defaultBuddyChat(state: SuperTabState, person: Person): Conversa
   return defaultChatOf(state, person) ?? openSwarmBuddyChat(state, person)
 }
 
-/** How many Buddies [person] has, running or starting, against the Swarm's cap: their chats with a Buddy in them or one
- *  starting there. */
+/** Whether [chat] of [person] has their Buddy in it, running or starting (task #3818): a chat whose start failed has none. */
+export function hasBuddy(state: SuperTabState, person: Pick<Person, 'id' | 'generation'>, chat: Conversation): boolean {
+  return state.agents.some(a => ownBuddy(a, person) && chat.agentIds.includes(a.id))
+    || !!state.starts?.some(s => s.request.conversationId === chat.id && !s.request.buddySession && !s.harnessId && !s.error)
+}
+
+/** How many Buddies [person] has, running or starting, against the Swarm's cap. */
 export function buddyCount(state: SuperTabState, person: Pick<Person, 'id' | 'generation'>): number {
-  return buddyChatsOf(state, person).filter(chat => state.agents.some(a => ownBuddy(a, person) && chat.agentIds.includes(a.id))
-    || state.starts?.some(s => s.request.conversationId === chat.id && !s.request.buddySession && !s.harnessId && !s.error)).length
+  return buddyChatsOf(state, person).filter(chat => hasBuddy(state, person, chat)).length
 }
 
 /** A new Buddy's own chat for [owner], with id [id], listed on their main chat so it loads with it (task #3818). */
