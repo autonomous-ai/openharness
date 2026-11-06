@@ -484,6 +484,30 @@ describe('a Buddy through the store', () => {
     await expect(f.execute({ type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [loose] }, peer, agentId))
       .rejects.toThrow('Attach this file again')
   })
+  it('persists approved files on a proposal card for the PM to open after the switch', async () => {
+    const f = await swarm()
+    const { chat, agentId } = await buddy(f)
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    const upload = async (name: string, asBuddy: boolean) =>
+      (await f.store.upload(peer, f.tab, chat, { name, mime: 'text/plain', body: Readable.from([Buffer.from(name)]) }, asBuddy ? agentId : undefined)).attachment.id
+    const plan = await upload('plan.txt', true), log = await upload('sync.log', false)
+    await f.execute({ type: 'message.send', conversationId: chat, text: 'Here is my log', replyTo: null, recipientIds: [], attachmentIds: [log] }, peer)
+    const ask = async () => String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send these files to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
+    const propose = async (attachmentIds: string[]) => f.execute({ type: 'buddy.propose', conversationId: chat,
+      ownerMessageId: await ask(), text: 'Send these files to the PM', goal: 'Offline sync', scope: 'Desktop only', priority: 'normal',
+      why: 'Drafts disappear', doneWhen: 'Drafts return', evidence: ['Network-off reproduction'], attachmentIds }, peer, agentId)
+    const sent = await propose([plan, log]), cardId = String(sent.result.conversationId)
+    const read = (await f.store.messages(owner, f.tab, cardId, {}, f.lead)).messages.find(m => (m.source as { kind?: string })?.kind === 'proposal-card')!
+    expect(read.attachments?.map(a => a.name)).toEqual(['plan.txt', 'sync.log'])
+    expect(read.attachments!.map(a => f.files.open(a.link!)?.toString())).toEqual(['plan.txt', 'sync.log'])
+    expect(sent.result.messageId).toBe(read.id)
+    const card = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: cardId } } })
+    expect(card.data).toHaveProperty('proposal.scope', 'Desktop only')
+    expect(await db.superTabAttachment.findUniqueOrThrow({ where: { id: plan } })).toHaveProperty('usedBy', read.id)
+    await expect(propose([plan])).rejects.toThrow('Upload this file again')
+    await expect(propose([log])).rejects.toThrow('already went with a proposal')
+  })
+
   it('never carries a file the expiry sweep took, its owner\'s or its own (Diego, 10-30)', async () => {
     const f = await swarm()
     const { chat, agentId } = await buddy(f)
