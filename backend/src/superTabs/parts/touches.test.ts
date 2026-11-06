@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor } from '../model.js'
+import { openSwarmBuddyChat } from '../buddies.js'
 import { touchesFor } from './touches.js'
 
 const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
@@ -131,4 +132,18 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     expect(has(touches, 'machine', 'host')).toBe(true)
     expect(has(touches, 'head', 'head')).toBe(true)
   })
+})
+
+
+it('guards an already awake Buddy hearing its own chat against a concurrent sleep', () => {
+  const f = swarm(), a = f.group('A')
+  const buddy = f.state.agents.find(agent => agent.id === a.worker)!
+  buddy.buddyOf = { personId: 'owner', generation: f.state.people[0]!.generation }
+  buddy.buddyScope = 'swarm'
+  const chat = openSwarmBuddyChat(f.state, f.state.people[0]!)
+  chat.agentIds.push(buddy.id)
+  const touches = touchesFor({ type: 'message.send', conversationId: chat.id, text: 'Hi', replyTo: null, recipientIds: [] },
+    owner, f.state, { state: f.state, messages: [{ id: 'input', conversationId: chat.id, text: 'Hi', replyTo: null,
+      recipients: [buddy.id], author: { kind: 'person', id: 'owner', name: 'Owner' } }] })
+  expect(has(touches, 'agent', buddy.id)).toBe(true)
 })

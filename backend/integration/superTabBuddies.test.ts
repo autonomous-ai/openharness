@@ -1291,3 +1291,42 @@ describe('idle Buddy sleep (#3824)', () => {
     expect(row).toMatchObject({ buddySleepManaged: true, agent: { harnessId: agent.harnessId, buddyOf: agent.buddyOf } })
   })
 })
+
+
+describe('Buddy input and sleep race (#3824)', () => {
+  it('wakes only the authorized recipient and retries sleep when input commits first', async () => {
+    let now = Date.now()
+    const f = await swarm(() => now)
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    const first = await swarmBuddy(f), second = await swarmBuddy(f)
+    const agents = (await f.store.read(peer, f.tab)).state.agents.filter(a => [first.main, second.main].includes(a.id))
+    const { receivedAt: _, sessionKind: __, ...report } = first.pool.machine.observation!
+    const idle = { ...report, runningHarnessIds: agents.map(a => a.harnessId), idleBuddyHarnessIds: agents.map(a => a.harnessId) }
+    const current = async (id: string) => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === id)!
+    now += 3_600_000
+    await f.store.observeMachine(peer, f.tab, 'peer-mac', idle)
+    expect((await current(first.main)).asleep).toBeDefined()
+    expect((await current(second.main)).asleep).toBeDefined()
+    await expect(f.execute({ type: 'message.send', conversationId: first.swarmChat, text: 'Not yours', replyTo: null, recipientIds: [] })).rejects.toThrow()
+    expect((await current(first.main)).asleep).toBeDefined()
+    const input = { type: 'message.send' as const, conversationId: first.swarmChat, text: 'Continue', replyTo: null, recipientIds: [] }
+    const sent = await f.execute(input, peer)
+    expect((await current(first.main)).asleep).toBeUndefined()
+    expect((await current(second.main)).asleep).toBeDefined()
+    const waiting = (await f.store.deliveries(peer, f.tab, first.main)).find(d => d.messageId === sent.result.messageId)!
+    const claim = await f.store.delivery(peer, f.tab, first.main, waiting.id, { type: 'claim', claimId: randomUUID() })
+    expect(claim).toMatchObject({ message: { id: sent.result.messageId } })
+    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: first.main }, data: { status: 'answered' } })
+    now += 3_600_001
+    let injected = false
+    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (injected) return
+      injected = true
+      await f.execute({ ...input, text: 'A message just before sleep' }, peer)
+    }), () => now)
+    await racing.observeMachine(peer, f.tab, 'peer-mac', idle)
+    expect(injected).toBe(true)
+    expect((await current(first.main)).asleep).toBeUndefined()
+    expect((await f.store.deliveries(peer, f.tab, first.main)).some(d => d.status === 'queued')).toBe(true)
+  })
+})

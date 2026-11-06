@@ -1,3 +1,4 @@
+import { numberMessages } from './parts/commit.js'
 import { describe, expect, it } from 'vitest'
 import { createSuperTab, visibleState, type Agent } from './model.js'
 import { openSwarmBuddyChat } from './buddies.js'
@@ -84,5 +85,37 @@ describe('server-owned Buddy sleep', () => {
     if (which === 'stopping') f.buddy.workDecision = 'stop'
     expect(buddySleepManaged(f.state, f.buddy)).toBe(false)
     expect(buddySleepCandidates(f.state, NOW)).toEqual([])
+  })
+})
+
+
+describe('authorized input wakes the same Buddy', () => {
+  it.each(['person', 'proposal-question'])('wakes only the intended Buddy for %s input before agent-only filtering', kind => {
+    const f = fixture()
+    f.buddy.asleep = { since: NOW - 1_000 }
+    const other = { ...structuredClone(f.buddy), id: 'other', harnessId: 'other-h' }
+    f.state.agents.push(other)
+    const own = kind === 'person'
+    const message = { id: 'input', conversationId: own ? f.chat.id : 'lead', replyTo: null,
+      author: { kind: 'person' as const, id: f.owner.id, name: f.owner.email, membershipGeneration: f.owner.generation },
+      recipients: own ? ['buddy'] : [], ...own ? {} : { buddyRecipients: ['buddy'], source: { kind: 'agent-only' } }, text: 'Please answer' }
+    numberMessages(f.state, [message], NOW)
+    expect(f.buddy.asleep).toBeUndefined()
+    expect(f.buddy).toMatchObject({ keptAt: NOW, downSince: new Date(NOW).toISOString(), crewWaking: { at: NOW, conversationId: message.conversationId },
+      harnessId: 'buddy-h', buddyOf: { personId: f.owner.id, generation: f.owner.generation } })
+    expect(other.asleep).toEqual({ since: NOW - 1_000 })
+    numberMessages(f.state, [{ ...message, id: 'second' }], NOW + 1)
+    expect(f.buddy.crewWaking!.at).toBe(NOW)
+    expect(buddySleepCandidates(f.state, NOW + 3_599_999)).toEqual([])
+  })
+
+  it.each(['stale-person', 'private-chat'])('does not wake for %s input it cannot read', kind => {
+    const f = fixture()
+    f.buddy.asleep = { since: NOW - 1_000 }
+    if (kind === 'stale-person') f.buddy.buddyOf!.generation = 'old'
+    else f.chat.audience!.people[0]!.generation = 'old'
+    numberMessages(f.state, [{ id: 'input', conversationId: f.chat.id, replyTo: null, text: 'No', recipients: ['buddy'],
+      author: { kind: 'person', id: 'owner', name: 'owner' } }], NOW)
+    expect(f.buddy.asleep).toEqual({ since: NOW - 1_000 })
   })
 })
