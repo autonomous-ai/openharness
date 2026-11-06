@@ -6,6 +6,12 @@ import { backend, identifier, object, SuperTabHostError } from './host.js'
 import { mkdir } from 'node:fs/promises'
 import { readAuthSession } from '../lib/authSession.js'
 import { randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
+import { homedir } from 'node:os'
+import { buildEngineInstallationArgv } from '../lib/engineLaunch.js'
+import { engineInstallRecipe } from '../lib/engineInstall.js'
+import { firstRunAnswered } from '../engines/launchPrep.js'
+import { ownProcessGroup } from '../lib/windows/noWindow.js'
 import { repairSwarmCloneTrust, swarmCloneRoot, swarmCloneRoots } from './cloneTrust.js'
 import { SwarmReads } from './swarmReads.js'
 
@@ -15,8 +21,54 @@ interface ContributionDeps {
   backend: typeof backend; open: typeof openDaemon; prepare: typeof prepareProjectFolder; capacity: typeof readCapabilities; team?: () => boolean
   /** The daemon's Swarm reads (superTabs/swarmReads.ts); a one-off read of its own when none is given. */
   reads?: SwarmReads
+  install: typeof installEngine
+  /** Whether Claude Code's questions before an agent's first turn are answered here (engines/launchPrep.ts). */
+  firstRun: () => boolean | null
 }
-const CONTRIBUTION_DEPS = { backend, open: openDaemon, prepare: prepareProjectFolder, capacity: readCapabilities }
+const CONTRIBUTION_DEPS = { backend, open: openDaemon, prepare: prepareProjectFolder, capacity: readCapabilities, install: installEngine,
+  firstRun: () => firstRunAnswered('claude') }
+
+/** The engines the phone may ask installed for its Buddy (owner, 2026-11-06: Codex as well as Claude Code). */
+export type BuddyEngine = 'claude' | 'codex'
+const ENGINE_NAME: Record<BuddyEngine, string> = { claude: 'Claude Code', codex: 'Codex' }
+
+/** How long an engine's install may take here before the setup gives up on it: as long as a pane's installer gets
+ *  (engines/kit/nativeInstall.ts). Over a slow Wi-Fi it took more than 5 minutes (the Dell, 2026-11-05). */
+const INSTALL_FOR_MS = 20 * 60_000
+
+/** Each engine's install under way, which a second setup asking for it joins. */
+const installing = new Map<BuddyEngine, Promise<void>>()
+/** The last install, which the next one waits for: two npm installs into one prefix fight over its files. */
+let lastInstall: Promise<unknown> = Promise.resolve()
+
+/** Installs [engine] on this machine with its vendor's own line (lib/engineInstall.ts), in the shell a pane installs it
+ *  from. Asked for by the phone setting up a new computer, so its Buddy can start there (owner, 2026-11-05): the OS ships no
+ *  engine of its own. Whether it worked is the engine probe's to say, not the installer's exit. */
+export function installEngine(engine: BuddyEngine = 'claude', run: typeof spawn = spawn): Promise<void> {
+  const under = installing.get(engine)
+  if (under) return under
+  const next = lastInstall.catch(() => {}).then(() => runEngineInstall(engine, run)).finally(() => { installing.delete(engine) })
+  installing.set(engine, next)
+  lastInstall = next
+  return next
+}
+
+async function runEngineInstall(engine: BuddyEngine, run: typeof spawn): Promise<void> {
+  const recipe = engineInstallRecipe(engine)
+  if (!recipe || process.platform === 'win32') throw new Error(`Install ${ENGINE_NAME[engine]} on this machine, then try again.`)
+  const [command, ...args] = buildEngineInstallationArgv(engine, recipe, { HOME: homedir() })
+  await new Promise<void>((resolve, reject) => {
+    // A group of its own, ended whole at the deadline as the pane's installer is (engines/kit/nativeInstall.ts): the shell
+    // alone killed left npm running, and the next try's install fought it over the prefix.
+    const child = run(command!, args, { stdio: 'ignore', ...ownProcessGroup() })
+    const deadline = setTimeout(() => {
+      try { process.kill(-child.pid!, 'SIGKILL') } catch { child.kill('SIGKILL') }
+      reject(new Error(`Installing ${ENGINE_NAME[engine]} took too long. Try again.`))
+    }, INSTALL_FOR_MS)
+    child.on('error', (error) => { clearTimeout(deadline); reject(error) })
+    child.on('close', () => { clearTimeout(deadline); resolve() })
+  })
+}
 
 /** The most agents a machine may offer: one for every 2 GB of total RAM, and 4 whatever its RAM (Ken, 2026-10-28: the cap
  * of 16 held a 192 GB Mac Studio to a sixth of that). 1024 is the most the server accepts (backend superTabs/commands.ts). */
@@ -97,13 +149,24 @@ export async function prepareContribution(core: CoreApi, input: Json, given: Par
   }
   const connection = await deps.open({ dataDir: core.dataDir, port: core.daemon.port, machineId })
   try {
-    const [probe, capability] = await Promise.all([
-      connection.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000),
-      deps.capacity({ cwd, tools: ['git'], devices: [] }),
-    ])
-    const engines = (Array.isArray(probe.engines) ? probe.engines.map(object) : [])
+    const probe = () => connection.request('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000)
+    const installed = (answer: Json) => (Array.isArray(answer.engines) ? answer.engines.map(object) : [])
       .filter(e => (e.engine === 'claude' || e.engine === 'codex') && e.installed === true)
       .map(e => e.engine as string)
+    const [first, capability] = await Promise.all([probe(), deps.capacity({ cwd, tools: ['git'], devices: [] })])
+    let answer = first, engines = installed(answer)
+    // The phone setting up a new computer (`installEngine`): the engine the person picked for their Buddy, Claude Code or
+    // Codex, is installed now when it is not here, so the Buddy it starts next is admitted (capacity.ts admission); one here
+    // already is not installed again (owner, 2026-11-06). Anyone else is told to install one.
+    const wanted = input.installEngine === 'claude' || input.installEngine === 'codex' ? input.installEngine : null
+    if (wanted && !engines.includes(wanted)) {
+      await deps.install(wanted)
+      answer = await probe()
+      engines = installed(answer)
+    }
+    // Which of them are signed in, so that phone asks for the sign-in before the Buddy waits on it.
+    const signedIn = (Array.isArray(answer.engines) ? answer.engines.map(object) : [])
+      .filter(e => engines.includes(e.engine as string) && e.signedIn === true).map(e => e.engine as string)
     if (!engines.length) throw new Error('Install Claude Code or Codex on this machine, then try again.')
     const resources = object('resources' in capability ? capability.resources : null)
     if (capability.ok !== true || typeof resources.projectDiskFreeBytes !== 'number') throw new Error('The project folder is unavailable on this machine.')
@@ -113,7 +176,11 @@ export async function prepareContribution(core: CoreApi, input: Json, given: Par
     // The suggestion keeps its 16, so a machine that joins by itself still sends what a server from before 1024 accepts.
     const maxAvailableAgents = machineMaximum(total)
     const maxAgents = Math.max(1, Math.min(16, Math.floor(total / (2 * START_REQUIREMENTS.memoryBytes))))
-    return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], maxAgents, maxAvailableAgents, ...(swarm ? { scope: 'swarm' } : {}) }
+    // Claude Code here with its theme and full mode still to answer: the phone asks them, then `claudeFirstRun` records them,
+    // rather than its first Buddy waiting on its screen with nobody there (owner, 2026-11-06).
+    const firstRun = engines.includes('claude') && deps.firstRun() === false ? { firstRun: ['claude'] } : {}
+    return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], signedIn: [...new Set(signedIn)], ...firstRun, maxAgents, maxAvailableAgents,
+      ...(swarm ? { scope: 'swarm' } : {}) }
   } finally { connection.close() }
 }
 

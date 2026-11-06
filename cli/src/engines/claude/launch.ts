@@ -56,6 +56,16 @@ export const launch: EngineLaunch = {
    */
   bypassAcceptance: { home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: { folder: '.claude' } }, file: 'settings.json', key: 'skipDangerousModePermissionPrompt' },
   /**
+   * "Welcome to Claude Code … Choose the text style", then its notes, the first time it runs on a machine: finishing them
+   * writes `hasCompletedOnboarding: true` to `.claude.json`, beside the folder trust (the Harness Team relay records the same
+   * key, team/relay.ts). The theme left unpicked is Claude Code's default; picked on the phone setting up the computer, it is
+   * kept as `theme` in the same file, one of its text styles (2.1.318's screen: Dark mode, Light mode, …).
+   */
+  onboarding: {
+    home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: 'home' }, file: '.claude.json', key: 'hasCompletedOnboarding',
+    theme: { key: 'theme', values: ['dark', 'light'] },
+  },
+  /**
    * `.mcp.json` in a folder above, such as the home's, is asked about as "New MCP server found in this project". Its
    * default, "Continue without using this MCP server", adds the name to `disabledMcpjsonServers` in the folder's
    * `.claude/settings.local.json` (localSettings); a name there is `rejected` and never asked again, whatever else

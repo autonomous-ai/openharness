@@ -3801,22 +3801,38 @@ mod tests {
         app.fleet.local_id = "local".into();
         app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "local".into(), name: "studio".into(), local: true, status: "online".into(), reach: crate::fleet::Reach::Ready });
         let folder = |name: &str| json!({"name": name, "cwd": format!("/src/{name}")});
+        // Minutes ago, as the daemon writes it (UTC): the list folds work over a week old, so fixed dates changed what it
+        // showed once a week had passed (2026-11-06, a week after 2026-10-30 09:40–09:55 UTC). Civil from days (Howard
+        // Hinnant), the inverse of fleet::parse_iso.
+        let ago = |minutes: i64| {
+            let t = crate::format::now_secs() - minutes * 60;
+            let (days, secs) = (t.div_euclid(86400), t.rem_euclid(86400));
+            let z = days + 719468;
+            let era = z.div_euclid(146097);
+            let doe = z - era * 146097;
+            let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            let mp = (5 * doy + 2) / 153;
+            let (d, m) = (doy - (153 * mp + 2) / 5 + 1, if mp < 10 { mp + 3 } else { mp - 9 });
+            let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+            format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.000Z", secs / 3600, secs % 3600 / 60, secs % 60)
+        };
         app.fleet.merge_roster("local", &[
-            json!({"id": "a1", "name": "fix login", "engine": "claude", "project": folder("webapp"), "updatedAt": "2026-10-30T09:50:00.000Z"}),
-            json!({"id": "a2", "name": "rate limit", "engine": "codex", "project": folder("api"), "updatedAt": "2026-10-30T09:40:00.000Z"}),
+            json!({"id": "a1", "name": "fix login", "engine": "claude", "project": folder("webapp"), "updatedAt": ago(10)}),
+            json!({"id": "a2", "name": "rate limit", "engine": "codex", "project": folder("api"), "updatedAt": ago(20)}),
         ]);
         let kind = PickerKind::Open { filter: crate::modal::Filter::All, machine: None, project: None };
         let mut picker = Picker::new("", "");
         fill(&app, &kind, &mut picker);
         app.fleet.merge_roster("local", &[
-            json!({"id": "a1", "name": "fix login", "engine": "claude", "project": folder("webapp"), "updatedAt": "2026-10-30T09:50:00.000Z"}),
-            json!({"id": "a2", "name": "rate limit", "engine": "codex", "project": folder("api"), "updatedAt": "2026-10-30T09:40:00.000Z"}),
-            json!({"id": "a3", "name": "release notes", "engine": "claude", "project": folder("webapp"), "updatedAt": "2026-10-30T09:55:00.000Z"}),
+            json!({"id": "a1", "name": "fix login", "engine": "claude", "project": folder("webapp"), "updatedAt": ago(10)}),
+            json!({"id": "a2", "name": "rate limit", "engine": "codex", "project": folder("api"), "updatedAt": ago(20)}),
+            json!({"id": "a3", "name": "release notes", "engine": "claude", "project": folder("webapp"), "updatedAt": ago(5)}),
         ]);
         fill(&app, &kind, &mut picker);
         // (Its harnesses: other tests' sessions can be listed after them.)
         let shown: Vec<(&str, &str)> = picker.rows.iter().filter(|r| !r.id.starts_with("session:")).map(|r| (r.group.as_deref().unwrap_or(""), r.label.as_str())).collect();
-        // (Their fixed dates are over a week old: each folder closes with its `▸ N older`.)
+        // (A folder's `▸ N older`, for work over a week old, is no harness of its own.)
         let shown: Vec<_> = shown.into_iter().filter(|(_, label)| !label.contains("older")).collect();
         assert_eq!(shown, [("webapp", "fix login"), ("webapp", "release notes"), ("api", "rate limit")]);
     }

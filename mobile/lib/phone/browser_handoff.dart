@@ -30,12 +30,23 @@ class BrowserHandoff {
   /// How long a sign-in may take before the phone stops listening for its redirect.
   static const listenFor = Duration(minutes: 10);
 
-  Future<void> open(String machineId, String url) async {
+  /// Where the caught redirect goes instead of the core's `browser_callback`: Set up Intern 3's sign-in to Claude
+  /// (`add_device/intern3_swarm.dart`), whose login the Swarm service runs. True once it was taken.
+  Future<bool> Function(String caught)? _deliver;
+
+  Future<void> open(
+    String machineId,
+    String url, {
+    Future<bool> Function(String caught)? deliver,
+  }) async {
     final page = Uri.tryParse(url);
     if (page == null || !(page.scheme == 'https' || page.scheme == 'http')) {
       return;
     }
-    unawaited(Clipboard.setData(ClipboardData(text: url)).catchError((_) {}));
+    _deliver = deliver;
+    if (deliver == null) {
+      unawaited(Clipboard.setData(ClipboardData(text: url)).catchError((_) {}));
+    }
     final redirect = Uri.tryParse(page.queryParameters['redirect_uri'] ?? '');
     await _stop();
     if (redirect != null && _loopback(redirect)) {
@@ -52,7 +63,9 @@ class BrowserHandoff {
       await _stop();
       return;
     }
-    say('Sign-in opened on this phone. The address is copied too.');
+    if (deliver == null) {
+      say('Sign-in opened on this phone. The address is copied too.');
+    }
   }
 
   static bool _loopback(Uri uri) =>
@@ -107,6 +120,11 @@ class BrowserHandoff {
     unawaited(closeInAppWebView().catchError((_) {}));
     final caught = redirect.replace(query: request.uri.query).toString();
     debugPrint('browser: caught the sign-in on port ${redirect.port}');
+    if (_deliver case final deliver?) {
+      _deliver = null;
+      await deliver(caught);
+      return;
+    }
     // The line to the computer is often down while the browser covered the app: try until it is back.
     final deadline = DateTime.now().add(const Duration(minutes: 2));
     while (DateTime.now().isBefore(deadline)) {

@@ -16,6 +16,8 @@ import { wireRole } from '../lib/swarmSkills.js'
 import { START_REQUIREMENTS } from './capacity.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
 import { ContributionPreparations, ownerRequest, prepareContribution, setMachineAgents } from './contribution.js'
+import { ClaudeSignIns } from './claudeSignIn.js'
+import { answerFirstRun } from '../engines/launchPrep.js'
 import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
@@ -318,6 +320,9 @@ const LOCAL_ONLY = 'An agent speaks to the Swarm through its own computer\'s Har
 
 export function superTabService(core: CoreApi, options: SuperTabServiceOptions = {}): { requests: ServiceRequests; port: SuperTabsPort } {
   const preparations = new ContributionPreparations(input => (options.prepareContribution ?? prepareContribution)(core, input))
+  const claudeSignIns = new ClaudeSignIns()
+  /** The sign-in this machine's reading was last told of. */
+  let reported: string | null = null
   // One host form and one set of Swarm reads per machine, shared by the host and every action here (design 2026-10-26 5.3).
   let held: SwarmSources | null = null
   const sources = (): SwarmSources => {
@@ -385,7 +390,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   // The server's word that one of this machine's Swarms changed, heard while no host runs (Amon, #3215).
   let hostWake: (() => void) | null = null
-  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); host?.stop(); host = null; held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
+  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
   const port = {
     connected: () => {
       tokens.start()
@@ -506,6 +511,23 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return { ok: true, buddy: grant?.role === 'buddy' }
         }
         if (payload.action === 'prepareContribution') return preparations.read(payload)
+        // The phone signing Claude Code, or Codex (`engineSignIn` {engine}), in here for the Buddy it starts (claudeSignIn.ts):
+        // its owner's, as the setup is.
+        if (payload.action === 'claudeSignIn' || payload.action === 'engineSignIn') {
+          const answer = await claudeSignIns.read(payload)
+          // Once per sign-in: the Swarm reads it signed in now, before the Buddy that phone starts next asks.
+          if (answer.state === 'done' && reported !== payload.operationId) {
+            reported = String(payload.operationId)
+            wake().engineSignedIn()
+          }
+          return answer
+        }
+        // The phone's answers to Claude Code's first-run questions here, asked as it set this computer up for its Buddy
+        // (engines/launchPrep.ts answerFirstRun): its owner's, as the setup is.
+        if (payload.action === 'claudeFirstRun') {
+          if (payload.acceptFullMode !== true || typeof payload.theme !== 'string') return { error: 'INVALID_REQUEST' }
+          return answerFirstRun('claude', { theme: payload.theme }) ? { ok: true } : { error: 'FIRST_RUN_UNANSWERED' }
+        }
         // `harness super-tab set-agents`, typed by the person at this computer; never through the relay.
         if (payload.action === 'setMachineAgents') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }

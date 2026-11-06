@@ -129,7 +129,15 @@ class Join(unittest.TestCase):
             out = setup.join(dict(ssid='Glink 1', password='@11235813', ticket='t'), self.NETWORKS, 'wlo1')
         self.assertEqual(out, dict(state='done', ssid='Glink 1', signedIn=True))
         connect.assert_called_once_with('Glink 1', '@11235813', 'WPA2', 'wlo1')
-        sign_in.assert_called_once_with('t')
+        sign_in.assert_called_once_with('t', swarm=False)
+
+    def test_a_phone_with_swarm_on_signs_in_for_its_swarm(self):
+        with patch.object(setup, 'connect', return_value=None), \
+             patch.object(setup, 'internet', return_value=True), \
+             patch.object(setup, 'sign_in', return_value=(True, '')) as sign_in, \
+             patch.object(setup, 'signed_in', return_value=True):
+            setup.join(dict(ssid='Glink 1', password='@11235813', ticket='t', swarm=True), self.NETWORKS, 'wlo1')
+        sign_in.assert_called_once_with('t', swarm=True)
 
     def test_wifi_without_internet_is_forgotten_and_reported(self):
         with patch.object(setup, 'connect', return_value=None), \
@@ -204,7 +212,7 @@ class Change(unittest.TestCase):
 class SetUpAsUnlocked(unittest.TestCase):
     """What a phone sent with the computer's password while its disk was locked (unlock/http)."""
 
-    def run_it(self, request, signed_in=False, account='u-1'):
+    def run_it(self, request, signed_in=False, account='u-1', refused=False):
         with tempfile.TemporaryDirectory() as folder:
             folder = Path(folder)
             sent = folder / 'phone-setup.json'
@@ -212,13 +220,21 @@ class SetUpAsUnlocked(unittest.TestCase):
                 sent.write_text(json.dumps(request))
             session = folder / 'session.json'
             session.write_text(json.dumps(dict(signInAcct=account)))
-            users = []
+            users, state = [], dict(signed_in=signed_in)
+
+            def as_user(*command, timeout=30):
+                users.append(command)
+                # The CLI's sign-out: it takes the session away, unless it refuses.
+                if command[1] == 'logout' and not refused:
+                    state['signed_in'] = False
+
             with patch.object(setup, 'PHONE_SETUP', sent), patch.object(setup, 'SESSION', session), \
                  patch.object(setup, 'STATE', folder), patch.object(setup, 'RESULT', folder / 'r.json'), \
                  patch.object(setup, 'wifi_device', return_value='wlo1'), \
                  patch.object(setup, 'online', return_value=False), \
-                 patch.object(setup, 'signed_in', return_value=signed_in), \
-                 patch.object(setup, 'as_user', side_effect=lambda *c, timeout=30: users.append(c)), \
+                 patch.object(setup, 'signed_in', side_effect=lambda: state['signed_in']), \
+                 patch.object(setup, 'log'), \
+                 patch.object(setup, 'as_user', side_effect=as_user), \
                  patch.object(setup, 'join', return_value=dict(state='done', ssid='Glinks', signedIn=True)) as join:
                 setup.set_up_as_unlocked()
                 self.assertFalse(sent.exists(), 'read once, then gone')
@@ -239,8 +255,15 @@ class SetUpAsUnlocked(unittest.TestCase):
     def test_another_account_is_signed_out_for_the_phones(self):
         join, users, _ = self.run_it(dict(ssid='Glinks', password='wifi pass 1', ticket='t', account='u-2'),
                                      signed_in=True, account='u-1')
-        self.assertEqual(users, [('/usr/bin/harness', 'logout')])
+        # As the desktop's Sign out asks: the CLI refuses a sign-out with no terminal and no word of a person.
+        self.assertEqual(users, [('/usr/bin/harness', 'logout', '--from-sign-out-button')])
         join.assert_called_once()
+
+    def test_a_refused_sign_out_is_said_and_keeps_the_other_account(self):
+        join, _, out = self.run_it(dict(ssid='Glinks', password='wifi pass 1', ticket='t', account='u-2'),
+                                   signed_in=True, account='u-1', refused=True)
+        join.assert_not_called()
+        self.assertEqual((out['state'], out['error']), ('failed', 'SIGN_IN'))
 
     def test_a_bad_request_is_said_and_joins_nothing(self):
         join, _, out = self.run_it(dict(ssid='', password='x'))
@@ -270,6 +293,21 @@ class FromPhone(unittest.TestCase):
                 run.assert_called_once()
                 self.assertFalse(marker.exists())
                 as_user.assert_called_once()
+
+    def test_a_swarm_setup_leaves_its_own_mark_and_a_plain_one_clears_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            marker, swarm = Path(folder) / 'set-up-from-phone', Path(folder) / 'set-up-for-swarm'
+            with patch.object(setup, 'FROM_PHONE', marker), patch.object(setup, 'FOR_SWARM', swarm), \
+                 patch.object(setup, 'signed_in', return_value=False), patch.object(setup, 'as_user'):
+                with patch.object(setup, 'run_sign_in', side_effect=lambda t: (swarm.exists(), '', False)):
+                    self.assertEqual(setup.sign_in('t', swarm=True), (True, ''))
+                self.assertTrue(swarm.exists())
+                with patch.object(setup, 'run_sign_in', return_value=(True, '', False)):
+                    setup.sign_in('t')
+                self.assertFalse(swarm.exists())
+                with patch.object(setup, 'run_sign_in', return_value=(False, 'used', False)):
+                    self.assertEqual(setup.sign_in('t', swarm=True), (False, 'used'))
+                self.assertFalse(swarm.exists())
 
 
 class SignedIn(unittest.TestCase):
@@ -392,7 +430,8 @@ class FactoryReset(unittest.TestCase):
     def test_off_its_account_while_signed_in_then_every_process_before_the_files(self):
         with tempfile.TemporaryDirectory() as folder:
             self.run_reset(self.home(folder))
-            order = [self.steps.index(s) for s in ['forget-desk', 'remove-from-account', '/usr/bin/harness logout',
+            order = [self.steps.index(s) for s in ['forget-desk', 'remove-from-account',
+                                                   'logout --from-sign-out-button',
                                                     'loginctl terminate-user me', 'cp -a /etc/skel/.',
                                                     'restore-password', 'systemctl start user@1000.service',
                                                     'systemctl restart getty@tty1.service']]
@@ -427,19 +466,35 @@ class FactoryReset(unittest.TestCase):
 
 
 class SignOut(unittest.TestCase):
+    def sign_out(self, state, users, wifi, signed_in_after):
+        with patch.object(setup, 'as_user', side_effect=lambda *c, timeout=30: users.append(c) or result()), \
+             patch.object(setup, 'signed_in', return_value=signed_in_after), patch.object(setup, 'log'), \
+             patch.object(setup, 'FROM_PHONE', state / 'from-phone'), patch.object(setup, 'NOW', state / 'now'), patch.object(setup, 'PHONE_SETS_UP', state / 'phone'), \
+             patch.object(setup, 'rows', return_value=[['u-home', '802-11-wireless']]), \
+             patch.object(setup, 'nmcli', side_effect=lambda *a, **k: wifi.append(a) or result()):
+            setup.sign_out()
+
     def test_it_signs_out_and_opens_the_hotspot_keeping_everything_of_the_person(self):
         users, wifi = [], []
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder)
             (state / 'from-phone').touch()
-            with patch.object(setup, 'as_user', side_effect=lambda *c, timeout=30: users.append(c) or result()), \
-                 patch.object(setup, 'FROM_PHONE', state / 'from-phone'), patch.object(setup, 'NOW', state / 'now'), patch.object(setup, 'PHONE_SETS_UP', state / 'phone'), \
-                 patch.object(setup, 'rows', return_value=[['u-home', '802-11-wireless']]), \
-                 patch.object(setup, 'nmcli', side_effect=lambda *a, **k: wifi.append(a) or result()):
-                setup.sign_out()
-            self.assertEqual(users, [('/usr/bin/harness', 'logout')])
+            self.sign_out(state, users, wifi, signed_in_after=False)
+            # As the desktop's Sign out asks: the CLI refuses a sign-out with no terminal and no word of a person.
+            self.assertEqual(users, [('/usr/bin/harness', 'logout', '--from-sign-out-button')])
             self.assertEqual(wifi, [('connection', 'delete', 'uuid', 'u-home')])
             self.assertTrue((state / 'now').exists() and (state / 'phone').exists())
+
+    def test_a_refused_sign_out_keeps_its_wifi_and_opens_no_hotspot(self):
+        users, wifi = [], []
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder)
+            (state / 'from-phone').touch()
+            with self.assertRaises(SystemExit):
+                self.sign_out(state, users, wifi, signed_in_after=True)
+            self.assertEqual(wifi, [])
+            self.assertFalse((state / 'now').exists())
+            self.assertTrue((state / 'from-phone').exists())
 
 
 class Password(unittest.TestCase):
