@@ -44,7 +44,7 @@ The fix is to split the two jobs:
 - Talks only to their own Buddies.
 - Sees every project they belong to as a Task Board.
 - Steers work from the Board: priority, pause, answering what is asked of them.
-- Writes in a task's thread when they take part in that task (a tester's retest, a reporter's extra screenshot).
+- Writes in a task's card chat when they take part in that task (a tester's retest, a reporter's extra screenshot).
 
 ### Buddy
 - A person's own assistant. A person may have several, each named for its purpose (for example Code, Research,
@@ -55,7 +55,7 @@ The fix is to split the two jobs:
   its person and bringing the answer back.
 - Tells its person, in one short line, at three moments of a proposal it sent: **decided** (accepted, reshaped,
   later or declined, with the PM's reason), **needs you**, and **shipped**. A person who disagrees with a decision says
-  so through the same Buddy, on the card. *(Call made in drafting.)*
+  so through the same Buddy, on the card.
 
 ### PM
 - Never chats with people, and is never in a person's conversation.
@@ -95,7 +95,7 @@ Actions on the Board:
 - Propose directly from the Board, for a person with no Buddy yet.
 - Change priority and pause or resume a task, within the rights below.
 - Answer a question or decision asked of them.
-- Open a task's thread.
+- Open a task's card chat.
 
 A "Needs you" bar at the top lists everything waiting on the reader in this project.
 
@@ -110,7 +110,7 @@ Who may do what on the Board:
 Setting P0 and pausing stay with a few people because a P0 goes ahead of everything and a pause stops other people's
 work.
 
-### Screens (Desktop) *(anh Dee)*
+### Screens (Desktop) *(anh Dee; the sketch is the end state: several Buddies and + New Buddy come in Phase 2)*
 
 ```
 +- left (hide/show) ---+ +- harness . Board -----------------------------------------+ +- right (hide/show) ------+
@@ -163,7 +163,7 @@ If the Buddy that sent a proposal has been removed, its messages go to the perso
 |---|---|
 | Change what goes first | Change the card's priority on the Board |
 | Stop something | Pause the task on the Board |
-| Give a lasting rule ("from now on…") | Send a rule proposal through their Buddy. The PM decides it like any proposal (Accept, Reshape, Later, No); an accepted rule is saved into the project's instructions word for word with who gave it. A person with the right to edit the instructions may also edit them directly *(call made in drafting)* |
+| Give a lasting rule ("from now on…") | Send a rule proposal through their Buddy. The PM decides it like any proposal (Accept, Reshape, Later, No); an accepted rule is saved into the project's instructions word for word with who gave it. A person with the right to edit the instructions may also edit them directly  |
 | Decide something a rule names them for (for example a production write, a product decision) | Answer the decision, which reaches them through their default Buddy and the Board's "Needs you" bar |
 
 ## When an agent needs a person
@@ -178,14 +178,14 @@ An agent working on a task that needs a person's answer asks that person directl
 
 ## Talking about a task
 
-A task's thread stays open to people:
+A task's conversation, the card's chat, stays open to people:
 - the people taking part in it can write there (the requester, a tester, a reviewer who is a person);
 - they talk with the agents working on that task.
 
 Only the chat with the PM goes away.
 
-A thread is for the task as accepted. New scope written there ("also do X") is not taken up by the agents: they say
-so in one line, and the person proposes it through their Buddy. *(Call made in drafting.)*
+The card's chat is for the task as accepted. New scope written there ("also do X") is not taken up by the agents: they say
+so in one line, and the person proposes it through their Buddy.
 
 ## People without their own machine
 
@@ -201,7 +201,7 @@ Until they have any Buddy, they can propose straight from the Board.
 
 - A person creates, names and removes their own Buddies. The PM never manages them.
 - Buddies belong to the person within one Swarm, as today. A person in two Swarms has separate Buddies in each, and
-  the cap counts per Swarm. *(Call made in drafting.)*
+  the cap counts per Swarm.
 - One Buddy is the person's default: it receives the messages of a removed Buddy and the decisions addressed to the
   person.
 - An idle Buddy sleeps and wakes when its person writes to it or a proposal it sent needs it, so many Buddies do not
@@ -218,24 +218,29 @@ Until they have any Buddy, they can propose straight from the Board.
 - The history of a switched project's chat with the PM stays readable, but nobody can write in it.
 - When a project switches on, every message to the PM still unanswered becomes a proposal on the Board, under its
   author's name, so nothing is dropped. When it switches back, undecided proposals stay open and the PM answers them
-  in the chat as today. *(Call made in drafting.)*
+  in the chat as today.
 
 ## Phases
 
-**Phase 1, Desktop, building now (#3787, Signincheck; release today):** Board opens by default for a project; Trello
-look; left pane without Buddy and Threads; right pane = Buddy chat, or a clicked card's flat chat; hide/show icons on
-both side panes. Built on what the backend has today (tasks, steps, PRs, task conversations, one Buddy, proposals as
-they are). The project chat stays readable for apps that don't have the Board yet.
+**Phase 1, Desktop, building now (#3787, Signincheck; release today):** the Board opens by default for a project, with
+the Trello look; left pane without Buddy and Threads; right pane = the person's Buddy, or a clicked card's chat;
+hide/show icons on both side panes. Built on what the backend has today (tasks, steps, PRs, task conversations, one
+Buddy, proposals as they are). **[merge, Ken's point 1]** No project is switched yet, so the PM still answers and asks in
+the project chat: Desktop keeps the project chat one click away (a Chat tab next to Board) until the project switches.
+**[merge, Ken's point 2]** Until the switch, agents and the PM keep replying in threads (the instructions' answer-in-thread
+rule stands); Desktop shows those replies inline in the chat, each with a 'replying to' line naming the message it
+answers, so the same conversation reads the same on every app. When a project switches, answers move to the card's
+chat and that rule is dropped.
 
 **Phase 2, after Dee and Ken approve this spec:**
-1. Backend (Ken): proposals as their own records with a decision (Accept, Reshape, Later, No + reason), questions on a
+1. Backend (from Ken's spec; built by the backend crew): proposals as their own records with a decision (Accept, Reshape, Later, No + reason), questions on a
    card with a default and a time, duplicate merge; many Buddies per person with a default and a cap; an agent's ask
    goes to the person's default Buddy and the "Needs you" bar; the PM's inputs become proposals, answers and notices
    only; the per-project switch; the Board read returns only what changed.
 2. Desktop: Merged column and Waiting folded into Working; decision, question and "needs you" on the card; Needs you
    bar; propose from the Board; priority and pause by role; + New Buddy and Buddy list.
 3. Phone and web: the same Board and Buddies.
-4. Instructions and the PM: drop the chat rules (answer in threads, inbox, owed asks) once the project switches.
+4. Instructions and the PM: drop the chat rules (answer in threads, inbox, owed asks) for a project once it switches.
 
 ## Design
 
