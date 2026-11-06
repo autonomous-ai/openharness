@@ -60,15 +60,15 @@ This plan is written and carried out by its Engineer, test first; there is no ex
 Files: `desktop/lib/state/profile_cache.dart`, `desktop/test/profile_cache_test.dart`.
 Interfaces: `Future<({String machineId, CurrentUserProfile profile})?> ProfileCache.readKept()`.
 
-- [ ] Failing test: `readKept` returns the record with its machine id; malformed records read as none.
-- [ ] Code that passes it; `read(machineId)` uses it.
+- [x] Failing test: `readKept` returns the record with its machine id; malformed records read as none.
+- [x] Code that passes it; `read(machineId)` uses it.
 
 ### 2. A launch with a kept sign-in opens before the check (`desktop/lib/state/app_state.dart`)
 
 Files: `desktop/lib/state/app_state.dart`, `desktop/test/kept_sign_in_launch_test.dart`.
 Interfaces: `bool Function() AppNotifier.cliSessionOnDisk` (`@visibleForTesting`, false under test).
 
-- [ ] Failing tests (memory store, fake sign-in whose check is held):
+- [x] Failing tests (memory store, fake sign-in whose check is held):
   - signed in with a kept profile: the window (`authenticated`, workspace, not the sign-in page) opens while the check
     is still running, then the check proves it and nothing changes; the `window` speed mark comes before
     `signed-in check`;
@@ -79,9 +79,9 @@ Interfaces: `bool Function() AppNotifier.cliSessionOnDisk` (`@visibleForTesting`
     record gone;
   - kept profile, CLI cannot answer: ends on the login screen, as today;
   - no profile is kept before the check proves the machine id.
-- [ ] Code that passes them.
+- [x] Code that passes them.
 
 ### 3. Before/after numbers
 
-- [ ] Speed marks of a launch with a check held for the measured 245 ms, before and after, in the PR; the release-build
+- [x] Speed marks of a launch with a check held for the measured 245 ms, before and after, in the PR; the release-build
       launch on a Mac where the app can run is the Tester's.
