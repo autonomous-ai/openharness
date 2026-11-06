@@ -118,11 +118,11 @@ describe('what a free crew member gets', () => {
     expect(s.picks()).toEqual([['Ash', 'Hosts', 'lane']])
   })
 
-  it('gives a member its pinned task first, and a pin whose member left the crew goes to the lane', () => {
+  it('gives a member its pinned task first, and a pin whose member is stopping goes to the lane', () => {
     const s = crew(['Ash', 'Birch'], { Ash: 'backend', Birch: 'backend' })
     s.group(s.tasks.store).pin = { agentId: s.ids.Birch!, why: 'ci', at: 2000 }
     expect(s.picks()).toEqual([['Ash', 'Api', 'lane'], ['Birch', 'Store', 'pin']])
-    delete s.state.agents.find(a => a.id === s.ids.Birch)!.crew
+    s.state.agents.find(a => a.id === s.ids.Birch)!.workDecision = 'stop'
     expect(s.picks()).toEqual([['Ash', 'Api', 'lane']])
   })
 
@@ -165,7 +165,7 @@ describe('what a free crew member gets', () => {
     expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, late - 2 * 3_600_000).map(p => titleOf(s, p.conversationId))).toEqual(['Store'])
   })
 
-  it('leaves out the PM, a Buddy, a stopping member, a moving one and an agent not in the crew; an asleep one is free', () => {
+  it('leaves out the PM, a stopping member and a moving one; asleep and ordinary workers are free', () => {
     const s = crew(['Ash', 'Birch', 'Cedar', 'Dune'], { Ash: 'backend', Birch: 'backend', Cedar: 'backend', Dune: 'backend' })
     const pm = s.state.agents.find(a => a.id === s.pm)!
     pm.crew = { role: 'PM', at: 1000, by: 'owner' }
@@ -174,7 +174,7 @@ describe('what a free crew member gets', () => {
     Object.assign(agent('Birch'), { movedTo: { machineId: 'other', at: 2000 } })
     Object.assign(agent('Cedar'), { asleep: { since: 2000 } })
     s.add('Elm')
-    expect(freeCrew(s.state, 'lead', DISPATCH_RULES, NOW).map(a => a.name)).toEqual(['Cedar', 'Dune'])
+    expect(freeCrew(s.state, 'lead', DISPATCH_RULES, NOW).map(a => a.name)).toEqual(['Cedar', 'Dune', 'Elm'])
   })
 
   it('never picks a step, an archived task, a chat, a finished task or one not to start before a later day', () => {
@@ -409,7 +409,7 @@ describe('lost work goes to an ordinary project worker', () => {
     assignment.lost = { reason: 'its session stopped', at: NOW }
     group.lostAttempt = { id: assignment.id, agentId: s.ids.Old!, machineId: 'host', engine: 'claude' }
     group.pullRequestUrls = ['https://github.com/example/repo/pull/21']
-    group.pullRequestHeads = { [group.pullRequestUrls[0]!]: { head: 'a'.repeat(40), base: 'main', patchId: null } }
+    group.pullRequestHeads = { [group.pullRequestUrls[0]!]: { head: 'a'.repeat(40), base: 'main', patch: null, at: NOW } }
     return { ...s, api, get state() { return s.state } }
   }
 

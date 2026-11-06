@@ -14,6 +14,7 @@ import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 import { queueOrder, queueSiblings } from './taskQueue.js'
 import { unavailableReason } from './liveness.js'
 import { FAILED, type PullRequestWatch } from './pullRequestEvents.js'
+import { roleNameOf } from './instructions.js'
 
 const HOUR_MS = 3_600_000
 
@@ -78,7 +79,6 @@ export function laneOf(group: Pick<Conversation, 'lane' | 'task'>, lanes: readon
 /** The reason the 3-hour clock gives a task it puts back in its lane (liveness.ts); the dispatch reads it to keep that task
  *  from its last member for one pass. */
 export const returnReason = (lane: string | null): string => `no progress for 3 hours: back in the ${lane ?? 'project'} lane`
-const RETURN_PREFIX = 'no progress for 3 hours'
 
 /** What a crew member hears after 2 hours without progress on its task. */
 export const nudgeLine = (lane: string | null): string =>
@@ -119,7 +119,7 @@ export function freeCrew(state: SuperTabState, projectId: string, rules: Dispatc
   const reachable = (agent: Agent) => !lead || !onTeamAccount(state, lead) || agent.machineId === lead.machineId || onTeamAccount(state, agent)
   const launching = (agent: Agent) => !!state.starts?.some(s => !s.poolSettled && s.poolGeneration && s.request.machineId === agent.machineId && s.harnessId === agent.harnessId)
   return state.agents
-    .filter(agent => !!agent.crew && agentProjectId(state, agent) === projectId && !leads.has(agent.id) && !isBuddy(agent)
+    .filter(agent => agentProjectId(state, agent) === projectId && !leads.has(agent.id) && !isBuddy(agent)
       && agent.workDecision !== 'stop' && !moving(agent) && (asleep(agent) || !sessionClosed(state, agent, now)) && !launching(agent)
       && !busy.has(agent.id) && (handedBy.get(agent.id) ?? 0) < rules.maxHanded && reachable(agent)
       // A member its machine or engine cannot serve now would lose the task at once (liveness.ts): until that clears.
@@ -143,31 +143,32 @@ export function openTasks(state: SuperTabState, projectId: string, now: number):
 }
 
 /** Whether [member] takes work in [lane]: its own lane, or any for a crew Engineer with none. */
-function takes(member: Agent, lane: string | null, rules: DispatchRules): boolean {
-  const own = member.crew?.lane
-  if (own) return lane !== null && laneNamed(rules.lanes, own) === lane
-  return /^engineer$/i.test(member.crew?.role.trim() ?? '')
+function takes(state: SuperTabState, member: Agent, rules: DispatchRules): (lane: string | null) => boolean {
+  if (!/^(engineer|builder)$/i.test((member.crew?.role ?? roleNameOf(state, member)).trim())) return () => false
+  // Ordinary workers have no crew lane: retain the area of their last task when the server knows it.
+  const previous = member.crew ? undefined : state.conversations.findLast(g => g.task && !g.reviewOf && g.assignment?.agentId === member.id)
+  const own = member.crew?.lane ?? (previous ? laneOf(previous, rules.lanes) : null)
+  return own ? lane => lane !== null && laneNamed(rules.lanes, own) === lane : () => true
 }
 
 /** The tasks [member] could be handed now, best first: those pinned to it (oldest pin first), then its lane's open tasks.
  *  A task it just lost to the 3-hour clock is not offered to it. */
 export function candidatesFor(state: SuperTabState, member: Agent, rules: DispatchRules, now: number, open = openTasks(state, agentProjectId(state, member)!, now),
   skip: Skip = () => false) {
-  const lostByIt = (group: Conversation) => group.lostAttempt?.agentId === member.id && lostToClock(group)
+  const lostByIt = (group: Conversation) => group.lostAttempt?.agentId === member.id && group.assignment?.status === 'lost'
   const pinned = open.filter(g => pinOf(g)?.agentId === member.id).sort((a, b) => pinOf(a)!.at - pinOf(b)!.at)
-  const crewIds = new Set(state.agents.filter(a => a.crew).map(a => a.id))
-  const lane = open.filter(g => !pinned.includes(g) && !(pinOf(g) && crewIds.has(pinOf(g)!.agentId)) && !lostByIt(g)
-    && takes(member, laneOf(g, rules.lanes), rules))
+  const members = new Set(state.agents.filter(a => a.workDecision !== 'stop' && !moving(a)).map(a => a.id))
+  const acceptsLane = takes(state, member, rules)
+  const lane = open.filter(g => !pinned.includes(g) && !(pinOf(g) && members.has(pinOf(g)!.agentId)) && !lostByIt(g)
+    && acceptsLane(laneOf(g, rules.lanes)))
   // Team-written code goes to Team accounts only (teamWritten.ts); a pick refused this round is not sent again (store.ts).
   const allowed = (group: Conversation) => !barredFromTeamWritten(state, group, member) && !skip(group.id, member.id)
   return [...pinned.filter(allowed).map(group => ({ group, why: 'pin' as const })), ...lane.filter(allowed).map(group => ({ group, why: 'lane' as const }))]
 }
 
-/** Lost to the 3-hour clock: its last member gets it not again at once (review 1 of #3230's plan, Review Focus). */
-const lostToClock = (group: Conversation): boolean => group.assignment?.status === 'lost' && !!group.assignment.lost?.reason.startsWith(RETURN_PREFIX)
-/** [group]'s pin, unless it names the member that just lost it to the clock: then it goes to the lane (review 2 of #3230). */
+/** A pin never sends a lost task straight back to the failed agent; another free worker takes it. */
 const pinOf = (group: Conversation): Conversation['pin'] =>
-  group.pin && !(lostToClock(group) && group.lostAttempt?.agentId === group.pin.agentId) ? group.pin : undefined
+  group.pin && !(group.assignment?.status === 'lost' && group.lostAttempt?.agentId === group.pin.agentId) ? group.pin : undefined
 
 /** A pick the caller leaves out: one whose work.assign was refused this round (store.ts dispatchCrew). */
 export type Skip = (conversationId: string, agentId: string) => boolean

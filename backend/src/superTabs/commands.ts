@@ -1711,6 +1711,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** [worker] takes [group]'s work as assignment [assignmentId], after assignRefusal let it: what work.assign writes, and its
    *  brief to the worker. */
   const assignTo = (group: Conversation, worker: Agent, assignmentId: string) => {
+    // Preserve the lost attempt's recovery context before replacing its assignment. The PR ref is fetchable on another
+    // machine; a local worktree path is not. No branch is invented when the builder never recorded a push.
+    const recovery = group.assignment?.status === 'lost' ? [
+      'Continue the previous attempt from its pushed work; read this task’s conversation before changing it.',
+      ...group.assignment.result ? [`Previous result: ${group.assignment.result}`] : [],
+      ...(group.pullRequestUrls ?? []).map(url => {
+        const number = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)$/.exec(url)?.[1]
+        const head = group.pullRequestHeads?.[url]?.head
+        return `Pushed work: ${url}${number ? ` (refs/pull/${number}/head)` : ''}${head ? ` at ${head}` : ''}`
+      }),
+    ].join('\n') : null
     // An asleep crew member wakes for it: its host reopens the session in place (crewKeep.ts). The wake is timed from here to
     // the first reading that shows it running (crewTimes.ts, task #3462).
     if (wakeCrewMember(worker, context.now)) startWake(worker, group.id, context.now)
@@ -1740,6 +1751,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // whom this task's pull requests are for, from its own requester (projects.ts requestedByLine).
     const requestedBy = requestedByLine(state, groupProject(state, group), group, worker)
     message(group.id, [group.brief || group.title,
+      ...recovery ? [recovery] : [],
       ...group.checks.length ? [`Acceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`] : [],
       ...requestedBy ? [requestedBy] : []].join('\n\n'), [worker.id], null, SYSTEM_ROW, undefined, undefined, undefined, assignmentId)
     const news = assignedNotice(state, group, sender, assignmentId)
