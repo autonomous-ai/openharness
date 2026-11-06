@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -389,6 +391,75 @@ void main() {
       expect(inCard(id, find.text('Reply 1')), findsOneWidget);
       expect(inCard(id, find.textContaining('more repl')), findsNothing);
       expect(opened, isEmpty);
+    });
+  });
+
+  testWidgets('a reply that arrives while older replies load stays in the '
+      'card', (tester) async {
+    final server = swarm()..messagePage = 3;
+    final id = _thread(
+      server,
+      'Busy thread',
+      replies: [for (var i = 1; i <= 8; i++) ('Kestrel', 'Reply $i')],
+    );
+    server.followedThreads = {
+      'unread': [],
+      'read': [_followed(server, id)],
+      'more': false,
+    };
+    await withClock(Clock.fixed(_now), () async {
+      final activity = await _loaded(tester, server);
+      final opened = await _show(tester, activity);
+      final hold = server.holdThreadPages = Completer<void>();
+      await tester.tap(find.text('Show 6 more replies'));
+      await _settle(tester);
+      expect(inCard(id, find.text('Loading replies…')), findsOneWidget);
+      // Reply 9 arrives while the older page is still on its way.
+      server.append('Reply 9');
+      server.messages.last
+        ..['thread'] = id
+        ..['author'] = _author('Kestrel');
+      server.followedThreads = {
+        'unread': [],
+        'read': [_followed(server, id)],
+        'more': false,
+      };
+      await tester.runAsync(activity.attention.load);
+      await _settle(tester);
+      expect(inCard(id, find.text('Reply 9')), findsOneWidget);
+      hold.complete();
+      await _settle(tester);
+      expect(inCard(id, find.text('Reply 9')), findsOneWidget);
+      expect(inCard(id, find.text('Reply 1')), findsOneWidget);
+      expect(inCard(id, find.textContaining('more repl')), findsNothing);
+      expect(opened, isEmpty);
+    });
+  });
+
+  testWidgets('a thread longer than the page cap keeps its button until every '
+      'reply is read', (tester) async {
+    final server = swarm()..messagePage = 1;
+    final id = _thread(
+      server,
+      'Huge thread',
+      replies: [for (var i = 1; i <= 45; i++) ('Kestrel', 'Reply $i')],
+    );
+    server.followedThreads = {
+      'unread': [],
+      'read': [_followed(server, id)],
+      'more': false,
+    };
+    await withClock(Clock.fixed(_now), () async {
+      await _show(tester, await _loaded(tester, server));
+      await tester.tap(find.textContaining('more replies'));
+      await _settle(tester);
+      // 40 pages are read at most: the card still says what is hidden.
+      expect(inCard(id, find.text('Reply 1')), findsNothing);
+      expect(inCard(id, find.textContaining('more replies')), findsOneWidget);
+      await tester.tap(find.textContaining('more replies'));
+      await _settle(tester);
+      expect(inCard(id, find.text('Reply 1')), findsOneWidget);
+      expect(inCard(id, find.textContaining('more repl')), findsNothing);
     });
   });
 
