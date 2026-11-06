@@ -325,6 +325,9 @@ export interface PrivacyObserverDeps {
   now(): number
 }
 
+/** What the status file says of a Team sign-in that is gone: the observer, `team __start` and a revoke say it alike. */
+export const TEAM_SIGNED_OUT_DETAIL = 'The Team sign-in is no longer available. Run harness team setup --sign-in-again.'
+
 export class TeamPrivacyObserver {
   private last: PrivacyResult | null = null
   private signedIn: boolean | null = null
@@ -345,7 +348,7 @@ export class TeamPrivacyObserver {
         if (!signedIn) {
           try {
             this.deps.writeStatus(config.statusFile, { signIn: { state: 'signed-out', at: now,
-              detail: 'The Team sign-in is no longer available. Run harness team setup --sign-in-again.' } })
+              detail: TEAM_SIGNED_OUT_DETAIL } })
             this.signedIn = signedIn
           } catch { /* Try the status write again at the next observation; privacy is checked independently. */ }
         } else this.signedIn = signedIn
