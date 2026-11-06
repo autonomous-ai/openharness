@@ -11,6 +11,7 @@ import { isBuddy, isBuddyChat } from './buddies.js'
 import { heldView, type HeldReason } from './heldReason.js'
 import { isLeads, type Author, type Conversation, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject, type SwarmProject } from './projects.js'
+import { projectCard } from './statusCard.js'
 
 /** One person's message to the PM not settled yet: its id, who wrote it, when, and the root of the thread it is in (its own
  *  id for a top-level message). */
@@ -217,6 +218,9 @@ export function recordPulse(state: SuperTabState, now: number, only?: string): v
     if (!chat) continue
     const pulse = projectPulse(state, project, now, PULSE_LIMITS, index, chat.pulse?.idleSince ?? null)
     if (JSON.stringify(pulse) !== JSON.stringify(chat.pulse)) chat.pulse = pulse
+    // The status card's lines (statusCard.ts), written only when one changed; a project with no active task keeps none.
+    const card = projectCard(state, project, index, chat.card, now, dayOf(now))
+    if (card.lines.length || chat.card) { if (JSON.stringify(card) !== JSON.stringify(chat.card)) chat.card = card }
   }
 }
 

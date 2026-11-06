@@ -11,6 +11,7 @@ import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
 import { visibleAccess } from './machineAccess.js'
+import { cardText } from './statusCard.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
@@ -511,6 +512,9 @@ export interface Conversation {
   answered?: import('./answers.js').AnsweredAsk[]
   /** On a project's chat: its project's pulse as last worked out (pulse.ts recordPulse), which every read sends in `derived`. */
   pulse?: import('./pulse.js').Pulse
+  /** On a project's chat: its status card's lines as the server last wrote them (statusCard.ts, recordPulse). Readers get them in
+   *  the project's `status` text (visibleState), never as a field. */
+  card?: import('./statusCard.js').StatusCard
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */
@@ -1160,9 +1164,14 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     // loaded, by nobody.
     visible.projects = visible.projects.map(({ owed: _owed, ...p }) => {
       // What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
-      if (p.status === undefined) return p
       const chat = state.conversations.find(c => c.id === p.leadConversationId)
-      if (chat && canReadGroup(state, actor, chat)) return p
+      if (chat && canReadGroup(state, actor, chat)) {
+        // The server's lines, then the coordinator's own (statusCard.ts); the stored status text is only the latter.
+        const lines = chat.card
+        if (!lines?.lines.length) return p
+        return { ...p, status: { text: cardText(lines.lines, p.status?.text, lines.more), at: new Date(Math.max(...lines.lines.map(l => l.since))).toISOString(), by: p.status?.by ?? chat.leadId ?? '' } }
+      }
+      if (p.status === undefined) return p
       const { status: _status, ...rest } = p
       return rest
     })

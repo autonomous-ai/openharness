@@ -34,6 +34,7 @@ export const GROUP_FIELDS = {
     'assignment.lost',
     'assignment.status',
     'audience',
+    'card',
     'dormant',
     'id',
     'kind',

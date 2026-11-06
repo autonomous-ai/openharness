@@ -39,6 +39,7 @@ const conversation: Required<Conversation> = {
   buddyDownTold: true,
   buddyName: 'Sparky',
   buddySessions: [],
+  card: { lines: [] },
   cards: {},
   checks: [],
   codePullRequestUrls: [],
