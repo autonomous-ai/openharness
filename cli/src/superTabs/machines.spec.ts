@@ -2710,11 +2710,11 @@ describe('the allowance a machine reports', () => {
     expect(reads(f)).toBe(2)
   })
 
-  it("says a Harness Team account's allowance is read on its owner's machine", async () => {
-    const f = fixture({}, () => null, () => true)
-    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
+  it('says the reason the CLI gave when its allowance report is not there', async () => {
+    const f = fixture()
+    f.request.mockImplementation(answer({ outcome: 'unreachable', source: 'cli', message: 'Codex did not answer when asked for its allowance on this machine.' }))
     await f.machine.tick()
-    expect(last(f).quotaReasons).toEqual({ codex: "This account runs on its owner's subscription; its allowance is read on the owner's machine." })
+    expect(last(f).quotaReasons).toEqual({ codex: 'Codex did not answer when asked for its allowance on this machine.' })
   })
 
   it("says why a Harness Team account cannot use its owner's subscription when the owner's relay does not answer", async () => {
@@ -2730,7 +2730,7 @@ describe('the allowance a machine reports', () => {
     f.request.mockImplementation(answer({ outcome: 'signedOut' }))
     const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth: async () => ({ ok: false, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true }) } as never)
     await machine.tick()
-    expect(last(f).quotaReasons).toEqual({ codex: "This account runs on its owner's subscription; its allowance is read on the owner's machine." })
+    expect(last(f).quotaReasons).toEqual({ codex: 'No subscription sign-in is stored on this machine.' })
   })
 
   it('drops the reasons for a backend that refuses them, keeping the allowance, and offers them again ten minutes later', async () => {
