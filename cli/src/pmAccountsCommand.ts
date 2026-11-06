@@ -13,7 +13,7 @@ import type { ClaudeProfile, ClaudeProfileError } from './lib/claudeProfiles.js'
 export interface PmAccountsDeps {
   argv: string[]
   home: string
-  /** One request to this machine's daemon; rejects with an Error whose message says what went wrong. */
+  /** One request to this machine's daemon; resolves its payload, including refusals in error, and rejects connection failures. */
   request: (type: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>
   claudeBin: string
   /** The environment `claude` runs in. */
@@ -56,8 +56,14 @@ function left(a: Account, name: string): string {
 }
 
 async function list(deps: PmAccountsDeps): Promise<Account[]> {
-  const reply = await deps.request('pm_accounts_list', {})
+  const reply = await request(deps, 'pm_accounts_list', {})
   return (reply.accounts ?? []) as Account[]
+}
+
+async function request(deps: PmAccountsDeps, type: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const reply = await deps.request(type, payload)
+  if (typeof reply.error === 'string') throw new Error(reply.error)
+  return reply
 }
 
 async function showList(deps: PmAccountsDeps): Promise<number> {
@@ -82,13 +88,13 @@ async function use(deps: PmAccountsDeps, names: string[], on: boolean): Promise<
     }
     ids.push(hit.id)
   }
-  await deps.request('pm_accounts_use', { ids, on })
+  await request(deps, 'pm_accounts_use', { ids, on })
   deps.output(`${on ? 'PM may now use' : 'PM may no longer use'} ${names.join(', ')}.`)
   return 0
 }
 
 async function history(deps: PmAccountsDeps, limit: number | undefined): Promise<number> {
-  const reply = await deps.request('pm_accounts_history', limit ? { limit } : {})
+  const reply = await request(deps, 'pm_accounts_history', limit ? { limit } : {})
   const moves = [...((reply.moves ?? []) as Move[])].sort((a, b) => b.at - a.at)
   if (!moves.length) { deps.output('No account moves yet.'); return 0 }
   // The moves hold account ids; the owner knows the accounts by name.
@@ -135,10 +141,9 @@ async function add(deps: PmAccountsDeps, tick: boolean): Promise<number> {
     if (status.status !== 0) return undo('Claude does not show this account as signed in.')
     const linked = deps.link(folder)
     if ('error' in linked) return undo(`Harness could not use the new folder (${linked.error}).`)
+    if (tick) await request(deps, 'pm_accounts_use', { ids: [linked.profile.id], on: true })
     deps.output(`Added ${linked.profile.label}.`)
-    if (!tick) return 0
-    await deps.request('pm_accounts_use', { ids: [linked.profile.id], on: true })
-    deps.output('PM may use it now. Turn that off with `harness pm accounts use --off`.')
+    if (tick) deps.output('PM may use it now. Turn that off with `harness pm accounts use --off`.')
     return 0
   } finally { for (const signal of signals) process.off(signal, mark) }
 }
