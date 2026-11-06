@@ -85,7 +85,7 @@ describe('a project\'s rules record', () => {
   it('lets the PM save only with a person\'s own chat message, recording it', async () => {
     const { tab, lead } = await swarm()
     expect(await refusal(run(tab, set(0, rules('10:00')), host, lead))).toMatchObject({ code: 'RULES_ASKED_IN_REQUIRED', status: 400 })
-    const own = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Status: all good.', replyTo: null, recipientIds: [] }, host, lead)
+    const own = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'The release is available.', replyTo: null, recipientIds: [] }, host, lead)
     const agentMessage = own.result.messageId as string
     expect(await refusal(run(tab, set(0, rules('10:00'), { askedIn: { conversationId: 'lead', messageId: agentMessage } }), host, lead)))
       .toMatchObject({ code: 'RULES_ASKED_IN_REQUIRED' })

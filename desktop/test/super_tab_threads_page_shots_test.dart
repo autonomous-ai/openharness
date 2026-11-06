@@ -170,6 +170,29 @@ void main() {
           await tester.pumpAndSettle();
         }
         await captureWindow(tester, shots, 'threads-page-${brightness.name}');
+        // Task #3619: Show N more replies expands the card where it is.
+        await tester.tap(find.text('Show 4 more replies'));
+        for (var i = 0; i < 3; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 30)),
+          );
+          await tester.pumpAndSettle();
+        }
+        await captureWindow(
+          tester,
+          shots,
+          'threads-page-expanded-${brightness.name}',
+        );
+        // Task #3751: the cards' text can be selected and copied, as in the chat.
+        tester
+            .state<SelectableRegionState>(find.byType(SelectableRegion).first)
+            .selectAll(SelectionChangedCause.keyboard);
+        await tester.pumpAndSettle();
+        await captureWindow(
+          tester,
+          shots,
+          'threads-page-selected-${brightness.name}',
+        );
       });
     });
   }

@@ -9,7 +9,16 @@ import { requiredReads, SEED_RULES, testsFor, touchedRows, type ProjectRules } f
 export type StepKind = 'review' | 'security' | 'test'
 /** A step a pull request needs: its name in the task, its kind, the sensitive areas it touched, where a test runs, and
  *  `unread` when its files could not be read, so it was planned as strictly as the table goes. */
-export interface PlannedStep { name: string; kind: StepKind; areas: string[]; where?: string[]; unread?: true }
+export interface PlannedStep { name: string; kind: StepKind; areas: string[]; where?: string[]; unread?: true; os?: StepOs }
+
+/** An OS a test step runs on, as the rules record's `where` names it (task #3602): "on a Mac", "on a Linux machine". */
+export type StepOs = 'mac' | 'linux' | 'windows'
+const OS_PLACE: Record<StepOs, string> = { mac: 'a Mac', linux: 'a Linux machine', windows: 'a Windows machine' }
+const OS_WORDS: Record<StepOs, RegExp> = { mac: /\bmac(?:os|book)?\b/i, linux: /\blinux\b/i, windows: /\bwindows\b/i }
+/** The OSes [where] names, in a fixed order. */
+export const osesIn = (where: readonly string[]): StepOs[] => (['mac', 'linux', 'windows'] as const).filter(os => where.some(line => OS_WORDS[os].test(line)))
+/** Whether a machine's reported OS (machines.ts resources.os: "macOS", "Linux", "Windows") is [os]. */
+export const reportsOs = (reported: string | null | undefined, os: StepOs): boolean => !!reported && OS_WORDS[os].test(reported)
 
 /**
  * The steps a change to [files] needs by the project's [rules], reads first: as many reads as requiredReads asks, each a
@@ -27,7 +36,11 @@ export function reviewPlan(files: readonly string[] | null, rules: ProjectRules 
     ...(files === null ? { unread: true as const } : {}),
   }))
   const where = testsFor(rules, files)
-  if (where.length) steps.push({ name: 'Test', kind: 'test', areas: [], where })
+  // A test that must run on more than one OS is one step per OS, each for a Tester on that OS (task #3602: #3576's went to a
+  // Mac only when its check needed a Mac and a Linux machine); one OS named is that step's.
+  const oses = osesIn(where)
+  if (where.length && oses.length > 1) for (const os of oses) steps.push({ name: `Test on ${OS_PLACE[os]}`, kind: 'test', areas: [], where, os })
+  else if (where.length) steps.push({ name: 'Test', kind: 'test', areas: [], where, ...oses.length ? { os: oses[0]! } : {} })
   return steps
 }
 
@@ -53,6 +66,7 @@ export function stepBrief(step: PlannedStep, task: { number: number; title: stri
     : 'its pull request'
   const what = step.kind === 'test'
     ? `Test ${pulls} for task #${task.number} "${task.title}" as a user would, where it changes: ${step.where!.join('; ')}.`
+      + (step.os && step.name !== 'Test' ? ` This step runs it on ${OS_PLACE[step.os]}.` : '')
     : `${step.kind === 'security' ? 'Security-review' : 'Review'} ${pulls} for task #${task.number} "${task.title}".`
   const why = step.unread ? ' Its changed files could not be read, so it is reviewed as strictly as the review table goes.'
     : step.kind === 'security' ? ` It changes ${step.areas.join(', ')}: two independent security reviews before merge.` : ''
