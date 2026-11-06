@@ -6,7 +6,7 @@
  */
 import { isBuddy } from './buddies.js'
 import { sessionClosed } from './closedAgents.js'
-import { activeWork, handed, occupiesAgent, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
+import { activeWork, handed, occupiesAgent, reviewsWanted, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
 import { agentProjectId, onTeamAccount, projectOf, projectsOf } from './projects.js'
 import { barredFromTeamWritten } from './teamWritten.js'
 import { digestOf, localNow } from './digest.js'
@@ -14,6 +14,7 @@ import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 import { queueOrder, queueSiblings } from './taskQueue.js'
 import { unavailableReason } from './liveness.js'
 import { FAILED, type PullRequestWatch } from './pullRequestEvents.js'
+import { modelMatches } from './rules.js'
 
 const HOUR_MS = 3_600_000
 
@@ -149,6 +150,13 @@ function takes(member: Agent, lane: string | null, rules: DispatchRules): boolea
   return /^engineer$/i.test(member.crew?.role.trim() ?? '')
 }
 
+/** Whether [group] is big, hard or risky work, which Routing puts on Opus or Astra: the PM marked it strong, or it wants two reviews
+ *  and the PM did not mark it standard (#3576). */
+const needsStrongModel = (group: Conversation): boolean => group.task?.strength === 'strong' || (group.task?.strength === undefined && reviewsWanted(group.task) === 2)
+/** Whether [member] runs a model Routing allows for big or risky work: Opus or Astra, at high effort or above. */
+const onStrongModel = (member: Agent): boolean => (modelMatches('opus', member.configuration.model) || modelMatches('astra', member.configuration.model))
+  && !['minimal', 'low', 'medium'].includes((member.configuration.effort ?? '').toLowerCase())
+
 /** The tasks [member] could be handed now, best first: those pinned to it (oldest pin first), then its lane's open tasks.
  *  A task it just lost to the 3-hour clock is not offered to it. */
 export function candidatesFor(state: SuperTabState, member: Agent, rules: DispatchRules, now: number, open = openTasks(state, agentProjectId(state, member)!, now),
@@ -157,7 +165,7 @@ export function candidatesFor(state: SuperTabState, member: Agent, rules: Dispat
   const pinned = open.filter(g => pinOf(g)?.agentId === member.id).sort((a, b) => pinOf(a)!.at - pinOf(b)!.at)
   const crewIds = new Set(state.agents.filter(a => a.crew).map(a => a.id))
   const lane = open.filter(g => !pinned.includes(g) && !(pinOf(g) && crewIds.has(pinOf(g)!.agentId)) && !lostByIt(g)
-    && takes(member, laneOf(g, rules.lanes), rules))
+    && takes(member, laneOf(g, rules.lanes), rules) && (!needsStrongModel(g) || onStrongModel(member)))
   // Team-written code goes to Team accounts only (teamWritten.ts); a pick refused this round is not sent again (store.ts).
   const allowed = (group: Conversation) => !barredFromTeamWritten(state, group, member) && !skip(group.id, member.id)
   return [...pinned.filter(allowed).map(group => ({ group, why: 'pin' as const })), ...lane.filter(allowed).map(group => ({ group, why: 'lane' as const }))]

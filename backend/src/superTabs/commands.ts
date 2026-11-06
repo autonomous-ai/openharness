@@ -185,6 +185,8 @@ const task = z.object({
   requires: z.object({ machines: z.array(id).min(1).max(20).optional(), devices: z.array(path).min(1).max(20).optional(),
     access: z.array(accessName).min(1).max(20).optional() }).strict()
     .refine(r => r.machines || r.devices || r.access, 'Require at least one machine, device or access.').optional(),
+  /** model.ts WorkTask.strength: `strong` for big, hard or risky work, which the crew's dispatch hands only to a member on Opus or Astra (#3576). */
+  strength: z.enum(['standard', 'strong']).optional(),
   /** model.ts ReviewPlan: what its reviews check first, and 2 for two independent reviews, said in its brief (#2382). */
   review: z.object({ focus: z.string().trim().min(1).max(2000).optional(), reviews: z.union([z.literal(1), z.literal(2)]).optional() }).strict()
     .refine(r => r.focus !== undefined || r.reviews !== undefined, 'Give the review a focus or a number of reviews.').optional(),
