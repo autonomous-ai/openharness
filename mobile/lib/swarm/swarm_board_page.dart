@@ -4,6 +4,7 @@ import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
@@ -240,16 +241,13 @@ class _NeedsYouBar extends StatelessWidget {
               DecoratedBox(
                 decoration: BoxDecoration(
                   color: AppCard.accent,
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(AppControl.radius),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 7,
-                    vertical: 1,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
                   child: Text(
                     '$count',
-                    style: AppType.caption(color: Colors.white),
+                    style: AppType.caption(color: AppInk.onFill),
                   ),
                 ),
               ),
@@ -334,16 +332,16 @@ class _ColumnTab extends StatelessWidget {
         child: ConstrainedBox(
           constraints: const BoxConstraints(minHeight: 44),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
             child: DecoratedBox(
               decoration: BoxDecoration(
                 color: selected ? AppGlass.rowFill : Colors.transparent,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(AppCard.radius),
               ),
               child: Padding(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
+                  horizontal: AppSpace.m,
+                  vertical: AppSpace.s,
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
