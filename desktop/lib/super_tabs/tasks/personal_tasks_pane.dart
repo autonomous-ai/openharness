@@ -426,6 +426,10 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                                 ? () => _send({
                                                     'type': 'task.approve',
                                                     'conversationId': task.id,
+                                                    // The agent shown: a suggestion changed since is refused (task #4217).
+                                                    if (task.agentId != null)
+                                                      'suggestedAgentId':
+                                                          task.agentId,
                                                   })
                                                 : null,
                                             child: const Text('Approve'),
