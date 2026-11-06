@@ -186,8 +186,10 @@ async function refreshCopy(path: string, name: string, deadline: number, signal:
   let at: string | null = null
   const here = async () => await git(['log', '-1', '--no-show-signature', '--format=%h %cs']).catch(() => null)
   try {
-    // A folder that lost its .git would otherwise find whichever repository is above it, and move that one.
-    if (realpathSync(await git(['rev-parse', '--show-toplevel'])) !== realpathSync(path)) return state('failed')
+    // A folder that lost its .git would otherwise find whichever repository is above it, and move that one. Compared as the
+    // file system resolves them: git reports a folder's real, long name, and on Windows a path can hold a short one
+    // (C:\Users\HARNES~1) or another letter case, which made every copy there "another repository" (#3815).
+    if (realpathSync.native(await git(['rev-parse', '--show-toplevel'])) !== realpathSync.native(path)) return state('failed')
     at = await here()
     const detached = await git(['symbolic-ref', '--quiet', 'HEAD']).then(() => false, () => true)
     if (!detached || await git(['status', '--porcelain'])) return state('changed', at)
