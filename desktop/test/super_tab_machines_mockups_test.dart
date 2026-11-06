@@ -35,23 +35,28 @@ Future<SuperTabController> mount(WidgetTester tester) async {
   ];
   final c = server.controller();
   await c.refresh();
-  await tester.pumpWidget(MaterialApp(
-    theme: grid.buildAppTheme(brightness: Brightness.light),
-    home: Scaffold(body: SuperTabMachines(
-      controller: c, onAddAgent: (_) {}, manage: true, ticks: false,
-    )),
-  ));
+  await tester.pumpWidget(
+    MaterialApp(
+      theme: grid.buildAppTheme(brightness: Brightness.light),
+      home: Scaffold(
+        body: SuperTabMachines(
+          controller: c,
+          onAddAgent: (_) {},
+          manage: true,
+          ticks: false,
+        ),
+      ),
+    ),
+  );
   await tester.pump();
-  addTearDown(() async {
-    await tester.pumpWidget(const SizedBox());
-    await c.flush();
-    c.dispose();
-  });
+  addTearDown(c.dispose);
   return c;
 }
 
 void main() {
-  testWidgets('Manage has title, counted filters and status groups', (tester) async {
+  testWidgets('Manage has title, counted filters and status groups', (
+    tester,
+  ) async {
     await mount(tester);
     expect(find.text('Machines'), findsOneWidget);
     expect(key('machines-search'), findsOneWidget);
@@ -66,37 +71,50 @@ void main() {
     expect(find.text('Sorted by status, then name'), findsOneWidget);
   });
 
-  testWidgets('Manage rows have leading dots, owner badge and aligned disk bars', (tester) async {
-    await mount(tester);
-    expect(find.text('OWNER'), findsOneWidget);
-    for (final id in ['mine', 'build', 'sleep', 'old']) {
-      expect(tester.getSize(key('machines-line-$id')).height, 56);
-      expect(key('machines-crew-$id'), findsOneWidget);
-      expect(key('machines-disk-$id'), findsOneWidget);
-      expect(tester.getTopLeft(key('machines-dot-$id')).dx,
-          lessThan(tester.getTopLeft(key('super-machine-name-$id')).dx));
-    }
-    expect(tester.getTopLeft(key('machines-disk-mine')).dx,
-        tester.getTopLeft(key('machines-disk-build')).dx);
-    expect(find.text('200 GB free'), findsNWidgets(4));
-    expect(find.textContaining('last seen'), findsWidgets);
-  });
+  testWidgets(
+    'Manage rows have leading dots, owner badge and aligned disk bars',
+    (tester) async {
+      await mount(tester);
+      expect(find.text('OWNER'), findsOneWidget);
+      for (final id in ['mine', 'build', 'sleep', 'old']) {
+        expect(tester.getSize(key('machines-line-$id')).height, 56);
+        expect(key('machines-crew-$id'), findsOneWidget);
+        expect(key('machines-disk-$id'), findsOneWidget);
+        expect(
+          tester.getTopLeft(key('machines-dot-$id')).dx,
+          lessThan(tester.getTopLeft(key('super-machine-name-$id')).dx),
+        );
+      }
+      expect(
+        tester.getTopLeft(key('machines-disk-mine')).dx,
+        tester.getTopLeft(key('machines-disk-build')).dx,
+      );
+      expect(find.text('200 GB free'), findsNWidgets(4));
+      expect(find.textContaining('last seen'), findsWidgets);
+    },
+  );
 
-  testWidgets('search combines with status filters and recovers from no matches', (tester) async {
-    await mount(tester);
-    await tester.tap(key('machines-filter-offline'));
-    await tester.pump();
-    expect(key('super-machine-row-old'), findsOneWidget);
-    expect(key('super-machine-row-mine'), findsNothing);
-    await tester.enterText(key('machines-search'), 'BUILD');
-    await tester.pump();
-    expect(find.text('No machines match your search and filter.'), findsOneWidget);
-    await tester.tap(key('machines-filter-all'));
-    await tester.pump();
-    expect(key('super-machine-row-build'), findsOneWidget);
-    expect(key('super-machine-row-old'), findsNothing);
-    await tester.enterText(key('machines-search'), '');
-    await tester.pump();
-    expect(key('super-machine-row-mine'), findsOneWidget);
-  });
+  testWidgets(
+    'search combines with status filters and recovers from no matches',
+    (tester) async {
+      await mount(tester);
+      await tester.tap(key('machines-filter-offline'));
+      await tester.pump();
+      expect(key('super-machine-row-old'), findsOneWidget);
+      expect(key('super-machine-row-mine'), findsNothing);
+      await tester.enterText(key('machines-search'), 'BUILD');
+      await tester.pump();
+      expect(
+        find.text('No machines match your search and filter.'),
+        findsOneWidget,
+      );
+      await tester.tap(key('machines-filter-all'));
+      await tester.pump();
+      expect(key('super-machine-row-build'), findsOneWidget);
+      expect(key('super-machine-row-old'), findsNothing);
+      await tester.enterText(key('machines-search'), '');
+      await tester.pump();
+      expect(key('super-machine-row-mine'), findsOneWidget);
+    },
+  );
 }
