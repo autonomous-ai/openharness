@@ -195,6 +195,16 @@ describe('settleReleases', () => {
     expect(state.conversations.find(c => c.id === 'g12')!.released).toBeUndefined()
   })
 
+  // Task #3586: a merge compared with a release and not carried is not compared with it again; the next release that holds it ships it.
+  it('marks a merge compared with a release that does not hold it, and ships it with the release that does', () => {
+    const state = swarm([entry({ groupId: 'g12', mergedAt: T - 5 * MINUTE, components: ['desktop'], sha: 'm12' })])
+    settleReleases(state, 'p1', { resolved: [], releases: { desktop: { ...desktopRelease([]), compared: [key12] } } }, T)
+    expect(ledgerOf(state).pending[0]!.checked).toEqual({ desktop: 'v1.3.78_desktop' })
+    const later = settleReleases(state, 'p1', { resolved: [], releases: { desktop: { ...desktopRelease([key12], 'v1.3.79_desktop'), compared: [key12] } } }, T + MINUTE)
+    expect(later.shipped).toEqual(['g12'])
+    expect(state.conversations.find(c => c.id === 'g12')!.released).toMatchObject({ tags: ['v1.3.79_desktop'] })
+  })
+
   it('ships work that changed no released part at its merge', () => {
     const state = swarm([entry({ groupId: 'g13', url: 'https://github.com/o/r/pull/13', mergedAt: T - MINUTE, components: undefined })])
     state.conversations.find(c => c.id === 'g13')!.releasing = []

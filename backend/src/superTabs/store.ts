@@ -1706,8 +1706,8 @@ export class SuperTabStore {
     const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([this.pushOriginFor(user, tabId, command),
       this.repositoryReachFor(user, tabId, command), this.pullRequestFilesFor(user, tabId, command), this.pullRequestMergesFor(user, tabId, command)])
     let ended: WorkHold[] = [], started: WorkHold[] = []
-    // Whether the Swarm, as this write leaves it, has a crew: only then may the write start a dispatch pass (dispatchSoon).
-    let crewed = false
+    // With only PMs and Buddies, no dispatch pass can hand out work.
+    let hasWorkers = false
     const done = await transaction(this.db, async tx => {
       // A retried attempt starts again: only the attempt that commits says which tasks ended or started.
       ended = []
@@ -2021,7 +2021,7 @@ export class SuperTabStore {
         : command.type === 'work.assign' || command.type === 'agent.start' ? command.routeDecisionId : undefined
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
       const effects = applyCommand(original, actor, command, context)
-      crewed = effects.state.agents.some(a => !!a.crew)
+      hasWorkers = effects.state.agents.some(a => !isBuddy(a) && !ledProject(effects.state, a.id))
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source, message.recipients))
       for (const group of effects.state.conversations) {
@@ -2347,8 +2347,8 @@ export class SuperTabStore {
     })
     this.endWork(tabId, ended)
     this.startWork(tabId, started)
-    // A write that may free a crew member or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
-    if (crewed && freesOrOpens(command)) this.dispatchSoon(tabId)
+    // A write that may free a worker or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
+    if (hasWorkers && freesOrOpens(command)) this.dispatchSoon(tabId)
     return done
   }
 
@@ -2371,7 +2371,7 @@ export class SuperTabStore {
     if (!pm || !task || !project || pm.workDecision === 'stop' || ledProject(state, agentId)?.id !== project.id) {
       return pmRefused(new SuperTabError('NOT_FOUND', 'This Super Tab is unavailable.', 404))
     }
-    // The pick as this write's state has it: the member still free and in the crew, the task still its candidate (open, its
+    // The pick as this write's state has it: the worker still free, the task still its candidate (open, its
     // day come, its lane or pin, not the one it just lost). What moved since the pass read is refused, and the next pass decides.
     const assigned = command.type === 'work.assign' ? command.agentId : undefined
     const now = this.now(), member = freeCrew(state, project.id, DISPATCH_RULES, now).find(a => a.id === assigned)

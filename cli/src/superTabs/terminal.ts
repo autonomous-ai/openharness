@@ -114,8 +114,9 @@ export function signedOut(text: string): boolean {
 /** A model the agent gets no answer from: retrying one that does not answer, or signed out of it. */
 const unanswered = (text: string) => modelFailing(text) || signedOut(text)
 
-/** Claude Code's tool call, whose output it draws under it: "⏺ Bash(…)", "⏺ Read(…)", "⏺ mcp__github__get_pr(…)". */
-const TOOL_CALL = /^⏺\s+[\w.-]+\(/
+/** Claude Code draws tool output under its call: "⏺ Bash(…)", "⏺ Read(…)", "⏺ mcp__github__get_pr(…)" or
+ *  "⏺ github - get_pr (MCP)(…)". The spaced MCP header must count too, or a printed limit becomes the engine's own. */
+const TOOL_CALL = /^⏺\s+[\w.-]+(?: - [\w.-]+ \(MCP\))?\(/
 
 /** Whether line [at] of [lines] is where an engine draws its own notice, not text the agent printed (Ken, 11-03: River
  *  was listed limited while working, as it had just printed another agent's screen showing Codex's limit line). An engine

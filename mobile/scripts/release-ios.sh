@@ -40,6 +40,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # mobile/
 cd "$ROOT"
+# shellcheck source=ios-entitlements.sh
+source "$ROOT/scripts/ios-entitlements.sh"
 
 VALIDATE_ONLY=0
 SKIP_BUILD=0
@@ -68,6 +70,10 @@ if [[ -z "$TEAM_ID" ]]; then
   echo "no DEVELOPMENT_TEAM in ios/Runner.xcodeproj/project.pbxproj" >&2
   exit 1
 fi
+
+# What the app asks for (push, the setup hotspot), read from the project too. Empty: none.
+ENTITLEMENTS="$(sed -n 's/.*CODE_SIGN_ENTITLEMENTS = \(.*\);.*/\1/p' ios/Runner.xcodeproj/project.pbxproj | head -1)"
+ENTITLEMENTS="${ENTITLEMENTS:+ios/$ENTITLEMENTS}"
 
 # -- credentials, before spending five minutes on a build ----------------------------------------
 # They live OUTSIDE this repo, which is PUBLIC. A Key ID and an Issuer ID are not secrets on their
@@ -143,6 +149,22 @@ EOF
     -allowProvisioningUpdates ${XCODE_AUTH[@]+"${XCODE_AUTH[@]}"}
 }
 
+# The entitlements onto the archived app, for the export to carry (ios-entitlements.sh says why).
+sign_archive_entitlements() {
+  [[ -n "$ENTITLEMENTS" ]] || return 0
+  echo "==> entitlements onto the archived app (ad-hoc signature)"
+  carry_entitlements "$ARCHIVE/Products/Applications/Runner.app" "$ENTITLEMENTS"
+  check_entitlements "$ARCHIVE/Products/Applications/Runner.app" "the archived app" any "$ENTITLEMENTS"
+}
+
+# The app inside the exported ipa, unpacked so its signature can be read, before anything goes up.
+check_ipa_entitlements() {   # $1 = .ipa
+  [[ -n "$ENTITLEMENTS" ]] || return 0
+  rm -rf "$WORK/ipa" && mkdir -p "$WORK/ipa" && unzip -q "$1" -d "$WORK/ipa"
+  check_entitlements "$(ls -d "$WORK"/ipa/Payload/*.app | head -1)" "the exported app" production \
+    "$ENTITLEMENTS"
+}
+
 # The pair printed above came from pubspec.yaml, which is what the NEXT build would carry — with
 # --skip-build the artifact on disk can predate a bump, and then the number announced is not the
 # number sent. Ask the artifact itself and say so.
@@ -178,8 +200,9 @@ EOF
 # The archive is left UNSIGNED and the export signs it, app and frameworks alike, with the team's
 # Apple Distribution certificate. A signed archive would need an Apple Development certificate on
 # this Mac first, and the shared release account has used up its quota of those ("Choose a
-# certificate to revoke") — revoking one breaks whichever Mac holds it. Runner has no entitlements
-# file, so the export's own (application-identifier, team, beta-reports-active) are all it needs.
+# certificate to revoke") — revoking one breaks whichever Mac holds it. An unsigned app carries no
+# entitlements, though, so Runner.entitlements goes onto it with an ad-hoc signature first, and the
+# exported app is checked for them before it is uploaded (ios-entitlements.sh).
 if [[ "$SKIP_BUILD" == 0 ]]; then
   echo "==> flutter build ios --config-only"
   flutter build ios --release --config-only
@@ -189,6 +212,7 @@ if [[ "$SKIP_BUILD" == 0 ]]; then
     -sdk iphoneos -destination generic/platform=iOS -archivePath "$ARCHIVE" \
     -quiet archive COMPILER_INDEX_STORE_ENABLE=NO \
     CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+  sign_archive_entitlements
 
   if [[ "$UPLOAD_WITH_XCODE" == 0 ]]; then
     echo "==> xcodebuild -exportArchive"
@@ -206,6 +230,16 @@ if [[ "$UPLOAD_WITH_XCODE" == 1 ]]; then
   warn_if_stale \
     "$(plutil -extract ApplicationProperties.CFBundleShortVersionString raw -o - "$ARCHIVE/Info.plist" 2>/dev/null || true)" \
     "$(plutil -extract ApplicationProperties.CFBundleVersion raw -o - "$ARCHIVE/Info.plist" 2>/dev/null || true)"
+  # An archive left by a run from before the ad-hoc step has none on it yet.
+  if [[ "$SKIP_BUILD" == 1 ]]; then
+    sign_archive_entitlements
+  fi
+
+  # The upload signs the archive the way this export does, and leaves nothing on disk to look at:
+  # export it here first, so the app that goes up has been checked.
+  echo "==> xcodebuild -exportArchive, to check what the upload will sign"
+  export_archive export
+  check_ipa_entitlements "$(ls -t "$IPA_DIR"/*.ipa | head -1)"
 
   echo "==> uploading with Xcode's account"
   export_archive upload
@@ -226,6 +260,7 @@ ipa_key() {
     | plutil -extract "$1" raw -o - - 2>/dev/null || true
 }
 warn_if_stale "$(ipa_key CFBundleShortVersionString)" "$(ipa_key CFBundleVersion)"
+check_ipa_entitlements "$IPA"
 
 # Validation catches the whole class of rejections that otherwise arrive by email 20 minutes later:
 # a duplicate build number, a missing icon size, an entitlement the profile does not grant.
