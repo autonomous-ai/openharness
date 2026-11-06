@@ -242,14 +242,31 @@ describe('PmRotation', () => {
     expect(log).toHaveBeenCalledWith('PM account rotation: could not tell the owner: no')
   })
 
-  it('a refused restart leaves the PM as it was and waits', async () => {
+  it('a refused restart tells the owner and waits without claiming a move', async () => {
     const log = vi.fn()
     const r = rig({ windows: { A: [w5(60), wk(4)] }, restart: async () => ({ ok: false, error: 'INVALID_PROFILE' }), log })
     await r.serve()
     await r.serve(1000)
-    expect(r.moves).toEqual([])
-    expect(r.told).toEqual([])
+    expect(r.moves).toEqual([expect.objectContaining({ from: 'A', to: 'B', ok: false })])
+    expect(r.told).toHaveLength(1)
+    expect(r.told[0]).toContain('could not move to Bo')
+    expect(r.told[0]).not.toContain('is back on')
     expect(log).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['reply', 'throw'] as const)('a failure after the old PM stops is visible for a %s failure', async failure => {
+    const r = rig({ windows: { A: [w5(60), wk(4)] }, restart: async () => {
+      r.state.alive = false
+      if (failure === 'throw') throw new Error('resume failed')
+      return { ok: false, error: 'RESTART_FAILED' }
+    } })
+    await r.serve()
+    expect(r.told).toHaveLength(1)
+    expect(r.told[0]).toContain('could not move to Bo')
+    expect(r.told[0]).not.toMatch(/is back on|moved to/)
+    expect(r.moves).toEqual([expect.objectContaining({ ok: false })])
+    await r.serve(1000)
+    expect(r.told).toHaveLength(1)
   })
 
   it('every account out tells the owner once and waits for the earliest reset', async () => {
@@ -367,6 +384,8 @@ describe('PmRotation', () => {
     await r.serve(5000)
     expect(r.moves[1]).toMatchObject({ why: 'fallback', ok: false })
     expect(log).toHaveBeenCalledWith(expect.stringContaining('could not go back'))
+    expect(r.told[1]).toContain('could not move back to Ann')
+    expect(r.told[1]).not.toContain('is back on Ann')
     const lost = rig({ windows: { A: [w5(60), wk(4)] }, log })
     lost.state.current.h1 = undefined
     lost.state.screen.text = LIMIT
@@ -377,6 +396,20 @@ describe('PmRotation', () => {
     await lost.serve(5000)
     expect(lost.restarts).toHaveLength(1)
     expect(log).toHaveBeenCalledWith(expect.stringContaining('first account is unknown'))
+    expect(lost.told[1]).toContain('could not recover')
+  })
+
+  it('a throwing rollback tells the owner once and does not claim recovery', async () => {
+    const r = rig({ windows: { A: [w5(60), wk(4)] } })
+    await r.serve()
+    r.state.alive = false
+    r.deps.restart = async () => { throw new Error('offline') }
+    await r.serve(5000)
+    expect(r.told[1]).toContain('could not move back to Ann')
+    expect(r.told[1]).not.toContain('is back on')
+    expect(r.moves[1]).toMatchObject({ why: 'fallback', ok: false })
+    await r.serve(1000)
+    expect(r.told).toHaveLength(2)
   })
 
   it('an unreadable screen says nothing, a throwing step is logged, and keep forgets gone PMs', async () => {
