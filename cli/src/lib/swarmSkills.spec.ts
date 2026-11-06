@@ -875,14 +875,19 @@ describe('built-in Swarm skills', () => {
 })
 
 describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
-  it.each([undefined, 'default', 'orchestration'] as const)('brainstorms and proposes only when asked, the same in every mode (%s)', mode => {
+  it.each([undefined, 'default', 'orchestration'] as const)('offers ready ideas and sends only with consent, the same in every mode (%s)', mode => {
     expect(parseSwarmSkill({ role: 'buddy', key: 'session', ...(mode ? { mode } : {}) })).toEqual({ role: 'buddy', key: 'session', ...(mode ? { mode } : {}) })
     const prepared = prepareSwarmSkill(fixture(), { role: 'buddy', key: 'session', ...(mode ? { mode } : {}) })
     const text = readFileSync(prepared.file, 'utf8')
     expect(text.startsWith('---\nname: swarm-buddy\n')).toBe(true)
     // Harness Instructions' brainstorming: the goal first, options with a recommendation, an agreed scope.
     for (const step of ['Ask the goal first', 'Offer 2 or 3 options', 'Agree the scope']) expect(text).toContain(step)
-    expect(text).toContain('Only when your owner asks')
+    expect(text).toContain('clear goal, why it matters and how to know it is done')
+    expect(text).toContain('check the project for an existing proposal or task')
+    expect(text).toContain('point to a match instead of duplicating it')
+    expect(text).toContain('offer without waiting to be asked: "Want me to propose this to <project>?"')
+    expect(text).toContain('Send only after your owner says yes to that proposal')
+    expect(text).toContain('One offer per idea; never repeat an ignored or declined offer')
     expect(text).toContain('harness super-tab --tab TAB propose OPERATION_ID')
     // Scholes (11-02): its one Buddy sends, naming the project, and asks which when it is unclear; never "open a session".
     expect(text).toContain('"projectId":"PROJECT"')

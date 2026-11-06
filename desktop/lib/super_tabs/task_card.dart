@@ -36,10 +36,17 @@ class SuperTabTaskCard extends StatefulWidget {
     this.captionLines = 1,
     this.tile = false,
     this.selected = false,
+    this.warn = false,
     this.trailing,
+    this.note,
+    this.noteKey,
   });
 
   final String title, caption;
+
+  /// A second quiet line on a Board card (#3820): the PM's decision, an open question, or a pause; null for none.
+  final String? note;
+  final Key? noteKey;
   final bool needsYou, unread;
   final HarnessActivity activity;
   final VoidCallback onOpen;
@@ -53,6 +60,9 @@ class SuperTabTaskCard extends StatefulWidget {
   /// How many lines the caption takes; null takes as many as it needs.
   final int? captionLines;
   final bool tile, selected;
+
+  /// The caption is a warning (a merge that has waited too long).
+  final bool warn;
   final Widget? trailing;
 
   /// A tile's padding: the spacing scale's 12, between the control and the
@@ -94,6 +104,7 @@ class _SuperTabTaskCardState extends State<SuperTabTaskCard> {
         ?w.lane,
         if (w.priority case final priority?) 'Priority ${priority.badge}',
         w.caption,
+        ?w.note,
         if (!w.needsYou)
           switch (w.activity) {
             HarnessActivity.starting => 'Queued',
@@ -188,10 +199,23 @@ class _SuperTabTaskCardState extends State<SuperTabTaskCard> {
                     overflow: w.captionLines == null
                         ? TextOverflow.clip
                         : TextOverflow.ellipsis,
-                    style: DesktopChrome.metadata(),
+                    style: DesktopChrome.metadata(
+                      color: w.warn ? grid.AppPalette.warn : null,
+                    ),
                   ),
                 ),
               ],
+            ),
+          ),
+        if (w.note case final note?)
+          Padding(
+            padding: const EdgeInsets.only(top: grid.AppDesktop.menuInset),
+            child: Text(
+              note,
+              key: w.noteKey,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.metadata(),
             ),
           ),
       ],
