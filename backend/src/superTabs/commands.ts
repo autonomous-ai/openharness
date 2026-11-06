@@ -21,7 +21,7 @@ import {
 import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
 import { reviewPlan, stepBrief, stepCheck, type PlannedStep, type StepKind } from './reviewTable.js'
-import { reviewerCandidates } from './reviewerPick.js'
+import { builtBy, reviewerCandidates } from './reviewerPick.js'
 import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
@@ -1775,7 +1775,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     state.conversations.push({ id, ...(state.projects ? { projectId: project.id } : {}), number, title: planned.name, leadId,
       agentIds: leadId ? [leadId] : [], archived: false, brief, reviewOf: task.id,
       // A step keeps its task's mark, as conversation.create's does (teamWritten.ts stepMark).
-      ...stepMark(state, task), step: planned.name,
+      ...stepMark(state, task), step: planned.name, openedBy: 'server',
       assignment: null, lastMessageSequence: 0, codePullRequestUrls: [], checks: storedChecks([{ description: stepCheck(planned), independent: true }], id) })
     const step = state.conversations.at(-1)!
     listStep(task, id)
@@ -1803,7 +1803,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         && (check.verdicts ?? []).some(verdict => verdict.passed && (verdict as { head?: string }).head === read.head))) continue
       step ??= openStep(task, planned, read)
       const previous = step.assignment?.agentId
-      const ranked = reviewerCandidates(state, task, planned.kind, read.head, context.now)
+      const ranked = reviewerCandidates(state, task, planned.kind, read.head, context.now, planned.os)
       const ordered = [...ranked.filter(a => a.id === previous), ...ranked.filter(a => a.id !== previous)]
       const target = step
       const worker = ordered.find(candidate => {
@@ -2560,6 +2560,20 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         open(state, reviewed.id)
         // One level: a step's own work is a task's step, never a task with steps of its own (task steps design).
         if (command.step && isStep(reviewed)) fail('STEP_OF_STEP', 'A step belongs to a task, not to another step.', 400)
+        // Never doubled (task #3602: #3561 got its server's Security reviews and Test, then its Engineer's review, review and
+        // test): the task's own Engineer is refused a step when one of the same name is open, or the server opened one of that
+        // kind, while its work is open. Its own second step of a kind under another name ("Security review 2") still opens. The
+        // PM, the Integrator and people open their later checks (a main merge check, a combination read) as before, and a done
+        // step blocks nobody (review of #3312).
+        const engineer = actor.kind === 'agent' && (reviewed!.assignment?.agentId === actor.agentId || builtBy(reviewed!).has(actor.agentId))
+        if (command.step && engineer) {
+          const name = (text: string) => text.trim().replace(/\s+/g, ' ').toLowerCase()
+          const kind = (text: string) => /security/i.test(text) ? 'security' : /test/i.test(text) ? 'test' : /review|read/i.test(text) ? 'review' : null
+          const wanted = kind(command.step)
+          const same = stepsOf(state, reviewed!.id).find(step => !step.archived && (!step.assignment || activeWork(step)) && (name(stepName(step)) === name(command.step!)
+            || (step.openedBy === 'server' && wanted !== null && kind(stepName(step)) === wanted)))
+          if (same) fail('STEP_OPEN', `"${stepName(same)}"${same.number ? ` (#${same.number})` : ''} is already open on this task: use it rather than opening another.`, 409)
+        }
       }
       // Who asked: the person named, else the one a Buddy's proposal was sent for, else a person opening it themselves.
       const proposal = command.proposalMessageId ? proposalOf(state, project, proposalNamed(context.proposal)) : undefined

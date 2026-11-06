@@ -86,6 +86,7 @@ export const GROUP_FIELDS = {
     'messageSeq',
     'notBefore',
     'number',
+    'openedBy',
     'owed',
     'pin',
     'priority',
