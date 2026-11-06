@@ -112,6 +112,7 @@ export const GROUP_FIELDS = {
     'talkedAt',
     'teamWritten',
     'teamWrittenBy',
+    'unlinkedPullRequests',
   ],
 } as const
 const LIGHT_GROUP = {

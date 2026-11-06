@@ -206,7 +206,7 @@ export function appPullRequestWatch(app: GitHubApp): PullRequestReader {
  * pullRequestSeen). One group's failure is logged and skips that group alone. A pass that posted, or could not read a pull
  * request, says so in one line: the measure of this feature (AGENTS.md standards 6 and 8). The messages posted.
  */
-export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen' | 'pullRequestHeadsWatched'>, reader: PullRequestReader, now: number,
+export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen' | 'pullRequestHeadsWatched' | 'pullRequestClosed'>, reader: PullRequestReader, now: number,
   limit = WATCH_GROUPS, doneLimit = WATCH_DONE_GROUPS): Promise<number> {
   try {
     // The finished mark's index, [workFinished, archived, lastActivityAt]: equality, equality, then the range, which also
@@ -243,9 +243,12 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
       return merges.get(key)!
     }
     const seen: Array<{ row: typeof rows[number]; watch: PullRequestWatch; patch: string | null | undefined; merged: string | null | undefined }> = []
+    const closed: Array<{ row: typeof rows[number]; url: string }> = []
     for (const row of rows) {
       for (const url of watchedLinks(row.urls)) {
         const watch = await watchOf(url)
+        // A pull request the watch read before and GitHub now shows closed stops capturing the task's checks (task #3953).
+        if (watch?.state === 'closed' && row.heads?.[url] && !row.heads[url]!.closed) closed.push({ row, url })
         if (watch?.state !== 'open') continue
         const known = row.heads?.[url] ?? undefined, newHead = known?.head !== watch.head || known.base !== watch.base
         seen.push({ row, watch, patch: patchNeeded(known, watch, now) ? await patchOf(url, watch.head, watch.base) : undefined,
@@ -265,6 +268,13 @@ export async function watchPullRequests(db: PrismaClient, store: Pick<SuperTabSt
       try {
         const lookedUp = listed.get(`${row.tabId}:${row.key}`)
         await store.pullRequestHeadsWatched(row.tabId, row.key, row.steps ?? lookedUp ?? [], lookedUp !== undefined)
+      } catch (error) {
+        logger.warn('[swarm-pr-events] group skipped', { tabId: row.tabId, group: row.key, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    for (const { row, url } of closed) {
+      try {
+        await store.pullRequestClosed(row.tabId, row.key, url)
       } catch (error) {
         logger.warn('[swarm-pr-events] group skipped', { tabId: row.tabId, group: row.key, error: error instanceof Error ? error.message : String(error) })
       }
@@ -337,7 +347,7 @@ export async function listedSteps(db: PrismaClient, tasks: ReadonlyArray<{ tabId
 }
 
 /** Runs the pass every minute in the singleton worker, one at a time. */
-export function startPullRequestWatch(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen' | 'pullRequestHeadsWatched'>, reader: () => PullRequestReader, everyMs = 60_000): () => void {
+export function startPullRequestWatch(db: PrismaClient, store: Pick<SuperTabStore, 'pullRequestSeen' | 'pullRequestHeadsWatched' | 'pullRequestClosed'>, reader: () => PullRequestReader, everyMs = 60_000): () => void {
   let running = false
   const run = () => {
     if (running) return

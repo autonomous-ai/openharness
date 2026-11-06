@@ -92,6 +92,7 @@ const conversation: Required<Conversation> = {
   teamWritten: true,
   teamWrittenBy: { kind: 'assigned' },
   title: 't',
+  unlinkedPullRequests: [],
 }
 
 describe('the light conversation projection (parts/light.ts)', () => {

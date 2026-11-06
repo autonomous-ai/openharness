@@ -7,7 +7,7 @@
  * request's own patch is the same (a plain rebase, or a main merge that leaves its diff unchanged). It replaces reading a
  * verdict's text: a stale pass passes nothing, and a stale failure fails nothing, until someone checks the new head.
  */
-import type { Check, CheckVerdict, PullRequestHead } from './model.js'
+import { codePullRequests, pullRequestLinks, type Check, type CheckVerdict, type Conversation, type PullRequestHead } from './model.js'
 
 /** Each linked pull request's head as the PR watch last read it (Conversation.pullRequestHeads). */
 export type PullRequestHeads = Readonly<Record<string, PullRequestHead>>
@@ -44,6 +44,22 @@ export function verdictCounts(verdict: CheckVerdict, heads: PullRequestHeads | u
   // base only (mergeCarry.ts, task #3553).
   const read = sameHead(current.head, verdict.head) || !!current.carries?.some(carried => sameHead(carried, verdict.head!))
   return (read && verdict.base === current.base) || (!!verdict.patch && current.patch === verdict.patch)
+}
+
+/**
+ * The pull request [task]'s checks and verdicts count at (task #3953): not simply its newest link, which a wrong link (another
+ * task's pull request, a closed duplicate) captured, so its reviewers' Yes on the real one counted nowhere. In order, the
+ * newest linked, not closed one that its Engineer's latest status names (the Ready line), else the newest in its code list
+ * (codePullRequests), else the newest not closed; each preferring one the watch has read. Only when every link is closed, the
+ * newest link, as before.
+ */
+export function checkedPullRequest(task: Partial<Pick<Conversation, 'pullRequestUrls' | 'pullRequestHeads' | 'codePullRequestUrls' | 'assignment'>>,
+  repositoryUrl: string | null): string | undefined {
+  const urls = task.pullRequestUrls ?? [], heads = task.pullRequestHeads
+  const open = urls.filter(url => !heads?.[url]?.closed)
+  const newest = (list: readonly string[]) => list.findLast(url => heads?.[url]) ?? list.at(-1)
+  const named = pullRequestLinks(task.assignment?.result ?? '', repositoryUrl), code = codePullRequests(task)
+  return newest(open.filter(url => named.includes(url))) ?? newest(open.filter(url => code.includes(url))) ?? newest(open) ?? newest(urls)
 }
 
 /** The links of a task its PR watch reads: its newest HEADS_KEPT (review of #3218: one task links 369 pull requests in
