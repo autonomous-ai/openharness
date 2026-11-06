@@ -10,7 +10,7 @@
 import { CommandRetries, permanentRefusal } from './retries.js'
 import { createHash } from 'node:crypto'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
-import { updateDismissKeys } from '../engines/codex/screen.js'
+import { openRestrictedKeys, updateDismissKeys } from '../engines/codex/screen.js'
 import { feedbackDismissKeys } from '../engines/claude/screen.js'
 import type { MessageHold } from '../engines/facets/screen.js'
 import { backend } from './host.js'
@@ -29,7 +29,7 @@ export const SERVE_EVERY_MS = 3_000
 /** A screen read per agent; the 3-minute prompt wait does not need it finer. */
 const WATCH_EVERY_MS = 15_000
 const PROMPT_WAIT_MS = 3 * 60_000
-/** How often Skip is typed for one stuck update screen before the 3-minute alert is left to say it did not work. */
+/** How often a safe dismissal is tried before the 3-minute alert is left to say it did not work. */
 const SKIP_TRIES = 3
 /** The spec's cap on what a screen read returns. */
 const MAX_SCREEN_BYTES = 64 * 1024
@@ -340,7 +340,7 @@ export class TerminalHost {
       // A screen that could not be read says nothing either way.
       const read = await this.core.superTabs!.screen(agent.harnessId, 0).catch(() => null)
       if (!read?.ok) continue
-      state.skips = await this.skipUpdate(agent, read, state.skips ?? 0)
+      state.skips = await this.dismissScreen(agent, read, state.skips ?? 0)
       const now = this.now()
       const digest = screenDigest(read.text), seen = this.progress.get(agent.harnessId)
       const failing = unanswered(read.text)
@@ -364,19 +364,20 @@ export class TerminalHost {
     }
   }
 
-  /** Codex's "Update available" screen on a Swarm agent's terminal, where no one will answer it and its task waits: Esc, through
-   *  the core's door that types only while the screen is still exactly the one read here, so a screen another writer cleared
-   *  meanwhile gets nothing (superTabs/inCore/terminal.ts `inputIfScreen`). Never a row number and Enter (on a misread row
-   *  that could run the update), and only a screen read as exactly that prompt (engines/codex/screen.ts `updateDismissKeys`).
-   *  After [SKIP_TRIES] the 3-minute alert takes over. Returns the tries made for this screen, none once it is gone. The held
-   *  task goes on by itself: the mailbox types it again once the prompt is gone. */
-  private async skipUpdate(agent: Own, read: Extract<SuperTabScreen, { ok: true }>, tries: number): Promise<number> {
-    // Codex's update screen, or one of Claude Code's own feedback popups (engines/claude/screen.ts feedbackDismissKeys).
-    const keys = read.hold === 'update_prompt_open' ? updateDismissKeys(read.text) : feedbackDismissKeys(read.text)
+  /** Safe choices on an unattended Swarm pane: skip an update or feedback popup, or open Codex restricted.
+   *  The core rechecks the exact screen under its input lock, so another writer clearing it receives no stray key.
+   *  After [SKIP_TRIES] the existing prompt alert takes over; the mailbox resumes once the screen is gone. */
+  private async dismissScreen(agent: Own, read: Extract<SuperTabScreen, { ok: true }>, tries: number): Promise<number> {
+    // Resumes already have a session identity, so startScreen cannot settle their folder-access prompt (#3904).
+    // Only the exact restricted choice is safe; never answer a trust grant or another engine's screen.
+    const restricted = read.hold === 'trust_open' && this.core.agents.byAgent(agent.harnessId)?.engine === 'codex'
+      ? openRestrictedKeys(read.text) : null
+    const keys = restricted ?? (read.hold === 'update_prompt_open' ? updateDismissKeys(read.text) : feedbackDismissKeys(read.text))
     if (!keys) return 0
     if (tries >= SKIP_TRIES) return tries
     const dismissed = await this.core.superTabs!.inputIfScreen(agent.harnessId, keys, read.text).catch(error => ({ ok: false as const, error: String(error) }))
     if (!dismissed.ok) this.log(`could not dismiss a screen for ${agent.agentId}: ${dismissed.error}`)
+    else if (restricted) this.log(`Opened Codex restricted for ${agent.agentId}; no folder trust granted`)
     return tries + 1
   }
 

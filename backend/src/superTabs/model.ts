@@ -341,6 +341,9 @@ export interface WorkTask {
   constraints: string
   owns: string[]
   requires?: TaskRequirement
+  /** `strong`: big, hard or risky work, which the crew's dispatch hands only to a member on a strong model (dispatch.ts, #3576); a task
+   *  that wants two reviews counts as strong unless this says `standard`. */
+  strength?: 'standard' | 'strong'
   /** What its reviews check first, and how many independent reviews it wants: written into its brief (renderWorkTask), which
    *  whoever opens its review reads. The server opens and counts no review (project instructions, phase 4). */
   review?: ReviewPlan
@@ -472,6 +475,8 @@ export interface Conversation {
   lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
   /** Counts reaction changes here (reactions.ts), so readers see a new reaction on an older message. */
   reactionSeq?: number
+  /** A durable proposal on this card (#3817); retained when its accepted work becomes a task. */
+  proposal?: import('./proposalCards.js').ProposalRecord
   /** A Buddy chat's owner messages its Buddy already proposed for (buddies.ts): each asks once. */
   proposals?: string[]
   /** The name a Buddy chat's owner chose for their Buddy (buddies.ts renameBuddy): kept here, which outlives the Buddy, so
@@ -807,6 +812,8 @@ export const NOTICE_READERS = {
   // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
+  // Proposal history and private Buddy notices are visible to the people who can read their card/chat.
+  'proposal-card': 'people', 'proposal-answer': 'people', 'proposal-notice': 'people', 'proposal-merged': 'people', 'proposal-overdue': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
   // A computer signed in as another account now, told to its old owner in their Buddy chat (commands.ts machine.moved, #3122).
   'computer-moved': 'people',
@@ -1158,6 +1165,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // A failing privacy check's detail is its contributor's: an error from the check can name paths on their Mac. Everyone
   // else reads which item failed (machines.ts teamWorkRefusal).
   for (const pool of visible.machines ?? []) {
+    // Engine idle proof is for server lifecycle decisions alone, never a member's activity feed (#3824).
+    if (pool.observation) delete pool.observation.idleBuddyHarnessIds
     const privacy = pool.observation?.privacy
     if (privacy && 'detail' in privacy && !(actor.kind === 'person' && actor.userId === pool.contributorId)) delete (privacy as { detail?: string }).detail
   }
