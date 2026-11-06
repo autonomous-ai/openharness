@@ -3,6 +3,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+// The login shell's environment is captured once and kept for minutes: each test here moves the engine homes in its own process.env.
+vi.mock('../engines/kit/launchExecutable.js', async (original) => ({ ...await original<object>(),
+  launchEnvironment: async () => Object.fromEntries(['HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'].filter(k => process.env[k] !== undefined).map(k => [k, process.env[k]])) }))
 import { BUDDY_COPIES_FILE, buddyProjectsOf, folderName, prepareBuddyHome, pruneBuddyHome, buddyHomeDue, refreshBuddyHome, removeBuddyHome, trustBuddyHome } from './buddyHome.js'
 
 // A person's one Buddy's folder (spec 2026-10-31-one-buddy-per-swarm, Folder): one worktree per project checkout on the
