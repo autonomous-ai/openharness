@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Agent, Assignment, Conversation, SuperTabState, WorkStatus } from './model.js'
 import { BUILT_IN_HEADING, PM_SCHEDULE_TEXT, recordTidy, recordWake, SCHEDULE_SLOT_MS, scheduleMessageId, scheduleRequest, scheduleSlot, tidyMessageId, tidyRequest, tidySaved } from './pmSchedule.js'
 import { ARCHIVE_QUIET_MS } from './tidy.js'
+import { latestProcessNote } from './processNotes.js'
 
 /** 10:00 on 4 November in Vietnam (03:00 UTC): a slot's first millisecond. */
 const T = Date.UTC(2026, 10, 4, 3, 0)
@@ -21,8 +22,10 @@ function swarm(...groups: Conversation[]): SuperTabState {
   return {
     version: 1, id: 'tab', name: 'Swarm', ownerId: 'owner', environment: 'prod', paused: false, invitations: [],
     people: [{ id: 'owner', email: 'owner@example.com', role: 'owner', generation: 'g' }] as SuperTabState['people'],
-    agents: [agent('lead'), agent('eng')],
-    projects: [{ id: 'p1', name: 'lampOS', ownerId: 'owner', leadConversationId: 'lead-p1', visibility: 'public', members: [], updateMinutes: 5 }],
+    // Its Engineer is crew, and its PM confirmed the newest note for PMs: neither wakes it here (processNotes.ts, task #3581).
+    agents: [agent('lead'), { ...agent('eng'), crew: { role: 'Engineer', at: 0, by: 'owner' } }],
+    projects: [{ id: 'p1', name: 'lampOS', ownerId: 'owner', leadConversationId: 'lead-p1', visibility: 'public', members: [], updateMinutes: 5,
+      processNote: { confirmed: latestProcessNote()!.id } }],
     conversations: [{ ...task(0, null), id: 'lead-p1', number: undefined, title: 'Lead' }, ...groups],
   } as SuperTabState
 }

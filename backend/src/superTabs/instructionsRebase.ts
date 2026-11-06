@@ -7,7 +7,7 @@
  * own reader (instructionsDiff.ts droppedRules) checks that nothing a person gave is lost; a project that would lose one is
  * refused, never written.
  */
-import { attributedRules, droppedRules, type AttributedRule, type DroppedRule } from './instructionsDiff.js'
+import { attributedRules, droppedRules, removedLines, type AttributedRule, type DroppedRule } from './instructionsDiff.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 
 export const REBASED_INTRO = `# Project instructions
@@ -21,7 +21,15 @@ export interface RebasedDocument {
   carried: AttributedRule[]
   /** Rules the new document would lose (droppedRules): none, or the project is not written. */
   lost: DroppedRule[]
+  /** Lines of any kind the new document would lose (instructionsDiff.ts removedLines): none, or the project is not written
+   *  (task #3679). In `rules` mode the lines no person gave are the template's process, dropped by design: always none there. */
+  lostLines: string[]
 }
+
+/** What a document carries of the old one. `everything`: every line, filed in People notes under its section: a project's own
+ *  document, where a line may be a safety rule or a schedule item no person's name guards (task #3679). `rules`: only what a
+ *  person gave, the rest being the Swarm's own process: the Swarm's own template, never a project's document. */
+export type Keep = 'everything' | 'rules'
 
 const HEADING = /^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/
 const FENCE = /^ {0,3}(?:```|~~~)/
@@ -35,7 +43,7 @@ const holdsRule = (lines: readonly string[]) => attributedRules(lines.join('\n')
 interface Piece { path: string; lines: string[]; section: boolean }
 
 /** [text]'s pieces that hold a person's rule, in document order. A heading in a fence is text. */
-function pieces(text: string): Piece[] {
+function pieces(text: string, keep: Keep): Piece[] {
   const lines = text.replace(/\r\n?/g, '\n').split('\n')
   const headings: (string | undefined)[] = []
   const pathOf = () => {
@@ -102,7 +110,7 @@ function pieces(text: string): Piece[] {
       if (FENCE.test(next)) fenced = true
       block.push(next)
     }
-    if (holdsRule(block)) found.push({ path: pathOf(), lines: block, section: false })
+    if (keep === 'everything' || holdsRule(block)) found.push({ path: pathOf(), lines: block, section: false })
   }
   return found
 }
@@ -115,13 +123,17 @@ function joined(blocks: readonly string[][]): string {
 
 /** [before]'s document on the new base, with [facts] as its "This project" section. Pure: the same input gives the same text,
  *  and a document already on the base with the same facts gives itself. */
-export function rebasedDocument(before: string, facts = ''): RebasedDocument {
+export function rebasedDocument(before: string, facts = '', keep: Keep = 'everything'): RebasedDocument {
   const seen = new Set<string>()
   const groups = new Map<string, string[][]>([['', []]])
   const sections: string[][] = []
-  for (const piece of pieces(before)) {
+  // The base's own intro and the facts given to this run are written again below, never carried as the old document's lines: a document
+  // already on the base gives itself.
+  const own = new Set([...pieces(REBASED_INTRO, 'everything'), ...facts.trim() ? pieces(`## This project\n\n${facts.trim()}`, 'everything') : []].map(piece => key(piece.lines)))
+  for (const piece of pieces(before, keep)) {
     const id = key(piece.lines)
     if (seen.has(id)) continue
+    if (own.has(id) && (piece.path === 'Project instructions' || piece.path === 'This project')) continue
     seen.add(id)
     if (piece.section) sections.push(piece.lines)
     else groups.set(piece.path, [...groups.get(piece.path) ?? [], piece.lines])
@@ -132,11 +144,11 @@ export function rebasedDocument(before: string, facts = ''): RebasedDocument {
   if (facts.trim()) parts.push(`## This project\n\n${facts.trim()}`)
   if (notes.length || sections.length) parts.push(['## People notes', ...notes, ...sections.map(lines => lines.join('\n'))].join('\n\n'))
   const text = `${parts.join('\n\n')}\n`
-  return { text, carried: attributedRules(before), lost: droppedRules(before, text) }
+  return { text, carried: attributedRules(before), lost: droppedRules(before, text), lostLines: keep === 'everything' ? removedLines(before, text) : [] }
 }
 
 /** The base a project is on once moved (SwarmProject.instructionsBase): migration/rebase.ts moves a project onto it once. */
 export const BASE_VERSION = 1
 /** What a new project of a Swarm on the base starts as (commands.ts project.create): the template's document moved, so a
  *  project made after the move and one moved by it read alike. */
-export const BASE_DOCUMENT = rebasedDocument(INSTRUCTIONS_TEMPLATE).text
+export const BASE_DOCUMENT = rebasedDocument(INSTRUCTIONS_TEMPLATE, '', 'rules').text

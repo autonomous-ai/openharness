@@ -1029,7 +1029,7 @@ void main() {
       expect(lc.snapshot!.projectById(code.id)?.name, 'code');
     });
 
-    // ENGINEERING.md 6 (Linnet, review round 3): a refused create or rename
+    // AGENTS.md standard 6 (Linnet, review round 3): a refused create or rename
     // says so in the log, with its code and nothing of the tab.
     test(
       'a refused create or rename is logged by its code, without the tab',
@@ -1070,7 +1070,7 @@ void main() {
       },
     );
 
-    // ENGINEERING.md §6 (River, 11-03): a failed rename waits, as a failed
+    // AGENTS.md standard 6 (River, 11-03): a failed rename waits, as a failed
     // create does, instead of being asked again on every sync.
     test(
       'a refused rename of a tab\'s project waits before it is asked again',

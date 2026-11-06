@@ -550,7 +550,7 @@ export class SuperTabHost {
   /** Deliveries whose message is the coordinator's in the reader's own task or step, with no question to answer (#3057). */
   private readonly plainReplies = new Set<string>()
   /** The tasks and steps where a coordinator's delivery carried their state (#3114), by Swarm, agent and conversation: a later
-   *  one there reads its latest messages beside the Swarm read, not after it (review 1, ENGINEERING.md section 4). The
+   *  one there reads its latest messages beside the Swarm read, not after it (review 1, AGENTS.md standard 4). The
    *  newest KNOWN_TASKS_MAX. */
   private readonly knownTasks = new Set<string>()
   /** The one-message page `repliedTo()` read, for the thread line when the reply answers its thread's root. */
@@ -899,10 +899,13 @@ export class SuperTabHost {
     const rows = data.map(object).filter(row => identifier(row.tabId) && object(row.agent).machineId === this.machineId
       && identifier(object(row.agent).harnessId) && object(row.agent).buddyOf)
     const ownerOf = (row: Record<string, unknown>) => { const of = object(object(row.agent).buddyOf); return `${row.tabId}\0${of.personId}\0${of.generation}` }
+    // A person may have several Buddies (task #3818): a Buddy's sessions are those in its own chat, which the backend names on
+    // each row; an older backend names none, and the person's sessions all go with their one Buddy.
+    const chatOf = (row: Record<string, unknown>) => identifier(row.buddyChatId) ? `${row.tabId}\0chat\0${row.buddyChatId}` : ownerOf(row)
     for (const row of rows) {
       const agent = object(row.agent)
       if (agent.buddySession || !agent.modelRequest) continue
-      const sessions = rows.filter(other => object(other.agent).buddySession && ownerOf(other) === ownerOf(row))
+      const sessions = rows.filter(other => object(other.agent).buddySession && chatOf(other) === chatOf(row))
       void this.buddyModels.serve(row as unknown as BuddyModelRow, sessions as unknown as BuddyModelRow[])
         .catch(error => this.log(`Buddy model: ${error instanceof Error ? error.name : typeof error}`))
     }
@@ -1657,7 +1660,9 @@ export class SuperTabHost {
       // the backend's stableId('buddy', 'swarm', person, generation); an older project chat's session is in that chat.
       const swarm = agent.buddyScope === 'swarm' || identifier(session.projectId)
       const projectId = swarm ? 'swarm' : identifier(agent.projectId) ? agent.projectId : 'lead'
-      const conversationId = buddyChatIdOf(projectId, buddyOf.personId, buddyOf.generation)
+      // With several Buddies (task #3818) the backend names the session's own chat on its row; an older backend names none.
+      const named = object(row).buddyChatId
+      const conversationId = identifier(named) ? named : buddyChatIdOf(projectId, buddyOf.personId, buddyOf.generation)
       state.running = true
       const ending = reason, short = String(agent.harnessId).slice(0, 8)
       // One id per session and reason: a retry is the same request, and a changed reason never reuses an id for another.
@@ -2485,7 +2490,7 @@ export class SuperTabHost {
     // A reply inside a thread gets the thread line, a Buddy's in its own chat too: Ken 11-03 (#2492) answered "ok để thử" in a
     // thread of his Buddy chat, the delivery quoted only the thread's root, and the Buddy guessed. Its root is in the page
     // repliedTo() read, or one read of that root in this same chat; the command is in the Buddy's prefix, with no --agent.
-    // Read beside the Swarm read and the PM's page read, never after them (review 1 of #3114, ENGINEERING.md section 4): a PM's
+    // Read beside the Swarm read and the PM's page read, never after them (review 1 of #3114, AGENTS.md standard 4): a PM's
     // reply in a task's thread waits on two reads in a row at most, as before #3114. Its failure is thrown where it was.
     const root = identifier(message.thread) && message.thread !== message.id ? message.thread : null
     const threadRead = root

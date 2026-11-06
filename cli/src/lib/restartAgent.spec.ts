@@ -311,6 +311,22 @@ describe('restart cancellation', () => {
     expect(coordinator.revision('next observed')).toBe(before + 1)
   })
 
+  // Asked with other launch words, a second restart would be answered by the first's launch and its words would be lost
+  // (or, saved beside it, differ from what launched): it is refused instead, and only the same words join.
+  it('joins an overlapping restart only when it asks for the same launch words, and refuses one that asks for others', async () => {
+    const coordinator = new AgentRestartCoordinator()
+    let finish!: () => void
+    const handler = vi.fn(async () => { await new Promise<void>((resolve) => { finish = resolve }); return { ok: false, error: 'fixture' } as const })
+    const first = coordinator.run('a', handler, 'restart', '["--chrome"]')
+    expect(coordinator.run('a', handler, 'restart', '["--chrome"]')).toBe(first)
+    expect(await coordinator.run('a', handler, 'restart', '["--other"]')).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+    expect(await coordinator.run('a', handler, 'restart')).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+    expect(coordinator.operation('a')).toBe('restart')
+    finish()
+    await first
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
   it('joins overlapping restarts but leaves other agents independent', async () => {
     const coordinator = new AgentRestartCoordinator()
     const initial = coordinator.revision('a')

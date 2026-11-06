@@ -212,6 +212,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _bar(context),
+        if (project.boardMode) ?_needsYou(board),
         // What waits for the PM and who works (task #3384); none from a
         // server before it.
         if (pulse != null)
@@ -247,6 +248,53 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
               : _boardView(shown, now),
         ),
       ],
+    );
+  }
+
+  /// Over a switched project's Board (#3820): everything in it that waits on the reader, each opening its card's
+  /// chat; null when nothing does.
+  Widget? _needsYou(Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> board) {
+    final waiting = [
+      for (final entry in board.values.expand((entries) => entries))
+        if (entry.needsYou && entry.task != null) entry.task!,
+    ];
+    if (waiting.isEmpty) return null;
+    return Padding(
+      key: const ValueKey('super-board-needs-you'),
+      padding: const EdgeInsetsDirectional.only(
+        start: grid.AppDesktop.groupGap,
+        end: grid.AppDesktop.groupGap,
+        bottom: grid.AppDesktop.controlGap,
+      ),
+      child: Wrap(
+        spacing: grid.AppDesktop.listRowGap,
+        runSpacing: grid.AppDesktop.listRowGap,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Semantics(
+            header: true,
+            child: Text(
+              'Needs you · ${waiting.length}',
+              style: DesktopChrome.control(color: DesktopChrome.foreground)
+                  .copyWith(fontWeight: grid.AppFont.semibold),
+            ),
+          ),
+          for (final task in waiting)
+            TextButton(
+              key: ValueKey('super-board-needs-you-${task.id}'),
+              style: TextButton.styleFrom(
+                backgroundColor: grid.AppSurface.wellFill,
+                shape: const StadiumBorder(),
+              ),
+              onPressed: () => widget.onOpenTask(task.id),
+              child: Text(
+                superTabTitlePriority(task.title).title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -331,7 +379,11 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   static const _columnGap = grid.AppDesktop.groupGap;
 
   Widget _heading(SuperTabTaskColumn column, int count, {bool? folded}) {
-    final style = DesktopChrome.control(medium: true);
+    // A Board lane's name is its bold title, as Trello's (task #3787).
+    final style = folded == null
+        ? DesktopChrome.control(color: DesktopChrome.foreground)
+              .copyWith(fontWeight: grid.AppFont.semibold)
+        : DesktopChrome.control(medium: true);
     final row = Row(
       children: [
         if (folded != null)
@@ -392,7 +444,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         (task.assignment?['status'] == 'needs_human' ||
             task.liveness?['why'] == 'person');
     return [
-      ?_person(task.requesterId),
+      // A proposal's card names who proposed it (#3817).
+      ?_person(task.requesterId ?? task.proposal?.senderIds.firstOrNull),
       if (agentId is String && snapshot != null)
         if (agent.isNotEmpty)
           agent
@@ -401,6 +454,60 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       if (entry.needsYou) 'Needs you',
       if (!waitingOnReader) ?entry.state,
     ].join(' · ');
+  }
+
+  /// A Board card's second line (#3820), on a project on the Board only: who paused it, else the question it waits
+  /// on with its default and time, else the PM's decision and its reason.
+  String? _note(SuperTabTaskEntry entry, DateTime now) {
+    final task = entry.task;
+    final project =
+        widget.controller.snapshot?.projectById(widget.project.id) ??
+        widget.project;
+    if (task == null || !project.boardMode) return null;
+    String reasoned(String head, String? reason) =>
+        reason == null ? head : '$head: $reason';
+    if (task.paused case final paused?) {
+      return reasoned(
+        'Paused by ${_person(paused.by) ?? 'someone'}',
+        paused.reason,
+      );
+    }
+    final proposal = task.proposal;
+    if (proposal == null) return null;
+    if (proposal.openQuestion case final q?) {
+      final who = q.personId == widget.controller.accountId
+          ? 'you'
+          : _person(q.personId) ?? 'someone';
+      return 'Asks $who: ${q.question} '
+          'If no answer by ${_when(q.deadline, now)}: ${q.defaultAnswer}';
+    }
+    final decision = proposal.decision;
+    if (decision == null) return null;
+    return reasoned(switch (decision.kind) {
+      'accept' => 'Accepted',
+      'reshape' => 'Reshaped',
+      'later' => switch (decision.revisitAt) {
+        final at? => 'Later, ${_day(at)}',
+        null => 'Later',
+      },
+      _ => 'No',
+    }, decision.reason);
+  }
+
+  static const _monthNames = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', //
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+
+  static String _day(DateTime at) => '${_monthNames[at.month - 1]} ${at.day}';
+
+  /// A deadline as the card says it: its time today, else its day and time.
+  static String _when(DateTime at, DateTime now) {
+    final time =
+        '${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
+    final today =
+        at.year == now.year && at.month == now.month && at.day == now.day;
+    return today ? time : '${_day(at)}, $time';
   }
 
   HarnessActivity _activity(SuperTabTaskEntry entry) {
@@ -433,7 +540,8 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     return HarnessActivity.working;
   }
 
-  /// [entry]'s card; [lane] leads its caption (Members' Unassigned).
+  /// [entry]'s card; [lane] is its label (Members' Unassigned), else its
+  /// task's hand-out lane.
   Widget _card(
     SuperTabTaskEntry entry,
     DateTime now, {
@@ -449,16 +557,30 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       title: task == null
           ? entry.proposal!.title
           : superTabTitlePriority(task.title).title,
-      caption: [?lane, if (caption.isNotEmpty) caption].join(' · '),
+      caption: list
+          ? [?lane, if (caption.isNotEmpty) caption].join(' · ')
+          : caption,
+      // A tile wears its lane as a label on top (task #3787).
+      lane: list ? null : lane ?? task?.handOutLane,
       priority: superTabEntryPriority(entry),
       needsYou: entry.needsYou,
       unread: task != null && widget.controller.unreadShown(task),
       activity: _activity(entry),
       titleLines: list ? 1 : 3,
-      // A merged task's release parts are what the card is for: they wrap
-      // however long, never cut off (task #3452).
-      captionLines: task != null && superTabTaskReleasing(task) ? null : 1,
+      // What a merged task waits on, and how long a done one has waited, are
+      // what the card is for: they wrap however long, never cut off (tasks
+      // #3452, #3812).
+      captionLines:
+          task != null &&
+              (superTabTaskReleasing(task) ||
+                  task.assignment?['status'] == 'done' &&
+                      !superTabTaskShipped(task))
+          ? null
+          : 1,
       tile: !list,
+      note: _note(entry, now),
+      noteKey: ValueKey('super-task-card-note-$id'),
+      warn: task != null && superTabMergeOverdue(task, now),
       selected: id == widget.selectedId,
       onOpen: () =>
           task == null ? widget.onOpenProposal(id) : widget.onOpenTask(task.id),
@@ -494,26 +616,43 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
     ),
   );
 
-  /// One column of the Board or of Members: card material with its hairline
-  /// rim at the card radius, and no shadow, which is for floating content
-  /// only; [heading] over [body], which fills the rest.
+  /// A lane's tint, as Trello's lists (anh Dee, task #3787): a step off the
+  /// page, darker in light under white cards and darker in dark under lifted
+  /// ones, with no rim or shadow.
+  static Color get _laneFill =>
+      grid.AppTheme.pick(grid.AppSurface.wellFill, grid.AppPalette.panelBg);
+
+  /// Inside a lane, around its cards: inside the scroll view, so a card's
+  /// shadow is never cut at the lane's edge.
+  static const _laneInset = EdgeInsets.fromLTRB(
+    grid.AppDesktop.controlGap,
+    grid.AppDesktop.listRowGap,
+    grid.AppDesktop.controlGap,
+    0,
+  );
+
+  /// One column of the Board or of Members: a tinted lane at the card radius
+  /// ([_laneFill]); [heading] over [body], which fills the rest.
   Widget _framed(Key key, Widget heading, Widget body) => DecoratedBox(
     key: key,
     decoration: BoxDecoration(
-      color: grid.AppCard.base,
+      color: _laneFill,
       borderRadius: BorderRadius.circular(grid.AppCard.radius),
-      border: Border.all(color: grid.AppCard.hair),
     ),
-    child: Padding(
-      padding: const EdgeInsets.all(grid.AppDesktop.controlGap),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          heading,
-          const SizedBox(height: grid.AppDesktop.listRowGap),
-          Expanded(child: body),
-        ],
-      ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            SuperTabTaskCard.tilePadding,
+            grid.AppDesktop.controlGap,
+            SuperTabTaskCard.tilePadding,
+            grid.AppDesktop.listRowGap,
+          ),
+          child: heading,
+        ),
+        Expanded(child: body),
+      ],
     ),
   );
 
@@ -541,6 +680,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         : column == SuperTabTaskColumn.nextUp
         ? _nextUp(entries, now)
         : LaidOutListView.builder(
+            padding: _laneInset,
             itemCount: entries.length,
             itemBuilder: (context, i) => Padding(
               padding: const EdgeInsets.only(
@@ -584,6 +724,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         key,
         heading,
         LaidOutListView.builder(
+          padding: _laneInset,
           itemCount: rows.length,
           itemBuilder: (context, i) => rows[i],
         ),
@@ -803,6 +944,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
             (Offset.zero & box.size).contains(event.localPosition);
       },
       child: ReorderableListView.builder(
+        padding: _laneInset,
         buildDefaultDragHandles: false,
         itemCount: ordered.length,
         onReorderItem: (from, to) {

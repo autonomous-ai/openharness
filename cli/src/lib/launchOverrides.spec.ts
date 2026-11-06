@@ -480,6 +480,30 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     expect(JSON.stringify(buddy)).toContain('lamp-mcp')
   })
 
+  it('hands the owner\'s saved launch flags over in a slot of their own, leaving the other arguments exactly as they were', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'overrides-buddy-'))
+    const source = { startedBy: null, cwd, swarmSkill: { role: 'buddy' as const, key: 'harness-claude-buddy' } }
+    const plain = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', source, 'a', () => true)
+    const flagged = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { ...source, launchArgs: ['--chrome'] }, 'a', () => true)
+    if (!plain.ok || !flagged.ok) throw new Error('Fixture launch failed')
+    expect(flagged.overrides.ownerArgs).toEqual(['--chrome'])
+    expect(flagged.overrides.extraArgs).toEqual(plain.overrides.extraArgs)
+    expect(plain.overrides.ownerArgs ?? []).toEqual([])
+  })
+
+  // Each launch checks the saved words again (a row edited by hand, or a flag a later release refuses): none is applied.
+  it('applies none of the saved launch flags when one is now refused, and says so once with the agent and why', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const built = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude',
+      { startedBy: null, cwd: null, launchArgs: ['--chrome', '--settings', 'x'] }, 'agent-12345678-rest', () => true)
+    if (!built.ok) throw new Error('Fixture launch failed')
+    expect(built.overrides.ownerArgs ?? []).toEqual([])
+    expect(built.overrides.extraArgs).not.toContain('--chrome')
+    expect(warn).toHaveBeenCalledOnce()
+    expect(warn.mock.calls[0]![0]).toContain('agent-12')
+    expect(warn.mock.calls[0]![0]).toContain('--settings is set by Harness')
+  })
+
   // A Buddy moved onto a grid model keeps the grid's web tools, as its owner's own session would, and everything that makes it a
   // Buddy (task #2832; before it, #2354 dropped them).
   it('a Buddy moved onto a grid keeps its web MCP and its Buddy launch', async () => {

@@ -257,6 +257,13 @@ export interface LaunchCommandOptions {
    */
   extraArgs?: readonly string[]
   /**
+   * The words the machine's owner added to this agent (`registry` `launchArgs`), appended after everything else: the
+   * extra arguments, the model and the first prompt. Last, so a trailing flag that takes a value fails loudly at
+   * startup instead of swallowing an argument Harness itself added, and a flag of theirs cannot be read as a value of
+   * Harness's. Checked by `checkLaunchWords` before they get here.
+   */
+  ownerArgs?: readonly string[]
+  /**
    * A shell line to run in the pane BEFORE the engine, from `engineInstall.ts` — the engine is not on
    * this machine yet and the user agreed to fetch it.
    *
@@ -402,6 +409,7 @@ export function buildEngineCommandArgv(engine: AgentEngine, opts: LaunchCommandO
   if (opts.extraArgs?.length) argv.push(...opts.extraArgs)
   if (opts.launchModel) argv.push(...launchModelArgs(engine, opts.launchModel))
   if (opts.firstPrompt) argv.push(...firstPromptArgs(engine, opts.firstPrompt))
+  if (opts.ownerArgs?.length) argv.push(...opts.ownerArgs)
   // Windows: the engine's .exe, or the node script its npm shim runs; never the .ps1 PowerShell would pick, and never
   // a batch file cmd.exe would read the first message through (lib/windows/launch.ts).
   return windowsEngineArgv(engine, argv)

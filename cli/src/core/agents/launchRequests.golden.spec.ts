@@ -69,6 +69,7 @@ it.each(['linux', 'darwin'])('preserves healthy launch requests and durable rece
         resumeAgent: () => (agentId, permissionMode) => dispatch('resume', { agentId, permissionMode }),
         restartAgent: () => agentId => dispatch('restart', { agentId }),
         byAgent: agentId => agentId === session.agentId ? session : undefined,
+        stoppedAgent: () => undefined,
         // The frame formatter is another boundary; retain recognizable fields
         // to detect a wrong agent or a dropped reply without invoking services.
         toProject: async row => ({ id: row.agentId, engine: row.engine, cwd: row.cwd } as unknown as AgentFrame),
@@ -87,7 +88,7 @@ it.each(['linux', 'darwin'])('preserves healthy launch requests and durable rece
             ...(kind === 'project' ? { projectSource: 'new', projectName: 'Fixture' } : { cwd }),
             ...(kind === 'model' ? { gridModel: 'fixture-model', gridName: 'fixture-grid' } : {}) }
       const invoke = () => kind === 'fork' ? requests.fork(payload, reply)
-        : kind === 'resume' || kind === 'restart' ? requests.relaunch(`agent_${kind}`, payload, reply)
+        : kind === 'resume' || kind === 'restart' ? requests.relaunch(`agent_${kind}`, payload, reply, { ownerApp: true })
           : requests.create(payload, { local: true }, reply)
       await invoke()
       await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
