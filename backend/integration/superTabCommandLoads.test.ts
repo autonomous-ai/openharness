@@ -13,6 +13,7 @@ import { logger } from '../src/utils/logger.js'
 import type { Conversation } from '../src/superTabs/model.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { profiled } from './plans.test-support.js'
+import { startCommandStats } from '../src/superTabs/commandStats.js'
 
 // Ken's prod DB profile, 2026-11-02: a command naming the PM read every group the PM was ever in, 1,628 of them and growing with
 // every task, up to 1.66 s a read. Those that write its groups need them; those that only ask about it do not.
@@ -220,5 +221,21 @@ describe('a command\'s reads outside its transaction (#3661)', () => {
     expect(await loads(async () => { assignmentId = String((await execute({ type: 'work.assign', conversationId: f.group, agentId: f.worker })).result.assignmentId) })).toBe(4)
     expect(await loads(() => execute({ type: 'work.status', conversationId: f.group, assignmentId, status: 'review',
       result: 'Ready for review: https://github.com/acme/app/pull/1' } as Command, f.worker))).toBe(4)
+  })
+})
+
+describe('commands by type (#3661)', () => {
+  it('records each command through the store by its type, with one attempt, and a refused one as refused', async () => {
+    const f = await swarm()
+    const log = vi.fn()
+    const stop = startCommandStats({ log })
+    try {
+      await f.execute({ type: 'message.send', conversationId: f.group, text: 'hello', replyTo: null, recipientIds: [] } as Command, f.worker)
+      await expect(f.execute({ type: 'conversation.rename', conversationId: 'missing', title: 'x' })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    } finally { stop() }
+    expect(log).toHaveBeenCalledWith('commands by type', expect.objectContaining({ commands: {
+      'message.send': expect.objectContaining({ n: 1 }), 'conversation.rename': expect.objectContaining({ n: 1, refused: 1 }) } }))
+    const { commands } = log.mock.calls[0]![1] as { commands: Record<string, { retried?: number }> }
+    expect(commands['message.send']!.retried).toBeUndefined()
   })
 })
