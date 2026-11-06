@@ -783,7 +783,7 @@ describe('which branch a worktree starts from', () => {
   })
   // Scholes, 11-06 (#3713): computer's Dee started in a Claude scratchpad, asked "Do you trust this folder?" on every run.
   it('is a permanent folder Harness makes and marks when the folder named is a temporary one', async () => {
-    const [payload] = await created(request => { request.worktree = false; request.cwd = '/private/tmp/claude-501/-Users-mac/abc/scratchpad' })
+    const [payload] = await created(request => { request.worktree = false; request.cwd = join(tmpdir(), 'claude-501', '-Users-mac', 'abc', 'scratchpad') })
     const folder = agentFolderFor(projectsRoot(), 'start')
     expect(payload).toMatchObject({ cwd: folder })
     expect(existsSync(join(folder, AGENT_FOLDER_MARK))).toBe(true)

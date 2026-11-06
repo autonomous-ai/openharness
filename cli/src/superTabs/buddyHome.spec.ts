@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -23,10 +23,20 @@ afterEach(() => { for (const dir of made.splice(0)) rmSync(dir, { recursive: tru
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } }).toString()
 
 /** A checkout with one committed file saying which project it is. */
+/** The worktrees git lists for [repo], in the file system's own spelling: git prints a folder's long name with forward slashes,
+ *  and a temporary folder on Windows can hold a short one (C:\Users\HARNES~1, #3815). */
+const worktreeList = (repo: string) => git(repo, 'worktree', 'list', '--porcelain').split('\n').filter(line => line.startsWith('worktree '))
+  .map(line => { const path = line.slice('worktree '.length); try { return realpathSync.native(path) } catch { return path } }).join('\n')
+/** Git on Windows is slower to start each command: a Buddy folder's tests there ran to 42 s on Window of Tim (#3815). */
+const GIT_TIMEOUT = process.platform === 'win32' ? 120_000 : 30_000
+
 function checkout(root: string, name: string): string {
   const dir = join(root, name)
   mkdirSync(dir, { recursive: true })
   git(dir, 'init', '-q', '-b', 'main')
+  // Git for Windows' installer sets core.autocrlf in its system config, which the code's own git reads: the repository says
+  // no, so a Buddy's worktree holds the bytes committed, as on every other machine (Window of Tim, #3815).
+  git(dir, 'config', 'core.autocrlf', 'false')
   writeFileSync(join(dir, 'WHO'), `${name}\n`)
   git(dir, 'add', 'WHO')
   git(dir, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'first')
@@ -38,7 +48,7 @@ function root(): string {
   return dir
 }
 
-describe('a person\'s one Buddy\'s folder', { timeout: 30_000 }, () => {
+describe('a person\'s one Buddy\'s folder', { timeout: GIT_TIMEOUT }, () => {
   // Task #2832: a Codex Buddy runs too, and would sit at Codex's own folder question in a terminal no Swarm view shows.
   it('answers Claude Code\'s and Codex\'s folder question for it, and leaves any other engine to ask', async () => {
     const claude = root(), codex = root(), home = join(root(), 'home'), config = join(claude, '.claude.json'), toml = join(codex, 'config.toml')
@@ -82,14 +92,15 @@ describe('a person\'s one Buddy\'s folder', { timeout: 30_000 }, () => {
     expect(existsSync(join(home, 'projects', 'Secret'))).toBe(false)
     expect(existsSync(join(home, 'projects', 'Web', 'WHO'))).toBe(true)
     // Its checkout no longer lists the worktree.
-    expect(git(secret, 'worktree', 'list')).not.toContain(join(home, 'projects', 'Secret'))
+    expect(worktreeList(secret)).not.toContain('Secret')
     expect(await pruneBuddyHome(home, new Set(['web']))).toEqual([])
   })
 
   it('goes whole with its Buddy, worktrees included, read-only files too', async () => {
     const r = root(), web = checkout(r, 'web-src'), home = join(r, 'home')
     await prepareBuddyHome(home, [{ id: 'web', name: 'Web', cwd: web }])
-    execFileSync('chmod', ['-R', 'a-w', join(home, 'projects', 'Web', 'WHO')])
+    // Read-only as the file system has it: Node sets the attribute on Windows, which has no chmod program (#3815).
+    chmodSync(join(home, 'projects', 'Web', 'WHO'), 0o444)
     await removeBuddyHome(home)
     expect(existsSync(home)).toBe(false)
     expect(git(web, 'worktree', 'list').trim().split('\n')).toHaveLength(1)
@@ -126,7 +137,7 @@ describe('a person\'s one Buddy\'s folder', { timeout: 30_000 }, () => {
     linkFolder(theirs, join(home, 'projects', 'Web'))
     await pruneBuddyHome(home, new Set())
     expect(readFileSync(join(theirs, 'WHO'), 'utf8')).toBe('other-src\n')
-    expect(git(other, 'worktree', 'list')).toContain(theirs)
+    expect(worktreeList(other)).toContain(realpathSync.native(theirs))
     expect(existsSync(join(home, 'projects', 'Web'))).toBe(false)
     // Made again, a link in a project's place is replaced by its own worktree, never kept.
     const again = join(r, 'home2')
@@ -182,7 +193,7 @@ describe('a person\'s one Buddy\'s folder', { timeout: 30_000 }, () => {
 // Scholes, 11-02: the Buddy kept saying a merged button was "not in my copy of the code yet". Real git: a bare origin, the
 // person's clone of it, and new commits pushed from another clone.
 // Each test here runs dozens of real git commands: a busy machine takes more than the default 5 s (seen with a hook added).
-describe('a Buddy\'s copy of a project follows its default branch', { timeout: 30_000 }, () => {
+describe('a Buddy\'s copy of a project follows its default branch', { timeout: GIT_TIMEOUT }, () => {
   const commit = (dir: string, file: string, text: string) => {
     writeFileSync(join(dir, file), text)
     git(dir, 'add', file)
@@ -195,6 +206,7 @@ describe('a Buddy\'s copy of a project follows its default branch', { timeout: 3
     const clone = join(r, 'clone'), teammate = join(r, 'teammate')
     git(r, 'clone', '-q', origin, clone)
     git(r, 'clone', '-q', origin, teammate)
+    for (const dir of [clone, teammate]) git(dir, 'config', 'core.autocrlf', 'false')
     return { origin, clone, teammate, home: join(r, 'home'), web: [{ id: 'web', name: 'Web', cwd: clone }] }
   }
   const advance = (teammate: string, file = 'NEW', text = 'new\n') => { commit(teammate, file, text); git(teammate, 'push', '-q', 'origin', 'main') }
