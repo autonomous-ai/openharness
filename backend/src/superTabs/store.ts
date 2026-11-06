@@ -67,7 +67,7 @@ import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
 import { currentRules, deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
-import { SEED_RULES, validMachineRules, type MachineRule } from './policy.js'
+import { SEED_RULES, seedRules, validMachineRules, type MachineRule } from './policy.js'
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, FIRST_SUMMARY, liveNotes, MAX_REVISIONS } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
@@ -2023,7 +2023,11 @@ export class SuperTabStore {
         // When it was saved, too: a person's approval of a dropped rule must come after it (ruleGuard.ts).
         const stored = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, projectId) }, select: { revision: true, text: true, updatedAt: true } })
         context.instructions = stored && { revision: stored.revision, text: stored.text, ...stored.updatedAt ? { at: stored.updatedAt.getTime() } : {} }
-        if (command.type === 'instructions.save' && command.approvals?.length) context.approvals = await readApprovals(tx, tabId, command.approvals)
+        if (command.type === 'instructions.save') {
+          authorizeCommandAccess(original, actor, command)
+          context.projectRules = await currentRules(tx, tabId, projectId)
+          if (command.approvals?.length) context.approvals = await readApprovals(tx, tabId, command.approvals)
+        }
         if (command.type === 'instructions.save' && pullRequestMerges) context.pullRequestMerges = pullRequestMerges
       }
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
@@ -3375,7 +3379,7 @@ export class SuperTabStore {
     return this.instructionHistory(user, tabId, projectId, asAgentId, async tx => {
       const history = await readRulesHistory(tx, tabId, projectId)
       const newest = history[0]
-      return { projectId, revision: newest?.revision ?? 0, rules: newest?.rules ?? SEED_RULES, seeded: !newest, history }
+      return { projectId, revision: newest?.revision ?? 0, rules: seedRules(tabId, projectId, newest?.rules), seeded: !newest, history }
     })
   }
 

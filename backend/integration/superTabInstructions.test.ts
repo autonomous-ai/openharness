@@ -19,7 +19,9 @@ import { roleVersion } from '../src/superTabs/projects.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
 import { INSTRUCTIONS_TEMPLATE } from '../src/superTabs/instructionsTemplate.js'
 import { rosterRows } from './hostRows.test-support.js'
+import { SEED_RULES } from '../src/superTabs/policy.js'
 import { PM_SCHEDULE_TEXT } from '../src/superTabs/pmSchedule.js'
+import { plan, profiled, reads } from './plans.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 // Project instructions, phase 2 (docs/plans/2026-10-30-project-instructions-plan.md): the document, its revisions, the
@@ -135,6 +137,54 @@ describe('project instructions storage', () => {
 
 // Task #3151: a save that drops a person's rule is refused, and goes through on that person's own message, read by the store,
 // which tells them in their Buddy chats.
+describe('configured rule approvals through the store', () => {
+  it('uses the saved decider and linked accounts, while refusing absent, agent and stale approvals', async () => {
+    const { tab, lead } = await withLead()
+    await invite(tab)
+    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: String(invitation.result.inviteId) }, host)
+    await run(tab, { type: 'rules.set', projectId: 'lead', baseRevision: 0, rules: { ...structuredClone(SEED_RULES),
+      instructionApprovals: { topDeciderId: peer.sub, people: [{ name: 'Ken', accountIds: [owner.sub, host.sub] }] } }, summary: 'Explicit approval authority' })
+    const text = '# Rules\n\n- Always test before merging (Ken, 2026-11-04).'
+    await run(tab, save(1, text))
+    const drop = (revision: number, approvals: string[] = []) => run(tab, { ...save(revision, '# Rules\n'), askedBy: owner.sub, approvals } as Command, host, lead)
+    const message = async (user: AuthUser, asAgentId?: string) => String((await run(tab, { type: 'message.send', conversationId: 'lead', text: 'I approve removing this rule.', replyTo: null, recipientIds: [] }, user, asAgentId)).result.messageId)
+    await expect(drop(2)).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    const agent = await message(host, lead)
+    await expect(drop(2, [agent])).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    const stale = await message(peer)
+    const saved = await db.superTabInstructions.findFirstOrThrow({ where: { tabId: tab, projectId: 'lead' } })
+    await db.superTabMessage.update({ where: { id: stale }, data: { createdAt: new Date(saved.updatedAt.getTime() - 1) } })
+    await expect(drop(2, [stale])).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    const decider = await message(peer)
+    const entries = await profiled(db, async () => expect((await drop(2, [decider])).result.revision).toBe(3))
+    const policyReads = plan(reads(entries, 'SuperTabProjectRules', ['tabId', 'projectId']))
+    expect(policyReads.length).toBeGreaterThan(0)
+    for (const read of policyReads) {
+      expect(read.plan).toContain('IXSCAN')
+      expect(read.docsExamined).toBe(1)
+      expect(read.returned).toBe(1)
+    }
+    const notices = await db.superTabMessage.findMany({ where: { tabId: tab, text: { contains: 'approved by peer' } } })
+    // Dee's approval tells the decider and both affected author accounts, through each person's two private Buddy chats.
+    expect(notices).toHaveLength(6)
+    for (const account of [owner, host, peer]) {
+      const visible = new Set((await store.read(account, tab)).state.conversations.map(c => c.id))
+      expect(notices.filter(n => visible.has(n.conversationId))).toHaveLength(2)
+    }
+    for (const notice of notices) {
+      expect(notice.text).toContain('Always test before merging')
+      expect(notice.text).not.toContain('as you approved')
+    }
+    for (const [index, account] of [owner, host].entries()) {
+      const revision = 4 + index * 2
+      await run(tab, save(revision - 1, text))
+      const approval = await message(account)
+      expect((await drop(revision, [approval])).result.revision).toBe(revision + 1)
+    }
+  })
+})
+
 describe('a person\'s rules in a save', () => {
   it('refuses the PM\'s drop, then saves it on the person\'s own approval and tells them privately', async () => {
     const { tab, lead } = await withLead()
