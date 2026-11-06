@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import '../../swarm/swarm_buddy.dart';
 import '../../swarm/swarm_home_top.dart' show swarmHomeOffers;
 import '../../swarm/swarm_inbox.dart';
+import '../../swarm/swarm_lead_start.dart'
+    show swarmPersonalName, swarmPersonalOperation;
 import '../../swarm/swarm_reader.dart';
 import '../../swarm/swarm_request.dart';
 import '../../swarm/swarm_session.dart';
@@ -25,8 +27,8 @@ enum Intern3SwarmStep {
   buddy,
 }
 
-/// After Set up Intern 3, with Swarm on (owner, 2026-11-05): Start puts Intern 3 in the person's Swarm — a new one, named
-/// after them, when they have none — has Claude Code installed there (the OS ships none, cli superTabs/contribution.ts
+/// After Set up Intern 3, with Swarm on (owner, 2026-11-05): Start puts Intern 3 in the person's Swarm — their Personal
+/// Swarm, made as Desktop makes it, when they have none — has Claude Code installed there (the OS ships none, cli superTabs/contribution.ts
 /// `installEngine`), and starts their Buddy on it. A Buddy already running elsewhere is kept, and its chat opens instead.
 ///
 /// One run at a time; a run that fails says why in [error] and can be run again: each step is the same request again (the
@@ -37,7 +39,6 @@ class Intern3Swarm extends ChangeNotifier {
     required this.computers,
     required this.machineId,
     required this.machineName,
-    required this.ownerName,
     this.swarmId,
     this.pause = const Duration(seconds: 2),
   });
@@ -52,9 +53,6 @@ class Intern3Swarm extends ChangeNotifier {
   /// Intern 3, as the account's computers list it.
   final String machineId;
   String machineName;
-
-  /// What a new Swarm is named after: "Tony's Swarm".
-  final String ownerName;
   final Duration pause;
 
   /// The step under way, or the one that failed; null before the first run.
@@ -261,8 +259,9 @@ class Intern3Swarm extends ChangeNotifier {
         'POST',
         '/api/super-tabs',
         body: {
-          'operationId': 'intern3-swarm-$machineId',
-          'name': "$ownerName's Swarm",
+          // The Personal Swarm, as Desktop makes it: the same one whichever app makes it first (owner, 2026-11-06).
+          'operationId': swarmPersonalOperation,
+          'name': swarmPersonalName,
         },
       );
       id = created is Map ? created['id'] as String? : null;
