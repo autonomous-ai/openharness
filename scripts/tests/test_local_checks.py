@@ -1,4 +1,3 @@
-import copy
 import importlib.util
 import json
 import os
@@ -33,6 +32,11 @@ def needs(receipts=None):
 
 
 class LocalGateTests(unittest.TestCase):
+    def test_shell_environment_and_quoting_changes_require_native_startup_evidence(self):
+        for name in ("loginShellEnv", "userShell", "shellQuote"):
+            with self.subTest(name=name):
+                self.assertEqual(planner.local_checks.required_checks([f"cli/src/lib/{name}.ts"]), ["cli-shell"])
+
     def test_a_mapped_pr_cannot_pass_ci_required_without_local_evidence(self):
         with self.assertRaisesRegex(ValueError, "cli-core"):
             planner.verify(plan(), needs(), "a" * 40)
