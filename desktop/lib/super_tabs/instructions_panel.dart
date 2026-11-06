@@ -357,9 +357,10 @@ class _InstructionsPanelState extends State<_InstructionsPanel> {
       'noteId': note.id,
     });
     if (!mounted) return;
+    final why = result == null ? c.takeOperationError() : null;
     setState(() {
       _removing.remove(note.id);
-      if (result == null) _saveError = c.operationError;
+      if (result == null) _saveError = why;
     });
     // The notes' revision moved with the command: the Swarm read's move reads them (never touching the draft).
     if (result != null) _onSwarm();
