@@ -7,6 +7,20 @@ String _machineStatusGroup(_MachineView view) => switch (view.status) {
   _ => 'unknown',
 };
 
+Object _machineCounts(List<_MachineView> views) {
+  final counts = <String, int>{};
+  for (final view in views) {
+    final group = _machineStatusGroup(view);
+    counts.update(group, (value) => value + 1, ifAbsent: () => 1);
+  }
+  return (
+    counts['online'] ?? 0,
+    counts['asleep'] ?? 0,
+    counts['offline'] ?? 0,
+    counts['unknown'] ?? 0,
+  );
+}
+
 extension _ManageMachines on _SuperTabMachinesState {
   bool _matchesMachine(_MachineView view) =>
       (_machineFilter == 'all' ||
@@ -15,9 +29,10 @@ extension _ManageMachines on _SuperTabMachinesState {
           .toLowerCase()
           .contains(_machineSearch.trim().toLowerCase());
 
-  Widget _manageScreen(VoidCallback? add, DateTime? failingSince) {
+  Widget _manageScreen(VoidCallback? add) {
     grid.AppTheme.watch(context);
     final views = _sortedViews();
+    _manageCountsDrawn = _machineCounts(views);
     int count(String group) =>
         views.where((v) => _machineStatusGroup(v) == group).length;
     final summary =
@@ -29,7 +44,7 @@ extension _ManageMachines on _SuperTabMachinesState {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: MachinesStyle.headerInset,
+            padding: MachinesStyle.toolbarInset,
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final narrow = constraints.maxWidth < 760;
@@ -41,54 +56,57 @@ extension _ManageMachines on _SuperTabMachinesState {
                     Text(summary, style: MachinesStyle.body()),
                   ],
                 );
-                final actions = Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        key: const ValueKey('machines-search'),
-                        onChanged: (value) {
-                          _machineSearch = value;
-                          _changed();
-                        },
-                        style: MachinesStyle.body(color: MachinesStyle.ink),
-                        decoration: InputDecoration(
-                          hintText: 'Search machines',
-                          hintStyle: MachinesStyle.body(
-                            color: MachinesStyle.label,
-                          ),
-                          prefixIcon: Icon(
-                            AppIcons.search,
-                            size: 16,
-                            color: MachinesStyle.label,
-                          ),
-                          filled: true,
-                          fillColor: MachinesStyle.field,
-                          isDense: true,
-                          contentPadding: MachinesStyle.fieldPadding,
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: MachinesStyle.radius,
-                            borderSide: BorderSide(color: MachinesStyle.line),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: MachinesStyle.radius,
-                            borderSide: BorderSide(
-                              color: MachinesStyle.accent,
-                              width: 2,
+                final actions = SizedBox(
+                  height: 36,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          key: const ValueKey('machines-search'),
+                          onChanged: (value) {
+                            _machineSearch = value;
+                            _changed();
+                          },
+                          style: MachinesStyle.body(color: MachinesStyle.ink),
+                          decoration: InputDecoration(
+                            hintText: 'Search machines',
+                            hintStyle: MachinesStyle.body(
+                              color: MachinesStyle.label,
+                            ),
+                            prefixIcon: Icon(
+                              AppIcons.search,
+                              size: 16,
+                              color: MachinesStyle.label,
+                            ),
+                            filled: true,
+                            fillColor: MachinesStyle.field,
+                            isDense: true,
+                            contentPadding: MachinesStyle.fieldPadding,
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: MachinesStyle.radius,
+                              borderSide: BorderSide(color: MachinesStyle.line),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: MachinesStyle.radius,
+                              borderSide: BorderSide(
+                                color: MachinesStyle.accent,
+                                width: 2,
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    FilledButton(
-                      key: const ValueKey('super-manage-add-machine'),
-                      onPressed: add,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: MachinesStyle.accent,
+                      const SizedBox(width: 12),
+                      FilledButton(
+                        key: const ValueKey('super-manage-add-machine'),
+                        onPressed: add,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: MachinesStyle.accent,
+                        ),
+                        child: const Text('Add machine'),
                       ),
-                      child: const Text('Add machine'),
-                    ),
-                  ],
+                    ],
+                  ),
                 );
                 return narrow
                     ? Column(
@@ -107,7 +125,7 @@ extension _ManageMachines on _SuperTabMachinesState {
           ),
           Divider(height: 1, color: MachinesStyle.line),
           Padding(
-            padding: MachinesStyle.headerInset,
+            padding: MachinesStyle.filterInset,
             child: Wrap(
               alignment: WrapAlignment.spaceBetween,
               runSpacing: 8,
@@ -130,6 +148,9 @@ extension _ManageMachines on _SuperTabMachinesState {
                         label: Text('$label $total'),
                         selected: _machineFilter == id,
                         showCheckmark: false,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
                         onSelected: (_) {
                           _machineFilter = id;
                           _changed();
@@ -294,7 +315,7 @@ class _ManageMachineLine extends StatelessWidget {
                         if (own) ...[
                           const SizedBox(width: 4),
                           Container(
-                            padding: MachinesStyle.chipInset,
+                            padding: MachinesStyle.badgeInset,
                             decoration: BoxDecoration(
                               color: MachinesStyle.accent.withValues(
                                 alpha: .15,
@@ -326,27 +347,56 @@ class _ManageMachineLine extends StatelessWidget {
                 flex: narrow ? 2 : 5,
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Container(
-                    key: ValueKey('machines-crew-${view.id}'),
-                    padding: MachinesStyle.chipInset,
-                    decoration: BoxDecoration(
-                      color: group == 'asleep'
-                          ? MachinesStyle.asleep.withValues(alpha: .12)
-                          : MachinesStyle.chip,
-                      borderRadius: MachinesStyle.radius,
-                    ),
-                    child: Text(
-                      group == 'asleep' && crew.isNotEmpty
-                          ? '${crew.length} asleep'
-                          : '${crew.length} crew',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: MachinesStyle.small(
-                        color: group == 'asleep'
-                            ? MachinesStyle.asleep
-                            : MachinesStyle.metadata,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (!narrow &&
+                          group == 'online' &&
+                          view.owner != null) ...[
+                        SuperTabAvatar.person(view.owner!, size: 20),
+                        if (crew.length > 1)
+                          Container(
+                            width: 20,
+                            height: 20,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: MachinesStyle.chip,
+                            ),
+                            child: Text(
+                              '+${crew.length - 1}',
+                              style: MachinesStyle.small(
+                                color: MachinesStyle.metadata,
+                              ),
+                            ),
+                          ),
+                        const SizedBox(width: 8),
+                      ],
+                      Flexible(
+                        child: Container(
+                          key: ValueKey('machines-crew-${view.id}'),
+                          padding: MachinesStyle.chipInset,
+                          decoration: BoxDecoration(
+                            color: group == 'asleep'
+                                ? MachinesStyle.asleep.withValues(alpha: .12)
+                                : MachinesStyle.chip,
+                            borderRadius: MachinesStyle.radius,
+                          ),
+                          child: Text(
+                            group == 'asleep' && crew.isNotEmpty
+                                ? '${crew.length} asleep'
+                                : '${crew.length} crew',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: MachinesStyle.small(
+                              color: group == 'asleep'
+                                  ? MachinesStyle.asleep
+                                  : MachinesStyle.metadata,
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
                 ),
               ),

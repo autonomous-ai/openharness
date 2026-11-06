@@ -169,6 +169,7 @@ void main() {
     await tester.pump();
     expect(c.isMachineExpanded('mine'), isTrue);
     expect(key('super-machine-crew-member-mine-0'), findsOneWidget);
+    await c.flush();
   });
 
   testWidgets(

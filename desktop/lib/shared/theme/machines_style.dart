@@ -33,8 +33,14 @@ abstract final class MachinesStyle {
       grid.AppTheme.pick(const Color(0xffeef0f3), const Color(0xff27272b));
   static const side = EdgeInsets.symmetric(horizontal: 24);
   static const rowInset = EdgeInsets.symmetric(horizontal: 12);
+  static const toolbarInset = EdgeInsets.symmetric(
+    horizontal: 24,
+    vertical: 12,
+  );
+  static const filterInset = EdgeInsets.fromLTRB(24, 8, 24, 0);
   static const headerInset = EdgeInsets.all(24);
   static const groupInset = EdgeInsets.only(top: 24, bottom: 8);
+  static const badgeInset = EdgeInsets.symmetric(horizontal: 4);
   static const chipInset = EdgeInsets.symmetric(horizontal: 8, vertical: 4);
   static const radius = BorderRadius.all(Radius.circular(8));
   static const pillRadius = BorderRadius.all(Radius.circular(20));

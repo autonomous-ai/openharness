@@ -840,6 +840,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   String? _selectedMachineId;
   String _machineSearch = '';
   String _machineFilter = 'all';
+  Object? _manageCountsDrawn;
 
   /// Samples from before foreground return stay cached, but their readings are
   /// hidden behind the refreshing state until the next read answers.
@@ -997,7 +998,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       for (final (key, _, group) in _groups())
         for (final v in group) '$key/${v.id}',
     ];
-    if (c.backendUnreachable || !listEquals(_groupsDrawn, groups)) {
+    if (c.backendUnreachable ||
+        (widget.manage && _manageCountsDrawn != _machineCounts(views)) ||
+        !listEquals(_groupsDrawn, groups)) {
       _changed();
       return;
     }
@@ -2846,7 +2849,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             ),
           )
         : null;
-    if (widget.manage) return _manageScreen(add, failingSince);
+    if (widget.manage) return _manageScreen(add);
     final children = [
       SuperTabSectionHeading(
         'Machines',
@@ -3320,8 +3323,9 @@ class _MachineProjectsSettingState extends State<_MachineProjectsSetting> {
     final pool = snapshot?.machines
         .where((m) => m['machineId'] == widget.machineId)
         .firstOrNull;
-    if (snapshot == null || pool == null || pool['hostMachineId'] is String)
+    if (snapshot == null || pool == null || pool['hostMachineId'] is String) {
       return const SizedBox.shrink();
+    }
     final kept = pool['projects'] is List
         ? [
             for (final id in pool['projects'] as List)
