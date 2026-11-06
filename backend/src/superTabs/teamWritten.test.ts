@@ -538,6 +538,34 @@ describe('a release task the Swarm opened', () => {
     expect(refusal(() => f.run({ type: 'work.assign', conversationId: own, agentId: f.member('team-tester', 'mac-team') }, owner, { pushOrigin: 'team', pushOriginPulls: [pull] }))).toBeNull()
   })
 
+  // Security review 1 of #3324: the exemption is for a release task that names no code of its own. One a Team agent pushed a branch to
+  // (a version bump, a rollout fix) is read, marked and gated like any task, and its steps copy the mark.
+  it('is read and marked like any task once it names code of its own, and its steps copy the mark', () => {
+    const f = releaseTask(), pull = 'https://github.com/acme/app/pull/77'
+    const task = () => f.state.conversations.find(c => c.id === f.task)!
+    task().codePullRequestUrls = [pull]
+    task().pullRequestUrls = [pull]
+    // (a) a Team agent assigned to build it, and GitHub's record of a bot's push, mark it.
+    const builder = f.member('team-builder', 'mac-team')
+    f.run({ type: 'work.assign', conversationId: f.task, agentId: builder }, owner, { pushOrigin: 'team', pushOriginPulls: [pull] })
+    expect(task().teamWritten).toBe(true)
+    // (b) the main account cannot take it once its builder is lost, and (c) cannot take a step of it that names no code.
+    task().assignment = null
+    const main = f.member('main-builder', 'mac')
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: f.task, agentId: main }, owner, { pushOrigin: 'team', pushOriginPulls: [pull] }))).toBe(TEAM_WRITTEN_WORK)
+    expect(teamWrittenTask(f.state, f.state.conversations.find(c => c.id === f.step)!)).toBe(true)
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: f.step, agentId: f.member('main-tester', 'mac') }))).toBe(TEAM_WRITTEN_WORK)
+    // A step opened on it now copies its mark.
+    expect(stepMark(f.state, task())).toMatchObject({ teamWritten: true })
+  })
+
+  it('is read while it asks for review with a result that names a pull request, though its code list was empty', () => {
+    const f = releaseTask(), pull = 'https://github.com/acme/app/pull/77'
+    const task = () => f.state.conversations.find(c => c.id === f.task)!
+    applyPushOrigin(f.state, task(), 'team', [pull])
+    expect(task().teamWritten).toBe(true)
+  })
+
   it('does not change an ordinary task: the same step with the same read is still refused to the main account', () => {
     const f = swarm(), task = f.group(), step = f.group({ reviewOf: task, step: 'Test' })
     expect(refusal(() => f.run({ type: 'work.assign', conversationId: step, agentId: f.member('main-tester', 'mac') }, owner, { pushOrigin: 'unknown' }))).toBe(TEAM_WRITTEN_WORK)
