@@ -5,7 +5,7 @@
  */
 import { isBuddy, isBuddyChat } from './buddies.js'
 import type { Agent, SuperTabState } from './model.js'
-import { ledProject } from './projects.js'
+import { isAgentChat, ledProject } from './projects.js'
 
 export type AgentKind = 'buddy' | 'pm' | 'regular'
 
@@ -14,8 +14,11 @@ export function agentKind(state: SuperTabState, target: Agent): AgentKind {
   return ledProject(state, target.id) ? 'pm' : 'regular'
 }
 
-/** The chat [target]'s person talks to it in: a Buddy's own chat, a PM's project chat; none yet for a Regular agent. */
+/** The chat [target]'s person talks to it in: a Buddy's own chat, a PM's project chat, a Regular agent's own chat (agent.new);
+ *  none for an agent started before chats of their own. */
 export function agentChatId(state: SuperTabState, target: Agent): string | null {
   if (isBuddy(target)) return state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id))?.id ?? null
-  return ledProject(state, target.id)?.leadConversationId ?? null
+  const led = ledProject(state, target.id)
+  if (led) return led.leadConversationId
+  return state.conversations.find(c => isAgentChat(c) && c.agentIds.includes(target.id))?.id ?? null
 }

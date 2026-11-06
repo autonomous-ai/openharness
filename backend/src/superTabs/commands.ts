@@ -397,6 +397,11 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('buddy.create'), projectId: id.optional(), machineId: id, engine: swarmEngine, model: z.string().trim().min(1).max(200).optional(),
     setup: z.object({ name: title, cwd: path, engines: z.array(swarmEngine).min(1).max(2) }).strict().optional(),
     name: z.string().max(200).optional(), conversationId: id.optional() }).strict(),
+  // + New agent (Swarm v3, task #4116): a Regular agent in a chat of its own, or a PM that names and starts a project, on the
+  // person's own listed computer and account.
+  z.object({ type: z.literal('agent.new'), kind: z.enum(['regular', 'pm']), machineId: id, engine: swarmEngine,
+    model: z.string().trim().min(1).max(200).optional(), name: z.string().trim().min(1).max(80).optional(), projectName: title.optional(),
+    repositoryUrl: repositoryUrl.optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration,
     startedSession: z.object({ sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
@@ -1685,6 +1690,25 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
 
   /** Records [me]'s own machine [machineId], prepared by the app ([setup]), as Buddy-only (machines.ts buddyOnly): its host
    *  then reads the Swarm, starts the Buddy and reports it, and nothing else of the Swarm runs there or reads it. */
+  /** A new project of [ownerId]'s named [name], with its Lead chat: project.create's, and + New agent's for a PM (task #4116). */
+  const createProject = (ownerId: string, name: string, visibility: 'public' | 'private', brief: string): SwarmProject => {
+    const projects = mutableProjects(state)
+    if (projects.length >= 100) fail('PROJECTS_FULL', 'A swarm can have up to 100 projects.')
+    const leadConversationId = `project-${operationId}`
+    // It starts on a copy of the built-in instructions as revision 1, the team's own to change (design, The built-in template).
+    // In a Swarm whose projects moved onto the base (#3600), on the base, marked: one way to start a project (review of #3300).
+    const onBase = projects.some(p => (p.instructionsBase ?? 0) >= BASE_VERSION)
+    const first = onBase ? { instructionsRevision: 1, instructionsHash: instructionsHash(BASE_DOCUMENT), instructionsBase: BASE_VERSION } : FIRST_INSTRUCTIONS
+    const project: SwarmProject = { id: operationId, name, ownerId, ownerGeneration: person(state, ownerId).generation, leadConversationId,
+      visibility, members: [], updateMinutes: 5, skillMode: 'default', ...first }
+    projects.push(project)
+    effects.instructions = { projectId: operationId, revision: 1, hash: first.instructionsHash, text: onBase ? BASE_DOCUMENT : INSTRUCTIONS_TEMPLATE,
+      summary: FIRST_SUMMARY, writtenBy: { kind: 'person', id: ownerId }, askedBy: ownerId, at: context.now }
+    state.conversations.push({ id: leadConversationId, projectId: operationId, title: 'Lead', leadId: null,
+      agentIds: [], archived: false, brief, checks: [], assignment: null, lastMessageSequence: 0 })
+    return project
+  }
+
   const addBuddyMachine = (machineId: string, setup: NonNullable<Extract<Command, { type: 'buddy.create' }>['setup']>, me: { id: string; generation: string }) => {
     // Its last Buddy's folders are still being deleted there: a new one would lose its own (machine.contribute does the same).
     if (state.machineCleanups?.some(c => c.machineId === machineId)) {
@@ -2014,21 +2038,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'project.create': {
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person creates a project and chooses its lead.', 403)
       if (state.paused) fail('PAUSED', 'New work is paused in this swarm.')
-      const projects = mutableProjects(state)
-      if (projects.length >= 100) fail('PROJECTS_FULL', 'A swarm can have up to 100 projects.')
-      const leadConversationId = `project-${operationId}`
-      // It starts on a copy of the built-in instructions as revision 1, the team's own to change (design, The built-in template).
-      // In a Swarm whose projects moved onto the base (#3600), on the base, marked: one way to start a project (review of #3300).
-      const onBase = projects.some(p => (p.instructionsBase ?? 0) >= BASE_VERSION)
-      const first = onBase ? { instructionsRevision: 1, instructionsHash: instructionsHash(BASE_DOCUMENT), instructionsBase: BASE_VERSION } : FIRST_INSTRUCTIONS
-      projects.push({ id: operationId, name: command.name, ownerId: actor.userId, ownerGeneration: person(state, actor.userId).generation, leadConversationId,
-        visibility: command.visibility, members: [], updateMinutes: 5, skillMode: 'default', ...first })
-      effects.instructions = { projectId: operationId, revision: 1, hash: first.instructionsHash, text: onBase ? BASE_DOCUMENT : INSTRUCTIONS_TEMPLATE,
-        summary: FIRST_SUMMARY, writtenBy: { kind: 'person', id: actor.userId }, askedBy: actor.userId, at: context.now }
-      state.conversations.push({ id: leadConversationId, projectId: operationId, title: 'Lead', leadId: null,
-        agentIds: [], archived: false, brief: command.brief, checks: [], assignment: null, lastMessageSequence: 0 })
-      result.projectId = operationId
-      result.conversationId = leadConversationId
+      const project = createProject(actor.userId, command.name, command.visibility, command.brief)
+      result.projectId = project.id
+      result.conversationId = project.leadConversationId
       break
     }
     case 'lead.start': {
@@ -3473,6 +3485,45 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (named.notice) message(chatId, named.notice, [], null, SYSTEM_ROW)
       result.startId = operationId
       result.conversationId = chatId
+      break
+    }
+    case 'agent.new': {
+      // + New agent (Swarm v3, task #4116; anh Dee 11-07): the person's own agent, on their own listed computer and account, as
+      // a Buddy is (Ken's ruling, 10-28): never a machine shared with them, and never a Harness Team account.
+      if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person makes their own agent.', 403)
+      if (state.paused) fail('PAUSED', 'New work is paused in this Swarm.')
+      const me = person(state, actor.userId)
+      if (me.role === 'viewer') fail('READ_ONLY', 'A viewer cannot start agents.', 403)
+      const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose your own computer.', 403)
+      if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant || grant.hostMachineId || grant.teamSession) {
+        fail('AGENT_OWN_MACHINE', 'A new agent runs only on your own computer, in your own account.', 403)
+      }
+      // A Buddy-only record is not the computer in the Swarm: its person adds it first (Desktop does, with no screen).
+      const pool = state.machines?.find(m => m.machineId === command.machineId && m.contributorId === me.id && !m.buddyOnly && !m.removal)
+        ?? fail('MACHINE_NOT_LISTED', 'Add this computer to the Swarm first.', 403)
+      if (command.kind === 'pm') {
+        const projectName = command.projectName ?? fail('PROJECT_NAME_REQUIRED', 'Name the project its PM starts.', 400)
+        const project = createProject(me.id, projectName, 'public', '')
+        const asked = leadEffort(withRoleDefaults({ engine: command.engine, ...(command.model ? { model: command.model } : {}),
+          ...(command.repositoryUrl ? { repositoryUrl: command.repositoryUrl } : {}) }, BUILT_IN_ROLE_DEFAULTS.lead), coordinatorNameOf(project))
+        const start = placeLead(state, project, me, pool.machineId, asked, operationId, context)
+        Object.assign(result, { projectId: project.id, conversationId: project.leadConversationId, startId: start.id })
+        break
+      }
+      // A Regular agent: in no project, in a chat of its own with its person, which nobody else reads (projects.ts readsAgentChat).
+      const name = command.name ?? fail('AGENT_NAME_REQUIRED', 'Name your agent.', 400)
+      const chatId = stableId('agent-chat', me.id, me.generation, operationId)
+      state.conversations.push({ id: chatId, kind: 'agent-chat', title: name, leadId: null, agentIds: [], archived: false, brief: '', checks: [],
+        assignment: null, lastMessageSequence: 0, audience: { people: [{ id: me.id, generation: me.generation }] } })
+      const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
+        ...(command.model ? { model: command.model } : {}), name, cwd: buddyHomeFolder(pool, me), worktree: false, requirements: BUDDY_REQUIREMENTS, regular: true }
+      const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
+      state.starts ??= []
+      if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
+      state.starts.push({ poolGeneration: admitted.generation, id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
+        contributorId: me.id, membershipGeneration: me.generation, machineOwnerId: grant.machineOwnerId, hostGrant: null, request,
+        harnessId: null, dispatched: false, error: null, requestedAt: context.now })
+      Object.assign(result, { conversationId: chatId, startId: operationId })
       break
     }
     case 'agent.startDispatch':

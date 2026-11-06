@@ -311,6 +311,12 @@ export function readConversation(state: SuperTabState, actor: Actor, conversatio
     if (!readsSwarmBuddyChat(state, actor, group)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
     return group
   }
+  // A person's chat with a Regular agent of theirs has no project either (agent.new, task #4116): its person and that agent.
+  if (isAgentChat(group)) {
+    author(state, actor)
+    if (!readsAgentChat(state, actor, group)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
+    return group
+  }
   // A chat of a project the reader does not read is refused in the same words as one that does not exist: "project
   // unavailable" told another project's chat apart from a made-up id (security review 2 of #2435).
   author(state, actor)
@@ -338,6 +344,7 @@ export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversa
 export function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conversation): boolean {
   if (isLeads(group)) return false
   if (isSwarmBuddyChat(group)) return readsSwarmBuddyChat(state, actor, group)
+  if (isAgentChat(group)) return readsAgentChat(state, actor, group)
   const project = groupProject(state, group)
   if (!canReadProject(state, actor, project)) return false
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
@@ -348,6 +355,20 @@ export function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conver
   const member = state.people.find(p => p.id === actor.userId)
   return !!member && (group.audience.people.some(p => p.id === member.id && p.generation === member.generation)
     || (PRIVATE_VISIBLE_TO_OWNERS && (member.id === project.ownerId || member.id === state.ownerId)))
+}
+
+/** A person's chat with a Regular agent of theirs (agent.new, task #4116). */
+export const isAgentChat = (group: Pick<Conversation, 'kind'>): boolean => group.kind === 'agent-chat'
+
+/** Whether [actor] reads agent chat [group]: its person at the membership it was opened in, and an agent in it that runs on that
+ *  person's own account. Nobody else: not the Swarm's owner, a project's owner or PM, or another agent, as a Swarm Buddy chat. */
+function readsAgentChat(state: SuperTabState, actor: Actor, group: Conversation): boolean {
+  const owner = group.audience?.people[0]
+  if (!owner || !state.people.some(p => p.id === owner.id && p.generation === owner.generation)) return false
+  if (actor.kind === 'person') return actor.userId === owner.id
+  const target = state.agents.find(a => a.id === actor.agentId)
+  return !!target && target.machineOwnerId === actor.machineOwnerId && group.agentIds.includes(target.id)
+    && target.contributorId === owner.id && target.machineOwnerId === owner.id
 }
 
 /** Whether [actor] reads Swarm Buddy chat [group] (Dee, 10-31): its person at the membership it was opened in, and a Buddy in it

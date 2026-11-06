@@ -197,6 +197,8 @@ export interface AgentStartRequest {
   buddyOf?: { personId: string; generation: string }
   /** A Swarm-wide Buddy's start (Agent.buddyScope), written by buddy.create or message.send alone. */
   buddyScope?: 'swarm'
+  /** A Regular agent's start (agent.new, task #4116): in its person's own chat, in no project's folder. Written by the server alone. */
+  regular?: true
   /** A one-project Buddy's start (Agent.buddyNarrow), written by message.send alone. */
   buddyNarrow?: true
   /** The person's messages in an older project chat its start waits on, delivered when it joins (ids only). */
@@ -387,7 +389,7 @@ export interface Conversation {
    *  project (buddies.ts), or their one Buddy chat for the whole Swarm, with no project (`swarm-buddy`, buddies.ts
    *  openSwarmBuddyChat; Dee, 10-31): a kind of its own, so an older release parks it unread (parkLaterConversations) instead
    *  of reading it as a project's. Absent on every other conversation. */
-  kind?: 'leads' | 'buddy' | 'swarm-buddy'
+  kind?: 'leads' | 'buddy' | 'swarm-buddy' | 'agent-chat'
   projectId?: string
   /** Stable, tab-local workgroup reference. Lead has no number. */
   number?: number
@@ -1008,7 +1010,7 @@ export function conversation(state: SuperTabState, id: string): Conversation {
 
 export const isLeads = (group: Conversation): boolean => group.kind === 'leads'
 
-const KNOWN_KINDS: Record<NonNullable<Conversation['kind']>, true> = { leads: true, buddy: true, 'swarm-buddy': true }
+const KNOWN_KINDS: Record<NonNullable<Conversation['kind']>, true> = { leads: true, buddy: true, 'swarm-buddy': true, 'agent-chat': true }
 /** Conversation kinds this release knows; one of another kind is kept aside unchanged (parkLaterConversations, parts/shape.ts). */
 export const knownKind = (group: Pick<Conversation, 'kind'>): boolean => group.kind == null || Object.hasOwn(KNOWN_KINDS, group.kind)
 /** During a rolling deploy the previous release reads what the next one wrote. A conversation kind it does not know
