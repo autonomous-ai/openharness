@@ -85,6 +85,34 @@ export function openSwarmBuddyChat(state: SuperTabState, owner: Person): Convers
   return chat
 }
 
+/** Whether [agent] is [person]'s own main Buddy now: theirs at their current membership, never a thread session's. */
+const ownBuddy = (agent: Agent, person: Pick<Person, 'id' | 'generation'>): boolean => isSwarmBuddy(agent) && !agent.buddySession
+  && agent.buddyOf!.personId === person.id && agent.buddyOf!.generation === person.generation
+
+/** [personId]'s default Buddy in this Swarm: the one their lines go to, a removed Buddy's news and what is asked of them (task
+ *  #3818). Undefined when they have none, or are not in the Swarm. Never throws. */
+export function defaultBuddy(state: SuperTabState, personId: string): Agent | undefined {
+  const person = state.people.find(p => p.id === personId)
+  return person ? state.agents.find(agent => ownBuddy(agent, person)) : undefined
+}
+
+/** The chat a line for [person] goes to: their default Buddy's, or with none their main Buddy chat, opened if missing, so there
+ *  is always somewhere to write (task #3818). */
+export function defaultBuddyChat(state: SuperTabState, person: Person): Conversation {
+  const buddy = defaultBuddy(state, person.id)
+  return (buddy && state.conversations.find(c => isSwarmBuddyChat(c) && c.agentIds.includes(buddy.id))) ?? openSwarmBuddyChat(state, person)
+}
+
+/** Where a notice about what [senderBuddyId] sent for [person] goes (task #3817's decided and needs-you lines): that Buddy and its
+ *  chat while it is still theirs, else their default (defaultBuddyChat), so a removed sender's news is never lost. */
+export function buddyFor(state: SuperTabState, person: Person, senderBuddyId: string | null): { agent?: Agent; chat: Conversation } {
+  const sender = senderBuddyId ? state.agents.find(a => a.id === senderBuddyId && ownBuddy(a, person)) : undefined
+  const chat = sender && state.conversations.find(c => isSwarmBuddyChat(c) && c.agentIds.includes(sender.id))
+  if (sender && chat) return { agent: sender, chat }
+  const agent = defaultBuddy(state, person.id)
+  return { ...agent ? { agent } : {}, chat: defaultBuddyChat(state, person) }
+}
+
 /** What a Buddy is called until its owner names it: "ken's Buddy". */
 export const defaultBuddyName = (owner: Pick<Person, 'email'>): string => `${owner.email.split('@')[0]}'s Buddy`
 
