@@ -330,11 +330,11 @@ void main() {
       await drag.moveBy(const Offset(-40, 0));
       await tester.pump();
       final samples = <int>[];
-      for (var i = 0; i < 140; i++) {
+      for (var i = 0; i < 1100; i++) {
         final watch = Stopwatch()..start();
         await drag.moveBy(Offset(i.isEven ? -8 : 8, 0));
         await tester.pump();
-        if (i >= 20) samples.add(watch.elapsedMicroseconds);
+        if (i >= 100) samples.add(watch.elapsedMicroseconds);
       }
       samples.sort();
       // ignore: avoid_print
@@ -342,8 +342,8 @@ void main() {
         jsonEncode({
           'benchmark': 'board-divider-drag',
           'samples': samples.length,
-          'p50_us': samples[60],
-          'p95_us': samples[114],
+          'p50_us': samples[500],
+          'p95_us': samples[950],
         }),
       );
       await drag.up();

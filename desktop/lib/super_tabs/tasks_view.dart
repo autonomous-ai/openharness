@@ -252,103 +252,101 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
 
   /// The view's own bar: Board, List or Members, Mine and Search, nothing
   /// else.
-  Widget _bar(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(
-      grid.AppDesktop.groupGap,
-      grid.AppDesktop.controlGap,
-      grid.AppDesktop.groupGap,
-      grid.AppDesktop.controlGap,
-    ),
-    child: LayoutBuilder(
-      builder: (context, constraints) {
-        // Both side panes stay visible on Desktop, leaving less room for the
-        // Board controls at the minimum window width.
-        final compact =
-            constraints.maxWidth < MediaQuery.textScalerOf(context).scale(560);
-        final children = <Widget>[
-          Text('Tasks', style: DesktopChrome.text(medium: true)),
-          if (_moveError case final error?) ...[
-            const SizedBox(width: grid.AppDesktop.groupGap),
-            if (compact)
-              SizedBox(
-                width: constraints.maxWidth,
-                child: Text(
-                  error,
-                  key: const ValueKey('super-tasks-move-error'),
-                  style: DesktopChrome.metadata(),
-                ),
-              )
-            else
-              Flexible(
-                child: Text(
-                  error,
-                  key: const ValueKey('super-tasks-move-error'),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.metadata(),
-                ),
-              ),
-          ],
-          if (!compact) const Spacer(),
-          DesktopPill(
-            key: const ValueKey('super-tasks-layout-board'),
-            label: 'Board',
-            selected: _layout == _Layout.board,
-            onPressed: () => _choose(layout: _Layout.board),
-          ),
-          const SizedBox(width: grid.AppDesktop.listRowGap),
-          DesktopPill(
-            key: const ValueKey('super-tasks-layout-list'),
-            label: 'List',
-            selected: _layout == _Layout.list,
-            onPressed: () => _choose(layout: _Layout.list),
-          ),
-          const SizedBox(width: grid.AppDesktop.listRowGap),
-          DesktopPill(
-            key: const ValueKey('super-tasks-layout-members'),
-            label: 'Members',
-            selected: _layout == _Layout.members,
-            tooltip: 'Tasks by crew member',
-            onPressed: () => _choose(layout: _Layout.members),
-          ),
-          const SizedBox(width: grid.AppDesktop.groupGap),
-          DesktopPill(
-            key: const ValueKey('super-tasks-mine'),
-            label: 'Mine',
-            selected: _mine,
-            tooltip: 'Only the tasks you asked for',
-            onPressed: () => _choose(mine: !_mine),
-          ),
-          const SizedBox(width: grid.AppDesktop.controlGap),
-          SizedBox(
-            width: _searchWidth,
-            child: TextField(
-              key: const ValueKey('super-tasks-search'),
-              onChanged: (query) => setState(() => _query = query.trim()),
-              textInputAction: TextInputAction.search,
-              style: grid.kFieldTextStyle,
-              decoration: InputDecoration(
-                hintText: 'Search',
-                isDense: true,
-                prefixIcon: Icon(
-                  AppIcons.search,
-                  size: grid.kFieldIconSize,
-                  color: grid.AppPalette.textFaint,
-                ),
-              ),
+  Widget _bar(BuildContext context) {
+    final title = Text('Tasks', style: DesktopChrome.text(medium: true));
+    final error = _moveError == null
+        ? null
+        : Text(
+            _moveError!,
+            key: const ValueKey('super-tasks-move-error'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: DesktopChrome.metadata(),
+          );
+    // Keep controls stable while a divider changes only their layout.
+    final controls = <Widget>[
+      DesktopPill(
+        key: const ValueKey('super-tasks-layout-board'),
+        label: 'Board',
+        selected: _layout == _Layout.board,
+        onPressed: () => _choose(layout: _Layout.board),
+      ),
+      const SizedBox(width: grid.AppDesktop.listRowGap),
+      DesktopPill(
+        key: const ValueKey('super-tasks-layout-list'),
+        label: 'List',
+        selected: _layout == _Layout.list,
+        onPressed: () => _choose(layout: _Layout.list),
+      ),
+      const SizedBox(width: grid.AppDesktop.listRowGap),
+      DesktopPill(
+        key: const ValueKey('super-tasks-layout-members'),
+        label: 'Members',
+        selected: _layout == _Layout.members,
+        tooltip: 'Tasks by crew member',
+        onPressed: () => _choose(layout: _Layout.members),
+      ),
+      const SizedBox(width: grid.AppDesktop.groupGap),
+      DesktopPill(
+        key: const ValueKey('super-tasks-mine'),
+        label: 'Mine',
+        selected: _mine,
+        tooltip: 'Only the tasks you asked for',
+        onPressed: () => _choose(mine: !_mine),
+      ),
+      const SizedBox(width: grid.AppDesktop.controlGap),
+      SizedBox(
+        width: _searchWidth,
+        child: TextField(
+          key: const ValueKey('super-tasks-search'),
+          onChanged: (query) => setState(() => _query = query.trim()),
+          textInputAction: TextInputAction.search,
+          style: grid.kFieldTextStyle,
+          decoration: InputDecoration(
+            hintText: 'Search',
+            isDense: true,
+            prefixIcon: Icon(
+              AppIcons.search,
+              size: grid.kFieldIconSize,
+              color: grid.AppPalette.textFaint,
             ),
           ),
-        ];
-        return compact
-            ? Wrap(
-                crossAxisAlignment: WrapCrossAlignment.center,
-                runSpacing: grid.AppDesktop.controlGap,
-                children: children,
-              )
-            : Row(children: children);
-      },
-    ),
-  );
+        ),
+      ),
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        grid.AppDesktop.groupGap,
+        grid.AppDesktop.controlGap,
+        grid.AppDesktop.groupGap,
+        grid.AppDesktop.controlGap,
+      ),
+      // These render objects reflow the controls without rebuilding them on
+      // every divider movement. Wide windows keep the title left and controls right.
+      child: OverflowBar(
+        alignment: MainAxisAlignment.spaceBetween,
+        overflowAlignment: OverflowBarAlignment.start,
+        overflowSpacing: grid.AppDesktop.controlGap,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              title,
+              if (error != null) ...[
+                const SizedBox(width: grid.AppDesktop.groupGap),
+                Flexible(child: error),
+              ],
+            ],
+          ),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            runSpacing: grid.AppDesktop.controlGap,
+            children: controls,
+          ),
+        ],
+      ),
+    );
+  }
 
   static const _searchWidth = 220.0;
   static const _columnGap = grid.AppDesktop.groupGap;
