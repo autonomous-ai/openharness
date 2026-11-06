@@ -167,8 +167,9 @@ class _RestartBuddyDialogState extends State<_RestartBuddyDialog> {
               const SizedBox(height: 8),
               Text(
                 "Added to $engine's command line each time this Buddy starts "
-                'on $machine. Your Buddy runs with full permissions. Clear the '
-                'field to remove them.',
+                'on $machine. Your Buddy runs with full permissions. Don\'t put '
+                'secrets here: other people on that computer can see them. '
+                'Clear the field to remove them.',
                 style: DesktopChrome.control(color: DesktopChrome.muted),
               ),
               if (_error case final error?) ...[

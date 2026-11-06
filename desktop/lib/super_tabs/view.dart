@@ -3963,7 +3963,9 @@ class _SuperTabViewState extends State<SuperTabView>
               'Rename Buddy…',
               () => unawaited(showRenameBuddy(context, c, group.projectId)),
             ),
-          if (editable && c.buddy(group.projectId) != null)
+          if (editable &&
+              (c.buddy(group.projectId)?.harnessId.isNotEmpty ?? false) &&
+              c.buddy(group.projectId)!.machineId.isNotEmpty)
             item(
               'Restart Buddy…',
               () => unawaited(
