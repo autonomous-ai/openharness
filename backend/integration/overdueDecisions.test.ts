@@ -6,7 +6,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { overdueNotice } from '../src/superTabs/decisions.js'
-import { OVERDUE_DECISION_MS, overdueDecisions } from '../src/superTabs/overdueDecisions.js'
+import { OVERDUE_DECISION_MS, overdueDecisions, dueDefaultDecisions } from '../src/superTabs/overdueDecisions.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
 // A decision its person leaves for 24 hours goes to the PM (spec: Diego, 2026-11-04). A fresh loopback replica set; never DATABASE_URL.
@@ -39,9 +39,9 @@ async function swarm() {
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
   const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'PM', configuration: config, lead: true })).result.agentId)
   /** Asks peer one question, then dates it `age` ago. */
-  const ask = async (age: number) => {
+  const ask = async (age: number, defaultAt?: string) => {
     const before = new Set((await db.superTabDecision.findMany({ where: { tabId: tab }, select: { id: true } })).map(d => d.id))
-    await execute({ type: 'decision.ask', conversationId: 'lead', personId: peer.sub, questions: [{ question: `Which week ${randomUUID()}?`, options: ['This week', 'Next week'], recommended: 1, unblocks: 'The plan' }] }, owner, lead)
+    await execute({ type: 'decision.ask', conversationId: 'lead', personId: peer.sub, questions: [{ question: `Which week ${randomUUID()}?`, options: ['This week', 'Next week'], recommended: 1, unblocks: 'The plan', ...defaultAt ? { defaultAt } : {} }] }, owner, lead)
     const row = (await db.superTabDecision.findMany({ where: { tabId: tab } })).find(d => !before.has(d.id))!
     await db.superTabDecision.update({ where: { id: row.id }, data: { createdAt: new Date(NOW - age) } })
     return row.id
@@ -74,6 +74,82 @@ describe('explicit deadline persistence', () => {
     expect(changed.result.decisionIds).not.toEqual([id])
     const list = await f.store.decisions(peer, f.tab, 'open')
     expect(list.decisions.find(d => d.id === id)).toMatchObject({ defaultAt: new Date('2026-11-04T13:00:00Z'), defaulted: false })
+  })
+})
+
+describe('timed recommendation defaults', () => {
+  const at = (delta: number) => new Date(NOW + delta).toISOString()
+
+  it('waits before the deadline, then applies its recommendation at the exact time and tells the asker once', async () => {
+    const f = await swarm()
+    const id = await f.ask(HOUR, at(0))
+    expect(await new SuperTabStore(db, () => NOW - 1).leaveOverdueDecisions(NOW - 1)).toEqual({ answered: 0, skipped: 0, failed: 0 })
+    expect(await f.store.leaveOverdueDecisions(NOW)).toEqual({ answered: 1, skipped: 0, failed: 0 })
+    expect(await f.row(id)).toMatchObject({ choice: 1, delegated: true, defaulted: true, overdue: null, answeredAt: new Date(NOW) })
+    const notices = (await f.store.messages(owner, f.tab, 'lead', {}, f.lead)).messages.filter(m => (m.source as { decisionId?: string })?.decisionId === id)
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toMatchObject({ recipientIds: [f.lead], source: { kind: 'agent-only' } })
+    expect(notices[0]!.text).toMatch(/default.*time|deadline/i)
+    expect(notices[0]!.text).not.toContain('Next week')
+    const settled = await f.store.decisions(peer, f.tab, 'settled')
+    expect(settled.decisions.find(d => d.id === id)).toMatchObject({ defaulted: true, answer: 'Default applied: Next week' })
+    expect((await f.store.decisions(peer, f.tab, 'answered')).decisions).toHaveLength(0)
+    expect(await f.store.leaveOverdueDecisions(NOW)).toEqual({ answered: 0, skipped: 0, failed: 0 })
+  })
+
+  it('does not take a future deadline at the legacy 24-hour age and does take a long-lived question due today', async () => {
+    const f = await swarm()
+    const future = await f.ask(25 * HOUR, at(HOUR))
+    const ancient = await f.ask(40 * DAY, at(0))
+    expect(await f.store.leaveOverdueDecisions(NOW)).toEqual({ answered: 1, skipped: 0, failed: 0 })
+    expect((await f.row(future)).answeredAt).toBeNull()
+    expect((await f.row(ancient)).defaulted).toBe(true)
+  })
+
+  it('keeps a person’s prior answer and makes concurrent sweep/answer attempts single-winner', async () => {
+    const f = await swarm()
+    const answered = await f.ask(HOUR, at(0))
+    await f.execute({ type: 'decision.answer', decisionId: answered, choice: 0 }, peer)
+    const racing = await f.ask(HOUR, at(0))
+    await Promise.allSettled([f.store.leaveOverdueDecisions(NOW), f.store.leaveOverdueDecisions(NOW), f.execute({ type: 'decision.answer', decisionId: racing, choice: 0 }, peer)])
+    expect(await f.row(answered)).toMatchObject({ choice: 0, defaulted: null })
+    const row = await f.row(racing)
+    expect(row.answeredAt).toEqual(new Date(NOW))
+    expect([0, 1]).toContain(row.choice)
+    const notices = (await f.store.messages(owner, f.tab, 'lead', {}, f.lead)).messages.filter(m => (m.source as { decisionId?: string })?.decisionId === racing)
+    expect(notices).toHaveLength(1)
+  })
+
+  it('caps explicit defaults per pass and excludes withdrawn or reflection decisions', async () => {
+    const f = await swarm()
+    const withdrawn = await f.ask(HOUR, at(0)), reflection = await f.ask(HOUR, at(0))
+    await db.superTabDecision.update({ where: { id: withdrawn }, data: { withdrawn: true } })
+    await db.superTabDecision.update({ where: { id: reflection }, data: { kind: 'routing-reflection' } })
+    const ids = [await f.ask(HOUR, at(-2)), await f.ask(HOUR, at(-1)), await f.ask(HOUR, at(0))]
+    expect(await f.store.leaveOverdueDecisions(NOW, 2)).toEqual({ answered: 2, skipped: 0, failed: 0 })
+    expect((await f.row(ids[2]!)).answeredAt).toBeNull()
+    expect((await f.store.leaveOverdueDecisions(NOW, 2)).answered).toBe(1)
+    for (const id of [withdrawn, reflection]) expect((await f.row(id)).answeredAt).toBeNull()
+  })
+
+  it('uses the deadline index without scanning future, legacy or answered noise', async () => {
+    const f = await swarm()
+    for (let i = 0; i < 10; i++) await f.ask(HOUR, at(HOUR + i))
+    for (let i = 0; i < 5; i++) await f.ask(25 * HOUR)
+    const done = await f.ask(HOUR, at(-1))
+    await f.execute({ type: 'decision.answer', decisionId: done, choice: 0 }, peer)
+    await f.ask(40 * DAY, at(0))
+    const found: unknown[] = []
+    const start = performance.now()
+    const entries = await profiled(db, async () => { found.push(...await dueDefaultDecisions(db, NOW)) })
+    const elapsedMs = performance.now() - start
+    const read = reads(entries, 'SuperTabDecision', ['defaultAt'])
+    const explain = JSON.stringify(plan(read))
+    expect(found).toHaveLength(1)
+    expect(read, explain).toHaveLength(1)
+    expect(read[0]!.planSummary, explain).toMatch(/IXSCAN \{ answeredAt: 1, defaultAt: 1 \}/)
+    expect(read[0]!.docsExamined, explain).toBeLessThanOrEqual(found.length + 1)
+    console.info('deadline query evidence', { elapsedMs, returned: found.length, examined: read[0]!.docsExamined, plan: read[0]!.planSummary })
   })
 })
 
