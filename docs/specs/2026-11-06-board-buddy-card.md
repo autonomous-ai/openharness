@@ -32,14 +32,15 @@ Top to bottom:
   **Remove** at the right in the destructive style (`confirmRemoveBuddy`).
 
 What the card shows when it applies:
-- The flags field and Restart/Start show only for the reader's own Buddy with an agent on a machine: `c.buddy(...)` with
-  a non-empty `harnessId` and `machineId`, as the old menu item required.
+- The flags field and Restart/Start show only for the reader's own Buddy with an agent on a machine (`c.buddy(...)` with
+  a non-empty `harnessId` and `machineId`, as the old menu item required) whose machine agent is loaded, so the card
+  knows its saved flags and whether it runs (audit). The card opens only on the reader's own Buddy chat.
 - Rename and Remove follow the old menu's rule (`editable`).
 
 ### The chip field
 - Each saved word (the machine agent's `Agent.launchArgs`) is a chip in monospace with a × that removes it.
 - After the chips, an input with the hint "add a flag…".
-- Enter or Space turns the typed text into chips. The text is split as a shell would split it, so `--add-dir "a b"` gives
+- Enter or Space turns the typed text into chips. Enter never restarts the Buddy; only the Restart button does. The text is split as a shell would split it, so `--add-dir "a b"` gives
   two chips, `--add-dir` and `a b`. An unclosed quote waits for more typing instead of splitting.
 - Backspace in an empty input removes the last chip.
 - While a restart runs, the field is read-only.
@@ -51,7 +52,9 @@ What the card shows when it applies:
   - `AppNotifier.restartAgent` with a fresh `restartAttempt`;
   - `launchArgs` omitted when nothing is saved and there are no chips;
   - a stopped Buddy is resumed with the flags, as today.
-- While it runs, the button shows a spinner and "Restarting", and Rename and Remove are disabled.
+- While it runs, the button shows a spinner and "Restarting", and Rename and Remove are disabled. Closing and reopening
+  the card keeps that state until the restart answers. Text typed but not yet a chip is added before sending; an
+  unclosed quote stops the restart with "Close the quote in the launch flags, or remove it."
 - Results, shown in the card under the field with the dialog's copy:
   - **success:** the card closes;
   - **`launchArgsIgnored`:** amber line "Update Harness on <machine> to use launch flags.";
