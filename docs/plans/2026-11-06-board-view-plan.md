@@ -3,7 +3,7 @@
 **Goal:** Opening a project on Desktop shows its Board by default; the Board looks and feels like Trello; the left
 pane has no Buddy entry under Projects; the right pane is the person's Buddy chat instead of the Thread panel (a thread
 still opens from a card or a mention); the left and right panes hide and show, remembered. anh Dee's scope cut of
-11-06: no redesign, same columns and data. The design doc stays as the record of where this goes next.
+11-06: no redesign, same columns and data. The final spec (`docs/plans/2026-11-06-buddy-board-final-spec.md`, Ken and anh Dee) holds the rest as Phase 2.
 
 **Architecture:** The Swarm view already has the Board (`SuperTabTasksView`: Proposals, Next up, Working, Waiting,
 Shipped) behind the header's Tasks button. Selecting a project now opens it instead of the project chat. The cards and
