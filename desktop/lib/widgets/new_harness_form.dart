@@ -1728,7 +1728,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                   else ...[
                                     _desktopTaskEditor(),
                                     const SizedBox(height: 6),
-                                    _desktopSettings(),
+                                    // A Buddy runs as the Swarm starts it.
+                                    if (!box.bringsBuddy) _desktopSettings(),
                                     if (box.placesLead) _desktopLeadBlocked(),
                                     if (box.requiredChoice
                                         case final required?) ...[
@@ -1996,7 +1997,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
             // Fo takes no repository; a cloud coding agent works on the chosen
             // repository's GitHub copy, never on this computer's folder.
-            if ((!box.isCloud || cloudAgentTakesRepository(box.engine)) &&
+            // A Buddy has a folder of its own (task #4196).
+            if (!box.bringsBuddy &&
+                (!box.isCloud || cloudAgentTakesRepository(box.engine)) &&
                 (!box.asGuest ||
                     box.fields.contains(NewHarnessField.projectMenu)))
               _desktopField(

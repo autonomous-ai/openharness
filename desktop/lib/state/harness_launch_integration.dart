@@ -47,6 +47,7 @@ class HarnessLaunchIntegration {
     this.checkRepositoryAgain,
     this.agentKind,
     this.ownMachinesOnly = false,
+    this.startBuddy,
   });
   final String creationId, actionLabel;
   String? swarmRole;
@@ -80,6 +81,11 @@ class HarnessLaunchIntegration {
   /// Only the person's own computers, never a shared, guest or Team one: an
   /// agent they start runs in their own account.
   final bool ownMachinesOnly;
+
+  /// Join's Buddy (task #4196): the Swarm starts it on [machineId] with
+  /// [engine], as before; the form only chooses them. Set, the form shows no
+  /// project and takes no first message.
+  final Future<void> Function(String machineId, String engine)? startBuddy;
 
   /// A new project in a Swarm: the Swarm's machines its Product Manager may
   /// start on, best first. The form then shows only the task, repo and
