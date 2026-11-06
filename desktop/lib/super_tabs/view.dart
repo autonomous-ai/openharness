@@ -67,6 +67,7 @@ import 'identity.dart' show superTabMachineName;
 import 'identity_card.dart';
 import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
+import 'project_people.dart';
 import 'proposal_form.dart';
 import 'backlog.dart'
     show
@@ -1888,6 +1889,11 @@ class _SuperTabViewState extends State<SuperTabView>
       if (project != null) {
         await showSuperTabInstructions(context, c, project.id);
       }
+      return;
+    }
+    if (action == 'people') {
+      final project = c.snapshot?.projectFor(group.id);
+      if (project != null) await showProjectPeople(context, c, project);
       return;
     }
     if (action == 'rules') {
@@ -4303,6 +4309,17 @@ class _SuperTabViewState extends State<SuperTabView>
       ),
       // The project's numbers, read only (task #3393): every member reads them; the PM changes them when asked.
       row('Project rules', 'rules'),
+      // Who may write in its chat, once it works from the Board (#3820).
+      if (project.boardMode)
+        row(
+          'People',
+          'people',
+          value: switch (project.canChatIds.length) {
+            0 => 'Only the owners can chat',
+            1 => '1 more can chat',
+            final n => '$n more can chat',
+          },
+        ),
       // While the PM has a switch under way, there is nothing to ask for.
       if (editable &&
           c.snapshot?.maySwitchLead(project.id, c.accountId) == true &&
@@ -5097,7 +5114,8 @@ class _SuperTabViewState extends State<SuperTabView>
         c.canWrite &&
         group != null &&
         !group.archived &&
-        !c.isEarlierBuddyChat(group);
+        !c.isEarlierBuddyChat(group) &&
+        c.mayChatIn(group);
     final busy = c.saving || c.uploading;
     final latestOwn = c
         .messages(c.selectedId)
@@ -5671,7 +5689,23 @@ class _SuperTabViewState extends State<SuperTabView>
         // nothing looks typeable: a closed group, or an older Buddy chat in a
         // project, which also leads to the one Buddy (Lead's design review,
         // 10-31).
-        if (group != null && (c.isEarlierBuddyChat(group) || group.archived))
+        if (group != null && c.canWrite && !c.mayChatIn(group))
+          // A project on the Board: its chat is read here by everyone, written by those with Can chat (#3820).
+          Padding(
+            key: const ValueKey('super-chat-no-can-chat'),
+            padding: const EdgeInsetsDirectional.symmetric(
+              horizontal: grid.AppDesktop.groupGap,
+              vertical: grid.AppDesktop.controlGap,
+            ),
+            child: Text(
+              'Only people with Can chat write here. Talk to your Buddy, or '
+              'propose on the Board; the project owner grants Can chat in '
+              'Project settings › People.',
+              style: DesktopChrome.metadata(),
+            ),
+          )
+        else if (group != null &&
+            (c.isEarlierBuddyChat(group) || group.archived))
           Padding(
             key: c.isEarlierBuddyChat(group)
                 ? const ValueKey('super-earlier-buddy-chat')

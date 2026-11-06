@@ -1766,6 +1766,17 @@ class ConversationServer {
                 )['priority'] =
             command['priority'];
         revision++;
+      } else if (command['type'] == 'project.canChat') {
+        // As #3819 keeps it: the people granted Can chat, on the project.
+        final project = (state['projects'] as List).cast<Map>().firstWhere(
+          (p) => p['id'] == command['projectId'],
+        );
+        final granted = {...(project['canChat'] as List? ?? const [])};
+        command['granted'] == true
+            ? granted.add(command['personId'])
+            : granted.remove(command['personId']);
+        project['canChat'] = granted.toList();
+        revision++;
       } else if (command['type'] == 'proposal.create') {
         // As #3817 makes it: a card of its own, in Proposals until the PM decides.
         final id = 'proposal-${(state['conversations'] as List).length}';
