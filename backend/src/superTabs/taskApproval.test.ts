@@ -166,6 +166,15 @@ describe('personal approval enforced before work', () => {
     expect(JSON.stringify(clean)).not.toContain(token)
     expect(removed.length).toBeGreaterThan(0)
   })
+  it('blocks child review execution while the owning task is pending or rejected', () => {
+    const f = fixture(); f.mode('review'); const id = f.create()
+    const step = String(f.runCommand({ type: 'conversation.create', title: 'Review', brief: 'Review implementation', checks: [{ description: 'Review passed' }],
+      reviewOf: id, step: 'Review' }, f.pm).result.conversationId)
+    const assign = { type: 'work.assign', conversationId: step, agentId: f.candidate }
+    expect(() => f.runCommand(assign, f.pm)).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
+    f.runCommand({ type: 'task.reject', conversationId: id, reason: 'Do later' })
+    expect(() => f.runCommand(assign, f.pm)).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
+  })
   it('guards the person and selected agent against concurrent changes, and keeps approval in light loads', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
     f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate })
