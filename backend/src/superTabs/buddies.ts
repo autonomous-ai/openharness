@@ -205,6 +205,7 @@ const BUDDY_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.re
   'agent.stopLease', 'agent.stopRefused', 'agent.remove', 'buddy.modelResult'])
 
 export function requireBuddyCommand(buddy: Agent, command: { type: string; conversationId?: unknown; agentId?: unknown }, groups: readonly Conversation[]): void {
+  if (command.type === 'proposal.answer') return // The card handler checks the current sender and question before receipt replay.
   if (!BUDDY_COMMANDS.has(command.type)) fail('BUDDY_FORBIDDEN', 'A Buddy only talks with its owner and sends the proposals they ask for.', 403)
   if ('agentId' in command && command.agentId !== buddy.id) fail('BUDDY_FORBIDDEN', 'A Buddy acts only for itself.', 403)
   if (command.type === 'message.send' || command.type === 'message.react' || command.type === 'buddy.propose') {

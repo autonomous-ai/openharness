@@ -460,8 +460,9 @@ export interface Conversation {
   lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
   /** Counts reaction changes here (reactions.ts), so readers see a new reaction on an older message. */
   reactionSeq?: number
-  /** A Buddy chat's owner messages its Buddy already proposed for (buddies.ts): each asks once. */
+  /** A durable proposal on this card (#3817); retained when its accepted work becomes a task. */
   proposal?: import('./proposalCards.js').ProposalRecord
+  /** A Buddy chat's owner messages its Buddy already proposed for (buddies.ts): each asks once. */
   proposals?: string[]
   /** The name a Buddy chat's owner chose for their Buddy (buddies.ts renameBuddy): kept here, which outlives the Buddy, so
    *  one added again takes it. Absent: the default, "<person>'s Buddy". */

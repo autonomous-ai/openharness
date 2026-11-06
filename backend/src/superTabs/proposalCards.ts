@@ -1,7 +1,10 @@
 /** Durable proposal metadata lives on its existing version-guarded card. Discussion stays in message rows. */
 import { z } from 'zod'
-import { author, fail, nextConversationNumber, person, stableId, type Actor, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { canReadProject, ownsProject, readProject, type SwarmProject } from './projects.js'
+import { author, fail, nextConversationNumber, person, stableId, type Actor, type Author, type Conversation, type MessageDraft, renderWorkTask, type SuperTabState } from './model.js'
+import { buddyFor, defaultBuddy, isBuddy } from './buddies.js'
+import { recordAsked } from './leaderboard/record.js'
+import { stampLane } from './dispatch.js'
+import { groupProject, ledProject, readConversation, canReadProject, ownsProject, readProject, type SwarmProject } from './projects.js'
 import { proposalPriority, type TaskPriority } from './taskPriority.js'
 
 export interface ProposalSender { personId: string; generation: string; buddyId?: string }
@@ -99,4 +102,137 @@ export function importLegacyProposal(state: SuperTabState, project: SwarmProject
   card.proposal!.legacyMessageId = ask.messageId
   card.proposal!.createdAt = ask.at
   return id
+}
+
+export const MAX_CARD_QUESTIONS = 20
+export const MAX_CARD_SENDERS = 50
+export type ProposalAction =
+  | { type: 'proposal.decide'; conversationId: string; decision: 'accept' | 'reshape' | 'later' | 'no'; reason: string;
+      task?: import('./model.js').WorkTask; checks?: Array<{ description: string; independent?: boolean }>; revisitAt?: number }
+  | { type: 'proposal.ask'; conversationId: string; personId: string; question: string; defaultAnswer: string; deadline: number; requiresConsent?: boolean }
+  | { type: 'proposal.answer'; conversationId: string; questionId: string; text: string }
+  | { type: 'proposal.merge'; conversationId: string; intoConversationId: string; reason: string }
+
+function namedCard(state: SuperTabState, actor: Actor, id: string): Conversation & { proposal: ProposalRecord } {
+  const group = readConversation(state, actor, id)
+  if (!group.proposal || group.kind || group.audience) fail('NOT_FOUND', 'This proposal is unavailable.', 404)
+  return group as Conversation & { proposal: ProposalRecord }
+}
+function currentSender(state: SuperTabState, card: Conversation & { proposal: ProposalRecord }, personId: string): ProposalSender[] {
+  const member = state.people.find(p => p.id === personId)
+  return member ? card.proposal.senders.filter(s => s.personId === member.id && s.generation === member.generation) : []
+}
+function answerer(state: SuperTabState, actor: Actor, card: Conversation & { proposal: ProposalRecord }, questionId: string): ProposalQuestion {
+  const q = card.proposal.questions.find(q => q.id === questionId) ?? fail('NOT_FOUND', 'This question is unavailable.', 404)
+  const senders = currentSender(state, card, q.personId)
+  const self = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
+  const own = actor.kind === 'person' ? actor.userId === q.personId : !!self && self.buddyOf!.personId === q.personId
+    && senders.some(s => s.generation === self.buddyOf!.generation && (s.buddyId === self.id ||
+      ((!s.buddyId || !state.agents.some(a => a.id === s.buddyId && a.buddyOf?.personId === s.personId && a.buddyOf.generation === s.generation))
+        && defaultBuddy(state, s.personId)?.id === self.id)))
+  if (!senders.length || !own) fail('PROPOSAL_ANSWER_FORBIDDEN', 'Only the person asked or the Buddy that sent this card may answer.', 403)
+  if (q.requiresConsent && actor.kind !== 'person') fail('PROPOSAL_CONSENT_REQUIRED', 'This question needs the named person’s own agreement.', 403)
+  return q
+}
+/** Called before receipt replay as well as apply; a recorded operation retains no revoked right. */
+export function authorizeProposalAction(state: SuperTabState, actor: Actor, command: ProposalAction): void {
+  const card = namedCard(state, actor, command.conversationId), project = groupProject(state, card)
+  if (command.type === 'proposal.answer') { answerer(state, actor, card, command.questionId); return }
+  requireBoard(project)
+  if (actor.kind !== 'agent' || ledProject(state, actor.agentId)?.id !== project.id) fail('COORDINATOR_REQUIRED', 'Only this project’s current PM decides, asks or merges proposals.', 403)
+  if (command.type === 'proposal.merge') {
+    const target = namedCard(state, actor, command.intoConversationId)
+    if (groupProject(state, target).id !== project.id) fail('NOT_FOUND', 'This proposal is unavailable.', 404)
+  }
+}
+
+/** Notices stay inside the consenting person's private Buddy chat, including when no Buddy can currently run. */
+export function proposalNotices(state: SuperTabState, card: Conversation & { proposal: ProposalRecord }, moment: 'decided' | 'needs-you' | 'shipped',
+  text: string, sender: Author, operationId: string, recipients = card.proposal.senders): MessageDraft[] {
+  const project = groupProject(state, card)
+  return recipients.flatMap((identity, i) => {
+    const member = state.people.find(p => p.id === identity.personId && p.generation === identity.generation)
+    if (!member || !canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) return []
+    const route = buddyFor(state, member, identity.buddyId ?? null)
+    return [{ id: stableId(operationId, 'proposal-notice', String(i), moment), conversationId: route.chat.id, author: sender,
+      text, replyTo: null, recipients: route.agent ? [route.agent.id] : [], buddyProject: project.id,
+      source: { kind: 'proposal-notice', moment, projectId: project.id, cardId: card.id } }]
+  })
+}
+function pending(card: Conversation & { proposal: ProposalRecord }): void {
+  if (card.proposal.decision || card.proposal.mergedInto) fail('PROPOSAL_DECIDED', 'This proposal already has a decision or was merged.', 409)
+}
+const hasOpenQuestion = (card: Conversation & { proposal: ProposalRecord }) => card.proposal.questions.some(q => !q.answer)
+
+export function applyProposalAction(state: SuperTabState, actor: Actor, command: ProposalAction, operationId: string, now: number):
+  { messages: MessageDraft[]; result: Record<string, unknown> } {
+  authorizeProposalAction(state, actor, command)
+  const card = namedCard(state, actor, command.conversationId), sender = author(state, actor)
+  const messages: MessageDraft[] = []
+  const result: Record<string, unknown> = { conversationId: card.id }
+  const row = (text: string, source: Record<string, unknown>, recipients: string[] = [], id = operationId) =>
+    messages.push({ id, conversationId: card.id, author: sender, text, recipients, replyTo: null, source })
+  if (command.type === 'proposal.answer') {
+    const q = answerer(state, actor, card, command.questionId)
+    result.applied = !q.answer
+    if (!q.answer) q.answer = { text: command.text, at: now, by: sender.id }
+    row(command.text, { kind: 'proposal-answer', questionId: q.id, applied: result.applied }, card.leadId ? [card.leadId] : [])
+  } else if (command.type === 'proposal.ask') {
+    pending(card)
+    if (!currentSender(state, card, command.personId).length) fail('PROPOSAL_ANSWER_FORBIDDEN', 'Ask a current proposer on this card.', 403)
+    if (command.deadline <= now) fail('PROPOSAL_DEADLINE', 'Choose a future deadline.', 400)
+    if (card.proposal.questions.length >= MAX_CARD_QUESTIONS) fail('PROPOSAL_LIMIT', 'This card has 20 questions; decide it or reshape a new proposal.', 409)
+    const q: ProposalQuestion = { id: operationId, personId: command.personId, question: command.question, defaultAnswer: command.defaultAnswer,
+      deadline: command.deadline, requiresConsent: command.requiresConsent ?? false }
+    card.proposal.questions.push(q)
+    result.questionId = q.id
+    row(`${q.question}\nDefault: ${q.defaultAnswer}\nBy: ${new Date(q.deadline).toISOString()}`, { kind: 'proposal-question', questionId: q.id })
+    messages.push(...proposalNotices(state, card, 'needs-you', `${card.title}: ${q.question}`, sender, operationId,
+      currentSender(state, card, command.personId)))
+  } else if (command.type === 'proposal.decide') {
+    pending(card)
+    if (hasOpenQuestion(card)) fail('PROPOSAL_QUESTION_OPEN', 'Answer the open questions before deciding.', 409)
+    if (command.decision === 'later' && (!command.revisitAt || command.revisitAt <= now)) fail('PROPOSAL_DATE', 'Later needs a future revisit date.', 400)
+    if (command.decision === 'accept' || command.decision === 'reshape') {
+      if (!command.task || !command.checks?.length) fail('TASK_CONTRACT_MISSING', 'Accepted work needs its task and done-when checks.', 400)
+      card.task = command.task
+      card.brief = renderWorkTask(command.task)
+      card.briefAt = now
+      card.stepIds = []
+      card.checks = command.checks.map((check, i) => ({ id: stableId(operationId, 'check', String(i)), description: check.description, independent: check.independent ?? false, evidence: null, passedBy: null, verdicts: [] }))
+      stampLane(card)
+      recordAsked(card, card.requesterId, now)
+    }
+    card.proposal.decision = { kind: command.decision, reason: command.reason, at: now, by: sender.id,
+      ...(command.decision === 'later' ? { revisitAt: command.revisitAt } : {}) }
+    delete card.proposal.overdue
+    if (command.decision === 'no') card.archived = true
+    row(`${command.decision}: ${command.reason}`, { kind: 'proposal-decision', decision: command.decision })
+    messages.push(...proposalNotices(state, card, 'decided', `${card.title}: ${command.decision}. ${command.reason}`, sender, operationId))
+  } else {
+    pending(card)
+    const target = namedCard(state, actor, command.intoConversationId)
+    pending(target)
+    if (target.id === card.id) fail('PROPOSAL_MERGE_SELF', 'Merge another proposal into this card.', 400)
+    if (hasOpenQuestion(card)) fail('PROPOSAL_QUESTION_OPEN', 'Answer the source card’s questions before merging.', 409)
+    const senders = [...target.proposal.senders, ...card.proposal.senders].filter((s, i, all) =>
+      all.findIndex(p => p.personId === s.personId && p.generation === s.generation && p.buddyId === s.buddyId) === i)
+    const mergedFrom = [...new Set([...target.proposal.mergedFrom ?? [], card.id, ...card.proposal.mergedFrom ?? []])]
+    if (senders.length > MAX_CARD_SENDERS || mergedFrom.length > MAX_CARD_SENDERS) fail('PROPOSAL_LIMIT', 'A combined card holds at most 50 senders and merged cards.', 409)
+    for (const id of card.proposal.mergedFrom ?? []) {
+      const child = namedCard(state, actor, id)
+      if (child.proposal.mergedInto !== card.id) fail('PROPOSAL_MERGE_STALE', 'A merged card changed; read the cards again.', 409)
+      child.proposal.mergedInto = target.id
+    }
+    target.proposal.senders = senders
+    target.proposal.mergedFrom = mergedFrom
+    card.proposal.mergedInto = target.id
+    card.archived = true
+    row(`Merged into #${target.number}: ${command.reason}`, { kind: 'proposal-merged', intoConversationId: target.id })
+    messages.push({ id: stableId(operationId, 'merge-target'), conversationId: target.id, author: sender, text: `Merged #${card.number}: ${command.reason}`,
+      recipients: target.leadId ? [target.leadId] : [], replyTo: null, source: { kind: 'proposal-merged' } })
+    messages.push(...proposalNotices(state, target, 'decided', `${card.title} was merged into ${target.title}. ${command.reason}`, sender, operationId))
+    result.conversationId = target.id
+  }
+  return { messages, result }
 }

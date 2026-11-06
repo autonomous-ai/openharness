@@ -48,6 +48,7 @@ export function tellBuddies(state: SuperTabState, message: MessageDraft, threadS
 /** Work [group]'s requester asked for was just assigned: one line for their Buddy alone, inside the task, saying only what
  *  its person reads there (its number, title and status, Lead's ruling 10-29). None when the Buddy cannot read the task. */
 export function assignedNotice(state: SuperTabState, group: Conversation, author: Author, operationId: string): MessageDraft | null {
+  if (groupProject(state, group).boardMode) return null
   const buddy = group.requesterId ? listeningBuddy(state, group.requesterId, group) : undefined
   if (!buddy || !group.assignment) return null
   return { id: stableId(operationId, 'buddy-news'), conversationId: group.id, author, replyTo: null, recipients: [buddy.id], source: AGENT_ONLY,

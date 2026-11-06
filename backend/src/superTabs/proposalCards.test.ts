@@ -165,7 +165,7 @@ describe('PM decisions and card questions', () => {
     const buddy: Actor = { kind: 'agent', agentId: f.buddy, machineOwnerId: `${owner.userId}-machine` }
     f.run({ type: 'proposal.answer', conversationId: id, questionId: qid, text: 'Seven days is fine' }, buddy)
     expect(f.card(id).proposal!.questions[0]!.answer!.by).toBe(f.buddy)
-    expect(() => f.run({ type: 'message.send', conversationId: id, text: 'Arbitrary new scope', recipientIds: [] }, buddy)).toThrow(expect.objectContaining({ code: 'BUDDY_FORBIDDEN' }))
+    expect(() => f.run({ type: 'message.send', conversationId: id, text: 'Arbitrary new scope', recipientIds: [], replyTo: null }, buddy)).toThrow(expect.objectContaining({ code: 'BUDDY_FORBIDDEN' }))
     f.state.agents.push({ ...f.state.agents.find(a => a.id === f.buddy)!, id: 'other-buddy', harnessId: 'other', buddyOf: { personId: outsider.userId, generation: f.state.people.find(p => p.id === outsider.userId)!.generation } })
     expect(() => f.run({ type: 'proposal.answer', conversationId: id, questionId: qid, text: 'Foreign' },
       { kind: 'agent', agentId: 'other-buddy', machineOwnerId: `${owner.userId}-machine` })).toThrow()

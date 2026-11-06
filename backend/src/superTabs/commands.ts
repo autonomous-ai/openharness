@@ -1,4 +1,4 @@
-import { authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalRoot } from './proposalCards.js'
+import { applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalRoot } from './proposalCards.js'
 import { pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
 import { applyPushOrigin, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import { crewMoveFailed, takeOverCrewMember, wakeCrewMember } from './crewKeep.js'
@@ -199,6 +199,12 @@ const MAX_REMOVED_MACHINES = 64
 
 export const commandSchema = z.discriminatedUnion('type', [
   proposalCreateSchema,
+  z.object({ type: z.literal('proposal.decide'), conversationId: id, decision: z.enum(['accept', 'reshape', 'later', 'no']), reason: text,
+    task: task.optional(), checks: z.array(check).min(1).max(50).optional(), revisitAt: z.number().int().positive().optional() }).strict(),
+  z.object({ type: z.literal('proposal.ask'), conversationId: id, personId: id, question: text, defaultAnswer: text,
+    deadline: z.number().int().positive(), requiresConsent: z.boolean().optional() }).strict(),
+  z.object({ type: z.literal('proposal.answer'), conversationId: id, questionId: id, text }).strict(),
+  z.object({ type: z.literal('proposal.merge'), conversationId: id, intoConversationId: id, reason: text }).strict(),
   z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(swarmEngine).min(1).max(2), maxAgents,
     // Its Agents setting (machines.ts agentLimit): an older client leaves it out.
     agents: z.enum(['memory', 'atMost']).optional(),
@@ -803,10 +809,11 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if (command.type === 'mention.done' || command.type === 'decision.answer' || command.type === 'member.username'
     || command.type === 'member.name' || command.type === 'member.timeZone') return void author(state, actor)
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
-  author(state, actor, !leaving && command.type !== 'proposal.create')
+  author(state, actor, !leaving && command.type !== 'proposal.create' && command.type !== 'proposal.answer')
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
   if (buddy) requireBuddyCommand(buddy, command, state.conversations)
   if (command.type === 'proposal.create') authorizePersonProposal(state, actor, command)
+  if (command.type === 'proposal.decide' || command.type === 'proposal.ask' || command.type === 'proposal.answer' || command.type === 'proposal.merge') authorizeProposalAction(state, actor, command)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
   if ('conversationId' in command && command.type !== 'invite.create') {
     const group = readConversation(state, actor, command.conversationId)
@@ -1083,7 +1090,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   if (command.type === 'swarm.delete' && (actor.kind !== 'person' || actor.userId !== state.ownerId)) notThere()
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   const sender = author(state, actor, !leaving && command.type !== 'decision.answer' && command.type !== 'member.username'
-    && command.type !== 'member.name' && command.type !== 'member.timeZone' && command.type !== 'proposal.create')
+    && command.type !== 'member.name' && command.type !== 'member.timeZone' && command.type !== 'proposal.create' && command.type !== 'proposal.answer')
   authorizeCommandAccess(state, actor, command, context)
   /** A machine's owner said so: they sent the command, or the Lead of the chat [askedIn] names passes on a message they wrote
    *  there in the last day, as routing rules are (machine.engineResume, machine.projects). */
@@ -3009,6 +3016,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           bookkeeping(r.conversationId, { kind: 'route-override', decisionId: decision.id, by: 'lead' }))
         if (routed) message(r.conversationId, routed.text, [], null, bookkeeping(r.conversationId, routed.source))
       }
+      break
+    }
+    case 'proposal.decide': case 'proposal.ask': case 'proposal.answer': case 'proposal.merge': {
+      const outcome = applyProposalAction(state, actor, command, operationId, context.now)
+      effects.messages.push(...outcome.messages)
+      Object.assign(result, outcome.result)
       break
     }
     case 'proposal.create': {
