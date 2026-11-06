@@ -1699,6 +1699,48 @@ describe('contributed machine executor', () => {
         error: 'The selected agent engine is not installed on this machine. CPU use is 97%; the requested maximum is 85%.' } }])
     })
 
+    // Task #3861 (stone7890's Mac, 11-06): a start stayed Queued for hours, its machine's fault only in the host log. The Swarm is
+    // told the reason, once, and the start fails with it after 5 minutes, so the Lead starts it elsewhere.
+    describe('on a fault of this machine', () => {
+      const fault = { error: 'START_MACHINE_FAULT', startId: 'start', creationId: 'creation-0000000000000001',
+        detail: 'CREATION_STORAGE_FAILED: The creation folder ~/.harness/cli/data/agent-creations is not usable by this account (permissions).' }
+      const waiting = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && c[2] === '/api/super-tabs/hosts/host/starts/tab/start')
+        .map(c => (c[3] as { command: { type: string; startId: string; reason: string } }).command).filter(command => command.type === 'agent.startWaiting')
+
+      it('tells the Swarm the reason once, and fails the start with it after five minutes', async () => {
+        const f = fixture()
+        f.start.mockResolvedValue(fault as never)
+        await f.machine.tick()
+        for (let i = 0; i < 4; i++) { f.step(60_000); await f.machine.tick() }
+        expect(waiting(f)).toEqual([{ type: 'agent.startWaiting', startId: 'start', reason: fault.detail }])
+        expect(failures(f)).toEqual([])
+        f.step(60_000); await f.machine.tick()
+        expect(failures(f)).toEqual([{ operationId: 'refused-start', command: { type: 'agent.startFailed', startId: 'start', error: fault.detail } }])
+      })
+
+      it('never fails a start already dispatched, whose launch may have happened', async () => {
+        const f = fixture()
+        f.pool.starts[0]!.dispatched = true
+        f.start.mockResolvedValue(fault as never)
+        await f.machine.tick()
+        for (let i = 0; i < 6; i++) { f.step(60_000); await f.machine.tick() }
+        expect(failures(f)).toEqual([])
+      })
+
+      it('goes on when the Swarm\'s server does not know the report', async () => {
+        const f = fixture()
+        f.start.mockResolvedValue(fault as never)
+        const post = f.backend.getMockImplementation()!
+        f.backend.mockImplementation(async (...args: Parameters<typeof post>) => {
+          if ((args[3] as { command?: { type?: string } } | undefined)?.command?.type === 'agent.startWaiting') throw new SuperTabHostError('VALIDATION_ERROR', 'Unknown command', 400)
+          return post(...args)
+        })
+        await f.machine.tick()
+        for (let i = 0; i < 5; i++) { f.step(60_000); await f.machine.tick() }
+        expect(failures(f)).toHaveLength(1)
+      })
+    })
+
     it('starts its minute again after a pass that did not refuse it, and never fails one whose launch is uncertain or pending', async () => {
       const f = fixture()
       f.start.mockResolvedValue({ error: 'CONTRIBUTION_REQUIRED', startId: 'start', detail: 'Ask the machine owner to use Add machine in this Swarm.' } as never)
