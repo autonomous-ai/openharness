@@ -72,7 +72,6 @@ describe('the weekly aggregate cache', () => {
     expect((await read()).projectId).toBe('load-4')
     expect((await read('owner', now + 86_400_000)).projectId).toBe('load-5')
     expect((await read('owner', now, week - 7 * 86_400_000)).projectId).toBe('load-6')
-    cache.dispose()
   })
 
   it('does not keep results or failures when the shared stamps are unavailable', async () => {

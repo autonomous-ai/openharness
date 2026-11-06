@@ -94,7 +94,8 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
         .map(u => ({ title: u.group.title, conversationId: u.group.id, kind: u.kind ?? 'needs_human', waitedMinutes: Math.round(u.waitedMs / 60_000) })),
       lent: [...machines].sort((a, b) => b.busyMs - a.busyMs).slice(0, DETAILS_LIMIT)
         .map(m => ({ machineName: m.name, busyHours: Math.round(m.busyMs / HOUR_MS * 10) / 10 })),
-      brought: broughtMachines(state, machinesBy.get(personId) ?? [], visibleMachines, shippedRequests, span, lentOf).slice(0, DETAILS_LIMIT),
+      // The weekly board counts agents instead of presenting machine/subscription contributions.
+      brought: weeklyOrg ? [] : broughtMachines(state, machinesBy.get(personId) ?? [], visibleMachines, shippedRequests, span, lentOf).slice(0, DETAILS_LIMIT),
     }
     return {
       points,
