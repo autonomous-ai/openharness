@@ -61,6 +61,8 @@ describe('shell guard: kill -1, every process the account can reach', () => {
     'kill -s TERM -1',
     '/bin/kill -1 -1',
     'kill 4242 -1',
+    'kill -1',
+    '/bin/kill -9 -1 ; true',
   ])('refuses %s', (command) => {
     expect(refused(command)).toBe(GUARD_REASONS.killAll)
   })
