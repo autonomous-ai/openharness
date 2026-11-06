@@ -112,7 +112,7 @@ const ENTRIES: readonly SheetEntry[] = [
   T('- Add a note:', '`note.add` {projectId, text up to 300, askedBy, expiresAt} adds a note.', 'pm', 'p'),
   T('- Remove a note:', '`note.remove` {projectId, noteId} removes one.', 'pm', 'p'),
   T('- `crew.add` {agentId, role, lane}', 'A crew: `crew.add` {agentId, role, lane} marks a standing member, `crew.remove` unmarks it; `work.lane` gives a task its lane; a free member takes its lane\'s next task.', 'pm', 'pe',
-    'Crew: mark it once, `crew.add` {agentId, role, lane: backend, cli, desktop, mobile, docs}; `work.lane` sets a task\'s lane and a free member takes it. Start an agent only to replace a broken one. Answer each person once, in place: `answer GROUP ID TEXT OPERATION_ID`. Confirm change notes: `process.confirm` {projectId, noteId}.'),
+    'Crew: mark it once, `crew.add` {agentId, role, lane: backend, cli, desktop, mobile, docs}; `work.lane` sets a task\'s lane and a free member takes it. Start an agent only to replace a broken one. Confirm change notes: `process.confirm` {projectId, noteId}.'),
   T('- `route GROUP JSON', "`route GROUP JSON [--instructions-read REVISION]` lists who could do a group's work (JSON: difficulty, risk, size, why, kind); choose by the project's Routing.", 'pm', 'pe', "`route GROUP JSON [--instructions-read REVISION]` lists who could do a group's work: choose by the project's Routing, then `start OPERATION_ID JSON` (or `work.assign`) with its `routeDecisionId` and `overrideReason`; `resume START_ID` finishes an interrupted start. Also `plan` and `capacity MACHINE_ID JSON`. A step is a conversation with `reviewOf` and `step`; a `review` status wakes nobody, so name the reviewer with `--to`."),
   T('- Start or assign the candidate', 'Start or assign the candidate you chose with its `routeDecisionId` and `overrideReason` (the Routing rule).', 'pm', 'pe'),
   T('- `plan [JSON]`', '`plan [JSON]` places all open groups at once; it records nothing.', 'pm', 'p'),
@@ -148,7 +148,7 @@ export const sheetEntries = (): readonly SheetEntry[] => ENTRIES
 /** The what-changed note for PMs the PM sheet was last announced with (backend superTabs/processNotes.ts, task #3581), and the
  *  sheet's fingerprint then. A change to the PM sheet fails swarmToolSheets.spec.ts until a new note is added there and pinned
  *  here, so every running PM hears what changed. */
-export const PM_SHEET_NOTE = { id: '2026-11-06-crew', sheet: '72d9395bf968' } as const
+export const PM_SHEET_NOTE = { id: '2026-11-06-crew', sheet: 'eaa55bffc189' } as const
 
 /** The role a session's sheet is for: the coordinator is the PM; an agent by its project role's name (anything unknown is an
  *  Engineer, whose sheet points to the full manual); a Reviewer started as the fallback role is a Reviewer. */

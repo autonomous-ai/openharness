@@ -16,7 +16,7 @@ export const PROCESS_NOTES: readonly ProcessNote[] = [
     id: '2026-11-06-crew',
     text: 'Swarm v2: mark your project\'s standing crew once (crew.add with a role and a lane: backend, cli, desktop, mobile or docs), '
       + 'and give each task a lane (work.lane): the Swarm hands a free crew member its lane\'s next task by itself. Start a new agent only '
-      + 'to replace a broken one. Answer each person\'s message once, in its place (answer). Your tool sheet says it; '
+      + 'to replace a broken one. Your tool sheet says it; '
       + '`harness super-tab help tools` has every rule.',
     schedule: '058d05641d40',
   },
