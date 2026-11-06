@@ -131,6 +131,41 @@ void main() {
     );
     expect(find.text('Auto approve'), findsOneWidget);
   });
+  testWidgets(
+    'ordinary proposals open their conversation without approval controls',
+    (t) async {
+      await mount(t);
+      final opened = <String>[];
+      f.rows.last.remove('canApprove');
+      f.rows.last['version'] = 2;
+      await f.controller.refresh();
+      await t.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabPersonalTasksPane(
+              controller: f.controller,
+              onOpenTask: opened.add,
+            ),
+          ),
+        ),
+      );
+      await t.tap(find.text('Task new'));
+      await t.pump();
+      expect(opened, ['new']);
+      expect(find.text('Approve'), findsNothing);
+      expect(find.text('Reject'), findsNothing);
+      expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+      expect(f.commands, isEmpty);
+      f.rows.last['canApprove'] = false;
+      f.rows.last['version'] = 3;
+      await f.controller.refresh();
+      await t.pump();
+      await t.tap(find.text('Task new'));
+      await t.pump();
+      expect(opened, ['new', 'new']);
+      expect(f.commands, isEmpty);
+    },
+  );
   testWidgets('mode is saved by authenticated command and server read', (
     t,
   ) async {

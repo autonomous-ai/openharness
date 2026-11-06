@@ -11,6 +11,7 @@ Map<String, dynamic> task(String id, int version, int at) => {
   'projectName': 'Old project',
   'title': 'Task $id',
   'status': 'proposal',
+  'canApprove': true,
   'suggested': true,
   'agent': {'id': '0540', 'name': 'Old name'},
 };
