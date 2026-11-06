@@ -73,24 +73,34 @@ describe('carrying out a Buddy\'s model request', () => {
   })
 
   // Task #3810 (Diego, 11-06): a send-home left a busy thread session on the member's model and reported ok, so its limit
-  // stopped holding.
-  it('on a send-home, waits for a thread session that is answering and moves it once its turn ends, moving the Buddy once', async () => {
-    const f = fixture({ answers: [{ retargeted: true }, { error: 'AGENT_BUSY' }, { retargeted: true }] })
-    const home = main(request({ gridModel: null, gridName: undefined, reason: 'limit' }))
-    await f.runner.serve(home, [thread('h-a')])
+  // stopped holding. Linux test of #3393: the Buddy itself is reported at once, so the Swarm records it home and its owner
+  // may switch again; the session, reported as stayed, is waited for by the sessions-only follow-up the Swarm then asks for.
+  it('on a send-home, reports the Buddy at once and names a thread session that is answering as stayed', async () => {
+    const f = fixture({ answers: [{ retargeted: true }, { error: 'AGENT_BUSY' }] })
+    await f.runner.serve(main(request({ gridModel: null, gridName: undefined, reason: 'limit' })), [thread('h-a')])
+    expect(f.frames.map(frame => frame.agentId)).toEqual(['h-main', 'h-a'])
+    expect(f.posts).toEqual([expect.objectContaining({ ok: true, stayed: ['h-a'], error: 'A thread session stayed where it was: it was answering' })])
+  })
+
+  it('on the follow-up for the sessions alone, waits for one that is answering and moves it once its turn ends', async () => {
+    const f = fixture({ answers: [{ error: 'AGENT_BUSY' }, { retargeted: true }] })
+    const followUp = main(request({ gridModel: null, gridName: undefined, reason: 'limit', sessionsOnly: true }))
+    await f.runner.serve(followUp, [thread('h-a')])
     expect(f.posts).toEqual([])
     f.later(15_000)
-    await f.runner.serve(home, [thread('h-a')])
-    expect(f.frames.map(frame => frame.agentId)).toEqual(['h-main', 'h-a', 'h-a'])
+    await f.runner.serve(followUp, [thread('h-a')])
+    expect(f.frames.map(frame => frame.agentId)).toEqual(['h-a', 'h-a'])
     expect(f.posts).toEqual([{ asAgentId: 'buddy', type: 'buddy.modelResult', agentId: 'buddy', requestId: 'req1', ok: true }])
   })
 
-  it('reports a thread session that is still answering as stayed once the request\'s lease is nearly over', async () => {
-    const f = fixture({ answers: [{ retargeted: true }, { error: 'AGENT_BUSY' }, { error: 'AGENT_BUSY' }] })
-    const home = main(request({ gridModel: null, gridName: undefined, reason: 'limit', at: new Date(0).toISOString() }))
-    await f.runner.serve(home, [thread('h-a')])
+  it('reports a thread session that is still answering as stayed once the follow-up\'s lease is nearly over', async () => {
+    const f = fixture({ answers: [{ error: 'AGENT_BUSY' }, { error: 'AGENT_BUSY' }] })
+    const followUp = main(request({ gridModel: null, gridName: undefined, sessionsOnly: true, at: new Date(0).toISOString() }))
+    await f.runner.serve(followUp, [thread('h-a')])
+    // A follow-up after the person's own move home has no reason, and still waits: the Buddy is not in it.
+    expect(f.posts).toEqual([])
     f.later(10 * 60_000)
-    await f.runner.serve(home, [thread('h-a')])
+    await f.runner.serve(followUp, [thread('h-a')])
     expect(f.posts).toEqual([expect.objectContaining({ ok: true, stayed: ['h-a'], error: 'A thread session stayed where it was: it was answering' })])
   })
 
