@@ -5578,3 +5578,42 @@ describe('a migrated Swarm\'s kept old state (Stability 2.1)', () => {
     for (const id of [tab, own]) expect((await db.superTab.findUnique({ where: { id }, select: { legacyState: true } }))!.legacyState).toEqual(OLD_STATE)
   })
 })
+
+// Task #3929 (for Diego's #3903): a closed tab's Personal project is deleted only if it has no message at that moment, in the same
+// write; a message that lands meanwhile makes it archived instead. Desktop sends it under one operation id from every computer.
+describe('a closed tab\'s Personal project', () => {
+  const person: AuthUser = { sub: '100000000000000000000391', email: 'tabs-3929@example.com', autonomousEnv: 'prod', role: 'user' }
+  const personal = async () => {
+    await db.user.upsert({ where: { id: person.sub }, create: { id: person.sub, externalId: `fixture-${person.sub}`, email: person.email,
+      autonomousEnv: person.autonomousEnv }, update: {} })
+    const tab = (await store.create(person, 'personal-swarm', 'Personal', 'private')).id
+    const projectId = String((await run(tab, { type: 'project.create', name: 'Untitled tab', visibility: 'private', brief: '' }, person, undefined,
+      `personal-tab-${randomUUID()}`)).result.projectId)
+    const chat = (await store.read(person, tab)).state.projects!.find(p => p.id === projectId)!.leadConversationId
+    return { tab, projectId, chat }
+  }
+
+  it('archives it when a message lands while it is being closed', async () => {
+    const { tab, projectId, chat } = await personal()
+    let sent = false
+    const raced = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (sent) return
+      sent = true
+      await run(tab, { type: 'message.send', conversationId: chat, text: 'Written as the tab closed', replyTo: null, recipientIds: [] }, person)
+    }))
+    const closed = await raced.execute(person, tab, { operationId: randomUUID(), command: { type: 'project.closeTab', projectId } as Command })
+    expect(sent).toBe(true)
+    expect(closed.result).toMatchObject({ outcome: 'archived' })
+    expect((await store.read(person, tab)).state.projects!.find(p => p.id === projectId)).toMatchObject({ archived: true })
+  })
+
+  it('does its work once under one operation id, from any of the person\'s computers', async () => {
+    const { tab, projectId } = await personal()
+    const operationId = `close-tab-${randomUUID()}`
+    const first = await store.execute(person, tab, { operationId, command: { type: 'project.closeTab', projectId } as Command })
+    const again = await store.execute(person, tab, { operationId, command: { type: 'project.closeTab', projectId } as Command })
+    expect(first.result).toMatchObject({ outcome: 'deleted' })
+    expect(again.result).toEqual(first.result)
+    expect((await store.read(person, tab)).state.projects!.some(p => p.id === projectId)).toBe(false)
+  })
+})
