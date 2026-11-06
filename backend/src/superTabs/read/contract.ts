@@ -27,7 +27,11 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
  *  (autoJoin.ts), from the sharing the head holds; who declined is never sent. */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'projects' | 'leadsConversationId' | 'ownerId'
   | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'workspaceId' | 'workspaceVisibility' | 'buddies' | 'removedMachines'
-  | 'autoJoin'>
+  | 'autoJoin'> & {
+  /** How many Buddies each person may have (task #3818): always sent, 5 unless the Swarm's owner set another. An older backend
+   *  sends none, so an app offers several Buddies only where this is present. */
+  buddyCap: number
+}
 /** A member's avatar says only `{ kind: 'upload' }` for an upload: its link comes signed in `derived.avatars`. */
 export type MemberView = Omit<Person, 'avatar'> & { avatar?: import('../profile.js').AvatarView }
 /** The stored agent. Time-based and cross-part values (`downSince`, `limitedUntil`, an awaiting decision, the custom

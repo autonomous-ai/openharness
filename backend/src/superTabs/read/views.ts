@@ -7,7 +7,7 @@ import { machineSuspensionReason, suspendedEngines } from '../engineHealth.js'
 import { DISPATCH_RULES, laneOf } from '../dispatch.js'
 import { leadChoices } from '../leadStart.js'
 import { heldView } from '../heldReason.js'
-import { isBuddyChat, isBuddyReader } from '../buddies.js'
+import { buddyCapOf, isBuddyChat, isBuddyReader } from '../buddies.js'
 import { agentForBuddy, agentWithoutMachine, groupForBuddy, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { availableSlots, slotCounter, machineTeamWork, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
@@ -111,6 +111,9 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   // no reader shows them. What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
   if (head.projects) head.projects = head.projects.map(({ progress: _progress, schedule: _schedule, releases: _releases, owed: _owed, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
+  // Always, its default too (task #3818): an app offers several Buddies only where the head says how many, so an older backend,
+  // which sends none, is never taken for one that makes them.
+  head.buddyCap = buddyCapOf(state)
   const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
   const buddy = isBuddyReader(state, actor)
   return {
