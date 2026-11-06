@@ -200,6 +200,26 @@ void main() {
     },
   );
 
+  test(
+    'a check on a starved machine still reads its result (task #3721)',
+    () async {
+      // CI runs four test workers on four CPUs: the isolate can be descheduled past any
+      // wall-clock budget while the check waits on file reads. The check is read when
+      // it finishes; a late one is not a missing one.
+      final child = _ProbeProcess();
+      children.add(child);
+      final setup = provisioner((_, _, {environment}) async => child);
+      Timer.run(() {
+        final stalled = Stopwatch()..start();
+        while (stalled.elapsedMilliseconds < 400) {}
+      });
+      final result = await check(setup);
+      expect(result, isNotNull, reason: 'A late check is not a missing one');
+      expect(result?.phase, EnvironmentSetupPhase.failed);
+      expect(result?.failure?.title, 'Checking this computer took too long');
+    },
+  );
+
   test('an injected run-only check also has a bounded wait', () async {
     final setup = EnvironmentProvisioner(
       harnessHome: scratch,
