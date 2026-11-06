@@ -10,6 +10,8 @@
 
 **Spec:** Harness task #3863: Dee's fixed projects / Board / chat layout, replacing #3846. No other layout change. Both appearances; memory stores and fake sign-in in tests.
 
+Dee's follow-up: the right chat is the main interface, approximately one-third of the window with a 420 px minimum. Smaller windows give space to chat before the Board. Task #3869 owns sideways Board scrolling. Capture light/dark at 1280, 1920 and 2560 px.
+
 ## Global Constraints
 
 - No hide/show controls or remembered hidden state for either side pane.
@@ -56,3 +58,14 @@
 - [x] Remove visibility flags, reads, writes and buttons. Reserve side panes for the Desktop Board workspace at supported window widths, and leave the center blank without an open project. Keep other navigation surfaces intact.
 - [x] Run the layout regression, named affected tests, changed-file analysis, icon and style audits. Capture and inspect both appearances, with and without a project. Record evidence and platform limitations in the PR.
 - [ ] Commit implementation, push, mark ready and hand the stable revision to the Integrator for independent review and test. Full Desktop suite evidence comes from automatic PR CI.
+
+## Task 2: Comfortable chat width (Dee's follow-up)
+
+**Files:** `desktop/lib/super_tabs/view.dart`, `desktop/lib/super_tabs/pane_layout.dart`, `desktop/test/super_tab_board_layout_test.dart`.
+
+**Interfaces:** Keep the existing resizable layout and stored widths. Add a `rightMinimum` size to `SuperTabPaneLayout` for the Board chat; other callers retain their current minimum. Desktop Board chat defaults to one-third of available width, at least 420 px. The center yields space before either side's minimum.
+
+- [ ] Commit tests asserting chat widths 426.67 / 640 / 853.33 at windows 1280 / 1920 / 2560, in both appearances, and capture each. At 880 px and after restoring an old 280 px width, assert at least 420 px of chat and a visible Board.
+- [ ] Watch these fail before adding the width rule; record the red revision.
+- [ ] Implement the size contract and retain existing user resizing above the minimum. Preserve non-Board navigation's responsive behavior.
+- [ ] Run layout and pane sizing regressions plus the changed Tasks toolbar tests, analyze the changed Dart, and inspect six screenshots. Record the rendering comparison and remaining platform limits.
