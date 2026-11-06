@@ -1,6 +1,6 @@
 # Harness: product thesis and roadmap
 
-> **Superseded on 2026-11-03 by [PRODUCT.md](../PRODUCT.md).** Kept as history.
+> **Superseded on 2026-11-03 by [AGENTS.md](../AGENTS.md).** Kept as history.
 
 Working product thesis, September 27, 2026. This records the framing developed with the
 founder and the product bet it suggests. Roadmap stages remain proposals for the order of

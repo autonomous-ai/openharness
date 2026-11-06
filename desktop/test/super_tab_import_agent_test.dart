@@ -1163,8 +1163,8 @@ void main() {
       );
     }, variant: mac);
 
-    // ENGINEERING.md 8: each import is counted by its outcome alone, with no
-    // name, path or id.
+    // AGENTS.md standard 8: each import is counted by its outcome alone, with
+    // no name, path or id.
     ({
       ProductMeasurement usage,
       Map<String, int> Function() totals,

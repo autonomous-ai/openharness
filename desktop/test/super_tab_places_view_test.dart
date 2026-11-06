@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -5,7 +6,7 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'super_tab_activity_lists_test.dart' show swarm;
+import 'super_tab_activity_lists_test.dart' show swarm, unreadThread;
 import 'support/super_tab_fixture.dart';
 
 /// The Swarm view of task #2996: the sidebar's three rows open their pages,
@@ -25,13 +26,15 @@ void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
 
   Future<(SuperTabController, ConversationServer)> show(
-    WidgetTester tester,
-  ) async {
+    WidgetTester tester, {
+    void Function(ConversationServer server)? prepare,
+  }) async {
     await tester.binding.setSurfaceSize(const Size(1300, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final server = swarm();
     server.append('A root to thread on');
     server.ask(['Ship it?']);
+    prepare?.call(server);
     final c = server.controller(
       account: 'owner',
       initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
@@ -80,6 +83,57 @@ void main() {
       expect(find.text(title), findsNWidgets(2), reason: '$row and header');
     }
     expect(find.text('Activity'), findsNothing);
+    await end(tester, c);
+  });
+
+  // Tuan, task #3751: on the Threads page a card's #-link to a task changed the chat behind the page, so
+  // nothing on screen moved and the link read as dead.
+  testWidgets('a #-link in a Threads card opens its task, as in the chat', (
+    tester,
+  ) async {
+    final (c, _) = await show(
+      tester,
+      prepare: (server) {
+        (server.state['conversations'] as List)
+                .cast<Map<String, dynamic>>()
+                .firstWhere((g) => g['id'] == 'offline')['number'] =
+            42;
+        server.append('See #42 for the fix.');
+        final root = server.messages.last['id'] as String;
+        server.followedThreads = {
+          'unread': [
+            unreadThread(root, text: 'See #42 for the fix.')
+              ..['conversationId'] = 'lead',
+          ],
+          'read': [],
+          'more': false,
+        };
+      },
+    );
+    await tap(tester, 'super-threads');
+    expect(key('super-threads-list'), findsOneWidget);
+
+    TextSpan? link;
+    for (final text in tester.widgetList<RichText>(
+      find.descendant(
+        of: key('super-threads-list'),
+        matching: find.byType(RichText),
+      ),
+    )) {
+      text.text.visitChildren((span) {
+        if (span is TextSpan &&
+            span.text == '#42' &&
+            span.recognizer is TapGestureRecognizer) {
+          link = span;
+        }
+        return true;
+      });
+    }
+    expect(link, isNotNull, reason: 'the card shows #42 as a link');
+    (link!.recognizer! as TapGestureRecognizer).onTap!();
+    await _settle(tester);
+    expect(key('super-threads-list'), findsNothing);
+    expect(c.selectedId, 'offline');
     await end(tester, c);
   });
 

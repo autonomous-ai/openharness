@@ -1,6 +1,6 @@
 # Who we're building Harness for
 
-> **The audience here is superseded on 2026-11-03 by [PRODUCT.md](../PRODUCT.md#who-it-is-for).**
+> **The audience here is superseded on 2026-11-03 by [AGENTS.md](../AGENTS.md).**
 > The voice and wording rules still apply.
 
 Product and marketing direction, September 20, 2026. Validate this working audience through real

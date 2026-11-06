@@ -13,10 +13,10 @@ import 'pulse.dart';
 import 'visible_tick.dart';
 
 /// The strip on top of a project's Tasks board (task #3384):
-/// `Waiting for River: 2 asks · oldest 14m (Huy) │ Working 6 of 10 │ Next up 7
-/// │ Lost 0 │ Held 3`. Each count opens its list. A count is red from its
-/// rule's `redAt` on, said by the error ink, a bold label and an alert icon
-/// together; the strip's rim turns red with it.
+/// `Waiting for River: 2 asks · oldest 14m (Huy)`, `Working 6 of 10`, `Next up
+/// 7`, `Lost 0`, `Held 3`, each a small chip (task #3787). Each count opens its
+/// list. A count is red from its rule's `redAt` on, said by the error ink, a
+/// bold label and an alert icon together; its chip's rim turns red with it.
 class SuperTabPulseStrip extends StatefulWidget {
   const SuperTabPulseStrip({
     super.key,
@@ -162,7 +162,6 @@ class _SuperTabPulseStripState extends State<SuperTabPulseStrip>
     grid.AppTheme.watch(context);
     final now = widget.now();
     final pulse = widget.pulse;
-    final error = Theme.of(context).colorScheme.error;
     bool red(SuperTabPulseRule rule) => pulse.isRed(rule, now);
     final parts = [
       _segment(
@@ -203,38 +202,18 @@ class _SuperTabPulseStripState extends State<SuperTabPulseStrip>
         ),
       ),
     ];
-    return DecoratedBox(
+    // Small chips, one per count (anh Dee, task #3787): a red one rims
+    // itself, not the whole strip.
+    return KeyedSubtree(
       key: const ValueKey('super-pulse'),
-      decoration: BoxDecoration(
-        color: grid.AppCard.base,
-        borderRadius: BorderRadius.circular(grid.AppCard.radius),
-        border: Border.all(
-          color: pulse.anyRed(now) ? error : grid.AppCard.hair,
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(grid.AppDesktop.listRowGap),
-        child: Wrap(
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            for (final (i, part) in parts.indexed) ...[
-              if (i > 0) _divider(),
-              part,
-            ],
-          ],
-        ),
+      child: Wrap(
+        spacing: grid.AppDesktop.menuInset,
+        runSpacing: grid.AppDesktop.menuInset,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: parts,
       ),
     );
   }
-
-  Widget _divider() => SizedBox(
-    height: AppIcons.inlineSize,
-    child: VerticalDivider(
-      width: grid.AppDesktop.listRowGap,
-      thickness: 1,
-      color: grid.AppCard.hair,
-    ),
-  );
 
   /// One count: its words, red by [redBy] when that rule has passed, opening
   /// [rows] beneath it.
@@ -258,33 +237,46 @@ class _SuperTabPulseStripState extends State<SuperTabPulseStrip>
       children: rows,
       builder: (context, menu, _) => Semantics(
         button: true,
-        child: InkWell(
-          key: ValueKey('super-pulse-$name'),
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-          hoverColor: grid.AppSurface.hoverFill,
-          onTap: () => menu.isOpen ? menu.close() : menu.open(),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: grid.AppDesktop.controlGap,
-              vertical: grid.AppDesktop.menuInset,
+        child: Material(
+          type: MaterialType.transparency,
+          child: Ink(
+            key: ValueKey('super-pulse-chip-$name'),
+            decoration: ShapeDecoration(
+              color: grid.AppSurface.wellFill,
+              shape: StadiumBorder(
+                side: red ? BorderSide(color: error) : BorderSide.none,
+              ),
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (red) ...[
-                  Tooltip(
-                    message: _why(redBy),
-                    child: Icon(
-                      AppIcons.circleAlert,
-                      size: AppIcons.inlineSize,
-                      color: error,
-                      semanticLabel: _why(redBy),
-                    ),
-                  ),
-                  const SizedBox(width: grid.AppDesktop.menuInset),
-                ],
-                Text(text, style: style),
-              ],
+            child: InkWell(
+              key: ValueKey('super-pulse-$name'),
+              customBorder: const StadiumBorder(),
+              hoverColor: grid.AppSurface.hoverFill,
+              onTap: () => menu.isOpen ? menu.close() : menu.open(),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal:
+                      grid.AppDesktop.controlGap + grid.AppDesktop.listRowGap,
+                  vertical: grid.AppDesktop.paneCloseInset,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (red) ...[
+                      Tooltip(
+                        message: _why(redBy),
+                        child: Icon(
+                          AppIcons.circleAlert,
+                          size: AppIcons.inlineSize,
+                          color: error,
+                          semanticLabel: _why(redBy),
+                        ),
+                      ),
+                      const SizedBox(width: grid.AppDesktop.menuInset),
+                    ],
+                    Text(text, style: style),
+                  ],
+                ),
+              ),
             ),
           ),
         ),

@@ -230,7 +230,7 @@ swarm_parts = {
     # with the last `swarms` list it keeps beside it
     'swarms_apply': source[source.index('// The last `swarms` list as it came'):source.index('void ui_swarms_replace(')],
 }
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'swarm_core', 'swarm_voice_id', 'voice_lead', 'tabs_open', 'face_hold', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'mix_black', 'face_buddy_disc', 'face_buddy_ring', 'companion_box', 'notice_badge', 'pill2', 'swarm_pair', 'render_swarm_pick', 'face_buddy_avatar', 'render_buddy_empty', 'thread_line', 'thread_rest', 'face_thread', 'render_swarm_face', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'swarms_apply', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'swarm_core', 'swarm_voice_id', 'voice_lead', 'tabs_open', 'face_hold', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'mix_black', 'face_buddy_disc', 'face_buddy_ring', 'companion_box', 'notice_badge', 'pill2', 'swarm_pair', 'pick_icon', 'pick_row', 'render_swarm_pick', 'face_buddy_avatar', 'render_buddy_empty', 'thread_line', 'thread_rest', 'face_thread', 'render_swarm_face', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'swarms_apply', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += swarm_parts[name] if name in swarm_parts else function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
@@ -2632,20 +2632,37 @@ static void pick_setup(bool personal, int teams, const char *face) {
     if (teams > 1) pick_card("s3", "t0", "Team B", "B0", false);
     enter_at(face, NULL); swarm_sent = 0; scene_take();
 }
-static bool pick_half(void) {   // the filled half: 0 Personal, 1 Team, -1 none
+// The picker's two rows (option B, Diego 2026-11-06): 340 x 104 at x 63, Personal at y 120 and Team at y 242.
+static int pick_half(void) {   // the filled row: 0 Personal, 1 Team, -1 none
     for (int i = 0; i < scene.count; i++) {
         const ht_run_t *r = &scene.runs[i];
-        if (r->box.h && r->box.fill == ht_rgb(0x2b2d33) && r->y == 214) return r->x < 233 ? 0 : 1;
+        if (r->box.h == 104 && r->w == 340 && r->x == 63 && r->box.fill == ht_rgb(0x2b2d33)) return r->y == 120 ? 0 : r->y == 242 ? 1 : -1;
     }
     return -1;
 }
-static bool pick_pill(void) {
+static bool pick_pill(void) {   // both rows drawn, the other one on the dark fill
+    int rows = 0;
     for (int i = 0; i < scene.count; i++) {
         const ht_run_t *r = &scene.runs[i];
-        if (r->box.h == 44 && r->w == 200 && r->x == 133 && r->y == 211 && r->box.fill == ht_rgb(0x141518)) return true;
+        if (r->box.h == 104 && r->w == 340 && r->x == 63 && (r->y == 120 || r->y == 242)
+            && (r->box.fill == ht_rgb(0x2b2d33) || r->box.fill == ht_rgb(0x141518))) rows++;
+    }
+    return rows == 2;
+}
+static bool pick_check_at(int y0) {   // the green check on the filled row
+    for (int i = 0; i < scene.count; i++) if (!strcmp(scene.runs[i].text, HT_DONE) && scene.runs[i].y > y0 && scene.runs[i].y < y0 + 104) return true;
+    return false;
+}
+static bool pick_icon_at(int y0) {   // a cell sprite icon at the row's left
+    for (int i = 0; i < scene.count; i++) {
+        const ht_run_t *r = &scene.runs[i];
+        if (r->sprite.width && r->x >= 80 && r->x <= 100 && r->y > y0 && r->y < y0 + 104) return true;
     }
     return false;
 }
+#define PICK_PERSONAL_X 233
+#define PICK_PERSONAL_Y 172
+#define PICK_TEAM_Y 294
 // Diego (2026-11-06): in a Swarm, a hold on the recap opens Personal | Team; the name keeps opening the project list.
 static void hold_at(int x, int y) {
     fake_ms += 1000; habitat_touch(true, x, y, fake_ms); surface_tick(fake_ms + 700);
@@ -2664,26 +2681,37 @@ static void swarm_pick_checks(const char *dir) {
     // A hold on the recap opens the picker: "Swarm" on the top arc, one pill, the Swarm on the face (Team) filled.
     hold_recap();
     assert(s.view == SWARM_PICK && scene_says("Swarm") && scene_says("Personal") && scene_says("Team") && pick_pill() && pick_half() == 1);
+    // Each row says where it lands: Personal its project count, Team the Swarm it opens; icons left, the check on the filled one.
+    assert(scene_says("1 project") && scene_says("Team A") && pick_check_at(242) && !pick_check_at(120));
+    assert(pick_icon_at(120) && pick_icon_at(242));
     portrait(dir, "pick-team");
     // Personal by a thumb's press (drifting, held): the Personal card's first Lead on the face, the desktop told as for a tab pick.
-    thumb(183, 233, 14, 10, 500);
+    thumb(PICK_PERSONAL_X, PICK_PERSONAL_Y, 14, 10, 500);
     assert(s.view == HOME && !strcmp(sw.tab, "sp") && !strcmp(sw.lead, "P0") && wire_has(0, "select sp P0"));
     hold_recap();
-    assert(s.view == SWARM_PICK && pick_half() == 0);
+    assert(s.view == SWARM_PICK && pick_half() == 0 && pick_check_at(120) && !pick_check_at(242));
     portrait(dir, "pick-personal");
     // The filled half only returns, unchanged and silent.
-    swarm_sent = 0; fake_ms += 1000; tap(fake_ms, 183, 233);
+    swarm_sent = 0; fake_ms += 1000; tap(fake_ms, PICK_PERSONAL_X, PICK_PERSONAL_Y);
     assert(s.view == HOME && !strcmp(sw.tab, "sp") && swarm_sent == 0);
     // Team goes to the last non-Personal card shown, else the first in list order.
     pick_setup(true, 2, "s3");
     swarm_enter(ht_supertabs_find(&swarm, "sp"), NULL, true); scene_take();
     hold_recap(); assert(s.view == SWARM_PICK);
-    fake_ms += 1000; tap(fake_ms, 283, 233);
+    fake_ms += 1000; tap(fake_ms, PICK_PERSONAL_X, PICK_TEAM_Y);
     assert(s.view == HOME && !strcmp(sw.tab, "s3") && !strcmp(sw.lead, "B0") && wire_has(0, "select s3 B0"));
     pick_setup(true, 2, "sp");
     hold_recap(); assert(s.view == SWARM_PICK);
-    fake_ms += 1000; tap(fake_ms, 283, 233);
+    fake_ms += 1000; tap(fake_ms, PICK_PERSONAL_X, PICK_TEAM_Y);
     assert(s.view == HOME && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "A0"));
+    // The desktop's focus (supertab.focus) while the picker is open never closes it: a tap meant for a row talked to the
+    // face instead (Diego's dial, 2026-11-06 14:38).
+    pick_setup(true, 1, "s1");
+    hold_recap(); assert(s.view == SWARM_PICK);
+    ui_supertab_focus("s1", "A0"); scene_take(); assert(s.view == SWARM_PICK);
+    ui_supertab_focus("sp", "P0"); scene_take(); assert(s.view == SWARM_PICK && !strcmp(sw.tab, "s1"));
+    fake_ms += 1000; tap(fake_ms, PICK_PERSONAL_X, PICK_PERSONAL_Y);
+    assert(s.view == HOME && !strcmp(sw.tab, "sp"));
     // Idle: 5 s with no touch returns to the same Lead and side, and sends no select or side frame.
     pick_setup(true, 1, "s1");
     hold_recap(); assert(s.view == SWARM_PICK);
