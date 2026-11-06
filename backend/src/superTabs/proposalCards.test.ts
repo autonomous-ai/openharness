@@ -103,3 +103,103 @@ describe('proposal card creation', () => {
     expect(f.card(id)).toMatchObject({ requesterId: peer.userId, proposal: { text: ask.text, legacyMessageId: 'legacy-ask', createdAt: NOW - 1000 } })
   })
 })
+
+const acceptedTask = { goal: 'Keep drafts', changes: 'Persist offline edits', constraints: 'No dependencies', owns: ['backend/src/drafts.ts'] }
+const checks = [{ description: 'Reconnect restores edits', independent: false }]
+const deadline = NOW + 60_000
+const decide = (conversationId: unknown, decision = 'accept', extra = {}) => ({ type: 'proposal.decide', conversationId,
+  decision, reason: 'Prevents lost work for contributors', ...(['accept', 'reshape'].includes(decision) ? { task: acceptedTask, checks } : {}), ...extra })
+const ask = (conversationId: unknown, extra = {}) => ({ type: 'proposal.ask', conversationId, personId: peer.userId,
+  question: 'Keep drafts for seven days?', defaultAnswer: 'Keep seven days', deadline, ...extra })
+
+describe('PM decisions and card questions', () => {
+  it.each(['accept', 'reshape', 'later', 'no'])('records %s with its reason on the same card exactly once', decision => {
+    const f = fixture(), id = f.create().result.conversationId
+    const result = f.run(decide(id, decision, decision === 'later' ? { revisitAt: deadline } : {}), f.pm)
+    expect(f.card(id).proposal?.decision).toMatchObject({ kind: decision, reason: 'Prevents lost work for contributors', at: NOW, by: f.lead })
+    expect(result.messages.some(m => m.conversationId === id && m.text.includes('Prevents lost work'))).toBe(true)
+    expect(result.messages.some(m => m.source?.kind === 'proposal-notice' && m.source.moment === 'decided')).toBe(true)
+    if (['accept', 'reshape'].includes(decision)) {
+      expect(f.card(id).task).toEqual(acceptedTask)
+      expect(queueSiblings(f.state, f.state.projects![0]!)).toContainEqual(f.card(id))
+      expect(f.card(id).checks[0]).toMatchObject({ description: 'Reconnect restores edits' })
+    } else expect(f.card(id).task).toBeUndefined()
+    if (decision === 'no') expect(f.card(id).archived).toBe(true)
+    expect(() => f.run(decide(id), f.pm)).toThrow(expect.objectContaining({ code: 'PROPOSAL_DECIDED' }))
+  })
+
+  it('refuses decisions without accepted work/date and refuses non-PMs before receipt replay', () => {
+    const f = fixture(), id = f.create().result.conversationId
+    for (const actor of [owner, peer, { kind: 'agent', agentId: f.worker, machineOwnerId: `${owner.userId}-machine` } as Actor]) {
+      expect(() => f.run(decide(id), actor)).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
+    }
+    for (const input of [decide(id, 'accept', { task: undefined }), decide(id, 'reshape', { checks: [] }), decide(id, 'later')]) {
+      expect(() => f.run(input, f.pm)).toThrow()
+    }
+    const input = commandSchema.parse(decide(id))
+    f.state.conversations.find(c => c.id === 'lead')!.leadId = f.worker
+    expect(() => authorizeCommandAccess(f.state, f.pm, input)).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
+  })
+
+  it('routes a question to its sender, and allows only that person or their sending Buddy to answer', () => {
+    const f = fixture(), id = f.create().result.conversationId
+    // A direct Board proposal has no sending Buddy: its current default may answer for its person.
+    const asked = f.run(ask(id), f.pm), q = f.card(id).proposal!.questions[0]!
+    expect(q).toMatchObject({ personId: peer.userId, question: 'Keep drafts for seven days?', defaultAnswer: 'Keep seven days', deadline, requiresConsent: false })
+    expect(asked.messages.some(m => m.source?.kind === 'proposal-notice' && m.source.moment === 'needs-you')).toBe(true)
+    const answer = { type: 'proposal.answer', conversationId: id, questionId: q.id, text: 'Keep fourteen days' }
+    expect(() => f.run(answer, outsider)).toThrow(expect.objectContaining({ code: 'PROPOSAL_ANSWER_FORBIDDEN' }))
+    f.state.people.find(p => p.id === peer.userId)!.role = 'viewer'
+    f.run(answer, peer)
+    expect(f.card(id).proposal!.questions[0]!.answer).toMatchObject({ text: 'Keep fourteen days', by: peer.userId, at: NOW })
+    const late = f.run({ ...answer, text: 'Actually thirty' }, peer)
+    expect(late.result.applied).toBe(false)
+    expect(late.messages[0]!.text).toContain('Actually thirty')
+    expect(f.card(id).proposal!.questions[0]!.answer!.text).toBe('Keep fourteen days')
+  })
+
+  it('permits the sending Buddy on its own card and keeps arbitrary posts and other Buddies forbidden', () => {
+    const f = fixture(), id = f.create().result.conversationId, generation = f.state.people.find(p => p.id === peer.userId)!.generation
+    f.card(id).proposal!.senders[0]!.buddyId = f.buddy
+    const qid = f.run(ask(id), f.pm).result.questionId
+    const buddy: Actor = { kind: 'agent', agentId: f.buddy, machineOwnerId: `${owner.userId}-machine` }
+    f.run({ type: 'proposal.answer', conversationId: id, questionId: qid, text: 'Seven days is fine' }, buddy)
+    expect(f.card(id).proposal!.questions[0]!.answer!.by).toBe(f.buddy)
+    expect(() => f.run({ type: 'message.send', conversationId: id, text: 'Arbitrary new scope', recipientIds: [] }, buddy)).toThrow(expect.objectContaining({ code: 'BUDDY_FORBIDDEN' }))
+    f.state.agents.push({ ...f.state.agents.find(a => a.id === f.buddy)!, id: 'other-buddy', harnessId: 'other', buddyOf: { personId: outsider.userId, generation: f.state.people.find(p => p.id === outsider.userId)!.generation } })
+    expect(() => f.run({ type: 'proposal.answer', conversationId: id, questionId: qid, text: 'Foreign' },
+      { kind: 'agent', agentId: 'other-buddy', machineOwnerId: `${owner.userId}-machine` })).toThrow()
+    f.state.people.find(p => p.id === peer.userId)!.generation = 'rejoined'
+    expect(() => authorizeCommandAccess(f.state, buddy, commandSchema.parse({ type: 'proposal.answer', conversationId: id, questionId: qid, text: 'Stale' }))).toThrow()
+  })
+
+  it('never accepts a Buddy answer in place of explicit person consent', () => {
+    const f = fixture(), id = f.create().result.conversationId
+    f.card(id).proposal!.senders[0]!.buddyId = f.buddy
+    const qid = f.run(ask(id, { requiresConsent: true }), f.pm).result.questionId
+    expect(() => f.run({ type: 'proposal.answer', conversationId: id, questionId: qid, text: 'Yes' },
+      { kind: 'agent', agentId: f.buddy, machineOwnerId: `${owner.userId}-machine` })).toThrow(expect.objectContaining({ code: 'PROPOSAL_CONSENT_REQUIRED' }))
+  })
+
+  it('merges duplicates into one card, preserving attribution and notifying every proposer', () => {
+    const f = fixture(), first = f.create().result.conversationId, second = f.create(outsider).result.conversationId
+    const merged = f.run({ type: 'proposal.merge', conversationId: second, intoConversationId: first, reason: 'Same reconnect loss' }, f.pm)
+    expect(f.card(second)).toMatchObject({ archived: true, proposal: { mergedInto: first } })
+    expect(f.card(first).proposal!.senders.map(s => s.personId).sort()).toEqual([peer.userId, outsider.userId].sort())
+    expect(merged.messages.filter(m => m.source?.kind === 'proposal-notice')).toHaveLength(2)
+    expect(() => f.run({ type: 'proposal.merge', conversationId: first, intoConversationId: second, reason: 'Cycle' }, f.pm)).toThrow()
+    expect(() => f.run({ type: 'proposal.merge', conversationId: first, intoConversationId: f.secretGroup, reason: 'Other project' }, f.pm)).toThrow()
+    const third = f.create(owner).result.conversationId
+    f.run({ type: 'proposal.merge', conversationId: first, intoConversationId: third, reason: 'Canonical combined card' }, f.pm)
+    expect(f.card(second).proposal!.mergedInto).toBe(third)
+    expect(f.card(first).proposal!.mergedInto).toBe(third)
+  })
+
+  it('does not abandon open questions or allow merge/ask metadata to grow without a bound', () => {
+    const f = fixture(), id = f.create().result.conversationId, other = f.create(owner).result.conversationId
+    f.run(ask(id), f.pm)
+    expect(() => f.run({ type: 'proposal.merge', conversationId: id, intoConversationId: other, reason: 'Duplicate' }, f.pm)).toThrow(expect.objectContaining({ code: 'PROPOSAL_QUESTION_OPEN' }))
+    for (let i = 1; i < 20; i++) f.run(ask(id), f.pm)
+    expect(() => f.run(ask(id), f.pm)).toThrow(expect.objectContaining({ code: 'PROPOSAL_LIMIT' }))
+  })
+})
