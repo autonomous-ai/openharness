@@ -741,7 +741,11 @@ export class ContributedMachines {
           if (this.stopped) return
           if (!identifier(start.id)) continue
           const report = this.failureReports.get(start.id)
-          if (report) { await this.reportStartFailure(start.id, report.path, report.input); continue }
+          if (report) {
+            await this.reportStartFailure(start.id, report.path, report.input)
+            // A dispatched receipt may already own a native session: retain its existing reconciliation/abandoned cleanup.
+            if (!report.done || !start.dispatched) continue
+          }
           if ((row.paused || pool.paused) && !start.dispatched) continue
           if (this.cleaningTabs.has(String(row.tabId))) { this.noteWaiting(start.id, CLEANING_WAIT); continue }
           const launched = this.startInFlight(String(row.tabId))

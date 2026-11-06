@@ -31,7 +31,7 @@
 
 1. NOT_FOUND on another command must keep its existing behavior; terminate only failed-start reporting.
 2. Unknown and transient refusals must retain a real failure's original command and operation id.
-3. A completed failure report must never cause a new native launch on a stale feed.
+3. A completed failure report must never retry an undispatched launch on a stale feed; an already-dispatched receipt retains its existing reconciliation/abandoned cleanup.
 4. A missing start must not block a different pending start or pollute logs with server-provided text.
 5. Dropped contributions/start rows must release report state; cancellation/abandoned native cleanup stays independent.
 
