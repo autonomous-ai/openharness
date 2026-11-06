@@ -67,7 +67,7 @@ import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
 import { currentRules, deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
-import { SEED_RULES, seedRules, validMachineRules, type MachineRule } from './policy.js'
+import { SEED_RULES, seedRules, validMachineRules, type MachineRule, type ProjectRules } from './policy.js'
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, FIRST_SUMMARY, liveNotes, MAX_REVISIONS } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
@@ -247,7 +247,7 @@ function namedFor(command: Command): Named {
   // Deleting a project or changing who reads it reaches every one of its groups, dormant ones too: their terminal
   // contexts are revoked from the groups the command loaded (native.ts revokeNativeContexts).
   return { groupIds, startIds: has('startId') ? [field('startId')!] : [],
-    projectIds: command.type === 'project.delete' || command.type === 'project.sharing' ? [command.projectId] : [] }
+    projectIds: command.type === 'project.delete' || command.type === 'project.sharing' || command.type === 'project.closeTab' ? [command.projectId] : [] }
 }
 
 /** What a receipt keeps of a command's reply besides its result: the parts it wrote and when (design section 4.7). */
@@ -716,6 +716,16 @@ async function machineRulesOf(tx: Transaction, tabId: string, projectId: string)
   const stored = read?.rules.machines
   if (Array.isArray(stored) && stored.length !== rules.length) logger.warn('[swarm-machine-rules] a rule failed its schema and is not applied', { tabId, projectId })
   return rules
+}
+
+/** [projectId]'s release window for its PM's built-in text (pmSchedule.ts), from its newest rules revision: the seed's for a
+ *  record that does not pass the schema, said in the log, so the PM still reads its instructions. One indexed read. */
+async function releaseWindowOf(tx: Transaction, tabId: string, projectId: string): Promise<ProjectRules['releaseWindow']> {
+  return (await currentRules(tx, tabId, projectId).catch((error: unknown) => {
+    if (!(error instanceof SuperTabError) || error.code !== 'RULES_INVALID') throw error
+    logger.warn('[swarm-pm-text] rules record invalid; the seed release window is shown', { tabId, projectId })
+    return { revision: 0, rules: SEED_RULES }
+  })).rules.releaseWindow
 }
 
 export class SuperTabStore {
@@ -1900,7 +1910,7 @@ export class SuperTabStore {
         const selfLeave = actor.kind === 'person' && command.type === 'member.remove' && command.userId === actor.userId
         if (!selfLeave) {
           if (command.type === 'agent.remove' && !original.agents.some(a => a.id === command.agentId) ||
-              command.type === 'project.delete' && !projectsOf(original).some(p => p.id === command.projectId)) {
+              (command.type === 'project.delete' || command.type === 'project.closeTab') && !projectsOf(original).some(p => p.id === command.projectId)) {
             // Retrying one's own completed removal returns only its empty
             // receipt. The removed object no longer exists to authorize against.
             author(original, actor, true)
@@ -2033,6 +2043,8 @@ export class SuperTabStore {
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
       // A stale rules save is refused with the newest revision, to merge (policy.ts); null is the seed.
       if (command.type === 'rules.set') context.projectRules = await readRules(tx, tabId, command.projectId, true)
+      // A closed tab's project with a rules record of the person's is kept, not deleted (commands.ts project.closeTab).
+      if (command.type === 'project.closeTab') context.projectRules = await readRules(tx, tabId, command.projectId, true)
       // A start or an assignment meets its project's machine rules (machineRules.ts): one indexed read of the newest revision.
       // Only the machine rules are read here, so a record broken elsewhere still applies those that pass (security review 1).
       if (command.type === 'agent.start' || command.type === 'work.assign') {
@@ -2352,13 +2364,15 @@ export class SuperTabStore {
           stableId(s.request.machineId, s.harnessId) === command.agentId)
         if (start?.routeDecisionId) await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'stopped', context.now)
       }
-      // Role texts are written no more (project instructions): a deleted project takes the ones it had.
-      if (command.type === 'project.delete') await tx.superTabRoleText.deleteMany({ where: { tabId, projectId: command.projectId } })
+      // Role texts are written no more (project instructions): a deleted project takes the ones it had. A closed tab's project
+      // deleted because it was empty is a deleted project too (task #3929).
+      const deleted = command.type === 'project.delete' || (command.type === 'project.closeTab' && effects.result.outcome === 'deleted') ? command.projectId : null
+      if (deleted) await tx.superTabRoleText.deleteMany({ where: { tabId, projectId: deleted } })
       if (effects.instructions) await writeInstructions(tx, tabId, effects.instructions)
       if (effects.notes) await writeNotes(tx, tabId, effects.notes, context.now)
       if (effects.projectRules) await writeRules(tx, tabId, effects.projectRules)
-      if (command.type === 'project.delete') await deleteInstructions(tx, tabId, command.projectId)
-      if (command.type === 'project.delete') await deleteRules(tx, tabId, command.projectId)
+      if (deleted) await deleteInstructions(tx, tabId, deleted)
+      if (deleted) await deleteRules(tx, tabId, deleted)
       if (effects.terminal) await this.writeTerminal(tx, tabId, effects.terminal, context.now)
       // A deleted Swarm's observer sockets, on any instance, check again and close (deletion.ts).
       if (this.hooks.accessChanged && (watchersLost.length || command.type === 'swarm.delete')) {
@@ -3349,7 +3363,7 @@ export class SuperTabStore {
       const coordinator = actor.kind === 'agent' && ledProject(state, actor.agentId)?.id === project.id
       return { projectId, revision, hash: stored ? stored.hash : FIRST_INSTRUCTIONS.instructionsHash, text: stored?.text ?? INSTRUCTIONS_TEMPLATE, template: !stored,
         coordinatorName: coordinatorNameOf(project), notesRevision: project.notesRevision ?? 0, ...(notes ? { notes } : {}),
-        ...(coordinator ? { builtIn: pmScheduleText(project) } : {}) }
+        ...(coordinator ? { builtIn: pmScheduleText(state, project, await releaseWindowOf(tx, tabId, projectId)) } : {}) }
     })
   }
 

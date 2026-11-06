@@ -78,7 +78,7 @@ export function askBuddyModel(state: SuperTabState, actor: Actor, gridModel: str
   const buddy = ownBuddy(state, actor, conversationId)
   const can = switchable(state, buddy, now)
   if (!can.ok) fail(can.code, can.message, 409)
-  if (buddy.modelRequest) fail('BUDDY_SWITCHING', 'Your Buddy is already switching.', 409)
+  if (buddy.modelRequest || buddy.switchRequest || buddy.switchLanded) fail('BUDDY_SWITCHING', 'Your Buddy is already switching.', 409)
   const shown = gridModel === null ? {} : served(state, gridModel, now)
   if (!shown) fail('BUDDY_MODEL_UNAVAILABLE', 'Nobody in the Swarm serves that model now.', 409)
   // The grid its machine moves it onto (agent_retarget's gridName): the Swarm's own, the one the models were checked on.
@@ -93,7 +93,7 @@ export function sendBuddyHome(state: SuperTabState, from: Agent, reason: 'limit'
   // The main Buddy of [from]'s own chat (task #3818: a person may have several), else theirs as before.
   const chat = buddyChatOf(state, from)
   const buddy = (chat && mainBuddyOf(state, chat)) ?? mainBuddy(state, from.buddyOf.personId, from.buddyOf.generation)
-  if (!buddy?.gridModel || buddy.modelRequest || !switchable(state, buddy, now).ok) return
+  if (!buddy?.gridModel || buddy.modelRequest || buddy.switchRequest || buddy.switchLanded || !switchable(state, buddy, now).ok) return
   buddy.modelRequest = { id: requestId, gridModel: null, name: current(state, buddy, now), reason,
     requestedBy: buddy.buddyOf!.personId, at: new Date(now).toISOString() }
 }
