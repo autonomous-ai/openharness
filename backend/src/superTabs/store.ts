@@ -126,7 +126,8 @@ import { costRows, failedStarts, summarizeCosts } from './costs/read.js'
 import { MAX_PROPOSALS, proposalQuestion, proposalTitle, REASK_DAYS, reflectionMessageId, routingReflection, type ReflectionInput } from './costs/reflection.js'
 import { readEvidence, recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
-import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByAnswer, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
+import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByAnswer, resolveByReply, resolveTags, resolveWhenWorked, writeMentions } from './mentions.js'
+import { stuckAlerts } from './stuck.js'
 import { OVERDUE_PER_PASS, overdueDecisions, dueDefaultDecisions } from './overdueDecisions.js'
 import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
@@ -5589,6 +5590,9 @@ export class SuperTabStore {
           select: { agentId: true }, distinct: ['agentId'] })).map(d => d.agentId))
         for (const project of projects) written.push(...idleNotices(state, project.id, now, busy))
       }
+      // Stuck work, told once to its PM and its people in a line that tags them, and cleared when fixed (stuck.ts, task #3915).
+      const stuck = stuckAlerts(state, now)
+      written.push(...stuck.rows)
       // What each PM owes people, for its host's watchdog: written only when it changes, so a steady Swarm writes nothing. A
       // project that lost its PM owes nothing until it has one again (review of #3213, Minor 4).
       for (const project of projectsOf(state)) {
@@ -5606,6 +5610,10 @@ export class SuperTabStore {
       // A loss or a start's failure was judged from a machine's report: a newer report makes this write retry.
       await this.save(tx, loaded, state, clock.next(), judgedMachines(loaded.state, state, written))
       await this.writeMessages(tx, tabId, state, written, sequences, true)
+      // Its tags put the line in their Needs you and on their phones; a fixed line's tags resolve.
+      const tags = await writeMentions(tx, tabId, state, stuck.rows, now)
+      await resolveTags(tx, tabId, stuck.resolved, now)
+      this.tellPhones(tx, tabId, state, { replies: [], tags }, stuck.rows)
       return written.length
     })
   }
