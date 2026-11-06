@@ -51,6 +51,13 @@ class SwarmAgentLauncher {
       _prepared ??= await prepare('$operationId-prepare')
           .timeout(const Duration(seconds: 25));
       _guard();
+      _prepared = {
+        ..._prepared!,
+        'engines': [
+          for (final engine in _prepared!['engines'] as List? ?? const [])
+            if (engine == 'claude' || engine == 'codex') engine,
+        ],
+      };
       if (kind != 'buddy') {
         await command({
           'type': 'machine.contribute',
@@ -74,11 +81,8 @@ class SwarmAgentLauncher {
       if (kind == 'buddy' && !_admitted) 'setup': _prepared,
       if (kind != 'buddy') ...{
         'kind': kind,
-        'name': kind == 'pm'
-            ? '$projectName PM'
-            : engine == 'claude'
-            ? 'Claude Code'
-            : 'Codex',
+        if (kind == 'regular')
+          'name': engine == 'claude' ? 'Claude Code' : 'Codex',
         if (kind == 'pm') 'projectName': projectName!.trim(),
       },
     }, '$operationId-start').timeout(const Duration(seconds: 25));
