@@ -4,7 +4,7 @@ import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, occupiesAgent, actorKey, agent, author, conversation, fail, isLeads, stableId, SuperTabError, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { downSince, productManagerOn } from './machines.js'
-import { agentProjectId, isConfidential, ledProject, onTeamAccount, ownSession, projectAgent, projectOf, readAgent, teamSessionAccess } from './projects.js'
+import { agentProjectId, canReadGroup, isConfidential, ledProject, onTeamAccount, ownSession, projectAgent, projectOf, readAgent, teamSessionAccess } from './projects.js'
 import { redactCredentials } from './credentials.js'
 
 /** Any agent of an agent's project, or a person with write access, reads and types in its terminal through the host of its
@@ -156,6 +156,23 @@ export function workedAgain(state: SuperTabState, agentId: string): void {
   target.alerting = target.alerting?.filter(a => a !== 'limit')
 }
 
+/** [agentId] answered with a report of its own (a status, a check, a post): its model works, so it takes work again (task #4076). */
+export function modelAnswered(state: SuperTabState, agentId: string): void {
+  const target = state.agents.find(a => a.id === agentId)
+  if (target?.modelFailing) delete target.modelFailing
+}
+
+const ENGINE_NAMES: Record<string, string> = { claude: 'Claude Code', codex: 'Codex' }
+/** What [target]'s machine reading says of its engine when it cannot answer: signed out or not installed there, or nothing. */
+function engineTrouble(state: SuperTabState, target: Agent): string | undefined {
+  const pool = state.machines?.find(m => m.machineId === target.machineId && m.contributorId === target.contributorId)
+  const engine = target.configuration.engine, ready = pool?.observation?.readiness?.engines?.find(e => e.engine === engine)
+  const name = ENGINE_NAMES[engine] ?? engine
+  if (ready?.installed === false) return `${name} is not installed on ${pool!.name}`
+  if (ready?.signedIn === false) return `${name} is not signed in on ${pool!.name}`
+  return undefined
+}
+
 /** One row per episode: a repeated observation adds nothing, and `active: false` ends the episode. No screen text goes in the row.
  * It is delivered to the agent's project Lead, in the agent's group when the Lead is there, else by a second row in the Lead's chat. */
 export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author, id: string, now: number,
@@ -184,12 +201,23 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
     } else text = `${nameOf(target)} hit a usage limit. Routing skips it until ${target.limitedUntil.slice(11, 16)} UTC.`
   }
   // Its engine has been retrying its model for 10 minutes (2026-10-24: a Builder on a small local model retried for an
-  // hour while its Lead waited on it).
-  if (command.alert === 'model') text = `${nameOf(target)} can't get answers from its model: its requests keep failing.`
+  // hour while its Lead waited on it). It takes no new work until it answers (task #4076: daniel-pc's signed-out Testers were
+  // handed step after step); its PM and its machine's owner hear it once a failure, not once an episode.
+  let owner: string | undefined
+  if (command.alert === 'model') {
+    if (target.modelFailing) return []
+    const reason = engineTrouble(state, target)
+    target.modelFailing = { since: now, ...reason ? { reason } : {} }
+    text = `${nameOf(target)} can't get answers from its model: its requests keep failing.${reason ? ` ${reason}.` : ''} It gets no new work until it answers again.`
+    const pool = state.machines?.find(m => m.machineId === target.machineId && m.contributorId === target.contributorId)
+    const person = state.people.find(p => p.id === (pool?.contributorId ?? target.contributorId))
+    if (person && canReadGroup(state, { kind: 'person', userId: person.id, email: person.email }, group)) owner = person.id
+  }
   // A Buddy's alert is its owner's alone, in their chat: the PM neither reads that chat nor runs the Buddy (buddies.ts).
   const chat = isBuddy(target) ? state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id)) : undefined
   if (chat) return [{ id, conversationId: chat.id, author: sender, replyTo: null, recipients: [], text, source, ...inSessionThread(target) }]
-  return toLead(state, target, { id, conversationId: group.id, author: sender, replyTo: null, recipients: [], text, source })
+  const [first, ...rest] = toLead(state, target, { id, conversationId: group.id, author: sender, replyTo: null, recipients: [], text, source })
+  return [owner ? { ...first!, mentions: [owner] } : first!, ...rest]
 }
 
 /** The project Lead of an agent, unless the agent is that Lead. */

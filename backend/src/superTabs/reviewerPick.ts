@@ -70,7 +70,8 @@ export function reviewerCandidates(state: SuperTabState, task: Conversation, kin
     .filter(verdict => atHead(verdict, head)).map(verdict => verdict.by))
   const ranked = state.agents.flatMap(agent => {
     if (built.has(agent.id) || index.leaders.has(agent.id) || index.working.has(agent.id) || holding.has(agent.id)) return []
-    if (isBuddy(agent) || agent.workDecision === 'stop' || agentProjectId(state, agent) !== projectId) return []
+    // One whose model keeps failing takes no step until it answers again (terminal.ts, task #4076).
+    if (isBuddy(agent) || agent.workDecision === 'stop' || agent.modelFailing || agentProjectId(state, agent) !== projectId) return []
     if (judged.has(`agent:${agent.id}`)) return []
     const role = roleNameOf(state, agent)
     if (NEVER.test(role) || NEVER_NAMED.test(agent.name) || NEVER_NAMED.test(agent.displayName ?? '')) return []

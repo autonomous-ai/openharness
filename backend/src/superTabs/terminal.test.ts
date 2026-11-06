@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
-import { mayDrive } from './terminal.js'
+import { mayDrive, modelAnswered } from './terminal.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -278,14 +278,18 @@ describe('terminal alerts', () => {
     expect(effects.messages[0].source).not.toHaveProperty('lead')
   })
 
-  it('tells the Lead when an agent cannot get answers from its model, once per episode', () => {
+  // Once a failure, not once an episode (task #4076): a new episode before the agent answers again tells nobody again.
+  it('tells the Lead when an agent cannot get answers from its model, once until it answers again', () => {
     const s = swarm()
     const on = () => s.run({ type: 'agent.alert', agentId: s.worker, alert: 'model', active: true }, as(s.worker)).messages
     expect(on()[0]).toMatchObject({ recipients: [s.lead], source: { kind: 'terminal-alert', agentId: s.worker, alert: 'model' },
-      text: `${name(s, s.worker)} can't get answers from its model: its requests keep failing.` })
+      text: `${name(s, s.worker)} can't get answers from its model: its requests keep failing. It gets no new work until it answers again.` })
     expect(on()).toEqual([])
     expect(s.state.agents.find(a => a.id === s.worker)!.limitedUntil).toBeUndefined()
     s.run({ type: 'agent.alert', agentId: s.worker, alert: 'model', active: false }, as(s.worker))
+    expect(on()).toEqual([])
+    s.run({ type: 'agent.alert', agentId: s.worker, alert: 'model', active: false }, as(s.worker))
+    modelAnswered(s.state, s.worker)
     expect(on()).toHaveLength(1)
   })
 
