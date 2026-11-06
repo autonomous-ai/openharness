@@ -7641,6 +7641,7 @@ class AppNotifier extends ChangeNotifier {
   /// this computer's restored desk: the account's work (its profile, devices, machine list and desk) waits for it, since
   /// the CLI may be signed in as someone else and that work would run through their session (review of #3293).
   ({int revision, Completer<void> settled})? _launchProof;
+  bool _layoutSaveHeld = false;
 
   /// The signed-in check behind a window [_openFromKeptSignIn] opened. The same machine: proven, as
   /// [_useKeptProfile] would have proven it. Signed out: the sign-in page, as when a sign-out elsewhere is noticed.
@@ -7660,8 +7661,10 @@ class AppNotifier extends ChangeNotifier {
     // Each branch below decides synchronously, so the account work waiting on this resumes under its outcome: proven,
     // or invalidated.
     final proof = _launchProof;
+    final held = _layoutSaveHeld;
     if (proof != null && proof.revision == revision) {
       _launchProof = null;
+      _layoutSaveHeld = false;
       proof.settled.complete();
     }
     if (!_authWorkCurrent(revision)) return;
@@ -7670,6 +7673,7 @@ class AppNotifier extends ChangeNotifier {
         answer.machineId == keptMachineId) {
       _provenMachineId = keptMachineId;
       unawaited(superTabImageCache.claim(keptMachineId));
+      if (held) _persistLayout();
       return;
     }
     if (answer != null && !answer.loggedIn) {
@@ -22361,6 +22365,12 @@ class AppNotifier extends ChangeNotifier {
     _announceVisibleAgents();
     _freezeDeskLayouts();
     _deskQueueDiff();
+    // Saved with an owner, so never under an account the signed-in check has not proven yet ([_launchProof]): held, and
+    // saved once it is (review of #3293).
+    if (_launchProof != null) {
+      _layoutSaveHeld = true;
+      return;
+    }
     final saved = swarms.where((swarm) => !isDraftSwarm(swarm.id)).toList();
     if (saved.isEmpty) return;
     final savedActive = isDraftSwarm(activeSwarmId)
