@@ -114,7 +114,7 @@ describe('routeTask', () => {
     const s = scoped()
     const result = await routeTask(input, s, where as never, opener(), () => 'op')
     expect(result).toMatchObject({ ok: true, routeDecisionId: 'd1', via: 'order', p: null, candidates: expect.arrayContaining([expect.objectContaining({ id: 'c0' })]), warnings: ['w'] })
-    expect(s.mock.calls.map(c => c[0].action)).toEqual(['routeContext', 'routeHistory', 'instructions', 'command'])
+    expect(s.mock.calls.map(c => c[0].action)).toEqual(['routeContext', 'routeHistory', 'instructions', 'machineRules', 'command'])
     expect(recorded(s).command.decision).not.toHaveProperty('context')
     const record = recorded(s)
     expect(record).toMatchObject({ operationId: 'route-op', command: { type: 'route.record', conversationId: 'g1' } })
