@@ -151,7 +151,11 @@ export type TrustContract = { home: LaunchHome; file: string } & (
  * agent's own start writes nothing into the person's settings (task #4215). `false` there is the person's and stays.
  * Applied by kit/folderTrust.ts `recordAcceptanceIn`.
  */
-export interface OnboardingContract { home: LaunchHome; file: string; key: string }
+export interface OnboardingContract {
+  home: LaunchHome; file: string; key: string
+  /** The one choice the screens ask for, kept as `key` in the same file: one of `values`, the first its default. */
+  theme?: { key: string; values: readonly string[] }
+}
 
 /**
  * The engine's question about MCP servers a folder inherits: a project file of servers (`file`, `servers` its map) in a

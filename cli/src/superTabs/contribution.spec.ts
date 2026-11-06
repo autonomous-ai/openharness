@@ -23,7 +23,9 @@ function fixture() {
   const open = vi.fn(async () => ({ request, close }))
   const prepare = vi.fn(async () => '/clone')
   const capacity = vi.fn(async () => ({ ok: true, resources: { memoryTotalBytes: 32 * GiB, memoryUsedBytes: 16 * GiB, projectDiskFreeBytes: 100 * GiB } }))
-  const deps = { backend, open, prepare, capacity }
+  // Claude Code's first-run questions answered already: never this machine's own ~/.claude.json.
+  const firstRun = vi.fn((): boolean | null => true)
+  const deps = { backend, open, prepare, capacity, firstRun }
   const run = () => prepareContribution(core, { tabId: 'tab' }, deps as never)
   return { run, state, deps, core, request, close }
 }
@@ -156,6 +158,16 @@ describe('one-field machine preparation', () => {
     const result = await prepareContribution(f.core, { tabId: 'tab', installEngine: 'claude' }, { ...f.deps, install } as never)
     expect(install).not.toHaveBeenCalled()
     expect(result).toMatchObject({ engines: ['claude', 'codex'], signedIn: ['claude'] })
+  })
+  // The Dell's first Buddy sat at Claude Code's theme screen: the phone asks those questions first (owner, 2026-11-06).
+  it('says when Claude Code\'s first-run questions are still to answer here, and only for Claude Code', async () => {
+    const f = fixture()
+    f.deps.firstRun.mockReturnValue(false)
+    expect(await f.run()).toMatchObject({ engines: ['claude', 'codex'], firstRun: ['claude'] })
+    f.request.mockResolvedValueOnce({ engines: [{ engine: 'codex', installed: true, signedIn: true }] })
+    expect(await f.run()).not.toHaveProperty('firstRun')
+    f.deps.firstRun.mockReturnValue(true)
+    expect(await f.run()).not.toHaveProperty('firstRun')
   })
   it('still refuses when the install left no engine behind', async () => {
     const f = fixture()

@@ -153,6 +153,36 @@ function recordJson(trust: JsonTrust, file: string, cwd: string, create = false)
   return 'trusted'
 }
 
+/** Whether `key` is true in the JSON settings `file`: an answer the engine or [recordAcceptanceIn] recorded. A missing or
+ *  unreadable file reads as no. */
+export function acceptedIn(file: string, key: string): boolean {
+  try {
+    const settings: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    return isPlainObject(settings) && settings[key] === true
+  } catch {
+    return false
+  }
+}
+
+/** Set `key` to `value` in the JSON settings `file`, the person's own choice made for the engine (its theme, picked on the
+ *  phone setting up the computer). A missing file is created holding the key alone; one that is not an object stays as it is. */
+export function recordSettingIn(file: string, key: string, value: string): 'recorded' | 'skipped' {
+  if (!existsSync(file)) {
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+    try {
+      writeFileSync(file, JSON.stringify({ [key]: value }, null, 2), { mode: 0o600, flag: 'wx' })
+      return 'recorded'
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    }
+  }
+  let settings: unknown
+  try { settings = JSON.parse(readFileSync(file, 'utf8')) } catch { return 'skipped' }
+  if (!isPlainObject(settings)) return 'skipped'
+  replaceConfigFile(file, JSON.stringify({ ...settings, [key]: value }, null, 2))
+  return 'recorded'
+}
+
 /** Its own entry, or a folder above it in the same Git repository, says yes: the inheritance Claude Code applies. Unreadable or absent
  *  settings read as no. */
 function jsonTrusts(trust: JsonTrust, file: string, path: string): boolean {
