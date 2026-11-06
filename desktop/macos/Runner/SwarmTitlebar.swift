@@ -108,6 +108,15 @@ final class SwarmTitlebar: NSObject, NSMenuItemValidation, NSMenuDelegate {
         let state = call.arguments as? [String: Any] ?? [:]
         self.configure(palette: state["palette"] as? [String: Any])
         result(true)
+      case "maximize":
+        // The opening maximise, without AppKit's animation. The zoom itself is
+        // unchanged, so the green button still returns to the frame it left.
+        if let window = self.window as? MainFlutterWindow, !window.isZoomed {
+          window.resizesInstantly = true
+          window.zoom(nil)
+          window.resizesInstantly = false
+        }
+        result(true)
       case "update":
         let state = call.arguments as? [String: Any] ?? [:]
         self.actionsEnabled = state["enabled"] as? Bool == true
