@@ -49,6 +49,20 @@ export const postedCode = (group: Conversation, texts: readonly string[], onList
   return texts.flatMap(text => pullRequestLinks(text, repositoryUrl).filter(url => !listed.has(url.toLowerCase())))
 }
 
+
+/**
+ * The texts that name [group]'s code, besides its brief and title, for its code list (store.ts): its latest status result, its
+ * checks' evidence and the posts that count ([posts], model.ts store). On a release task only what it builds counts (security reviews
+ * of #3324): the pull request links of a result given with status review (the Ready line, which the push read reads) and of its posts,
+ * without those on the project's release list [onList]; a working, done or blocked note and the check evidence cite what was released.
+ */
+export function releaseCodeSources(group: Conversation, from: { status?: string | null; result?: string | null; evidence: ReadonlyArray<string | null | undefined>;
+  posts: readonly string[]; onList: readonly string[]; repositoryUrl?: string | null }): string[] {
+  if (!group.release) return [from.result, ...from.evidence, ...from.posts].filter((text): text is string => !!text)
+  return [...from.status === 'review' && from.result ? postedCode(group, [from.result], from.onList, from.repositoryUrl) : [],
+    ...postedCode(group, from.posts, from.onList, from.repositoryUrl)]
+}
+
 /** Whether [group]'s code is Team-written. An open task from before the mark reads its current assignee too. A step whose
  *  task this command did not load counts as Team-written: an unknown never reads as clean. */
 export function teamWrittenTask(state: SuperTabState, group: Conversation): boolean {

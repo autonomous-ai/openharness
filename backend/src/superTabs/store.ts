@@ -2,7 +2,7 @@ import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { applyCrewKeep, crewMoveRequest, crewNeedsMachine, type CrewDeps } from './crewKeep.js'
 import { finishedWakes } from './crewTimes.js'
 import { isCrew } from './crew.js'
-import { isReleaseWork, postedCode } from './teamWritten.js'
+import { isReleaseWork, releaseCodeSources } from './teamWritten.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
@@ -2045,8 +2045,8 @@ export class SuperTabStore {
           .map(message => message.text) : []
         // On a release task the pull requests on its project's release list, cited in a post, are not its code (teamWritten.ts postedCode).
         const onList = group.release ? (groupProject(effects.state, group).releases?.pending ?? []).map(entry => entry.url) : []
-        appendCodePullRequestUrls(group, [group.brief, group.title, ...group.checks.map(check => check.evidence), group.assignment?.result,
-          ...postedCode(group, codePosts, onList, repositoryUrl)], repositoryUrl)
+        appendCodePullRequestUrls(group, [group.brief, group.title, ...releaseCodeSources(group, { status: group.assignment?.status, result: group.assignment?.result,
+          evidence: group.checks.map(check => check.evidence), posts: codePosts, onList, repositoryUrl })], repositoryUrl)
         cleanPullRequestLinks(group, repositoryUrl)
       }
       if (command.type === 'agent.rebind') {
