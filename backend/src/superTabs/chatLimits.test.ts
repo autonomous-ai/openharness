@@ -60,6 +60,13 @@ describe('project chat content limits', () => {
     expect(() => send('Status: tests running.', { extra: { agentOnly: true, recipientIds: [f.lead] } })).not.toThrow()
   })
 
+  it('lets a visible response to an agent-only notice stand on its own, while still checking main content', () => {
+    const { f, send } = setup()
+    const note = { id: 'notice', conversationId: 'lead', author: { kind: 'agent' as const, id: f.lead, name: 'PM' }, createdAt: f.now, thread: 'notice', agentOnly: true }
+    expect(() => send('The worker has resumed.', { reply: note, extra: { replyTo: note.id } })).not.toThrow()
+    expect(() => send('Status: worker resumed.', { reply: note, extra: { replyTo: note.id } })).toThrow(expect.objectContaining({ code: 'CHAT_STATUS' }))
+  })
+
   it('checks status on a thread reply mirrored into main chat', () => {
     const { send, ask } = setup()
     const question = ask()
