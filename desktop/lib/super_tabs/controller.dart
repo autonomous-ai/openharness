@@ -23,6 +23,7 @@ import 'task_groups.dart';
 import 'buddy_chat.dart';
 import 'project_github.dart';
 import 'parts.dart';
+import 'tasks/personal_tasks.dart';
 import 'read_marks.dart';
 import 'reading.dart';
 import 'linked_tasks.dart';
@@ -436,6 +437,8 @@ class SuperTabController extends ChangeNotifier {
 
   /// The Swarm's parts as last read: what the next read asks changes for, and what [snapshot] is built from.
   SuperTabParts? _parts;
+
+  SuperTabPersonalTasks? get personalTasks => _parts?.personalTasks;
 
   /// The visibility epoch of the last read: it moves when who may read what changes (backend parts/commit.ts
   /// `visibilityChanged`). Null before a read.

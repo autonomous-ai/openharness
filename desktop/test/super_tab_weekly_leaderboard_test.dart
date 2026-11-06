@@ -7,6 +7,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/leaderboard/weekly_page.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/super_tabs/tasks/personal_tasks_pane.dart';
 
 import 'support/capture.dart';
 import 'support/humans_fixture.dart';
@@ -132,6 +133,25 @@ void main() {
         brightness: brightness,
         size: const Size(1500, 900),
       );
+      c.personalTasks!.apply({
+        'approvalMode': 'autoApprove',
+        'reset': true,
+        'upserts': [
+          {
+            'id': 'ready-to-ship',
+            'version': 1,
+            'at': 1,
+            'projectId': 'lead',
+            'projectName': 'Pilot',
+            'title': 'Ship the weekly board',
+            'status': 'working',
+            'suggested': false,
+            'canApprove': false,
+            'agent': <String, dynamic>{},
+          },
+        ],
+        'removed': <String>[],
+      });
       await tester.pumpWidget(
         MaterialApp(
           debugShowCheckedModeBanner: false,
@@ -149,6 +169,16 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      expect(find.byType(SuperTabPersonalTasksPane), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('personal-task-ready-to-ship')),
+        findsOneWidget,
+      );
+      await captureWindow(
+        tester,
+        shots,
+        'weekly-board-tasks-${brightness.name}',
+      );
       await tester.tap(find.byKey(const ValueKey('super-leaderboard')));
       await tester.pumpAndSettle();
       expect(find.text('This week'), findsOneWidget);
