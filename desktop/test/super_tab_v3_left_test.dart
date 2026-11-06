@@ -33,6 +33,15 @@ Map<String, dynamic> _agent(
 void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
 
+  Future<void> settle(WidgetTester tester) async {
+    for (var i = 0; i < 3; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 30)),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+  }
+
   Future<SuperTabController> show(
     WidgetTester tester, {
     List<Map<String, dynamic>>? agents,
@@ -381,6 +390,149 @@ void main() {
       expect(calls, ['add-agent:lead']);
       await tester.pumpWidget(const SizedBox());
       c.dispose();
+    });
+  });
+
+  group('the middle follows the selected agent', () {
+    Future<SuperTabController> view(
+      WidgetTester tester, {
+      Widget Function(BuildContext)? rightPane,
+    }) async {
+      final server = swarm()
+        ..state['agents'] = [
+          _agent('kestrel', 'Kestrel'),
+          _agent('orion', 'Orion'),
+        ];
+      final groups = (server.state['conversations'] as List)
+          .cast<Map<String, dynamic>>();
+      groups.firstWhere((g) => g['id'] == 'lead')['leadId'] = 'orion';
+      groups.firstWhere((g) => g['id'] == 'offline')['assignment'] = {
+        'id': 'a1',
+        'agentId': 'kestrel',
+        'status': 'working',
+      };
+      server.append('Working on the fix.', conversationId: 'offline');
+      server.append('The project chat line.');
+      final c = server.controller(
+        account: 'owner',
+        initial: {
+          'tabId': 'tab',
+          'accountId': 'owner',
+          'selectedId': 'lead',
+          'projectsGroupOpen': true,
+        },
+      );
+      await tester.runAsync(c.refresh);
+      await tester.binding.setSurfaceSize(const Size(1600, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.light),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Mac Studio',
+              board: true,
+              rightPane: rightPane,
+            ),
+          ),
+        ),
+      );
+      await settle(tester);
+      return c;
+    }
+
+    Future<void> end(WidgetTester tester, SuperTabController c) async {
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+      await tester.pump(const Duration(seconds: 5));
+    }
+
+    testWidgets('a Regular agent opens its task\'s chat in the middle', (
+      tester,
+    ) async {
+      final c = await view(tester);
+      await tester.tap(key('super-agent-kestrel'));
+      await settle(tester);
+      expect(c.selectedId, 'offline');
+      expect(
+        find.descendant(
+          of: key('super-center-pane'),
+          matching: find.text('Working on the fix.'),
+        ),
+        findsOneWidget,
+      );
+      expect(key('super-middle-chat'), findsOneWidget);
+      // No Board, and the chat is not in the right pane any more.
+      expect(key('super-tasks-lead'), findsNothing);
+      expect(key('super-board-chat'), findsNothing);
+      expect(key('super-right-pane'), findsOneWidget);
+      await end(tester, c);
+    });
+
+    testWidgets('a PM opens its project\'s chat in the middle', (tester) async {
+      final c = await view(tester);
+      await tester.tap(key('super-agent-orion'));
+      await settle(tester);
+      expect(c.selectedId, 'lead');
+      expect(
+        find.descendant(
+          of: key('super-center-pane'),
+          matching: find.text('The project chat line.'),
+        ),
+        findsOneWidget,
+      );
+      expect(key('super-tasks-lead'), findsNothing);
+      await end(tester, c);
+    });
+
+    testWidgets('a project still opens its Board, Board first', (tester) async {
+      final c = await view(tester);
+      await tester.tap(key('super-agent-kestrel'));
+      await settle(tester);
+      await tester.tap(key('super-group-lead'));
+      await settle(tester);
+      expect(key('super-tasks-lead'), findsOneWidget);
+      expect(key('super-middle-chat'), findsNothing);
+      expect(
+        tester.widget<TextButton>(key('super-board-tab-board')).onPressed,
+        isNull,
+        reason: 'Board is the tab shown',
+      );
+      await end(tester, c);
+    });
+
+    testWidgets('the right pane is the Tasks slot: always there, with the '
+        'chat in the middle', (tester) async {
+      final c = await view(
+        tester,
+        rightPane: (_) => const Text('Tasks pane', key: ValueKey('tasks-pane')),
+      );
+      // Even on a project's Board the right pane is the slot, not a chat.
+      await tester.tap(key('super-group-lead'));
+      await settle(tester);
+      expect(
+        find.descendant(
+          of: key('super-right-pane'),
+          matching: key('tasks-pane'),
+        ),
+        findsOneWidget,
+      );
+      expect(key('super-board-chat'), findsNothing);
+      await tester.tap(key('super-agent-kestrel'));
+      await settle(tester);
+      expect(
+        find.descendant(
+          of: key('super-right-pane'),
+          matching: key('tasks-pane'),
+        ),
+        findsOneWidget,
+      );
+      expect(key('super-middle-chat'), findsOneWidget);
+      await end(tester, c);
     });
   });
 }
