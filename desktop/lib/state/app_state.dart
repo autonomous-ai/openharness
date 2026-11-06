@@ -2992,10 +2992,6 @@ class AppNotifier extends ChangeNotifier {
     final swarm = swarms.where((s) => s.id == swarmId).firstOrNull;
     if (swarm == null) return;
     enterSuperTabs();
-    if (!swarms.any((s) => s.superTabId == tabId) &&
-        !superTabs.hiddenIds.contains(tabId)) {
-      _openedInRun.add(tabId);
-    }
     // A discovery response can beat the creation response back to this
     // computer. Keep the lead form's tab and retain any already-open panes.
     for (final duplicate
@@ -3026,6 +3022,7 @@ class AppNotifier extends ChangeNotifier {
   /// Reopen later cannot add a second view.
   void openSuperTab(String tabId, String name, {String? intoSwarmId}) {
     enterSuperTabs();
+    _noteOpenedInRun(tabId);
     _rememberSuperTabVisibility(tabId, true);
     _closedHistory.removeWhere(
       (entry) => entry is ClosedSwarm && entry.superTabId == tabId,
@@ -3052,12 +3049,24 @@ class AppNotifier extends ChangeNotifier {
     bindSuperTab(activeSwarmId, tabId, name);
   }
 
+  /// Notes that Swarm [tabId] is about to open on this computer for the first
+  /// time in this run ([_openedInRun]). Read before the visibility is saved:
+  /// showing a Swarm clears its hidden state at once, and one the person had
+  /// hidden and reopens is still one they had.
+  void _noteOpenedInRun(String tabId) {
+    if (!swarms.any((s) => s.superTabId == tabId) &&
+        !superTabs.hiddenIds.contains(tabId)) {
+      _openedInRun.add(tabId);
+    }
+  }
+
   /// Shows Swarm [tabId] in the Swarm tab [swarmId] in place of the Swarm it
   /// shows, from the Swarm dropdown: the tab keeps its place and its name
   /// follows. A Swarm already open in another tab is selected there instead,
   /// so no tab is added or closed. The Swarm the tab showed is hidden here as
   /// a closed one is, and let go, which keeps its draft for its return.
   void showSuperTabIn(String swarmId, String tabId, String name) {
+    _noteOpenedInRun(tabId);
     final tab = swarms.where((s) => s.id == swarmId).firstOrNull;
     final previous = tab?.superTabId;
     if (tab == null || previous == null || previous == tabId) return;
