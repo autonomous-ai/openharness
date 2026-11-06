@@ -138,6 +138,62 @@ describe('the crew dispatch pass', () => {
     expect(await s.holders()).toEqual({ First: 'Ash', Next: null })
   })
 
+  it('honors periodic project cadence while direct work events bypass it', async () => {
+    const s = await swarm({ Ash: 'backend' }, { First: 'backend/a.ts', Next: 'backend/b.ts', Third: 'backend/c.ts' })
+    await save(s, 0, { dispatch: { ...SEED_RULES.dispatch, everyMs: 60_000 } })
+    expect(await s.store.dispatchCrew(s.tab, true)).toMatchObject({ assigned: 1 })
+    const first = (await readGroup(s.tab, s.tasks.First!)).assignment!.id
+    await s.execute({ type: 'work.status', conversationId: s.tasks.First!, assignmentId: first, status: 'review', result: 'Ready at abc1234.' }, s.crew.Ash)
+    s.advance(30_000)
+    expect(await s.store.dispatchCrew(s.tab, true)).toMatchObject({ assigned: 0 })
+    s.advance(30_000)
+    expect(await s.store.dispatchCrew(s.tab, true)).toMatchObject({ assigned: 1 })
+    const next = (await readGroup(s.tab, s.tasks.Next!)).assignment!.id
+    await s.execute({ type: 'work.status', conversationId: s.tasks.Next!, assignmentId: next, status: 'review', result: 'Ready at abc1234.' }, s.crew.Ash)
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+    expect(await s.holders()).toEqual({ First: 'Ash', Next: 'Ash', Third: 'Ash' })
+  })
+
+  it('upgrades a pending periodic pass when a work event arrives', async () => {
+    const s = await swarm({ Ash: 'backend' }, { First: 'backend/a.ts', Next: 'backend/b.ts' })
+    await save(s, 0, { dispatch: { ...SEED_RULES.dispatch, everyMs: 60_000 } })
+    const automatic = new SuperTabStore(db, () => NOW, null, { dispatch: true })
+    await automatic.dispatchCrew(s.tab, true)
+    const id = (await readGroup(s.tab, s.tasks.First!)).assignment!.id
+    await s.execute({ type: 'work.status', conversationId: s.tasks.First!, assignmentId: id, status: 'review', result: 'Ready at abc1234.' }, s.crew.Ash)
+    const schedule = automatic as unknown as { dispatchSoon(tabId: string, periodic: boolean): void }
+    const passes = vi.spyOn(automatic, 'dispatchCrew')
+    schedule.dispatchSoon(s.tab, true)
+    await vi.waitFor(() => expect(passes.mock.results.length).toBe(1), { timeout: 5_000, interval: 100 })
+    await passes.mock.results[0]!.value
+    expect((await readGroup(s.tab, s.tasks.Next!)).assignment).toBeNull()
+    schedule.dispatchSoon(s.tab, true)
+    await automatic.execute(owner, s.tab, { operationId: randomUUID(), command: { type: 'work.queue', conversationId: s.tasks.Next!, after: null } })
+    await vi.waitFor(async () => expect((await readGroup(s.tab, s.tasks.Next!)).assignment?.agentId).toBe(s.crew.Ash), { timeout: 5_000, interval: 100 })
+  })
+
+  it('uses each project’s progress clock without changing another project’s seed', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/a.ts' })
+    const other = String((await s.execute({ type: 'project.create', name: 'Phone', visibility: 'public', brief: '' })).result.projectId)
+    const projects = (await db.swarmHead.findUniqueOrThrow({ where: { tabId_key: { tabId: s.tab, key: 'head' } } })).data as unknown as { projects: { id: string; leadConversationId: string }[] }
+    const chat = projects.projects.find(p => p.id === other)!.leadConversationId
+    const mobile = String((await s.execute({ type: 'agent.add', conversationId: chat, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Phone worker', configuration: config, lead: false })).result.agentId)
+    await s.execute({ type: 'crew.add', agentId: mobile, lane: 'mobile', role: 'Engineer' })
+    const phone = String((await s.execute({ type: 'conversation.create', projectId: other, title: 'Phone', checks: [], task: { goal: 'Phone.', changes: 'Change.', constraints: 'None.', owns: ['mobile/a.dart'] } })).result.conversationId)
+    await save(s, 0, { lanes: [{ name: 'firmware', owns: ['backend/'] }], dispatch: { ...SEED_RULES.dispatch, nudgeAfterMs: 60_000, returnAfterMs: 120_000 } })
+    await s.execute({ type: 'work.assign', conversationId: s.tasks.Api!, agentId: s.crew.Ash! })
+    await s.execute({ type: 'work.assign', conversationId: phone, agentId: mobile })
+    s.advance(60_000)
+    await s.store.runTimeChecks(s.tab)
+    const messages = (await s.store.messages(owner, s.tab, s.tasks.Api!, {}, s.crew.Ash)).messages
+    expect(messages.filter(m => (m.source as { kind?: string })?.kind === 'crew-nudge')).toHaveLength(1)
+    s.advance(60_000)
+    await s.store.runTimeChecks(s.tab)
+    expect((await readGroup(s.tab, s.tasks.Api!)).assignment?.status).toBe('lost')
+    expect((await readGroup(s.tab, phone)).assignment?.status).toBe('working')
+    expect((await readGroup(s.tab, phone)).handOutLane).toBe('mobile')
+  })
+
   it('hands a free member its pinned task first, then its lane\'s top task, as the PM, through work.assign', async () => {
     const s = await swarm({ Ash: 'backend', Birch: 'desktop' }, { Api: 'backend/src/a.ts', Store: 'backend/src/b.ts', Board: 'desktop/lib/c.dart' })
     await editGroup(s.tab, s.tasks.Store!, group => ({ ...group, pin: { agentId: s.crew.Ash!, why: 'ci', at: NOW } }))
