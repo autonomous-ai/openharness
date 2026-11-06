@@ -219,7 +219,8 @@ describe('pause and resume', () => {
       expect(() => f.run({ type: 'work.assign', conversationId: id, agentId: f.worker }, actor), JSON.stringify(actor))
         .toThrow(expect.objectContaining({ code: 'TASK_PAUSED' }))
     }
-    expect(() => f.run({ type: 'agent.start', request: { conversationId: id, machineId: 'machine', engine: 'claude', name: 'Helper', cwd: '/repo', worktree: true } } as Command))
+    expect(() => f.run({ type: 'agent.start', request: { conversationId: id, machineId: 'machine', engine: 'claude', name: 'Helper', cwd: '/repo', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }, routeDecisionId: 'route' }))
       .toThrow(expect.objectContaining({ code: 'TASK_PAUSED' }))
   })
 
@@ -277,7 +278,7 @@ describe('switching a project on', () => {
     const owed = owedLines(f.state, f.project(), 1000).join('\n')
     expect(owed).toContain(first)
     expect(owed).toContain(second)
-    const after = ask('After the switch', granted)
+    const after = ask('After the switch', projectOwner)
     expect(owedLines(f.state, f.project(), 1000).join('\n')).not.toContain(after)
   })
 })
