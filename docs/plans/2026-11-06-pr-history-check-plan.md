@@ -52,9 +52,14 @@
 **Files:** backend/src/superTabs/prHistoryRead.ts, prHistoryRead.test.ts, pullRequestFiles.ts, pullRequestFiles.test.ts, commands.ts, reviewTable.ts, reviewTable.test.ts, reviewSteps.test.ts; backend/integration/superTabReviewSteps.test.ts.
 **Interfaces:** `readPrHistory(app.get, repository, number, token, head): Promise<HistoryReport>`; optional per-PR `history` in PullRequestFilesRead.heads; review brief replaces a generated history block on every Ready.
 
-- [ ] Commit failing tests for complete/failed/truncated/malformed reads, read cap, token permissions/revocation, moved head, separate reports for multiple PRs, every review brief, refreshed active/finished steps and real-store persisted brief.
-- [ ] Observe failures before implementation.
-- [ ] Read fixed repository endpoints with bounded concurrency, attach only current-head reports, preserve file-based review planning on history failure, refresh the generated brief block before step assignment.
-- [ ] Run affected unit checks, focused store integration, typecheck, script tests and the explicitly requested backend unit suite. Record red/green; mark Ready once, hold the head for automatic CI and independent review.
+- [x] Commit failing tests for complete/failed/truncated/malformed reads, read cap, token permissions/revocation, moved head, separate reports for multiple PRs, every review brief, refreshed active/finished steps and real-store persisted brief.
+- [x] Observe failures before implementation.
+- [x] Read fixed repository endpoints with bounded concurrency, attach only current-head reports, preserve file-based review planning on history failure, refresh the generated brief block before step assignment.
+- [x] Run affected unit checks, focused store integration, typecheck, script tests and the explicitly requested backend unit suite. Record red/green. Ready follows this local validation; hold that head for automatic CI and independent review.
 
 - Task 1: red cc930f866 lacked the checker; green passes 19 sample/script cases and backend typecheck. The standalone script consumes JSON through tsx and executes no PR code.
+
+- Task 2: red 0243cd20a lacked the reader and all brief reports; green 4dde172d2 passed 43 focused checks and 5 real-store review-step integrations. Supplemental pagination, malformed-data, multi-PR and head/base-move cases pass.
+- Repeated-Ready regression: ab9011118 caught the original head remaining in a generated brief's opening sentence; c0cc1825e refreshes the generated section while keeping manual instructions. All 68 affected checker/reader/brief tests pass, and the 5 real-store review-step integrations pass after the fix.
+- Final code validation at c0cc1825e: backend `npm test -- --maxWorkers=2`: 5,978 passed, 30 skipped in 74.24 s (363 passed files, 4 skipped). `npm run typecheck` passed. No full Super Tab suite was run locally; automatic PR CI provides it.
+- Maximum pure-checker workload: 50 commits × 300 files, 300 net PR files, 100 iterations after warmup: 9.91 ms average on this macOS machine. It replaces manual counting; no earlier checker exists to benchmark. GitHub history reads add bounded network work to Ready (four concurrent commit reads, stop starting calls after a shared 10 s budget; each API call retains its 10 s timeout).
