@@ -218,6 +218,9 @@ export interface AgentStartRequest {
   /** A project's Product Manager's start (leadStart.ts): written by lead.start alone, never taken from an agent.start. Its
    *  agent becomes the Lead of the project's Lead conversation once it runs. */
   leadFor?: { projectId: string; personId: string; generation: string; switchId?: string }
+  /** What the agent is for (task #3614): once its host says it is ready, the server assigns it this request's task and sends it
+   *  `message`, so its coordinator makes no assign call and keeps answering people. Cleared once done. */
+  assign?: { message?: string }
 }
 export interface AgentStart {
   poolGeneration?: string
