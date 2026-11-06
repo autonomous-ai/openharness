@@ -26,10 +26,15 @@ export const TEAM_WRITTEN_STOP = 'Stop: GitHub shows a Harness Team agent pushed
 const taskOf = (state: SuperTabState, group: Conversation): Conversation | undefined =>
   group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : group
 
+/** Whether [group] is a release task the Swarm opened, or a step on one (task #3604): main at a named commit, which every member may
+ *  read. Such work is never Team-written, and what GitHub says of a branch marks nothing there. */
+export const isReleaseWork = (state: SuperTabState, group: Conversation): boolean => !!taskOf(state, group)?.release
+
 /** Whether [group]'s code is Team-written. An open task from before the mark reads its current assignee too. A step whose
  *  task this command did not load counts as Team-written: an unknown never reads as clean. */
 export function teamWrittenTask(state: SuperTabState, group: Conversation): boolean {
   const task = taskOf(state, group)
+  if (task?.release) return false
   if (!task || group.teamWritten || task.teamWritten) return true
   const assignee = state.agents.find(a => a.id === task.assignment?.agentId)
   return !!assignee && onTeamAccount(state, assignee)
@@ -47,12 +52,13 @@ function mark(group: Conversation, cause: Cause): void {
 
 /** Marks [group] when [worker], assigned to build it, runs in a Team account. A step or the project's coordinator marks nothing. */
 export function markTeamWritten(state: SuperTabState, group: Conversation, worker: Agent): void {
-  if (group.reviewOf || coordinates(state, group, worker) || !onTeamAccount(state, worker)) return
+  if (group.reviewOf || coordinates(state, group, worker) || !onTeamAccount(state, worker) || group.release) return
   mark(group, { kind: 'assigned' })
 }
 
 /** What a step opened on [task] stores: a copy of its task's mark, or an assignment's when it reads as Team-written by its assignee. */
 export function stepMark(state: SuperTabState, task: Conversation): Pick<Conversation, 'teamWritten' | 'teamWrittenBy'> {
+  if (task.release) return {}
   if (task.teamWritten) return { teamWritten: true, ...task.teamWrittenBy ? { teamWrittenBy: structuredClone(task.teamWrittenBy) } : {} }
   return teamWrittenTask(state, task) ? { teamWritten: true, teamWrittenBy: { kind: 'assigned' } } : {}
 }
@@ -105,6 +111,7 @@ export function mainAccountMembers(state: SuperTabState, group: Conversation, ex
  */
 export function applyPushOrigin(state: SuperTabState, group: Conversation, origin: PushOrigin | undefined, pulls: readonly string[] = [],
   taskRead?: { origin: PushOrigin; pulls: readonly string[] }): void {
+  if (isReleaseWork(state, group)) return
   const task = taskOf(state, group)
   // A step's own links (a reviewer citing another pull request, log lines) are read for the step alone; its task is marked by the
   // read of the task's own code (task #3554: #3462 was marked for its Team reviewers' links). Without that read, as before.

@@ -72,6 +72,7 @@ const conversation: Required<Conversation> = {
   pulse: {} as never,
   queueRank: 1.5,
   reactionSeq: 0,
+  release: true,
   released: { at: 1, tags: [] },
   releasing: ['cli'],
   reportSeq: 0,

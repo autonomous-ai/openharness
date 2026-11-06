@@ -487,7 +487,7 @@ describe('a release task the Swarm opened', () => {
     const f = swarm(), task = f.group()
     f.state.conversations.find(c => c.id === task)!.release = true
     const step = f.group({ reviewOf: task, step: 'Test' })
-    return { ...f, task, step }
+    return { ...f, task, step, get state() { return f.state } }
   }
 
   it('is never Team-written, whoever it was assigned to or whatever GitHub says of a branch', () => {

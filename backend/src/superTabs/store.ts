@@ -2,6 +2,7 @@ import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { applyCrewKeep, crewMoveRequest, crewNeedsMachine, type CrewDeps } from './crewKeep.js'
 import { finishedWakes } from './crewTimes.js'
 import { isCrew } from './crew.js'
+import { isReleaseWork } from './teamWritten.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
@@ -1578,6 +1579,8 @@ export class SuperTabStore {
         const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
         const group = state.conversations.find(c => c.id === asked.conversationId)
         if (!group) return null
+        // A release task tests main at a named commit: no push to read (task #3604, teamWritten.ts isReleaseWork).
+        if (isReleaseWork(state, group)) return null
         const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
         const repositoryUrl = groupProject(state, group).repository?.repositoryUrl ?? null
         // Only the code each is in: links posted in a task or a step mark nothing (task #3554, model.ts codePullRequests).

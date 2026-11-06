@@ -1,5 +1,5 @@
 import { pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
-import { applyPushOrigin, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
+import { applyPushOrigin, failPushUnknown, failTeamWritten, isReleaseWork, mainAccountMembers, markTeamWritten, mayName, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import { crewMoveFailed, takeOverCrewMember, wakeCrewMember } from './crewKeep.js'
 import { moveTimingRow, startWake } from './crewTimes.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
@@ -1137,6 +1137,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** What GitHub's read says for an agent about to take [group]'s work (store.ts pushOriginFor): a bot's push marks the task and
    *  refuses the main account, and the store keeps that mark after this command is refused. Unknown refuses it unmarked. */
   const pushedRefusal = (group: Conversation, worker: Agent) => {
+    // A release task tests main at a named commit, which every member may read: no push to read (task #3604).
+    if (isReleaseWork(state, group)) return
     marking(group, () => applyPushOrigin(state, group, context.pushOrigin, context.pushOriginPulls, context.pushOriginTask))
     if (onTeamAccount(state, worker) || ledProject(state, worker.id)?.id === groupProject(state, group).id) return
     if (context.pushOrigin === 'unknown') failPushUnknown(unknownPushReason(context.repositoryReach))
@@ -2936,7 +2938,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const written = teamWrittenTask(state, startGroup)
       // Named the Team account's entry itself, which its owner's choice keeps teammates' work off (task #3060). A branch GitHub
       // cannot place runs only in a Team account (below), so it counts as Team-written here (security review 2 of #3081).
-      const ownEntry = ownAccountTeamEntry(state, named.machineId, home, written || context.pushOrigin === 'unknown')
+      const origin = isReleaseWork(state, startGroup) ? undefined : context.pushOrigin
+      const ownEntry = ownAccountTeamEntry(state, named.machineId, home, written || origin === 'unknown')
       if (ownEntry) failOwnAccountTeamEntry(ownEntry)
       const moved = teamStartRequest(state, named, home, context.teamAccountsIdle, context.teamMachines, written, taskAccess(startGroup))
       // Moved to the Mac's Team account: the starter is told why in one line (task #2806).
@@ -2946,7 +2949,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       if (written) requireTeamWrittenMachine(state, startGroup, moved.machineId)
       // A branch GitHub cannot place stays out of the main account too, unmarked, as it may yet read clean.
-      else if (context.pushOrigin === 'unknown' && !teamAccountPool(state.machines?.find(m => m.machineId === moved.machineId))) failPushUnknown(unknownPushReason(context.repositoryReach))
+      else if (origin === 'unknown' && !teamAccountPool(state.machines?.find(m => m.machineId === moved.machineId))) failPushUnknown(unknownPushReason(context.repositoryReach))
       const request: AgentStartRequest = noRepositoryStart(state.machines?.find(m => m.machineId === moved.machineId), home,
         written ? { ...moved, projectSettings: 'off' } : moved)
       // Before it is queued: a machine that cannot get the app's token for it would fail it, and count that against its engine.

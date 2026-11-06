@@ -477,6 +477,9 @@ export interface Conversation {
   /** While it is on its project's release list (releases.ts): the parts it still waits for, as `desktop` or `cli`; empty until
    *  its pull request's files are read. Absent otherwise, and cleared once it is released or leaves the list (River, 11-05). */
   releasing?: import('./releases.js').ReleaseComponentId[]
+  /** A release task the Swarm opened itself (releases.ts settleReleases, task #3604): it tests main at a named commit, which every member
+   *  may read, so it is never Team-written (teamWritten.ts). Set only by the server; no command writes it. */
+  release?: true
   /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
   liveness?: TaskLiveness
   /** Its last step up from a cheaper model: written when a grid attempt's first review fails (commands.ts reviewFailed, goals
