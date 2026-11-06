@@ -54,7 +54,7 @@ describe('+ New agent, PM', () => {
   it('needs a project name', () => {
     const f = swarm()
     expect(code(() => f.add({ kind: 'pm' }))).not.toBeNull()
-    expect(f.state.projects ?? []).toHaveLength(0)
+    expect((f.state.projects ?? []).filter(p => p.id !== 'lead')).toHaveLength(0)
   })
 })
 
@@ -67,7 +67,7 @@ describe('+ New agent, Regular', () => {
     const start = f.state.starts!.find(s => s.id === made.result.startId)!
     expect(start.request).toMatchObject({ machineId: 'mate-mac', conversationId: chat.id, engine: 'claude', name: 'Ada', regular: true })
     expect(start).toMatchObject({ contributorId: 'mate', machineOwnerId: 'mate' })
-    expect(f.state.projects ?? []).toHaveLength(0)
+    expect((f.state.projects ?? []).filter(p => p.id !== 'lead')).toHaveLength(0)
   })
 
   it('once started, is a Regular agent in its own chat', () => {
@@ -93,7 +93,36 @@ describe('+ New agent, on whose computer', () => {
       expect(code(() => f.add({ ...extra, machineId: 'nowhere' }))).toBe('MACHINE_NOT_LISTED')
       expect(code(() => f.add(extra, { kind: 'agent', agentId: 'x', machineOwnerId: 'mate' }))).not.toBeNull()
     }
-    expect(f.state.projects ?? []).toHaveLength(0)
+    expect((f.state.projects ?? []).filter(p => p.id !== 'lead')).toHaveLength(0)
     expect(f.state.starts ?? []).toHaveLength(0)
+  })
+})
+
+describe('a Regular agent\'s chat', () => {
+  /** Mate's Regular agent Ada, started and running in its chat. */
+  function running() {
+    const f = swarm()
+    const made = f.add({ kind: 'regular', name: 'Ada' })
+    const startId = made.result.startId as string
+    f.run({ type: 'agent.startDispatch', startId }, mate, own('mate'))
+    const agentId = f.run({ type: 'agent.started', startId, harnessId: 'h-ada',
+      configuration: { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null } }, mate, own('mate')).result.agentId as string
+    return { ...f, chat: made.result.conversationId as string, agentId }
+  }
+  const say = (chat: string, text: string) => ({ type: 'message.send', conversationId: chat, text, replyTo: null, recipientIds: [] }) as Command
+
+  it('takes its person\'s messages and the agent\'s replies', () => {
+    const f = running()
+    expect(code(() => f.run(say(f.chat, 'Hello Ada'), mate))).toBeNull()
+    expect(code(() => f.run(say(f.chat, 'Hello'), { kind: 'agent', agentId: f.agentId, machineOwnerId: 'mate' }))).toBeNull()
+  })
+
+  it('is read and written by nobody else: not the Swarm\'s owner, nor another agent', () => {
+    const f = running()
+    expect(code(() => f.run(say(f.chat, 'Peeking'), owner))).toBe('NOT_FOUND')
+    const lead = f.state.agents.find(a => a.id !== f.agentId)
+    if (lead) expect(code(() => f.run(say(f.chat, 'Peeking'), { kind: 'agent', agentId: lead.id, machineOwnerId: lead.machineOwnerId }))).not.toBeNull()
+    // Its agent carried to another owner's machine (a stale grant) is not its person's agent there.
+    expect(code(() => f.run(say(f.chat, 'Hi'), { kind: 'agent', agentId: f.agentId, machineOwnerId: 'owner' }))).not.toBeNull()
   })
 })
