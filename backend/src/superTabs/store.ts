@@ -115,7 +115,7 @@ import { STATUS_LABELS,
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { agentPost, digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredMessage, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
-import { PM_SCHEDULE_TEXT, recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
+import { pmScheduleText, recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, startedHolds, tokenTask, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
@@ -3214,7 +3214,7 @@ export class SuperTabStore {
       const coordinator = actor.kind === 'agent' && ledProject(state, actor.agentId)?.id === project.id
       return { projectId, revision, hash: stored ? stored.hash : FIRST_INSTRUCTIONS.instructionsHash, text: stored?.text ?? INSTRUCTIONS_TEMPLATE, template: !stored,
         coordinatorName: coordinatorNameOf(project), notesRevision: project.notesRevision ?? 0, ...(notes ? { notes } : {}),
-        ...(coordinator ? { builtIn: PM_SCHEDULE_TEXT } : {}) }
+        ...(coordinator ? { builtIn: pmScheduleText(project) } : {}) }
     })
   }
 

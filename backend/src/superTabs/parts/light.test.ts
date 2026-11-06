@@ -64,6 +64,7 @@ const conversation: Required<Conversation> = {
   number: 1,
   openedBy: 'server',
   owed: [],
+  paused: { by: 'person:owner', at: 1, reason: 'Wait' },
   pin: { agentId: 'a', why: 'ci', at: 1 },
   priority: 'P0',
   projectId: 'p',
