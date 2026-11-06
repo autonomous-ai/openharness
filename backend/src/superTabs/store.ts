@@ -1548,6 +1548,24 @@ export class SuperTabStore {
     }
   }
 
+  /** The task a start names for its agent (AgentStartRequest.assign), when [command] is the start's agent joining or settling, which is
+   *  when the server assigns it: that is a work.assign, so what the store reads for one (who pushed the task's code, the repository's
+   *  reach) is read for it. Undefined for any other command, or a start that names no task. */
+  private async startNamingTask(user: AuthUser, tabId: string, command: unknown): Promise<string | undefined> {
+    const asked = command as { type?: unknown; startId?: unknown } | null
+    if ((asked?.type !== 'agent.started' && asked?.type !== 'agent.startSettled') || typeof asked.startId !== 'string') return undefined
+    try {
+      return await transaction(this.db, async tx => {
+        const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
+        const start = state.starts?.find(s => s.id === asked.startId)
+        return start?.request.assign ? start.request.conversationId : undefined
+      })
+    } catch (error) {
+      if (error instanceof SuperTabError) return undefined
+      throw error
+    }
+  }
+
   /**
    * Who pushed the pull requests of the task a work.assign or a Ready for review is about (github/pushOrigin.ts, audit H2).
    * Read outside the command's transaction, as GitHub may take seconds, so it can only ever add a mark. Undefined when there is
@@ -1557,7 +1575,7 @@ export class SuperTabStore {
   private async pushOriginFor(user: AuthUser, tabId: string, command: unknown): Promise<{ origin: PushOrigin; pulls: string[]; task?: { origin: PushOrigin; pulls: string[] } } | undefined> {
     const hook = this.hooks.pushOrigin
     const asked = command as { type?: unknown; conversationId?: unknown; status?: unknown; result?: unknown; present?: unknown; projectId?: unknown; branchRef?: unknown;
-      request?: { branchRef?: unknown; conversationId?: unknown } } | null
+      startId?: unknown; request?: { branchRef?: unknown; conversationId?: unknown } } | null
     if (!asked) return undefined
     // A start that names a branch: a person or the PM can name any branch, whoever pushed it.
     const ref = asked.type === 'agent.start' ? asked.request?.branchRef : asked.type === 'lead.start' ? asked.branchRef : undefined
@@ -1572,11 +1590,14 @@ export class SuperTabStore {
         })
         return repositoryUrl === undefined ? undefined : { origin: await this.hooks.branchPushOrigin(repositoryUrl, branch), pulls: [] }
       }
-      const reads = asked.type === 'work.assign' || asked.type === 'work.teamWritten' || (asked.type === 'conversation.agent' && asked.present === true) || (asked.type === 'work.status' && asked.status === 'review')
-      if (!hook || typeof asked.conversationId !== 'string' || !reads) return undefined
+      // A start that names its task assigns it when its agent is ready, which is an assignment: its task is read as one's is (#3614).
+      const named = await this.startNamingTask(user, tabId, command)
+      const reads = asked.type === 'work.assign' || asked.type === 'work.teamWritten' || (asked.type === 'conversation.agent' && asked.present === true) || (asked.type === 'work.status' && asked.status === 'review') || !!named
+      const conversationId = named ?? asked.conversationId
+      if (!hook || typeof conversationId !== 'string' || !reads) return undefined
       const facts = await transaction(this.db, async tx => {
         const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
-        const group = state.conversations.find(c => c.id === asked.conversationId)
+        const group = state.conversations.find(c => c.id === conversationId)
         if (!group) return null
         const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
         const repositoryUrl = groupProject(state, group).repository?.repositoryUrl ?? null
@@ -1621,7 +1642,8 @@ export class SuperTabStore {
     const asked = command as { type?: unknown; conversationId?: unknown; request?: { conversationId?: unknown } } | null
     // A task's Ready assigns its review steps (task #3401), so it reads the reach as an assignment does.
     const assigns = asked?.type === 'work.assign' || (asked?.type === 'work.status' && (asked as { status?: unknown }).status === 'review')
-    const conversationId = asked?.type === 'agent.start' ? asked.request?.conversationId : assigns ? asked!.conversationId : undefined
+    const named = await this.startNamingTask(user, tabId, command)
+    const conversationId = asked?.type === 'agent.start' ? asked.request?.conversationId : assigns ? asked!.conversationId : named
     if (!hook || typeof conversationId !== 'string') return undefined
     try {
       const project = await transaction(this.db, async tx => {
@@ -2110,8 +2132,10 @@ export class SuperTabStore {
       // its latest message; an ordinary message never does (Dee, 2026-10-31).
       const sequences = numberMessages(effects.state, effects.messages, context.now)
       noteWorkChanges(original, effects.state, context.now)
-      if (command.type === 'work.assign' || command.type === 'work.status' || command.type === 'message.send') {
-        const group = conversation(effects.state, command.conversationId)
+      // What a start that names its task assigned in this command, as a work.assign would have (#3614).
+      const startAssigned = effects.result.startAssigned as { conversationId: string; assignmentId: string } | undefined
+      if (command.type === 'work.assign' || command.type === 'work.status' || command.type === 'message.send' || startAssigned) {
+        const group = conversation(effects.state, startAssigned ? startAssigned.conversationId : (command as { conversationId: string }).conversationId)
         const assignment = group.assignment
         if (assignment && (command.type !== 'message.send' || actor.kind === 'agent' && actor.agentId === assignment.agentId)) {
           // Even an unchanged working status is fresh evidence that the agent
@@ -2154,8 +2178,8 @@ export class SuperTabStore {
           create: { id, scopeIds: [], ...(effects.result.forceReleased ? { releasedTabIds: [tabId] } : {}) },
           update: { stopReleaseId: null, ...(effects.result.forceReleased ? { releasedTabIds: { push: tabId } } : { closeLeaseId: null, closeLeaseUntil: null, closeLeaseGeneration: null }) } })
       }
-      if (command.type === 'work.assign') {
-        const assigned = conversation(effects.state, command.conversationId).assignment!
+      if (command.type === 'work.assign' || startAssigned) {
+        const assigned = conversation(effects.state, startAssigned ? startAssigned.conversationId : (command as { conversationId: string }).conversationId).assignment!
         const running = await tx.superTabRun.findUnique({ where: { id: assigned.agentId } })
         // A record of this Swarm's for work that has ended here is stale (endRuns): it goes, by its own assignment, and the agent
         // is free. A record of another Swarm's, or a stopping agent's, still means busy.
@@ -2246,6 +2270,7 @@ export class SuperTabStore {
           sent.flatMap(m => m.recipients)), context.now)
       }
       if (command.type === 'work.assign') await resolveWhenWorked(tx, tabId, command.conversationId, context.now)
+      else if (startAssigned) await resolveWhenWorked(tx, tabId, startAssigned.conversationId, context.now)
       // The Lead acting on a group ends the tags it held back about it (mentions.ts), before this command's own are written.
       const ledId = 'conversationId' in command ? command.conversationId : command.type === 'agent.start' ? command.request.conversationId : undefined
       const leadAt = (state: SuperTabState) => state.conversations.find(c => c.id === ledId)?.leadAction?.at

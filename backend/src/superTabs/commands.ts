@@ -1782,6 +1782,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       return
     }
     assignTo(group, worker, stableId(start.id, 'assignment'))
+    // The store does around this what it does around a work.assign: the agent's run record, its progress mark, the tags it settles.
+    result.startAssigned = { conversationId: group.id, assignmentId: stableId(start.id, 'assignment') }
     if (wanted.message) effects.messages.push({ id: stableId(start.id, 'brief'), conversationId: group.id, author: from, text: wanted.message, replyTo: null, recipients: [worker.id] })
   }
   /** The kind of a step already open on a task, by its name, so a step its Engineer opened is reused, not doubled. */
@@ -2942,6 +2944,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A coordinator starts there through lead.start alone.
       projectChatJoin(open(state, command.request.conversationId), null, command.request.name)
       const home = groupProject(state, open(state, command.request.conversationId))
+      // A start that names its task has the coordinator's brief and assignment done for it: its coordinator alone starts so, or a
+      // person or another agent would put words in the coordinator's name and hand out work as it (review of #3334).
+      if (command.request.assign && !(actor.kind === 'agent' && ledProject(state, actor.agentId)?.id === home.id)) {
+        fail('FORBIDDEN', `Only this project's ${coordinatorNameOf(home)} starts an agent with its assignment. Start it without assign, then assign it.`, 403)
+      }
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       if (!['claude', 'codex'].includes(command.request.engine)) {
         fail('SWARM_ENGINE', 'A Swarm agent runs only Claude Code or Codex.', 400)
@@ -3446,6 +3453,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const starter = actorLabel(state, start.actorKey)
         const joined = starter ? `${starter} added ${quotedName(start.request.name)}.` : `${quotedName(start.request.name)} joined.`
         message(group.id, `${joined} ${start.poolGeneration ? 'Preparing its model.' : 'Ready for an assignment.'}`, [], null, bookkeeping(group.id, SYSTEM_ROW))
+        // A machine with no pool never settles: it is ready as it joins, so its task is assigned now (a pooled one's, at its settle).
+        if (!start.poolGeneration && start.request.assign) startAssignment(start)
       }
       break
     }

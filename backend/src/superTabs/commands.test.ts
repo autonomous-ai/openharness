@@ -6504,7 +6504,7 @@ describe('a start that names its task assigns and briefs its agent when it is re
       requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
     // A person's start, and another agent's, put no words in the coordinator's name.
     expect(() => t.f.run({ type: 'agent.start', request, ...via }, undefined, { contribution, ...decisionIn(t.group) })).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
-    const engineer = t.f.add('engineer', t.group)
+    const engineer = t.f.add('engineer', 'owner', t.group)
     expect(() => t.f.run({ type: 'agent.start', request, ...via }, { kind: 'agent', agentId: engineer, machineOwnerId: 'host-owner' }, { contribution, ...decisionIn(t.group) }))
       .toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
   })
