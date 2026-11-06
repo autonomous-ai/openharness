@@ -651,3 +651,47 @@ describe('reading a model that keeps failing off a screen', () => {
     expect(modelFailing(`I will make the client say "Unable to connect to API" when the relay is down.\n${'line\n'.repeat(30)}> `)).toBe(false)
   })
 })
+
+// #3904: a resumed Swarm Codex already has an identity, so startup settlement never sees its folder prompt.
+describe('opening a Swarm Codex folder restricted after start or resume', () => {
+  const restricted = fixture('codex-0165-open-restricted')
+  it.each(['fresh start', 'resume'])('continues a fake Codex %s without granting trust', async () => {
+    let capture = restricted
+    const savedTrust = 'untrusted'
+    const t = setup({ engine: 'codex', screen: () => ({ ok: true, text: capture,
+      hold: capture === restricted ? 'trust_open' : null }) })
+    // Fake Codex waits for the highlighted restricted choice; no other key or stale screen opens it.
+    vi.mocked(t.core.superTabs!.inputIfScreen).mockImplementation(async (_id, keys, expected) => {
+      if (expected !== capture) return { ok: false, error: 'Screen changed.' }
+      if (keys.length !== 1 || keys[0] !== 'Enter') return { ok: false, error: 'Still waiting.' }
+      capture = '› Ask Codex to do anything'
+      return { ok: true }
+    })
+    await t.host.tick([row()])
+    expect(capture).toBe('› Ask Codex to do anything')
+    expect(savedTrust).toBe('untrusted')
+    t.wait(180_000); await t.host.tick([row()])
+    expect(t.alerts()).toEqual([])
+  })
+
+  it.each([
+    ['trust grant', CODEX_TRUST_PROMPT, 'codex', [row()]],
+    ['another engine', restricted, 'claude', [row()]],
+    ['personal session outside the roster', restricted, 'codex', []],
+    ['Quit highlighted', restricted.replace('› 1. Open restricted', '  1. Open restricted').replace('  2. Quit', '› 2. Quit'), 'codex', [row()]],
+  ])('never types on %s', async (_name, text, engine, rows) => {
+    const t = setup({ engine, screen: () => ({ ok: true, text, hold: 'trust_open' }) })
+    await t.host.tick(rows)
+    expect(t.core.superTabs!.inputIfScreen).not.toHaveBeenCalled()
+  })
+
+  it('bounds failed conditional inputs and alerts when the prompt persists', async () => {
+    const t = setup({ engine: 'codex', screen: () => ({ ok: true, text: restricted, hold: 'trust_open' }) })
+    vi.mocked(t.core.superTabs!.inputIfScreen).mockResolvedValue({ ok: false, error: 'Screen changed.' })
+    for (let i = 0; i < 5; i++) { await t.host.tick([row()]); t.wait(15_000) }
+    expect(t.core.superTabs!.inputIfScreen).toHaveBeenCalledTimes(3)
+    expect(t.core.superTabs!.inputIfScreen).toHaveBeenCalledWith('h1', ['Enter'], restricted)
+    t.wait(180_000); await t.host.tick([row()])
+    expect(t.alerts()).toContainEqual(expect.objectContaining({ alert: 'prompt', active: true }))
+  })
+})
