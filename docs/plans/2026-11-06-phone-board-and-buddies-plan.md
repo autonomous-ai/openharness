@@ -153,16 +153,19 @@ Proposal, and `needsYou` as the list `swarmProjectTasks().waiting` holds.
 ## Task 5: a project opens on its Board
 
 **Files:** `mobile/lib/swarm/swarm_project_tabs.dart`, `mobile/lib/swarm/swarm_project_page.dart`,
-`mobile/test/swarm/swarm_project_c_test.dart` and the tests that open a project.
+`mobile/test/swarm/swarm_board_page_test.dart`, `mobile/test/swarm/swarm_fixture.dart`.
 
-- [ ] Failing test: a project opens on Board with Chat as the second tab; the Chat tab still shows its unread dot and the
-  Lead's tags; the old Tasks list is no longer reachable from the project page. Watch it fail. Commit.
-- [ ] Set `SwarmProjectTab.current` to Board then Chat and draw the Board tab; remove the Tasks tab list the Board replaces
-  (`SwarmProjectTasks`, its row widgets that nothing else uses) in the same pull request. Commit.
+- [ ] Failing test: a project opens on Board with Chat as the second tab; a link, a notice or a new message to the project's
+  chat (`SwarmOpenedChat`) opens the Chat tab, not the Board; the Chat tab still shows its unread dot and the Lead's tags.
+  Watch it fail. Commit.
+- [ ] Set `SwarmProjectTab.current` to Board then Chat under Home C's header, open a chat on the Chat tab, and update the one
+  shared helper (`expectHomeCProject`) that said "no tab bar". Direction B's tabs (Buddy, Tasks, Leaderboard) and
+  `SwarmProjectTasks` stay: only tests reach them today, and they go with the Buddy-home part. Commit.
 
 ## Task 6: screenshots
 
-**Files:** `mobile/test/swarm/swarm_board_shots_test.dart`.
+**Files:** `mobile/integration_test/swarm_board_shots_test.dart`.
 
-- [ ] Shots test for the Board in light and dark, written when the capture directory is set; run the Board on the iOS
-  simulator (named with `-d`) in both themes. Post the images in the task for Dee with a person line naming the task.
+- [ ] Simulator test for the Board in dark and light, a screenshot at each column and at the Chat tab, run with
+  `flutter drive -d <simulator>` on a simulator named by id, from in-memory data only. Post the images in the task for Dee
+  with a person line naming the task.
