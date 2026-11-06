@@ -74,7 +74,7 @@ import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefus
 import { sessionRows } from './memberRows.js'
 import { RefusalMemory } from './dispatchRefusals.js'
 import { tasksHoldingMoves } from './ruleGuard.js'
-import { candidatesFor, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type Skip } from './dispatch.js'
+import { candidatesFor, dispatchRules, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type Skip } from './dispatch.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
 import { owedAsk } from './timeChecks.js'
@@ -1911,6 +1911,12 @@ export class SuperTabStore {
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
       // A stale rules save is refused with the newest revision, to merge (policy.ts); null is the seed.
       if (command.type === 'rules.set') context.projectRules = await readRules(tx, tabId, command.projectId)
+      if (command.type === 'crew.add' || command.type === 'work.lane' || command.type === 'work.define' || command.type === 'conversation.create') {
+        const projectId = command.type === 'crew.add' ? agentProjectId(original, agent(original, command.agentId))!
+          : command.type === 'conversation.create' ? command.projectId ?? (actor.kind === 'agent' ? agentProjectId(original, agent(original, actor.agentId))! : 'lead')
+          : groupProject(original, conversation(original, command.conversationId)).id
+        context.projectRules = await currentRules(tx, tabId, projectId)
+      }
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
         || command.type === 'machine.engineResume' || command.type === 'machine.projects' || command.type === 'machine.ownAccountWork'
         || command.type === 'machine.access' || command.type === 'rules.set') && command.askedIn) {
@@ -2376,8 +2382,9 @@ export class SuperTabStore {
     // The pick as this write's state has it: the worker still free, the task still its candidate (open, its
     // day come, its lane or pin, not the one it just lost). What moved since the pass read is refused, and the next pass decides.
     const assigned = command.type === 'work.assign' ? command.agentId : undefined
-    const now = this.now(), member = freeCrew(state, project.id, DISPATCH_RULES, now).find(a => a.id === assigned)
-    if (!member || !candidatesFor(state, member, DISPATCH_RULES, now).some(c => c.group.id === task.id)) {
+    const rules = dispatchRules((await currentRules(tx, state.id, project.id)).rules)
+    const now = this.now(), member = freeCrew(state, project.id, rules, now).find(a => a.id === assigned)
+    if (!member || !candidatesFor(state, member, rules, now).some(c => c.group.id === task.id)) {
       fail('DISPATCH_STALE', 'This task is no longer one to hand out to this member.', 409)
     }
     try {
@@ -2435,11 +2442,12 @@ export class SuperTabStore {
     const row = await this.db.superTab.findUnique({ where: { id: tabId }, select: { ...SWARM_ROW, autonomousEnv: true } })
     if (!row || row.deletedAt || row.format !== 2) return out
     const { state } = await loadRow(this.db, row)
-    const now = this.now(), rules = DISPATCH_RULES
+    const now = this.now()
     if (state.paused) return out
     this.refusedPicks.prune(now)
     this.waitingPms.prune(now)
     projects: for (const project of projectsOf(state)) {
+      const rules = dispatchRules((await currentRules(this.db, tabId, project.id)).rules)
       if (this.pmWaiting(tabId, state, project, now)) continue
       const free = freeCrew(state, project.id, rules, now)
       if (!free.length) continue

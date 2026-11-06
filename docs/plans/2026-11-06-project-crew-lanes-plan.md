@@ -53,10 +53,10 @@
 **Files:** dispatch.ts, crew.ts, model.ts, commands.ts, store.ts, read/views.ts; crew/dispatch tests and integration/crewDispatch.test.ts.
 **Interfaces:** DispatchRules is the numeric policy plus lanes; stampLane(group, lanes), addCrew accepts string lanes validated against passed policy. CommandContext.projectRules carries the target project's current record. Store assignment revalidation reads currentRules in the transaction.
 
-- [ ] Commit command/store regressions: firmware lane works and dispatches; removed mobile refused on crew.add and work.lane; other project keeps seeded mobile; stale lane/cap pick refused; rules saves update labels.
-- [ ] Watch expected failures in affected tests.
-- [ ] Replace global enum validation with project validation; read the policy for relevant commands, stamping and dispatch; preserve crew lowercase compatibility and all access checks.
-- [ ] Run changed/importer tests, transactional dispatch integration and typecheck; commit and push.
+- [x] Commit command/store regressions: firmware lane works and dispatches; removed mobile refused on crew.add and work.lane; other project keeps seeded mobile; stale lane/cap pick refused; rules saves update labels.
+- [x] Watch expected failures in affected tests.
+- [x] Replace global enum validation with project validation; read the policy for relevant commands, stamping and dispatch; preserve crew lowercase compatibility and all access checks.
+- [x] Run changed/importer tests, transactional dispatch integration and typecheck; commit and push.
 
 ### Task 3: Use project clocks and periodic cadence
 
@@ -71,3 +71,4 @@
 ## Evidence
 
 - Task 1 red: `6f5666e84` fails 2 policy tests (25 pass) and the focused stored-legacy integration. Green: all 27 policy tests and all 6 project-rules integrations pass, including the existing indexed history query and explicit empty list. Backend typecheck clean. No new query/index or backfill.
+- Task 2 red: `deb068ac8` fails the custom crew test (8 pass) and all four new dispatch integrations (14 unrelated skipped). Green: 74 policy/crew/dispatch unit tests, 604 affected importer unit tests across seven files, all 18 crew-dispatch integrations and backend typecheck pass. Custom firmware, no mobile, updated stamps, old marks, and lane/cap changes between planning and transaction are covered.
