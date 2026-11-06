@@ -1706,7 +1706,7 @@ describe('several Buddies on their machine', () => {
 
   it('tells each Buddy and its thread sessions their own chat', async () => {
     const { f, first, second, session } = withSession()
-    const rows = (await hostTab('swarm', f.state, 'peer-mac', user, null, lookups)).roster
+    const rows = (await hostTab('swarm', f.state, 'peer-mac', user, null, lookups)).roster as Array<{ agent: { id: string }; buddyChatId?: string | null }>
     const chatOf = (agentId: string) => rows.find(r => r.agent.id === agentId)?.buddyChatId
     expect([chatOf(first.agentId), chatOf(second.agentId), chatOf(session.agentId)]).toEqual([peerSwarmChat, second.conversationId, second.conversationId])
     expect(rows.find(r => r.agent.id === f.pm)?.buddyChatId).toBeUndefined()

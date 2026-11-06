@@ -299,6 +299,9 @@ export interface HostAgentRow {
    *  names that loss, since one task can be lost, resumed and lost again. */
   resume: { conversationId: string; assignmentId: string; lostAt: number; at: string } | null
   agent: Agent
+  /** A Buddy's own chat, its main one's or the thread session's (task #3818): its host ends a session and moves a model switch
+   *  there. Absent on every other agent; null while its chat is not loaded. An older backend sends none: the person's main chat. */
+  buddyChatId?: string | null
   joinSwarm: boolean
   skillMode: 'default' | 'orchestration'
   role?: { id: string; name: string; kind: string; version: string; projectId: string } | null

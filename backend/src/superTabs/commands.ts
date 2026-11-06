@@ -3141,12 +3141,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'buddy.sessionEnd': {
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person ends their own Buddy session.', 403)
-      const chat = readConversation(state, actor, command.conversationId)
-      requireChatOwner(state, chat, actor.userId)
-      const entry = sessionOf(state, chat, command.thread)
-      result.ended = !!entry
-      if (!entry) break
-      endBuddySession(chat, entry, command.reason)
+      const named = readConversation(state, actor, command.conversationId)
+      requireChatOwner(state, named, actor.userId)
+      // An older host names the person's main Buddy chat for every session (task #3818): a thread of another of their Buddies is
+      // found in that Buddy's own chat.
+      const me = person(state, actor.userId)
+      const chats = named.id === swarmBuddyChatId(me) ? [named, ...buddyChatsOf(state, me).filter(c => c.id !== named.id)] : [named]
+      const found = chats.map(chat => ({ chat, entry: sessionOf(state, chat, command.thread) })).find(hit => hit.entry)
+      result.ended = !!found
+      if (!found) break
+      endBuddySession(found.chat, found.entry!, command.reason)
       break
     }
     case 'person.tell': {
