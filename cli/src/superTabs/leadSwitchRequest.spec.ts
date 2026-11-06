@@ -1,14 +1,17 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { parse as parseToml } from 'smol-toml'
 import type { Daemon } from '../agentClient/daemon.js'
 import { markBuddyOwner, writeBuddyAccount } from '../lib/buddyGuard.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { processCoreApi } from '../services/processCoreApi.js'
 import { FIXTURE, readFixture } from './fixtures/read/index.js'
 import { LeadSwitchRequests, profileSignedIn, switchChangeId, type SwitchRow } from './leadSwitchRequest.js'
+
+afterEach(() => { vi.unstubAllEnvs() })
 
 const request = { id: 'sw1', engine: 'claude', profileId: 'p1' }
 const row = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): SwitchRow => ({ tabId: 'tab', ledConversationId: 'conv1', roleName: 'Product Manager',
@@ -423,6 +426,31 @@ describe('a Buddy engine handoff', () => {
       expect(t.calls).toEqual([])
       expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false })
     }
+  })
+
+  it.each(['codex', 'claude'])('answers %s folder trust for its existing Swarm Buddy home before stopping the source', async engine => {
+    const t = buddySetup({ old: { engine: engine === 'codex' ? 'claude' : 'codex' } })
+    vi.stubEnv('CODEX_HOME', t.home)
+    vi.stubEnv('CLAUDE_CONFIG_DIR', t.home)
+    const config = join(t.home, engine === 'codex' ? 'config.toml' : '.claude.json')
+    const request = vi.mocked(t.daemon.request).getMockImplementation()!
+    vi.mocked(t.daemon.request).mockImplementation(async (type, payload, timeout) => {
+      if (type === 'agent_close') {
+        expect(existsSync(config), 'the target engine must not ask a hidden folder question').toBe(true)
+        const saved = engine === 'codex' ? parseToml(readFileSync(config, 'utf8')) : JSON.parse(readFileSync(config, 'utf8'))
+        expect(saved.projects['/work']).toMatchObject(engine === 'codex' ? { trust_level: 'trusted' } : { hasTrustDialogAccepted: true })
+      }
+      return request(type, payload, timeout)
+    })
+    await t.switches.serve(buddyRow({ switchRequest: { id: 'sw1', engine, profileId: 'default', requestedBy: 'owner' } }))
+    expect(t.calls.map(c => c[0])).toEqual(['agent_handoff_prepare', 'agent_close', 'agent_create', 'agent_handoff_complete'])
+  })
+
+  it('leaves a project Buddy folder to its own trust question', async () => {
+    const t = buddySetup()
+    vi.stubEnv('CODEX_HOME', t.home)
+    await t.switches.serve(buddyRow({}, { agent: { ...buddyRow().agent, buddyScope: undefined } }))
+    expect(existsSync(join(t.home, 'config.toml'))).toBe(false)
   })
 
   it('switches Claude Code to Codex in its folder as a Buddy in the same private chat, without PM authority', async () => {
