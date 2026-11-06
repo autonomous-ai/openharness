@@ -885,6 +885,13 @@ describe('a verdict at a pull request head', () => {
     expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).toMatchObject({ pullRequest: PR })
   })
 
+  it('does not count a brief-only PR as reviewed code when the task has no code PR', () => {
+    const { f, check } = watched()
+    f.group(f.task).codePullRequestUrls = []
+    expect(check(f.task, true, A).result).toMatchObject({ counts: false })
+    expect(f.group(f.task).checks[0]!.verdicts!.at(-1)).not.toHaveProperty('pullRequest')
+  })
+
   it('on a step, records its task\'s pull request', () => {
     const { f, reviewer, check } = watched()
     const step = f.step('Review', f.as(f.dev), f.task, [{ description: 'Diff reads right', independent: true }])
@@ -993,7 +1000,7 @@ describe('a verdict naming its base', () => {
   const watched = (base: string) => {
     const f = stepsFixture()
     const rev = f.add('rev', f.task)
-    Object.assign(f.group(f.task), { pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: A, patch: 'p', at: 1, base } } })
+    Object.assign(f.group(f.task), { codePullRequestUrls: [PR], pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: A, patch: 'p', at: 1, base } } })
     const check = (fields: Record<string, string>) => f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
       checkId: f.group(f.task).checks[0]!.id, passed: true, evidence: 'Read it', ...fields } as Command, f.as(rev))
     return { f, check }
