@@ -175,6 +175,50 @@ void main() {
       expect(line(null), 'Assigned · Mac Studio · Opus · high');
     });
 
+    test('reads the current task, never an older lost one (task #3649)', () async {
+      // Gray, 2026-11-06: Lamp showed "Lost" on an old task while the Swarm had it working on another.
+      Map<String, dynamic> task(String id, String title, String status) => {
+        ...conversationFixture(id, title),
+        'leadId': 'Lead',
+        'agentIds': ['Lead', 'Lamp'],
+        'assignment': {'id': 'as-$id', 'agentId': 'Lamp', 'status': status},
+      };
+      final server = ConversationServer();
+      server.state['machines'] = [_machine('m1', 'Mac Studio')];
+      server.state['agents'] = [_agent('Lamp', 'm1')];
+      // The lost one comes first, as an older task does in the Swarm's list.
+      (server.state['conversations'] as List)
+        ..add(task('old', 'First customers', 'lost'))
+        ..add(task('now', 'Move the guide link', 'working'));
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      final info = SuperTabAgentInfo(
+        c,
+        null,
+        c.snapshot!.agent('Lamp')!,
+        activity: HarnessActivity.working,
+      );
+      expect(
+        superTabAgentGlance(info).line,
+        'Working · Mac Studio · Opus · high',
+      );
+      expect(info.status, 'Working on "Move the guide link"');
+      // With no other task, the lost one is still the agent's state.
+      server.state['conversations'] = [
+        ...(server.state['conversations'] as List).where(
+          (g) => g['id'] != 'now',
+        ),
+      ];
+      await c.refresh();
+      expect(
+        superTabAgentGlance(
+          SuperTabAgentInfo(c, null, c.snapshot!.agent('Lamp')!),
+        ).label,
+        'Lost',
+      );
+    });
+
     testWidgets(
       'names each state in a word: waiting, lost, down, kept (closed), limited, stuck, in review',
       (tester) async {
