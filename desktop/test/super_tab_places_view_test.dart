@@ -28,6 +28,7 @@ void main() {
   Future<(SuperTabController, ConversationServer)> show(
     WidgetTester tester, {
     void Function(ConversationServer server)? prepare,
+    bool board = false,
   }) async {
     await tester.binding.setSurfaceSize(const Size(1300, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -45,6 +46,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.light),
         home: Scaffold(
           body: SuperTabView(
+            board: board,
             controller: c,
             onInvite: () {},
             onAddAgent: (_) {},
@@ -73,6 +75,7 @@ void main() {
 
   testWidgets('each row opens its page, named in the header', (tester) async {
     final (c, _) = await show(tester);
+    expect(key('super-leaderboard'), findsNothing);
     for (final (row, title, list) in [
       ('super-decisions', 'Decisions', 'super-decisions-list'),
       ('super-mentions', 'Mentions', 'super-mentions-list'),
@@ -86,33 +89,58 @@ void main() {
     await end(tester, c);
   });
 
-  testWidgets('Leaderboard below Decisions opens this week and participates in Back and Forward', (tester) async {
-    final (c, server) = await show(tester, prepare: (server) {
-      server.leaderboard = {
-        'projectId': 'lead', 'allProjects': true, 'week': 1793577600000,
-        'people': [{'personId': 'owner', 'displayName': 'Owner', 'rank': 1, 'points': 4,
-          'shipped': {'count': 1}, 'accepted': 1, 'unblocked': {'count': 0}, 'agentsBrought': 2, 'streakDays': 1}],
-      };
-    });
-    expect(key('super-leaderboard'), findsOneWidget);
-    expect(tester.getTopLeft(key('super-leaderboard')).dy,
-      greaterThanOrEqualTo(tester.getBottomLeft(key('super-decisions')).dy));
-    await tap(tester, 'super-decisions');
-    await tap(tester, 'super-leaderboard');
-    expect(find.text('This week'), findsOneWidget);
-    expect(key('weekly-person-owner'), findsOneWidget);
-    expect(server.leaderboardReads.any((path) {
-      final query = Uri.parse(path).queryParameters;
-      return query['scope'] == 'all' && !query.containsKey('period');
-    }), isTrue);
-    SuperTabPlaces.of(c).step(-1);
-    await _settle(tester);
-    expect(key('super-decisions-list'), findsOneWidget);
-    SuperTabPlaces.of(c).step(1);
-    await _settle(tester);
-    expect(find.text('This week'), findsOneWidget);
-    await end(tester, c);
-  });
+  testWidgets(
+    'Leaderboard below Decisions opens this week and participates in Back and Forward',
+    (tester) async {
+      final (c, server) = await show(
+        tester,
+        board: true,
+        prepare: (server) {
+          server.leaderboard = {
+            'projectId': 'lead',
+            'allProjects': true,
+            'week': 1793577600000,
+            'people': [
+              {
+                'personId': 'owner',
+                'displayName': 'Owner',
+                'rank': 1,
+                'points': 4,
+                'shipped': {'count': 1},
+                'accepted': 1,
+                'unblocked': {'count': 0},
+                'agentsBrought': 2,
+                'streakDays': 1,
+              },
+            ],
+          };
+        },
+      );
+      expect(key('super-leaderboard'), findsOneWidget);
+      expect(
+        tester.getTopLeft(key('super-leaderboard')).dy,
+        greaterThanOrEqualTo(tester.getBottomLeft(key('super-decisions')).dy),
+      );
+      await tap(tester, 'super-decisions');
+      await tap(tester, 'super-leaderboard');
+      expect(find.text('This week'), findsOneWidget);
+      expect(key('weekly-person-owner'), findsOneWidget);
+      expect(
+        server.leaderboardReads.any((path) {
+          final query = Uri.parse(path).queryParameters;
+          return query['scope'] == 'all' && !query.containsKey('period');
+        }),
+        isTrue,
+      );
+      SuperTabPlaces.of(c).step(-1);
+      await _settle(tester);
+      expect(key('super-decisions-list'), findsOneWidget);
+      SuperTabPlaces.of(c).step(1);
+      await _settle(tester);
+      expect(find.text('This week'), findsOneWidget);
+      await end(tester, c);
+    },
+  );
 
   // Tuan, task #3751: on the Threads page a card's #-link to a task changed the chat behind the page, so
   // nothing on screen moved and the link read as dead.
