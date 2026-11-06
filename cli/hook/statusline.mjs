@@ -49,13 +49,23 @@ function readInput() {
   })
 }
 
-/** A window as the report keeps it, or null when Claude Code reported none or a percentage that is not one. */
+/** A reset time in epoch seconds: given so, or as an ISO 8601 string. */
+function resetSeconds(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  const ms = typeof value === 'string' ? Date.parse(value) : NaN
+  return Number.isFinite(ms) ? ms / 1000 : null
+}
+
+/**
+ * A window as the report keeps it, or null when Claude Code reported none or a percentage that is not one. Its status
+ * line docs name the fields `used_percentage` and epoch-second `resets_at`; 2.1.316's own schema for the same windows
+ * names them `utilization` (0-100) with an ISO `resets_at`. Either is read.
+ */
 function windowOf(value) {
   if (!value || typeof value !== 'object') return null
-  const used = value.used_percentage
+  const used = value.used_percentage ?? value.utilization
   if (typeof used !== 'number' || !Number.isFinite(used) || used < 0 || used > 100) return null
-  const resets = value.resets_at
-  return { used_percentage: used, resets_at: typeof resets === 'number' && Number.isFinite(resets) ? resets : null }
+  return { used_percentage: used, resets_at: resetSeconds(value.resets_at) }
 }
 
 function record(input, data) {

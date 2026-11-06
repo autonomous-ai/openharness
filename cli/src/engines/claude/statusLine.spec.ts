@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { env } from '../../config/env.js'
 import { joinedInstructions } from '../../lib/agentAttribution.js'
+import { claudeReportPath, readClaudeReport } from '../../lib/quotaReports.js'
 import { agentInstructionArgs } from '../launches.js'
 
 const SCRIPT = fileURLToPath(new URL('../../../hook/statusline.mjs', import.meta.url))
@@ -68,6 +69,9 @@ describe('hook/statusline.mjs', () => {
       seven_day: { used_percentage: 7, resets_at: 1762900000 },
     })
     expect(Math.abs((report.at as number) - Date.now())).toBeLessThan(60_000)
+    // The daemon's reader (services/usage.ts) finds and reads it as written.
+    expect(claudeReportPath(data, configDir)).toBe(file)
+    expect(readClaudeReport(data, configDir)).toEqual({ at: report.at, five_hour: report.five_hour, seven_day: report.seven_day })
     for (const secret of ['sess-secret', 'private-app', 'Opus', 'seven_day_opus', '1.23']) expect(text).not.toContain(secret)
     if (posix) {
       expect(statSync(file).mode & 0o777).toBe(0o600)
