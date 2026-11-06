@@ -330,6 +330,31 @@ describe('proposal time and delivery boundaries', () => {
     expect(advanceProposalCards(f.state, date + 31 * 60_000)).toEqual([])
   })
 
+  it.each(['person', 'agent'] as const)('tells a %s when their ordinary post reaches no switched PM', kind => {
+    const f = fixture(), actor: Actor = kind === 'person' ? owner : { kind: 'agent', agentId: f.worker, machineOwnerId: `${owner.userId}-machine` }
+    const sent = f.run({ type: 'message.send', conversationId: f.web, text: 'Answer for the PM', recipientIds: [f.lead], replyTo: null }, actor)
+    expect(sent.messages.find(m => m.id === sent.result.messageId)?.recipients).toEqual([])
+    expect(sent.result.reachedNoAgent).toEqual(expect.any(String))
+    expect(sent.result.notReached).toContain('lead-harness')
+    expect(sent.result.notReached).toContain('proposal card')
+    expect(f.card(f.web).owed ?? []).not.toEqual(expect.arrayContaining([expect.objectContaining({ messageId: sent.result.messageId })]))
+  })
+
+  it('reports the excluded PM while delivering to another recipient and leaves legacy delivery alone', () => {
+    const f = fixture()
+    const input = { type: 'message.send', conversationId: f.web, text: 'For both of you', recipientIds: [f.lead, f.worker], replyTo: null }
+    const sent = f.run(input, owner)
+    expect(sent.messages.find(m => m.id === sent.result.messageId)?.recipients).toEqual([f.worker])
+    expect(sent.result.notReached).toContain('lead-harness')
+    expect(sent.result.notReached).not.toContain('worker-harness')
+    expect(sent.result).not.toHaveProperty('reachedNoAgent')
+    delete f.state.projects![0]!.boardMode
+    const legacy = f.run(input, owner)
+    expect(legacy.messages.find(m => m.id === legacy.result.messageId)?.recipients).toEqual([f.lead, f.worker])
+    expect(legacy.result).not.toHaveProperty('notReached')
+    expect(legacy.result).not.toHaveProperty('reachedNoAgent')
+  })
+
   it('blocks ordinary messages to a switched PM, retaining proposals, answers, server notices and all legacy inputs', async () => {
     const { pmAcceptsMessage } = await import('./proposalCards.js')
     const f = fixture(), id = f.create().result.conversationId

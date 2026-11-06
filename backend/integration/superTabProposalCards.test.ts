@@ -59,6 +59,25 @@ describe('durable proposal cards', () => {
     expect((await f.card('lead')).owed ?? []).toHaveLength(0)
   })
 
+  it('tells senders the PM was excluded and persists only the recipients that will receive a chat post', async () => {
+    const f = await fixture()
+    const worker = String((await f.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'proposal-mac', harnessId: randomUUID(), name: 'Worker', configuration: config })).result.agentId)
+    for (const asAgent of [undefined, worker]) {
+      const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'For the PM', recipientIds: [f.pm], replyTo: null }, owner, asAgent)
+      expect(sent.result.reachedNoAgent).toEqual(expect.any(String))
+      expect(sent.result.notReached).toContain('PM')
+      expect(sent.result.notReached).toContain('proposal card')
+      const row = await db.superTabMessage.findUniqueOrThrow({ where: { id: String(sent.result.messageId) } })
+      expect(row.recipientIds).toEqual([])
+      expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: row.id } })).toBe(0)
+    }
+    const partial = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'For both', recipientIds: [f.pm, worker], replyTo: null })
+    expect(partial.result.notReached).toContain('PM')
+    expect(partial.result).not.toHaveProperty('reachedNoAgent')
+    expect((await db.superTabMessage.findUniqueOrThrow({ where: { id: String(partial.result.messageId) } })).recipientIds).toEqual([worker])
+    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: String(partial.result.messageId) } })).map(d => d.agentId)).toEqual([worker])
+  })
+
   it('delivers a decided notice inside the sending person’s private Buddy chat', async () => {
     const f = await fixture()
     const added = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } })
