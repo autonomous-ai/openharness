@@ -43,3 +43,13 @@ export function requireCanChat(state: SuperTabState, actor: Actor, group: Conver
   if (!project || !switched(project) || canChat(state, project, actor.userId)) return
   fail('CHAT_NOT_ALLOWED', 'Only the project owner and the people they allow write in this project\'s chat. Send it as a proposal through your Buddy, or ask the owner for Can chat.', 403)
 }
+
+/** Refuses a person's priority in a switched project unless they steer it or it is P1-P3 on a card they requested (the spec's
+ *  "Who may do what on the Board"): P0 goes ahead of everything, so only those who steer set it or lower it. [requesterId] is
+ *  the card's requester, or the one a new task names; [previous] its priority before. Agents keep today's rights. */
+export function requirePriorityRight(state: SuperTabState, actor: Actor, project: SwarmProject, next: string, requesterId: string | undefined,
+  previous?: string): void {
+  if (actor.kind !== 'person' || !switched(project) || steers(state, project, actor.userId)) return
+  if (next !== 'P0' && previous !== 'P0' && requesterId === actor.userId) return
+  fail('PRIORITY_FORBIDDEN', 'In this project the owner and its decider set P0 and other people\'s priorities. You set P1-P3 on your own cards.', 403)
+}

@@ -10,7 +10,7 @@ import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_LANES, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { noteIndex } from './processNotes.js'
-import { ownsBoard, readsProject, requireCanChat } from './boardRights.js'
+import { ownsBoard, readsProject, requireCanChat, requirePriorityRight } from './boardRights.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
 import { z } from 'zod'
@@ -2602,6 +2602,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A step and a private chat are no tasks of their own, so they carry no priority (taskPriority.ts).
       const prioritized = !command.step && !command.audience
       if (command.priority && !prioritized) fail('PRIORITY_TASK_ONLY', 'Only a task has a priority: leave it out of a step or a private chat.', 400)
+      // In a switched project a person's P0, or a task for someone else, needs a right (boardRights.ts, task #3819).
+      if (command.priority) requirePriorityRight(state, actor, project, command.priority, command.requesterId ?? undefined)
       // A hotfix jumps every queue, so of the agents only the PM marks one (River, task #3117).
       if (command.priority === 'P0' && actor.kind === 'agent' && ledProject(state, actor.agentId)?.id !== project.id) {
         fail('PRIORITY_P0', 'Only the PM or a person sets P0. Give this task P1, P2 or P3.', 403)
@@ -2782,6 +2784,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // A task from before priorities reads as its title marks it, as every client shows it.
       const previous: TaskPriority = task.priority ?? titlePriority(task.title) ?? DEFAULT_PRIORITY
+      requirePriorityRight(state, actor, project, command.priority, task.requesterId, previous)
       task.priority = command.priority
       if (previous === command.priority) break
       const name = actor.kind === 'person' ? shownNameOf(state, actor.userId) ?? 'Someone'
