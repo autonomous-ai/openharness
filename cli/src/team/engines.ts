@@ -12,7 +12,7 @@
  */
 import { accessSync, constants, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { userInfo } from 'node:os'
-import { dirname, join, posix, win32 } from 'node:path'
+import { delimiter, dirname, join, posix, win32 } from 'node:path'
 import { engineAccount, type EngineAccount } from '../lib/engineAccount.js'
 import { env } from '../config/env.js'
 import { readTeamConfig, type TeamConfig } from './config.js'
@@ -154,8 +154,10 @@ export const realEngineCheckDeps = (home: string, env: NodeJS.ProcessEnv = proce
   home,
   platform: process.platform,
   executable: (path) => { try { accessSync(path, constants.X_OK); return true } catch { return false } },
-  // Only presence is read, never a secret (lib/engineAccount.ts). The team daemon has no login shell of the owner's to read.
-  account: (engine) => engineAccount(engine, { home, env, lastUsed: false }),
+  // The engine's own CLI says whether it is signed in (lib/engineAccount.ts), asked where the team's copy is: its home's bin,
+  // which the daemon's PATH need not name. The team daemon has no login shell of the owner's to read.
+  account: (engine) => engineAccount(engine, { home, lastUsed: false,
+    env: { ...env, PATH: [dirname(teamEngineBin(home, engine as TeamEngine, process.platform)), env.PATH].filter(Boolean).join(delimiter) } }),
   now: () => Date.now(),
 })
 
