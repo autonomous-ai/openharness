@@ -3525,17 +3525,24 @@ class _SuperTabViewState extends State<SuperTabView>
           onPressed: () => _togglePane(left: true),
         ),
         const SizedBox(width: 8),
-        Flexible(
-          child: Text(
-            project.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: DesktopChrome.heading(),
+        // The name and its tabs take the room left, so what follows sits at the right edge: a Flexible name beside a
+        // Spacer split the free space, and the name's unused half left Show your Buddy mid-bar (task #3846).
+        Expanded(
+          child: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  project.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.heading(),
+                ),
+              ),
+              const SizedBox(width: 12),
+              _projectTabs(project, board: true),
+            ],
           ),
         ),
-        const SizedBox(width: 12),
-        _projectTabs(project, board: true),
-        const Spacer(),
         if (_rightHidden)
           AppIconButton(
             key: const ValueKey('super-pane-right-toggle'),
