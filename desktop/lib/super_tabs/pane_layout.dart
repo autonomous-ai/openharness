@@ -36,6 +36,9 @@ class SuperTabPaneLayout extends StatefulWidget {
   /// the narrowest the pane goes.
   static const threadWidth = 340.0;
 
+  /// Under this the centre pane has no room for a header, let alone cards.
+  static const _centerFloor = 160.0;
+
   /// The Board's chat: a third of the window, never narrower than this.
   static const boardChatMinimum = 420.0;
   static const boardChatShare = 1 / 3;
@@ -148,20 +151,25 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
       final centerMin = math.min(scale.scale(360), width);
       final leftMin = hasLeft ? scale.scale(180) : 0.0;
       final rightMin = hasRight ? scale.scale(widget.rightMinimum) : 0.0;
-      double limit(double value, double floor, double ceiling) => value
-          .clamp(math.min(floor, ceiling), math.max(0, ceiling))
-          .toDouble();
+      // The centre yields before either side pane: a side's minimum wins
+      // over the room the centre's own minimum asks for, and only the
+      // window itself can take a pane's width (review of #3863).
+      double limit(double value, double floor, double ceiling) =>
+          value.clamp(floor, math.max(floor, ceiling)).toDouble();
       final left = hasLeft
-          ? limit(_left, leftMin, width - centerMin - rightMin)
+          ? math.min(width, limit(_left, leftMin, width - centerMin - rightMin))
           : 0.0;
       final right = hasRight
-          ? limit(
-              _right ??
-                  (widget.rightShare == null
-                      ? widget.rightDefault
-                      : math.max(rightMin, width * widget.rightShare!)),
-              rightMin,
-              width - centerMin - left,
+          ? math.min(
+              width - left,
+              limit(
+                _right ??
+                    (widget.rightShare == null
+                        ? widget.rightDefault
+                        : math.max(rightMin, width * widget.rightShare!)),
+                rightMin,
+                width - centerMin - left,
+              ),
             )
           : 0.0;
       final arrangement = PaneArrangement([
@@ -182,7 +190,11 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
                 ),
               Expanded(
                 key: const ValueKey('super-center-pane'),
-                child: widget.center,
+                // A centre squeezed under what any Board needs draws
+                // nothing rather than overflowing into its neighbours.
+                child: width - left - right < SuperTabPaneLayout._centerFloor
+                    ? const SizedBox.shrink()
+                    : widget.center,
               ),
               if (hasRight)
                 SizedBox(
