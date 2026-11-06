@@ -144,6 +144,6 @@ it('guards an already awake Buddy hearing its own chat against a concurrent slee
   chat.agentIds.push(buddy.id)
   const touches = touchesFor({ type: 'message.send', conversationId: chat.id, text: 'Hi', replyTo: null, recipientIds: [] },
     owner, f.state, { state: f.state, messages: [{ id: 'input', conversationId: chat.id, text: 'Hi', replyTo: null,
-      recipients: [buddy.id], author: { kind: 'person', id: 'owner', name: 'Owner' } }] })
+      recipients: [buddy.id], author: { kind: 'person', id: 'owner', name: 'Owner', membershipGeneration: f.state.people[0]!.generation } }] })
   expect(has(touches, 'agent', buddy.id)).toBe(true)
 })

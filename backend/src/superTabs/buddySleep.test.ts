@@ -115,7 +115,7 @@ describe('authorized input wakes the same Buddy', () => {
     if (kind === 'stale-person') f.buddy.buddyOf!.generation = 'old'
     else f.chat.audience!.people[0]!.generation = 'old'
     numberMessages(f.state, [{ id: 'input', conversationId: f.chat.id, replyTo: null, text: 'No', recipients: ['buddy'],
-      author: { kind: 'person', id: 'owner', name: 'owner' } }], NOW)
+      author: { kind: 'person', id: 'owner', name: 'owner', membershipGeneration: f.owner.generation } }], NOW)
     expect(f.buddy.asleep).toEqual({ since: NOW - 1_000 })
   })
 })

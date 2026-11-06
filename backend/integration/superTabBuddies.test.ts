@@ -105,8 +105,8 @@ async function launch(f: Swarm, startId: string) {
 
 /** peer's one Buddy of the Swarm (Dee, 10-31), added from # buddy and started by peer-mac's host; [pool] is what that host read
  *  while it started. */
-async function swarmBuddy(f: Swarm) {
-  const added = await f.execute({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude' }, peer)
+async function swarmBuddy(f: Swarm, fresh = false) {
+  const added = await f.execute({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', ...(fresh ? { name: 'Research' } : {}) }, peer)
   const pool = (await poolRows(f.store, peer, 'peer-mac')).find(p => p.tabId === f.tab)!
   return { swarmChat: String(added.result.conversationId), main: await launch(f, String(added.result.startId)), pool }
 }
@@ -1298,7 +1298,7 @@ describe('Buddy input and sleep race (#3824)', () => {
     let now = Date.now()
     const f = await swarm(() => now)
     await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
-    const first = await swarmBuddy(f), second = await swarmBuddy(f)
+    const first = await swarmBuddy(f), second = await swarmBuddy(f, true)
     const agents = (await f.store.read(peer, f.tab)).state.agents.filter(a => [first.main, second.main].includes(a.id))
     const { receivedAt: _, sessionKind: __, ...report } = first.pool.machine.observation!
     const idle = { ...report, runningHarnessIds: agents.map(a => a.harnessId), idleBuddyHarnessIds: agents.map(a => a.harnessId) }
