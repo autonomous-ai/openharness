@@ -6434,16 +6434,16 @@ describe('a start that names its task assigns and briefs its agent when it is re
   const setup = () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
     const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-    const start = (harnessId: string, assign?: { message?: string }) => {
+    const start = (harnessId: string, assign?: { message?: string }, pooled = true) => {
       const request = { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true, ...assign ? { assign } : {},
         requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
       const startId = f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) }).result.startId as string
       f.run({ type: 'agent.startDispatch', startId }, actor, { contribution })
-      f.state.starts!.find(s => s.id === startId)!.poolGeneration = 'pool-1'
+      if (pooled) f.state.starts!.find(s => s.id === startId)!.poolGeneration = 'pool-1'
       const agentId = f.run({ type: 'agent.started', startId, harnessId, configuration: { ...config, engine: 'claude' } }, actor, { contribution }).result.agentId as string
       return { startId, agentId }
     }
-    const settle = (startId: string) => f.run({ type: 'agent.startSettled', startId, warning: null }, actor, { contribution })
+    const settle = (startId: string, extra: Partial<CommandContext> = {}) => f.run({ type: 'agent.startSettled', startId, warning: null }, actor, { contribution, ...extra })
     const work = () => f.state.conversations.find(c => c.id === group)!.assignment
     return { f, group, lead, actor, start, settle, work }
   }
@@ -6489,6 +6489,32 @@ describe('a start that names its task assigns and briefs its agent when it is re
     const told = effects.messages.filter(m => m.text.includes('could not be assigned'))
     expect(told).toHaveLength(1)
     expect(told[0]!.recipients).toContain(t.lead)
+  })
+
+  // Review of #3334 (Sec3684A): it was a second work.assign that skipped what the store does around one.
+  it('assigns when a machine with no pool joins, since such a start never settles', () => {
+    const t = setup()
+    const { agentId } = t.start('b-1', { message: 'Brief.' }, false)
+    expect(t.work()).toMatchObject({ agentId, status: 'working' })
+  })
+
+  it('is refused for anyone but the project\'s coordinator, who is the voice of the brief', () => {
+    const t = setup()
+    const request = { conversationId: t.group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true, assign: { message: 'Brief.' },
+      requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+    // A person's start, and another agent's, put no words in the coordinator's name.
+    expect(() => t.f.run({ type: 'agent.start', request, ...via }, undefined, { contribution, ...decisionIn(t.group) })).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    const engineer = t.f.add('engineer', t.group)
+    expect(() => t.f.run({ type: 'agent.start', request, ...via }, { kind: 'agent', agentId: engineer, machineOwnerId: 'host-owner' }, { contribution, ...decisionIn(t.group) }))
+      .toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+  })
+
+  it('does not assign code a Team agent pushed to an agent of the main account', () => {
+    const t = setup()
+    const { startId } = t.start('b-1', { message: 'Brief.' })
+    const effects = t.settle(startId, { pushOrigin: 'team' })
+    expect(t.work()).toBeNull()
+    expect(effects.messages.filter(m => m.text.includes('could not be assigned'))).toHaveLength(1)
   })
 
   it('tells the coordinator of a failed start once, however often its host says so', () => {
