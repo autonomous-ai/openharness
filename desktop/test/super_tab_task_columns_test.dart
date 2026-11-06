@@ -338,6 +338,7 @@ void main() {
           _task(
             id: 'new',
             status: 'done',
+            merged: true,
             shippedAt: _now.subtract(const Duration(hours: 3)),
           ),
         ],

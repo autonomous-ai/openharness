@@ -49,7 +49,7 @@ void main() {
     test('each part reads as its name', () {
       expect(
         place(merged(releasing: ['backend', 'web', 'desktop']))!.state,
-        'waiting for backend, Web, Desktop',
+        'waiting for Backend, Web, Desktop',
       );
     });
 

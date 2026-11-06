@@ -468,6 +468,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       // however long, never cut off (task #3452).
       captionLines: task != null && superTabTaskReleasing(task) ? null : 1,
       tile: !list,
+      warn: task != null && superTabMergeOverdue(task, now),
       selected: id == widget.selectedId,
       onOpen: () =>
           task == null ? widget.onOpenProposal(id) : widget.onOpenTask(task.id),

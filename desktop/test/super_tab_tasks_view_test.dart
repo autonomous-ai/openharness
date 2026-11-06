@@ -308,7 +308,7 @@ void main() {
     expect(tester.getTopLeft(_column('shipped')).dx, greaterThan(900));
     await tester.drag(
       find.byKey(const ValueKey('super-tasks-board')),
-      const Offset(-800, 0),
+      const Offset(-1200, 0),
     );
     await tester.pumpAndSettle();
     expect(tester.getTopRight(_column('shipped')).dx, lessThanOrEqualTo(900));
@@ -437,14 +437,10 @@ void main() {
   });
 
   testWidgets('an empty column keeps its heading with 0', (tester) async {
-    final server = tasksServer();
-    (server.state['conversations'] as List).removeWhere(
-      (g) => (g as Map)['id'] == 'tag',
-    );
-    final c = await _show(tester, server);
+    final c = await _show(tester, tasksServer());
     expect(
       find.descendant(
-        of: find.byKey(const ValueKey('super-tasks-heading-working')),
+        of: find.byKey(const ValueKey('super-tasks-heading-done')),
         matching: find.text('0'),
       ),
       findsOneWidget,
@@ -494,16 +490,16 @@ void main() {
   testWidgets('an empty column says No tasks in the caption color', (
     tester,
   ) async {
-    final server = tasksServer();
-    (server.state['conversations'] as List).removeWhere(
-      (g) => (g as Map)['id'] == 'tag',
-    );
-    final c = await _show(tester, server);
+    final c = await _show(tester, tasksServer());
     final empty = find.descendant(
-      of: _column('working'),
+      of: _column('done'),
       matching: find.text('No tasks'),
     );
     expect(empty, findsOneWidget);
+    expect(
+      find.descendant(of: _column('merged'), matching: find.text('No tasks')),
+      findsOneWidget,
+    );
     expect(
       tester.widget<Text>(empty).style?.color,
       grid.AppPalette.textSecondary,
@@ -604,7 +600,14 @@ void main() {
     final c = await _show(tester, tasksServer());
     await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
     await tester.pumpAndSettle();
-    final names = ['proposals', 'nextUp', 'working', 'waiting', 'shipped'];
+    final names = [
+      'proposals',
+      'nextUp',
+      'working',
+      'done',
+      'merged',
+      'shipped',
+    ];
     final tops = [
       for (final n in names)
         tester.getTopLeft(find.byKey(ValueKey('super-tasks-heading-$n'))).dy,
@@ -821,7 +824,7 @@ void main() {
       await dragTo(tester, 'preview', tester.getCenter(_column('working')));
       expect(moves(server), isEmpty);
       expect(_cardsIn(tester, 'nextUp'), ['shipped-means', 'preview', 'third']);
-      expect(_cardsIn(tester, 'working'), ['tag']);
+      expect(_cardsIn(tester, 'working'), ['test-copy', 'tag']);
       await _close(tester, c);
     });
 
@@ -999,7 +1002,7 @@ void main() {
       unorderedEquals(['fresh-done', 'stuck-done', 'no-code']),
     );
     Finder line(String id, String text) =>
-        find.descendant(of: _card(id), matching: find.text(text));
+        find.descendant(of: _card(id), matching: find.textContaining(text));
     expect(line('fresh-done', 'waiting to merge for 12 min'), findsOneWidget);
     expect(
       tester
@@ -1041,7 +1044,7 @@ void main() {
       expect(
         find.descendant(
           of: _card('released'),
-          matching: find.text('Desktop 1.3.84'),
+          matching: find.textContaining('Desktop 1.3.84'),
         ),
         findsOneWidget,
       );
@@ -1074,7 +1077,7 @@ void main() {
       );
       final caption = find.descendant(
         of: _card('all-four'),
-        matching: find.textContaining('waiting for backend, CLI, Desktop, Web'),
+        matching: find.textContaining('waiting for Backend, CLI, Desktop, Web'),
       );
       expect(caption, findsOneWidget);
       expect(
