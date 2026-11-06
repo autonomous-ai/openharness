@@ -18,10 +18,12 @@ export function requireChatContent(state: SuperTabState, group: Conversation, te
   if (STATUS.test(text)) fail('CHAT_STATUS', 'Keep status lines in the task status or the ask’s thread, not the main chat.', 400)
   const line = plain(text)
   const pr = line.match(/^(?:PR\s*#\d+\s*:?\s*)?(https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+)\/?$/i)?.[1]
+  const prNumber = line.match(/^PR\s*#(\d+)$/i)?.[1]
+  const repeatedPr = group.cards?.pullRequests?.some(card => (pr && card.url === pr) || (prNumber && card.url.endsWith(`/pull/${prNumber}`)))
   const task = line.match(/^(?:Task\s*)?#(\d+)(?:\s*[:—-]?\s*(.*))?$/i)
   const repeatedTask = task && state.conversations.some(g => g.number === Number(task[1]) && g.cards?.line?.conversationId === group.id
     && (!task[2] || plain(task[2]).toLowerCase() === plain(g.title).toLowerCase()))
-  if ((pr && group.cards?.pullRequests?.some(card => card.url === pr)) || repeatedTask) {
+  if (repeatedPr || repeatedTask) {
     fail('CHAT_CARD_REPEAT', 'This card is already in the chat. Add new details in its thread instead of repeating it.', 400)
   }
 }
