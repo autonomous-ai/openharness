@@ -69,7 +69,36 @@ describe('carrying out a Buddy\'s model request', () => {
     const f = fixture({ tokens: { 'h-main': 1_000, 'h-a': 120_000, 'h-b': 1_000 }, answers: [{ retargeted: true }, { retargeted: true }, { error: 'AGENT_BUSY' }] })
     await f.runner.serve(main(), [thread('h-a'), thread('h-b')])
     expect(f.frames.map(frame => [frame.agentId, frame.fresh ?? false])).toEqual([['h-main', false], ['h-a', true], ['h-b', false]])
-    expect(f.posts).toEqual([expect.objectContaining({ ok: true, error: 'A thread session stayed where it was: it was answering' })])
+    expect(f.posts).toEqual([expect.objectContaining({ ok: true, stayed: ['h-b'], error: 'A thread session stayed where it was: it was answering' })])
+  })
+
+  // Task #3810 (Diego, 11-06): a send-home left a busy thread session on the member's model and reported ok, so its limit
+  // stopped holding.
+  it('on a send-home, waits for a thread session that is answering and moves it once its turn ends, moving the Buddy once', async () => {
+    const f = fixture({ answers: [{ retargeted: true }, { error: 'AGENT_BUSY' }, { retargeted: true }] })
+    const home = main(request({ gridModel: null, gridName: undefined, reason: 'limit' }))
+    await f.runner.serve(home, [thread('h-a')])
+    expect(f.posts).toEqual([])
+    f.later(15_000)
+    await f.runner.serve(home, [thread('h-a')])
+    expect(f.frames.map(frame => frame.agentId)).toEqual(['h-main', 'h-a', 'h-a'])
+    expect(f.posts).toEqual([{ asAgentId: 'buddy', type: 'buddy.modelResult', agentId: 'buddy', requestId: 'req1', ok: true }])
+  })
+
+  it('reports a thread session that is still answering as stayed once the request\'s lease is nearly over', async () => {
+    const f = fixture({ answers: [{ retargeted: true }, { error: 'AGENT_BUSY' }, { error: 'AGENT_BUSY' }] })
+    const home = main(request({ gridModel: null, gridName: undefined, reason: 'limit', at: new Date(0).toISOString() }))
+    await f.runner.serve(home, [thread('h-a')])
+    f.later(10 * 60_000)
+    await f.runner.serve(home, [thread('h-a')])
+    expect(f.posts).toEqual([expect.objectContaining({ ok: true, stayed: ['h-a'], error: 'A thread session stayed where it was: it was answering' })])
+  })
+
+  it('moves only the thread sessions for a request that is for them alone: the Buddy is already there', async () => {
+    const f = fixture()
+    await f.runner.serve(main(request({ gridModel: null, gridName: undefined, reason: 'limit', sessionsOnly: true })), [thread('h-a')])
+    expect(f.frames).toEqual([{ type: 'agent_retarget', agentId: 'h-a', clearGrid: true }])
+    expect(f.posts).toEqual([expect.objectContaining({ ok: true })])
   })
 
   it('says why a move was refused, in words its owner can act on', async () => {
