@@ -204,6 +204,8 @@ class SwarmPartsBackend {
     if (state['sessionsFromChat'] == true) 'sessionsFromChat': true,
     // A server with one Buddy per person for the whole Swarm.
     if (state['swarmBuddy'] == true) 'swarmBuddy': true,
+    // A server that makes several Buddies per person (#3818).
+    if (state['buddyCap'] case final int cap) 'buddyCap': cap,
     // The reader's own read marks alone, as backend readMarks.ts sends them.
     if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
       'readMarks': Map<String, dynamic>.from(marks),
@@ -1448,6 +1450,48 @@ class ConversationServer {
           },
         ];
         revision++;
+      } else if (command['type'] == 'buddy.create' &&
+          command['name'] is String &&
+          command['conversationId'] == null) {
+        // As #3818 makes one of several: a new Buddy in a chat of its own, up to the Swarm's cap.
+        final person = reader ?? 'owner';
+        final conversations = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>();
+        final count = conversations
+            .where(
+              (g) => g['kind'] == 'swarm-buddy' && g['buddyOwnerId'] == person,
+            )
+            .length;
+        if (count >= (state['buddyCap'] as int? ?? 5)) {
+          throw SuperTabFailure(
+            'BUDDY_CAP',
+            'You have $count Buddies, the most this Swarm allows. Remove one '
+                'to add another.',
+            statusCode: 409,
+          );
+        }
+        revision++;
+        final chatId = 'swarm-buddy-$person-$revision';
+        conversations.add({
+          ...conversationFixture(chatId, command['name'] as String),
+          'kind': 'swarm-buddy',
+          'projectId': null,
+          'buddyOwnerId': person,
+          'buddyName': command['name'],
+          'agentIds': <String>[],
+        });
+        output
+          ..['startId'] = 'start-$revision'
+          ..['conversationId'] = chatId;
+      } else if (command['type'] == 'buddy.default') {
+        final person = reader ?? 'owner';
+        for (final g
+            in (state['conversations'] as List).cast<Map<String, dynamic>>()) {
+          if (g['kind'] == 'swarm-buddy' && g['buddyOwnerId'] == person) {
+            g['buddyDefault'] = g['id'] == command['conversationId'];
+          }
+        }
+        revision++;
       } else if (command['type'] == 'buddy.create') {
         // As the backend's Buddy create: a start for the reader's Buddy and
         // its chat, fixed per person and project. The fixture's host starts it
@@ -1766,6 +1810,82 @@ class ConversationServer {
                   (g) => g['id'] == command['conversationId'],
                 )['priority'] =
             command['priority'];
+        revision++;
+      } else if (command['type'] == 'project.canChat') {
+        // As #3819 keeps it: the people granted Can chat, on the project.
+        final project = (state['projects'] as List).cast<Map>().firstWhere(
+          (p) => p['id'] == command['projectId'],
+        );
+        final granted = {...(project['canChat'] as List? ?? const [])};
+        command['granted'] == true
+            ? granted.add(command['personId'])
+            : granted.remove(command['personId']);
+        project['canChat'] = granted.toList();
+        revision++;
+      } else if (command['type'] == 'proposal.create') {
+        // As #3817 makes it: a card of its own, in Proposals until the PM decides. Its schema (proposalCards.ts
+        // proposalFields) takes one to five non-empty pieces of evidence, as this checks.
+        final evidence = command['evidence'];
+        if (evidence is! List ||
+            evidence.isEmpty ||
+            evidence.length > 5 ||
+            evidence.any((e) => e is! String || e.trim().isEmpty)) {
+          throw const SuperTabFailure(
+            'VALIDATION_ERROR',
+            'evidence: Array must contain at least 1 element(s)',
+            statusCode: 400,
+          );
+        }
+        final id = 'proposal-${(state['conversations'] as List).length}';
+        (state['conversations'] as List).add({
+          ...conversationFixture(id, command['title'] as String),
+          'projectId': command['projectId'],
+          'agentIds': <String>[],
+          'priority': command['priority'],
+          'proposal': {
+            'version': 1,
+            'text': command['text'],
+            'goal': command['goal'],
+            'why': command['why'],
+            'doneWhen': command['doneWhen'],
+            'evidence': command['evidence'],
+            'createdAt': DateTime.now().millisecondsSinceEpoch,
+            'senders': [
+              {'personId': Zone.current[_reader] as String? ?? 'owner'},
+            ],
+            'questions': <dynamic>[],
+          },
+        });
+        output['conversationId'] = id;
+        revision++;
+      } else if (command['type'] == 'proposal.answer') {
+        // As #3817 records it: the question's answer, by the person asked.
+        final card = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((g) => g['id'] == command['conversationId']);
+        final question = ((card['proposal'] as Map)['questions'] as List)
+            .cast<Map>()
+            .firstWhere((q) => q['id'] == command['questionId']);
+        question['answer'] = {
+          'text': command['text'],
+          'at': DateTime.now().millisecondsSinceEpoch,
+          'by': Zone.current[_reader] as String? ?? 'owner',
+        };
+        revision++;
+      } else if (command['type'] == 'work.pause') {
+        // As #3819 keeps it: the task's `paused` while paused, absent otherwise.
+        final task = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((g) => g['id'] == command['conversationId']);
+        if (command['paused'] == true) {
+          task['paused'] = {
+            'by': Zone.current[_reader] as String? ?? 'owner',
+            'at': DateTime.now().millisecondsSinceEpoch,
+            'reason': ?command['reason'],
+          };
+        } else {
+          task.remove('paused');
+        }
         revision++;
       } else if (command['type'] == 'conversation.archive') {
         (state['conversations'] as List)
