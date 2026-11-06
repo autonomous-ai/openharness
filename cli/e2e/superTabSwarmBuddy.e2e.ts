@@ -28,8 +28,7 @@ it.skipIf(isTeamAccount())('starts and switches its engine in the same folder an
   backend.addMachine(ME)
   backend.me = { id: 'person', email: ME.email }
   // As a real engine does: it asks about a folder it has no answer for, in a terminal no Swarm view shows.
-  const d = await signedInDaemon(backend, ME, { ANTHROPIC_API_KEY: 'fixture-only' }, undefined,
-    { trustPrompt: true, submissionGate: true }); daemon = d
+  const d = await signedInDaemon(backend, ME, { ANTHROPIC_API_KEY: 'fixture-only' }, undefined, true); daemon = d
   writeFileSync(join(d.env.HOME!, '.claude.json'), '{}')
   mkdirSync(d.env.CODEX_HOME!, { recursive: true })
   writeFileSync(join(d.env.CODEX_HOME!, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: 'fixture-only' }), { mode: 0o600 })
@@ -122,10 +121,11 @@ it.skipIf(isTeamAccount())('starts and switches its engine in the same folder an
   expect(saved.cwd).toBe(originalCwd)
   expect(saved.swarmSkill).toMatchObject({ role: 'buddy' })
   expect(saved.swarmSkill.github).not.toBe(true)
-  await until('the replacement to read its private chat and handoff', () => {
-    const prompts = readFileSync(join(d.root, 'submitted-prompts'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as string)
-    return prompts.some(prompt => prompt.includes('Your chat with your owner is conversation buddy-chat') && prompt.includes('Context handoff:')) || null
-  }, 30_000, 100)
+  // Codex receives its first prompt on launch, before the switch reports success.
+  const launches = readFileSync(join(d.root, 'launch-argv'), 'utf8').split('\n').filter(Boolean)
+    .map(line => JSON.parse(line) as { engine: string; args: string[] })
+  expect(launches.some(({ engine, args }) => engine === 'codex' && args.some(prompt =>
+    prompt.includes('Your chat with your owner is conversation buddy-chat') && prompt.includes('Context handoff:')))).toBe(true)
   expect(agents[0]).toMatchObject({ id: 'buddy', buddyOf: { personId: 'person', generation: 'g' } })
   expect(asked).toEqual([])
 })
