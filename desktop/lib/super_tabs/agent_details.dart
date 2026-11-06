@@ -22,6 +22,17 @@ import 'model.dart';
 import 'profile_sheet.dart';
 import 'pull_requests.dart';
 
+/// The task an agent holds now among its [candidates]: one that is not lost,
+/// the first listed. A lost task is where the agent's earlier attempt ended; it
+/// is the agent's state only when nothing else is open, never when a current
+/// task exists (task #3649: an agent working on one task read Lost for an old
+/// one).
+SuperTabConversation? superTabCurrentTask(
+  Iterable<SuperTabConversation> candidates,
+) =>
+    candidates.where((g) => g.assignment?['status'] != 'lost').firstOrNull ??
+    candidates.firstOrNull;
+
 /// Facts already observed by the Swarm or the agent's machine. Unknown facts
 /// stay absent; an idle or working claim needs actual work or native activity.
 class SuperTabAgentInfo {
@@ -43,20 +54,20 @@ class SuperTabAgentInfo {
              ?.agents
              .where((a) => a.id == agent.harnessId)
              .firstOrNull,
-         controller.snapshot?.conversations
-             .where(
-               (g) =>
-                   !g.closed &&
-                   g.assignment?['agentId'] == agent.id &&
-                   // Never a task the viewer may not read (review of #2281).
-                   superTabGroupReadable(controller, g) &&
-                   !const {
-                     'done',
-                     'stopped',
-                     'cancelled',
-                   }.contains(g.assignment?['status']),
-             )
-             .firstOrNull,
+         superTabCurrentTask(
+           (controller.snapshot?.conversations ?? const []).where(
+             (g) =>
+                 !g.closed &&
+                 g.assignment?['agentId'] == agent.id &&
+                 // Never a task the viewer may not read (review of #2281).
+                 superTabGroupReadable(controller, g) &&
+                 !const {
+                   'done',
+                   'stopped',
+                   'cancelled',
+                 }.contains(g.assignment?['status']),
+           ),
+         ),
        );
 
   SuperTabAgentInfo._(

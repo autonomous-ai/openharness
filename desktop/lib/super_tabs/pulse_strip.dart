@@ -1,3 +1,4 @@
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import '../widgets/desktop_chrome.dart';
+import 'agent_details.dart' show superTabCurrentTask;
 import 'backlog.dart';
 import 'machine_status.dart';
 import 'model.dart';
@@ -336,15 +338,15 @@ class _SuperTabPulseStripState extends State<SuperTabPulseStrip>
   ];
 
   /// The task [agentId] works on in this project, while the Swarm holds it.
-  SuperTabConversation? _taskOf(String agentId) => _snapshot.conversations
-      .where(
-        (g) =>
-            g.projectId == widget.projectId &&
-            g.assignment?['agentId'] == agentId &&
-            !g.closed &&
-            !superTabTaskShipped(g),
-      )
-      .firstOrNull;
+  SuperTabConversation? _taskOf(String agentId) => superTabCurrentTask(
+    _snapshot.conversations.where(
+      (g) =>
+          g.projectId == widget.projectId &&
+          g.assignment?['agentId'] == agentId &&
+          !g.closed &&
+          !superTabTaskShipped(g),
+    ),
+  );
 
   List<Widget> _agentRows() => [
     for (final id in widget.pulse.working.agentIds)
