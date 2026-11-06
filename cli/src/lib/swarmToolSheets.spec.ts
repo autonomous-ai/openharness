@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { SWARM_TOOLS_SKILL } from './swarmTools.js'
-import { manualBlocks, sheetEntries, sourceFingerprints, staleSheetEntries, swarmToolsSheet, TOOLS_ROLES, toolsRoleFor, type ToolsRole } from './swarmToolSheets.js'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { manualBlocks, PM_SHEET_NOTE, sheetEntries, sourceFingerprints, staleSheetEntries, swarmToolsSheet, TOOLS_ROLES, toolsRoleFor, type ToolsRole } from './swarmToolSheets.js'
 
 const bytes = (text: string) => Buffer.byteLength(text, 'utf8')
 const sheet = (role: ToolsRole) => swarmToolsSheet(role)
@@ -29,6 +32,15 @@ describe('the role tools sheets', () => {
     for (const word of ['crew.add', 'role', 'lane', 'backend, cli, desktop, mobile, docs', 'work.lane', 'only to replace a broken one', '`answer GROUP ID', 'process.confirm']) {
       expect(pm, word).toContain(word)
     }
+  })
+
+  // Task #3581: a release that changes the PM's sheet carries a what-changed note, which reaches each PM (backend
+  // superTabs/processNotes.ts). The sheet is pinned to the note it was last announced with.
+  it('pins the PM sheet to a what-changed note the backend sends: changing it needs a new note', () => {
+    expect(createHash('sha256').update(sheet('pm')).digest('hex').slice(0, 12),
+      'the PM sheet changed: add a what-changed note in backend/src/superTabs/processNotes.ts and pin it in PM_SHEET_NOTE').toBe(PM_SHEET_NOTE.sheet)
+    const notes = readFileSync(fileURLToPath(new URL('../../../backend/src/superTabs/processNotes.ts', import.meta.url)), 'utf8')
+    expect(notes).toContain(`id: '${PM_SHEET_NOTE.id}'`)
   })
 
   it('holds, in each other sheet, the commands that role uses', () => {
