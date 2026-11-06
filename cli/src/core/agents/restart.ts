@@ -236,6 +236,7 @@ export function createAgentRestarter({
     }
     // The conversation's file is in the other account's folder before anything is stopped; the source is kept, so a refusal
     // below leaves the agent where it was. The relaunch is built from the row as it will be.
+    const originalSession = session
     const previousHome = session.claudeHome ?? undefined, previousTranscript = session.transcriptPath ?? null
     if (moving) {
       try {
@@ -269,9 +270,10 @@ export function createAgentRestarter({
     const built = await relaunchOverrides(session, launchArgs ? { ...session, launchArgs } : session, current, native)
     if (!current()) return changed
     if (!built.ok) return built
-    // A Claude row with no account of its own is the default account's: a pane launched under another account once
-    // (a PM moved back) must not hand that CLAUDE_CONFIG_DIR on to every later relaunch.
-    const overrides = moving || (engine === 'claude' && !session.claudeHome) ? withClaudeHome(built.overrides, session.claudeHome ?? null) : built.overrides
+    // An ordinary restart keeps the account supplied by the launch shell. Only an absent launch value needs to clear
+    // a stale pane value; an explicit account move replaces either one.
+    const overrides = moving || (engine === 'claude' && !session.claudeHome && !built.overrides.env.CLAUDE_CONFIG_DIR)
+      ? withClaudeHome(built.overrides, session.claudeHome ?? null) : built.overrides
 
     // Shell startup and native checks can outlast the reconciler's default 30-second hold.
     // Keep this route through publication, and release only this operation's own reservation.
@@ -291,29 +293,48 @@ export function createAgentRestarter({
         registry.setClaudeHome(session.agentId, claudeHome ?? undefined)
         registry.setTranscriptPath(session.agentId, session.transcriptPath)
       }
+      let stoppedForMove = false
+      // Once the old writer stopped, restoring metadata alone leaves a dead PM. Recover the original conversation
+      // once in the same pane, while this operation still owns it. Never turn a failed resume into a new conversation.
+      const recoverMove = async () => {
+        rollback()
+        if (!stoppedForMove || !dispatchCurrent()) return
+        try {
+          const backOverrides = withClaudeHome(overrides, previousHome ?? null)
+          const backSwap = paneSwapDeps(originalSession, place, backOverrides, restartPermission.permissionMode ?? null, dispatchCurrent)
+          const back = await restartAgent({ engine, sessionId: originalSession.sessionId, resumeOnly: true },
+            restartPermission.bypassPermission === true, { ...backSwap, isCurrent: dispatchCurrent })
+          if (back.ok && dispatchCurrent()) {
+            await commitRelaunchedEngine({ registry, announceSession, refreshGridAssignment }, session.agentId, back.processIdentity, place, dispatchCurrent)
+          } else console.warn(`[restart] ${sid(session.agentId)} account move recovery failed`)
+        } catch {
+          console.warn(`[restart] ${sid(session.agentId)} account move recovery failed`)
+        }
+      }
       let outcome: Awaited<ReturnType<typeof restartAgent>>
       try {
         const swap = paneSwapDeps(session, place, overrides, restartPermission.permissionMode ?? null, dispatchCurrent)
         outcome = await restartAgent(
-          { engine, sessionId: session.sessionId, ...(session.resumeOnly ? { resumeOnly: true as const } : {}) },
+          { engine, sessionId: session.sessionId, ...(moving || session.resumeOnly ? { resumeOnly: true as const } : {}) },
           restartPermission.bypassPermission === true,
           { ...swap, isCurrent: dispatchCurrent,
             // The old engine kept writing until it stopped, after the copy made above: copy again once it has exited and
             // before the new one starts, so the conversation it resumes has every line.
             ...(moving ? { prepareResume: async () => {
+              stoppedForMove = true
               carryClaudeTranscript(previousHome, claudeHome ?? undefined, session.cwd ?? '', session.sessionId)
               await swap.prepareResume?.()
             } } : {}) },
         )
       } catch (error) {
-        rollback()
+        await recoverMove()
         throw error
       }
 
       if (!current()) { rollback(); return changed }
       // A refused relaunch (Windows: a batch-file engine cmd.exe would misread) stopped nothing: its own code.
       if (!outcome.ok) {
-        rollback()
+        await recoverMove()
         return { ok: false, error: outcome.error ?? 'RESTART_FAILED', detail: outcome.detail }
       }
       refreshGridWebSearch(session.agentId, overrides)
