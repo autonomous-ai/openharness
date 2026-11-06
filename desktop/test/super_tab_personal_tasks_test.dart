@@ -20,11 +20,13 @@ Map<String, dynamic> feed(
   bool reset = false,
   List<String> removed = const [],
   String mode = 'autoApprove',
+  String? olderCursor,
 }) => {
   'approvalMode': mode,
   'reset': reset,
   'upserts': rows,
   'removed': removed,
+  'olderCursor': ?olderCursor,
 };
 void main() {
   test('old backend has no capability; first load sorts newest then id', () {
@@ -126,5 +128,56 @@ void main() {
       recorded('changes')..['personalTasks'] = feed([task('a', 2, 10)]),
     );
     expect(restored.personalTasks.rows, isEmpty);
+  });
+  test('rows read who asked and the PR; an older backend sends neither', () {
+    final parts = SuperTabParts.firstLoad(
+      recorded('first_load')
+        ..['personalTasks'] = feed([
+          task('a', 1, 20)
+            ..['requester'] = {'id': '6a8f', 'name': 'Dee'}
+            ..['pullRequestUrl'] =
+                'https://github.com/autonomous-ai/openharness/pull/3464',
+          task('b', 1, 10),
+        ], reset: true),
+    );
+    final [a, b] = parts.personalTasks.rows;
+    expect(a.requesterId, '6a8f');
+    expect(a.requester['name'], 'Dee');
+    expect(
+      a.pullRequestUrl,
+      'https://github.com/autonomous-ai/openharness/pull/3464',
+    );
+    expect(b.requester, isEmpty);
+    expect(b.requesterId, isNull);
+    expect(b.pullRequestUrl, isNull);
+  });
+  test('an older page adds rows below and moves the cursor', () {
+    final parts = SuperTabParts.firstLoad(
+      recorded('first_load')
+        ..['personalTasks'] = feed(
+          [task('a', 2, 40), task('b', 1, 30)],
+          reset: true,
+          olderCursor: 'c1',
+        ),
+    );
+    final tasks = parts.personalTasks;
+    expect(tasks.olderCursor, 'c1');
+    final changed = tasks.applyOlder({
+      'upserts': [task('c', 1, 20), task('d', 1, 10), task('a', 1, 5)],
+      'olderCursor': null,
+    });
+    expect(changed, isTrue);
+    expect(tasks.rows.map((r) => r.id), ['a', 'b', 'c', 'd']);
+    expect(tasks.rows.first.version, 2);
+    expect(tasks.olderCursor, isNull);
+    // The cache keeps the cursor, so a restart can still load older pages.
+    parts.apply(
+      recorded('changes')
+        ..['personalTasks'] = feed([], reset: true, olderCursor: 'c9'),
+    );
+    expect(
+      SuperTabParts.fromJson(parts.toJson()).personalTasks.olderCursor,
+      'c9',
+    );
   });
 }
