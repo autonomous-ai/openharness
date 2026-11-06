@@ -1773,6 +1773,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // A crew member on its way to another machine takes work once there; an asleep one wakes for it, in place (crewKeep.ts),
     // so its session is not closed (assignTo wakes it).
     if (worker.movedTo) fail('CREW_MOVING', `${worker.displayName ?? worker.name} is moving to another machine. Assign it once it has moved.`)
+    // The project's machine rules (machineRules.ts), for an assignment and for the review steps a Ready hands out alike.
+    refuseByMachineRules(context, { machineId: worker.machineId, engine: worker.configuration.engine, review: isReview(group) })
     if (!worker.asleep && sessionClosed(state, worker, context.now)) {
       fail('AGENT_CLOSED', `${worker.displayName ?? worker.name}'s session was closed. Start a new agent for this task.`)
     }
@@ -4337,7 +4339,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const group = open(state, command.conversationId)
       const worker = agent(state, command.agentId)
       assignRefusal(group, worker)
-      refuseByMachineRules(context, { machineId: worker.machineId, engine: worker.configuration.engine, review: isReview(group) })
       const home = groupProject(state, group)
       // An older client assigns in a custom role: kept for older readers, and the role name it means for a worker without
       // one (instructions.ts legacyRoleName). No command reads the role.
@@ -4699,7 +4700,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   return effects
 }
 
-/** Reject an invalid command result before the store tries to write duplicate message keys. */
 /** Refuses [work] its project's machine rules refuse now, with the rule's own why. A command whose record was not read
  *  (none in its context) meets no rule. */
 function refuseByMachineRules(context: CommandContext, work: { machineId: string; engine: string; review: boolean }): void {
@@ -4707,6 +4707,7 @@ function refuseByMachineRules(context: CommandContext, work: { machineId: string
   if (why) fail('MACHINE_RULE', why, 409)
 }
 
+/** Reject an invalid command result before the store tries to write duplicate message keys. */
 export function assertUniqueMessageIds(commandType: string, messages: Array<{ id: string }>): void {
   const ids = new Set<string>()
   for (const draft of messages) {
