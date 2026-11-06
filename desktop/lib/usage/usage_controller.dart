@@ -119,11 +119,22 @@ class UsageController extends ChangeNotifier {
       answers = await ask();
     } catch (_) {
       // Keep the last good answer, the same rule the local half follows.
+      if (!_disposed && request == _remoteRequest && _sources.isEmpty) {
+        _landed = true;
+        stale = true;
+        notifyListeners();
+      }
       return;
     }
     // A slower, older answer must not overwrite a newer one.
     if (_disposed || request != _remoteRequest) return;
     _remote = answers;
+    if (_sources.isEmpty) {
+      _landed = true;
+      stale = !answers.any(
+        (machine) => machine.readings.any((r) => r.hasFigures),
+      );
+    }
     notifyListeners();
   }
 
@@ -139,6 +150,10 @@ class UsageController extends ChangeNotifier {
 
   Future<void> _refreshLocal() async {
     _started = true;
+    if (_sources.isEmpty) {
+      if (remote == null) _landed = true;
+      return;
+    }
     final request = ++_request;
     final results = await Future.wait(_sources.map((s) => s.read()));
     // A refresh that finished after a newer one started is thrown away: its
