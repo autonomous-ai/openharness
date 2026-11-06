@@ -74,6 +74,7 @@ import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROP
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { repeatedRules } from './instructionsDiff.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
+import { BASE_DOCUMENT, BASE_VERSION } from './instructionsRebase.js'
 import { BUILT_IN_HEADING, tidySaved } from './pmSchedule.js'
 import { contractRefusal, missingContract } from './taskContract.js'
 import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, proposalPriority, titlePriority, type TaskPriority } from './taskPriority.js'
@@ -1718,6 +1719,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** [worker] takes [group]'s work as assignment [assignmentId], after assignRefusal let it: what work.assign writes, and its
    *  brief to the worker. */
   const assignTo = (group: Conversation, worker: Agent, assignmentId: string) => {
+    // The PR ref is fetchable on another machine; a local worktree path is not. The previous agent's free-text result stays
+    // in its own status message, where deliveries retain its attribution and cross-account warning.
+    const recovery = group.assignment?.status === 'lost' ? [
+      'Continue the previous attempt from its pushed work; read this task’s conversation before changing it.',
+      'The previous agent’s last status is in this task’s conversation.',
+      ...(group.pullRequestUrls ?? []).map(url => {
+        const number = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)$/.exec(url)?.[1]
+        const head = group.pullRequestHeads?.[url]?.head
+        return `Pushed work: ${url}${number ? ` (refs/pull/${number}/head)` : ''}${head ? ` at ${head}` : ''}`
+      }),
+    ].join('\n') : null
     // An asleep crew member wakes for it: its host reopens the session in place (crewKeep.ts). The wake is timed from here to
     // the first reading that shows it running (crewTimes.ts, task #3462).
     if (wakeCrewMember(worker, context.now)) startWake(worker, group.id, context.now)
@@ -1747,6 +1759,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // whom this task's pull requests are for, from its own requester (projects.ts requestedByLine).
     const requestedBy = requestedByLine(state, groupProject(state, group), group, worker)
     message(group.id, [group.brief || group.title,
+      ...recovery ? [recovery] : [],
       ...group.checks.length ? [`Acceptance checks:\n${group.checks.map(c => `- ${c.description}`).join('\n')}`] : [],
       ...requestedBy ? [requestedBy] : []].join('\n\n'), [worker.id], null, SYSTEM_ROW, undefined, undefined, undefined, assignmentId)
     const news = assignedNotice(state, group, sender, assignmentId)
@@ -1888,9 +1901,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (projects.length >= 100) fail('PROJECTS_FULL', 'A swarm can have up to 100 projects.')
       const leadConversationId = `project-${operationId}`
       // It starts on a copy of the built-in instructions as revision 1, the team's own to change (design, The built-in template).
+      // In a Swarm whose projects moved onto the base (#3600), on the base, marked: one way to start a project (review of #3300).
+      const onBase = projects.some(p => (p.instructionsBase ?? 0) >= BASE_VERSION)
+      const first = onBase ? { instructionsRevision: 1, instructionsHash: instructionsHash(BASE_DOCUMENT), instructionsBase: BASE_VERSION } : FIRST_INSTRUCTIONS
       projects.push({ id: operationId, name: command.name, ownerId: actor.userId, ownerGeneration: person(state, actor.userId).generation, leadConversationId,
-        visibility: command.visibility, members: [], updateMinutes: 5, skillMode: 'default', ...FIRST_INSTRUCTIONS })
-      effects.instructions = { projectId: operationId, revision: 1, hash: FIRST_INSTRUCTIONS.instructionsHash, text: INSTRUCTIONS_TEMPLATE,
+        visibility: command.visibility, members: [], updateMinutes: 5, skillMode: 'default', ...first })
+      effects.instructions = { projectId: operationId, revision: 1, hash: first.instructionsHash, text: onBase ? BASE_DOCUMENT : INSTRUCTIONS_TEMPLATE,
         summary: FIRST_SUMMARY, writtenBy: { kind: 'person', id: actor.userId }, askedBy: actor.userId, at: context.now }
       state.conversations.push({ id: leadConversationId, projectId: operationId, title: 'Lead', leadId: null,
         agentIds: [], archived: false, brief: command.brief, checks: [], assignment: null, lastMessageSequence: 0 })
@@ -2730,6 +2746,16 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const pullRequestUrl = projectPullRequestUrl(command.pullRequestUrl, repositoryUrl)
         ?? fail('PULL_REQUEST_REPOSITORY', `This pull request is not in the project's repository (${own!.fullName}).`, 400)
       const shippedAt = group.ledger?.shippedAt, linked = group.pullRequestUrls?.includes(pullRequestUrl)
+      // Whether the task itself named this pull request before the record: in its result or a check's evidence (the Ready line), or in
+      // its code list (its brief, its builder's or the project's own posts). A builder lost before its Ready line has only the
+      // posts, and its merged task must still close (task #3574). Read before the record links anything.
+      const assignment = group.assignment
+      // Only the code list: a task stored before it existed reads every link it held as its code, posts' and earlier merge records' included.
+      const namedBefore = group.codePullRequestUrls?.includes(pullRequestUrl) ?? false
+      const ownPullRequest = (namedBefore && !group.cards?.recorded?.includes(pullRequestUrl))
+        || (!!assignment && [assignment.result, ...group.checks.map(check => check.evidence)].some(text => !!text && pullRequestLinks(text, repositoryUrl).includes(pullRequestUrl)))
+      // What only this record linked stays marked, so a repeated record of an unrelated pull request closes nothing (Aster, #3259).
+      if (!ownPullRequest && !group.cards?.recorded?.includes(pullRequestUrl)) group.cards = { ...group.cards, recorded: [...group.cards?.recorded ?? [], pullRequestUrl] }
       appendPullRequestUrls(group, [pullRequestUrl], repositoryUrl)
       // The pull request that merged is the task's own code.
       appendCodePullRequestUrls(group, [pullRequestUrl], repositoryUrl)
@@ -2752,11 +2778,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A merged task whose builder is gone closes itself with the merge as its result (task #3510): a released builder can
       // no longer set its own Done, and the task would stay in review for good. A live builder still closes its own task, and
       // a step never closes here, nor its parent through it. Only the task's own pull request closes it: one its builder named in
-      // its result (the Ready line) or a check's evidence names, which a merge record never writes. A merge of an unrelated one
-      // recorded here, even twice, only links it (Aster, review of #3259).
-      const assignment = group.assignment
-      const ownPullRequest = assignment && [assignment.result, ...group.checks.map(check => check.evidence)]
-        .some(text => !!text && pullRequestLinks(text, repositoryUrl).includes(pullRequestUrl))
+      // its result (the Ready line), a check's evidence or its own posts, which a merge record never writes. A merge of an unrelated
+      // one recorded here, even twice, only links it (Aster, review of #3259). Closed whenever the record is made: a lost attempt, a
+      // merge recorded again later (#3574).
       if (ownPullRequest && !isStep(group) && assignment && !['done', 'cancelled'].includes(assignment.status) && builderGone(state, assignment)) {
         const previous = assignment.status
         assignment.status = 'done'
