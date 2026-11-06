@@ -1711,11 +1711,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** [worker] takes [group]'s work as assignment [assignmentId], after assignRefusal let it: what work.assign writes, and its
    *  brief to the worker. */
   const assignTo = (group: Conversation, worker: Agent, assignmentId: string) => {
-    // Preserve the lost attempt's recovery context before replacing its assignment. The PR ref is fetchable on another
-    // machine; a local worktree path is not. No branch is invented when the builder never recorded a push.
+    // The PR ref is fetchable on another machine; a local worktree path is not. The previous agent's free-text result stays
+    // in its own status message, where deliveries retain its attribution and cross-account warning.
     const recovery = group.assignment?.status === 'lost' ? [
       'Continue the previous attempt from its pushed work; read this task’s conversation before changing it.',
-      ...group.assignment.result ? [`Previous result: ${group.assignment.result}`] : [],
+      'The previous agent’s last status is in this task’s conversation.',
       ...(group.pullRequestUrls ?? []).map(url => {
         const number = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)$/.exec(url)?.[1]
         const head = group.pullRequestHeads?.[url]?.head
