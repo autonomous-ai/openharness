@@ -13,7 +13,7 @@ import { instructionsHash } from '../src/superTabs/instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from '../src/superTabs/instructionsTemplate.js'
 import { attributedRules, droppedRules } from '../src/superTabs/instructionsDiff.js'
 import { rebasedDocument } from '../src/superTabs/instructionsRebase.js'
-import { rebaseAll, rebaseDone, REBASE_SUMMARY } from '../src/superTabs/migration/rebase.js'
+import { rebaseAll, rebaseDone, rebaseUntilDone, REBASE_SUMMARY, REBASE_SWARMS } from '../src/superTabs/migration/rebase.js'
 import { logger } from '../src/utils/logger.js'
 
 // Task #3600 (anh Dee, 11-06: "ALL OF THEM"; River: "ship it asap", no preview): after the release every project's
@@ -70,8 +70,8 @@ afterAll(async () => {
 })
 
 /** A Swarm whose first project has BEFORE at revision 2 and a PM, and a second project still on the template. */
-async function swarm() {
-  const tab = (await store.create(owner, randomUUID(), 'Pilot')).id
+async function swarm(id: string = randomUUID()) {
+  const tab = (await store.create(owner, id, 'Pilot')).id
   const pm = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Lead',
     configuration: config, lead: true })).result.agentId as string
   await run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: BEFORE, summary: 'Our process.' })
@@ -83,7 +83,7 @@ const projects = async (tab: string) => (await store.read(owner, tab)).state.pro
 describe('every project on the new base, once, by itself', () => {
   it('writes each project\'s new revision with every person\'s rule, keeps the before in its History, and tells its agents', async () => {
     const { tab, pm, app } = await swarm()
-    const report = await rebaseAll(db, { now: () => now })
+    const report = await rebaseAll(db, { now: () => now, swarms: [tab] })
     expect(report.failed).toEqual([])
     expect(report.held).toEqual([])
     expect(rebaseDone(report)).toBe(true)
@@ -109,10 +109,14 @@ describe('every project on the new base, once, by itself', () => {
 
   it('runs once: a second run writes nothing, and a later save by a person stays', async () => {
     const { tab } = await swarm()
-    await rebaseAll(db, { now: () => now })
+    await rebaseAll(db, { now: () => now, swarms: [tab] })
     await run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 3, text: `${(await store.instructions(owner, tab, 'lead')).text}\n## This project\n\n- Repository: acme/app.\n`, summary: 'Facts.' })
-    const again = await rebaseAll(db, { now: () => now })
-    expect(again.written.filter(w => w.tabId === tab)).toEqual([])
+    const again = await rebaseAll(db, { now: () => now, swarms: [tab] })
+    expect(again.written).toEqual([])
+    // A project made after the move starts on the base already (commands.ts project.create): nothing to move.
+    const later = (await run(tab, { type: 'project.create', name: 'Later', visibility: 'public', brief: '' })).result.projectId as string
+    expect((await rebaseAll(db, { now: () => now, swarms: [tab] })).written).toEqual([])
+    expect((await store.instructions(owner, tab, later)).text).toBe(rebasedDocument(INSTRUCTIONS_TEMPLATE).text)
     expect((await projects(tab))[0]!.instructionsRevision).toBe(4)
     expect((await store.instructions(owner, tab, 'lead')).text).toContain('Repository: acme/app.')
   })
@@ -126,7 +130,7 @@ describe('every project on the new base, once, by itself', () => {
       return { ...built, text: built.text.replace(/^.*Merges and releases.*$/m, ''), lost: [] }
     }
     for (let attempt = 0; attempt < 2; attempt++) {
-      const report = await rebaseAll(db, { now: () => now, build: faulty })
+      const report = await rebaseAll(db, { now: () => now, build: faulty, swarms: [tab] })
       expect(report.held.filter(h => h.tabId === tab)).toEqual([expect.objectContaining({ projectId: 'lead',
         rules: [expect.stringContaining('Merges and releases, in place of the PM (Ken, 2026-11-05).')] })])
       expect(rebaseDone(report)).toBe(false)
@@ -139,5 +143,36 @@ describe('every project on the new base, once, by itself', () => {
     expect((await store.instructions(owner, tab, 'lead')).text).toBe(BEFORE)
     // The other project went on as planned.
     expect(head.find(p => p.id === app)).toMatchObject({ instructionsRevision: 2, instructionsBase: 1 })
+  })
+
+  // Review of #3300, Critical: Dee's "ALL OF THEM" is this Swarm's projects. Another team's Swarm is never touched.
+  it('moves only the Swarm that asked for it, as asked by its owner, and leaves every other Swarm as it was', async () => {
+    expect(REBASE_SWARMS).toEqual(['c51479bd73b59e58176ad9e4'])
+    const ours = await swarm('c51479bd73b59e58176ad9e4')
+    const theirs = await swarm()
+    const report = await rebaseAll(db, { now: () => now })
+    expect(report.swarms).toBe(1)
+    expect(report.written.map(w => w.tabId)).toEqual([ours.tab, ours.tab])
+    expect((await projects(theirs.tab)).map(p => [p.instructionsRevision, p.instructionsBase])).toEqual([[2, undefined], [1, undefined]])
+    expect((await store.instructions(owner, theirs.tab, 'lead')).text).toBe(BEFORE)
+    expect((await store.instructionRevision(owner, ours.tab, 'lead', 3)).askedBy).toBe(owner.sub)
+  })
+
+  // Review of #3300, Important 3: the hourly retries end. A held project is tried a bounded number of times, then the job
+  // stops, saying so as an error; a Swarm that cannot be read keeps nothing waiting either.
+  it('stops after a bounded number of passes while a project stays held back, saying it gave up', async () => {
+    const { tab } = await swarm()
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => logger)
+    const faulty = (before: string) => ({ ...rebasedDocument(before), text: rebasedDocument(before).text.replace(/^.*Merges and releases.*$/m, '') })
+    const waits: number[] = []
+    const report = await rebaseUntilDone(db, { swarms: [tab], build: faulty, passes: 3, wait: async ms => { waits.push(ms) } })
+    expect(report?.held).toHaveLength(1)
+    expect(waits).toHaveLength(2)
+    expect(error.mock.calls.some(call => JSON.stringify(call).includes('gave up'))).toBe(true)
+    error.mockRestore()
+    // Done at once when nothing is held: one pass, no wait.
+    const done: number[] = []
+    expect(rebaseDone((await rebaseUntilDone(db, { swarms: [tab], wait: async ms => { done.push(ms) } }))!)).toBe(true)
+    expect(done).toEqual([])
   })
 })

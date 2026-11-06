@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { REBASED_INTRO, rebasedDocument } from './instructionsRebase.js'
+import { applyCommand } from './commands.js'
+import { createSuperTab } from './model.js'
+import { instructionsHash } from './instructions.js'
+import { projectsOf } from './projects.js'
+import { BASE_DOCUMENT, BASE_VERSION, REBASED_INTRO, rebasedDocument } from './instructionsRebase.js'
 import { attributedRules, budgetParts, droppedRules } from './instructionsDiff.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 
@@ -135,3 +139,29 @@ describe('a project\'s document on the new base', () => {
   })
 })
 
+
+// Review of #3300: one way to start a project. A Swarm whose projects moved onto the base starts a new one on it too, marked,
+// so the job never has to move it and it never runs on the old template meanwhile.
+describe('a new project', () => {
+  const create = (moved: boolean) => {
+    const state = createSuperTab('tab', 'Pilot', { id: 'owner', email: 'owner@example.com' }, 'prod')
+    if (moved) Object.assign(projectsOf(state)[0]!, { instructionsBase: BASE_VERSION })
+    const effects = applyCommand(state, { kind: 'person', userId: 'owner', email: 'owner@example.com' },
+      { type: 'project.create', name: 'App', visibility: 'public', brief: '' }, { now: 1000, operationId: 'op-1' })
+    return { effects, project: projectsOf(effects.state).find(p => p.id === 'op-1')! }
+  }
+
+  it('starts on the base, marked, in a Swarm whose projects moved onto it', () => {
+    const { effects, project } = create(true)
+    expect(BASE_DOCUMENT).toBe(rebasedDocument(INSTRUCTIONS_TEMPLATE).text)
+    expect(project).toMatchObject({ instructionsRevision: 1, instructionsHash: instructionsHash(BASE_DOCUMENT), instructionsBase: BASE_VERSION })
+    expect(effects.instructions).toMatchObject({ projectId: 'op-1', revision: 1, text: BASE_DOCUMENT })
+  })
+
+  it('starts on the template, unmarked, in any other Swarm', () => {
+    const { effects, project } = create(false)
+    expect(project).toMatchObject({ instructionsRevision: 1, instructionsHash: instructionsHash(INSTRUCTIONS_TEMPLATE) })
+    expect(project.instructionsBase).toBeUndefined()
+    expect(effects.instructions).toMatchObject({ text: INSTRUCTIONS_TEMPLATE })
+  })
+})
