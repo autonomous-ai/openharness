@@ -48,14 +48,6 @@ export const launch: EngineLaunch = {
     format: 'json', projects: 'projects', accepted: 'hasTrustDialogAccepted', entry: { allowedTools: [] },
   },
   /**
-   * "WARNING: Claude Code running in Bypass Permissions mode … Yes, I accept", the first time `--dangerously-skip-permissions`
-   * runs: a Swarm Lead on the Mac Studio sat there before its first turn (2026-10-26). Accepting writes
-   * `skipDangerousModePermissionPrompt: true` to the user settings, "Whether the user has accepted the bypass permissions
-   * mode dialog" in its settings schema, and the key its own message tells people to add (2.1.310; with it set the
-   * dialog is not shown, tried with the binary).
-   */
-  bypassAcceptance: { home: { variable: 'CLAUDE_CONFIG_DIR', otherwise: { folder: '.claude' } }, file: 'settings.json', key: 'skipDangerousModePermissionPrompt' },
-  /**
    * `.mcp.json` in a folder above, such as the home's, is asked about as "New MCP server found in this project". Its
    * default, "Continue without using this MCP server", adds the name to `disabledMcpjsonServers` in the folder's
    * `.claude/settings.local.json` (localSettings); a name there is `rejected` and never asked again, whatever else

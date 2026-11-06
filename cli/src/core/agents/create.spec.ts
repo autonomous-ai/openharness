@@ -77,10 +77,9 @@ vi.mock('../../engines/kit/nativeHookFiles.js', () => ({
 const trust = vi.hoisted(() => ({
   claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
   preTrustClaudeProject: vi.fn((_path: string): unknown => undefined), preTrustCodexProject: vi.fn((_path: string, _profile?: string | null): unknown => undefined),
-  acceptFullMode: vi.fn((_engine: string, _environment?: NodeJS.ProcessEnv): unknown => 'accepted'),
 }))
-const { preTrustClaudeProject, preTrustCodexProject, acceptFullMode } = trust
-vi.mock('../../engines/launchPrep.js', () => ({ acceptFullMode: trust.acceptFullMode, folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
+const { preTrustClaudeProject, preTrustCodexProject } = trust
+vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
     ? { trusts: (path: string) => trust.claudeTrusts(path), record: (path: string) => trust.preTrustClaudeProject(path) }
     : engine === 'codex' ? { trusts: (path: string) => trust.codexTrusts(path, profile), record: (path: string) => trust.preTrustCodexProject(path, profile) } : null }))
 // The connections an agent on a profile home is given (lib/connectors/agents.ts): never written into a real folder here.
@@ -239,8 +238,6 @@ describe('creating an agent', () => {
   // Swarm v3 (task #4215): a Swarm agent starts with its owner's own settings. Harness wrote full mode's warning acceptance
   // into them for every Swarm agent in full mode (2026-10-26); a person who chooses full mode answers Claude Code's own warning.
   it('writes nothing into the person\'s settings for a Swarm agent, with no mode or in full mode', async () => {
-    const real = await vi.importActual<typeof import('../../engines/launchPrep.js')>('../../engines/launchPrep.js')
-    vi.mocked(acceptFullMode).mockImplementation(real.acceptFullMode)
     const home = mkdtempSync(join(tmpdir(), 'own-settings-')), config = join(home, 'claude'), settings = join(config, 'settings.json')
     mkdirSync(config); writeFileSync(settings, '{"theme":"dark"}\n')
     const launch = { current: () => true, environment: { HOME: home, CLAUDE_CONFIG_DIR: config }, prepareHooks: async () => true } as unknown as NativeLaunch
@@ -339,12 +336,10 @@ describe('creating an agent', () => {
   // HARNESS_SWARM=off: the core holds none of the Swarm's launch code, so a start that asks for a Swarm role is
   // refused before anything is written or launched, and every other start is as it was.
   it('refuses a Swarm role while the Swarm is off, before opening a pane, and starts everything else as before', async () => {
-    acceptFullMode.mockClear()
     const off = setup({ swarmLaunch: undefined })
     expect(await off.create(request({ cwd: folder(), swarmRole: 'agent' })))
       .toEqual({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
     expect(createAndRegisterPane).not.toHaveBeenCalled()
-    expect(acceptFullMode).not.toHaveBeenCalled()
     expect(await off.create(request({ cwd: folder() }))).toMatchObject({ ok: true })
     expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0]).not.toHaveProperty('swarmSkill')
   })
