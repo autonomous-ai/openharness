@@ -4,7 +4,7 @@
 
 **Goal:** Keep project chats useful by refusing agent status/card repeats, a third main-chat post per ask, and duplicate answers, while leaving people untouched.
 
-**Architecture:** Add a focused `chatLimits.ts` guard to `message.send`, beside ACK_ONLY. A bounded, private ledger on the conversation records the newest 50 person asks, their first answer and at most two main posts across all agents. Unlinked main posts belong to the latest top-level person ask; thread follow-ups remain available. Explicit answer links and direct replies to person asks count as answers in either place.
+**Architecture:** Add a focused `chatLimits.ts` guard to `message.send`, beside ACK_ONLY. A bounded, private ledger on the conversation records the newest 50 person asks, their first answer and at most two main posts across all agents. Only explicit ask/thread links consume that ask’s main budget; unlinked announcements stay independent. Explicit answer links and person replies shown in main count as answers; plain thread replies remain discussion.
 
 **Tech Stack:** Existing TypeScript, Vitest and transactional MongoDB conversation parts; no dependencies, collections, indexes or new queries.
 
@@ -15,13 +15,13 @@
 - Only project chats; people, private/Buddy chats, task chats and agent-only notices retain their behavior.
 - Main-chat status labels and pure repeats of existing cards are refused with the next step. Substantive factual results remain allowed.
 - Two posts across all agents per ask; newline wrapping does not consume another post. Thread mirrors consume a main post.
-- One answer per person message across agents and main/thread locations. Replying to an earlier agent answer continues discussion.
+- One formal answer per message across agents and main/thread locations. Plain thread replies, including replies to the person’s ask itself, continue discussion.
 - Commit failing tests before implementation; push each completed task. Run only affected local checks; full backend unit and Super Tab integration suites run in ready PR CI.
 - Temp files only in mktemp directories. Never sign out the real CLI or stop another process.
 
 ## Design
 
-- **Growth:** At most 50 ask entries per project chat, each two post IDs and one answer. Eviction records an age watermark: an old ask cannot reopen a main budget or a formal answer. Its thread remains readable and replies to the existing agent response remain available. No text is stored in this ledger. Conversation removal deletes it.
+- **Growth:** At most 50 ask entries per project chat, each two post IDs and one answer. Eviction records an age watermark: an old ask cannot reopen a main budget or a formal answer. Its thread remains readable and plain thread discussion remains available. No text is stored in this ledger. Conversation removal deletes it.
 - **Concurrency:** Existing optimistic conversation-part transaction serializes each post and counter together; operation receipts make retries idempotent.
 - **Read cost:** Reuse the conversation and existing reply lookup. No message-history scan, new query or index. Hide bookkeeping from reader views/light loads.
 - **Scale:** At 10x traffic state stays fixed at 50 asks; benchmark guard and full apply path. PRODUCT.md delivery target is p95 <=1s; algorithm timing alone cannot establish delivery latency.
@@ -51,7 +51,7 @@
 ### Task 2: Two main posts per ask
 
 **Files:** Modify `chatLimits.ts`, `chatLimits.test.ts`, `commands.ts`, `model.ts`, `read/views.ts`, `read/contract.ts`, `parts/light.ts`, `parts/light.test.ts`; integration coverage in `integration/superTabProjectChatWorkers.test.ts`.
-**Interfaces:** `Conversation.chatLimits?: ChatLimits`; `recordChatAsk(group, id, at, topLevel)` and `requireChatPost(group, command, reply)` / `recordChatPost(...)` reuse trusted context.
+**Interfaces:** `Conversation.chatLimits?: ChatLimits`; `recordChatAsk(group, id, at)` and `requireChatPost(group, command, reply)` / `recordChatPost(...)` reuse trusted context.
 
 - [x] Commit failing command tests for third post across agents, new/old asks, thread-only followups, mirrors, eviction and private reader bookkeeping; add transactional integration test for competing third posts and retry.
 - [x] Run focused tests and observe missing refusals.
@@ -61,7 +61,7 @@
 ### Task 3: One answer across agents and locations
 
 **Files:** Modify `chatLimits.ts`, `chatLimits.test.ts`, `answers.test.ts`, `commands.ts`.
-**Interfaces:** Store first answer on each ask; explicit `answers` or `answer` and direct person replies are answers. Existing PM owed settlement remains independent.
+**Interfaces:** Store first answer on each ask; explicit `answers` or `answer` and direct person replies shown in main are answers; plain thread replies are discussion. Existing PM owed settlement remains independent.
 
 - [x] Commit failing tests: plain second answer, Engineer then PM, main then thread and thread then main, distinct person followups, and reply-to-agent continuation. Update the two old expectations superseded by this task.
 - [x] Run focused tests; confirm duplicate-answer refusals are missing.
@@ -73,10 +73,19 @@
 
 - Content guard: `3ac59da35` produced 9 failures / 1 pass; `07f9488c8` passed content + acknowledgement checks (48 tests).
 - Main budget: `2cc8137d5` produced 5 failures / 11 passes. Its transactional test let both competing posts through (expected only one). `fd3520c32` passed the focused integration file (3 tests), including replay and concurrent writes.
-- Duplicate answers: `bfbf589f4` produced 6 failures / 25 passes; `bd4cf457a` fixed them. The old two-post thread test now follows up under the agent response, since a second direct person reply is an answer.
+- Duplicate answers: `bfbf589f4` produced 6 failures / 25 passes; `bd4cf457a` fixed them. Formal answer links remain guarded; the review fixes below preserve ordinary discussion under the ask root.
 - Card-number bypass: `e3e37988f` failed on a repeated `PR #12` without its URL; `e274001c7` passed it. File/tag status bypasses are also covered.
-- Current-main merge: `d299e264e`; final affected run passed 575 tests across 9 files; backend typecheck passed. Focused store integration passed 3 tests. Ready PR CI supplies full backend unit/integration evidence.
-- Posting benchmark vs main `bb34f2907`: 2,000 tasks and 50 active asks, 20 warmup pairs + 200 interleaved measured pairs. Median 4.659 -> 4.635 ms; p95 5.442 -> 5.257 ms. Initial 40-pair pilot had median 4.321 -> 4.282 ms and noisy p95 4.900 -> 5.159 ms; increased sample addresses that uncertainty. These measure applyCommand only, not delivery/database latency. No query/index changed.
-- Empty-answer ledger with 50 asks is 2,746 JSON bytes. Each entry adds at most two 24-character post IDs and one first-answer record. The ledger stays bounded well below the conversation part's 4 MiB cap and disappears with the conversation. Production count/size/growth measurements could not be collected: the required read-only environment file is absent on this Team machine. No production access or write attempted; bounded local payload measurement replaces that evidence for this optional JSON field.
-- Rollout: existing chats initialize with the next person ask; existing recorded PM answers still apply. The ledger retains 50 asks. After eviction older main budgets and formal answers close conservatively, including equal-timestamp unknown asks; reply to an existing agent response to continue its thread. No transcript is removed. Revert the backend change to roll back; no schema migration.
+- Current-main merge: `d299e264e`; initial affected run passed 575 tests across 9 files; backend typecheck passed. Focused store integration passed 3 tests. Ready PR CI supplies full backend unit/integration evidence.
+- Linked-answer posting benchmark vs main `bb34f2907`: 2,000 tasks and 50 active asks, 20 warmup pairs + 200 interleaved measured pairs. Median 4.025 -> 3.973 ms; p95 4.733 -> 4.488 ms. This measures applyCommand only, not delivery/database latency. No query/index changed.
+- Empty-answer ledger with 50 asks is 2,710 JSON bytes. Each entry adds at most two 24-character post IDs and one first-answer record. The ledger stays bounded well below the conversation part's 4 MiB cap and disappears with the conversation. Production count/size/growth measurements could not be collected: the required read-only environment file is absent on this Team machine. No production access or write attempted; bounded local payload measurement replaces that evidence for this optional JSON field.
+- Rollout: existing chats initialize with the next person ask; existing recorded PM answers still apply. The ledger retains 50 asks. After eviction older main budgets and formal answers close conservatively, including equal-timestamp unknown asks; plain thread discussion remains available under the ask or an existing response. No transcript is removed. Revert the backend change to roll back; no schema migration.
 - Independent review and ready PR CI are the remaining delivery gates, owned by their steps/CI after submission.
+
+### Review and CI corrections
+
+- [x] Commit review regressions (`5ed2b2931`): three failures / 20 passes. An outage and older result after a full newer ask must pass; a second agent’s plain thread follow-up must pass.
+- [x] Implement linked-only budgets and formal-answer distinction (`95f0527db`); 551 affected unit tests and three transactional integration tests passed.
+- [x] Reproduce ready CI’s Buddy scope failure: three failures / 144 passes in buddies/buddyModel. Detect project chats by project lead-conversation ID without resolving a Swarm-wide Buddy’s nonexistent project (`c54f6e4ac`); 147 passes. The two affected activity/Buddy integration cases pass (92 unrelated cases skipped).
+- [x] Commit boundary regression (`f2d3b7390`): answering an earlier agent response with 50 retained asks evicted its main-budget entry before recording the post and threw. Record the main slot before adding an answer target (`ac48a1dad`); 34 focused tests pass.
+- [x] Final affected run: 651 tests across seven files, typecheck clean, three project-chat transactional integration tests pass. Reviewer’s light-load note requires no code change: chatLimits is in GROUP_FIELDS.unread and removed by both reader views.
+- [ ] Same independent reviewer reads the corrected head; ready PR CI supplies complete backend and integration evidence.
