@@ -67,8 +67,11 @@ describe('personal approval enforced before work', () => {
     expect(f.card(id).assignment).toBeNull()
     f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.other })
     const approved = f.runCommand({ type: 'task.approve', conversationId: id })
-    expect(f.card(id)).toMatchObject({ taskApproval: { state: 'approved', suggestedAgentId: f.other }, assignment: { agentId: f.other, status: 'working' } })
-    expect(approved.messages.some(m => m.recipients.includes(f.other))).toBe(true)
+    expect(f.card(id)).toMatchObject({ taskApproval: { state: 'approved', suggestedAgentId: f.other }, assignment: null })
+    expect(approved.messages.some(m => m.recipients.includes(f.lead))).toBe(true)
+    f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.other }, f.pm)
+    expect(f.card(id).assignment?.agentId).toBe(f.other)
+    expect(approved.messages.some(m => m.recipients.includes(f.other))).toBe(false)
     expect(approved.messages.some(m => m.recipients.includes(f.candidate))).toBe(false)
   })
   it('refuses another person, PM or Buddy approval and old membership authority before receipt replay', () => {
