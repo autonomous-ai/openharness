@@ -3089,6 +3089,8 @@ describe('fresh Buddy idle proof (#3824)', () => {
     await f.machine.tick()
     expect(posts(f)[0]).toHaveProperty('idleBuddyHarnessIds', ids)
     expect(vi.mocked(f.core.agents.activity).mock.calls.map(([batch]) => batch.length)).toEqual([64, 36])
+    // The report already checked these sessions; idle proof adds no per-session core round trips.
+    expect(f.core.agents.stopped).toHaveBeenCalledTimes(ids.length)
   })
   it('does not ask for activity or send proof without the server request or running Buddies', async () => {
     const older = buddies()
