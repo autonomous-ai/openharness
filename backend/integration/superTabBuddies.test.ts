@@ -1174,7 +1174,7 @@ describe('a Buddy on its person\'s own machine outside the Swarm, through the st
   it('is no contribution another Swarm sees: the Mac it shares elsewhere still takes teammates\' work there', async () => {
     const a = await swarm()
     const files = new MemoryAttachmentStore()
-    const store = new SuperTabStore(db, now, { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
+    const store = new SuperTabStore(db, () => Date.now(), { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
     const b = (await store.create(peer, randomUUID(), 'Peer\'s own', 'public')).id
     const stateA = (await a.store.read(owner, a.tab)).state, stateB = (await store.read(peer, b)).state
     expect(stateB.workspaceId).not.toBe(stateA.workspaceId)
