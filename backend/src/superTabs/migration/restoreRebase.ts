@@ -29,6 +29,7 @@ import { writeNotes } from '../instructionsStore.js'
 import { stableId } from '../model.js'
 import { BASE_VERSION } from '../instructionsRebase.js'
 import { INSTRUCTIONS_TEMPLATE } from '../instructionsTemplate.js'
+import { PAST_TEMPLATE_LINES } from '../instructionsTemplateHistory.js'
 import { logger } from '../../utils/logger.js'
 import { sleeper } from './dropLegacyJob.js'
 import { REBASE_SUMMARY, REBASE_SWARMS, RETRY_MS, START_DELAY_MS, type RebaseSwarm } from './rebase.js'
@@ -41,9 +42,10 @@ export const MAX_PASSES = 24
 /** What a note to a PM that restored by hand begins with, which is how it is told once. */
 const NOTE_PREFIX = 'Restore (task #3679):'
 
-/** The words of every line of the Swarm's own template (the old process text), which the Swarm builds in now: process by definition, as
+/** The words of every line of the Swarm's own template, today's and every past version's (a project keeps the template it was made
+ *  from; instructionsTemplateHistory.ts), the old process text, which the Swarm builds in now: process by definition, as
  *  the move treats it (rebase.ts), so a project is never given its template's lines back, only its own (second review of #3327). */
-export const templateLines = (): ReadonlySet<string> => new Set(removedLines(INSTRUCTIONS_TEMPLATE, ''))
+export const templateLines = (): ReadonlySet<string> => new Set([...removedLines(INSTRUCTIONS_TEMPLATE, ''), ...PAST_TEMPLATE_LINES])
 
 /** What the move lost of [before] that is the project's own: each line's words and how many times, since a line may stand in two
  *  sections (removedLines). A line of the template ([skip]) is left out. */
