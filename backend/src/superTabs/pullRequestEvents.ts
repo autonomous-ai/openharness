@@ -42,6 +42,22 @@ const PASSED = new Set(['success', 'neutral', 'skipped'])
 export const SEEN_KEPT = 50
 const QUOTE = 300
 
+/** Whether every check run of [watch]'s head is done and passed, and every suite that has runs is done: nothing left to wait for. */
+const settledGreen = (watch: PullRequestWatch): boolean => {
+  const suites = watch.checkSuites.filter(suite => suite.runs > 0)
+  return watch.checkRuns.length > 0 && suites.length > 0 && suites.every(suite => suite.status === 'completed')
+    && watch.checkRuns.every(run => run.status === 'completed' && !!run.conclusion && PASSED.has(run.conclusion))
+}
+
+/** What a task's pull request shows the board (Conversation.pullRequestChecks, task #3827): `red` once a check failed, `green`
+ *  when everything is done and passed (the rule that posts "CI passed"), else `running`: a draft, checks still going, or none read. */
+export type ChecksState = 'green' | 'red' | 'running'
+export function checksStateOf(watch: PullRequestWatch): ChecksState {
+  if (watch.draft) return 'running'
+  if (watch.checkRuns.some(run => !!run.conclusion && FAILED.has(run.conclusion))) return 'red'
+  return settledGreen(watch) ? 'green' : 'running'
+}
+
 const short = (sha: string) => sha.slice(0, 7)
 const quoted = (body: string) => {
   const text = body.trim().replace(/\s+/g, ' ')
@@ -83,9 +99,7 @@ export function pullRequestEvents(watch: PullRequestWatch, seen: readonly string
     const failed = watch.checkRuns.filter(run => failing(run) && (run.completedAt ?? now) >= since)
     const stale = watch.checkRuns.some(run => failing(run) && (run.completedAt ?? now) < since)
     if (failed.length) add(`ci-red:${head}`, `CI failed on your pull request #${number} (head ${short(head)}): ${failed.map(run => run.name).join(', ')}. ${url}`)
-    const suites = watch.checkSuites.filter(suite => suite.runs > 0)
-    if (!failed.length && !stale && watch.checkRuns.length && suites.length && suites.every(suite => suite.status === 'completed')
-      && watch.checkRuns.every(run => run.status === 'completed' && run.conclusion && PASSED.has(run.conclusion))) {
+    if (!failed.length && !stale && settledGreen(watch)) {
       add(`ci-green:${head}`, `CI passed on your pull request #${number} (head ${short(head)}). ${url}`)
     }
   }
