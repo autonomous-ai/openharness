@@ -73,8 +73,8 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     // Another port: another command, so another hash, in the same tables.
     await installHookSettings('codex', hooks.settings, 18999, codexHome)
     const second = readFileSync(join(codexHome, 'config.toml'), 'utf8')
-    // Agent Messages' block makes three: notify.mjs's two, and its one.
-    expect(second.match(/^\[hooks\.state\./gm)).toHaveLength(3)
+    // Agent Messages' block makes three: notify.mjs's two, and its one; the Swarm's shell guard a fourth (task #3596).
+    expect(second.match(/^\[hooks\.state\./gm)).toHaveLength(4)
     expect(second).not.toBe(first)
     const installed = JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8'))
     for (const [, hash] of reviewRecords(record, join(codexHome, 'hooks.json'), installed)) expect(second).toContain(hash)
