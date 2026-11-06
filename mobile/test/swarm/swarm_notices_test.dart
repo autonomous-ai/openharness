@@ -225,11 +225,11 @@ void main() {
     announcer.swarmRead('tab-b', [mention()]);
     expect(notices.cancelled, isEmpty, reason: 'one read may miss it');
     announcer.swarmRead('tab-b', [mention()]);
-    expect(notices.cancelled, [decision().key]);
+    expect(notices.cancelled, [swarmNotice(decision()).key]);
 
     // Signed out: nothing of the account stays on the lock screen.
     announcer.clear();
-    expect(notices.cancelled, [decision().key, mention().key]);
+    expect(notices.cancelled, [swarmNotice(decision()).key, mention().key]);
   });
 
   test('a need missed by one read and back at the next stays up', () {
@@ -258,7 +258,7 @@ void main() {
     final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
     announcer.announce(decision());
     announcer.settle(const [], readable: {'tab-other'});
-    expect(notices.cancelled, [decision().key]);
+    expect(notices.cancelled, [swarmNotice(decision()).key]);
   });
 
   test('a need never shown is never taken down', () {
@@ -272,18 +272,21 @@ void main() {
   });
 
   group('a reply in a thread the person is in', () {
-    SwarmActivityEntry reply(String id, {bool read = false, String threadId = 'root-1'}) =>
-        SwarmActivityEntry.fromJson({
-          'id': id,
-          'kind': 'reply',
-          'conversationId': 'g9',
-          'messageId': 'msg-$id',
-          'threadId': threadId,
-          'actor': {'kind': 'person', 'id': 'person-mia', 'name': 'Mia'},
-          'text': "sounds good, I'll ship the copy today",
-          'createdAt': DateTime.utc(2026, 11, 4, 9).toIso8601String(),
-          'read': read,
-        });
+    SwarmActivityEntry reply(
+      String id, {
+      bool read = false,
+      String threadId = 'root-1',
+    }) => SwarmActivityEntry.fromJson({
+      'id': id,
+      'kind': 'reply',
+      'conversationId': 'g9',
+      'messageId': 'msg-$id',
+      'threadId': threadId,
+      'actor': {'kind': 'person', 'id': 'person-mia', 'name': 'Mia'},
+      'text': "sounds good, I'll ship the copy today",
+      'createdAt': DateTime.utc(2026, 11, 4, 9).toIso8601String(),
+      'read': read,
+    });
 
     test('says who replied and in which project, not the reply, and opens '
         'at it', () {
@@ -345,60 +348,127 @@ void main() {
         'reply replaces it quietly until the thread is read (task #3248)', () {
       final notices = _Recording();
       final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
-      announcer.announceReply(swarmId: 'tab-b', entry: reply('a1'), project: 'M');
-      announcer.announceReply(swarmId: 'tab-b', entry: reply('a2'), project: 'M');
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('a1'),
+        project: 'M',
+      );
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('a2'),
+        project: 'M',
+      );
       final slot = threadSlot('tab-b', 'g9', 'root-1');
-      expect(slot, 'thread:tab-b:g9:root-1', reason: 'the server\'s push slot (backend/src/push/notices.ts threadSlot)');
-      expect([for (final n in notices.shown) (n.key, n.quiet)], [(slot, false), (slot, true)]);
-      expect(notices.shown.last.target.messageId, 'msg-a2', reason: 'the tap opens the newest');
+      expect(
+        slot,
+        'thread:tab-b:g9:root-1',
+        reason:
+            'the server\'s push slot (backend/src/push/notices.ts threadSlot)',
+      );
+      expect(
+        [for (final n in notices.shown) (n.key, n.quiet)],
+        [(slot, false), (slot, true)],
+      );
+      expect(
+        notices.shown.last.target.messageId,
+        'msg-a2',
+        reason: 'the tap opens the newest',
+      );
 
       // Read up to a1 only: the thread's notification stays for a2.
       announcer.repliesRead('tab-b', [reply('a1', read: true), reply('a2')]);
       expect(notices.cancelled, isEmpty);
-      announcer.repliesRead('tab-b', [reply('a1', read: true), reply('a2', read: true)]);
+      announcer.repliesRead('tab-b', [
+        reply('a1', read: true),
+        reply('a2', read: true),
+      ]);
       expect(notices.cancelled, [slot]);
 
       // Read, the next reply there sounds again; a reply in another thread is a notification of its own.
-      announcer.announceReply(swarmId: 'tab-b', entry: reply('a3'), project: 'M');
-      announcer.announceReply(swarmId: 'tab-b', entry: reply('b1', threadId: 'root-2'), project: 'M');
-      expect([for (final n in notices.shown.skip(2)) (n.key, n.quiet)],
-          [(slot, false), (threadSlot('tab-b', 'g9', 'root-2'), false)]);
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('a3'),
+        project: 'M',
+      );
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('b1', threadId: 'root-2'),
+        project: 'M',
+      );
+      expect(
+        [for (final n in notices.shown.skip(2)) (n.key, n.quiet)],
+        [(slot, false), (threadSlot('tab-b', 'g9', 'root-2'), false)],
+      );
     });
 
     test('is not posted for a thread a push shows: the push already says '
         'so, and comes down once the thread is read (task #3248)', () {
       final notices = _Recording();
       final told = SwarmTold();
-      final announcer = SwarmAnnouncer(notices, quiet: (_) => false, told: told);
+      final announcer = SwarmAnnouncer(
+        notices,
+        quiet: (_) => false,
+        told: told,
+      );
       final slot = threadSlot('tab-b', 'g9', 'root-1');
       // Android's FCM push carries the thread's slot as its tag, iOS's the slot and the key it showed.
       told.pushesShown([slot, 'reply:tab-b:a1', 'decision:d1']);
-      announcer.announceReply(swarmId: 'tab-b', entry: reply('a1'), project: 'M');
-      announcer.announceReply(swarmId: 'tab-b', entry: reply('a2'), project: 'M');
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('a1'),
+        project: 'M',
+      );
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('a2'),
+        project: 'M',
+      );
       announcer.announce(decision());
       expect(notices.shown, isEmpty);
 
       // Read in the app: the push goes with the thread's notification, and the next reply there sounds.
-      announcer.repliesRead('tab-b', [reply('a1', read: true), reply('a2', read: true)]);
+      announcer.repliesRead('tab-b', [
+        reply('a1', read: true),
+        reply('a2', read: true),
+      ]);
       expect(notices.cancelled, [slot]);
       expect(told.pushed(slot), isFalse);
-      announcer.announceReply(swarmId: 'tab-b', entry: reply('a3'), project: 'M');
-      expect([for (final n in notices.shown) (n.key, n.quiet)], [(slot, false)]);
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('a3'),
+        project: 'M',
+      );
+      expect(
+        [for (final n in notices.shown) (n.key, n.quiet)],
+        [(slot, false)],
+      );
     });
 
     test('a thread whose push was swiped away unread only replaces quietly, '
         'as the server does', () {
       final notices = _Recording();
       final told = SwarmTold();
-      final announcer = SwarmAnnouncer(notices, quiet: (_) => false, told: told);
+      final announcer = SwarmAnnouncer(
+        notices,
+        quiet: (_) => false,
+        told: told,
+      );
       final slot = threadSlot('tab-b', 'g9', 'root-1');
       told.pushesShown([slot]);
-      announcer.announceReply(swarmId: 'tab-b', entry: reply('a1'), project: 'M');
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('a1'),
+        project: 'M',
+      );
       expect(notices.shown, isEmpty);
 
       // Back again with that push gone, and a1 still unread.
       told.pushesShown(const []);
-      announcer.announceReply(swarmId: 'tab-b', entry: reply('a2'), project: 'M');
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: reply('a2'),
+        project: 'M',
+      );
       expect([for (final n in notices.shown) (n.key, n.quiet)], [(slot, true)]);
     });
 
@@ -461,10 +531,16 @@ void main() {
       final [first, second] = [for (final n in notices.shown) n.key];
 
       announcer.repliesRead('tab-other', const []);
-      announcer.repliesRead('tab-b', [reply('a1'), reply('a2', threadId: 'root-2')]);
+      announcer.repliesRead('tab-b', [
+        reply('a1'),
+        reply('a2', threadId: 'root-2'),
+      ]);
       expect(notices.cancelled, isEmpty, reason: 'both still unread');
 
-      announcer.repliesRead('tab-b', [reply('a1'), reply('a2', threadId: 'root-2', read: true)]);
+      announcer.repliesRead('tab-b', [
+        reply('a1'),
+        reply('a2', threadId: 'root-2', read: true),
+      ]);
       expect(notices.cancelled, [second]);
 
       announcer.repliesRead('tab-b', const []);
@@ -632,6 +708,206 @@ void main() {
         isNot(swarmNoticeIdFor('decision:d2')),
       );
       expect(swarmNoticeIdFor('decision:d1'), greaterThan(0));
+    });
+  });
+  // Task #3607 (Tony, 2026-11-06): the phone rings when a person must act or a
+  // person speaks to its person; an agent's tag or reply is badge and
+  // Activity; one task's questions are one notification.
+  group('who rings (task #3607)', () {
+    SwarmMentionNeed tagBy(String? kind) => SwarmMentionNeed(
+      'tab-b',
+      SuperTabMention.fromJson({
+        'id': 'm9',
+        'projectName': 'Mobile',
+        'conversationId': 'g9',
+        'messageId': 'msg-9',
+        'leadName': 'River',
+        if (kind != null) 'leadKind': kind,
+        'text': 'x',
+      }),
+    );
+
+    SwarmActivityEntry replyBy(String id, String kind) =>
+        SwarmActivityEntry.fromJson({
+          'id': id,
+          'kind': 'reply',
+          'conversationId': 'g9',
+          'messageId': 'msg-$id',
+          'threadId': 'root-1',
+          'actor': {'kind': kind, 'id': 'who', 'name': 'River'},
+          'text': 'approve this',
+          'createdAt': DateTime.utc(2026, 11, 6, 9).toIso8601String(),
+          'read': false,
+        });
+
+    test(
+      'a tag by an agent posts no notice, yet still counts on the badge',
+      () {
+        final notices = _Recording();
+        final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+        final need = tagBy('agent');
+
+        announcer.announce(need);
+        announcer.settle([need]);
+
+        expect(notices.shown, isEmpty);
+        expect(notices.badges, [1]);
+      },
+    );
+
+    test('a tag by a person rings', () {
+      final notices = _Recording();
+      SwarmAnnouncer(notices, quiet: (_) => false).announce(tagBy('person'));
+      expect(notices.shown.single.title, 'River tagged you');
+      expect(notices.shown.single.quiet, isFalse);
+    });
+
+    test(
+      'a tag whose tagger an older backend does not name rings as before',
+      () {
+        final notices = _Recording();
+        SwarmAnnouncer(notices, quiet: (_) => false).announce(tagBy(null));
+        expect(notices.shown.single.title, 'River tagged you');
+      },
+    );
+
+    test('a reply by an agent posts no notice and takes no thread slot', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: replyBy('a1', 'agent'),
+        project: 'M',
+      );
+      expect(notices.shown, isEmpty);
+
+      // A person's reply in that thread is the first there: it sounds.
+      announcer.announceReply(
+        swarmId: 'tab-b',
+        entry: replyBy('a2', 'person'),
+        project: 'M',
+      );
+      expect(notices.shown.single.quiet, isFalse);
+    });
+
+    test('a reply by a person rings, whatever it says', () {
+      final notices = _Recording();
+      SwarmAnnouncer(notices, quiet: (_) => false).announceReply(
+        swarmId: 'tab-b',
+        entry: replyBy('a1', 'person'),
+        project: 'M',
+      );
+      expect(notices.shown.single.title, 'River replied in a thread');
+    });
+  });
+
+  group('one task, one notification (task #3607)', () {
+    SwarmDecisionNeed decisionIn(
+      String swarm,
+      String conversation, [
+      String id = 'd1',
+    ]) => SwarmDecisionNeed(
+      swarm,
+      SuperTabDecision.fromJson({
+        'id': id,
+        'projectName': 'Mobile',
+        'conversationId': conversation,
+        'askerName': 'River',
+        'question': 'Ship it?',
+        'options': ['Yes', 'No'],
+      }),
+    );
+
+    final slot = swarmTaskSlot(tab, 'g1');
+
+    test("the slot is the server's push slot (backend taskSlot)", () {
+      expect(swarmTaskSlot('tab-b', 'g9'), 'task:tab-b:g9');
+    });
+
+    test('stuck and a decision of one task post under one key, the later one '
+        'quiet', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+
+      announcer.announce(work('blocked'));
+      announcer.announce(decisionIn(tab, 'g1'));
+
+      expect(
+        [for (final n in notices.shown) (n.key, n.title, n.quiet)],
+        [(slot, 'Nova is stuck', false), (slot, 'River asks you', true)],
+      );
+    });
+
+    test('stuck, then needs you, of one task is one notification', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+
+      announcer.announce(work('blocked'));
+      announcer.announce(work('needs_human'));
+
+      expect(
+        [for (final n in notices.shown) (n.key, n.quiet)],
+        [(slot, false), (slot, true)],
+      );
+    });
+
+    test('two tasks keep two notifications, each sounding', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+
+      announcer.announce(work('blocked'));
+      announcer.announce(decisionIn(tab, 'g2'));
+
+      expect(
+        [for (final n in notices.shown) (n.key, n.quiet)],
+        [(slot, false), (swarmTaskSlot(tab, 'g2'), false)],
+      );
+    });
+
+    test('answering one of two needs leaves the notification up; answering '
+        'both takes it down once', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+      final asked = decisionIn(tab, 'g1');
+      announcer.announce(work('blocked'));
+      announcer.announce(asked);
+
+      // The work moves on; the decision still waits. Two reads miss it.
+      announcer.settle([asked]);
+      announcer.swarmRead(tab, [asked]);
+      announcer.swarmRead(tab, [asked]);
+      expect(notices.cancelled, isEmpty);
+
+      // The decision is answered on the desktop.
+      announcer.settle(const []);
+      announcer.swarmRead(tab, const []);
+      announcer.swarmRead(tab, const []);
+      expect(notices.cancelled, [slot]);
+    });
+
+    test('a task whose decision push shows its slot gets no local notice', () {
+      final notices = _Recording();
+      final told = SwarmTold();
+      final announcer = SwarmAnnouncer(
+        notices,
+        quiet: (_) => false,
+        told: told,
+      );
+      // Android gives the slot alone as the push's tag.
+      told.pushesShown([slot]);
+
+      announcer.announce(work('blocked'));
+      announcer.announce(decisionIn(tab, 'g1'));
+
+      expect(notices.shown, isEmpty);
+    });
+
+    test('the badge still counts each need of the task', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+      announcer.settle([work('blocked'), decisionIn(tab, 'g1')]);
+      expect(notices.badges, [2]);
     });
   });
 }
