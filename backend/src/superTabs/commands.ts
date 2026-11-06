@@ -24,6 +24,7 @@ import {
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
+import { closeMerged } from './mergedTasks.js'
 import { noteWriter } from './stuck.js'
 import { reviewPlan, stepBrief, stepCheck, refreshStepBrief, type PlannedStep, type StepKind } from './reviewTable.js'
 import { builtBy, reviewerCandidates } from './reviewerPick.js'
@@ -74,6 +75,7 @@ import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liv
 import { BUDDY_REQUIREMENTS, buddyCapOf, buddyCapRefusal, buddyChatId, buddyChatOf, buddyChatsOf, buddyCount, defaultBuddy, defaultBuddyChat, hasBuddy, dropBuddyChat, MAX_BUDDY_CAP, openNewBuddyChat, setDefaultBuddy, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, okayedWords, openBuddyChat, openSwarmBuddyChat, PM_LINE_KIND, PROPOSAL_ASK_MS, PROPOSAL_SENT_KIND, proposalBrief, proposalSentText, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
+import { askBuddyEngine, buddyEngineChat, buddyEngineName, checkBuddyRebind } from './buddyEngine.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { ACK_ONLY_HINT, isAcknowledgement } from './acknowledgements.js'
 import { isProjectChat, inMainChat, requireChatContent, requireChatPost, recordChatAsk, recordChatPost, requireChatAnswer, recordChatAnswer } from './chatLimits.js'
@@ -250,6 +252,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.create'), name: title, visibility: z.enum(['public', 'private']), brief: z.string().trim().max(8000).default('') }).strict(),
   z.object({ type: z.literal('project.rename'), projectId: id, name: title }).strict(),
   z.object({ type: z.literal('project.delete'), projectId: id }).strict(),
+  // A closed tab's project in the person's own Personal Swarm (task #3929, desktop personal_projects.dart): deleted when none of
+  // its conversations has a message, archived otherwise. `tabOperation`: the request that created it, `personal-tab-…`.
+  z.object({ type: z.literal('project.closeTab'), projectId: id, tabOperation: z.string().regex(/^personal-tab-[A-Za-z0-9_-]{1,120}$/) }).strict(),
   z.object({ type: z.literal('project.sharing'), projectId: id, visibility: z.enum(['public', 'private']), memberIds: z.array(id).max(200) }).strict(),
   // A project's Board settings (boardRights.ts, task #3819), set by its owner or the Swarm's owner.
   z.object({ type: z.literal('project.boardMode'), projectId: id, on: z.boolean() }).strict(),
@@ -374,6 +379,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   // A person ends a thread session of their own Buddy chat (buddySessions.ts): `ended` from their app, `idle` and `stopped` from
   // their machine's host, which acts as them. Idempotent: a thread with no session is told so and nothing changes.
   // The person's own Buddy onto a model the Swarm's grid serves now, or back to their subscription (null): buddyModel.ts.
+  z.object({ type: z.literal('buddy.engine'), engine: swarmEngine, conversationId: id.optional() }).strict(),
   // `conversationId`: which of the person's Buddies, by its chat (task #3818); without it, their default.
   z.object({ type: z.literal('buddy.model'), gridModel: z.string().trim().min(1).max(200).nullable(), conversationId: id.optional() }).strict(),
   // What the Buddy's machine reports once it carried the request out: `fresh` when the conversation was too long for the model.
@@ -416,7 +422,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('crew.remove'), agentId: id }).strict(),
   z.object({ type: z.literal('agent.sessionClosed'), agentId: id, harnessId: id }).strict(),
   z.object({ type: z.literal('agent.configuration'), previousVersion: id.nullable(), configuration }).strict(),
-  z.object({ type: z.literal('agent.rebind'), agentId: id, machineId: id, projectId: id,
+  z.object({ type: z.literal('agent.rebind'), agentId: id, machineId: id, projectId: id.optional(),
     previousHarnessId: id, harnessId: id, configuration, profileId: z.string().regex(/^([0-9a-f]{16}|default)$/).optional(),
     startedSession: z.object({ creationId: id, sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
   z.object({ type: z.literal('conversation.agent'), conversationId: id, agentId: id, present: z.boolean(), lead: z.boolean() }).strict(),
@@ -824,7 +830,7 @@ function dropClosing(state: SuperTabState, keep: (request: NonNullable<SuperTabS
 /** What may name a person's one Buddy chat: posts, reactions, proposals, naming the Buddy and ending a session. */
 const SWARM_BUDDY_CHAT_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'message.edit', 'message.delete', 'buddy.propose', 'buddy.rename', 'buddy.sessionEnd',
   // Which of a person's several Buddies (task #3818).
-  'buddy.create', 'buddy.remove', 'buddy.default', 'buddy.model'])
+  'buddy.create', 'buddy.remove', 'buddy.default', 'buddy.model', 'buddy.engine'])
 function viewerProposal(state: SuperTabState, actor: Actor, command: Command): boolean {
   if (command.type === 'proposal.create' || command.type === 'proposal.answer') return true
   if (command.type !== 'buddy.propose' || actor.kind !== 'agent') return false
@@ -1036,6 +1042,18 @@ function placeAnswer(command: Command, context: CommandContext): Command {
   if (!command.answers || command.replyTo) fail('VALIDATION_ERROR', 'An answer names the message it answers, and nothing else to reply to.', 400)
   const reply = context.reply
   return reply && reply.id === command.answers && inThread(reply) ? { ...command, replyTo: command.answers, answers: undefined } : command
+}
+
+/** The project `project.closeTab` may close (task #3929): a no-repo tab's, in the caller's own Personal Swarm, by that person.
+ *  Desktop creates a tab's project with the request `personal-tab-…` (desktop personal_projects.dart personalProjectOperation),
+ *  and `project.create` makes its id from that request and its sender (applyCommandOnce `operationId`), so [tabOperation]
+ *  proves the project is that person's tab's: it must make exactly [projectId]. Anything else reads as a project not there. */
+function closingTabProject(state: SuperTabState, actor: Actor, projectId: string, tabOperation: string): SwarmProject {
+  const tabs = actor.kind === 'person' && actor.userId === state.ownerId && isPersonalSwarm(state)
+    && stableId(state.id, actorKey(actor), tabOperation) === projectId
+  const project = tabs ? projectsOf(state).find(p => p.id === projectId) : undefined
+  if (!project || project.repository) fail('NOT_FOUND', 'This project is unavailable.', 404)
+  return project
 }
 
 function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
@@ -1615,6 +1633,20 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     ?? state.conversations.find(c => c.id === start.request.conversationId && !isSwarmBuddyChat(c))?.projectId
 
   /** Deleting its project is the only removal that takes a Lead. `close: false` when its host already closed the session. */
+  /** [project] deleted with its own agents, its Lead included (their hosts close their sessions), its starts and machines' lists. */
+  const deleteWholeProject = (project: SwarmProject) => {
+    // Read before its agents go: a contributed start still settling whose agent is already gone never settles (projects.ts).
+    const orphaned = new Set((state.starts ?? []).filter(s => s.poolGeneration && s.harnessId && !s.poolSettled && !s.error
+      && !state.agents.some(a => a.machineId === s.request.machineId && a.harnessId === s.harnessId)).map(s => s.id))
+    for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id)) removeAgent(target, { lead: true })
+    // Its sessions still starting in people's one Buddy chats go with it (their chats belong to no project).
+    for (const start of state.starts ?? []) {
+      if (start.request.buddySession?.projectId === project.id && !start.harnessId && !start.error) start.error = 'Its project was deleted.'
+    }
+    deleteProject(state, actor, project.id, orphaned, context.now)
+    // No machine keeps it any more; one kept only for it now serves none (machines.ts machineProjectRefusal).
+    for (const pool of state.machines ?? []) if (pool.projects) pool.projects = pool.projects.filter(id => id !== project.id)
+  }
   const removeAgent = (target: Agent, { lead = false, close = true } = {}) => {
     // A person's removal stands: a record of this session must not bring it back when it reopens (closedAgents.ts).
     dropRemovedRecord(state, target.machineId, target.harnessId)
@@ -2114,18 +2146,30 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'project.delete': {
       // Its owner confirmed a permanent delete, so the project takes its own agents with it, its Lead included, and their
       // hosts close their sessions. The Swarm's owner deletes one nobody owns (task #3073).
-      const project = deletableProject(state, actor, command.projectId)
-      // Read before its agents go: a contributed start still settling whose agent is already gone never settles (projects.ts).
-      const orphaned = new Set((state.starts ?? []).filter(s => s.poolGeneration && s.harnessId && !s.poolSettled && !s.error
-        && !state.agents.some(a => a.machineId === s.request.machineId && a.harnessId === s.harnessId)).map(s => s.id))
-      for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id)) removeAgent(target, { lead: true })
-      // Its sessions still starting in people's one Buddy chats go with it (their chats belong to no project).
-      for (const start of state.starts ?? []) {
-        if (start.request.buddySession?.projectId === project.id && !start.harnessId && !start.error) start.error = 'Its project was deleted.'
+      deleteWholeProject(deletableProject(state, actor, command.projectId))
+      break
+    }
+    case 'project.closeTab': {
+      // The Personal Swarm's owner closes a tab's project (task #3929): deleted only if none of its conversations, dormant ones
+      // loaded with it, has a message now. A message written meanwhile changes one of those parts, so this write conflicts and
+      // runs again on it, and archives instead.
+      const project = closingTabProject(state, actor, command.projectId, command.tabOperation)
+      const groups = state.conversations.filter(c => c.projectId === project.id || c.id === project.leadConversationId)
+      // What the person wrote without a message is theirs too (security review 2, review of #3929): instructions saved past the
+      // built-in first revision, a note told to its PM, or any rules record. A save meanwhile changes the project's part, or is
+      // read in this write (store.ts). Rules that could not be read (undefined) count as written: nothing is deleted unchecked.
+      const written = (project.instructionsRevision ?? 0) > 1 || (project.notesRevision ?? 0) > 0 || context.projectRules !== null
+      if (!written && groups.every(c => !c.lastMessageSequence)) {
+        deleteWholeProject(project)
+        result.outcome = 'deleted'
+        break
       }
-      deleteProject(state, actor, command.projectId, orphaned, context.now)
-      // No machine keeps it any more; one kept only for it now serves none (machines.ts machineProjectRefusal).
-      for (const pool of state.machines ?? []) if (pool.projects) pool.projects = pool.projects.filter(id => id !== project.id)
+      // Kept, read-only (an archived conversation is written no more: store.ts) and out of the sidebar; its agents leave.
+      for (const target of state.agents.filter(a => agentProjectId(state, a) === project.id)) removeAgent(target, { lead: true })
+      mutableProjects(state)
+      projectOf(state, project.id).archived = true
+      for (const group of groups) group.archived = true
+      result.outcome = 'archived'
       break
     }
     case 'project.sharing': {
@@ -2960,16 +3004,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // its result (the Ready line), a check's evidence or its own posts, which a merge record never writes. A merge of an unrelated
       // one recorded here, even twice, only links it (Aster, review of #3259). Closed whenever the record is made: a lost attempt, a
       // merge recorded again later (#3574).
+      // Its open steps close with it (mergedTasks.ts, task #4032).
       if (ownPullRequest && !isStep(group) && assignment && !['done', 'cancelled'].includes(assignment.status) && builderGone(state, assignment)) {
-        const previous = assignment.status
-        assignment.status = 'done'
-        assignment.result = `Merged ${pullRequestUrl}. Its builder is no longer running, so the recorded merge closes the task.`
-        delete assignment.hold
-        delete assignment.askedOf
-        recordStatus(group, assignment, previous, context.now, operationId)
+        effects.messages.push(...closeMerged(state, group, pullRequestUrl, context.now, sender, part => stableId(operationId, part), operationId))
         effects.closedAssignment = { assignmentId: assignment.id, outcome: 'done' }
-        message(group.id, `Done\n\n${assignment.result}`, [], null, { ...SYSTEM_ROW, status: 'done' }, undefined, undefined, undefined,
-          stableId(operationId, 'merged-done'))
       }
       break
     }
@@ -3305,6 +3343,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'buddy.rename':
       renameBuddy(state, actor, readConversation(state, actor, command.conversationId), command.name, context.buddyNames)
+      break
+    case 'buddy.engine':
+      askBuddyEngine(state, actor, command.engine, operationId, context.now, command.conversationId)
       break
     case 'buddy.model':
       askBuddyModel(state, actor, command.gridModel, operationId, context.now, command.conversationId)
@@ -3679,7 +3720,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'agent.rebind': {
       const target = agent(state, command.agentId)
       if (actor.kind !== 'agent' || actor.agentId !== target.id || actor.machineOwnerId !== target.machineOwnerId
-        || command.machineId !== target.machineId || command.projectId !== agentProjectId(state, target)) {
+        || command.machineId !== target.machineId || (isSwarmBuddy(target) ? command.projectId !== undefined : command.projectId !== agentProjectId(state, target))) {
         fail('HOST_REQUIRED', 'Only this project’s execution host can report a replacement.', 403)
       }
       if (target.workDecision === 'stop') fail('STOP_REQUESTED', 'This member is stopping; reconcile its stop first.')
@@ -3687,6 +3728,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('SESSION_CONTRIBUTED', 'The replacement terminal already belongs to another member.')
       }
       if (target.harnessId === command.harnessId && target.replacement?.previousHarnessId === command.previousHarnessId) break
+      if (isBuddy(target)) checkBuddyRebind(target, command.configuration.engine, storedProfileId(target.machineId, command.configuration.engine, command.profileId), context.now)
       if (target.harnessId !== command.previousHarnessId || command.harnessId === command.previousHarnessId) {
         fail('AGENT_CHANGED', 'The member’s terminal changed. Read its current binding before replacing it.')
       }
@@ -3811,6 +3853,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const asked = (landed ?? target.switchRequest)?.requestedBy
       // A rebind already moved the PM: a failure the host reported as it landed is not what happened.
       const moved = command.ok || !!landed
+      if (isBuddy(target)) {
+        if (moved && !landed) fail('STALE_SWITCH', 'The Buddy has not confirmed its new session yet.', 409)
+        delete target.switchRequest
+        delete target.switchLanded
+        const engine = buddyEngineName(target.configuration.engine)
+        const error = command.error?.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/[.\s]+$/, '')
+        effects.messages.push({ id: operationId, conversationId: buddyEngineChat(state, target), author: sender, replyTo: null, recipients: [], source: SYSTEM_ROW,
+          text: moved ? `Your Buddy now runs on ${engine}.`
+            : `Couldn't switch your Buddy: ${error || 'it failed'}. ${command.down ? `It has not come back on ${engine} yet; its machine keeps trying.` : `It is back on ${engine}.`}` })
+        break
+      }
       if (moved && !landed && target.switchRequest) moveToProfile(target, target.switchRequest.engine, target.switchRequest.profileId)
       delete target.switchRequest
       delete target.switchLanded

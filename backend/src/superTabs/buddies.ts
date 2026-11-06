@@ -278,7 +278,7 @@ export const buddyReady = (name: string): string => `${name} is ready. Tell it w
  *  model, a terminal alert, its own stop). Every other command is refused, so it can never assign, start, route, ask
  *  decisions or change anything for its owner (spec constraint: PRIVACY-CRITICAL). */
 const BUDDY_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'buddy.propose', 'agent.configuration', 'agent.alert',
-  'agent.stopLease', 'agent.stopRefused', 'agent.remove', 'buddy.modelResult'])
+  'agent.stopLease', 'agent.stopRefused', 'agent.remove', 'buddy.modelResult', 'agent.switchClaim', 'agent.switchResult', 'agent.rebind'])
 
 export function requireBuddyCommand(buddy: Agent, command: { type: string; conversationId?: unknown; agentId?: unknown }, groups: readonly Conversation[]): void {
   if (command.type === 'proposal.answer') return // The card handler checks the current sender and question before receipt replay.

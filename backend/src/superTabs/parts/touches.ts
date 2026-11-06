@@ -5,6 +5,8 @@ import { agentProjectId, canReadProject, groupProject, projectsOf } from '../pro
 import type { Touch } from './commit.js'
 import { waitsNow } from '../leaderboard/record.js'
 import { buddiesHearing } from '../buddyNews.js'
+import { defaultBuddy } from '../buddies.js'
+import { mainBuddyOf } from '../buddySessions.js'
 
 /**
  * The parts a command relies on without writing them (design section 1.2, column T). A part the command also writes is
@@ -61,6 +63,13 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'machine.contribute':
       if (!before.machines?.some(m => m.machineId === command.machineId)) head()
       break
+    case 'buddy.engine': {
+      const chat = before.conversations.find(c => c.id === command.conversationId)
+      const buddy = command.conversationId ? chat && mainBuddyOf(before, chat)
+        : actor.kind === 'person' ? defaultBuddy(before, actor.userId) : undefined
+      if (buddy) machine(buddy.machineId)
+      break
+    }
     case 'proposal.create':
       head()
       group(leadGroupOf(command.projectId))
@@ -103,8 +112,14 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       break
     case 'project.report': case 'project.repository':
     // The coordinator's own writes check it leads the project, which a concurrent Lead change ends (review of phase 2).
-    case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName': case 'rules.set':
+    case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName':
       leadCheck(command.projectId)
+      break
+    // A rules save writes its own collection, no part of the project: by anyone, it guards on the project's Lead chat, which a
+    // project delete and a tab's close write, so a first save never lands on a project being deleted (security review 2 of
+    // #3929). The Lead check above is part of the same touch.
+    case 'rules.set':
+      group(leadGroupOf(command.projectId))
       break
     // An older CLI's rule is a save to its project's instructions, the coordinator's like instructions.save (commands.ts).
     case 'rule.set':

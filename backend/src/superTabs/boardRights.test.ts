@@ -1,3 +1,4 @@
+import { REBASE_SWARMS } from './migration/rebase.js'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type SuperTabState } from './model.js'
@@ -238,6 +239,8 @@ describe('pause and resume', () => {
 })
 
 describe('the PM text in a switched project', () => {
+  // The v2 section, which holds the inbox line, is the rebased Swarm's alone (#4097).
+  const rebased = { id: REBASE_SWARMS[0]!.tabId }
   const INBOX_LINE = /Answer each person's message once|Your inbox lists every unanswered message/
 
   it('drops the inbox lines, and a person\'s message there owes the PM nothing', () => {
@@ -245,12 +248,12 @@ describe('the PM text in a switched project', () => {
     f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'c', granted: true })
     const ask = () => f.run({ type: 'message.send', conversationId: f.app.conversationId, text: 'Can you look at this?', replyTo: null, recipientIds: [f.pm] }, granted)
     // Not switched: today's text, and the ask is owed.
-    expect(pmScheduleText(f.project())).toBe(PM_SCHEDULE_TEXT)
+    expect(pmScheduleText(rebased, f.project())).toBe(PM_SCHEDULE_TEXT)
     ask()
     expect(owedLines(f.state, f.project(), 1000).join('\n')).toMatch(/Owed asks/)
 
     f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
-    const text = pmScheduleText(f.project())
+    const text = pmScheduleText(rebased, f.project())
     expect(PM_SCHEDULE_TEXT).toMatch(INBOX_LINE)
     expect(text).not.toMatch(INBOX_LINE)
     expect(text).toContain('Keep a standing crew')

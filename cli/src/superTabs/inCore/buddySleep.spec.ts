@@ -22,7 +22,7 @@ afterEach(() => {
 
 // Keep the real Swarm authority, retention, close guard and idle recheck together. Faking closeMember hid the native
 // refusal in #3824: the host correctly asked to sleep, but the ordinary Buddy close guard always kept it running.
-function fixture(options: { phase?: 'activity' | 'checkpoint' | 'stop'; revoke?: 'wake' | 'corrupt'; activity?: 'working' | 'unknown' } = {}) {
+function fixture(options: { phase?: 'activity' | 'checkpoint' | 'stop'; revoke?: 'wake' | 'corrupt' | 'switch'; activity?: 'working' | 'unknown' } = {}) {
   const row = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%88' }], cwd: dir })!
   Object.assign(row, { sessionId: 'kept-conversation', startedBy: 'agent' })
   const hostRow = (agent: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) => ({ tabId: 'tab', active: true, buddySleepManaged: true,
@@ -32,6 +32,7 @@ function fixture(options: { phase?: 'activity' | 'checkpoint' | 'stop'; revoke?:
   const revoke = (phase: string) => {
     if (options.phase !== phase) return
     if (options.revoke === 'corrupt') writeFileSync(retention.retentionFile(dir), '{')
+    else if (options.revoke === 'switch') roster({ switchRequest: { id: 'switch', engine: 'codex', requestedBy: 'person' } })
     else roster({ asleep: undefined })
   }
   const deps: CloseAgentServiceDeps = { registry,
@@ -82,6 +83,8 @@ it('an unreadable retention revokes sleep after the checkpoint', async () => {
 it.each([
   ['awake', { asleep: undefined }, {}],
   ['thread', { buddySession: { thread: 'root' } }, {}],
+  ['engine request', { switchRequest: { id: 'switch', engine: 'codex', requestedBy: 'person' } }, {}],
+  ['landed switch', { switchLanded: { id: 'switch', requestedBy: 'person' } }, {}],
   ['model request', { modelRequest: { id: 'request' } }, {}],
   ['Team session', { teamAccount: true }, {}],
   ['unmanaged', {}, { buddySleepManaged: undefined }],
@@ -99,5 +102,11 @@ it('never sleeps a Buddy on a Team daemon or grants a normal window close the sl
   expect(await close.request(request)).toMatchObject({ error: 'BUDDY_PROTECTED' })
   vi.mocked(team.isTeamDaemon).mockReturnValue(true)
   expect(await f.swarm.closeMember(f.row.agentId)).toMatchObject({ error: 'BUDDY_PROTECTED' })
+  expect(registry.byAgent(f.row.agentId)).toBe(f.row)
+})
+
+it.each(['activity', 'checkpoint', 'stop'] as const)('an engine switch revokes an in-flight sleep during %s', async phase => {
+  const f = fixture({ phase, revoke: 'switch' })
+  expect(await f.swarm.closeMember(f.row.agentId)).toMatchObject({ error: expect.any(String) })
   expect(registry.byAgent(f.row.agentId)).toBe(f.row)
 })

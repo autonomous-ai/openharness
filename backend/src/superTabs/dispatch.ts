@@ -20,6 +20,7 @@ import { modelMatches } from './rules.js'
 import { roleNameOf } from './instructions.js'
 import { reviewerCandidates } from './reviewerPick.js'
 import { stepName } from './steps.js'
+import { ownMerge } from './mergedTasks.js'
 
 const HOUR_MS = 3_600_000
 
@@ -134,9 +135,11 @@ export function openTasks(state: SuperTabState, projectId: string, now: number):
   const lostSteps = state.conversations.filter(group => {
     if (group.archived || group.kind || group.audience || !group.reviewOf || group.assignment?.status !== 'lost' || (group.projectId ?? 'lead') !== projectId) return false
     const task = state.conversations.find(g => g.id === group.reviewOf)
-    return !!task && !task.archived && (task.projectId ?? 'lead') === projectId && activeWork(task)
+    // Never a step of a task whose own merge is recorded (mergedTasks.ts, task #4032): nothing is left to check.
+    return !!task && !task.archived && (task.projectId ?? 'lead') === projectId && activeWork(task) && !ownMerge(task)
   })
-  const open = [...queueSiblings(state, project), ...lostSteps].filter(group => (group.task || group.brief.trim())
+  // Nor a task whose own merge is recorded: finished work, which the sweep sets done (task #4032).
+  const open = [...queueSiblings(state, project).filter(group => !ownMerge(group)), ...lostSteps].filter(group => (group.task || group.brief.trim())
     && !activeWork(group) && !['done', 'cancelled'].includes(group.assignment?.status ?? '') && !(group.notBefore && group.notBefore > today)
     // Paused by someone who steers its project (boardRights.ts, task #3819): until resumed.
     && !group.paused)

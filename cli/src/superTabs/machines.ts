@@ -199,6 +199,8 @@ CAPABILITIES.push('leadSwitch')
 /** What this host does for a Buddy's model switch (task #2354, superTabs/buddyModel.ts): the backend refuses a switch to a host
  *  that does not say so. */
 CAPABILITIES.push('buddyModel')
+// Buddy engine switches use the same owner-checked handoff and recovery as a PM's.
+CAPABILITIES.push('buddyEngine')
 /** This host sends its PM's turn with the PM's delivery list read (host.ts, task #3545): only then does the backend keep people's
  *  messages and crew needs to that PM for its inbox, which goes when its turn ends. */
 CAPABILITIES.push('turnInbox')
