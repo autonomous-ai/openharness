@@ -17,11 +17,7 @@ import 'model.dart';
 /// it means.
 const kProjectProcesses = [
   ('simple', 'Simple', 'To do, Doing, Done. No review, test or merge steps.'),
-  (
-    'full',
-    'Full',
-    'Proposal, Next up, Working, Done, Merged, Shipped, with review, test and merge.',
-  ),
+  ('full', 'Full', 'Proposal to Shipped, with review, test and merge.'),
 ];
 
 String _title(String id) => id == 'simple' ? 'Simple' : 'Full';
@@ -235,12 +231,14 @@ class _ProjectProcessState extends State<_ProjectProcess> {
                     ],
                   ),
                 ),
-                if (selected)
+                if (selected) ...[
+                  const SizedBox(width: grid.AppDesktop.controlGap),
                   Icon(
                     AppIcons.check,
                     size: AppIcons.inlineSize,
                     color: DesktopChrome.foreground,
                   ),
+                ],
               ],
             ),
           ),
