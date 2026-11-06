@@ -42,8 +42,8 @@ function fixture() {
     checks: [{ description: 'Restarts', independent: true }], priority: 'P2', requesterId: 'd' } as Command, f.asAgent(f.pm)).conversationId as string
   f.run({ type: 'work.assign', conversationId: task, agentId: f.worker } as Command, f.asAgent(f.pm))
   const group = (id = task) => f.state.conversations.find(c => c.id === id)!
-  const post = (actor: Actor, text: string, id = task) => f.run({ type: 'message.send', conversationId: id, text } as Command, actor)
-  return { ...f, task, group, post }
+  const post = (actor: Actor, text: string, id = task) => f.run({ type: 'message.send', conversationId: id, text, replyTo: null, recipientIds: [] } as Command, actor)
+  return { run: f.run, app: f.app, pm: f.pm, worker: f.worker, add: f.add, asAgent: f.asAgent, task, group, post, get state() { return f.state } }
 }
 
 describe('who wrote in a task', () => {
@@ -69,6 +69,8 @@ describe('a stuck task', () => {
     f.post(person('c'), 'Is this ready?')
     f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group().assignment!.id, status: 'review', result: `Ready: ${PR}` } as Command, f.asAgent(f.worker))
     const g = f.group()
+    // As the PR watch sees it: the task links its pull request, read at its head with a check failed.
+    g.pullRequestUrls = [PR]
     g.pullRequestHeads = { [PR]: { head: HEAD, patch: null, at: NOW } }
     g.pullRequestChecks = { [PR]: 'red' }
     const first = stuckAlerts(f.state, NOW)
