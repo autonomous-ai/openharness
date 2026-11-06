@@ -122,7 +122,12 @@ void main() {
     f.rows.first['version'] = 2;
     await f.controller.refresh();
     await t.pump();
-    expect(find.byWidgetPredicate((w) => w is ActivityMark && w.activity == HarnessActivity.working), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (w) => w is ActivityMark && w.activity == HarnessActivity.working,
+      ),
+      findsOneWidget,
+    );
     expect(find.text('Auto approve'), findsOneWidget);
   });
   testWidgets('mode is saved by authenticated command and server read', (

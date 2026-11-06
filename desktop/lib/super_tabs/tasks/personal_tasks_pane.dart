@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../state/harness_activity.dart';
+import '../../shared/theme/app_icons.dart';
+import '../../widgets/harness_activity_mark.dart';
 import '../../widgets/desktop_chrome.dart';
 import '../controller.dart';
 import '../identity.dart';
@@ -435,22 +437,28 @@ class _TaskMark extends StatelessWidget {
   final String status;
   @override
   Widget build(BuildContext context) {
-    final (mark, label) = switch (status) {
-      'proposal' => ('◇', 'Proposal'),
-      'rejected' => ('⊗', 'Rejected'),
-      'done' || 'shipped' => (HarnessActivity.done.mark, 'Done'),
-      'working' => (HarnessActivity.working.mark, 'Working'),
-      'needs_human' || 'needs_human_approval' => (
-        HarnessActivity.needsInput.mark,
-        'Needs your input',
-      ),
-      'blocked' || 'stuck' => (HarnessActivity.failed.mark, 'Blocked'),
-      'stopped' => (HarnessActivity.paused.mark, 'Stopped'),
-      _ => (HarnessActivity.starting.mark, status.replaceAll('_', ' ')),
+    if (status == 'proposal' || status == 'rejected') {
+      final label = status == 'proposal' ? 'Proposal' : 'Rejected';
+      return Tooltip(
+        message: label,
+        child: Icon(
+          status == 'proposal' ? AppIcons.circleDashed : AppIcons.circleX,
+          size: AppIcons.metadataSize,
+          semanticLabel: label,
+        ),
+      );
+    }
+    final activity = switch (status) {
+      'done' || 'shipped' => HarnessActivity.done,
+      'working' => HarnessActivity.working,
+      'needs_human' || 'needs_human_approval' => HarnessActivity.needsInput,
+      'blocked' || 'stuck' => HarnessActivity.failed,
+      'stopped' => HarnessActivity.paused,
+      _ => HarnessActivity.starting,
     };
-    return Tooltip(
-      message: label,
-      child: Semantics(label: label, excludeSemantics: true, child: Text(mark)),
+    return ActivityMark(
+      activity: activity,
+      color: Theme.of(context).colorScheme.onSurface,
     );
   }
 }
