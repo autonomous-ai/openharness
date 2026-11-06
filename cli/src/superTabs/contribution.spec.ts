@@ -150,7 +150,17 @@ describe('one-field machine preparation', () => {
     expect(install).toHaveBeenCalledOnce()
     expect(result).toMatchObject({ state: 'ready', engines: ['claude'], signedIn: [] })
   })
-  it('installs nothing unless asked, nor when an engine is already here', async () => {
+  // The person picks Codex for their Buddy on a computer with Claude Code only (owner, 2026-11-06).
+  it('installs the engine the phone picked when it is not here, beside one that is', async () => {
+    const f = fixture()
+    const install = vi.fn(async () => {})
+    f.request.mockResolvedValueOnce({ engines: [{ engine: 'claude', installed: true, signedIn: true }] })
+      .mockResolvedValueOnce({ engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: false }] })
+    const result = await prepareContribution(f.core, { tabId: 'tab', installEngine: 'codex' }, { ...f.deps, install } as never)
+    expect(install).toHaveBeenCalledExactlyOnceWith('codex')
+    expect(result).toMatchObject({ engines: ['claude', 'codex'], signedIn: ['claude'] })
+  })
+  it('installs nothing unless asked, nor when the engine asked for is already here', async () => {
     const f = fixture()
     const install = vi.fn(async () => {})
     f.request.mockResolvedValueOnce({ engines: [] })

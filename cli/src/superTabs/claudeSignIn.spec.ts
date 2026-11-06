@@ -21,6 +21,68 @@ function fakeLogin(local: string | null = LOCAL_PAGE) {
 }
 const tick = () => new Promise(resolve => setImmediate(resolve))
 
+// Codex 0.167's `codex login`: it hands BROWSER its page, which returns to 127.0.0.1:1455, prints the same page, and asks for
+// no code; its callback answers 302 to its own /success, and it ends once a browser opens that (the Dell, 2026-11-06).
+const CODEX_PAGE = 'https://auth.openai.com/oauth/authorize?response_type=code&redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback&state=s'
+const CODEX_OUTPUT = `Starting local login server on http://localhost:1455.\nIf your browser did not open, navigate to this URL to authenticate:\n\n${CODEX_PAGE}\n`
+
+describe('Codex signed in from the phone', () => {
+  it('starts codex login when asked for Codex, answers its localhost page alone, and is done when it ends', async () => {
+    const f = fakeLogin(CODEX_PAGE)
+    const login = { ...f.login, codePages: false }
+    const start = vi.fn(() => login)
+    const replay = vi.fn(async () => 302)
+    const signIns = new ClaudeSignIns(start, replay)
+    expect(await signIns.read({ operationId: 'op1', engine: 'codex' })).toEqual({ ok: true, state: 'page', url: CODEX_PAGE, codeUrl: null })
+    expect(start).toHaveBeenCalledWith('codex')
+    f.child.stdout.write(CODEX_OUTPUT)
+    await tick()
+    expect(await signIns.read({ operationId: 'op1', engine: 'codex', callback: 'http://127.0.0.1:1455/auth/callback?code=c&state=s' }))
+      .toMatchObject({ state: 'checking' })
+    expect(replay).toHaveBeenCalledWith('http://127.0.0.1:1455/auth/callback?code=c&state=s')
+    f.close(0)
+    expect(await signIns.read({ operationId: 'op1', engine: 'codex' })).toEqual({ ok: true, state: 'done' })
+  })
+
+  it('waits for BROWSER\'s page, and says Codex when it refuses', async () => {
+    let page: string | null = null
+    const f = fakeLogin()
+    const signIns = new ClaudeSignIns(() => ({ ...f.login, page: () => page, codePages: false }), vi.fn(async () => 302))
+    expect(await signIns.read({ operationId: 'op1', engine: 'codex' })).toMatchObject({ state: 'starting' })
+    page = CODEX_PAGE
+    expect(await signIns.read({ operationId: 'op1', engine: 'codex' })).toMatchObject({ state: 'page', url: CODEX_PAGE })
+    f.child.stdout.write('Error logging in: bad\n')
+    await tick()
+    f.close(1)
+    expect(await signIns.read({ operationId: 'op1', engine: 'codex' })).toEqual({ error: 'SIGN_IN_FAILED', detail: 'Codex did not take it: Error logging in: bad' })
+  })
+
+  it('follows the login to its own page on the same port, and nowhere else', async () => {
+    const { createServer } = await import('node:http')
+    const seen: string[] = []
+    const server = createServer((request, response) => {
+      seen.push(request.url ?? '')
+      if (request.url?.startsWith('/auth/callback')) response.writeHead(302, { location: request.url.includes('away') ? 'http://example.com/x' : '/success' })
+      else response.writeHead(200)
+      response.end()
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    const page = `https://auth.openai.com/oauth/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A${port}%2Fauth%2Fcallback&state=s`
+    try {
+      for (const callback of [`http://127.0.0.1:${port}/auth/callback?code=c`, `http://127.0.0.1:${port}/auth/callback?code=away`]) {
+        const f = fakeLogin(page)
+        const signIns = new ClaudeSignIns(() => ({ ...f.login, codePages: false }))
+        await signIns.read({ operationId: 'op1', engine: 'codex' })
+        expect(await signIns.read({ operationId: 'op1', engine: 'codex', callback })).toMatchObject({ state: 'checking' })
+      }
+      expect(seen).toEqual(['/auth/callback?code=c', '/success', '/auth/callback?code=away'])
+    } finally {
+      server.close()
+    }
+  })
+})
+
 describe('Claude Code signed in from the phone', () => {
   it('reads both pages: the one for a browser elsewhere, and where the localhost one returns', () => {
     expect(claudeSignInPageOf(OUTPUT)).toBe(CODE_PAGE)
