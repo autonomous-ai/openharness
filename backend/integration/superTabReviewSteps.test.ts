@@ -10,6 +10,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, type SuperTabStoreHooks } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { SEED_RULES } from '../src/superTabs/policy.js'
+import { poolRows } from './hostRows.test-support.js'
 
 // Task #3401: a task's Ready reads its pull request's files from GitHub, outside the command's transaction, and the server
 // opens its review steps from them. A fresh loopback replica set, created here.
@@ -45,8 +46,14 @@ async function swarm(hooks: SuperTabStoreHooks) {
   const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
   await execute({ type: 'machine.contribute', machineId: 'review-host', name: 'Review Mac', cwd: '/repo', engines: ['claude'], maxAgents: 8 }, host)
+  // It reports as a live machine does, so its own agents can take steps (reviewSeats.ts canStart): they are its person's own (task #4120).
+  const generation = (await poolRows(store, host, 'review-host')).find(p => p.tabId === tab)!.machine.generation
+  await store.observeMachine(host, tab, 'review-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+    diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+    quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+    readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] } } as never)
   const add = async (conversationId: string, name: string, lead = false, roleName?: string) => String((await execute({ type: 'agent.add',
-    conversationId, machineId: 'review-host', harnessId: randomUUID(), name, configuration: opus, lead, ...roleName ? { roleName } : {} } as Command)).result.agentId)
+    conversationId, machineId: 'review-host', harnessId: randomUUID(), name, configuration: opus, lead, ...roleName ? { roleName } : {} } as Command, host)).result.agentId)
   const lead = await add('lead', 'PM', true)
   const task = String((await execute({ type: 'conversation.create', title: 'Fix sign-in', brief: 'Sign in works offline.', checks: [] })).result.conversationId)
   const dev = await add(task, 'Dev', false, 'Engineer')
