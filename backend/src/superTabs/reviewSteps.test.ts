@@ -81,13 +81,16 @@ describe('a handed task opens its review steps', () => {
       expect(step.brief).toContain('12 production lines')
       expect(step.brief).toContain('does not prove a test failed')
     }
+    first!.brief += '\nKeep this manual instruction.'
     f.run({ type: 'work.status', conversationId: first!.id, assignmentId: first!.assignment!.id, status: 'done', result: 'No' } as Command, f.as(first!.assignment!.agentId))
     f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'Fixing' } as Command, f.as(f.dev))
     ready(next, 30)
+    expect(stepsOf(f.state, f.task).find(s => s.id === first!.id)!.brief).toContain('Keep this manual instruction.')
     for (const step of stepsOf(f.state, f.task)) {
       expect(step.brief).toContain('30 production lines')
       expect(step.brief).not.toContain('12 production lines')
       expect(step.brief).toContain(next)
+      expect(step.brief).not.toContain(head)
       expect(step.brief!.match(/PR history checks/g)).toHaveLength(1)
     }
   })
