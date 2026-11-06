@@ -3,134 +3,60 @@
 > Written by the project's Engineer by the writing-plans skill, as the project instructions say: the Engineer implements it
 > task by task, test first, and the pull request's review step is its one independent review.
 
-**Goal:** One approved change (anh Dee, 11-06: "update them all and override all of their existing instructions. ALL OF
-THEM") replaces every project's instructions in a Swarm with the new base: the built-in base, that project's own roles and
-facts, and every person's rule word for word in its People notes. A dry run shows the before and after of every project and
-changes nothing; the run writes exactly what the dry run showed, and each project's PM is told.
+**Goal:** Every project's instructions move onto the new base once, by themselves, after the backend release (anh Dee 11-06:
+"ALL OF THEM"; River's rulings the same day: "REPLACE 100%", no preview, no approval step, one review). Each document
+becomes a short intro and every person's rule word for word in People notes; all process is the Swarm's built-in PM text
+(#3603). No person's rule may be lost: that is the one check that must be right.
 
-**Architecture:** A new Swarm command, `instructions.rebase`, through the existing command endpoint (no new route, no CLI
-change: `command OPERATION_ID JSON` sends it). A pure module, `instructionsRebase.ts`, builds each project's new document from
-its stored one and checks with the rule guard's own reader (`instructionsDiff.ts droppedRules`) that no person's rule is lost.
-The store loads every project's stored document for the command and writes every new revision in the command's transaction.
+**Architecture:** A pure builder, `instructionsRebase.ts rebasedDocument`, carries every block of the old document that holds
+an attributed rule (an item with its wrapped lines and nested items, a paragraph, a fenced block, or a whole section whose
+heading names a person) into People notes, filed under its old section. A worker job, `migration/rebase.ts`, moves each
+project not yet marked, one Swarm per transaction guarded by the head's version (as migration/instructions.ts writes),
+checks with the rule guard's own reader (`droppedRules`) that the document it would write keeps every rule, writes the new
+revision as the Swarm, and marks the project (`instructionsBase`) so it never runs on it again. A project that would lose
+a rule is held back, unwritten, and logged as an error every hourly pass.
 
-**Tech Stack:** TypeScript, zod, Prisma (MongoDB), vitest; MongoMemoryReplSet for the store test.
+**Tech Stack:** TypeScript, Prisma (MongoDB), vitest; MongoMemoryReplSet for the job's test.
 
-**Spec:** task #3600's brief (conversation 35059e6f472ab0db037bba90). Reuses migration/instructions.ts's way of building a
-document from parts and the rule guard (ruleGuard.ts, instructionsDiff.ts); ruleMoves.ts (GitHub merge reads) has nothing
-this needs.
+**Spec:** task #3600's brief and River's rulings in its conversation (35059e6f472ab0db037bba90).
 
 ## Global Constraints
 
-- Only the Swarm owner, or a project's PM passing on a chat message the owner wrote in the last day (`askedIn`, as every
-  Swarm-wide switch: commands.ts swarmOwnerAsked), runs it, dry run included: it reads every project's instructions.
-- The dry run changes nothing: no state, no instructions row, no message.
-- The run writes only the plan the dry run showed: it names the dry run's `plan` hash, and a project changed since refuses
-  the whole run (REBASE_STALE) with the new hash. All projects or none.
-- Every attributed rule of a project's document — "(Name, date)" as instructionsDiff.ts reads it — stays word for word with
-  who gave it. A project whose new document would drop one is refused, with the rule, and nothing is written.
-- "REPLACE 100%" (River's ruling with anh Dee, 11-06): a document becomes only a short intro, the project's facts (repo,
-  devices, people's areas; given by the run per project) and People notes. No template and no role section is copied in:
-  all process is the Swarm's built-in PM text, which #3603 adds to pmSchedule.ts PM_SCHEDULE_TEXT. A role section's
-  attributed rules go to People notes under "Roles › <role>" like any other.
-- A document stays within 64 KB (MAX_INSTRUCTIONS_BYTES); the size budget is reported, not enforced (People notes of a
-  project with many rules is over 3 KB; later saves may only shrink it, ruleGuard.ts refuseOverBudget).
-- Each written project's PM (the coordinator of its project chat) gets one notice only it reads; the CLI host's own
-  "instructions changed" notice follows from the new revision as for any save.
-- Swarm code stays out of cli/src/core. Owns backend/src/superTabs/.
+- Every attributed rule, "(Name, date)" as instructionsDiff.ts reads it, stays word for word with who gave it, checked by
+  the job itself on what it writes; a project that would lose one is not written.
+- Runs once per project: marked when on the base; a later save is never rewritten.
+- The record: the Instructions history keeps the revision before and the new one, written by the Swarm (`system`,
+  `rebase`), with every line that went (ruleGuard.ts droppedLines).
+- Each PM is told through the new revision and hash, as for any save (the CLI host's "instructions changed" notice).
+- A document stays within 64 KB; the size budget is not enforced here (openharness keeps ~22 KB of rules; later saves may
+  only shrink People notes, ruleGuard.ts refuseOverBudget).
+- Every Swarm on the server (Birch's stated default; River did not limit it).
 
 ## Design
 
-- Growth: one revision per project, once; revisions are capped at 50 per project as for any save (instructionsStore.ts).
-- Concurrency: the command runs in the Swarm's command transaction (one Swarm lock); the plan hash catches a save between
-  the dry run and the run.
-- Read cost: one equality read of the Swarm's instruction rows (`tabId`), only for this command.
-- Scale: 10x projects in a Swarm is ~300 documents of at most 64 KB in one command result: the dry run's result is the
-  first to warn (it is stored with the receipt); it holds texts only for projects that change.
-- Compatibility: a new command type; old clients never send it. Agents read the new revision as any save's.
-- Migration + rollback: this is the migration; rollback is the Instructions history (each project's previous revision).
-- Audience: the server enforces the owner check; a PM relaying needs the owner's own message in this Swarm.
-- Identity: `askedBy` is the Swarm owner; `writtenBy` is the sender (owner or relaying PM), never the machine owner's login.
-- Failure: a lost rule, a document over 64 KB, an unreadable stored document or a stale plan refuses the whole run, out loud.
+- Growth: one revision per project, once; revisions stay capped at 50 per project (instructionsStore.ts).
+- Concurrency: one Swarm per transaction, head version guarded: a command in between wins and the Swarm is retried next pass.
+- Read cost: one pass per worker start, then hourly only while something is held back; a marked project costs no read.
+- Scale: 10x Swarms is 10x passes of one transaction each; the pass log's counts warn first.
+- Compatibility: `instructionsBase` is a new optional project field; old readers ignore it.
+- Migration + rollback: this is the migration; rollback is each project's previous revision in the History.
+- Audience: nothing new is exposed; the History is read by who reads the project.
+- Identity: written by the Swarm (`system`), asked by the project's owner (the Swarm owner for a project nobody owns).
+- Failure: a held project or failed Swarm is logged as an error every pass, with why; nothing is written for it.
 - Platforms: server only.
 
 ## Review Focus
 
-- A rule whose item holds several attributions ("(Ken, 11-02; Dee, 11-03)", two "(…)" in one bullet): each kept, with all its people.
-- A rule already in a `## People notes` section, or written twice: kept once, never doubled.
-- A project with no document yet (revision 0, on the template): planned from the template like any other.
-- An attributed list item with wrapped lines and items nested under it, or a heading carrying the attribution: carried whole.
-- A save between the dry run and the run: the run refuses and names the new plan.
+- A rule in an item of several attributions, nested under an unattributed item, or under a heading that names a person.
+- A rule already in People notes, or written twice: kept once.
+- A project with no document yet (revision 0) or still on the template.
+- A save between the job's read and write: the head guard makes it retry.
+- A faulty builder: the job's own check holds the project back.
 
 ---
 
-### Task 1: Build one project's new document
-
-**Files:**
-- Create: `backend/src/superTabs/instructionsRebase.ts`
-- Modify: `backend/src/superTabs/instructionsDiff.ts` (export `sectionedRules`)
-- Test: `backend/src/superTabs/instructionsRebase.test.ts`
-
-**Interfaces:**
-- Produces: `sectionedRules(text: string): Array<AttributedRule & { path: string }>` (instructionsDiff.ts) — every attributed
-  rule with its section path ("Roles › PM").
-- Produces: `rebasedDocument(before: string, facts?: string): RebasedDocument` where
-  `RebasedDocument = { text: string; carried: AttributedRule[]; keptRoles: string[]; lost: DroppedRule[] }`.
-
-- [ ] **Step 1: Write the failing tests** (`describe('a project\'s document on the new base')`):
-  - `keeps every person's rule word for word in People notes, under its old section, and nothing else of the old text`:
-    from a document with a PM rule "(Ken, 2026-11-02)", a Workflow rule and an unattributed process line, `text` starts with
-    the base, has `## People notes` then `### Roles › PM` and `- <rule>`; the unattributed line is gone;
-    `droppedRules(before, text)` is `[]`; `lost` is `[]`.
-  - `splits an item of several attributions and keeps each with its people`.
-  - `writes a rule once: one already in People notes, or written twice`.
-  - `keeps a role section the base lacks, with its rules, and copies them nowhere else` (Integrator).
-  - `adds the project's facts under "## This project", and none when none are given`.
-  - `rebuilds the openharness revision 79 shape without losing any of its 59 rules` (fixture: a trimmed copy with the same
-    shapes: nested lists, numbered steps, honorifics, "(Dee, 2026-11-04; repeated 2026-11-05 …)").
-- [ ] **Step 2: Run** `npx vitest run src/superTabs/instructionsRebase.test.ts` — FAIL: module not found.
-- [ ] **Step 3: Implement** `sectionedRules` from `items()`'s paths; `rebasedDocument`: base roles from TEMPLATE_ROLES' `###`
-  names; kept role sections copied as lines; People notes grouped by path (the leading "People notes" dropped), deduped by
-  text; `lost = droppedRules(before, text)`.
-- [ ] **Step 4: Run** the test — PASS. **Step 5: Commit.**
-
-### Task 2: The `instructions.rebase` command
-
-**Files:**
-- Modify: `backend/src/superTabs/commands.ts` (schema, case, context `allInstructions`), `backend/src/superTabs/model.ts`
-  (`CommandEffects.rebased`, NOTICE_READERS `instructions-rebased`), `backend/src/superTabs/instructionsRebase.ts`
-  (`rebasePlan`)
-- Test: `backend/src/superTabs/instructionsRebase.test.ts`
-
-**Interfaces:**
-- Consumes: `rebasedDocument` (Task 1).
-- Produces: command `{ type: 'instructions.rebase', apply?: boolean, plan?: string, facts?: Record<projectId, string ≤ 4000>,
-  askedIn? }`; context `allInstructions?: Array<{ projectId, revision, text }>`; effects `rebased?: InstructionsWrite[]`;
-  `rebasePlan(state, stored, facts): { plan: string; projects: RebasedProject[] }`.
-
-- [ ] **Step 1: Write the failing tests** (`describe('instructions.rebase')`):
-  - `a dry run lists before and after for every project and changes nothing` (two projects, one on revision 0): result has
-    `plan` and per project `before`, `after`, `rules`, `keptRoles`, `dropped`, `parts`; state, effects.rebased and messages
-    unchanged/empty.
-  - `the run saves each project's new base, keeps every person's rule, and tells every PM`: revisions +1, hashes, every
-    `effects.rebased[i].text` keeps each rule; one `instructions-rebased` row per project to its coordinator only.
-  - `refuses anyone but the Swarm owner`: a collaborator, a PM without `askedIn`, a PM quoting a member's message → 403
-    OWNER_REQUIRED, dry run and run alike; a PM quoting the owner's message from the last day passes.
-  - `refuses a run without the dry run's plan, or after a project changed since` → REBASE_PLAN_REQUIRED / REBASE_STALE with
-    the new plan.
-  - `refuses the whole run when a project's document would lose a rule or pass 64 KB` (an unreadable document too).
-- [ ] **Step 2: Run** — FAIL (unknown command type).
-- [ ] **Step 3: Implement**: plan hash = sha256 of each changed project's id, revision and new hash, in project order.
-- [ ] **Step 4: Run** — PASS. **Step 5: Commit.**
-
-### Task 3: The store loads every document and writes every revision
-
-**Files:**
-- Modify: `backend/src/superTabs/store.ts` (context load for `instructions.rebase`; write `effects.rebased`)
-- Test: `backend/integration/superTabInstructions.test.ts`
-
-- [ ] **Step 1: Write the failing test** `instructions.rebase writes each project's new revision once, after a dry run that wrote nothing`:
-  a Swarm with two projects, a saved rule; the dry run leaves rows and revisions as they were; the run's revisions read back
-  with the new text, the History has the revision with its summary, and the PM's read shows it.
-- [ ] **Step 2: Run** `npx vitest run --config vitest.super-tabs.config.ts integration/superTabInstructions.test.ts -t rebase` — FAIL.
-- [ ] **Step 3: Implement**: `findMany({ where: { tabId } })` for the command; `for (const write of effects.rebased ?? []) writeInstructions(...)`.
-- [ ] **Step 4: Run** — PASS. **Step 5: Commit.**
+### Task 1: Build one project's document — `instructionsRebase.ts`, tested in `instructionsRebase.test.ts` (done)
+### Task 2: The run-once job — `migration/rebase.ts`, wired in `worker.ts`, tested in `integration/superTabInstructionsRebase.test.ts`
+- [x] Failing test: writes each project with every rule, keeps the before in its History; runs once; holds back a project a
+  faulty builder would make lose a rule, and logs it every pass.
+- [x] Job, marker field (`projects.ts instructionsBase`), worker start and stop.
