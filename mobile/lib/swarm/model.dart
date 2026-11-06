@@ -174,6 +174,7 @@ class SuperTabAgent {
       role = row['role'] as String?,
       kind = row['kind'] as String?,
       chatId = row['chatId'] as String?,
+      myAgent = row['myAgent'] as bool?,
       roleId = row['roleId'] as String?,
       roleName = row['roleName'] as String?,
       buddyOf = switch (row['buddyOf']) {
@@ -235,6 +236,10 @@ class SuperTabAgent {
 
   /// What it is and where its person talks to it (Swarm v3, backend #4116), read as the desktop's model reads them.
   final String? kind, chatId;
+
+  /// Whether it is in the reader's My agents (backend agentKind.ts inMyAgents, task #4192), read as the desktop's model
+  /// reads it. Null from an older backend.
+  final bool? myAgent;
 
   /// Set by its contributor or its project's Lead; null draws its pattern.
   final SuperTabAvatarPicture? avatar;
