@@ -62,9 +62,11 @@ void main() {
           await pumpEventQueue();
         });
         await tester.pumpAndSettle();
-        if (find.text('Retry').evaluate().isNotEmpty) {
+        // The machine prepares its Buddy folder on the first ask, as a real
+        // one may; the person tries again.
+        if (find.textContaining('still being prepared').evaluate().isNotEmpty) {
           await tester.runAsync(() async {
-            await tester.tap(find.text('Retry'));
+            await tester.tap(find.text('Bring agent'));
             await pumpEventQueue();
           });
           await tester.pumpAndSettle();
