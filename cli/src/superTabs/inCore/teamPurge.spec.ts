@@ -983,14 +983,15 @@ describe('a purge that did not finish', () => {
     })
     const ended = createConfidentialPurge({ confidential: () => true, home, record, purge,
       session: agentId => ({ agentId, sessionId: 'session', registeredAt: 1, engine: 'codex', cwd: null, codexHome: own }) })
-    const reports: unknown[] = [], logs: string[] = []
-    const start = () => withPurgeRetries(ended, { record, sessions: () => ({ live: [], stopped: [] }), report: status => reports.push(status), log: line => logs.push(line) })
-    return { own, record, state, purge, ended, reports, logs, start, recordFile }
+    const report = vi.fn<(status: unknown) => void>(), logs: string[] = []
+    const start = () => withPurgeRetries(ended, { record, sessions: () => ({ live: [], stopped: [] }), report, log: line => logs.push(line) })
+    return { own, record, state, purge, ended, report, logs, start, recordFile }
   }
-  /** Lets a due retry's disk work finish: it reads real folders, which fake timers do not wait for. */
-  const pass = async (ms: number) => {
+  /** A due retry reports after its service and disk work finish; advancing fake timers alone cannot wait for them. */
+  const pass = async (ms: number, report?: ReturnType<typeof fixture>['report']) => {
+    const settled = report && new Promise<void>(resolve => { report.mockImplementationOnce(() => resolve()) })
     await vi.advanceTimersByTimeAsync(ms)
-    await new Promise(resolve => realTimeout(resolve, 60))
+    await settled
   }
   beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
   afterEach(() => { vi.useRealTimers() })
@@ -1007,10 +1008,10 @@ describe('a purge that did not finish', () => {
     expect(after.record.pending().map(t => t.agentId)).toEqual(['pm'])
     after.state.failing = false
     const second = after.start()
-    await pass(MINUTE + 1)
+    await pass(MINUTE + 1, after.report)
     expect(existsSync(dirname(after.own))).toBe(false)
     expect(after.record.pending()).toEqual([])
-    expect(after.reports.at(-1)).toMatchObject({ pending: 0, unreadable: false })
+    expect(after.report.mock.lastCall?.[0]).toMatchObject({ pending: 0, unreadable: false })
     second.stop()
   })
 
@@ -1022,19 +1023,19 @@ describe('a purge that did not finish', () => {
     const first = tries()
     await pass(MINUTE - 1)
     expect(tries()).toBe(first)
-    await pass(1)
+    await pass(1, f.report)
     expect(tries()).toBe(first + 1)
     await pass(MINUTE)
     expect(tries()).toBe(first + 1)
-    await pass(MINUTE)
+    await pass(MINUTE, f.report)
     expect(tries()).toBe(first + 2)
-    for (const wait of [5, 15, 30, 30]) await pass(wait * MINUTE)
+    for (const wait of [5, 15, 30, 30]) await pass(wait * MINUTE, f.report)
     expect(tries()).toBe(first + 6)
     expect(f.record.pending().map(t => t.agentId)).toEqual(['pm'])
-    expect(f.reports.at(-1)).toMatchObject({ pending: 1, unreadable: false })
+    expect(f.report.mock.lastCall?.[0]).toMatchObject({ pending: 1, unreadable: false })
     f.state.failing = false
     f.state.responseDelay = responseDelay
-    await pass(30 * MINUTE)
+    await pass(30 * MINUTE, f.report)
     expect(f.record.pending()).toEqual([])
     const done = tries()
     await pass(120 * MINUTE)
@@ -1063,22 +1064,23 @@ describe('a purge that did not finish', () => {
       const sessions = () => ({ live: registry.live as never, stopped: registry.stopped as never })
       const ended = createConfidentialPurge({ confidential: () => true, home, record, purge, sessions,
         session: id => (byId(id) ?? registry.stopped.find(s => s.agentId === id) ?? null) as never })
-      const retried = withPurgeRetries(ended, { record, sessions, report: () => {}, log: () => {} })
-      return { own, cwd, record, stop, purge, ended, retried, registry }
+      const report = vi.fn<(status: unknown) => void>()
+      const retried = withPurgeRetries(ended, { record, sessions, report, log: () => {} })
+      return { own, cwd, record, stop, purge, ended, retried, registry, report }
     }
     const row = (over: Record<string, unknown>) => ({ agentId: 'other', sessionId: 'other-session', registeredAt: 1, engine: 'codex', cwd: '/elsewhere', codexHome: null, ...over })
 
     it('a retry leaves its own agent alone while it is live, and finishes once it stops', async () => {
       const registry = { live: [row({ agentId: 'pm', sessionId: 'session' })], stopped: [] as Array<Record<string, unknown>> }
       const f = inUse(dir(), registry)
-      await pass(MINUTE)
+      await pass(MINUTE, f.report)
       expect(f.purge).not.toHaveBeenCalled()
       expect(f.stop).not.toHaveBeenCalled()
       expect(existsSync(f.own)).toBe(true)
       expect(f.record.pending().map(t => t.agentId)).toEqual(['pm'])
       // It stopped: the next try goes through the service as any purge does.
       registry.stopped.push(registry.live.pop()!)
-      await pass(2 * MINUTE)
+      await pass(2 * MINUTE, f.report)
       expect(f.purge).toHaveBeenCalled()
       f.retried.stop()
     })
@@ -1086,7 +1088,7 @@ describe('a purge that did not finish', () => {
     it('a conversation running under a new agent id keeps its engine home and traces, in a retry and a host\'s close', async () => {
       const f = inUse(dir(), { live: [row({ agentId: 'new', sessionId: 'session' })], stopped: [] })
       expect(await f.ended('pm')).toMatchObject({ error: 'SESSION_IN_USE' })
-      await pass(MINUTE)
+      await pass(MINUTE, f.report)
       expect(existsSync(f.own)).toBe(true)
       expect(f.record.pending().map(t => t.agentId)).toEqual(['pm'])
       f.retried.stop()
@@ -1122,7 +1124,7 @@ describe('a purge that did not finish', () => {
     const retried = f.start()
     await pass(MINUTE)
     expect(f.purge).not.toHaveBeenCalled()
-    expect(f.reports.at(-1)).toMatchObject({ pending: 0, unreadable: true })
+    expect(f.report.mock.lastCall?.[0]).toMatchObject({ pending: 0, unreadable: true })
     retried.stop()
   })
 
@@ -1144,8 +1146,8 @@ describe('a purge that did not finish', () => {
     const f = fixture(dir())
     const retried = f.start()
     await retried('pm-secret')
-    const said = JSON.stringify(f.reports.at(-1))
-    expect(Object.keys(f.reports.at(-1) as object).sort()).toEqual(['at', 'pending', 'unreadable'])
+    const said = JSON.stringify(f.report.mock.lastCall?.[0])
+    expect(Object.keys(f.report.mock.lastCall?.[0] as object).sort()).toEqual(['at', 'pending', 'unreadable'])
     expect(said).not.toContain('pm-secret')
     expect(said).not.toContain('session')
     retried.stop()
