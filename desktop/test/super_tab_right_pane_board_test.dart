@@ -24,8 +24,9 @@ void main() {
     ValueChanged<SuperTabAgent>? terminal,
     Brightness brightness = Brightness.light,
     int cards = 0,
+    Size size = const Size(1800, 1000),
   }) async {
-    await tester.binding.setSurfaceSize(const Size(1800, 1000));
+    await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final oldBrightness = grid.AppTheme.brightness.value;
     grid.AppTheme.brightness.value = brightness;
@@ -128,6 +129,20 @@ void main() {
       await tester.tap(find.text('Windows credential fix').first);
       await tester.pumpAndSettle();
       expect(key('super-chat-tab-offline'), findsOneWidget);
+      await end(tester, c);
+    },
+  );
+
+  testWidgets(
+    'beside the wide chat on a 1280 px window, the Tasks bar fits and its search stays usable',
+    (tester) async {
+      final c = await show(tester, size: const Size(1280, 800));
+      expect(key('super-board-chat'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      final board = tester.getRect(key('super-tasks-lead'));
+      final search = tester.getRect(key('super-tasks-search'));
+      expect(search.right, lessThanOrEqualTo(board.right));
+      expect(search.width, greaterThanOrEqualTo(120));
       await end(tester, c);
     },
   );
