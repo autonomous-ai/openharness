@@ -260,7 +260,10 @@ describe('a Buddy\'s copy of a project follows its default branch', { timeout: G
     const marker = join(p.clone, 'HOOK_RAN')
     writeFileSync(join(p.clone, '.git', 'hooks', 'post-checkout'), `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o755 })
     await prepareBuddyHome(p.home, p.web)
-    rmSync(marker, { force: true })
+    // Making the copy runs no hook of the person's either: on Windows the hook's shell ate the path's backslashes and left a
+    // file in the copy, which then never moved (WinTest3348's diagnostic, #3815).
+    expect(existsSync(marker)).toBe(false)
+    expect(git(copy(p.home), 'status', '--porcelain')).toBe('')
     git(p.teammate, 'tag', 'v9')
     advance(p.teammate)
     git(p.teammate, 'push', '-q', 'origin', 'v9')
