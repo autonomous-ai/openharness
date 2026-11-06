@@ -9,7 +9,7 @@
  */
 import { execFile } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join, posix, win32 } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
 import { launchEnvironment } from '../engines/kit/launchExecutable.js'
 import { folderTrust } from '../engines/launchPrep.js'
@@ -44,16 +44,14 @@ const FETCH_BUDGET_MS = 30_000
 const FETCH_TIMEOUT_MS = 20_000
 const FETCHES_AT_ONCE = 4
 
-/** A folder named in full on this machine's kind: POSIX, or a Windows drive or share. A Windows checkout (C:\…) was dropped,
- *  so a Buddy there had no copy of it (#3815); a drive-relative C:web is not absolute. */
-const absolute = (path: string): boolean => posix.isAbsolute(path) || win32.isAbsolute(path)
-
-/** The projects a start lists, as far as they are well formed: an id, a name and an absolute folder. */
+/** The projects a start lists, as far as they are well formed: an id, a name and a folder absolute by this machine's own rules.
+ *  A Windows checkout (C:\…, \\server\share\…) was dropped when this asked for a leading /, so a Buddy there had no copy of it
+ *  (#3815); on a Mac or Linux those names are relative, resolved from the service's folder (Linuxtest2), and stay dropped. */
 export function buddyProjectsOf(request: Record<string, unknown>): BuddyProject[] {
   const listed = Array.isArray(request.buddyProjects) ? request.buddyProjects : []
   return listed.flatMap(entry => {
     const p = entry as Record<string, unknown>
-    return typeof p?.id === 'string' && ID.test(p.id) && typeof p.name === 'string' && typeof p.cwd === 'string' && absolute(p.cwd)
+    return typeof p?.id === 'string' && ID.test(p.id) && typeof p.name === 'string' && typeof p.cwd === 'string' && isAbsolute(p.cwd)
       ? [{ id: p.id, name: p.name, cwd: p.cwd }] : []
   }).slice(0, MAX_BUDDY_PROJECTS)
 }
