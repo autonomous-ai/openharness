@@ -72,14 +72,15 @@
 - [x] Commit failing tests for positive/unknown/working activity; one batch, no call without Buddies; old-server omission; repeated heartbeat strips proof; sleep closes once, preserves home, refuses busy/unknown/Team; wake and host restart reopen same session without replaying input; ordinary/unswitched Buddies unchanged.
 - [x] Watch focused CLI tests fail.
 - [x] Implement minimal report/retention/host changes; check live idle again immediately before sleep and preserve existing failure backoff. Managed awake Buddies use keepAlive without crew continuation text.
-- [ ] Run affected backend and CLI tests/typechecks. Record same-workload call counts and timing; commit and push, publish red/green evidence and mark ready.
+- [x] Run affected backend and CLI tests/typechecks. Record same-workload call counts and timing; commit and push, publish red/green evidence and mark ready.
 
 
 ## Validation notes
 
 - Server decision tests were committed at `4afea00e5`, real-store report/delivery tests at `82c0943fb`, and private-report tests at `07a1dd3e3`, before server implementation `8cf3ee094`. Wake tests `f60e62746` preceded `7cddf82f5`. CLI tests `8aa1cea7d` preceded `8aba589cc`.
 - The 100-session report failed at 64 returned IDs (`89f70cee3`) before bounded batches (`c0bbe860a`); the duplicate-core-call regression (`134fdc518`) failed at 200 calls before the live-registry fix (`8fcb70b65`).
-- Card-question regression `04e567e33` uses #3817's commands. It passes on a temporary combination with #3387 at `4e833f3fd`, and fails at the wake assertion with only `wakeBuddies` withheld. It requires #3387 merged before this branch's final integration run.
+- Card-question regression `04e567e33` uses #3817's commands. It passed on the temporary combination and failed at the wake assertion with only `wakeBuddies` withheld. After #3387 landed at `50f524878`, main merged cleanly at `b34197e01`; all three #3824 real-store regressions pass on this branch, including the PM question waking the original proposal sender while the newer default stays asleep.
+- Final validation after merging main: the three focused #3824 real-store regressions pass; 102 units in `buddySleep`, `machines`, `parts/touches` and `proposalCards` pass; 678 CLI checks in `machines`, `host`, `retention` and `buddyHome` pass. Backend and CLI typechecks are clean. No source edits were needed after the automatic merge.
 - 344 affected backend units pass, plus the two extra report/switch-back regressions. The three affected CLI files pass (651 checks); the report file passes again after the scale fix (199 checks). Both typechecks pass. Real-store sleep and input-race cases pass; open-delivery reads use the existing agent/status index, 0 documents examined and at most 3 keys for the empty probe. The broader report integration file passes (32 checks).
 - One broadened Buddy integration run found an accidental clock replacement in another fixture; corrected at `057840ae5`, and that case passes. Its failure is not product red evidence.
 - The isolated native Buddy test is present, preserving the Buddy folder and exact engine conversation across sleep/wake. This machine is a Team OS account: product policy refuses Buddy starts here even with isolated homes. The run stopped before starting a Buddy, and does not count as native sleep/wake evidence. The test now explicitly requires an owner account; independent Mac/Linux native verification remains with the test steps.
