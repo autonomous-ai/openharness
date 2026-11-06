@@ -12,7 +12,7 @@ import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { shellSingleQuote } from '../../lib/shellQuote.js'
 import { isRecord, jsonObject, merged, type AttributionFiles } from './attribution.js'
 import { quoteHookCommand } from './notifyHooks.js'
-import { claudeCodeGitBash } from '../claude/gitBash.js'
+import { claudeCodeGitBash } from '../../lib/windows/claudeCodeGitBash.js'
 
 declare const __STATUS_LINE_SCRIPT__: string | undefined
 
@@ -69,7 +69,7 @@ let leftAlone = false
 
 /**
  * [argv] as the line the shell that runs it reads: a POSIX shell off Windows; on Windows the one Claude Code runs its status
- * line in (claude/gitBash.ts, task #4164), Git Bash with its paths in forward slashes, else PowerShell (`& 'program' …`).
+ * line in (lib/windows/claudeCodeGitBash.ts, task #4164), Git Bash with its paths in forward slashes, else PowerShell (`& 'program' …`).
  * Null for a word PowerShell would not pass whole.
  */
 function commandLine(argv: string[], platform: NodeJS.Platform, bash: string | null): string | null {

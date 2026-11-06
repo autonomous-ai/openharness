@@ -205,7 +205,7 @@ describe.skipIf(!posix)('a Claude launch\'s status line (a POSIX shell line)', (
   })
 })
 
-// Task #4164: on Windows, Claude Code 2.1.316 runs its status line in Git Bash when it finds one (claude/gitBash.ts), and in
+// Task #4164: on Windows, Claude Code 2.1.316 runs its status line in Git Bash when it finds one (lib/windows/claudeCodeGitBash.ts), and in
 // PowerShell otherwise. Harness's line is written for that shell, and the person's own line runs in it as Claude Code would run
 // it, so a Windows agent reports its quota and the person sees their line as before.
 describe('a Claude launch\'s status line on Windows', () => {

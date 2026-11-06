@@ -17,7 +17,7 @@ whether it had any left. Codex's app-server read already runs on Windows (lib/co
 
 **Architecture:**
 
-- `claude/gitBash.ts` `claudeCodeGitBash`: the Git Bash Claude Code runs its status line in, found as it finds it.
+- `lib/windows/claudeCodeGitBash.ts`: the Git Bash Claude Code runs its status line in, found as it finds it.
 - `kit/statusLine.ts` on Windows:
   - With that Git Bash: Harness's line is quoted for it as on a Mac (POSIX quotes, forward slashes), so a path with a space
     works, and the script is given `--bash <path>`. The person's own line is passed along as on a Mac.

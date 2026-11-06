@@ -5,7 +5,7 @@ import { launch as codex } from './codex/launch.js'
 import { attributionArgsIn, attributionInstruction, instructionsArgsIn, type Instruction } from './kit/attribution.js'
 import { contextArgsOf, envArgsOf, fill, ownProviderArgs, readConfig } from './kit/launchArgs.js'
 import { joinedSettings, statusLineSetting } from './kit/statusLine.js'
-import { claudeCodeGitBash } from './claude/gitBash.js'
+import { claudeCodeGitBash } from '../lib/windows/claudeCodeGitBash.js'
 import { env } from '../config/env.js'
 import { launchHome, launchHomeOf, launchPersonalHome } from '../lib/engineHomes.js'
 

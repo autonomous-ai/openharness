@@ -1,7 +1,7 @@
 /**
  * The Git Bash Claude Code runs its status line in on Windows, found as Claude Code 2.1.316 finds it (task #4164): its status
  * line goes through its hook runner, which runs a command in this bash, or in PowerShell when there is none. Harness's status
- * line is written for that shell (kit/statusLine.ts), so this follows Claude Code's own order, not lib/windows/gitBash.ts's.
+ * line is written for that shell (kit/statusLine.ts), so this follows Claude Code's own order, not gitBash.ts's.
  */
 import { statSync } from 'node:fs'
 import { win32 } from 'node:path'

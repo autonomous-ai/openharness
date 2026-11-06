@@ -3,7 +3,7 @@
  * Harness's status line is written for the shell Claude Code will run it in, so the Git Bash is found as Claude Code finds it.
  */
 import { describe, expect, it } from 'vitest'
-import { claudeCodeGitBash } from './gitBash.js'
+import { claudeCodeGitBash } from './claudeCodeGitBash.js'
 
 const there = (...paths: string[]) => (path: string) => paths.includes(path)
 const PROGRAM_FILES = 'C:\\Program Files\\Git\\bin\\bash.exe'
