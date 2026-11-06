@@ -22,6 +22,30 @@ import 'model.dart';
 import 'profile_sheet.dart';
 import 'pull_requests.dart';
 
+/// The task [agent] holds now. A task the Swarm lost is that task's history: it names the agent's state only when the
+/// agent holds nothing else (Gray, 2026-11-06: Lamp read "Lost" on an old task while working on another).
+SuperTabConversation? _currentTask(
+  SuperTabController controller,
+  SuperTabAgent agent,
+) {
+  final open = [
+    for (final g
+        in controller.snapshot?.conversations ?? const <SuperTabConversation>[])
+      if (!g.closed &&
+          g.assignment?['agentId'] == agent.id &&
+          // Never a task the viewer may not read (review of #2281).
+          superTabGroupReadable(controller, g) &&
+          !const {
+            'done',
+            'stopped',
+            'cancelled',
+          }.contains(g.assignment?['status']))
+        g,
+  ];
+  return open.where((g) => g.assignment?['status'] != 'lost').firstOrNull ??
+      open.firstOrNull;
+}
+
 /// Facts already observed by the Swarm or the agent's machine. Unknown facts
 /// stay absent; an idle or working claim needs actual work or native activity.
 class SuperTabAgentInfo {
@@ -43,20 +67,7 @@ class SuperTabAgentInfo {
              ?.agents
              .where((a) => a.id == agent.harnessId)
              .firstOrNull,
-         controller.snapshot?.conversations
-             .where(
-               (g) =>
-                   !g.closed &&
-                   g.assignment?['agentId'] == agent.id &&
-                   // Never a task the viewer may not read (review of #2281).
-                   superTabGroupReadable(controller, g) &&
-                   !const {
-                     'done',
-                     'stopped',
-                     'cancelled',
-                   }.contains(g.assignment?['status']),
-             )
-             .firstOrNull,
+         _currentTask(controller, agent),
        );
 
   SuperTabAgentInfo._(

@@ -1941,6 +1941,43 @@ describe('registry across a reboot and pane loss', () => {
     expect(plain.launchModel).toBeUndefined()
   })
 
+  it('keeps an agent\'s launch flags across a reload, a hook bind and a stopped row, and drops an empty or malformed list', async () => {
+    const { registry, strictPersistedRow } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%41' }], cwd: '/tmp/demo' })!
+    expect(registry.setLaunchArgs('nobody', ['--chrome'])).toBe(false)
+    expect(registry.setLaunchArgs(pending.agentId, ['--chrome'])).toBe(true)
+    const { registry: reloaded, strictPersistedRow: strict } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(pending.agentId)?.launchArgs).toEqual(['--chrome'])
+    // A hook bind rebuilds the row from named fields; the flags must survive it.
+    const transcriptPath = join(dataDir, 'session-args.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const bound = reloaded.register({ sessionId: 'session-args', transcriptPath, tmuxPane: '%41', cwd: '/tmp/demo' })
+    expect(bound?.entry.launchArgs).toEqual(['--chrome'])
+    // A stopped row goes through the normaliser on its way back from disk.
+    const row = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')).find((r: { agentId: string }) => r.agentId === pending.agentId)
+    expect(strict(row)?.launchArgs).toEqual(['--chrome'])
+    expect(strict({ ...row, launchArgs: [1, '--x'] })).not.toHaveProperty('launchArgs')
+    expect(strict({ ...row, launchArgs: 'x' })).not.toHaveProperty('launchArgs')
+    expect(strict({ ...row, launchArgs: [] })).not.toHaveProperty('launchArgs')
+    // Empty clears the field rather than writing an empty array.
+    expect(reloaded.setLaunchArgs(pending.agentId, [])).toBe(true)
+    expect('launchArgs' in reloaded.byAgent(pending.agentId)!).toBe(false)
+    // A hand-edited record on disk loads without the field.
+    const file = join(dataDir, 'registry.json')
+    const rows = JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>
+    writeFileSync(file, JSON.stringify(rows.map(r => ({ ...r, launchArgs: [1, '--x'] }))), { mode: 0o600 })
+    const { registry: hand } = await loadRegistryModule()
+    hand.load()
+    expect(hand.byAgent(pending.agentId)).not.toHaveProperty('launchArgs')
+    writeFileSync(file, JSON.stringify(rows.map(r => ({ ...r, launchArgs: 'x' }))), { mode: 0o600 })
+    const { registry: hand2 } = await loadRegistryModule()
+    hand2.load()
+    expect(hand2.byAgent(pending.agentId)).not.toHaveProperty('launchArgs')
+    void registry; void strictPersistedRow
+  })
+
   // The conversation a fresh move onto a grid left (core/agents/retarget.ts): the way home reopens it.
   it('keeps the remembered subscription session across a reload and the binds on the grid', async () => {
     const { registry } = await loadRegistryModule()
