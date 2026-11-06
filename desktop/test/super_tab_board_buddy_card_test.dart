@@ -227,6 +227,51 @@ void main() {
     await end(tester, c);
   });
 
+  testWidgets('text typed but not yet a chip is sent with Restart', (
+    tester,
+  ) async {
+    final c = await show(tester);
+    await open(tester);
+    await tester.enterText(input, '--foo');
+    await tester.pump();
+    await tester.tap(restart);
+    await tester.pump();
+    expect(connection.requests.single['launchArgs'], '--chrome --foo');
+    await end(tester, c);
+  });
+
+  testWidgets('typed text with an unclosed quote blocks Restart', (
+    tester,
+  ) async {
+    final c = await show(tester);
+    await open(tester);
+    await tester.enterText(input, '--x "a');
+    await tester.pump();
+    await tester.tap(restart);
+    await tester.pump();
+    expect(connection.requests, isEmpty);
+    expect(
+      find.text('Close the quote in the launch flags, or remove it.'),
+      findsOneWidget,
+    );
+    expect(card, findsOneWidget);
+    await end(tester, c);
+  });
+
+  testWidgets('Remove sits at the right edge, apart from Rename', (
+    tester,
+  ) async {
+    final c = await show(tester);
+    await open(tester);
+    final rename = tester.getRect(key('super-buddy-card-rename'));
+    final remove = tester.getRect(key('super-buddy-card-remove'));
+    final cardBox = tester.getRect(card);
+    expect(remove.left, greaterThan(rename.right + 8));
+    expect(cardBox.right - remove.right, lessThan(24));
+    expect(tester.takeException(), isNull);
+    await end(tester, c);
+  });
+
   testWidgets('a stopped Buddy says Stopped and Start resumes with the flags', (
     tester,
   ) async {

@@ -35,10 +35,10 @@ class LaunchFlagsField extends StatefulWidget {
   final ValueChanged<bool>? onFocusChanged;
 
   @override
-  State<LaunchFlagsField> createState() => _LaunchFlagsFieldState();
+  State<LaunchFlagsField> createState() => LaunchFlagsFieldState();
 }
 
-class _LaunchFlagsFieldState extends State<LaunchFlagsField> {
+class LaunchFlagsFieldState extends State<LaunchFlagsField> {
   final _text = TextEditingController();
   final _focus = FocusNode(debugLabel: 'Launch flag input');
 
@@ -70,6 +70,18 @@ class _LaunchFlagsFieldState extends State<LaunchFlagsField> {
     _text.clear();
     widget.onChanged([...widget.words, ...words]);
     return true;
+  }
+
+  /// The chips with any typed text turned into chips too, for a caller that
+  /// acts on them (Restart). Null for an unclosed quote, which stays as typed.
+  List<String>? takePending() {
+    final words = splitLaunchArgs(_text.text);
+    if (words == null) return null;
+    if (words.isEmpty) return widget.words;
+    final all = [...widget.words, ...words];
+    _text.clear();
+    widget.onChanged(all);
+    return all;
   }
 
   void _typed(String value) {

@@ -47,12 +47,13 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
   static const _gap = grid.AppDesktop.menuInset;
   static const _inset = grid.AppDesktop.groupGap;
 
-  /// Rename and Remove sit beside Restart in the card's width.
+  /// Rename and Remove fit beside Restart in the card's width.
   static final _compact = TextButton.styleFrom(
     minimumSize: const Size(0, grid.AppControl.height),
     padding: const EdgeInsets.symmetric(horizontal: grid.AppDesktop.controlGap),
   );
 
+  final _fieldKey = GlobalKey<LaunchFlagsFieldState>();
   final _portal = OverlayPortalController();
   final _link = LayerLink();
   final _buttonFocus = FocusNode(debugLabel: 'Buddy card button');
@@ -117,15 +118,27 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
   Future<void> _restart(Agent agent) async {
     final app = this.app;
     if (_busy || app == null) return;
+    // Text typed but not yet a chip is part of the flags.
+    final field = _fieldKey.currentState;
+    final words = field == null ? _words : field.takePending();
+    if (words == null) {
+      setState(() {
+        _marked = null;
+        _warning = false;
+        _message = 'Close the quote in the launch flags, or remove it.';
+      });
+      return;
+    }
     setState(() {
       _busy = true;
       _message = _marked = null;
+      _words = words;
     });
     final result = await restartBuddyWithFlags(
       c,
       widget.projectId,
       app,
-      text: launchArgsLine(_words),
+      text: launchArgsLine(words),
       saved: launchArgsLine(agent.launchArgs),
     );
     if (!mounted) return;
@@ -394,6 +407,7 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
     Text('Launch flags', style: DesktopChrome.control(medium: true)),
     const SizedBox(height: _gap),
     LaunchFlagsField(
+      key: _fieldKey,
       words: _words,
       readOnly: _busy,
       marked: _marked,
@@ -425,7 +439,8 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
     final stopped = agent?.isStopped ?? true;
     return Row(
       children: [
-        Flexible(
+        // Restart and Rename on the left; Remove is pushed to the right edge.
+        Expanded(
           child: Wrap(
             spacing: _gap,
             runSpacing: _gap,
