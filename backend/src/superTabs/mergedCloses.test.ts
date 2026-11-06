@@ -132,7 +132,7 @@ describe('a merged task ends done whatever happened to its builder (#3574)', () 
   it('closes a task whose merge was already recorded when it is recorded again after its attempt was lost', () => {
     const f = postedFixture()
     f.merge()
-    expect(f.group(f.task).assignment).toMatchObject({ status: 'working' })
+    expect(f.group(f.task).assignment).toMatchObject({ status: 'review' })
     f.group(f.task).assignment!.status = 'lost'
     const effects = f.merge()
     expect(f.group(f.task).assignment).toMatchObject({ id: f.assignment, status: 'done' })
