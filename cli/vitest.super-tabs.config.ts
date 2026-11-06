@@ -11,6 +11,8 @@ const FILES = ['src/superTabs/route.ts', 'src/superTabs/routeCommand.ts', 'src/s
   'src/superTabs/routeCheapFirst.ts', 'src/superTabs/routeMeasured.ts', 'src/superTabs/windowPull.ts', 'src/superTabs/machineFit.ts',
   // Whose PM an account runs (Ken, 11-05).
   'src/superTabs/pmAccounts.ts',
+  // A PM moves between its owner's ticked Claude accounts (2026-11-06).
+  'src/superTabs/pmRotation.ts',
 ]
 export default defineConfig({
   test: {

@@ -2167,6 +2167,26 @@ describe('registry across a reboot and pane loss', () => {
     expect(registry.setCodexHome(claude.entry.agentId, '/tmp/codex-work')).toBe(false)
   })
 
+  it('setClaudeHome and setTranscriptPath move a Claude row between accounts, and only a Claude row', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const claude = registry.openProcessAgent({ engine: 'claude', tmuxPane: '%8', processIdentity: processIdentity(80), claudeHome: '/tmp/claude-a' })!
+    const id = claude.entry.agentId
+    registry.setClaudeHome(id, '/tmp/claude-b')
+    expect(registry.byAgent(id)?.claudeHome).toBe('/tmp/claude-b')
+    registry.setClaudeHome(id, undefined)
+    expect(registry.byAgent(id)?.claudeHome).toBeNull()
+    registry.setTranscriptPath(id, '/tmp/claude-b/projects/-work/s.jsonl')
+    expect(registry.byAgent(id)).toMatchObject({ transcriptPath: '/tmp/claude-b/projects/-work/s.jsonl', projectDir: '-work' })
+    registry.setTranscriptPath(id, null)
+    expect(registry.byAgent(id)?.transcriptPath).toBeNull()
+    // No-ops: unknown row, same value, another engine.
+    registry.setClaudeHome('nope', '/tmp/x'); registry.setTranscriptPath('nope', null); registry.setTranscriptPath(id, null); registry.setClaudeHome(id, undefined)
+    const codex = registry.openProcessAgent({ engine: 'codex', tmuxPane: '%9', processIdentity: processIdentity(81) })!
+    registry.setClaudeHome(codex.entry.agentId, '/tmp/x')
+    expect(registry.byAgent(codex.entry.agentId)?.claudeHome).toBeNull()
+  })
+
   it('clearProcessIdentity forgets the pid everywhere it is indexed', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()

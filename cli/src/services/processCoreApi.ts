@@ -140,6 +140,14 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       },
       closeMember: async (agentId, creationId) => await (ask?.('close_member', { agentId, ...(creationId ? { creationId } : {}) }) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }))
         .catch(() => ({ error: 'SERVICE_UNAVAILABLE' })),
+      // The core's restarter answers when the relaunch has ended: asked with no wait of ours, so a slow one is the real answer.
+      restartOnAccount: async (agentId, claudeHome) => {
+        const answer = await ask?.('restart_on_account', { agentId, claudeHome }).catch(() => null)
+        if (answer?.ok === true) return { ok: true }
+        return answer?.ok === false && typeof answer.code === 'string'
+          ? { ok: false, code: answer.code, ...(typeof answer.message === 'string' ? { message: answer.message } : {}) }
+          : { ok: false, code: 'SERVICE_UNAVAILABLE' }
+      },
       stopped: async agentId => (await ask?.('stopped', { agentId }).catch(() => null))?.stopped === true,
       gone: async agentId => (await ask?.('gone', { agentId }).catch(() => null))?.gone === true,
       creationStatus: async creationId => creationObservation(creationId,

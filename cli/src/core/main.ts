@@ -51,7 +51,7 @@ import { loginShellCaptureLine, warmLoginShellEnvironment } from '../lib/loginSh
 import { enableOffThreadExec } from '../lib/offThreadExec.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
-import { claudeHomeOffered } from '../lib/claudeProfiles.js'
+import { claudeHomeOffered, listClaudeProfiles } from '../lib/claudeProfiles.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from '../lib/registry.js'
 import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
@@ -1017,6 +1017,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The Super Tab host keeps its Leads alive and closes the sessions its backend ends (superTabs/host.ts). Read when it
     // asks, never now: the lifecycle is built further down, and one asked before then is refused, and asked again later.
     resumeAgent: async (agentId) => lifecycle.resumeAgent(agentId),
+    restartAgent: (agentId, launchArgs, claudeHome) => restartAgent(agentId, launchArgs, claudeHome),
     // What it may close and reopen is decided in this process, on what its host retains (superTabs/inCore/agents.ts).
     ...(swarm ? { swarmAgents: (agentDeps) => swarm.createSwarmAgents({ ...agentDeps,
       members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR) },
@@ -2955,6 +2956,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     paneSwapDeps,
     restartHeld: (agentId) => heldLaunches.restartHeld(agentId),
     moveHeld: (agentId) => moveHeld.has(agentId),
+    profileHomes: () => listClaudeProfiles([], { machineId: machineIdNow() }).filter((profile) => !profile.default).map((profile) => profile.path),
   })
   // Agents on a drained pty host move, one at a time and only while nobody uses them, to the target host once it can seed
   // a pane (lib/hostMove/mover.ts). Each move is the agent's lifecycle operation: a restart, stop or delete waits for it

@@ -28,6 +28,7 @@ import { RELAY_REASONS, teamRelayHealth, type RelayHealth } from './relayHealth.
 import type { PrivacyObservation } from '../team/privacy.js'
 import { repositoryKey } from './route.js'
 import { cleanupClosed } from './cleanupCloses.js'
+import { readPmPool } from '../lib/pmAccountPool.js'
 import { listClaudeProfiles, codexReportLabel, profileId } from '../lib/claudeProfiles.js'
 import { defaultCodexHome, listCodexProfiles } from '../lib/codexProfiles.js'
 import { usageTarget, validModelTokens, validUsageTarget, type ModelTokens } from '../lib/agentUsageWire.js'
@@ -161,8 +162,10 @@ export interface MachineDeps {
   /** The Claude and Codex profile folders this machine offers ([listClaudeProfiles], [listCodexProfiles]). */
   claudeProfiles?: (machineId: string) => Array<{ id: string; path: string; reportLabel: string; offered: boolean; default?: true }>
   codexProfiles?: () => Array<{ path: string; offered?: boolean }>
+  /** The profile ids the owner ticked for a Product Manager here (lib/pmAccountPool.ts). */
+  pmPool?: () => string[]
 }
-const MACHINE_DEPS = { claudeProfiles: (machineId: string) => listClaudeProfiles([], { machineId }), codexProfiles: () => listCodexProfiles(), backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }
+const MACHINE_DEPS = { pmPool: readPmPool, claudeProfiles: (machineId: string) => listClaudeProfiles([], { machineId }), codexProfiles: () => listCodexProfiles(), backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }
 /** A start's folder preparation can clone a whole repository; past this, its cleanup gives up and tries again later. */
 const CLEANUP_WAIT_MS = 10 * 60_000
 const CLEANING_WAIT = 'Waiting for this machine to finish cleaning up this Swarm.'
@@ -301,6 +304,10 @@ export class ContributedMachines {
   /** Per profile, its last allowance and until when it stands; and until when Anthropic is refusing allowance reads. */
   private readonly profileReads = new Map<string, { value: { left: number | null; resetsAt: string | null }; until: number }>()
   private anthropicLimitedUntil = 0
+  /** The pass that last read the PM pool's accounts: once per pass, whatever the number of Swarms. */
+  private pmReadPass = -1
+  /** Per Claude profile, the windows of its last readable allowance (the PM's account pool shows both, not just the tightest). */
+  private readonly profileWindows = new Map<string, ReturnType<typeof quotaOf>['windows']>()
   /** Per Swarm folder, its checkouts' readiness and until when it stands, and the folders being read now. A push check
    *  asks the remote, so it is read beside the pass, never holding up a start. */
   private readonly checkoutReads = new Map<string, { value: ReadyCheckout[] | null; until: number }>()
@@ -370,10 +377,34 @@ export class ContributedMachines {
     const providers = list(value.providers)
     if (engine === 'claude' && providers.some(p => p.outcome === 'answered' && p.httpStatus === 429)) this.anthropicLimitedUntil = now + USAGE_LIMITED_MS
     const wait = !Array.isArray(value.providers) ? USAGE_RETRY_MS : providers.some(p => p.outcome === 'answered' && p.httpStatus === 429) ? USAGE_LIMITED_MS : USAGE_FRESH_MS
-    const read = allowanceLeft(quotaOf(value, engine, false).windows)
+    const quota = quotaOf(value, engine, false)
+    if (engine === 'claude' && quota.known) this.profileWindows.set(id, quota.windows)
+    const read = allowanceLeft(quota.windows)
     const result = read.left === null && kept ? kept.value : read
     this.profileReads.set(key, { value: result, until: now + wait })
     return result
+  }
+  /** The windows last read for a Claude account here, `'default'` for the default one, as the owner sees them: what is left of each,
+   *  and when it resets. Only what the reads above already kept (no new read), so an account not read yet has none. */
+  claudeWindows(id: string): Array<{ name: '5-hour' | 'weekly'; leftPercent: number; resetsAt?: string }> {
+    const windows = id === 'default' ? this.goodQuota.get('claude')?.windows : this.profileWindows.get(id)
+    return (windows ?? []).map(w => {
+      const at = typeof w.resetsAt === 'number' ? new Date(w.resetsAt < 1e12 ? w.resetsAt * 1000 : w.resetsAt)
+        : typeof w.resetsAt === 'string' ? new Date(w.resetsAt) : null
+      return { name: w.name as '5-hour' | 'weekly', leftPercent: Math.min(100, Math.max(0, Math.round(100 - w.usedPercent))),
+        ...(at && !Number.isNaN(at.getTime()) ? { resetsAt: at.toISOString() } : {}) }
+    })
+  }
+  /** The accounts the owner ticked for a PM here are read as the offered ones are (the same wait, the same refusal backoff), so the
+   *  PM rotation knows what each has left. They are kept here only and never reported: a ticked account that is not offered stays
+   *  private to this machine. The default account's reading is already there (quotaFor). */
+  private async readPmPool(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> }, began: number): Promise<void> {
+    if (this.pmReadPass === began) return
+    this.pmReadPass = began
+    const ticked = new Set(this.deps.pmPool!())
+    for (const p of this.deps.claudeProfiles!(this.machineId).filter(p => !p.default && ticked.has(p.id)).slice(0, MAX_PROFILES_PER_ENGINE * 4)) {
+      await this.profileAllowance(local, 'claude', p.id)
+    }
   }
   /** The accounts a Product Manager here could move to, by id and label only: the default account's allowance is the one
    *  already read, the others are read each at most once per [USAGE_FRESH_MS]. An entry the backend would refuse is left out. */
@@ -664,6 +695,7 @@ export class ContributedMachines {
         // Only to a backend that asks for them (backend read/hostRows.ts): an older one refuses the field, and would refuse
         // every reading with it.
         // Only to a backend that asks for capabilities, as it is new enough to know the field: an older one refuses it.
+        await this.readPmPool(local, began)
         const profiles = row.capabilitiesWanted === true && began >= this.profilesRefusedUntil ? await this.profiles(local, engines, allowances) : []
         const observation = { generation: pool.generation, tools: reportedTools, ...(Object.keys(tokens).length ? { harnessTokens: tokens } : {}),
           ...(Object.keys(quotaReasons).length ? { quotaReasons } : {}),

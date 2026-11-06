@@ -48,8 +48,10 @@ export type ForkAgent = NonNullable<BackendSocket['onForkAgent']>
  *  agentId and (best-effort) resuming the same engine session. `resumed` says whether the relaunch
  *  actually resumed the prior conversation or had to fall back to a fresh one (core/agents/restart.ts). `launchArgs` are
  *  the owner's new launch words (an empty list clears them): the relaunch is built with them and saves them on the record
- *  only once the engine is back, so a refused or failed restart saves nothing. */
-export type RestartAgent = (agentId: string, launchArgs?: string[]) => Promise<
+ *  only once the engine is back, so a refused or failed restart saves nothing. `claudeHome` moves a Claude agent to another
+ *  of this machine's Claude accounts (`null`: the default one); it is not on the wire, only `CoreApi.agents.restartOnAccount`
+ *  asks it, for the Swarm host's PM account rotation. */
+export type RestartAgent = (agentId: string, launchArgs?: string[], claudeHome?: string | null) => Promise<
   { ok: true; session: RegisteredSession; resumed: boolean }
   | { ok: false; error: string; detail?: string; reason?: string }
 >

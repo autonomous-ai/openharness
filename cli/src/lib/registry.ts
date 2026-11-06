@@ -2543,6 +2543,30 @@ class Registry {
     return true
   }
 
+  /**
+   * Move a Claude row to another account's home (undefined: the default account). The fill-only rule above
+   * (`register`, `setCodexHome`) is for a home the row did not know; this one is the owner's own move: a PM changing
+   * between its machine's Claude accounts keeps its conversation and relaunches under the other CLAUDE_CONFIG_DIR
+   * (spec 2026-11-06-pm-account-rotation, core/agents/restart.ts). Only that restart calls it.
+   */
+  setClaudeHome(agentId: string, claudeHome: string | undefined): void {
+    const session = this.agents.get(agentId)
+    if (!session || session.engine !== 'claude' || (session.claudeHome ?? undefined) === claudeHome) return
+    session.claudeHome = claudeHome ?? null
+    session.touchedAt = Date.now()
+    this.save()
+  }
+
+  /** Point a row at the transcript its conversation was carried to (`setClaudeHome`'s companion), or null. */
+  setTranscriptPath(agentId: string, transcriptPath: string | null): void {
+    const session = this.agents.get(agentId)
+    if (!session || session.transcriptPath === transcriptPath) return
+    session.transcriptPath = transcriptPath
+    session.projectDir = transcriptPath ? basename(dirname(transcriptPath)) : session.projectDir
+    session.touchedAt = Date.now()
+    this.save()
+  }
+
   /** Fill in the Hermes home a row did not know — found by looking for its session in each store, or
    *  read off the live process. Never overwrites: like `setCodexHome`, a session does not move between
    *  homes, and a later probe that could not read the process must not take the answer away. */

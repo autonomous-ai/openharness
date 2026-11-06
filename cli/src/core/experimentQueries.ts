@@ -43,7 +43,7 @@ import { nativeTurnCursorIn } from '../lib/nativeTurnObservations.js'
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud' | 'superTabs' | 'transcripts'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'activity', 'close_swarm', 'keep_lead_alive', 'close_member', 'stopped', 'gone', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'super_tab_screen', 'super_tab_input', 'super_tab_input_if_screen'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'activity', 'close_swarm', 'keep_lead_alive', 'close_member', 'restart_on_account', 'stopped', 'gone', 'creation_status', 'native_turns', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'super_tab_attention', 'super_tab_cards', 'super_tab_card_recap', 'super_tab_observers', 'super_tab_screen', 'super_tab_input', 'super_tab_input_if_screen'])
 const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
@@ -108,6 +108,15 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       return query === 'keep_lead_alive'
         ? { ...await (core.agents.keepLeadAlive?.(agentId) ?? { ok: false, error: 'UNSUPPORTED' }) }
         : { ...await (core.agents.closeMember?.(agentId, creationId as string | undefined) ?? { error: 'UNSUPPORTED' }) }
+    }
+    // A Product Manager moved to another Claude account: the core's own restarter checks the engine and that the home is one
+    // of this machine's profiles, and answers when the relaunch has ended.
+    case 'restart_on_account': {
+      if (service !== 'superTabs') return { error: 'NOT_SUPER_TABS' }
+      const { agentId, claudeHome } = payload
+      if (typeof agentId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(agentId)
+        || !(claudeHome === null || typeof claudeHome === 'string' && claudeHome !== '')) return { error: 'INVALID_REQUEST' }
+      return { ...await (core.agents.restartOnAccount?.(agentId, claudeHome) ?? { ok: false, code: 'UNSUPPORTED' }) }
     }
     // Whether its agents are in a turn: a Buddy session's idle end asks before ending one (superTabs/host.ts).
     case 'activity': {

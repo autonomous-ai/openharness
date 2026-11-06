@@ -101,6 +101,7 @@ import '../settings/experimental_features.dart';
 import '../core/local_key_value_store.dart';
 import '../core/harness_file_store.dart';
 import '../super_tabs/swarm_accounts.dart';
+import '../super_tabs/pm_accounts.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/attachment_viewer.dart' show superTabForgetPictures;
 import '../super_tabs/image_cache.dart' show superTabImageCache;
@@ -16385,6 +16386,80 @@ class AppNotifier extends ChangeNotifier {
       'TOO_MANY' => 'Too many accounts are offered. Withdraw one first.',
       _ => 'Couldn’t reach this computer. Try again.',
     };
+  }
+
+  /// A reply of the PM account requests, or null when this computer's CLI does not know them yet
+  /// (the screen then hides the feature) or cannot be reached.
+  Future<Map<String, dynamic>?> _pmAccountsRequest(
+    String machineId,
+    String type,
+    Map<String, dynamic> payload,
+  ) async {
+    if (stateOf(machineId)?.isLocalMachine != true) return null;
+    try {
+      final reply = await _conn(
+        machineId,
+      ).request(type, payload: payload, timeout: const Duration(seconds: 10));
+      return reply['error'] is String ? null : reply;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The Claude accounts of this computer with whether PMs may use each, or null when the CLI is too old.
+  Future<List<PmAccount>?> pmAccounts(String machineId) async {
+    final reply = await _pmAccountsRequest(
+      machineId,
+      'pm_accounts_list',
+      const {},
+    );
+    final rows = reply?['accounts'];
+    if (rows is! List) return null;
+    return [for (final row in rows) ?PmAccount.fromJson(row)];
+  }
+
+  /// Lets PMs use [ids], or stops them. Null when done, or what to tell the owner.
+  Future<String?> setPmAccountUse(
+    String machineId,
+    List<String> ids,
+    bool on,
+  ) async {
+    if (stateOf(machineId)?.isLocalMachine != true) {
+      return 'Accounts can be chosen on their own computer only.';
+    }
+    String? code;
+    try {
+      final reply = await _conn(machineId).request(
+        'pm_accounts_use',
+        payload: {'ids': ids, 'on': on},
+        timeout: const Duration(seconds: 10),
+      );
+      code = reply['error'] as String?;
+    } on WsRequestFailure catch (failure) {
+      code = failure.code;
+    } catch (_) {
+      code = 'UNREACHABLE';
+    }
+    return switch (code) {
+      null => null,
+      'NOT_FOUND' => 'That account’s folder is gone.',
+      'UNSUPPORTED' ||
+      'UNKNOWN_TYPE' => 'Update Harness on this computer to choose accounts.',
+      _ => 'Couldn’t save that. Try again.',
+    };
+  }
+
+  /// The moves PMs made between accounts, newest first, or null when the CLI is too old.
+  Future<List<PmMove>?> pmAccountMoves(String machineId) async {
+    final reply = await _pmAccountsRequest(
+      machineId,
+      'pm_accounts_history',
+      const {'limit': 20},
+    );
+    final rows = reply?['moves'];
+    if (rows is! List) return null;
+    return [for (final row in rows) ?PmMove.fromJson(row)]
+      ..sort((a, b) => b.at.compareTo(a.at));
   }
 
   /// What `usage_read` last said per account, kept so opening the picker again does not call the vendors again.

@@ -25,6 +25,20 @@ describe('the core API services stand on', () => {
     expect([given!.closeAgent, given!.resumeAgent, given!.creationStatus]).toEqual([closeAgent, resumeAgent, creationStatus])
   })
 
+  // A PM's account move (superTabs/pmRotation.ts): the core's own restarter answers it, and says why when it does not start.
+  it('offers a restart on another Claude account only when handed the core\'s restarter, and says why it failed', async () => {
+    const restartAgent = vi.fn(async (_id: string, _args: undefined, _home: string | null): Promise<{ ok: true } | { ok: false; error: string; detail?: string }> => ({ ok: true }))
+    const core = createCoreApi({ ...coreDeps(), restartAgent })
+    expect(await core.agents.restartOnAccount!('pm', '/work/.claude-b')).toEqual({ ok: true })
+    expect(restartAgent).toHaveBeenLastCalledWith('pm', undefined, '/work/.claude-b')
+    restartAgent.mockResolvedValueOnce({ ok: false, error: 'INVALID_PROFILE' })
+    expect(await core.agents.restartOnAccount!('pm', null)).toEqual({ ok: false, code: 'INVALID_PROFILE' })
+    expect(restartAgent).toHaveBeenLastCalledWith('pm', undefined, null)
+    restartAgent.mockResolvedValueOnce({ ok: false, error: 'RESTART_FAILED', detail: 'tmux gone' })
+    expect(await core.agents.restartOnAccount!('pm', null)).toEqual({ ok: false, code: 'RESTART_FAILED', message: 'tmux gone' })
+    expect(createCoreApi(coreDeps()).agents.restartOnAccount).toBeUndefined()
+  })
+
   it('exposes an optional native-turn observer without importing feature state', () => {
     const nativeTurns = vi.fn(async () => null)
     expect(createCoreApi({ ...coreDeps(), nativeTurns }).transcripts.nativeTurns).toBe(nativeTurns)
