@@ -23,8 +23,11 @@ describe('project chat content limits', () => {
     })
 
   it('does not let a file or person tag bypass a status refusal', () => {
-    const { send } = setup()
+    const { f, send } = setup()
     expect(() => send('Status: tests running.', { extra: { mentions: [owner.userId] } })).toThrow(expect.objectContaining({ code: 'CHAT_STATUS' }))
+    expect(() => f.run({ type: 'message.send', conversationId: 'lead', text: 'Status: tests running.', replyTo: null, recipientIds: [], attachmentIds: ['file'] }, f.as(f.lead),
+      { attachments: [{ id: 'file', name: 'evidence.txt', mime: 'text/plain', size: 12, url: 'https://files.invalid/evidence' }] }))
+      .toThrow(expect.objectContaining({ code: 'CHAT_STATUS' }))
   })
 
   it('refuses a repeated pull request card pointer but allows new facts with its link', () => {
@@ -33,6 +36,7 @@ describe('project chat content limits', () => {
     f.group('lead').cards = { pullRequests: [{ url, messageId: 'card' }] }
     expect(() => send(url)).toThrow(expect.objectContaining({ code: 'CHAT_CARD_REPEAT', message: expect.stringMatching(/card|thread/i) }))
     expect(() => send(`PR #12: ${url}`)).toThrow(expect.objectContaining({ code: 'CHAT_CARD_REPEAT' }))
+    expect(() => send('PR #12')).toThrow(expect.objectContaining({ code: 'CHAT_CARD_REPEAT' }))
     expect(() => send(`The login fix shipped in 2.3. ${url}`)).not.toThrow()
     expect(() => send('https://github.com/acme/repo/pull/13')).not.toThrow()
   })
