@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { TeamConfig } from './config.js'
-import { recordTeamSignedOut } from './observer.js'
+import { afterRevoke, recordTeamSignedOut } from './observer.js'
 
 const config = { user: '_harnessteam', statusFile: '/Users/_harnessteam/.harness/team-status.json' } as TeamConfig
 
@@ -36,5 +36,24 @@ describe('the Team config the real observer reads', () => {
     delete process.env.VITEST
     try { expect(teamConfigHere()).toBe(config) } finally { process.env.VITEST = vitest }
     vi.doUnmock('./config.js')
+  })
+})
+
+// Security review 2 of #3331, third round: the revoke's status was written while the session's own signed-out mark still
+// waited for the refresh lock, so an observer in that gap read the session as live and healed the status to signed-in.
+describe('a revoke, in order', () => {
+  it('writes the status only once the session is marked signed out, and even when marking failed', async () => {
+    const order: string[] = []
+    let finish: () => void = () => {}
+    const mark = () => new Promise<void>((resolve) => { finish = () => { order.push('marked'); resolve() } })
+    const done = afterRevoke(mark, () => order.push('recorded'))
+    await Promise.resolve()
+    expect(order).toEqual([])
+    finish()
+    await done
+    expect(order).toEqual(['marked', 'recorded'])
+    const failed: string[] = []
+    await afterRevoke(async () => { throw new Error('lock held') }, () => failed.push('recorded'))
+    expect(failed).toEqual(['recorded'])
   })
 })
