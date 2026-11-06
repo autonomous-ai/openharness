@@ -39,8 +39,16 @@ export const isReleaseWork = (state: SuperTabState, group: Conversation): boolea
   return !!task?.release && !task.teamWritten && !group.teamWritten && !namesCode(task) && (group === task || !namesCode(group))
 }
 
+/** The pull requests already merged in [state]'s projects: those a task's card shows merged, and those still waiting on a release
+ *  list. A merged pull request is on main, which release work reads anyway; it is not code a release task builds, whether or not its
+ *  release has shipped and taken it off the list (security review 2 of #3324). */
+export const mergedPullRequests = (state: SuperTabState): string[] => [...new Set([
+  ...state.conversations.flatMap(c => c.cards?.pullRequests?.filter(card => card.mergedAt !== undefined).map(card => card.url) ?? []),
+  ...(state.projects ?? []).flatMap(p => p.releases?.pending.map(entry => entry.url) ?? []),
+])]
+
 /** The texts of posts in [group] that name its code, for its code list (store.ts). On a release task a post cites the merged pull
- *  requests it releases (the Integrator applying a rollout note), which are on the project's release list [onList] and build nothing
+ *  requests it releases (the Integrator applying a rollout note), which are already merged [onList] and build nothing
  *  here; every other pull request a post names is its code, as on any task, so a builder's posted pull request ends the exemption
  *  (security reviews 1 and 2 of #3324). */
 export const postedCode = (group: Conversation, texts: readonly string[], onList: readonly string[], repositoryUrl?: string | null): string[] => {
@@ -54,7 +62,7 @@ export const postedCode = (group: Conversation, texts: readonly string[], onList
  * The texts that name [group]'s code, besides its brief and title, for its code list (store.ts): its latest status result, its
  * checks' evidence and the posts that count ([posts], model.ts store). On a release task only what it builds counts (security reviews
  * of #3324): the pull request links of a result given with status review (the Ready line, which the push read reads) and of its posts,
- * without those on the project's release list [onList]; a working, done or blocked note and the check evidence cite what was released.
+ * without those already merged [onList]; a working, done or blocked note and the check evidence cite what was released.
  */
 export function releaseCodeSources(group: Conversation, from: { status?: string | null; result?: string | null; evidence: ReadonlyArray<string | null | undefined>;
   posts: readonly string[]; onList: readonly string[]; repositoryUrl?: string | null }): string[] {

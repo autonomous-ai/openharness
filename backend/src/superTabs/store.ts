@@ -2,7 +2,7 @@ import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { applyCrewKeep, crewMoveRequest, crewNeedsMachine, type CrewDeps } from './crewKeep.js'
 import { finishedWakes } from './crewTimes.js'
 import { isCrew } from './crew.js'
-import { isReleaseWork, releaseCodeSources } from './teamWritten.js'
+import { isReleaseWork, mergedPullRequests, releaseCodeSources } from './teamWritten.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
@@ -2043,8 +2043,8 @@ export class SuperTabStore {
           || message.author.id === group.assignment?.agentId
           || (message.author.kind === 'agent' && ledProject(effects.state, message.author.id)?.id === groupProject(effects.state, group).id)))
           .map(message => message.text) : []
-        // On a release task the pull requests on its project's release list, cited in a post, are not its code (teamWritten.ts postedCode).
-        const onList = group.release ? (groupProject(effects.state, group).releases?.pending ?? []).map(entry => entry.url) : []
+        // On a release task the pull requests already merged, cited in a post, are not its code (teamWritten.ts postedCode).
+        const onList = group.release ? mergedPullRequests(effects.state) : []
         appendCodePullRequestUrls(group, [group.brief, group.title, ...releaseCodeSources(group, { status: group.assignment?.status, result: group.assignment?.result,
           evidence: group.checks.map(check => check.evidence), posts: codePosts, onList, repositoryUrl })], repositoryUrl)
         cleanPullRequestLinks(group, repositoryUrl)
