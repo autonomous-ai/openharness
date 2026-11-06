@@ -368,6 +368,23 @@ describe('a Buddy coming home by itself', () => {
     expect(session().homeOwed).toEqual({ reason: 'limit', tries: 2 })
   })
 
+  // Review of #3393: the last unanswered follow-up dropped the session's follow-up with no word to its owner.
+  it('tells the owner when follow-ups its machine never answered run out, and asks no more', () => {
+    const f = onModel()
+    const session = addSession(f, 'session', 'h-session', MODEL)
+    f.run({ type: 'agent.alert', agentId: f.buddyId, alert: 'limit', active: true }, f.buddy())
+    f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true, stayed: ['h-session'] }, f.buddy())
+    const said: string[][] = []
+    for (let i = 1; i <= 3; i++) {
+      unservedBuddyModels(f.state, NOW, () => `follow-up-${i}`)
+      said.push(expiredModelRequests(f.state, NOW + BUDDY_MODEL_LEASE_MS).map(line => line.text))
+    }
+    expect(said).toEqual([[], [], ["A thread session is still on DeepSeek 4.1 Flash: its computer didn't answer. End that thread's session to bring it back to your subscription."]])
+    expect(session().homeOwed).toBeUndefined()
+    unservedBuddyModels(f.state, NOW, () => 'again')
+    expect(f.agent().modelRequest).toBeUndefined()
+  })
+
   it('goes back when the model keeps failing', () => {
     const f = onModel()
     f.run({ type: 'agent.alert', agentId: f.buddyId, alert: 'model', active: true }, f.buddy())
