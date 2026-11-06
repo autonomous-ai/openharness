@@ -13,6 +13,7 @@ type Transaction = Prisma.TransactionClient
 
 /** The SwarmGroup indexes hot reads name, as prisma/schema.prisma declares them. */
 export const GROUP_INDEX = {
+  proposalDue: { deleted: 1, proposalDueAt: 1, tabId: 1, key: 1 },
   key: { tabId: 1, key: 1 },
   running: { tabId: 1, executionMachineId: 1 },
   agents: { tabId: 1, agentIds: 1 },

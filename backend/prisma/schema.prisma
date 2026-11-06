@@ -1974,6 +1974,8 @@ model SwarmGroup {
   messageSeq         Int       @default(0)
   reportSeq          Int       @default(0)
   lastActivityAt     DateTime
+  /// Next proposal deadline/revisit; null once none is due. Existing card history lives until project/Swarm deletion.
+  proposalDueAt      DateTime?
   /// The machines whose hosts this group's last write concerned: its agents' and its work's, before and after (host reads).
   hostMachineIds     String[]  @default([])
   /// A short hash of the fields host rows read (read/hostRows.ts); a post leaves it. Missing on a part written before it.
@@ -1985,6 +1987,7 @@ model SwarmGroup {
   /// Not indexed on `data.kind` (Atlas advisor, 2026-11-04, task #2841): no backend read filters by it, the only one that
   /// does is the rollback script scripts/buddy-sessions/end-all.ts, across every Swarm; and every hot read keeps its plan
   /// with such an index (the numbers are in task #2841's pull request). The top-level `kind` holds the same value.
+  @@index([deleted, proposalDueAt, tabId, key])
   @@unique([tabId, key])
   @@index([tabId, changedAt])
   @@index([tabId, dormant, changedAt])

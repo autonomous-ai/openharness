@@ -1,3 +1,4 @@
+import { dueProposalCards } from './proposalDue.js'
 // The Swarm's time checks run in the singleton worker (task #3385, anh Dee's Swarm redesign, 11-05): lost and stalled work,
 // failed starts and idle agents are found and told to each project's PM whether or not the PM is up. They ran only on the
 // PM's own poll before: on 11-05 a hung PM left five people's asks unanswered for 3 to 10 hours and the board showed nothing
@@ -64,7 +65,11 @@ export type TimeCheckMemory = Map<string, { at: string; checkedAt: number }>
  *  not checked for QUIET_CHECK_MS. One Swarm's failure is logged and skips that Swarm alone, and it is checked again next pass. */
 export async function runTimeCheckPass(db: PrismaClient, store: Pick<SuperTabStore, 'runTimeChecks'>, now: number, limit = TIME_CHECK_SWARMS,
   seen: TimeCheckMemory = new Map()) {
-  const rows = await timeCheckCandidates(db, now, limit)
+  const due = await dueProposalCards(db, now, limit)
+  const dueByTab = new Map<string, string[]>()
+  for (const row of due) dueByTab.set(row.tabId, [...dueByTab.get(row.tabId) ?? [], row.key])
+  const recent = await timeCheckCandidates(db, now, limit)
+  const rows = [...[...dueByTab.keys()].map(tabId => ({ tabId, at: `due:${now}` })), ...recent.filter(r => !dueByTab.has(r.tabId))].slice(0, limit)
   const pass = { swarms: rows.length, checked: 0, written: 0, failed: 0 }
   const listed = new Set(rows.map(row => row.tabId))
   for (const tabId of seen.keys()) if (!listed.has(tabId)) seen.delete(tabId)
@@ -73,7 +78,7 @@ export async function runTimeCheckPass(db: PrismaClient, store: Pick<SuperTabSto
     if (last && last.at === at && now - last.checkedAt < QUIET_CHECK_MS) continue
     pass.checked++
     try {
-      pass.written += await store.runTimeChecks(tabId)
+      pass.written += await store.runTimeChecks(tabId, dueByTab.get(tabId))
       seen.set(tabId, { at, checkedAt: now })
     } catch (error) {
       pass.failed++

@@ -1,3 +1,5 @@
+import { expireProposalQuestion } from './proposalClock.js'
+export { advanceProposalCards, proposalDueAt } from './proposalClock.js'
 /** Durable proposal metadata lives on its existing version-guarded card. Discussion stays in message rows. */
 import { z } from 'zod'
 import { author, fail, nextConversationNumber, person, stableId, type Actor, type Author, type Conversation, type MessageDraft, renderWorkTask, type SuperTabState } from './model.js'
@@ -24,6 +26,7 @@ export interface ProposalRecord {
   mergedInto?: string
   mergedFrom?: string[]
   overdue?: true
+  waitSince?: number
 }
 export interface ProposalQuestion {
   id: string; personId: string; question: string; defaultAnswer: string; deadline: number; requiresConsent: boolean
@@ -95,7 +98,7 @@ export function importLegacyProposal(state: SuperTabState, project: SwarmProject
   if (state.conversations.some(c => c.id === id)) return id
   const member = person(state, ask.personId)
   const card = createProposalCard(state, project, { personId: member.id, generation: member.generation }, {
-    title: ask.text.trim().slice(0, 160) || 'Earlier request', text: ask.text, goal: ask.text,
+    title: ask.text.trim().slice(0, 160) || 'Earlier request', text: ask.text, goal: ask.text.slice(0, 4000),
     why: 'Imported unanswered request; details remain to be clarified.', doneWhen: 'To be clarified on this card.',
     evidence: ['Original project message'], priority: 'P2',
   }, id, now)
@@ -138,7 +141,6 @@ function answerer(state: SuperTabState, actor: Actor, card: Conversation & { pro
 export function authorizeProposalAction(state: SuperTabState, actor: Actor, command: ProposalAction): void {
   const card = namedCard(state, actor, command.conversationId), project = groupProject(state, card)
   if (command.type === 'proposal.answer') { answerer(state, actor, card, command.questionId); return }
-  requireBoard(project)
   if (actor.kind !== 'agent' || ledProject(state, actor.agentId)?.id !== project.id) fail('COORDINATOR_REQUIRED', 'Only this project’s current PM decides, asks or merges proposals.', 403)
   if (command.type === 'proposal.merge') {
     const target = namedCard(state, actor, command.intoConversationId)
@@ -169,11 +171,12 @@ export function applyProposalAction(state: SuperTabState, actor: Actor, command:
   authorizeProposalAction(state, actor, command)
   const card = namedCard(state, actor, command.conversationId), sender = author(state, actor)
   const messages: MessageDraft[] = []
-  const result: Record<string, unknown> = { conversationId: card.id }
+  const result: Record<string, unknown> = { conversationId: card.id, messageId: operationId }
   const row = (text: string, source: Record<string, unknown>, recipients: string[] = [], id = operationId) =>
     messages.push({ id, conversationId: card.id, author: sender, text, recipients, replyTo: null, source })
   if (command.type === 'proposal.answer') {
     const q = answerer(state, actor, card, command.questionId)
+    messages.push(...expireProposalQuestion(state, card, q, now))
     result.applied = !q.answer
     if (!q.answer) q.answer = { text: command.text, at: now, by: sender.id }
     row(command.text, { kind: 'proposal-answer', questionId: q.id, applied: result.applied }, card.leadId ? [card.leadId] : [])
@@ -235,4 +238,10 @@ export function applyProposalAction(state: SuperTabState, actor: Actor, command:
     result.conversationId = target.id
   }
   return { messages, result }
+}
+
+/** Server-written sources are the only notices. A raw chat line never enters a switched PM's delivery queue. */
+export function pmAcceptsMessage(state: SuperTabState, recipientId: string, source: unknown): boolean {
+  const project = ledProject(state, recipientId)
+  return !project?.boardMode || !!source && typeof source === 'object' && typeof (source as { kind?: unknown }).kind === 'string'
 }
