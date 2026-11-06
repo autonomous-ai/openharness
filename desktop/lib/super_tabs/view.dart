@@ -3562,7 +3562,7 @@ class _SuperTabViewState extends State<SuperTabView>
                 TextButton.icon(
                   key: const ValueKey('super-board-chat-buddy'),
                   onPressed: () => _showBuddy(project),
-                  icon: const Icon(Icons.arrow_back, size: 16),
+                  icon: const Icon(AppIcons.arrowLeft, size: 16),
                   label: const Text('Your Buddy'),
                 ),
               Expanded(
