@@ -26,6 +26,16 @@ private let kFontsChannel = "harness/fonts"
 private let kSystemSymbolsChannel = "harness/system_symbols"
 
 class MainFlutterWindow: NSWindow {
+  /// True only while the opening maximise runs (task #3559). AppKit's zoom
+  /// animates the resize on the main thread, ~400-500 ms before the first
+  /// Flutter frame; at launch the window is not on screen long enough to be
+  /// worth animating. Every later zoom (the green button) keeps its animation.
+  var resizesInstantly = false
+
+  override func animationResizeTime(_ newFrame: NSRect) -> TimeInterval {
+    resizesInstantly ? 0 : super.animationResizeTime(newFrame)
+  }
+
   private var swarmTitlebar: SwarmTitlebar?
   private var menuChannel: FlutterMethodChannel?
   private var clipboardImageChannel: FlutterMethodChannel?

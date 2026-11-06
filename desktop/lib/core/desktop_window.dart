@@ -61,7 +61,14 @@ Future<void> configureDesktopWindow({
   // is dropped on Windows, which left the app opening at the 1280x800 default.
   await windowManager.show();
   speedMarks.launch('window shown');
-  await windowManager.maximize();
+  // macOS: the window manager's maximize is AppKit's animated zoom, which
+  // blocks the main thread for ~400-500 ms before the first frame (task #3559).
+  // The native channel zooms the same way without the animation.
+  if (RuntimePlatform.isMacOS) {
+    await const MethodChannel('harness/swarm_tabs').invokeMethod('maximize');
+  } else {
+    await windowManager.maximize();
+  }
   speedMarks.launch('window maximized');
   await windowManager.focus();
 }

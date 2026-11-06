@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'dart:io';
 
@@ -26,6 +25,9 @@ void main() {
   final calls = <String>[];
   final nativeCalls = <MethodCall>[];
   final windowCalls = <MethodCall>[];
+  // The palette call; `maximize` shares the channel since task #3559.
+  Iterable<MethodCall> configureCalls() =>
+      nativeCalls.where((call) => call.method == 'configure');
   Future<Object?> Function(MethodCall)? nativeReply;
   Future<Object?> Function(MethodCall)? windowReply;
 
@@ -127,8 +129,7 @@ void main() {
     final setup = configureDesktopWindow();
     await tester.pump();
     await setup;
-    expect(nativeCalls.single.method, 'configure');
-    expect(nativeCalls.single.arguments, {
+    expect(configureCalls().single.arguments, {
       'palette': HarnessPalette.graphite.nativeColors,
     });
     expect(calls.indexOf('native:configure'), lessThan(calls.indexOf('show')));
@@ -143,7 +144,7 @@ void main() {
       final setup = configureDesktopWindow(palette: palette);
       await tester.pump();
       await setup;
-      expect(nativeCalls.single.arguments, {
+      expect(configureCalls().single.arguments, {
         'palette': palette.nativeColors,
       });
       expect(
@@ -187,10 +188,7 @@ void main() {
     expect(calls, isNot(contains('maximize')));
     // After show, so the maximise is not dropped on an unshown window.
     expect(calls.indexOf('show'), lessThan(calls.indexOf('native:maximize')));
-    expect(
-      calls.indexOf('native:maximize'),
-      lessThan(calls.indexOf('focus')),
-    );
+    expect(calls.indexOf('native:maximize'), lessThan(calls.indexOf('focus')));
   }, skip: !Platform.isMacOS);
 
   testWidgets('the window keeps its 1280x800 frame to return to', (
