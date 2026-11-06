@@ -20,7 +20,7 @@ import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
 import { INSTRUCTIONS_TEMPLATE } from '../src/superTabs/instructionsTemplate.js'
 import { rosterRows } from './hostRows.test-support.js'
 import { SEED_RULES } from '../src/superTabs/policy.js'
-import { PM_SCHEDULE_TEXT } from '../src/superTabs/pmSchedule.js'
+import { PM_SCHEDULE_TEXT, pmScheduleText } from '../src/superTabs/pmSchedule.js'
 import { plan, profiled, reads } from './plans.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -451,7 +451,9 @@ describe('the built-in PM schedule beside the instructions', () => {
   it('is in the coordinator\'s read alone, and the document read is unchanged', async () => {
     const { tab, lead, worker } = await withWorker()
     const asLead = (await get(host, doc(tab, lead))).json().data
-    expect(asLead.builtIn).toBe(PM_SCHEDULE_TEXT)
+    // Outside the rebased Swarm (#4097): the built-in schedule with the project's own release window, no v2 section.
+    expect(asLead.builtIn).toBe(pmScheduleText({ id: tab }, {}, SEED_RULES.releaseWindow))
+    expect(asLead.builtIn).not.toBe(PM_SCHEDULE_TEXT)
     expect(asLead).toMatchObject({ revision: 1, text: INSTRUCTIONS_TEMPLATE, hash: instructionsHash(INSTRUCTIONS_TEMPLATE) })
     for (const [user, as] of [[host, worker], [owner]] as Array<[AuthUser, string?]>) {
       const answer = await get(user, doc(tab, as))
@@ -463,8 +465,20 @@ describe('the built-in PM schedule beside the instructions', () => {
   it('moves the coordinator\'s roster row by its hash; no other agent\'s row carries one', async () => {
     const { tab, lead, worker } = await withWorker()
     const rows = (await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab) as Array<{ agent: { id: string }; instructions: Record<string, unknown> }>
-    expect(rows.find(r => r.agent.id === lead)!.instructions.builtInHash).toBe(instructionsHash(PM_SCHEDULE_TEXT))
+    expect(rows.find(r => r.agent.id === lead)!.instructions.builtInHash).toBe(instructionsHash(pmScheduleText({ id: tab }, {}, SEED_RULES.releaseWindow)))
     expect(rows.find(r => r.agent.id === worker)!.instructions).not.toHaveProperty('builtInHash')
+  })
+
+  // Diego 11-06 (#4097): a team with another window is told its own hours, and its own process lines keep their force.
+  it('tells a PM outside the rebased Swarm its project\'s own release window, and never that the Swarm replaces its process lines', async () => {
+    const { tab, lead } = await withLead()
+    const berlin = { start: '13:00', end: '22:00', timeZone: 'Europe/Berlin' }
+    await run(tab, { type: 'rules.set', projectId: 'lead', baseRevision: 0, summary: 'Berlin hours',
+      rules: { ...structuredClone(SEED_RULES), releaseWindow: berlin, releasePace: { ...SEED_RULES.releasePace, backendPause: null } } })
+    const builtIn = (await get(host, doc(tab, lead))).json().data.builtIn as string
+    expect(builtIn).toContain('Releases run 13:00-22:00 Europe/Berlin time')
+    expect(builtIn).not.toContain('replaces every process line')
+    expect(builtIn).not.toContain('Vietnam time')
   })
 
   it('refuses a save holding the built-in section, and takes the document as read', async () => {
