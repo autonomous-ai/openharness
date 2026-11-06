@@ -17,7 +17,10 @@ a card is a raised rounded tile with a thin lane strip, the title first and one 
 and a "Needs you" bar sits on top from the same needs the Tasks tab lists today (`swarmProjectTasks().waiting`). A tap on a
 card opens the task's own conversation, which is the card's one flat chat. The project page's tabs become Board then Chat
 (`SwarmProjectTab.current`), so a project opens on its Board and the chat with everyone is unchanged one tap away.
-The Proposal column reads the open Buddy proposals the server already answers (`GET /api/super-tabs/:tabId/proposals`).
+The Proposal column reads the open Buddy proposals the server already answers (`GET /api/super-tabs/:tabId/proposals`), and
+Merged and Shipped need the project's closed conversations, which a first load does not hold: the Board reads them with the
+phone's own older-work read (`loadDormant`), back to the Shipped window, as Desktop's `readClosedShipped` does. Both reads
+keep Desktop's bounds (a proposals read only when the project chat moved and at most once a minute; at most 40 pages).
 
 **Tech Stack:** Dart, Flutter widget and unit tests with the fake Swarm of the mobile `test/swarm` fixtures; light and dark
 screenshots from the shots tests and the iOS simulator.
@@ -124,14 +127,19 @@ Proposal, and `needsYou` as the list `swarmProjectTasks().waiting` holds.
   out another project's tasks, a private chat and the person's Buddy chat, and counts what waits on the reader. Commit.
 - [ ] Implement `swarmBoardOf` over `swarmProjectWork` and the proposals. Commit.
 
-## Task 3: the proposals read
+## Task 3: the Board's two reads
 
-**Files:** the mobile Super Tab client (`mobile/lib/swarm/swarm_session.dart` or the file that holds its other reads),
-`mobile/test/swarm/swarm_board_proposals_test.dart`.
+**Files:** `mobile/lib/swarm/swarm_reader.dart`, `mobile/test/swarm/swarm_board_reads_test.dart`.
 
-- [ ] Failing test: the client asks `GET /api/super-tabs/:tabId/proposals?projectId=`, parses `messageId`, `title`, `personId`,
-  `priority` and `at`, and an error answer gives a named failure, not an empty list. Commit.
-- [ ] Implement the read with a timeout; the Board asks it once on open and again when the project changes. Commit.
+**Interfaces:** `SwarmReader.readProposals(projectId)`, `proposalsOf(projectId)`, `proposalsFailed(projectId)`;
+`SwarmReader.loadShipped(projectId, since)`, `shippedFailed(projectId)`.
+
+- [ ] Failing test: `readProposals` asks `GET /api/super-tabs/:tabId/proposals?projectId=` and holds the parsed list; it asks
+  nothing again until the project chat has moved, and then at most once a minute (one read for every move in the minute);
+  a failed read keeps what was shown, is named once in the log and flagged. `loadShipped` reads the project's closed
+  conversations page by page until a page's last conversation changed before the window or 40 pages, and a failed page is
+  flagged and asked again on the next call. Commit.
+- [ ] Implement both on the reader with Desktop's bounds; remember each page's last change in `_readDormant`. Commit.
 
 ## Task 4: the Board page
 
