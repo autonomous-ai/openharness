@@ -27,6 +27,7 @@ export interface Lane { name: string; owns: readonly string[] }
 /** The validated dispatch policy of one project; the default is only for legacy pure callers. */
 export interface DispatchRules extends Readonly<ProjectRules['dispatch']> { readonly lanes: readonly Lane[] }
 export const dispatchRules = (rules: ProjectRules): DispatchRules => ({ ...rules.dispatch, lanes: rules.lanes })
+export type DispatchLookup = (projectId: string) => DispatchRules
 export const DISPATCH_RULES: DispatchRules = Object.freeze(dispatchRules(SEED_RULES))
 
 /** The lane [name] means, matched in any case, as the table writes it; undefined when the table has none by that name. */
@@ -64,13 +65,16 @@ export function laneOf(group: Pick<Conversation, 'lane' | 'task'>, lanes: readon
   return best
 }
 
-/** The reason the 3-hour clock gives a task it puts back in its lane (liveness.ts); the dispatch reads it to keep that task
- *  from its last member for one pass. */
-export const returnReason = (lane: string | null): string => `no progress for 3 hours: back in the ${lane ?? 'project'} lane`
+/** Configured time in a progress notice, without rounding a project's threshold. */
+const duration = (ms: number): string => {
+  const [value, unit] = ms % HOUR_MS === 0 ? [ms / HOUR_MS, 'hour'] : ms % 60_000 === 0 ? [ms / 60_000, 'minute'] : [ms / 1000, 'second']
+  return `${value} ${unit}${value === 1 ? '' : 's'}`
+}
+export const returnReason = (lane: string | null, rules: DispatchRules = DISPATCH_RULES): string =>
+  `no progress for ${duration(rules.returnAfterMs)}: back in the ${lane ?? 'project'} lane`
 
-/** What a worker hears after 2 hours without progress on its task. */
-export const nudgeLine = (lane: string | null): string =>
-  `No progress on this task for 2 hours. Post where it stands, or set it blocked with why; at 3 hours it goes back to the ${lane ?? 'project'} lane.`
+export const nudgeLine = (lane: string | null, rules: DispatchRules = DISPATCH_RULES): string =>
+  `No progress on this task for ${duration(rules.nudgeAfterMs)}. Post where it stands, or set it blocked with why; at ${duration(rules.returnAfterMs)} it goes back to the ${lane ?? 'project'} lane.`
 
 /** The progress clocks on [assignment] of [group], held by any project worker (liveness.ts): from its own last progress
  *  (its assignment, status, check or post: `progressAt`), only while working. `nudge` after `nudgeAfterMs`, once

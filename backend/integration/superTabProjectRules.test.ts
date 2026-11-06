@@ -103,7 +103,15 @@ describe('a project\'s rules record', () => {
     const { tab } = await swarm()
     expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 0, rules: SEED_RULES })
     await run(tab, set(0, rules('10:00')))
-    expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 1, rules: rules('10:00') })
+    const started = performance.now()
+    const entries = await profiled(db, async () => {
+      expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 1, rules: rules('10:00') })
+    })
+    const read = reads(entries, 'SuperTabProjectRules', ['tabId', 'projectId'])
+    expect(read).toHaveLength(1)
+    expect(read[0]!.planSummary).toMatch(/IXSCAN/)
+    expect(read[0]!.docsExamined).toBeLessThanOrEqual(1)
+    console.info('project dispatch policy read', { elapsedMs: performance.now() - started, returned: read[0]!.nreturned, examined: read[0]!.docsExamined, plan: read[0]!.planSummary })
   })
 
   it('normalizes legacy stored dispatch policy and keeps new empty lanes explicit', async () => {

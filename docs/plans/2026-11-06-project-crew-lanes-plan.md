@@ -63,12 +63,13 @@
 **Files:** liveness.ts, dispatch.ts, store.ts; liveness/dispatch tests and integration/crewDispatch.test.ts.
 **Interfaces:** DispatchLookup(projectId) returns the pass's validated DispatchRules; liveness entrypoints accept it with seeded defaults for pure callers. dispatchCrew(tabId, periodic=false) applies bounded per-project cadence only on periodic passes. Debounced event requests upgrade a pending periodic pass to immediate.
 
-- [ ] Commit tests for custom nudge/return thresholds and wording, two projects with different clocks, configured periodic interval, and event requests bypassing/upgrading periodic gating.
-- [ ] Run focused tests and confirm fixed-number behavior fails.
-- [ ] Load project policy once per pass, thread the lookup through clock decisions, and use bounded expiry memory for periodic dispatch; no extra timer.
-- [ ] Run affected unit/integration/typecheck and query-plan checks. Record limits, red/green and timings; mark ready for CI and independent review.
+- [x] Commit tests for custom nudge/return thresholds and wording, two projects with different clocks, configured periodic interval, and event requests bypassing/upgrading periodic gating.
+- [x] Run focused tests and confirm fixed-number behavior fails.
+- [x] Load project policy once per pass, thread the lookup through clock decisions, and use bounded expiry memory for periodic dispatch; no extra timer.
+- [x] Run affected unit/integration/typecheck and query-plan checks. Record limits, red/green and timings; mark ready for CI and independent review.
 
 ## Evidence
 
 - Task 1 red: `6f5666e84` fails 2 policy tests (25 pass) and the focused stored-legacy integration. Green: all 27 policy tests and all 6 project-rules integrations pass, including the existing indexed history query and explicit empty list. Backend typecheck clean. No new query/index or backfill.
 - Task 2 red: `deb068ac8` fails the custom crew test (8 pass) and all four new dispatch integrations (14 unrelated skipped). Green: 74 policy/crew/dispatch unit tests, 604 affected importer unit tests across seven files, all 18 crew-dispatch integrations and backend typecheck pass. Custom firmware, no mobile, updated stamps, old marks, and lane/cap changes between planning and transaction are covered.
+- Task 3 red: `1126bfd03` fails custom clock unit behavior (38 pass), both initial clock/cadence integrations, and the strengthened scheduled-pass case. Green: all 21 dispatch integrations, 99 dispatch/liveness tests and backend typecheck pass; commands remained green (427 tests). The two-project test keeps the other project’s seeded mobile lane and clock. The policy read uses IXSCAN and examines at most one row; the existing history plan stays indexed. Periodic cadence memory is per process, capped at 5000 project entries and pruned after an hour; existing work events upgrade pending periodic passes.
