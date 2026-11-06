@@ -85,16 +85,15 @@ export function recordChatPost(group: Conversation, askId: string | null, messag
 /** Explicit answer links and person replies mirrored into main are answers; plain thread replies are discussion. */
 export function requireChatAnswer(group: Conversation, command: Send, reply: Reply): string | null {
   if (!reply || reply.agentOnly || !(command.answers || command.answer || (command.replyTo && inMainChat(command, reply) && reply.author.kind === 'person'))) return null
-  let ask = group.chatLimits?.asks.find(ask => ask.id === reply.id)
+  const ask = group.chatLimits?.asks.find(ask => ask.id === reply.id)
   requireUnanswered(group, reply.id, ask?.answer)
   if (!ask) {
     if (group.chatLimits?.closedThrough !== undefined && reply.createdAt <= group.chatLimits.closedThrough) return closedAsk()
-    ask = remember(group, reply.id, reply.createdAt)
   }
-  return ask.id
+  return reply.id
 }
 
-export function recordChatAnswer(group: Conversation, askId: string | null, messageId: string, thread: string | null, at: number): void {
-  const ask = askId && group.chatLimits?.asks.find(ask => ask.id === askId)
+export function recordChatAnswer(group: Conversation, askId: string | null, messageId: string, thread: string | null, at: number, askedAt: number): void {
+  const ask = askId && remember(group, askId, askedAt)
   if (ask) ask.answer = { id: askId, answerId: messageId, thread, at }
 }

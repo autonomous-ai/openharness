@@ -3917,7 +3917,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (chatPost) {
         recordChatPost(group, chatAsk, operationId)
         const root = command.replyTo && context.reply && !context.reply.agentOnly ? context.reply.thread ?? context.reply.id : null
-        recordChatAnswer(group, chatAnswer, operationId, root, context.now)
+        recordChatAnswer(group, chatAnswer, operationId, root, context.now, context.reply?.createdAt ?? context.now)
       }
       if (actor.kind === 'agent') renewOwnTask(state, group, actor.agentId, context.now)
       // A post to an Engineer waiting on this review: its own step then waits for the new revision (liveness.ts waitingForRevision).
