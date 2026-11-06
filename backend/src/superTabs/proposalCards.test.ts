@@ -90,6 +90,19 @@ describe('proposal card creation', () => {
       .toThrow(expect.objectContaining({ code: 'PRIORITY_FORBIDDEN' }))
   })
 
+  it('keeps the approved files and scope when a Buddy sends a proposal card', () => {
+    const f = fixture(), buddy: Actor = { kind: 'agent', agentId: f.buddy, machineOwnerId: `${owner.userId}-machine` }
+    const file = { id: 'plan', name: 'plan.md', mime: 'text/markdown', size: 120, url: 'https://cdn.example.test/plan.md' }
+    const sent = f.run({ type: 'buddy.propose', conversationId: f.buddyChat, ownerMessageId: 'ask', projectId: 'lead',
+      ...proposal, scope: 'Persist drafts', priority: 'normal', attachmentIds: ['plan'] }, buddy, {
+      attachments: [file], proposalAsk: { id: 'ask', conversationId: f.buddyChat, source: false,
+        author: { kind: 'person', id: peer.userId, name: peer.email, membershipGeneration: f.state.people.find(p => p.id === peer.userId)!.generation },
+        text: words, createdAt: NOW, newestOwnerMessageId: 'ask', shown: [] },
+    })
+    expect(sent.messages.find(m => m.conversationId === sent.result.conversationId)?.attachments).toEqual([file])
+    expect(f.card(sent.result.conversationId).proposal).toHaveProperty('scope', 'Persist drafts')
+  })
+
   it('refuses hand assignment until the proposal is accepted', () => {
     const f = fixture(), id = f.create().result.conversationId
     expect(() => f.run({ type: 'work.assign', conversationId: id, agentId: f.worker }, f.pm))
