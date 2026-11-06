@@ -584,6 +584,7 @@ void main() {
         'machineId': 'host',
         'harnessId': 'session',
         'contributorId': 'owner',
+        'configuration': <String, dynamic>{},
         ...extra,
       };
 
