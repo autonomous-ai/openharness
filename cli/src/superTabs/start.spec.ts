@@ -452,7 +452,7 @@ it.each([
   ['project session', { buddySession: { thread: 'root-1', from: 1, projectId: 'project' } }],
 ])('tells the %s Buddy to offer ready ideas once and wait for consent (task #3865)', async (_name, context) => {
   const f = fixture()
-  f.start.request = { ...f.start.request, buddyOf: { personId: 'peer', generation: 'g' }, ...context } as typeof f.start.request
+  Object.assign(f.start.request, { buddyOf: { personId: 'peer', generation: 'g' }, ...context })
   ownMachine(f)
   await startAgent({ ...OWN_HOST, action: 'start', tabId: 'tab', operationId: 'buddy-offer', request: f.start.request } as never, f.scoped, where, f.open)
   const prompt = String(f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!.prompt)
