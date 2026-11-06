@@ -24,6 +24,8 @@ void main() {
     List<String>? releasing,
     List<String>? releasedTags,
     String? notBefore,
+    String? priority,
+    num? queueRank,
   }) => SuperTabConversation.fromJson({
     ...groupData(id, title: 'Task $id', number: number, status: status),
     'archived': archived,
@@ -39,6 +41,8 @@ void main() {
     'releasing': ?releasing,
     if (releasedTags != null) 'released': {'at': 1, 'tags': releasedTags},
     'notBefore': ?notBefore,
+    'priority': ?priority,
+    'queueRank': ?queueRank,
   });
 
   Map<String, dynamic> waiting(String why, {String? personId}) => {
@@ -240,6 +244,149 @@ void main() {
         expect(place(task(status: 'cancelled')), isNull);
         expect(place(task(status: 'stopped')), isNull);
         expect(place(task(status: 'working', archived: true)), isNull);
+      },
+    );
+  });
+
+  group('the board of a project', () {
+    SwarmProposal proposal(String id, {String priority = 'P2', int at = 1}) =>
+        SwarmProposal.fromJson({
+          'messageId': id,
+          'title': 'Proposal $id',
+          'personId': 'ken',
+          'priority': priority,
+          'at': at,
+        });
+
+    Map<SwarmBoardColumn, List<String>> ids(
+      Map<SwarmBoardColumn, List<SwarmBoardEntry>> board,
+    ) => {
+      for (final MapEntry(:key, :value) in board.entries)
+        key: [for (final e in value) e.task?.id ?? e.proposal!.messageId],
+    };
+
+    Map<SwarmBoardColumn, List<SwarmBoardEntry>> board(
+      List<SuperTabConversation> tasks, {
+      List<SwarmProposal> proposals = const [],
+      Set<String> waiting = const {},
+    }) => swarmBoardOf(tasks, proposals: proposals, waiting: waiting, now: now);
+
+    test('every column is there, in order, empty or not', () {
+      expect(board(const []).keys, SwarmBoardColumn.values);
+      expect(board(const []).values.every((c) => c.isEmpty), isTrue);
+    });
+
+    test('each task is in exactly one column and one that is not listed is in none', () {
+      final tasks = [
+        task(id: 'next', number: 1),
+        task(id: 'work', number: 2, status: 'working'),
+        task(id: 'done', number: 3, status: 'done', linked: true),
+        task(
+          id: 'merged',
+          number: 4,
+          status: 'done',
+          merged: true,
+          releasing: [],
+        ),
+        task(
+          id: 'shipped',
+          number: 5,
+          status: 'done',
+          merged: true,
+          shippedAt: now.subtract(const Duration(days: 1)),
+        ),
+        task(id: 'gone', number: 6, status: 'cancelled'),
+      ];
+      expect(ids(board(tasks, proposals: [proposal('p')])), {
+        SwarmBoardColumn.proposal: ['p'],
+        SwarmBoardColumn.nextUp: ['next'],
+        SwarmBoardColumn.working: ['work'],
+        SwarmBoardColumn.done: ['done'],
+        SwarmBoardColumn.merged: ['merged'],
+        SwarmBoardColumn.shipped: ['shipped'],
+      });
+    });
+
+    test('a column lists P0 first, then what waits on the reader, then its own order', () {
+      final tasks = [
+        task(id: 'w1', number: 1, status: 'working'),
+        task(id: 'w2', number: 2, status: 'working'),
+        task(id: 'w3', number: 3, status: 'working', priority: 'P1'),
+        task(id: 'w4', number: 4, status: 'working', priority: 'P0'),
+        task(id: 'w5', number: 5, status: 'working', priority: 'P3'),
+      ];
+      expect(ids(board(tasks, waiting: {'w1'}))[SwarmBoardColumn.working], [
+        'w4',
+        'w3',
+        'w1',
+        'w2',
+        'w5',
+      ]);
+    });
+
+    test('Next up keeps the shared queue, Shipped the newest first, proposals the oldest first', () {
+      final shipped = [
+        for (final (id, days) in [('s1', 5), ('s2', 1), ('s3', 3)])
+          task(
+            id: id,
+            number: 10,
+            status: 'done',
+            merged: true,
+            shippedAt: now.subtract(Duration(days: days)),
+          ),
+      ];
+      final queued = [
+        task(id: 'q1', number: 1, queueRank: 30),
+        task(id: 'q2', number: 2, queueRank: 10),
+        task(id: 'q3', number: 3),
+      ];
+      final b = ids(
+        board(
+          [...shipped, ...queued],
+          proposals: [proposal('late', at: 9), proposal('early', at: 2)],
+        ),
+      );
+      expect(b[SwarmBoardColumn.shipped], ['s2', 's3', 's1']);
+      expect(b[SwarmBoardColumn.nextUp], ['q2', 'q3', 'q1']);
+      expect(b[SwarmBoardColumn.proposal], ['early', 'late']);
+    });
+
+    test('a proposal lists by its priority too, and one the server gives none reads P2', () {
+      final p = SwarmProposal.fromJson({'messageId': 'x', 'at': 1});
+      expect(p.priority, 'P2');
+      expect(p.title, '');
+      expect(
+        ids(
+          board(
+            const [],
+            proposals: [
+              proposal('a'),
+              proposal('b', priority: 'P1'),
+            ],
+          ),
+        )[SwarmBoardColumn.proposal],
+        ['b', 'a'],
+      );
+    });
+
+    test(
+      'the cards that wait on the reader are counted, a proposal never is',
+      () {
+        final b = board(
+          [
+            task(id: 'a', number: 1, status: 'working'),
+            task(id: 'b', number: 2, status: 'working'),
+          ],
+          proposals: [proposal('p')],
+          waiting: {'a'},
+        );
+        expect(swarmBoardNeedingYou(b), 1);
+        expect(
+          b[SwarmBoardColumn.working]!
+              .firstWhere((e) => e.task!.id == 'a')
+              .needsYou,
+          isTrue,
+        );
       },
     );
   });
