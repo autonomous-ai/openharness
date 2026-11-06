@@ -1036,6 +1036,96 @@ void main() {
     await _close(tester, c);
   });
 
+  group('a filter that hides every card says so (task #3869)', () {
+    final noCards = find.byKey(const ValueKey('super-tasks-no-match'));
+    final showAll = find.byKey(const ValueKey('super-tasks-show-all'));
+
+    for (final layout in ['board', 'list']) {
+      testWidgets('Mine and Search name themselves in the $layout, '
+          'and Show all brings the cards back', (tester) async {
+        final c = await _show(tester, tasksServer());
+        await tester.tap(find.byKey(ValueKey('super-tasks-layout-$layout')));
+        await tester.pumpAndSettle();
+        expect(noCards, findsNothing);
+
+        // Mine alone hides every card the reader did not ask for: the
+        // search for "preview" leaves only another person's task.
+        await tester.tap(find.byKey(const ValueKey('super-tasks-mine')));
+        await tester.enterText(
+          find.byKey(const ValueKey('super-tasks-search')),
+          'preview',
+        );
+        await tester.pumpAndSettle();
+        expect(_card('preview'), findsNothing);
+        expect(
+          find.descendant(
+            of: noCards,
+            matching: find.text('No cards match Mine and “preview”'),
+          ),
+          findsOneWidget,
+        );
+        expect(find.text('No tasks yet'), findsNothing);
+
+        await tester.tap(showAll);
+        await tester.pumpAndSettle();
+        expect(noCards, findsNothing);
+        expect(_card('preview'), findsOneWidget);
+        expect(_card('tag'), findsOneWidget);
+        expect(
+          tester
+              .widget<TextField>(
+                find.byKey(const ValueKey('super-tasks-search')),
+              )
+              .controller
+              ?.text,
+          isNot('preview'),
+        );
+        await _close(tester, c);
+      });
+    }
+
+    testWidgets('a search alone, and Mine alone, are named alone', (
+      tester,
+    ) async {
+      final c = await _show(tester, tasksServer());
+      await tester.enterText(
+        find.byKey(const ValueKey('super-tasks-search')),
+        'zzz',
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('No cards match “zzz”'), findsOneWidget);
+      await tester.tap(showAll);
+      await tester.pumpAndSettle();
+      expect(noCards, findsNothing);
+      expect(_card('tag'), findsOneWidget);
+
+      // Mine alone: the reader asked for nothing in this project.
+      final server = tasksServer();
+      for (final g
+          in (server.state['conversations'] as List)
+              .cast<Map<String, dynamic>>()) {
+        g.remove('requesterId');
+      }
+      await _close(tester, c);
+      final lonely = await _show(tester, server);
+      await tester.tap(find.byKey(const ValueKey('super-tasks-mine')));
+      await tester.pumpAndSettle();
+      expect(find.text('No cards match Mine'), findsOneWidget);
+      await tester.tap(showAll);
+      await tester.pumpAndSettle();
+      expect(_card('tag'), findsOneWidget);
+      await _close(tester, lonely);
+    });
+
+    testWidgets('a project with no tasks still says so, with no filter to '
+        'clear', (tester) async {
+      final c = await _show(tester, tasksServer(empty: true));
+      expect(find.text('No tasks yet'), findsOneWidget);
+      expect(noCards, findsNothing);
+      await _close(tester, c);
+    });
+  });
+
   testWidgets('List and Mine are remembered for the reader on this Mac', (
     tester,
   ) async {
