@@ -8,7 +8,7 @@
 import { join } from 'node:path'
 import { homeRoots, launchHomeOf } from '../lib/engineHomes.js'
 import { homeIsNetworkOrDevice } from './kit/homeAdoption.js'
-import { forgetTrustIn, recordTrustIn, trustsIn } from './kit/folderTrust.js'
+import { forgetTrustIn, recordAcceptanceIn, recordTrustIn, trustsIn } from './kit/folderTrust.js'
 import { recordInheritedMcp } from './kit/inheritedMcp.js'
 import { repairHistory } from './kit/resumeRepair.js'
 import { launchContract } from './launches.js'
@@ -56,6 +56,15 @@ export function folderTrust(engine: AgentEngine, profile?: string | null, enviro
     },
     forget: (path) => network() ? 'skipped' : forgetTrustIn(trust, file(), path),
   }
+}
+
+/** Record that `engine`'s first-run screens are done, as finishing them would (`onboarding`); null for an engine with none.
+ *  A network or device home is never opened, as for trust. */
+export function skipOnboarding(engine: AgentEngine, environment?: NodeJS.ProcessEnv): 'accepted' | 'already' | 'skipped' | null {
+  const contract = launchContract(engine)?.onboarding
+  if (!contract) return null
+  const home = launchHomeOf(contract.home, null, environment)
+  return homeIsNetworkOrDevice(home) ? 'skipped' : recordAcceptanceIn(join(home, contract.file), contract.key)
 }
 
 /** The session a resume relaunches. `codexHome` is the agent's own engine home, the row's profile. */

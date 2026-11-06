@@ -100,6 +100,27 @@ export function replaceConfigFile(file: string, text: string): void {
   renameSync(tmp, target)
 }
 
+/** Record an engine's one-time answer (facets/launch.ts `OnboardingContract`) as `key` in the JSON settings `file`, as its own
+ *  screen would. Like trust, only ever adds: a file that is not an object, or a `key` the person set to anything else, stays
+ *  as it is. A missing file is created holding the key alone, never over a file made meanwhile. */
+export function recordAcceptanceIn(file: string, key: string): 'accepted' | 'already' | 'skipped' {
+  if (!existsSync(file)) {
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+    try {
+      writeFileSync(file, JSON.stringify({ [key]: true }, null, 2), { mode: 0o600, flag: 'wx' })
+      return 'accepted'
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    }
+  }
+  let settings: unknown
+  try { settings = JSON.parse(readFileSync(file, 'utf8')) } catch { return 'skipped' }
+  if (!isPlainObject(settings)) return 'skipped'
+  if (settings[key] !== undefined) return settings[key] === true ? 'already' : 'skipped'
+  replaceConfigFile(file, JSON.stringify({ ...settings, [key]: true }, null, 2))
+  return 'accepted'
+}
+
 function recordJson(trust: JsonTrust, file: string, cwd: string, create = false): 'trusted' | 'already' | 'skipped' {
   if (!existsSync(file)) {
     if (!create) return 'skipped'
