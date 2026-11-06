@@ -6,8 +6,8 @@
  * and quota. The builder now carries every line and the move refuses any lost one; this job repairs the projects already moved.
  *
  * For each project the move wrote a revision for, it reads the revision before (the History keeps it) and appends what the document
- * lost, word for word and under the section it came from, as one saved revision that says it is the restore. A project saved
- * since the move gets the lines the move lost that are still missing (the daily tidy is a save, and no later save can have chosen to
+ * lost, word for word and under the section it came from (never the Swarm's own template's lines, which the Swarm builds in), as one saved revision that says it is the restore. A project saved
+ * since the move gets the project's own lines the move lost that are still missing (the daily tidy is a save, and no later save can have chosen to
  * drop a line the move lost). Only a project whose PM already put some back by hand and chose what to leave out (harness's did, at
  * revision 81, with anh Dee's approval to drop what v2 repeats) is left alone, reported and told by a PM note which lines are still
  * missing. Nothing the project has is removed or reworded. Once: a project is
@@ -28,6 +28,7 @@ import { removedLineItems, removedLines } from '../instructionsDiff.js'
 import { writeNotes } from '../instructionsStore.js'
 import { stableId } from '../model.js'
 import { BASE_VERSION } from '../instructionsRebase.js'
+import { INSTRUCTIONS_TEMPLATE } from '../instructionsTemplate.js'
 import { logger } from '../../utils/logger.js'
 import { sleeper } from './dropLegacyJob.js'
 import { REBASE_SUMMARY, REBASE_SWARMS, RETRY_MS, START_DELAY_MS, type RebaseSwarm } from './rebase.js'
@@ -40,10 +41,15 @@ export const MAX_PASSES = 24
 /** What a note to a PM that restored by hand begins with, which is how it is told once. */
 const NOTE_PREFIX = 'Restore (task #3679):'
 
-/** What the move lost of [before]: each line's words and how many times, since a line may stand in two sections (removedLines). */
-export function moveLoss(before: string, moved: string): ReadonlyMap<string, number> {
+/** The words of every line of the Swarm's own template (the old process text), which the Swarm builds in now: process by definition, as
+ *  the move treats it (rebase.ts), so a project is never given its template's lines back, only its own (second review of #3327). */
+export const templateLines = (): ReadonlySet<string> => new Set(removedLines(INSTRUCTIONS_TEMPLATE, ''))
+
+/** What the move lost of [before] that is the project's own: each line's words and how many times, since a line may stand in two
+ *  sections (removedLines). A line of the template ([skip]) is left out. */
+export function moveLoss(before: string, moved: string, skip: ReadonlySet<string> = templateLines()): ReadonlyMap<string, number> {
   const loss = new Map<string, number>()
-  for (const text of removedLines(before, moved)) loss.set(text, (loss.get(text) ?? 0) + 1)
+  for (const text of removedLines(before, moved)) if (!skip.has(text)) loss.set(text, (loss.get(text) ?? 0) + 1)
   return loss
 }
 
@@ -128,7 +134,7 @@ async function restoreSwarm(tx: Transaction, { tabId, askedBy }: RebaseSwarm, no
     // Against what the project already lacked, not the whole old document: a later save of its own may have dropped lines the move kept
     // (the daily tidy trims), and those stay dropped. Nothing the project has goes, and what is still missing of the old document is what
     // it lacked before less the lines put back.
-    if (removedLines(stored.text, text).length || removedLines(before.text, text).length !== removedLines(before.text, stored.text).length - lines.length) {
+    if (removedLines(stored.text, text).length || stillMissing(before.text, text, lostByMove).length !== stillMissing(before.text, stored.text, lostByMove).length - lines.length) {
       report.held.push({ tabId, projectId: project.id, why: 'the restored document would not hold what it should' }); continue
     }
     writes.push({ projectId: project.id, revision: current, text, lines })
