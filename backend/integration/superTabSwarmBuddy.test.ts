@@ -928,4 +928,23 @@ describe('+ New agent through the store', () => {
     const read = await f.store.read(owner, f.tab)
     expect(read.state.conversations.find(c => c.id === webTask)?.assignment).toMatchObject({ agentId: ada })
   })
+
+  // Security review 2 of #4116 (Rowan): its next task takes it out of the earlier project's chats, loaded or quiet.
+  it('takes a Regular agent out of an earlier project\'s chats when it takes a task elsewhere', async () => {
+    const f = await swarm()
+    await capable(f)
+    const made = await f.execute({ type: 'agent.new', kind: 'regular', name: 'Ada', engine: 'claude', machineId: 'peer-mac' }, peer)
+    const ada = await f.launch(String(made.result.startId))
+    const task = async (projectId: string) => String((await f.execute({ type: 'conversation.create', projectId, title: 'A task', brief: 'Do it.', checks: [] })).result.conversationId)
+    const webTask = await task(f.web.projectId)
+    const first = await f.execute({ type: 'work.assign', conversationId: webTask, agentId: ada }, owner, f.pms.web)
+    await f.execute({ type: 'work.status', conversationId: webTask, assignmentId: String(first.result.assignmentId), status: 'done', result: 'Done.' }, peer, ada)
+    // Long enough for the web task to go quiet, so no read loads it by activity.
+    f.clock.now += 3 * 86_400_000
+    const secretTask = await task(f.secret.projectId)
+    await f.execute({ type: 'work.assign', conversationId: secretTask, agentId: ada }, owner, f.pms.secret)
+    // Read straight from its stored part: a quiet group is in no first load.
+    const stored = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: webTask } } })
+    expect((stored.data as { agentIds: string[] }).agentIds).not.toContain(ada)
+  })
 })
