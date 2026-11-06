@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/first_task.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/core/permission_modes.dart';
 import 'package:harness/core/project_folder.dart';
 import 'package:harness/core/launch_setup.dart';
 import 'package:harness/notify/system_notifications.dart';
@@ -536,7 +537,9 @@ class SuperTabLaunchFixture {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   test(
-    'Swarm members with no full mode retain their supported launch behavior',
+    // Swarm v3 (task #4215): no mode is forced, so another engine's Swarm
+    // member launches exactly as its ordinary harness does.
+    'Swarm members on other engines launch as their ordinary harness does',
     () async {
       for (final engine in ['opencode', 'hermes']) {
         final f = SuperTabLaunchFixture();
@@ -552,12 +555,16 @@ void main() {
         final request = f.connection.calls
             .firstWhere((c) => c.$1 == 'agent_create')
             .$2;
-        expect(request['permissionMode'], isNull);
-        expect(request['bypassPermission'], isTrue);
-        expect(
-          box.agentSettingsFor(engine).map((o) => o.id),
-          isNot(contains(NewHarnessController.permissionsId)),
-        );
+        final settings = box.agentSettingsFor(engine).map((o) => o.id);
+        if (engine == 'hermes') {
+          expect(request['permissionMode'], isNull);
+          expect(request['bypassPermission'], isFalse);
+          expect(settings, isNot(contains(NewHarnessController.permissionsId)));
+        } else {
+          expect(settings, contains(NewHarnessController.permissionsId));
+          expect(request['permissionMode'], box.mode);
+          expect(request['bypassPermission'], permissionModeApproves(box.mode));
+        }
       }
     },
   );
