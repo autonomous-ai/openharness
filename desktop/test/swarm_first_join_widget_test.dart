@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/super_tabs/join/agent_dialog.dart';
+import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/super_tabs/join_dialog.dart';
 
 import 'support/capture.dart';
@@ -37,19 +37,28 @@ void main() {
       await tester.pump();
       await tester.runAsync(() async => pumpEventQueue());
       await tester.pumpAndSettle();
-      expect(find.byType(SwarmAgentDialog), findsOneWidget);
-      expect(find.text('Bring your agent'), findsOneWidget);
+      // Task #4196: the Cmd-N form, its agent and computer, for a Buddy.
+      expect(find.byType(NewHarnessForm), findsOneWidget);
+      expect(find.text('Bring agent'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('new-harness-field-project')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('new-harness-field-agent-kind')),
+        findsNothing,
+      );
       expect(find.text('Separate Harness Team account'), findsNothing);
       expect(find.text('Add machine'), findsNothing);
       await captureWindow(tester, shots, 'bring-agent-${brightness.name}');
       if (brightness == Brightness.dark) {
-        await tester.tap(find.byTooltip('Close').first);
+        await tester.tap(find.byKey(const ValueKey('new-harness-close')));
         await tester.pumpAndSettle();
         await tester.runAsync(() => joining);
         expectNoEnrollment(f);
       } else {
         await tester.runAsync(() async {
-          await tester.tap(find.byKey(const Key('swarm-agent-submit')));
+          await tester.tap(find.text('Bring agent'));
           await pumpEventQueue();
         });
         await tester.pumpAndSettle();
@@ -60,7 +69,7 @@ void main() {
           });
           await tester.pumpAndSettle();
         }
-        expect(find.byType(SwarmAgentDialog), findsNothing);
+        expect(find.byType(NewHarnessForm), findsNothing);
         await tester.runAsync(() => joining);
         final starts = f.connection.server.posts.where(
           (post) => (post['command'] as Map)['type'] == 'buddy.create',
