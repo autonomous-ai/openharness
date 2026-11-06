@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -42,6 +44,8 @@ void main() {
       )..foreground = false;
       addTearDown(host.dispose);
       var step = 0;
+      // Android draws into a surface a screenshot cannot read until it is converted.
+      var surfaceReady = !Platform.isAndroid;
       Future<void> wait([int ms = 900]) async {
         for (var elapsed = 0; elapsed < ms; elapsed += 100) {
           await tester.pump(const Duration(milliseconds: 100));
@@ -50,6 +54,11 @@ void main() {
 
       Future<void> shot(String name) async {
         await wait();
+        if (!surfaceReady) {
+          await binding.convertFlutterSurfaceToImage();
+          await tester.pump();
+          surfaceReady = true;
+        }
         step++;
         await binding.takeScreenshot(
           'board-$theme-${step.toString().padLeft(2, '0')}-$name',
