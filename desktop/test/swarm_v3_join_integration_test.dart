@@ -16,7 +16,16 @@ void main() {
         {'id': 'owner', 'email': 'owner@example.com', 'role': 'collaborator'},
       ];
       f.connection.server.state['ownerId'] = 'boss';
-      f.app.addListener(() => f.app.joinAccountRequest?.complete(false));
+      var prompts = 0;
+      final joined = <Object>[];
+      final subscription = f.app.joinedMachines.listen(joined.add);
+      f.app.addListener(() {
+        final request = f.app.joinAccountRequest;
+        if (request != null && !request.answered) {
+          prompts++;
+          request.complete(false);
+        }
+      });
       await f.app.addMachineOnJoin(tabId, role: 'collaborator');
       expect(
         f.connection.server.posts.where(
@@ -31,7 +40,9 @@ void main() {
         ),
         isEmpty,
       );
-      expect(f.app.joinedMachines, isEmpty);
+      expect(prompts, 1);
+      expect(joined, isEmpty);
+      await subscription.cancel();
       f.dispose();
     },
   );

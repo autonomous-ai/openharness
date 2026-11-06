@@ -4,6 +4,7 @@ import '../../shared/widgets/app_select_field.dart';
 import '../../widgets/desktop_chrome.dart';
 import '../../widgets/desktop_prompt_surface.dart';
 import '../controller.dart' show superTabOperationId;
+import 'agent_launcher.dart';
 
 /// Starts only through the authenticated owner's daemon adapter. The dialog
 /// never reads CLI settings, credentials or another machine's login.
@@ -62,7 +63,7 @@ class _SwarmAgentDialogState extends State<SwarmAgentDialog> {
             _selectedKind == 'pm' ? _project.text.trim() : null,
             _operation,
           )
-          .timeout(const Duration(seconds: 30));
+          .timeout(const Duration(seconds: 80));
       if (!mounted) return;
       if (!widget.isCurrent()) {
         setState(() {
@@ -75,11 +76,12 @@ class _SwarmAgentDialogState extends State<SwarmAgentDialog> {
         throw const FormatException('Agent start not acknowledged');
       }
       Navigator.pop(context, result);
-    } catch (_) {
-      if (mounted)
+    } catch (failure) {
+      if (mounted) {
         setState(
-          () => _error = 'Could not start your agent. Check this computer’s connection and try again.',
+          () => _error = failure is SwarmAgentLaunchFailure ? failure.message : 'Could not start your agent. Check this computer’s connection and try again.',
         );
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }

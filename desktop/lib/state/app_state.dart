@@ -2840,9 +2840,7 @@ class AppNotifier extends ChangeNotifier {
       try {
         final fresh = await record.fresh(account, listed, knownHere: knownHere);
         for (final tabId in fresh) {
-          if (_disposed ||
-              currentUser?.id != account ||
-              _teamAccountHere() == null) {
+          if (_disposed || currentUser?.id != account) {
             return;
           }
           if (_joinPassed.contains('$account/$tabId')) continue;
@@ -2869,31 +2867,13 @@ class AppNotifier extends ChangeNotifier {
     required bool joined,
     bool? ownAccount,
   }) async {
-    final here = _teamAccountHere();
     final accountId = currentUser?.id;
-    if (here == null || accountId == null || !_joinAdding.add(tabId)) return;
+    if (accountId == null || !_joinAdding.add(tabId)) return;
     bool current() =>
         !_disposed &&
         status == AppStatus.authenticated &&
         currentUser?.id == accountId;
-    final machineName = stateOf(here)?.machine.displayName ?? 'This computer';
-    // Opened only for this add: let go after it, unless the person went to it
-    // meanwhile, so it does not keep polling unseen (review of #3115).
     final openedHere = superTabs.peek(tabId) == null;
-    var collaborator = joined;
-    void failed(String problem) {
-      if (!collaborator || !current()) return;
-      _joinedMachines.add(
-        SwarmJoinedMachine(
-          tabId: tabId,
-          swarmName: superTabName(tabId) ?? 'the Swarm',
-          machineId: here,
-          machineName: machineName,
-          problem: problem,
-        ),
-      );
-    }
-
     try {
       final c = await superTabs.open(tabId);
       if (!current()) return;
@@ -2901,75 +2881,49 @@ class AppNotifier extends ChangeNotifier {
       if (!current()) return;
       final snapshot = c.snapshot;
       if (snapshot == null) {
-        appLog.info('super-tabs', 'machine not added on join: unread Swarm');
-        if (!collaborator) _joinPassed.add('$accountId/$tabId');
-        failed('Could not reach the Swarm. Add this computer from Machines.');
+        appLog.info('super-tabs', 'bring-agent join deferred: org unreadable');
         return;
       }
       final role = snapshot.people
           .where((p) => p.id == accountId)
           .firstOrNull
           ?.role;
-      if (role == null || role == 'viewer') {
+      if (role != 'collaborator') {
         _joinPassed.add('$accountId/$tabId');
         return;
       }
-      collaborator = role == 'collaborator';
       await _joinRecord?.mark(accountId, tabId);
-      if (!collaborator) return;
-      if (!snapshot.teamAccounts ||
-          !c.canWrite ||
-          snapshot.machines.any((m) => m['machineId'] == here) ||
-          snapshot.removedMachines.any((id) => sameMachineId(id, here))) {
+      if (!c.canWrite ||
+          snapshot.agents.any(
+            (agent) => agent.isMainBuddy && agent.buddyOf == accountId,
+          )) {
         return;
       }
-      if (ownAccount == null) {
-        final request = SwarmJoinAccountRequest(snapshot.name, accountId);
-        _joinAccountRequests.add(request);
-        notifyListeners();
-        try {
-          ownAccount = await request.answer.timeout(
-            const Duration(minutes: 15),
-            onTimeout: () {
-              appLog.info('super-tabs', 'join account choice expired');
-              return null;
-            },
-          );
-        } finally {
-          request.complete(null);
-          _joinAccountRequests.remove(request);
-          if (!_disposed) notifyListeners();
-        }
-        if (!current()) return;
-        if (ownAccount == null) {
-          failed('Add it from Machines.');
-          return;
-        }
+      final request = SwarmJoinAccountRequest(
+        snapshot.name,
+        accountId,
+        tabId: tabId,
+      );
+      _joinAccountRequests.add(request);
+      notifyListeners();
+      try {
+        await request.answer.timeout(
+          const Duration(minutes: 15),
+          onTimeout: () {
+            appLog.info('super-tabs', 'bring-agent join prompt expired');
+            return null;
+          },
+        );
+      } finally {
+        request.complete(null);
+        _joinAccountRequests.remove(request);
+        if (!_disposed) notifyListeners();
       }
-      final note =
-          await SwarmJoinMachine(
-            machineRequest: superTabMachineRequest,
-            readResources: readMachineResources,
-            wake: wakeSuperTabHost,
-          ).add(
-            c,
-            machineId: here,
-            machineName: machineName,
-            current: current,
-            ownAccount: ownAccount,
-          );
-      if (note == null || !current()) return;
-      _joinedMachines.add(note);
-      // Joined by the person at this computer: the system asks once for the
-      // Harness Team account (cli/src/team/autoSetup.ts).
-      if (!note.added || ownAccount) return;
-      if (!await offerTeamAccount('join', tabId: tabId) && current()) {
-        _joinedMachines.add(note.withoutTeamOffer());
-      }
-    } catch (error) {
-      appLog.info('super-tabs', 'machine not added on join: $error');
-      if (!collaborator) _joinPassed.add('$accountId/$tabId');
-      failed('Could not add this computer. Add it from Machines.');
+    } catch (_) {
+      appLog.info(
+        'super-tabs',
+        'bring-agent join deferred: org request failed',
+      );
     } finally {
       _joinAdding.remove(tabId);
       if (openedHere &&

@@ -4,10 +4,15 @@ import '../core/machine_resources.dart';
 import '../core/models.dart' show sameMachineId;
 import 'controller.dart';
 
-/// A join waiting for the local person's account choice. Never persisted;
-/// closing the UI cancels it without enabling own-account work.
+/// A join waiting for the person to bring their own agent. Never persisted;
+/// closing the prompt starts nothing and never enrolls a machine.
 class SwarmJoinAccountRequest {
-  SwarmJoinAccountRequest(this.swarmName, this.accountId);
+  SwarmJoinAccountRequest(
+    this.swarmName,
+    this.accountId, {
+    required this.tabId,
+  });
+  final String tabId;
   final String swarmName, accountId;
   final _answer = Completer<bool?>();
   bool get answered => _answer.isCompleted;
