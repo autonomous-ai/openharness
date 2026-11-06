@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { candidatesFor, DISPATCH_RULES } from './dispatch.js'
+import { sweepLiveness } from './liveness.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { stepsOf } from './steps.js'
 
@@ -118,4 +119,33 @@ describe('a step named for an OS', () => {
     expect(start('mac1')).toThrow(expect.objectContaining({ code: 'STEP_OS' }))
     expect(start('linux1')).not.toThrow()
   })
+
+  it('with no Linux Tester free, waits and says so in the step, and the PM is told once', () => {
+    const f = fixture()
+    // daniel-pc goes down: its Linux Testers with it, while the Mac and Windows Testers stay free.
+    const linux1 = f.state.machines!.find(m => m.machineId === 'linux1')!
+    linux1.observation!.receivedAt = NOW - 60 * 60_000
+    const rows = sweepLiveness(f.state, NOW)
+    const step = f.step('Test on a Linux machine')
+    expect(step.assignment!.status).toBe('lost')
+    const toPm = rows.filter(r => r.recipients.includes(f.lead))
+    expect(toPm).toHaveLength(1)
+    expect(toPm[0]!.text).toContain('No Linux Tester free')
+    const said = rows.filter(r => r.conversationId === step.id && r.recipients.length === 0 && /No Linux Tester free/.test(r.text))
+    expect(said).toHaveLength(1)
+    expect(f.offered(f.mac2)).not.toContain(step.id)
+    // The next sweeps say nothing again.
+    expect(sweepLiveness(f.state, NOW + 30_000).filter(r => /No Linux Tester free/.test(r.text))).toEqual([])
+  })
+
+  it('lost with a Linux Tester free, says nothing of waiting', () => {
+    const f = fixture()
+    // Only the Tester's own session ends: its machine and the other Linux Tester are up.
+    f.state.machines!.find(m => m.machineId === 'linux1')!.observation!.stoppedHarnessIds = ['linux-tst']
+    const rows = sweepLiveness(f.state, NOW)
+    expect(f.step('Test on a Linux machine').assignment!.status).toBe('lost')
+    expect(rows.filter(r => /No Linux Tester free/.test(r.text))).toEqual([])
+    expect(f.offered(f.linux2)).toContain(f.step('Test on a Linux machine').id)
+  })
 })
+
