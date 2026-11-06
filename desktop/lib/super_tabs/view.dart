@@ -228,6 +228,19 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
   }
 
+  /// Keeps the Board of the project [group] belongs to in the middle, for a
+  /// task or project chat opened by a card, a link or a notice; the Buddy's
+  /// own chat names no project of its own.
+  void _showBoardOf(SuperTabConversation group) {
+    if (!widget.board || group.isBuddyChat) return;
+    final project = c.snapshot?.projectById(group.projectId);
+    if (project == null) return;
+    setState(() {
+      _boardProjectId = project.id;
+      if (group.id != project.leadConversationId) _tasksSelectedId = group.id;
+    });
+  }
+
   /// The person's Buddy chat on the right: the Swarm's one Buddy, or this project's.
   void _showBuddy(SuperTabProject project) {
     final key = c.oneBuddy ? SuperTabController.kSwarmBuddyKey : project.id;
@@ -2225,9 +2238,8 @@ class _SuperTabViewState extends State<SuperTabView>
   /// Opens chat [conversationId] from a row of a page; false when it is
   /// gone or the reader's access is.
   bool _openConversation(String conversationId) {
-    if (c.accessRevoked || c.snapshot?.conversation(conversationId) == null) {
-      return false;
-    }
+    final group = c.snapshot?.conversation(conversationId);
+    if (c.accessRevoked || group == null) return false;
     widget.onCloseTerminal?.call();
     _closeSidebar();
     setState(() {
@@ -2235,6 +2247,7 @@ class _SuperTabViewState extends State<SuperTabView>
       _showManage = false;
       _showPullRequests = _showTasks = false;
     });
+    _showBoardOf(group);
     c.select(conversationId);
     return true;
   }
@@ -2302,6 +2315,7 @@ class _SuperTabViewState extends State<SuperTabView>
     widget.onCloseTerminal?.call();
     _closeSidebar();
     c.select(id);
+    _showBoardOf(c.snapshot!.conversation(id)!);
     // A thread reply opens its thread; one shown only there has no row in the
     // chat to scroll to.
     if (message.threadReply) {
@@ -3442,6 +3456,18 @@ class _SuperTabViewState extends State<SuperTabView>
   void _openTasks(SuperTabConversation group) {
     final project = c.snapshot?.projectById(group.projectId);
     if (project == null) return;
+    if (widget.board) {
+      // The fixed layout has one Board: projects, the Board and the chat on
+      // the right, the Buddy unless a task's chat is the one open.
+      if (group.id == project.leadConversationId || group.isBuddyChat) {
+        _openBoard(project);
+      } else {
+        _showBoardOf(group);
+      }
+      c.closeThread();
+      if (_rosterOpen) _closeRoster();
+      return;
+    }
     widget.onCloseTerminal?.call();
     if (c.selectedId != project.leadConversationId) {
       unawaited(c.select(project.leadConversationId));

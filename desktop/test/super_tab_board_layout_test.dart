@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/message_link.dart';
 import 'package:harness/super_tabs/message_row.dart' show SuperTabReplyPreview;
 import 'package:harness/super_tabs/pane_layout.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -413,8 +414,17 @@ void main() {
 
   testWidgets('a task chat opened from a notice shows its project Board '
       'beside it', (tester) async {
-    final (c, _) = await show(tester, width: 1500);
-    c.select('offline');
+    final (c, server) = await show(tester, width: 1500);
+    final message =
+        server.messages.lastWhere((m) => m['conversationId'] == 'offline')['id']
+            as String;
+    c.openMessageLink(
+      SwarmMessageLink(
+        tabId: 'tab',
+        conversationId: 'offline',
+        messageId: message,
+      ),
+    );
     await _settle(tester);
     expect(c.selectedId, 'offline');
     expect(_key('super-tasks-lead'), findsOneWidget);
