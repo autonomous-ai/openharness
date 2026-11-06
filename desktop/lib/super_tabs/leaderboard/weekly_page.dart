@@ -133,7 +133,7 @@ class _WeeklyBoardState extends State<SuperTabWeeklyLeaderboardPage> {
     return ColoredBox(
       color: grid.AppPalette.swarmWelcome,
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(DesktopChrome.panelPadding),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -331,7 +331,9 @@ class _WeeklyBoardState extends State<SuperTabWeeklyLeaderboardPage> {
 
   Widget _line(List<Widget> children, {bool heading = false}) => Container(
     height: heading ? 36 : 56,
-    padding: const EdgeInsets.symmetric(horizontal: 12),
+    padding: const EdgeInsets.symmetric(
+      horizontal: DesktopChrome.panelPadding / 2,
+    ),
     decoration: BoxDecoration(
       border: Border(bottom: BorderSide(color: grid.AppPalette.divider)),
     ),
