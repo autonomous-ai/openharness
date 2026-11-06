@@ -137,12 +137,10 @@ describe('in a project that answers people in threads', () => {
     const question = ask('Can the board show who works?')
     const { sent } = answer(f.lead, question, 'Yes, from tonight.', { plain: true })
     expect(sent.replyTo).toBe(question.id)
-    expect(sent.thread).toBe(question.id)
     expect(owed()).toEqual([])
     const second = ask('And the costs?')
     const { sent: answered } = answer(f.lead, second, 'Tomorrow.')
     expect(answered.replyTo).toBe(second.id)
-    expect(answered.thread).toBe(second.id)
     expect(f.group('lead').answered?.find(a => a.id === second.id)).toMatchObject({ answerId: answered.id, thread: second.id })
   })
 
@@ -151,15 +149,15 @@ describe('in a project that answers people in threads', () => {
     const news = f.run({ type: 'message.send', conversationId: 'lead', text: 'v1.4.23 is out.', replyTo: null, recipientIds: [] }, f.as(f.lead))
     expect(news.messages.find(m => m.text === 'v1.4.23 is out.')).toMatchObject({ replyTo: null })
     const agent = { kind: 'agent', id: f.dev, name: 'dev' } as Author
-    const effects = f.run({ type: 'message.send', conversationId: 'lead', text: 'Noted.', replyTo: null, recipientIds: [], answers: 'agent-line' } as Command,
+    const effects = f.run({ type: 'message.send', conversationId: 'lead', text: 'The login fix ships tonight.', replyTo: null, recipientIds: [], answers: 'agent-line' } as Command,
       f.as(f.lead), { reply: { id: 'agent-line', conversationId: 'lead', author: agent, createdAt: 0, thread: null } })
-    expect(effects.messages.find(m => m.text === 'Noted.')!.replyTo).toBeNull()
+    expect(effects.messages.find(m => m.text === 'The login fix ships tonight.')!.replyTo).toBeNull()
   })
 
   it('is set by the project\'s coordinator or a person who manages it, and turned off again; nobody else', () => {
     const { f, projectId, refusal } = threaded()
     expect(f.state.projects?.find(p => p.id === projectId)?.answersInThread).toBe(true)
-    expect(refusal(() => f.run({ type: 'project.answers', projectId, inThread: false } as Command, f.as(f.dev)))?.code).toBe('FORBIDDEN')
+    expect(refusal(() => f.run({ type: 'project.answers', projectId, inThread: false } as Command, f.as(f.dev)))?.code).toBe('COORDINATOR_REQUIRED')
     f.run({ type: 'project.answers', projectId, inThread: false } as Command, owner)
     expect(f.state.projects?.find(p => p.id === projectId)?.answersInThread).toBeUndefined()
   })

@@ -101,6 +101,9 @@ export interface SwarmProject {
   githubSeen?: GitHubSeen
   /** What its coordinator is called; reads give "Product Manager" when absent (instructions.ts coordinatorNameOf). */
   coordinatorName?: string
+  /** Agents answer every person's message in that message's thread, never right below it in the main chat (task #3747, anh
+   *  Dee 11-06: "i don't know which one you reply to which"). Absent: as before. Set with `project.answers`. */
+  answersInThread?: true
   /** Its owner's last "New repository" from New Project (task #1788): asked, then what GitHub's sign-in made of it. The
    *  app that asked starts the Product Manager in it once `created`; the next ask replaces it. */
   repositoryCreation?: RepositoryCreation
