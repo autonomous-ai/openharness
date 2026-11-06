@@ -16,6 +16,7 @@ import { canReadGroup } from '../projects.js'
 import { promptWaits } from '../promptWaits.js'
 import { storedPulse, type Pulse } from '../pulse.js'
 import { coordinatorNameOf, roleNameOf } from '../instructions.js'
+import { agentChatId, agentKind } from '../agentKind.js'
 import { withAvatarView } from '../profile.js'
 import { swarmUsernames } from '../usernames.js'
 import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
@@ -208,7 +209,9 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
       workDecision: seen.workDecision === 'awaiting' && state.agents.find(a => a.id === seen.id)!.workDecision !== 'awaiting' ? 'awaiting' as const : null,
       roleId: seen.roleId ?? null,
       // Derived on every read: who leads a project, and its role set, live outside the agent's own part.
-      roleName: roleNameOf(state, state.agents.find(a => a.id === seen.id)!) }])),
+      roleName: roleNameOf(state, state.agents.find(a => a.id === seen.id)!),
+      // What it is and where its person talks to it, for the left pane's "My agents" (agentKind.ts, task #4116).
+      kind: agentKind(state, state.agents.find(a => a.id === seen.id)!), chatId: agentChatId(state, state.agents.find(a => a.id === seen.id)!) }])),
     machines: Object.fromEntries((visible.machines ?? []).map(machine)),
     ...(visible.otherProjectsWork ? { otherProjectsWork: visible.otherProjectsWork } : {}),
     ...(visible.pmAccounts ? { pmAccounts: visible.pmAccounts } : {}),
