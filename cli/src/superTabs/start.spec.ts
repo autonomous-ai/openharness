@@ -445,6 +445,26 @@ it.each(['claude', 'codex'])('starts a %s Buddy with the built-in swarm-buddy sk
   expect(payload.prompt).not.toContain('swarm-dev')
 })
 
+it.each([
+  ['main', {}],
+  ['Swarm', { buddyScope: 'swarm' }],
+  ['thread', { buddySession: { thread: 'root-1', from: 1 } }],
+  ['project session', { buddySession: { thread: 'root-1', from: 1, projectId: 'project' } }],
+])('tells the %s Buddy to offer ready ideas once and wait for consent (task #3865)', async (_name, context) => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, buddyOf: { personId: 'peer', generation: 'g' }, ...context } as typeof f.start.request
+  ownMachine(f)
+  await startAgent({ ...OWN_HOST, action: 'start', tabId: 'tab', operationId: 'buddy-offer', request: f.start.request } as never, f.scoped, where, f.open)
+  const prompt = String(f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!.prompt)
+  expect(prompt).toContain('clear goal, why it matters and how to know it is done')
+  expect(prompt).toContain('check the project for an existing proposal or task')
+  expect(prompt).toContain('point to a match instead of duplicating it')
+  expect(prompt).toContain('offer without waiting to be asked: "Want me to propose this to <project>?"')
+  expect(prompt).toContain('show the exact proposal')
+  expect(prompt).toContain('Send only after your owner says yes to that proposal')
+  expect(prompt).toContain('One offer per idea; never repeat an ignored or declined offer')
+})
+
 it('admits a person\'s one Buddy by the disk its folder is made on, as the folder its start names is never made', async () => {
   // The real disk reading, on a folder that is not there: measured as it stands it is refused, and the Buddy never starts (2026-11-02).
   const root = mkdtempSync(join(tmpdir(), 'swarm-buddy-disk-'))
