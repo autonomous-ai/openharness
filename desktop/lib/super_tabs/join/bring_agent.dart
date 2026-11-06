@@ -7,6 +7,7 @@ import '../../shared/widgets/app_dialog.dart';
 import '../../state/app_state.dart';
 import '../../state/harness_launch_integration.dart';
 import '../../state/new_harness.dart';
+import '../../widgets/desktop_chrome.dart';
 import '../../widgets/new_harness_form.dart';
 import '../controller.dart';
 import 'agent_launcher.dart';
@@ -161,7 +162,7 @@ Future<Map<String, dynamic>?> showBringAgentForm(
       transitionDuration: Duration.zero,
       veilBlur: 0,
       builder: (dialog) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        padding: const EdgeInsets.all(DesktopChrome.panelPadding),
         child: NewHarnessForm(
           controller: box,
           desktop: true,
