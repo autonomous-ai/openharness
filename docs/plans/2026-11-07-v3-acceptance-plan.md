@@ -30,13 +30,13 @@
 
 **Files:** Create backend/src/superTabs/__tests__/swarmV3.acceptance.ts and v3.vitest.config.ts.
 
-**Interfaces:** SuperTabStore.create/execute/observeMachine/deliveries; SwarmReads.firstLoad/changes. Existing planDatabase creates and removes a loopback store.
+**Interfaces:** SuperTabStore.create/execute/observeMachine/deliveries; SwarmReads.firstLoad; HostReads.changes. The acceptance fixture creates and removes a loopback store inside the backend source root.
 
-- [ ] Write acceptance assertions before any implementation: join, buddy.create with setup, host launch, proposal delivery, PM conversion, Regular worker, Auto approve assignment, Review suggestion/wait/approve, and reject.
-- [ ] Run the acceptance. Report a real failure to its owner without changing product code; passing existing behavior needs no artificial failing implementation.
-- [ ] Run existing CLI host start/delivery and own-account reporting tests with isolated fixtures.
-- [ ] Run current-main Desktop join/Buddy launcher widgets with fake sign-in and memory state; run Tasks tests when #4138 is merged.
-- [ ] Record exact main head, commands, per-step receipts and limitations; push test-only PR for independent review and CI.
+- [x] Write acceptance assertions before any implementation: join, buddy.create with setup, host launch, proposal delivery, PM conversion, Regular worker, Auto approve assignment, Review suggestion/wait/approve, and reject.
+- [x] Run the acceptance. Report a real failure to its owner without changing product code; passing existing behavior needs no artificial failing implementation.
+- [x] Run existing CLI host start/delivery and own-account reporting tests with isolated fixtures.
+- [x] Run current-main Desktop join/Buddy launcher widgets with fake sign-in and memory state; run Tasks tests when #4138 is merged.
+- [x] Record exact main head, commands, per-step receipts and limitations; push test-only PR for independent review and CI.
 
 ## Design
 
