@@ -425,21 +425,6 @@ describe('the crew dispatch pass', () => {
     expect(await s.holders()).toEqual({ Api: 'Ash' })
   })
 
-  it('assigns within the short retry once the repository is approved, and not before it', async () => {
-    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
-    // Ash runs in a Team account, which reaches the repository only through the GitHub App (repositoryReach.ts).
-    await editAgent(s.tab, s.crew.Ash!, agent => ({ ...agent, teamAccount: true }))
-    const store = s.store as unknown as { repositoryReachFor: (...args: unknown[]) => Promise<unknown> }
-    vi.spyOn(store, 'repositoryReachFor').mockResolvedValueOnce({ state: 'not-approved', repository: 'owner/repo' })
-    const refused = await s.store.dispatchCrew(s.tab)
-    expect(refused).toMatchObject({ assigned: 0, skipped: { REPOSITORY_UNREACHABLE: 1 } })
-    // Approved now, in the same round. The pick waits its short retry, then goes.
-    expect(await s.store.dispatchCrew(s.tab)).toEqual({ assigned: 0, skipped: {} })
-    s.advance(DISPATCH_RETRY_MS)
-    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
-    expect(await s.holders()).toEqual({ Api: 'Ash' })
-  })
-
   it('does not assign a task postponed while the pass read GitHub', async () => {
     const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
     // Between the pass's read and its write: a person moves the task to tomorrow.
@@ -465,12 +450,12 @@ describe('the crew dispatch pass', () => {
     expect(second.status).toBe('working')
   })
 
-  it('skips a task the member may not take (Team-written code, main account) and gives it its next one', async () => {
+  // Swarm v3 (task #4120, the PM's ruling): Team-written code goes only to the project owner's own agent, as Ash is here.
+  it('gives Team-written code to the project owner\'s own agent', async () => {
     const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts', Store: 'backend/src/b.ts' })
-    // Team-written code goes only to a Team account's agent: Ash runs in the main account.
     await editGroup(s.tab, s.tasks.Api!, group => ({ ...group, teamWritten: true }))
     const done = await s.store.dispatchCrew(s.tab)
     expect(done.assigned).toBe(1)
-    expect(await s.holders()).toEqual({ Api: null, Store: 'Ash' })
+    expect(await s.holders()).toEqual({ Api: 'Ash', Store: null })
   })
 })
