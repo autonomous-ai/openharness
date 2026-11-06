@@ -54,8 +54,7 @@ export function advanceProposalCards(state: SuperTabState, now: number): Message
       if (owner) {
         const rows = proposalNotices(state, card, 'needs-you', `${card.title} has waited over 30 minutes for a PM decision.`, clockAuthor(state, card),
           stableId(card.id, 'overdue', String(record.waitSince ?? record.createdAt)), [{ personId: owner.id, generation: owner.generation }])
-        for (const row of rows) row.source = { ...row.source, kind: 'proposal-overdue' }
-        messages.push(...rows)
+        messages.push(...rows.map(row => ({ ...row, source: { ...row.source, kind: 'proposal-overdue' } })))
       }
     }
   }
