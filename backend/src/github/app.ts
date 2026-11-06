@@ -670,7 +670,7 @@ export class GitHubApp {
       const list = (value: unknown) => Array.isArray(value) ? value as Array<Record<string, unknown>> : []
       return {
         url: text(pull.html_url) || `https://github.com/${repository.owner}/${repository.name}/pull/${number}`, number,
-        state: pull.state, draft: pull.draft === true, head, base: text((pull.base as { ref?: unknown } | undefined)?.ref) || 'main',
+        state: pull.state, ...typeof pull.merged_at === 'string' ? { merged: true as const } : {}, draft: pull.draft === true, head, base: text((pull.base as { ref?: unknown } | undefined)?.ref) || 'main',
         mergeable: typeof pull.mergeable === 'boolean' ? pull.mergeable : null,
         checkRuns: list((runs as Record<string, unknown>).check_runs).map(run => ({ name: text(run.name), status: text(run.status),
           conclusion: typeof run.conclusion === 'string' ? run.conclusion : null, completedAt: at(run.completed_at) })),

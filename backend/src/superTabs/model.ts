@@ -292,7 +292,10 @@ export interface PullRequestHead { head: string; patch: string | null; at: numbe
   base?: string
   /** The heads whose verdicts this one carries, newest first, at most CARRIES_KEPT: it is git's own merge of the first and
    *  main, the first of the next, and so on (mergeCarry.ts, task #3553). Absent on any other head. */
-  carries?: string[] }
+  carries?: string[]
+  /** Set by the PR watch once GitHub shows the pull request closed (merged or not): a task's checks never count at it while
+   *  another linked pull request is open (checkVerdicts.ts checkedPullRequest, task #3953). Cleared when it is open again. */
+  closed?: true }
 export interface Assignment {
   id: string
   agentId: string
@@ -438,6 +441,9 @@ export interface Conversation {
    *  #3554): those its brief, title, assignment's result, checks' evidence and merge record name, never links in posts. [] from
    *  its creation; absent on a conversation from before, which reads what it recorded instead (codePullRequests). */
   codePullRequestUrls?: string[]
+  /** Pull requests the PM or the task's Engineer unlinked from it, newest last, at most UNLINKS_KEPT: the task's history of
+   *  them, and what keeps a later post's link from linking one again (commands.ts conversation.unlink, task #3953). */
+  unlinkedPullRequests?: Array<{ url: string; by: string; reason: string; at: number }>
   /** 'server' on a step the server opened for a handed task (commands.ts openReviewSteps, task #3602): an agent's step of its
    *  kind is then refused as a double. Absent on a step an agent or a person opened, and on older ones. */
   openedBy?: 'server'
@@ -591,14 +597,19 @@ export const codePullRequests = (group: Pick<Conversation, 'codePullRequestUrls'
 export function appendCodePullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
   if (group.codePullRequestUrls === undefined) return
   const urls = new Set(group.codePullRequestUrls.flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
-  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) urls.add(url)
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) if (!unlinked(group, url)) urls.add(url)
   group.codePullRequestUrls = [...urls]
 }
+
+/** The most unlinked pull requests a task remembers. */
+export const UNLINKS_KEPT = 50
+/** Whether [url] was unlinked from [group]: no later text links it again. */
+const unlinked = (group: Pick<Conversation, 'unlinkedPullRequests'>, url: string): boolean => !!group.unlinkedPullRequests?.some(entry => entry.url === url)
 
 /** Adds the pull request links of [texts] to [group] and corrects the ones it holds, by the project's [repositoryUrl]. */
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
   const urls = new Set((group.pullRequestUrls ?? []).flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
-  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) urls.add(url)
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) if (!unlinked(group, url)) urls.add(url)
   group.pullRequestUrls = [...urls]
 }
 export interface Invitation {
