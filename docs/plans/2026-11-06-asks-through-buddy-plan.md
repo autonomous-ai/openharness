@@ -66,17 +66,17 @@ applies when due (store.ts leaveOverdueDecisions, `dueDefaultDecisions`). In a p
 **Interfaces:** `askedThroughBuddy(state, group, drafts, author)`: the Buddy-chat lines for drafts in a switched project
 (decisions.ts); `checkSwitchedAsk(question)`: refuses a question with no `defaultAt`.
 
-- [ ] Test: in a switched project, an agent's needs_human ask and its decision.ask each open a decision for the person
+- [x] Test: in a switched project, an agent's needs_human ask and its decision.ask each open a decision for the person
   with its default and time, post the question in their default Buddy's chat addressed to that Buddy, send nothing to the
   PM, and keep `askedOf`; without `defaultAt` each is refused; in a project not switched both are the PM's crew needs, as
   today.
-- [ ] Watch it fail; commit. Code; watch it pass; commit.
+- [x] Watch it fail; commit. Code; watch it pass; commit.
 
 ## Task 2: the default applies at its time, unless the person must agree
 
 **Files:** backend/prisma/schema.prisma, backend/src/superTabs/{decisions.ts, overdueDecisions.ts, commands.ts, store.ts,
 model.ts}, backend/integration/overdueDecisions.test.ts
 
-- [ ] Test: past its time the default answers a switched project's decision and the agent hears it; a `mustAgree` one
+- [x] Test: past its time the default answers a switched project's decision and the agent hears it; a `mustAgree` one
   stays open, the PM is told once, the next pass and the 24-hour sweep take nothing, and the person can still answer.
-- [ ] Watch it fail; commit. Code; watch it pass; commit.
+- [x] Watch it fail; commit. Code; watch it pass; commit.
