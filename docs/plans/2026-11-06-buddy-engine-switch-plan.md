@@ -22,7 +22,7 @@
 ## Design
 
 - Growth: reuse the single pending `switchRequest` per Buddy and existing expiring switch/operation receipts; no new collection. Completion or the existing bounded lease clears a request.
-- Concurrency: existing serialized Swarm command applies requests; engine/model switches exclude one another. Daemon handoff receipts fence duplicate stops/starts and survive restart.
+- Concurrency: existing serialized Swarm command applies requests; engine/model switches exclude one another. Daemon handoff receipts fence duplicate stops/starts and survive restart; a bounded recovered marker keeps a later Stop Harness stopped after rollback.
 - Read cost: use current agent and machine observations; no new polling, database queries or transcript scan on idle passes. A switch reads the existing bounded handoff only on demand.
 - Scale: bounded machine engine list and existing host fan-out; measure header build cost and command cost on the same fixture before/after. Switch latency uses the existing bounded claim/start leases.
 - Compatibility: additive command/capability and Buddy host chat field; old hosts cannot receive a switch. Existing model commands and clients remain valid.
@@ -46,10 +46,10 @@
 
 **Interfaces:** `buddy.engine {engine}` writes the existing `Agent.switchRequest` with default profile, owner and operation id. Host rows expose `buddyConversationId`. Existing `agent.switchClaim`, `agent.rebind`, and `agent.switchResult` settle only the requested Buddy switch. `buddyEngine` is the new host capability.
 
-- [ ] Commit failing caller-level tests for owner-only admission, signed-in/fresh/capable host, mutual exclusion, rebind preserving chat, duplicate/stale results, expiry and limit notice.
-- [ ] Run the new tests and record their expected failures.
-- [ ] Implement request validation and private result/expiry lines using existing switch state; preserve Buddy-specific authorization.
-- [ ] Run the new tests and affected Buddy/model/terminal/rebind tests; commit and push the passing implementation.
+- [x] Commit failing caller-level tests for owner-only admission, signed-in/fresh/capable host, mutual exclusion, rebind preserving chat, duplicate/stale results, expiry and limit notice.
+- [x] Run the new tests and record their expected failures.
+- [x] Implement request validation and private result/expiry lines using existing switch state; preserve Buddy-specific authorization.
+- [x] Run the new tests and affected Buddy/model/terminal/rebind tests; commit and push the passing implementation.
 
 ### Task 2: Host handoff and recovery
 
@@ -57,10 +57,10 @@
 
 **Interfaces:** Consume Task 1's request/chat field; use `agent_handoff_prepare`, `agent_close`, `agent_create`, `agent_handoff_complete` with one deterministic creation id. Preserve Buddy role, owner guard, folder and chat prompt. Reuse the handoff-backed one-use close permit and rollback window.
 
-- [ ] Commit failing tests: Claude Code to Codex launch in the same folder with Buddy role/chat; no sign-in or stale owner refuses before close; duplicate/restarted request does not create twice; failed/late start recovers; ordinary close remains protected.
-- [ ] Run those tests and record their expected failures.
-- [ ] Extend existing handoff/recovery to Buddies, advertise capability only with the path implemented, and keep model switches exclusive.
-- [ ] Run affected host, switch, replacement, close and Windows launch guard tests; typecheck and applicable non-CI coverage gates; commit and push.
+- [x] Commit failing tests: Claude Code to Codex launch in the same folder with Buddy role/chat; no sign-in or stale owner refuses before close; duplicate/restarted request does not create twice; failed/late start recovers; ordinary close remains protected.
+- [x] Run those tests and record their expected failures.
+- [x] Extend existing handoff/recovery to Buddies, advertise capability only with the path implemented, and keep model switches exclusive.
+- [x] Run affected host, switch, replacement, close and Windows launch guard tests; typecheck and applicable non-CI coverage gates; commit and push.
 
 ### Task 3: Header engine menu and limit action
 
@@ -68,8 +68,8 @@
 
 **Interfaces:** `switchBuddyEngine(String engine)` submits Task 1's command. Offers come from a fresh machine `observation.readiness.engines` with installed/signedIn both true. `switchRequest` drives pending text and disables model changes.
 
-- [ ] Commit failing widget tests with memory store/fake sign-in for selecting Codex, hidden signed-out/unknown/stale engines, pending state, command refusal and limit-action menu.
-- [ ] Run them and record the expected failures.
-- [ ] Add a compact shared-menu engine picker beside the model picker; reuse it in the one-line limit notice. Keep engine labels accurate in the model menu.
-- [ ] Run affected Buddy tests on macOS, light/dark screenshot runs and narrow-layout tests. Record baseline/changed header timings and analyze changed files; commit and push.
-- [ ] Update the PR with red/green evidence, screenshots, platform limits and timings; mark ready and hand to the Integrator for independent review/test and release.
+- [x] Commit failing widget tests with memory store/fake sign-in for selecting Codex, hidden signed-out/unknown/stale engines, pending state, command refusal and limit-action menu.
+- [x] Run them and record the expected failures.
+- [x] Add a compact shared-menu engine picker beside the model picker; reuse it in the one-line limit notice. Keep engine labels accurate in the model menu.
+- [x] Run affected Buddy tests on macOS, light/dark screenshot runs and narrow-layout tests. Record baseline/changed header timings and analyze changed files; commit and push.
+- [x] Update the PR with red/green evidence, screenshots, platform limits and timings; mark ready and hand to the Integrator for independent review/test and release.
