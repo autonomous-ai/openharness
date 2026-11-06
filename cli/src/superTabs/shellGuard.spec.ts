@@ -149,6 +149,29 @@ describe('shell guard: heredocs', () => {
   })
 })
 
+describe('shell guard: temporary paths in simple variables', () => {
+  it.each([
+    'OUT=/tmp; echo hi > "$OUT/shared.txt"',
+    'OUT=/tmp; cat ${OUT}/shared.txt',
+    'OUT=/private; OUT="$OUT/tmp"; touch "$OUT/shared.txt"',
+    'OUT=/tmp; NEXT=$OUT; curl -o "$NEXT/shared.txt" https://example.com',
+    'export OUT=/tmp; tee "$OUT/shared.txt"',
+    "bash -c 'OUT=/tmp; echo hi > \"$OUT/shared.txt\"'",
+  ])('refuses %s', command => {
+    expect(refused(command)).toBe(GUARD_REASONS.fixedTmp)
+  })
+
+  it.each([
+    'OUT=/work; echo hi > "$OUT/shared.txt"',
+    'OUT=/tmp; OUT=/work; echo hi > "$OUT/shared.txt"',
+    "OUT=/tmp; echo '$OUT/shared.txt'",
+    "OUT=/tmp; echo \\$OUT/shared.txt",
+    'OUT=$(mktemp -d); echo hi > "$OUT/shared.txt"',
+  ])('allows %s', command => {
+    expect(refused(command)).toBeNull()
+  })
+})
+
 describe('shell guard: fixed names in /tmp', () => {
   it.each([
     'echo hi > /tmp/out.txt',
