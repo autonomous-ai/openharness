@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/material.dart';
@@ -28,6 +30,7 @@ Future<SuperTabController> controller(
   int cards = 0,
   String account = 'owner',
   String selected = 'offline',
+  void Function(ConversationServer)? configure,
 }) async {
   final server = swarm();
   server.state['swarmBuddy'] = true;
@@ -44,6 +47,7 @@ Future<SuperTabController> controller(
       'lastMainSequence': 2,
     });
   }
+  configure?.call(server);
   final c = server.controller(
     account: account,
     initial: {'tabId': 'tab', 'accountId': account, 'selectedId': selected},
@@ -169,6 +173,68 @@ void main() {
     },
   );
 
+  testWidgets(
+    'restoration drops archived and missing ids and bounds recent chats',
+    (tester) async {
+      final store = MemoryKeyValueStore();
+      final c = await controller(
+        tester,
+        cards: 31,
+        selected: 'plan',
+        configure: (server) {
+          (server.state['conversations'] as List).cast<Map>().firstWhere(
+            (g) => g['id'] == 'offline',
+          )['archived'] = true;
+        },
+      );
+      await showRow(tester, c, storage: store);
+      await tester.pumpAndSettle();
+      final scopedKey = store.values.keys.single;
+      await tester.pumpWidget(const SizedBox());
+      store.values[scopedKey] = jsonEncode([
+        'offline',
+        'missing',
+        'code',
+        'card-0',
+      ]);
+      await showRow(tester, c, storage: store);
+      await tester.pumpAndSettle();
+      expect(key('super-chat-tab-offline'), findsNothing);
+      expect(key('super-chat-tab-missing'), findsNothing);
+      expect(key('super-chat-tab-card-0'), findsOneWidget);
+      for (var i = 1; i < 31; i++) {
+        await tester.runAsync(() => c.select('card-$i'));
+        await tester.pump();
+      }
+      await tester.pumpAndSettle();
+      expect((jsonDecode(store.values[scopedKey]!) as List), hasLength(30));
+      expect(
+        (jsonDecode(store.values[scopedKey]!) as List),
+        isNot(contains('card-0')),
+      );
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+      await tester.pump(const Duration(seconds: 1));
+    },
+  );
+
+  testWidgets('a slow initial restore keeps chats opened while it waits', (
+    tester,
+  ) async {
+    final store = SlowStore();
+    final c = await controller(tester, cards: 1, selected: 'plan');
+    await showRow(tester, c, storage: store);
+    await tester.runAsync(() => c.select('card-0'));
+    await tester.pump();
+    store.gate.complete(jsonEncode(['offline']));
+    await tester.pumpAndSettle();
+    expect(key('super-chat-tab-offline'), findsOneWidget);
+    expect(key('super-chat-tab-card-0'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+    await tester.pump(const Duration(seconds: 1));
+  });
+
   testWidgets('a failed local store is visible and leaves chats usable', (
     tester,
   ) async {
@@ -186,4 +252,10 @@ void main() {
 class BrokenStore extends MemoryKeyValueStore {
   @override
   Future<String?> read(String key) async => throw StateError('unavailable');
+}
+
+class SlowStore extends MemoryKeyValueStore {
+  final gate = Completer<String?>();
+  @override
+  Future<String?> read(String key) => gate.future;
 }

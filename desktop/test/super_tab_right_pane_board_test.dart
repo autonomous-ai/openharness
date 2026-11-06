@@ -24,8 +24,9 @@ void main() {
     ValueChanged<SuperTabAgent>? terminal,
     Brightness brightness = Brightness.light,
     int cards = 0,
+    double width = 1800,
   }) async {
-    await tester.binding.setSurfaceSize(const Size(1800, 1000));
+    await tester.binding.setSurfaceSize(Size(width, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final server = swarm();
     server.state['swarmBuddy'] = true;
@@ -153,6 +154,15 @@ void main() {
       await end(tester, c);
     },
   );
+  testWidgets('a smaller Desktop window keeps the Board and chat together', (
+    tester,
+  ) async {
+    final c = await show(tester, width: 960);
+    expect(key('super-right-pane-row'), findsOneWidget);
+    expect(key('super-tasks-lead'), findsOneWidget);
+    await end(tester, c);
+  });
+
   for (final brightness in Brightness.values) {
     testWidgets('Board avatar row screenshot in ${brightness.name}', (
       tester,
