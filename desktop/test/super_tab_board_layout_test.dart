@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/message_row.dart' show SuperTabReplyPreview;
 import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_activity_lists_test.dart' show swarm;
@@ -134,6 +135,32 @@ void main() {
     expect(find.text('Working on the fix.'), findsOneWidget);
     expect(find.text('A reply in its thread.'), findsOneWidget);
     expect(find.textContaining('1 reply'), findsNothing);
+    // Each reply says what it answers, as on the phone (Ken's review of the spec).
+    expect(
+      find.descendant(
+        of: find.byType(SuperTabReplyPreview),
+        matching: find.textContaining('Working on the fix.'),
+      ),
+      findsOneWidget,
+    );
+    await end(tester, c);
+  });
+
+  testWidgets('the project chat stays a tab away: Chat beside Board, Board '
+      'first (Ken)', (tester) async {
+    final (c, _) = await show(tester);
+    await tester.tap(_key('super-group-lead'));
+    await _settle(tester);
+    expect(_key('super-tasks-lead'), findsOneWidget);
+    await tester.tap(_key('super-board-tab-chat'));
+    await _settle(tester);
+    expect(c.selectedId, 'lead');
+    expect(find.text('The project chat line nobody should see'), findsOneWidget);
+    expect(_key('super-tasks-lead'), findsNothing);
+    await tester.tap(_key('super-board-tab-board'));
+    await _settle(tester);
+    expect(_key('super-tasks-lead'), findsOneWidget);
+    expect(c.selectedId, 'buddy-owner-lead');
     await end(tester, c);
   });
 
