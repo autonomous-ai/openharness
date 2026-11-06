@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { startDecisionSweep } from './decisionSweep.js'
-import { logger } from '../lib/logger.js'
+import { logger } from '../utils/logger.js'
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
