@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/buddies.dart';
+import 'package:harness/super_tabs/buddy_model.dart';
 import 'package:harness/super_tabs/right_pane_row.dart';
 
 import 'super_tab_activity_lists_test.dart' show swarm;
@@ -15,6 +16,29 @@ Finder key(String value) => find.byKey(ValueKey(value));
 
 void main() {
   setUpAll(() => loadCaptureFonts(shots));
+  testWidgets('a secondary Buddy subscription cannot switch the first Buddy', (tester) async {
+    final server = swarm();
+    server.state['agents'] = <Map<String, dynamic>>[
+      for (final id in ['first', 'second']) {
+        'id': id, 'name': id, 'machineId': 'mac', 'harnessId': id,
+        'contributorId': 'owner', 'buddyOf': {'personId': 'owner'},
+        'buddyScope': 'swarm', 'configuration': {'engine': 'claude'},
+      },
+    ];
+    final c = server.controller(account: 'owner');
+    await tester.runAsync(c.refresh);
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SizedBox(width: 280,
+      child: BuddyModelLine(controller: c,
+        agent: c.snapshot!.agents.firstWhere((a) => a.id == 'second'),
+        machine: 'Mac', rest: 'Claude · Mac', compact: true)))));
+    await tester.tap(find.text('Your subscription'));
+    await tester.pumpAndSettle();
+    expect(find.text('SHARED IN THIS SWARM'), findsNothing);
+    expect(server.posts, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+    await tester.pump(const Duration(seconds: 1));
+  });
   for (final brightness in Brightness.values) {
     for (final width in [280.0, 600.0]) {
       testWidgets('selected Buddy header at $width in ${brightness.name}', (
