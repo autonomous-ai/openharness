@@ -40,13 +40,57 @@ void main() {
           expect((start['setup'] as Map)['engines'], ['codex']);
         } else {
           expect(sent.first['type'], 'machine.contribute');
-          expect(sent.first.containsKey('teamAccountOnly'), isFalse);
+          expect(sent.first['teamAccountOnly'], isTrue);
+          expect(sent.first.containsKey('ifMissing'), isFalse);
           expect(start['type'], 'agent.new');
           expect(start['kind'], kind);
           if (kind == 'pm') expect(start.containsKey('name'), isFalse);
           expect(start['projectName'], kind == 'pm' ? 'Compiler' : null);
         }
         expect(sent.toString(), isNot(contains('teamSetup')));
+      },
+    );
+  }
+  for (final kind in ['regular', 'pm']) {
+    test(
+      'a non-owner collaborator can create $kind without sharing their login',
+      () async {
+        final calls = <Map<String, dynamic>>[];
+        final launcher = SwarmAgentLauncher(
+          machineId: 'collaborator-computer',
+          machineName: 'This computer',
+          inSwarm: false,
+          isCurrent: () => true,
+          prepare: (_) async => {
+            'cwd': '/work',
+            'engines': ['claude'],
+          },
+          command: (command, operation) async {
+            // This transport represents a collaborator, not the org owner. The
+            // backend reserves automatic ifMissing admission for the owner.
+            if (command['type'] == 'machine.contribute' &&
+                command['ifMissing'] == true) {
+              throw const SwarmAgentLaunchFailure(
+                'Only the org owner adds a machine automatically.',
+              );
+            }
+            calls.add(command);
+            return command['type'] == 'machine.contribute'
+                ? <String, dynamic>{}
+                : {'startId': 'started', 'conversationId': 'own-chat'};
+          },
+        );
+        final result = await launcher.create(
+          'claude',
+          kind,
+          kind == 'pm' ? 'Compiler' : null,
+          'collaborator-operation',
+        );
+        expect(result['startId'], 'started');
+        expect(calls, hasLength(2));
+        expect(calls.first['teamAccountOnly'], isTrue);
+        expect(calls.first.containsKey('ownAccountWork'), isFalse);
+        expect(calls.last['type'], 'agent.new');
       },
     );
   }
