@@ -65,6 +65,22 @@ describe('the project rules record', () => {
     expect(projectRulesSchema.parse(rules)).toEqual(rules)
   })
 
+  it('accepts optional approval authority with explicit linked account IDs and rejects ambiguous links', () => {
+    const authority = { topDeciderId: 'dee-id', people: [{ name: 'Ken', accountIds: ['ken-id', 'other-ken-id'] }] }
+    expect(projectRulesSchema.parse({ ...copy(), instructionApprovals: authority })).toMatchObject({ instructionApprovals: authority })
+    expect(projectRulesSchema.parse({ ...copy(), instructionApprovals: null })).toMatchObject({ instructionApprovals: null })
+    expect(projectRulesSchema.parse(copy())).not.toHaveProperty('instructionApprovals')
+    const bad = [
+      { ...authority, people: [{ name: 'Ken', accountIds: [] }] },
+      { ...authority, people: [{ name: 'Ken', accountIds: ['a', 'a'] }] },
+      { ...authority, people: [{ name: 'Ken', accountIds: ['a'] }, { name: 'KEN', accountIds: ['b'] }] },
+      { ...authority, people: [{ name: 'Ken', accountIds: ['a'] }, { name: 'Other', accountIds: ['a'] }] },
+      { ...authority, people: [{ name: 'Ken', accountIds: Array.from({ length: 11 }, (_, i) => `a${i}`) }] },
+      { ...authority, people: Array.from({ length: 51 }, (_, i) => ({ name: `Person ${i}`, accountIds: [`a${i}`] })) },
+    ]
+    for (const instructionApprovals of bad) expect(projectRulesSchema.safeParse({ ...copy(), instructionApprovals }).success).toBe(false)
+  })
+
   it('refuses bad values', () => {
     expect(refused({ ...copy(), extra: 1 })).toBe(true)
     expect(refused({ ...copy(), releaseWindow: { ...SEED_RULES.releaseWindow, start: '25:00' } })).toBe(true)
@@ -437,6 +453,26 @@ describe('who changes the rules', () => {
     expect(effects.messages).toEqual([])
   })
 
+  it.each(['owner', 'peer'])('refuses authority changes through the PM quoting %s, while allowing that person directly', id => {
+    const f = fixture()
+    f.invite()
+    const lead = f.add('lead', 'lead', true)
+    const authority = { topDeciderId: 'peer', people: [{ name: 'Ken', accountIds: ['owner'] }] }
+    const current = { revision: 1, rules: { ...copy(), instructionApprovals: authority } }
+    const context = { projectRules: current, askedIn: personAsked(id) }
+    for (const instructionApprovals of [null, { ...authority, topDeciderId: 'owner' },
+      { ...authority, people: [{ name: 'Ken', accountIds: ['owner', 'peer'] }] }]) {
+      expect(code(() => f.run(set(1, { ...later(), instructionApprovals }, asked('lead')), as(lead), context)))
+        .toBe('RULES_APPROVAL_EDITOR_REQUIRED')
+    }
+    // The PM may still make ordinary edits with either omitted or unchanged authority.
+    for (const rules of [later(), { ...later(), instructionApprovals: authority }]) {
+      expect(f.run(set(1, rules, asked('lead')), as(lead), context).projectRules?.rules.instructionApprovals).toEqual(authority)
+    }
+    expect(f.run(set(1, { ...later(), instructionApprovals: null }), id === 'owner' ? owner : peer, { projectRules: current })
+      .projectRules?.rules.instructionApprovals).toBeNull()
+  })
+
   it('refuses every other agent, the PM of another project and a Buddy', () => {
     const f = fixture()
     f.invite()
@@ -477,6 +513,23 @@ describe('machine rules in the record', () => {
     expect(refused(withMachines([{ ...RULES[3], machineIds: [] }]))).toBe(true)
     // A record from before has none.
     expect(projectRulesSchema.parse(copy()).machines).toBeUndefined()
+  })
+
+  it('preserves approval authority and machine rules together without letting an ordinary member change authority', () => {
+    const f = fixture()
+    f.invite()
+    const authority = { topDeciderId: 'owner', people: [{ name: 'Ken', accountIds: ['owner', 'peer'] }] }
+    const current = { revision: 1, rules: { ...withMachines(RULES), instructionApprovals: authority } }
+    const kept = f.run(set(1, later()), peer, { projectRules: current })
+    expect(kept.projectRules?.rules).toMatchObject({ machines: RULES, instructionApprovals: authority })
+    expect(kept.projectRules?.diff).toEqual([{ path: 'releaseWindow.start', before: '09:00', after: '08:00' }])
+    expect(f.run(set(1, copy()), peer, { projectRules: current }).result.unchanged).toBe(true)
+    expect(code(() => f.run(set(1, { ...later(), instructionApprovals: null }), peer, { projectRules: current })))
+      .toBe('RULES_APPROVAL_EDITOR_REQUIRED')
+    const cleared = f.run(set(1, { ...later(), instructionApprovals: null, machines: [] }), owner, { projectRules: current })
+    expect(cleared.projectRules?.rules).toMatchObject({ instructionApprovals: null, machines: [] })
+    expect(code(() => f.run(set(1, { ...copy(), lanes: [{ name: 'phone', owns: ['mobile/'] }] }), owner, { projectRules: current })))
+      .toBe('RULES_INVALID')
   })
 
   it('keeps the current machine rules when a save leaves them out, and clears them only when it says so', () => {
