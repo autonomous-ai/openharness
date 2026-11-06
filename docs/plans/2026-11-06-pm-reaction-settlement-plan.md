@@ -39,8 +39,15 @@
 **Files:** pulse.ts, commands.ts; pulse.test.ts, integration/superTabs.test.ts.
 **Interfaces:** settleReaction(state, group, agentId, messageId, on) removes only that owed message when the actual PM adds a reaction. The emoji is already validated by message.react.
 
-- [ ] Commit tests: all seven reactions clear a social message and owedLines/pulse; questions clear too; removing a reaction/other actors do not; thread siblings remain. Add a real-store joke/question case proving persisted owed state.
-- [ ] Run new tests and observe missing eyes/laugh/heart settlement before implementation.
-- [ ] Remove verdict-only filtering and its unused set/argument; keep actual-PM/on/exact-message checks and automatic receipt path unchanged.
-- [ ] Run pulse, commands, answers, inbox, reactions and liveness importers; affected real-store reaction/answer/index cases; typecheck.
-- [ ] Commit/push the green fix, record evidence, mark Ready for CI and independent review.
+- [x] Commit tests: all seven reactions clear a social message and owedLines/pulse; questions clear too; removing a reaction/other actors do not; thread siblings remain. Add a real-store joke/question case proving persisted owed state (`cb868b10b`).
+- [x] Run new tests and observe missing eyes/laugh/heart settlement before implementation: four unit failures and the real-store joke remained owed.
+- [x] Remove verdict-only filtering and its unused set/argument; keep actual-PM/on/exact-message checks and automatic receipt path unchanged.
+- [x] Run pulse, commands, answers, inbox, reactions and liveness importers: 545 tests pass; four affected real-store reaction/answer/index cases pass; typecheck clean.
+- [x] Commit/push the green fix and record red/green evidence in the PR. Full component suites run in ready CI.
+- [ ] Independent review confirms the final head.
+
+## Evidence
+
+- `npm --prefix backend test -- src/superTabs/pulse.test.ts src/superTabs/commands.test.ts src/superTabs/answers.test.ts src/superTabs/inbox.test.ts src/superTabs/reactions.test.ts src/superTabs/liveness.test.ts`: 545 passed.
+- `npm --prefix backend run test:super-tabs -- integration/superTabs.test.ts -t 'a PM reaction settles|closes the reacting agent|settles a reaction.s deliveries by index|closes an agent.s delivery when it answers'`: four passed. The joke and question leave durable owed state without replies; other actors/removal do not clear them; existing answer/delivery isolation and indexed delivery updates still pass.
+- `npm --prefix backend run typecheck`: passed. No query, index, schema, dependency or screen changes; no production reads/writes.

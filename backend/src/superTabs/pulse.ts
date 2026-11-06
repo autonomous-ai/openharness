@@ -4,7 +4,7 @@
  * unanswered for 3-10 h: nothing tracked what the PM owed, and the idle checks ran only on the PM's poll.
  *
  * An owed ask is a person's message that reached the PM, kept on its conversation (`Conversation.owed`) until the PM answers
- * it in its place (a reply in its thread, or an answer right below it), gives it a verdict reaction, or opens a task from it.
+ * it in its place (a reply in its thread, or an answer right below it), explicitly reacts, or opens a task from it.
  * Nothing here refuses anything: a settle that finds nothing does nothing.
  */
 import { isBuddy, isBuddyChat } from './buddies.js'
@@ -18,8 +18,6 @@ export interface OwedAsk { id: string; personId: string; at: number; thread: str
 
 /** At most this many asks are kept per conversation, the newest: a growth bound, far above what a PM leaves unanswered. */
 export const MAX_OWED = 50
-/** The reactions that answer an ask (reactions.ts): a verdict. Eyes says the PM saw it, and it still owes the answer. */
-export const VERDICT_REACTIONS: ReadonlySet<string> = new Set(['check', 'thumbs_up', 'rocket', 'tada'])
 
 /** The project [group] belongs to, or none for a conversation outside every project (the removed Leads chat, a person's one
  *  Buddy chat). Never throws: the pulse is never a reason for a command to fail. */
@@ -67,9 +65,9 @@ export function settleReply(state: SuperTabState, group: Conversation, agentId: 
   settle(group, ask => ask.id === place.answers || (!!place.thread && ask.thread === place.thread))
 }
 
-/** The PM's verdict reaction on [messageId] settles it. */
-export function settleReaction(state: SuperTabState, group: Conversation, agentId: string, messageId: string, emoji: string, on: boolean): void {
-  if (!on || !VERDICT_REACTIONS.has(emoji) || !group.owed || !byPm(state, group, agentId)) return
+/** The PM's explicit reaction on [messageId] settles it. Automatic receipt eyes never call this command path (#3663). */
+export function settleReaction(state: SuperTabState, group: Conversation, agentId: string, messageId: string, on: boolean): void {
+  if (!on || !group.owed || !byPm(state, group, agentId)) return
   settle(group, ask => ask.id === messageId)
 }
 
