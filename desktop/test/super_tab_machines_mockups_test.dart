@@ -180,4 +180,28 @@ void main() {
       expect(tester.getSize(key('machines-line-mine')).height, 56);
     },
   );
+  testWidgets('disk total changes redraw the aligned value and bar', (
+    tester,
+  ) async {
+    final server = ConversationServer();
+    final c = await mount(tester, fixture: server);
+    final resources =
+        (server.state['machines'] as List)[1]['observation']['resources']
+            as Map;
+    resources['diskTotalBytes'] = 2000000000000;
+    server.revision++;
+    await tester.runAsync(c.refresh);
+    await tester.pump();
+    expect(
+      find.descendant(
+        of: key('machines-disk-build'),
+        matching: find.text('of 2 TB'),
+      ),
+      findsOneWidget,
+    );
+    final bar = tester.widget<LinearProgressIndicator>(
+      key('machines-disk-bar-build'),
+    );
+    expect(bar.value, .1);
+  });
 }
