@@ -236,22 +236,22 @@ describe('creating an agent', () => {
     expect(place.swarmInstructions!.startsWith('Use the built-in swarm-tools skill')).toBe(true)
   })
 
-  // A Swarm Lead on the Mac Studio sat at Claude Code's "Yes, I accept" for full mode before its first turn (2026-10-26).
-  it('accepts full mode\'s warning for a Swarm agent the Swarm starts in full mode, and for nothing else', async () => {
-    await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'full' }))
-    expect(acceptFullMode).toHaveBeenLastCalledWith('claude', undefined)
-    const launch = { current: () => true, environment: { HOME: root, CLAUDE_CONFIG_DIR: '/moved' }, prepareHooks: async () => true } as unknown as NativeLaunch
-    await setup({ native: async () => ({ ok: true, launch }) }).create(request({ swarmRole: 'agent', permissionMode: 'full' }))
-    expect(acceptFullMode).toHaveBeenLastCalledWith('claude', expect.objectContaining({ CLAUDE_CONFIG_DIR: '/moved' }))
-    await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'auto' }))
-    await setup().create(request({ permissionMode: 'full' }))
-    expect(acceptFullMode).toHaveBeenCalledTimes(2)
-    // A settings file it cannot write leaves the engine to ask, and the launch goes on.
-    vi.mocked(acceptFullMode).mockImplementationOnce(() => { throw new Error('settings locked') }).mockImplementationOnce(() => { throw 'worse' })
-    expect(await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'full' }))).toMatchObject({ ok: true })
-    expect(await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'full' }))).toMatchObject({ ok: true })
-    expect(console.warn).toHaveBeenCalledWith('[agent] full mode acceptance · settings locked')
-    expect(console.warn).toHaveBeenCalledWith('[agent] full mode acceptance · worse')
+  // Swarm v3 (task #4215): a Swarm agent starts with its owner's own settings. Harness wrote full mode's warning acceptance
+  // into them for every Swarm agent in full mode (2026-10-26); a person who chooses full mode answers Claude Code's own warning.
+  it('writes nothing into the person\'s settings for a Swarm agent, with no mode or in full mode', async () => {
+    const real = await vi.importActual<typeof import('../../engines/launchPrep.js')>('../../engines/launchPrep.js')
+    vi.mocked(acceptFullMode).mockImplementation(real.acceptFullMode)
+    const home = mkdtempSync(join(tmpdir(), 'own-settings-')), config = join(home, 'claude'), settings = join(config, 'settings.json')
+    mkdirSync(config); writeFileSync(settings, '{"theme":"dark"}\n')
+    const launch = { current: () => true, environment: { HOME: home, CLAUDE_CONFIG_DIR: config }, prepareHooks: async () => true } as unknown as NativeLaunch
+    try {
+      for (const over of [{}, { permissionMode: 'full', bypassPermission: true }]) {
+        for (const swarmRole of ['coordinator', 'agent']) {
+          expect(await setup({ native: async () => ({ ok: true, launch }) }).create(request({ swarmRole, ...over }))).toMatchObject({ ok: true })
+        }
+      }
+      expect(readFileSync(settings, 'utf8')).toBe('{"theme":"dark"}\n')
+    } finally { rmSync(home, { recursive: true, force: true }) }
   })
 
   // Audit M1: beside a Team account, the owner's agents get a private temporary folder, and the launch's own variables win.
@@ -408,7 +408,8 @@ describe('creating an agent', () => {
 
   // 2026-10-30: a Cmd+S Swarm's PM, in a clone or worktree the desktop made and sent as a plain cwd, sat at Claude Code's
   // trust question, which no Swarm view shows.
-  it('trusts a local Claude Swarm agent in full mode in a clone in the projects root or a worktree Harness made', async () => {
+  // Its owner's own mode since task #4215: the trust follows the Swarm's checkout, not full mode.
+  it('trusts a local Claude Swarm agent in any mode in a clone in the projects root or a worktree Harness made', async () => {
     vi.mocked(projectsRoot).mockReturnValue(root)
     try {
       const clone = folder(), plain = folder(['README.md']), worktree = join(folder(), 'worktree')
@@ -417,19 +418,20 @@ describe('creating an agent', () => {
       vi.mocked(harnessMadeWorktree).mockImplementation(async path => path === worktree)
       const authority = { id: 'fixture', label: 'harness-claude-fixture', current: () => true, hold: () => {} }
       const prepare = (over: Record<string, unknown>, local = true) =>
-        setup().create.prepare(request({ swarmRole: 'coordinator', permissionMode: 'full', bypassPermission: true, ...over }), authority, { local })
+        setup().create.prepare(request({ swarmRole: 'coordinator', ...over }), authority, { local })
       expect((await prepare({ cwd: clone })).ok).toBe(true)
       expect(preTrustClaudeProject).toHaveBeenCalledWith(clone)
-      await prepare({ cwd: worktree })
+      await prepare({ cwd: worktree, permissionMode: 'full', bypassPermission: true })
       expect(preTrustClaudeProject).toHaveBeenLastCalledWith(worktree)
       expect(harnessMadeWorktree).toHaveBeenCalledWith(worktree, root)
-      // Not the person's own folder, not relayed, not outside a Swarm or full mode, not for Codex.
+      await prepare({ cwd: clone, permissionMode: 'ask' })
+      expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)
+      // Not the person's own folder, not relayed, not outside a Swarm, not for Codex.
       await prepare({ cwd: plain })
       await prepare({ cwd: clone }, false)
-      await prepare({ cwd: clone, swarmRole: null })
-      await prepare({ cwd: clone, permissionMode: 'auto', bypassPermission: false })
+      await prepare({ cwd: clone, swarmRole: null, permissionMode: 'full', bypassPermission: true })
       await prepare({ cwd: clone, engine: 'codex' })
-      expect(preTrustClaudeProject).toHaveBeenCalledTimes(2)
+      expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)
       expect(preTrustCodexProject).not.toHaveBeenCalled()
     } finally {
       vi.mocked(projectsRoot).mockReset()
