@@ -1,4 +1,4 @@
-import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
+import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -26,8 +26,8 @@ function fakeServer(answer: (message: Message) => unknown | undefined) {
     }
   })
   const calls: Array<{ command: string; args: string[]; options: Record<string, unknown> }> = []
-  const spawn = vi.fn((command: string, args: string[], options: Record<string, unknown>) => {
-    calls.push({ command, args, options })
+  const spawn = vi.fn((command: string, args: string[], options: SpawnOptions) => {
+    calls.push({ command, args, options: options as Record<string, unknown> })
     return child as unknown as ChildProcess
   })
   return { spawn, child, received, calls }
@@ -158,7 +158,7 @@ describe('readCodexRateLimits', () => {
       writeFileSync(script, 'process.stdin.resume(); setInterval(() => {}, 60_000)\n')
       let exitedWith: (signal: NodeJS.Signals | null) => void = () => {}
       const exited = new Promise<NodeJS.Signals | null>(resolve => { exitedWith = resolve })
-      const spawn = (_command: string, args: string[], options: object) => {
+      const spawn = (_command: string, args: string[], options: SpawnOptions) => {
         const child = nodeSpawn(process.execPath, [script, ...args], options)
         child.once('exit', (_code, signal) => exitedWith(signal))
         return child

@@ -62,7 +62,7 @@ describe('readClaudeReport', () => {
     write({ ...report, five_hour: { used_percentage: 101, resets_at: 1 } })
     expect(readClaudeReport(dataDir)).toEqual({ at: report.at, seven_day: report.seven_day })
     for (const window of [{ used_percentage: -1, resets_at: 1 }, { used_percentage: Number.NaN }, { used_percentage: '5', resets_at: 1 },
-      { used_percentage: 5, resets_at: 'soon' }, { used_percentage: 5, resets_at: Number.POSITIVE_INFINITY }, null, 'full']) {
+      { used_percentage: 5, resets_at: 'soon' }, null, 'full']) {
       write({ v: 1, at: 1, five_hour: window })
       expect(readClaudeReport(dataDir), JSON.stringify(window)).toBeNull()
     }

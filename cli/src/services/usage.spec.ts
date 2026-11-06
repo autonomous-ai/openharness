@@ -63,7 +63,7 @@ describe('the usage service', () => {
         } } },
     ] })
     // The default accounts: the owner's own CODEX_HOME, nothing injected.
-    expect(deps.codex).toHaveBeenCalledWith(undefined)
+    expect(deps.codex).toHaveBeenCalledWith({ codexHome: undefined })
     // The router reads both, by the windows' own lengths.
     expect(quotaOf(reply, 'claude', false)).toMatchObject({ known: true, windows: [
       { name: '5-hour', usedPercent: 23.5, resetsAt: '2026-11-07T04:00:00.000Z' }, { name: 'weekly', usedPercent: 41, resetsAt: null }] })
@@ -148,7 +148,7 @@ describe('the usage service', () => {
     expect(await providers('codex', 'default')).toEqual(['codex'])
     expect(await providers('claude', profileId(core.daemon.machineId(), 'claude', 'default'))).toEqual(['claude'])
     expect(await providers('codex', profileId(core.daemon.machineId(), 'codex', 'default'))).toEqual(['codex'])
-    expect(codex.mock.calls).toEqual([[undefined]])
+    expect(codex.mock.calls).toEqual([[{ codexHome: undefined }]])
   })
 
   it('usage_read finds a Claude and a Codex profile by id, and reads each under its own folder', async () => {
@@ -168,7 +168,7 @@ describe('the usage service', () => {
         .toEqual({ providers: [expect.objectContaining({ provider: 'claude', outcome: 'answered', body: { five_hour: { utilization: 64, resets_at: null } } })] })
       expect(await requests.usage_read!({ profile: { engine: 'codex', id: profileId('machine-1', 'codex', join(real, 'codex')) } }, ASKER))
         .toEqual({ providers: [expect.objectContaining({ provider: 'codex', outcome: 'answered' })] })
-      expect(codex.mock.calls).toEqual([[join(real, 'codex')]])
+      expect(codex.mock.calls).toEqual([[{ codexHome: join(real, 'codex') }]])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

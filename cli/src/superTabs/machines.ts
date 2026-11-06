@@ -413,7 +413,7 @@ export class ContributedMachines {
     // A relay that does not answer says why, in place of where the allowance is read (task #3106).
     const relay = this.relayRead?.value ?? null
     if (relay && !relay.ok && !this.relayServes(engine, relay) && (this.deps.relayed ?? teamRelayed)()) return { engine, known: false, windows: [], reason: relay.reason }
-    return { engine, known: false, windows: [], reason: quotaUnknownReason(read.value, engine, (this.deps.relayed ?? teamRelayed)()) ?? undefined }
+    return { engine, known: false, windows: [], reason: quotaUnknownReason(read.value, engine) ?? undefined }
   }
   /** The last readiness of [root]'s checkouts, reading them again beside the pass once it is [READINESS_MS] old. Null
    *  until the first read is in. */
