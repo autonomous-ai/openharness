@@ -60,7 +60,10 @@ export const backendPaused = (rules: ReleaseRules, now: number): boolean =>
  *  request's files, and `sha` until it found the merge's commit on main (its own merge commit, or the batch's that closed
  *  it); `shippedIn` names, per component, the verified release that carries it. */
 export interface PendingRelease { groupId: string; url: string; mergedAt: number; components?: ReleaseComponentId[]; sha?: string
-  shippedIn?: Partial<Record<ReleaseComponentId, string>> }
+  shippedIn?: Partial<Record<ReleaseComponentId, string>>
+  /** Per component, the newest verified release this merge was compared with and found not in it (task #3586): it is compared
+   *  once with each release, so one cut before the merge was recorded still ships it, and one that does not hold it is not read again. */
+  checked?: Partial<Record<ReleaseComponentId, string>> }
 /** A component's newest verified release: its tag, the tag's commit, and when its release ran (the pace counts from it). */
 export interface VerifiedRelease { tag: string; sha: string; at: number }
 
@@ -146,7 +149,7 @@ export interface ReleaseFacts {
   resolved: Array<{ groupId: string; url: string; components?: ReleaseComponentId[]; sha?: string }>
   /** Each component's newest verified release on main, with the entries whose merge commits GitHub says its tag contains
    *  (pendingKey). A component GitHub could not read or compare is absent, and nothing of it changes. */
-  releases: Partial<Record<ReleaseComponentId, VerifiedRelease & { carries: string[] }>>
+  releases: Partial<Record<ReleaseComponentId, VerifiedRelease & { carries: string[]; compared?: string[] }>>
 }
 /** What a settle did: rows to write, the tasks it marked released, the release step it opened, the entries it dropped. */
 export interface SettledReleases { messages: MessageDraft[]; shipped: string[]; opened: string | null; dropped: PendingRelease[] }
@@ -197,9 +200,11 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
     // A re-run of an older tag's workflow is no newer release; the same tag read again only carries merges resolved since.
     const order = read && known ? compareTags(read.tag, known.tag) : 1
     if (!read || order < 0) continue
-    const { carries: keys, ...release } = read
+    const { carries: keys, compared, ...release } = read
     const carried = waitingFor(ledger, component.id).filter(e => keys.includes(pendingKey(e)))
     for (const entry of carried) (entry.shippedIn ??= {})[component.id] = release.tag
+    // Compared and not held: not compared with this release again (task #3586).
+    for (const entry of waitingFor(ledger, component.id)) if (compared?.includes(pendingKey(entry)) && !keys.includes(pendingKey(entry))) (entry.checked ??= {})[component.id] = release.tag
     if (order === 0) continue
     ;(ledger.last ??= {})[component.id] = release
     const step = ledger.steps?.[component.id]
