@@ -692,7 +692,13 @@ class SuperTabBuddyBar extends StatelessWidget {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final c = controller;
-    final agent = c.buddy(chat.projectId);
+    final agent = chat.isSwarmBuddyChat && c.snapshot!.buddyCap != null
+        ? chat.agentIds
+              .map(c.snapshot!.agent)
+              .whereType<SuperTabAgent>()
+              .where((a) => a.isMainBuddy && a.buddyOf == c.accountId)
+              .firstOrNull
+        : c.buddy(chat.projectId);
     if (agent == null) return _starting(c);
     final name = c.snapshot!.agentName(agent.id, fallback: agent.name);
     final machine = buddyMachineName(c, agent.machineId, app: app);

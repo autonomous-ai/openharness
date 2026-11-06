@@ -86,6 +86,18 @@ class _BuddyEnginePickerState extends State<BuddyEnginePicker> {
   Widget build(BuildContext context) {
     final c = widget.controller;
     final agent = widget.agent;
+    final snapshot = c.snapshot!;
+    final severalBuddies = snapshot.buddyCap != null;
+    final chat = severalBuddies
+        ? snapshot.conversations
+              .where(
+                (chat) =>
+                    chat.isSwarmBuddyChat &&
+                    chat.buddyOwnerId == c.accountId &&
+                    chat.agentIds.contains(agent.id),
+              )
+              .firstOrNull
+        : null;
     final request = agent.switchRequest;
     if (request != null && !widget.limitAction) {
       return Text(
@@ -100,6 +112,7 @@ class _BuddyEnginePickerState extends State<BuddyEnginePicker> {
         c.hasPendingAction ||
         request != null ||
         agent.modelRequest != null ||
+        (severalBuddies && chat == null) ||
         agent.downSince != null;
     final offers = buddyEngineOffers(c.snapshot!, agent, now: DateTime.now());
     return AppDropdown(
@@ -120,7 +133,9 @@ class _BuddyEnginePickerState extends State<BuddyEnginePicker> {
                       if (engine == agent.engine && agent.gridModel == null) {
                         return;
                       }
-                      unawaited(c.switchBuddyEngine(engine));
+                      unawaited(
+                        c.switchBuddyEngine(engine, conversationId: chat?.id),
+                      );
                     },
             ),
           ),
