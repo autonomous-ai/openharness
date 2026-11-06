@@ -58,3 +58,12 @@ Light/dark captures and side-by-side reference comparisons are attached to task 
 Same 16-machine debug/offscreen redraw workload (100 updates): base median 2840µs / p95 4595µs; current median 3098µs / p95 4533µs. Reusing sorted views removed a repeated grouping pass. This is a widget microbenchmark, not native production latency; median increased 258µs while p95 decreased 62µs.
 
 Final delivery goes through independent Integrator review/test and ready-PR Linux CI; no release is part of this task.
+
+
+## Independent review fixes
+
+- Restored local Team Set up / Restart / Retry in Manage's contextual menu, sharing the existing compact-row handler. Regression committed at 8a17a35e1, then observed red; fixture targeting refined before implementation at 85a42644e.
+- Added the local endpoint port and monospace machine ID/port; b7b9ce375 failed before the implementation in 4b0b1ad74.
+- Updated legacy Manage crew-line assertions to inspect crew chips, expanded asleep states and disk columns. Project-disk priority, missing-reading behavior and stale-reading age remain covered. Three legacy expectations were observed failing before adjustment.
+- After these fixes: 33 passed across crew, Team machine, mockup and screenshot files; earlier affected Machines and account-move checks passed (81 + 6). Changed-file analysis and UI style gate passed. Regenerated light/dark captures include port 18473.
+- The reported ci/required failure was the old draft run explicitly deferring validation until ready_for_review. No manual rerun was started; the final fix push uses automatic CI.
