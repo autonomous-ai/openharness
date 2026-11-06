@@ -27,8 +27,8 @@ export interface BrowserDeps {
   /** Who is on a connection, the same across its reconnects (a paired phone's key). The phone's line drops
    *  while the browser covers the app, and it sends the redirect back over a new connection. */
   who: (connId: string) => string
-  /** GET [url] on this computer; resolves with the HTTP status. */
-  replay: (url: string) => Promise<number>
+  /** GET [url] on this computer; resolves with the HTTP status, and where the program sends the browser next. */
+  replay: (url: string) => Promise<{ status: number; location: string | null }>
   now: () => number
   /** One line about what happened, for the daemon's log. Never the page or the redirect: they carry codes. */
   log: (line: string) => void
@@ -36,6 +36,9 @@ export interface BrowserDeps {
 
 /** How long a phone has to sign in and send the redirect back. */
 export const CALLBACK_FOR_MS = 10 * 60_000
+
+/** The program's own pages after its callback a replay follows, as the phone's browser would have. */
+const FOLLOWED_PAGES = 3
 
 interface Pending { who: string, port: string, path: string, until: number }
 
@@ -89,14 +92,32 @@ export function createBrowser(deps: BrowserDeps) {
       return { error: 'NOT_EXPECTED' }
     }
     pending.splice(at, 1)
+    let url = `http://127.0.0.1:${caught.port}${caught.pathname}${caught.search}`
+    let answer: { status: number; location: string | null }
     try {
-      const status = await deps.replay(`http://127.0.0.1:${caught.port}${caught.pathname}${caught.search}`)
-      deps.log(`[browser] sign-in handed to the program on port ${caught.port}: HTTP ${status}`)
-      return { ok: status < 400, status }
+      answer = await deps.replay(url)
+      deps.log(`[browser] sign-in handed to the program on port ${caught.port}: HTTP ${answer.status}`)
     } catch (error) {
       deps.log(`[browser] sign-in not handed to the program on port ${caught.port}: ${error instanceof Error ? error.message : String(error)}`)
       return { error: 'NOT_DELIVERED' }
     }
+    const { status } = answer
+    // A program that finishes on a page of its own sends the browser there and waits for it: Codex's callback answers 302
+    // to its `/success`, and its sign-in stayed open until a browser came (the MSI, 2026-11-06). Followed as the phone's
+    // browser would, only on that same port of this computer; a page elsewhere is the browser's, and none is opened here.
+    try {
+      for (let page = 0; page < FOLLOWED_PAGES && answer.status >= 300 && answer.status < 400 && answer.location; page++) {
+        const next = new URL(answer.location, url)
+        if (next.protocol !== 'http:' || !LOOPBACK.has(next.hostname) || next.port !== caught.port) break
+        url = `http://127.0.0.1:${next.port}${next.pathname}${next.search}`
+        answer = await deps.replay(url)
+        deps.log(`[browser] the program's next page on port ${caught.port}: HTTP ${answer.status}`)
+      }
+    } catch (error) {
+      // The sign-in is the program's already: only its own page after it is missed.
+      deps.log(`[browser] the program's next page on port ${caught.port} not opened: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return { ok: status < 400, status }
   }
 
   return { typed, open, callback }
