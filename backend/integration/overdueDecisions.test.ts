@@ -31,11 +31,11 @@ afterAll(async () => {
 })
 
 /** A Swarm whose PM asks peer decisions; each `ask` is stored with the given age. */
-async function swarm() {
+async function swarm(role: 'collaborator' | 'viewer' = 'collaborator') {
   const store = new SuperTabStore(db, () => NOW)
   const tab = (await store.create(owner, randomUUID(), 'Overdue', 'public')).id
   const execute = (command: Command, user = owner, asAgentId?: string) => store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
-  const invitation = await execute({ type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
+  const invitation = await execute({ type: 'invite.create', email: peer.email, role, conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
   const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'PM', configuration: config, lead: true })).result.agentId)
   /** Asks peer one question, then dates it `age` ago. */
@@ -143,6 +143,23 @@ describe('timed recommendation defaults', () => {
     for (let i = 0; i < 2; i++) await f.store.leaveOverdueDecisions(NOW, 2)
     for (const id of gone) expect(await f.row(id)).toMatchObject({ withdrawn: true, answeredAt: new Date(NOW), choice: null })
     expect((await f.row(due)).defaulted).toBe(true)
+  })
+
+  it('withdraws a removed member’s due default even while their user still exists', async () => {
+    const f = await swarm()
+    const id = await f.ask(HOUR, at(0))
+    await f.execute({ type: 'member.remove', userId: peer.sub })
+    expect(await db.user.findUnique({ where: { id: peer.sub } })).not.toBeNull()
+    expect(await f.store.leaveOverdueDecisions(NOW)).toEqual({ answered: 0, skipped: 1, failed: 0 })
+    expect(await f.row(id)).toMatchObject({ withdrawn: true, answeredAt: new Date(NOW), choice: null, defaulted: null })
+    expect(await f.store.leaveOverdueDecisions(NOW)).toEqual({ answered: 0, skipped: 0, failed: 0 })
+  })
+
+  it('keeps decision defaults available to viewers, who may answer their own questions', async () => {
+    const f = await swarm('viewer')
+    const id = await f.ask(HOUR, at(0))
+    expect(await f.store.leaveOverdueDecisions(NOW)).toEqual({ answered: 1, skipped: 0, failed: 0 })
+    expect(await f.row(id)).toMatchObject({ choice: 1, defaulted: true, withdrawn: null })
   })
 
   it('uses the deadline index without scanning future, legacy or answered noise', async () => {
