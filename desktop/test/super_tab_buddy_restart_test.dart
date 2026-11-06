@@ -156,6 +156,20 @@ void main() {
     await close(tester, c);
   });
 
+  testWidgets('the menu has none on a Buddy with no agent on a machine', (
+    tester,
+  ) async {
+    final server = swarm();
+    for (final agent in server.state['agents'] as List) {
+      if ((agent as Map)['buddyOf'] != null) agent['harnessId'] = '';
+    }
+    final c = await show(tester, server);
+    await openMenu(tester);
+    expect(find.text('Rename Buddy…'), findsOneWidget);
+    expect(find.text('Restart Buddy…'), findsNothing);
+    await close(tester, c);
+  });
+
   testWidgets('the dialog prefills the saved flags and says where they apply', (
     tester,
   ) async {
@@ -167,7 +181,8 @@ void main() {
     expect(
       find.text(
         "Added to Claude Code's command line each time this Buddy starts on "
-        'Test host. Your Buddy runs with full permissions. Clear the field to '
+        'Test host. Your Buddy runs with full permissions. Don\'t put secrets '
+        'here: other people on that computer can see them. Clear the field to '
         'remove them.',
       ),
       findsOneWidget,
