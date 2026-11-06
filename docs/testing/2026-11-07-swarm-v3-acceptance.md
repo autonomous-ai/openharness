@@ -35,7 +35,7 @@ Adding a Regular worker uses the normal + New agent capacity admission after joi
 Run from backend, with `TMPDIR` created by `mktemp -d` and the cached Mongo 7.0.24 binary supplied through `MONGOMS_SYSTEM_BINARY`:
 
 ```sh
-npx vitest run --config src/superTabs/__tests__/v3.vitest.config.ts
+npx vitest run --config src/superTabs/__tests__/v3.vitest.config.test-support.ts
 npx tsc --noEmit
 ```
 
@@ -77,3 +77,10 @@ Counts respectively: **16**, **2**, **19**, **2** passed. Capture run set HARNES
 This is layered acceptance through real backend storage, the CLI host with fake transport/engines, and Desktop widgets with memory state/fake sign-in. It does not claim a native-window/IME, live provider sign-in, production deployment, Windows session or phone check. Release publication remains the release owner's separate 09:00 step.
 
 The first test draft attempted a second suggestion after its worker was already assigned: Auto approve passed and Review correctly refused AGENT_BUSY. The fixture now checks rejection while the worker is free. Initial typecheck also caught test-support imports outside rootDir and the host-read union; both fixture issues are corrected. Later comparison with the real Desktop dialog caught the missing account-isolation setting, reproducing the actual remaining #4120 dependency. No product fix was made, and fixture corrections are not claimed as product red/green evidence. Tests were written before any implementation; this task implements no product code.
+
+
+## Candidate and CI correction
+
+Both corrected acceptance cases passed in a temporary checkout combining main `3932fd2c7f49478c7e4a178f51e1f2c840761c48` with #3446 at `ed86fd9bfeb6bcb3cfebb574b6fa0ead9fa72e99` (combined source tree including acceptance: `c17f1a6143505773df3c09e65811e73a369936d9`). This is candidate evidence only; main acceptance remains failed until the dependency merges and is tested there.
+
+CI at `ad91434f0` exposed two failures: the known main usage-vocabulary mismatch (#4173), and this PR's acceptance/config filenames being treated as production files. The existing `productionBuild.test.ts` reproduced the latter locally (1 failed, 3 passed), naming all three dev imports. Renaming both files to `.test-support.ts` keeps them out of production and out of automatic unit discovery. The same packaging check then passed all 4 tests; TypeScript passed. The renamed explicit config still runs both acceptance cases and reproduces the same Team-account failures. Its first invocation stopped before any case on a transient Mongo port collision; a second invocation reached both expected failures. Neither invocation is reported as a pass.

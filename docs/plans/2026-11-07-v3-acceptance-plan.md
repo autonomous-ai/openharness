@@ -28,7 +28,7 @@
 
 ### Task 1: Continuous real-store acceptance
 
-**Files:** Create backend/src/superTabs/__tests__/swarmV3.acceptance.ts and v3.vitest.config.ts.
+**Files:** Create backend/src/superTabs/__tests__/swarmV3.acceptance.test-support.ts and v3.vitest.config.test-support.ts.
 
 **Interfaces:** SuperTabStore.create/execute/observeMachine/deliveries; SwarmReads.firstLoad; HostReads.changes. The acceptance fixture creates and removes a loopback store inside the backend source root.
 
