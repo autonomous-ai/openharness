@@ -77,6 +77,31 @@ describe('proposal card creation', () => {
       { proposalAsk: { ...ask, id: 'ask3', newestOwnerMessageId: 'ask3' } })).toThrow(expect.objectContaining({ code: 'PRIORITY_FORBIDDEN' }))
   })
 
+  it('lets a viewer’s Buddy propose, but rechecks P0 rights before replay', () => {
+    const f = fixture(), buddy: Actor = { kind: 'agent', agentId: f.buddy, machineOwnerId: `${owner.userId}-machine` }
+    f.state.people.find(p => p.id === peer.userId)!.role = 'viewer'
+    const input = { type: 'buddy.propose', conversationId: f.buddyChat, ownerMessageId: 'ask', projectId: 'lead',
+      ...proposal, scope: 'Persist drafts', priority: 'normal' }
+    const consent: NonNullable<CommandContext['proposalAsk']> = { id: 'ask', conversationId: f.buddyChat, source: false,
+      author: { kind: 'person', id: peer.userId, name: peer.email, membershipGeneration: f.state.people.find(p => p.id === peer.userId)!.generation },
+      text: words, createdAt: NOW, newestOwnerMessageId: 'ask', shown: [] }
+    expect(f.card(f.run(input, buddy, { proposalAsk: consent }).result.conversationId).proposal?.text).toBe(words)
+    expect(() => authorizeCommandAccess(f.state, buddy, commandSchema.parse({ ...input, priority: 'P0' })))
+      .toThrow(expect.objectContaining({ code: 'PRIORITY_FORBIDDEN' }))
+  })
+
+  it('refuses hand assignment until the proposal is accepted', () => {
+    const f = fixture(), id = f.create().result.conversationId
+    expect(() => f.run({ type: 'work.assign', conversationId: id, agentId: f.worker }, f.pm))
+      .toThrow(expect.objectContaining({ code: 'PROPOSAL_UNDECIDED' }))
+  })
+
+  it('rejects dates outside the supported timestamp range at the command boundary', () => {
+    const f = fixture(), id = f.create().result.conversationId
+    expect(commandSchema.safeParse(ask(id, { deadline: 1e20 })).success).toBe(false)
+    expect(commandSchema.safeParse(decide(id, 'later', { revisitAt: 1e20 })).success).toBe(false)
+  })
+
   it('keeps unswitched Buddy proposals as project-chat roots and refuses new priorities there', () => {
     const f = fixture(false), buddy: Actor = { kind: 'agent', agentId: f.buddy, machineOwnerId: `${owner.userId}-machine` }
     const input = { type: 'buddy.propose', conversationId: f.buddyChat, ownerMessageId: 'ask', projectId: 'lead',

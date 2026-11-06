@@ -38,13 +38,36 @@ async function fixture() {
   const data = head.data as unknown as { projects: Array<{ boardMode?: true }> }
   data.projects[0]!.boardMode = true
   await db.swarmHead.update({ where: { id: head.id }, data: { data: data as never, version: head.version + 1 } })
-  const create = async (user = peer) => String((await execute({ type: 'proposal.create', projectId: 'lead', title: 'Keep drafts', text: 'Keep offline drafts',
-    goal: 'Preserve work', why: 'Reconnect loses drafts', doneWhen: 'Draft returns', evidence: ['Network-off reproduction'], priority: 'P2' }, user)).result.conversationId)
+  const create = async (user = peer, priority = 'P2') => String((await execute({ type: 'proposal.create', projectId: 'lead', title: 'Keep drafts', text: 'Keep offline drafts',
+    goal: 'Preserve work', why: 'Reconnect loses drafts', doneWhen: 'Draft returns', evidence: ['Network-off reproduction'], priority }, user)).result.conversationId)
   const card = async (id: string) => (await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: tab, key: id } } })).data as unknown as Conversation
   return { store, tab, pm, execute, create, card, clock: { get now() { return now }, set now(value: number) { now = value } } }
 }
 
 describe('durable proposal cards', () => {
+  it('delivers urgent proposals first on both a full poll and its fast repeat', async () => {
+    const f = await fixture(), low = await f.create(), urgent = await f.create(owner, 'P0')
+    for (let i = 0; i < 2; i++) {
+      const deliveries = await f.store.deliveries(owner, f.tab, f.pm)
+      expect(deliveries.filter(d => [low, urgent].includes(d.conversationId)).map(d => d.conversationId)).toEqual([urgent, low])
+    }
+  })
+
+  it('withholds queued ordinary chat after switching and still delivers a proposal', async () => {
+    const f = await fixture()
+    const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${f.tab}:head` } })
+    const data = head.data as any
+    delete data.projects[0].boardMode
+    await db.swarmHead.update({ where: { id: head.id }, data: { data, version: { increment: 1 } } })
+    const chat = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Old ordinary chat', recipientIds: [f.pm], replyTo: null })
+    data.projects[0].boardMode = true
+    await db.swarmHead.update({ where: { id: head.id }, data: { data, version: { increment: 1 } } })
+    const id = await f.create()
+    const deliveries = await f.store.deliveries(owner, f.tab, f.pm)
+    expect(deliveries.some(d => d.messageId === chat.result.messageId)).toBe(false)
+    expect(deliveries.some(d => d.conversationId === id)).toBe(true)
+  })
+
   it('persists viewer proposals and answers through the real store and changed-parts read', async () => {
     const f = await fixture(), read = new SwarmReads(f.store)
     const before = await read.firstLoad(peer, f.tab)
