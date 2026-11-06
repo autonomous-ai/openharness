@@ -1160,6 +1160,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // A failing privacy check's detail is its contributor's: an error from the check can name paths on their Mac. Everyone
   // else reads which item failed (machines.ts teamWorkRefusal).
   for (const pool of visible.machines ?? []) {
+    // Engine idle proof is for server lifecycle decisions alone, never a member's activity feed (#3824).
+    if (pool.observation) delete pool.observation.idleBuddyHarnessIds
     const privacy = pool.observation?.privacy
     if (privacy && 'detail' in privacy && !(actor.kind === 'person' && actor.userId === pool.contributorId)) delete (privacy as { detail?: string }).detail
   }
