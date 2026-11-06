@@ -176,6 +176,64 @@ void main() {
     await _end(tester, c);
   });
 
+  // Review of #3370: a machine that leaves Online for Offline keeps the same order of rows, and its group's heading
+  // and count must follow it all the same. Mounted with no host rebuilding it: only the machines' own news redraws.
+  testWidgets('a machine going offline moves its group heading and counts, '
+      'even when the order of rows stays the same', (tester) async {
+    final server = ConversationServer();
+    server.state['machines'] = [
+      _machine('a', 'Alpha', 'peer', seen: Duration.zero),
+      _machine('b', 'Bravo', 'peer', seen: Duration.zero),
+      _machine('c', 'Charlie', 'peer', seen: const Duration(hours: 2)),
+    ];
+    final c = server.controller();
+    await c.refresh();
+    await tester.binding.setSurfaceSize(const Size(420, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabMachines(controller: c, onAddAgent: (_) {}),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Online · 2'), findsOneWidget);
+    expect(find.text('Offline · 1'), findsOneWidget);
+
+    // Bravo goes quiet: the rows still read Alpha, Bravo, Charlie.
+    final machines = (server.state['machines'] as List)
+        .cast<Map<String, dynamic>>();
+    machines[1] = _machine('b', 'Bravo', 'peer', seen: const Duration(hours: 2));
+    server.revision++;
+    await tester.runAsync(c.refresh);
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(find.text('Online · 1'), findsOneWidget);
+    expect(find.text('Offline · 2'), findsOneWidget);
+    await _end(tester, c);
+  });
+
+  testWidgets('a Swarm read empty, then unreachable, says so with Retry, not '
+      'Add a machine', (tester) async {
+    final server = ConversationServer();
+    server.state['machines'] = <dynamic>[];
+    final c = server.controller();
+    await c.refresh();
+    server.failReads = true;
+    await tester.runAsync(() async {
+      try {
+        await c.refresh();
+      } catch (_) {}
+    });
+    expect(c.backendUnreachable, isTrue);
+    await _mount(tester, c);
+    expect(_key('super-machines-error'), findsOneWidget);
+    expect(find.textContaining('Add a machine'), findsNothing);
+    await _end(tester, c);
+  });
+
   testWidgets('a read Swarm with no machine shows the empty note', (
     tester,
   ) async {
