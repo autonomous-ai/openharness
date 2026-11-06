@@ -267,7 +267,7 @@ void main() {
       },
     );
 
-    test('a failed page is flagged, kept apart from the open work, and read again on the next call', () async {
+    test('a failed page is flagged, kept apart from the open work, and read again only for a retry', () async {
       final r = rig();
       var fail = true;
       r.swarm.routes[dormant] = (_) => fail
@@ -284,6 +284,10 @@ void main() {
 
       fail = false;
       await r.reader.loadShipped(project, since);
+      expect(r.reader.shippedFailed(project), isTrue, reason: 'not on its own');
+      expect(r.swarm.paths.where((p) => p.startsWith(dormant)).length, 1);
+
+      await r.reader.loadShipped(project, since, retry: true);
       expect(r.reader.shippedFailed(project), isFalse);
       expect(r.reader.snapshot!.conversation('a'), isNotNull);
     });
