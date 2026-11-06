@@ -22,7 +22,7 @@ import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
 import { reviewPlan, stepBrief, stepCheck, type PlannedStep, type StepKind } from './reviewTable.js'
 import { builtBy, reviewerCandidates } from './reviewerPick.js'
-import { recordCheckVerdict } from './checkVerdicts.js'
+import { recordCheckVerdict, verdictPullRequest } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
@@ -4337,13 +4337,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const departed = (key: string) => key.startsWith('agent:') ? !state.agents.some(a => `agent:${a.id}` === key)
         : key.startsWith('person:') && !state.people.some(p => `person:${p.id}` === key)
       const name = actor.kind === 'agent' ? agentDisplayName(state.agents, actor.agentId) ?? agent(state, actor.agentId).name : actor.email
-      // The pull request head it read (#3394): the task's, for a step its task's; the newest linked one the watch has read. The
+      // The pull request head it read (#3394): the task's code PR, for a step its task's (#3731). The
       // checker names it. A person who named none gets the head the watch read last, as the screen they checked showed it; an
       // agent's verdict naming none is recorded and counts at no watched head (security review of #3218: a push during the
       // review would get its pass). Nothing is refused: the result says how the verdict counts and what makes it count.
       const build = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : group
-      const heads = build?.pullRequestHeads, urls = build?.pullRequestUrls ?? []
-      const pullRequest = urls.findLast(url => heads?.[url]) ?? urls.at(-1)
+      const pullRequest = build ? verdictPullRequest(build, groupRepositoryUrl(state, build)) : undefined
+      // An explicitly empty code list must not inherit a brief reference's head through the legacy no-PR fallback.
+      const heads = !pullRequest && build?.codePullRequestUrls && build.pullRequestHeads ? {} : build?.pullRequestHeads
       const watched = pullRequest ? heads?.[pullRequest]?.head : undefined
       const head = command.head ?? (actor.kind === 'person' ? watched : undefined)
       // The base it read against, named as the head is (review of #3218, round 7): no inferred base is known to be the one read.

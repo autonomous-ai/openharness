@@ -7,7 +7,7 @@
  * request's own patch is the same (a plain rebase, or a main merge that leaves its diff unchanged). It replaces reading a
  * verdict's text: a stale pass passes nothing, and a stale failure fails nothing, until someone checks the new head.
  */
-import type { Check, CheckVerdict, PullRequestHead } from './model.js'
+import { codePullRequests, pullRequestLinks, type Check, type CheckVerdict, type Conversation, type PullRequestHead } from './model.js'
 
 /** Each linked pull request's head as the PR watch last read it (Conversation.pullRequestHeads). */
 export type PullRequestHeads = Readonly<Record<string, PullRequestHead>>
@@ -18,6 +18,15 @@ const sameHead = (full: string, head: string) => full.toLowerCase() === head.toL
 
 /** The most pull request heads a task keeps (keepHead): the most recently read. */
 export const HEADS_KEPT = 50
+
+/** The task's code PR, even before its head is watched: the one its Engineer names in its result, else its newest code PR.
+ *  The broad watched list also holds references from briefs and other tasks; a known head there never makes it this task's
+ *  code (#3731). Old tasks without a code list retain codePullRequests' existing fallback. */
+export function verdictPullRequest(task: Conversation, repositoryUrl?: string | null): string | undefined {
+  const code = codePullRequests(task)
+  const named = pullRequestLinks(task.assignment?.result ?? '', repositoryUrl)
+  return named.findLast(url => code.includes(url)) ?? code.at(-1)
+}
 
 /** The head a verdict's pull request is at now: its own pull request's, or for one recorded with none (from before heads,
  *  or before the task linked one), the one its task's watch read last. Undefined while the task was never watched; null

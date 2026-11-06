@@ -948,7 +948,7 @@ describe('a failure at an old head', () => {
     const rev = f.add('rev', id)
     f.run({ type: 'work.assign', conversationId: id, agentId: rev }, f.as(f.dev))
     f.run({ type: 'conversation.agent', conversationId: f.task, agentId: rev, present: true, lead: false })
-    Object.assign(f.group(f.task), { pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: B, patch: 'p2', at: 1 } } })
+    Object.assign(f.group(f.task), { codePullRequestUrls: [PR], pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: B, patch: 'p2', at: 1 } } })
     const fail = (head: string) => f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
       checkId: f.group(f.task).checks[0]!.id, passed: false, evidence: 'Drops the session', head } as Command, f.as(rev))
     fail(A)
@@ -980,7 +980,7 @@ describe('a failure at an old head on a handed task', () => {
     const PR = 'https://github.com/acme/app/pull/7'
     const A = 'aaaaaaa1111111111111111111111111111111aa', B = 'bbbbbbb2222222222222222222222222222222bb'
     const rev = f.add('rev', f.task)
-    Object.assign(f.group(f.task), { pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: B, patch: 'p2', at: 1 } } })
+    Object.assign(f.group(f.task), { codePullRequestUrls: [PR], pullRequestUrls: [PR], pullRequestHeads: { [PR]: { head: B, patch: 'p2', at: 1 } } })
     f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: `${B} ${PR}` } as Command, f.as(f.dev))
     const fail = (head: string) => f.run({ type: 'work.check', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id,
       checkId: f.group(f.task).checks[0]!.id, passed: false, evidence: 'Drops the session', head } as Command, f.as(rev))
