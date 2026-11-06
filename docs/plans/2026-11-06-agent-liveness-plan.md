@@ -68,7 +68,7 @@
 - [x] Commit a failing integration test showing an ordinary Engineer receives no automatic assignment when the project has no crew.
 - [x] Broaden the write trigger from crew to workers; preserve transactional revalidation when an agent starts stopping during the pass.
 - [x] Update prior crew-only and notice-only integration expectations to the new behavior.
-- [ ] Run the two affected integration files, affected unit tests and backend typecheck; record red/green and hot-path timings in the PR.
+- [x] Run the two affected integration files, affected unit tests and backend typecheck; record red/green and hot-path timings in the PR.
 
 ## Data and rollout
 
