@@ -428,12 +428,19 @@ void main() {
     await end(tester, c);
   });
 
-  // The center yields before either side pane at enlarged text (review of
-  // #3399): projects keep their scaled minimum and chat its own, whatever
-  // is left is the Board's.
-  for (final (width, scale) in [(880.0, 1.6), (1280.0, 2.0), (1500.0, 1.0)]) {
-    testWidgets('the Board yields before the side panes at $width wide, '
-        'text ${scale * 100}%', (tester) async {
+  // At enlarged text the side panes widen only while the Board keeps room:
+  // the chat's scaled minimum shrinks back to 420 first, then projects to
+  // their own minimum (reviews of #3399). The Board never goes blank.
+  for (final (width, scale) in [
+    (880.0, 1.25),
+    (1024.0, 1.5),
+    (880.0, 1.6),
+    (1280.0, 2.0),
+    (1500.0, 1.0),
+  ]) {
+    testWidgets('the Board keeps room at $width wide, text ${scale * 100}%', (
+      tester,
+    ) async {
       // From the Buddy: the fixed layout's own start, never the Chat view.
       final (c, _) = await show(
         tester,
@@ -446,10 +453,12 @@ void main() {
       final left = tester.getSize(_key('super-left-pane')).width;
       final right = tester.getSize(_key('super-right-pane')).width;
       final center = tester.getSize(_key('super-center-pane')).width;
-      expect(left, greaterThanOrEqualTo(180 * scale));
-      expect(right, greaterThanOrEqualTo(math.min(420 * scale, width - left)));
+      expect(left, greaterThanOrEqualTo(180));
+      expect(right, greaterThanOrEqualTo(420));
+      expect(center, greaterThanOrEqualTo(280));
       expect(left + center + right, closeTo(width, 0.01));
-      expect(center, greaterThanOrEqualTo(0));
+      // The Board itself is drawn, not an empty centre.
+      expect(_key('super-tasks-lead'), findsOneWidget);
       expectFixedPanes(tester);
       expect(tester.takeException(), isNull);
       await end(tester, c);
