@@ -188,6 +188,19 @@ describe('a Buddy\'s copy of a project follows its default branch', { timeout: 3
   const copy = (home: string) => join(home, 'projects', 'Web')
   const copies = (home: string) => readFileSync(join(home, BUDDY_COPIES_FILE), 'utf8')
 
+  // Window of Tim, #3815: git reports a folder's real, long name, and the temporary folder there is C:\\Users\\HARNES~1\\…, so a
+  // check that compared the two as written found every copy in another repository and moved none. A path in another letter
+  // case is the same mismatch on a case-insensitive Mac.
+  const caseInsensitive = (() => { const r = mkdtempSync(join(tmpdir(), 'case-')); try { return existsSync(r.toUpperCase()) } finally { rmSync(r, { recursive: true, force: true }) } })()
+  it.runIf(caseInsensitive)('moves a copy whose Buddy home is named in another letter case, as Windows names one by its short name', async () => {
+    const p = project(root())
+    await prepareBuddyHome(p.home, p.web)
+    advance(p.teammate)
+    await refreshBuddyHome(p.home.toUpperCase())
+    expect(head(copy(p.home))).toBe(head(p.teammate))
+    expect(copies(p.home)).toContain('This is the latest default branch.')
+  })
+
   it('moves a Buddy home made at an old commit to the new origin head on the next prepare, and says where it is', async () => {
     const p = project(root())
     await prepareBuddyHome(p.home, p.web)
