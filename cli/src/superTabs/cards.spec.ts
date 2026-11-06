@@ -1573,6 +1573,15 @@ describe('one Buddy per Swarm', () => {
     leadsOf(state, 'm1', idle, 'me', focus).leads.find(l => l.projectId === project)!
   const inLead = { kind: 'lead', id: 'lead-web', name: 'Lead', working: false }
 
+  // Task #3818: a reader with several Buddies sees their default on the dial, the chat the backend marks buddyDefault.
+  it('shows the reader\'s default Buddy when they have several', () => {
+    const research = agent('y2', { name: 'Research', buddyOf: { personId: 'me', generation: 'g1' }, configuration: { engine: 'codex' }, buddyScope: 'swarm' })
+    const state = one({ agents: [...chats().agents as object[], buddy({ buddyScope: 'swarm' }), research],
+      conversations: [...swarm().conversations, sb(), conv('sb2', null, { projectId: undefined, kind: 'swarm-buddy', buddyOwnerId: 'me', agentIds: ['y2'], buddyDefault: true }), group()] })
+    expect(lead(state).buddy).toMatchObject({ chatId: 'sb2', name: 'Research' })
+    expect(lead(state).sideChat).toMatchObject({ id: 'sb2', kind: 'buddy' })
+  })
+
   it('gives every project\'s card the reader\'s one Buddy, and the Buddy face shows its chat', () => {
     const block = { chatId: 'sb', name: "diego's Buddy", engine: 'codex', cells: 25513, color: '#d6a79a', live: true, local: 'h-y1' }
     for (const project of ['web', 'mobile']) {

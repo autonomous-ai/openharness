@@ -1609,6 +1609,19 @@ describe('a Buddy\'s status', () => {
     expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/decisions?state=open&asAgentId=${t.agentId}`, undefined)
   })
 
+  // Huy 11-06 (#3872): a proposal's files are uploaded to the Buddy's chat for its project's PM, which the summary never names.
+  // This read answers just that: the chat it names when this Buddy reads it, its own record, and each project's chat.
+  it('answers a proposal\'s files with its chat, its own record and the projects\' chats, and nothing else of the Swarm', async () => {
+    const t = buddySetup()
+    const value = object(object(await t.ask({ action: 'proposalTarget', tabId: 'tab', agentId: t.agentId, conversationId: 'app-chat' }, owner)).value)
+    expect(value).toEqual({ chat: { id: 'app-chat', projectId: 'app' }, self: { id: t.agentId, projectId: 'app' },
+      projects: [{ id: 'app', leadConversationId: 'app-chat' }] })
+    expect(JSON.stringify(value)).not.toContain('Offline sync')
+    // A chat it does not read is none.
+    expect(object(object(await t.ask({ action: 'proposalTarget', tabId: 'tab', agentId: t.agentId, conversationId: 'elsewhere' }, owner)).value).chat).toBeNull()
+    expect(await t.ask({ action: 'proposalTarget', tabId: 'tab', agentId: t.agentId, conversationId: 'not an id' }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
+  })
+
   it('reads its archived tasks a page at a time, in its own project only', async () => {
     const t = buddySetup()
     expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId, archived: true, before: 'page-2' }, owner)).toMatchObject({ ok: true, value: { summary: { tasks: [], next: null } } })

@@ -27,6 +27,7 @@ Map<String, dynamic> taskFixture(
   DateTime? shippedAt,
   List<String>? releasing,
   Map<String, dynamic>? released,
+  Map<String, String>? checks,
 }) => {
   ...conversationFixture(id, title),
   'projectId': 'lead',
@@ -56,6 +57,7 @@ Map<String, dynamic> taskFixture(
   if (shippedAt != null) 'shippedAt': shippedAt.millisecondsSinceEpoch,
   'releasing': ?releasing,
   'released': ?released,
+  'pullRequestChecks': ?checks,
 };
 
 /// The project of the mockup Dee confirmed: a proposal, two tasks nobody is on
@@ -1029,6 +1031,92 @@ void main() {
     expect(_cardsIn(tester, 'shipped'), ['sender']);
     await _close(tester, c);
   });
+
+  testWidgets(
+    'a done task says its checks, red ones return it to Working, and a merged '
+    'one says when the next release is due (task #3827)',
+    (tester) async {
+      final server = tasksServer();
+      String pr(int n) =>
+          'https://github.com/autonomous-ai/openharness/pull/$n';
+      (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+        taskFixture(
+          'green-done',
+          'Checks passed',
+          40,
+          requester: 'owner',
+          status: 'done',
+          pullRequest: 3600,
+          shippedAt: _now.subtract(const Duration(minutes: 12)),
+          checks: {pr(3600): 'green'},
+        ),
+        taskFixture(
+          'stale-green',
+          'Green for a while',
+          41,
+          requester: 'owner',
+          status: 'done',
+          pullRequest: 3601,
+          shippedAt: _now.subtract(const Duration(minutes: 90)),
+          checks: {pr(3601): 'green'},
+        ),
+        taskFixture(
+          'red-done',
+          'Checks failed',
+          42,
+          requester: 'owner',
+          status: 'done',
+          pullRequest: 3602,
+          shippedAt: _now.subtract(const Duration(minutes: 5)),
+          checks: {pr(3602): 'red'},
+        ),
+        taskFixture(
+          'merged-soon',
+          'Waiting for Desktop',
+          43,
+          requester: 'owner',
+          status: 'done',
+          pullRequest: 3603,
+          merged: true,
+          shippedAt: _now.subtract(const Duration(minutes: 30)),
+          releasing: ['desktop'],
+        ),
+      ]);
+      // What the server sends in `derived.releaseTimes`: Desktop may release at 15:30 today.
+      server.state['releaseTimes'] = {
+        'lead': {
+          'desktop': DateTime(2026, 11, 4, 15, 30).millisecondsSinceEpoch,
+        },
+      };
+      final c = await _show(tester, server);
+      Finder line(String id, String text) =>
+          find.descendant(of: _card(id), matching: find.textContaining(text));
+      expect(
+        _cardsIn(tester, 'done'),
+        containsAll(['green-done', 'stale-green']),
+      );
+      expect(line('green-done', 'green, waiting 12 min'), findsOneWidget);
+      expect(
+        tester
+            .widget<Text>(line('green-done', 'green, waiting 12 min'))
+            .style
+            ?.color,
+        isNot(grid.AppPalette.warn),
+      );
+      final stale = line('stale-green', 'green, waiting 1 h 30 min');
+      expect(stale, findsOneWidget);
+      expect(tester.widget<Text>(stale).style?.color, grid.AppPalette.warn);
+      expect(_cardsIn(tester, 'working'), contains('red-done'));
+      expect(_cardsIn(tester, 'done'), isNot(contains('red-done')));
+      expect(line('red-done', 'CI red'), findsOneWidget);
+      expect(_cardsIn(tester, 'merged'), contains('merged-soon'));
+      expect(
+        line('merged-soon', 'waiting for Desktop · next release about 15:30'),
+        findsOneWidget,
+      );
+      await _close(tester, c);
+    },
+  );
 
   testWidgets(
     'a released task is under Shipped with its version (task #3812)',

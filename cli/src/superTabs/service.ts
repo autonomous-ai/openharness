@@ -645,6 +645,21 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           for (const oldest of buddySince.keys()) { if (buddySince.size <= 64) break; buddySince.delete(oldest) }
           return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary } }
         }
+        // A proposal's files (command.ts proposalFiles, #3872): the chat they go up to and the project PM's chat it names. A Buddy's
+        // status is a task summary with none of them, so every Buddy proposal with a file was refused. Only what the upload reads,
+        // from this agent's own read: the chat when it reads that chat, its own record, and each project's id and chat.
+        if (payload.action === 'proposalTarget') {
+          if (!identifier(payload.conversationId)) return { error: 'INVALID_REQUEST' }
+          const { state } = await swarm()
+          const chat = list(state.conversations).find(c => c.id === payload.conversationId)
+          const self = list(state.agents).find(a => a.id === agentId)
+          const session = object(self?.buddySession).projectId
+          return { ok: true, value: {
+            chat: chat ? { id: chat.id, ...typeof chat.kind === 'string' ? { kind: chat.kind } : {}, ...typeof chat.projectId === 'string' ? { projectId: chat.projectId } : {} } : null,
+            self: self ? { id: self.id, ...typeof self.projectId === 'string' ? { projectId: self.projectId } : {}, ...typeof session === 'string' ? { buddySession: { projectId: session } } : {} } : null,
+            projects: list(state.projects).map(p => ({ id: p.id, leadConversationId: p.leadConversationId })),
+          } }
+        }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {
           if (!identifier(payload.terminalRequestId)) return { error: 'INVALID_REQUEST' }

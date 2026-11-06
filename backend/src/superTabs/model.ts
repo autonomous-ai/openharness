@@ -443,6 +443,9 @@ export interface Conversation {
   /** Each linked pull request's head and patch id as the PR watch last read them (#3394): what check verdicts count against.
    *  Absent until the watch reads one. */
   pullRequestHeads?: Record<string, PullRequestHead>
+  /** Each linked pull request's check state as the PR watch last read it, `green`, `red` or `running` (pullRequestEvents.ts
+   *  checksStateOf, task #3827): what the board's Done cards say. Written only when it changes; absent until the watch reads one. */
+  pullRequestChecks?: Record<string, import('./pullRequestEvents.js').ChecksState>
   /** Its steps and reviews (groups whose reviewOf is this one), newest last, at most 200 (production's most was 14): what a new
    *  pull request head re-derives the checks of, dormant ones included (#3394). Empty from a task's start; absent on a task
    *  from before, whose PR watch looks them up once (pullRequestEvents.ts listedSteps). */
@@ -469,6 +472,12 @@ export interface Conversation {
   /** The name a Buddy chat's owner chose for their Buddy (buddies.ts renameBuddy): kept here, which outlives the Buddy, so
    *  one added again takes it. Absent: the default, "<person>'s Buddy". */
   buddyName?: string
+  /** A person's main Buddy chat (buddies.ts swarmBuddyChatId) lists their other Buddies' chats, oldest first, so they load
+   *  with it, whose id every command can derive (task #3818). At most the Swarm's Buddy cap. Absent: one Buddy. */
+  buddyChats?: string[]
+  /** This Buddy chat's Buddy is its person's default (task #3818): their lines go to it. One per person; with none marked, the
+   *  main chat's. */
+  buddyDefault?: true
   /** A Buddy chat's live and starting thread sessions (buddySessions.ts); absent while it has none. */
   buddySessions?: BuddySessionEntry[]
   /** An older project Buddy chat whose person was told their one Buddy cannot start there now (commands.ts buddyDownLine):
@@ -498,6 +507,9 @@ export interface Conversation {
   notBefore?: string
   /** Why its not-before date holds it (heldReason.ts), set with the date by work.queue. Absent on a hold from before reasons. */
   hold?: import('./heldReason.js').HeldReason
+  /** A pause by someone who steers its project (boardRights.ts, task #3819): who (actorKey), when and why. While set, the task
+   *  is not handed out (dispatch.ts) or chased by the PM's sweep (pmSchedule.ts), and shows held (pulse.ts). */
+  paused?: { by: string; at: number; reason?: string }
   /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
    *  from before priorities, which reads as P2. */
   priority?: import('./taskPriority.js').TaskPriority
@@ -634,6 +646,8 @@ export interface SuperTabState {
   deletion?: { at: string; by: string; purgeAt: string }
   /** Idle workers stop and finished groups archive by themselves (tidy.ts); false once the owner turns it off. */
   tidy?: false
+  /** The most Buddies a person may have in this Swarm (buddies.ts BUDDY_CAP), set by its owner (task #3818). */
+  buddyCap?: number
   /** Buddies (buddies.ts) are on in every Swarm; readers are always told so (visibleState), as apps from before 10-29 hide
    *  Buddies and show Chat with PM without it. A stored value from the old switch is ignored. */
   buddies?: true

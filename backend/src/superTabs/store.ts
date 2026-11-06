@@ -46,7 +46,7 @@ import { logger } from '../utils/logger.js'
 import { noteClaim, recordDeliveryCall } from '../lib/deliveryCalls.js'
 import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
-import { buddyChatId, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
+import { buddyChatId, isSwarmBuddyChat, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
 import { accountOf, wordsOf, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
@@ -89,7 +89,7 @@ import { activeMachineKeysOf } from '../lib/deviceKeyLog.js'
 import { commitParts, indexesOf, machineContentChanged, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
-import { pullRequestEvents, readPullRequestsNow, type PullRequestReader, type PullRequestWatch, type TaskHeads } from './pullRequestEvents.js'
+import { checksStateOf, pullRequestEvents, readPullRequestsNow, type PullRequestReader, type PullRequestWatch, type TaskHeads } from './pullRequestEvents.js'
 import { deriveCheck, keepHead, refreshChecks, watchedLinks } from './checkVerdicts.js'
 import { reopenOnEvents } from './handed.js'
 import type { TrainTask } from './mergeTrain/plan.js'
@@ -111,7 +111,7 @@ import { STATUS_LABELS,
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { agentPost, digestIsDue, digestMessage, digestText, doneRow, endedAlert, GATHERED_LIMIT_MS, gatheredMessage, NOTICE_DIGEST_MAX, noticeLine } from './noticeDigest.js'
-import { PM_SCHEDULE_TEXT, recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
+import { pmScheduleText, recordTidy, recordWake, scheduleRequest, tidyRequest } from './pmSchedule.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, startedHolds, tokenTask, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
@@ -584,6 +584,19 @@ export class GrantReads {
     this.answers.set(key, answer)
     return answer
   }
+
+  /** Every machine of [wanted] not read yet, in one read, with the grant's own filter (machineAlive): each grant check then finds
+   *  its machine here, or none, instead of a read of its own (task #3925: the harness shares list read one per machine its
+   *  shared agents run on, ~850 a pod-minute after v1.4.24). */
+  async machines(db: Pick<PrismaClient, 'machine'>, environment: string, wanted: ReadonlyArray<{ machineId: string; ownerId: string }>): Promise<void> {
+    const missing = wanted.filter(w => !this.answers.has(machineKey(environment, w.machineId, w.ownerId)))
+    if (!missing.length) return
+    const rows = db.machine.findMany({ where: { machineId: { in: [...new Set(missing.map(w => w.machineId))] }, autonomousEnv: environment, ...machineAlive } })
+    for (const w of missing) {
+      this.answers.set(machineKey(environment, w.machineId, w.ownerId), rows.then(found => found.find(m => m.machineId === w.machineId && m.userId === w.ownerId) ?? null))
+    }
+    await rows
+  }
 }
 
 /** Another Swarm too busy to say whether a shared session is confidential there: the list hides those shares and lists the rest,
@@ -1001,6 +1014,8 @@ export class SuperTabStore {
       // And their one Buddy chat, which takes it too (spec: Guard).
       if (asked && command.delegate) swarmChat(asked.personId)
     }
+    // A private line from an agent goes to the person's default Buddy (task #3818): their Buddy chats, quiet or not.
+    if (command.type === 'person.tell') swarmChat(command.personId)
     // A switch's result tells the machine's owner in their one Buddy chat, quiet or not (commands.ts agent.switchResult).
     if (command.type === 'agent.switchResult') swarmChat(state.agents.find(a => a.id === command.agentId)?.machineOwnerId)
     // A project's sharing ends its sessions in the one Buddy chats of whoever loses it (commands.ts endLostProjectSessions).
@@ -1730,7 +1745,10 @@ export class SuperTabStore {
       // A Workspace removal leaves a deleted Swarm too, so its restore cannot bring the person back (security review 2 of #2457).
       const leavingDeleted = workspaceLeave && command.type === 'member.remove' && command.userId === user.sub && !asAgentId
       const first = await this.load(tx, user, tabId, namedFor(command), DELETED_SWARM_COMMANDS.has(command.type) || leavingDeleted)
-      const loaded = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command, asAgentId ? null : user.sub, asAgentId))
+      const named = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command, asAgentId ? null : user.sub, asAgentId))
+      // A person's other Buddies' chats load with their main one, which lists them (task #3818): a command that reads that person's
+      // Buddies, their default's chat included, reads all of them. Nothing more is read when none is listed.
+      const loaded = await this.ensure(tx, named, { groupIds: listedBuddyChats(named.state) })
       const original = loaded.state
       const team = await this.teamHost(tx, user)
       // Removal retries can arrive after the actor itself left. Return only this host's exact prior receipt.
@@ -3235,7 +3253,7 @@ export class SuperTabStore {
       const coordinator = actor.kind === 'agent' && ledProject(state, actor.agentId)?.id === project.id
       return { projectId, revision, hash: stored ? stored.hash : FIRST_INSTRUCTIONS.instructionsHash, text: stored?.text ?? INSTRUCTIONS_TEMPLATE, template: !stored,
         coordinatorName: coordinatorNameOf(project), notesRevision: project.notesRevision ?? 0, ...(notes ? { notes } : {}),
-        ...(coordinator ? { builtIn: PM_SCHEDULE_TEXT } : {}) }
+        ...(coordinator ? { builtIn: pmScheduleText(project) } : {}) }
     })
   }
 
@@ -4425,7 +4443,9 @@ export class SuperTabStore {
     const byTab = new Map<string, T[]>()
     for (const share of shares) if (share.superTabId) byTab.set(share.superTabId, [...byTab.get(share.superTabId) ?? [], share])
     const observable = new Set<T>()
-    for (const [tabId, tabShares] of byTab) for (const share of await this.observable(user, tabId, tabShares)) observable.add(share)
+    // One request's grant reads, shared by every Swarm it lists (task #3925).
+    const reads = new GrantReads()
+    for (const [tabId, tabShares] of byTab) for (const share of await this.observable(user, tabId, tabShares, reads)) observable.add(share)
     return shares.filter(s => s.superTabId ? observable.has(s) : user.sub === s.ownerId || !anywhere.has(key(s)))
   }
 
@@ -4434,7 +4454,7 @@ export class SuperTabStore {
     reassemble(await readParts(this.db, await this.view([tabId]), tabId, { agentIds }), { share: true })
 
   /** mayObserve for each of `shares`, all in Swarm `tabId`, from one load of it. */
-  private async observable<T extends { machineId: string; agentId: string; ownerId: string }>(user: AuthUser, tabId: string, shares: T[]): Promise<T[]> {
+  private async observable<T extends { machineId: string; agentId: string; ownerId: string }>(user: AuthUser, tabId: string, shares: T[], reads = new GrantReads()): Promise<T[]> {
     if (isTeamSession(user)) return []
     let state: SuperTabState
     try {
@@ -4446,11 +4466,13 @@ export class SuperTabStore {
     const grants = new Map<string, Promise<boolean>>()
     const granted = (target: Agent) => {
       const key = JSON.stringify([target.contributorId, target.machineId, target.machineOwnerId, target.hostGrant])
-      if (!grants.has(key)) grants.set(key, this.agentGrant(this.db, state, target).then(() => true,
+      if (!grants.has(key)) grants.set(key, this.agentGrant(this.db, state, target, reads).then(() => true,
         error => { if (error instanceof SuperTabError) return false; throw error }))
       return grants.get(key)!
     }
     const targets = shares.map(share => state.agents.find(a => a.machineId === share.machineId && a.harnessId === share.agentId && a.machineOwnerId === share.ownerId))
+    // The machines every grant below reads, in one read for the Swarm (task #3925).
+    await reads.machines(this.db, state.environment, targets.flatMap(t => t ? [{ machineId: t.machineId, ownerId: t.machineOwnerId }] : []))
     // Confidential in another Swarm closes it here too; in this one, its current Lead stays open to readers (projects.ts watchClosed).
     const elsewhere = await confidentialSessions(this.db, targets.flatMap(t => t ? [t.id] : []), tabId, this.cachedState, busyListing)
     const allowed: T[] = []
@@ -5222,14 +5244,19 @@ export class SuperTabStore {
           refreshChecks(checked.checks, watch.url, newHead ? known : undefined, group.pullRequestHeads)
         }
       }
+      // What the board says of its checks (task #3827): recorded with the head, even for a done task, and only when it changed.
+      const checks = checksStateOf(watch), checksMoved = group.pullRequestChecks?.[watch.url] !== checks
+      // Of the links it still has: a state of a pull request the task dropped goes with the link.
+      if (checksMoved) group.pullRequestChecks = Object.fromEntries(Object.entries({ ...group.pullRequestChecks, [watch.url]: checks })
+        .filter(([url]) => group.pullRequestUrls!.includes(url)))
       if (done) {
-        if (!newHead && !repatched) return 0
+        if (!newHead && !repatched && !checksMoved) return 0
         await this.save(tx, loaded, state, clock.next())
         return 0
       }
       const seen = group.pullRequestEvents?.[watch.url] ?? []
       const { events: seenEvents, keys } = pullRequestEvents(watch, seen, botLogin, now)
-      if (!newHead && !repatched && keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
+      if (!newHead && !repatched && !checksMoved && keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
       group.pullRequestEvents = { ...group.pullRequestEvents, [watch.url]: keys }
       // CI failing or a conflict brings a handed task back to its Engineer, in the message that tells it (handed.ts, #3399).
       const events = reopenOnEvents(group, seenEvents, now)
@@ -5630,9 +5657,19 @@ export async function buddyNames(tx: Transaction, tabId: string, state: SuperTab
   const keys = [...projectsOf(state).flatMap(project => state.people.map(person => buddyChatId(project.id, person))),
     ...state.people.map(person => swarmBuddyChatId(person))]
   if (!keys.length) return []
-  const rows = await groupsBy(tx, 'key', [
-    { $match: { tabId, key: { $in: keys }, deleted: false, 'data.buddyName': { $gt: '' } } },
-    { $project: { _id: 0, key: 1, name: '$data.buddyName' } },
-  ]) as Array<{ key: string; name: string }>
-  return rows.map(row => ({ conversationId: row.key, name: row.name }))
+  const named = (match: Record<string, unknown>) => groupsBy(tx, 'key', [
+    { $match: { tabId, deleted: false, ...match } },
+    { $project: { _id: 0, key: 1, name: '$data.buddyName', chats: '$data.buddyChats' } },
+  ]) as Promise<Array<{ key: string; name?: string; chats?: string[] }>>
+  // A main Buddy chat may list a person's other Buddies' chats (task #3818), whose ids no one derives: they are read by those keys.
+  const rows = await named({ key: { $in: keys }, $or: [{ 'data.buddyName': { $gt: '' } }, { 'data.buddyChats.0': { $exists: true } }] })
+  const listed = rows.flatMap(row => row.chats ?? [])
+  const more = listed.length ? await named({ key: { $in: listed }, 'data.buddyName': { $gt: '' } }) : []
+  return [...rows, ...more].flatMap(row => row.name ? [{ conversationId: row.key, name: row.name }] : [])
+}
+
+/** The Buddy chats listed on [state]'s loaded main Buddy chats (task #3818) that are not loaded yet. */
+function listedBuddyChats(state: SuperTabState): string[] {
+  const loaded = new Set(state.conversations.map(c => c.id))
+  return [...new Set(state.conversations.filter(isSwarmBuddyChat).flatMap(c => c.buddyChats ?? []))].filter(id => !loaded.has(id))
 }
