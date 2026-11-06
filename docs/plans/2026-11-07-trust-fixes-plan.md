@@ -40,51 +40,51 @@
 **Files:** `backend/src/superTabs/taskLine.ts`, `releases.ts`, `buddyNews.ts`, `releases.test.ts`
 **Interfaces:** `settleReleases` adds `shippedNotice` drafts to `outcome.messages`.
 
-- [ ] Test: a merge sends the Buddy no shipped news; the settle that marks it released does, once.
-- [ ] Run it: fails (news at merge, none at release).
-- [ ] Move the notice from `taskLine.ts moved()` to `settleReleases`, authored by the project's lead.
-- [ ] Run it: passes.
+- [x] Test: a merge sends the Buddy no shipped news; the settle that marks it released does, once.
+- [x] Run it: fails (news at merge, none at release).
+- [x] Move the notice from `taskLine.ts moved()` to `settleReleases`, authored by the project's lead.
+- [x] Run it: passes.
 
 ## Task 2: Assigned news once per task
 
 **Files:** `backend/src/superTabs/commands.ts`, `buddyNews.test.ts`
 
-- [ ] Test: a task lost and assigned to a replacement tells the Buddy once.
-- [ ] Run it: fails. Send the notice only on the task's first assignment (`ledger.firstAssignedAt` unset before it). Passes.
+- [x] Test: a task lost and assigned to a replacement tells the Buddy once.
+- [x] Run it: fails. Send the notice only on the task's first assignment (`ledger.firstAssignedAt` unset before it). Passes.
 
 ## Task 3: The Buddy says only what the server knows
 
 **Files:** `backend/src/superTabs/buddyNews.ts`, `buddyNews.test.ts`
 
-- [ ] Test: the news says the task is in the person's name, not that they requested it.
-- [ ] Run it: fails. Change both notices' words. Passes.
+- [x] Test: the news says the task is in the person's name, not that they requested it.
+- [x] Run it: fails. Change both notices' words. Passes.
 
 ## Task 4: A task at a person's prompt is not lost
 
 **Files:** `backend/src/superTabs/liveness.ts`, `liveness.test.ts`
 
-- [ ] Test: a working task whose agent's terminal waits at a prompt, quiet past its lease, is not lost; once the prompt
+- [x] Test: a working task whose agent's terminal waits at a prompt, quiet past its lease, is not lost; once the prompt
       closes it is lost as before.
-- [ ] Run it: fails. `waitingOnPerson` also reads the agent's open `prompt` alert. Passes.
+- [x] Run it: fails. `waitingOnPerson` also reads the agent's open `prompt` alert. Passes.
 
 ## Task 5: Approval names the agent shown
 
 **Files:** `backend/src/superTabs/commands.ts`, `taskApproval.test.ts`, `desktop/lib/super_tabs/tasks/personal_tasks_pane.dart`, its test
 
-- [ ] Test: `task.approve` naming an agent other than the current suggestion is refused and approves nothing.
-- [ ] Run it: fails (schema refuses the field). Add `agentId` (nullable, optional until 2026-12-07) and refuse a mismatch.
-- [ ] Desktop sends the agent it shows.
+- [x] Test: `task.approve` naming an agent other than the current suggestion is refused and approves nothing.
+- [x] Run it: fails (schema refuses the field). Add `suggestedAgentId` (nullable, optional until 2026-12-07; compared, never read as an agent) and refuse a mismatch.
+- [x] Desktop sends the agent it shows.
 
 ## Task 6: Leaderboard counts merges
 
 **Files:** `backend/src/superTabs/leaderboard/stats.ts`, `leaderboard/brought.ts`, a stats test
 
-- [ ] Test: a done task with a linked, unmerged PR is not Shipped on the board.
-- [ ] Run it: fails. Count `ledger.mergedAt`. Passes.
+- [x] Test: a done task with a linked, unmerged PR is not Shipped on the board.
+- [x] Run it: fails. Count `ledger.mergedAt`. Passes.
 
 ## Task 7: Claude reports expire; unknown is unknown
 
 **Files:** `cli/src/services/usage.ts`, `usage.spec.ts`
 
-- [ ] Test: a report older than an hour, and a window whose reset passed, read as unknown with a reason.
-- [ ] Run it: fails. Expire reports after an hour; leave a passed window out. Passes.
+- [x] Test: a report older than an hour, and a window whose reset passed, read as unknown with a reason.
+- [x] Run it: fails. Expire reports after an hour; leave a passed window out. Passes.
