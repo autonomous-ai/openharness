@@ -126,3 +126,49 @@ describe('two main posts per ask', () => {
     expect(groupView(f.group('lead'), new Set())).not.toHaveProperty('chatLimits')
   })
 })
+
+
+describe('one answer across main and thread', () => {
+  it.each(['main', 'thread'] as const)('refuses a plain second answer after the first in %s, even by another agent', place => {
+    const { f, send, ask } = setup()
+    const question = ask()
+    const first = send('Login works offline.', { by: f.dev, reply: question,
+      extra: place === 'main' ? { answers: question.id } : { replyTo: question.id } })
+    const messageId = first.result.messageId
+    for (const extra of [{ answers: question.id }, { replyTo: question.id }]) {
+      expect(() => send('Yes, it works offline.', { reply: question, extra }))
+        .toThrow(expect.objectContaining({ code: 'ALREADY_ANSWERED', message: expect.stringContaining(String(messageId)) }))
+    }
+  })
+
+  it('allows replying to an agent answer and answering a new person followup in that thread', () => {
+    const { f, send, ask } = setup()
+    const question = ask()
+    const first = send('Login works offline.', { reply: question, extra: { answers: question.id } })
+    const reply = { ...question, id: String(first.result.messageId), author: first.messages[0]!.author }
+    expect(() => send('The phone build includes it too.', { reply, extra: { replyTo: reply.id } })).not.toThrow()
+    const next = send('Does it handle expired tokens?', { person: true, reply, extra: { replyTo: reply.id } })
+    const followup = { ...question, id: String(next.result.messageId) }
+    expect(() => send('Expired tokens are refreshed.', { by: f.dev, reply: followup, extra: { replyTo: followup.id } })).not.toThrow()
+    expect(() => send('They are refreshed automatically.', { reply: followup, extra: { answers: followup.id, answer: true } }))
+      .toThrow(expect.objectContaining({ code: 'ALREADY_ANSWERED' }))
+  })
+
+  it('preserves person answers and agent duplicates in a task chat', () => {
+    const { f, send, ask } = setup()
+    const question = ask()
+    send('Login works offline.', { reply: question, extra: { answers: question.id } })
+    for (let i = 0; i < 3; i++) expect(() => send(`Person answer ${i}`, { person: true, reply: question, extra: { answers: question.id } })).not.toThrow()
+    const taskReply = { ...question, conversationId: f.task }
+    for (let i = 0; i < 3; i++) expect(() => send(`Task answer ${i}`, { by: f.dev, group: f.task, reply: taskReply, extra: { answers: taskReply.id } })).not.toThrow()
+  })
+
+  it('does not reopen a formal answer after its ask has left the active ledger', () => {
+    const { f, send, ask } = setup()
+    const first = ask()
+    send('Login works offline.', { reply: first, extra: { replyTo: first.id } })
+    for (let i = 0; i < 51; i++) { f.tick(1); ask() }
+    expect(() => send('Yes, offline works.', { reply: first, extra: { replyTo: first.id, answers: undefined } }))
+      .toThrow(expect.objectContaining({ code: 'CHAT_ASK_CLOSED' }))
+  })
+})
