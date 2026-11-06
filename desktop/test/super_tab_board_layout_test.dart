@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -164,8 +163,8 @@ void main() {
     await end(tester, c);
   });
 
-  testWidgets('the project Chat tab opens its chat on the right and keeps '
-      'the Board in the middle', (tester) async {
+  testWidgets('the project Chat tab opens its chat in the middle, with its '
+      'header, and the Board tab brings back the three panes', (tester) async {
     final (c, _) = await show(tester);
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
@@ -177,18 +176,15 @@ void main() {
       find.text('The project chat line nobody should see'),
       findsOneWidget,
     );
-    expect(_key('super-tasks-lead'), findsOneWidget);
-    expect(
-      find.descendant(
-        of: _key('super-right-pane'),
-        matching: find.text('The project chat line nobody should see'),
-      ),
-      findsOneWidget,
-    );
+    // The Chat view keeps its header, Project options and Tasks icon.
+    expect(_key('super-tasks-lead'), findsNothing);
+    expect(_key('super-tasks'), findsOneWidget);
+    expect(_key('super-left-pane'), findsOneWidget);
     await tester.tap(_key('super-board-tab-board'));
     await _settle(tester);
     expect(_key('super-tasks-lead'), findsOneWidget);
     expect(c.selectedId, 'buddy-owner-lead');
+    expect(_key('super-right-pane'), findsOneWidget);
     await end(tester, c);
   });
 
