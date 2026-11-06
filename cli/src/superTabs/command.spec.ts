@@ -320,6 +320,36 @@ it('parses propose with up to 5 --attach files, always as a proposal', () => {
     expect(() => parseSuperTabArgs([...prefix, 'propose', 'op-1', json, ...tail], where)).toThrow('harness super-tab')
   }
 })
+// Huy 11-06 (#3872): every Buddy proposal with a file was refused before upload, "Name your own chat". The upload read its chat,
+// its record and the projects' chats from `status`, which a Buddy gets as a task summary with none of them. It reads them from
+// the read made for it, as the service answers a Buddy.
+it('sends a Buddy\'s proposal with a file, its status being the task summary a Buddy reads', async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-'))
+  try {
+    writeFileSync(join(folder, 'shot.png'), Buffer.from([1, 2, 3]))
+    const calls: Array<Record<string, unknown>> = []
+    const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
+      if (type === 'agents_list') return { agents: [{ id: 'buddy-harness', engine: 'claude', status: 'active', tmuxPane: '%7', project: { cwd: folder } }] }
+      calls.push(payload)
+      if (payload.action === 'status') return { ok: true, value: { lastChangedAt: 1, summary: { tasks: [] } } }
+      if (payload.action === 'proposalTarget') return { ok: true, value: { chat: { id: 'chat', projectId: 'p', kind: 'buddy' }, self: { id: 'buddy' },
+        projects: [{ id: 'p', leadConversationId: 'lead' }] } }
+      if (payload.step === 'sent') return { ok: true, value: { agentId: 'buddy', attachmentIds: null } }
+      return { ok: true, value: { revision: 9, result: { messageId: 'm' } } }
+    })
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ success: true, data: { attachment: { id: 'f1' } } }), { status: 200 }))
+    const deps = { where: () => where, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print: vi.fn(), pane: '%7',
+      fetch: fetch as unknown as typeof globalThis.fetch }
+    const json = JSON.stringify({ conversationId: 'chat', ownerMessageId: 'ask', goal: 'G', scope: 'S', priority: 'normal' })
+    expect(await superTabCommand([...prefix, 'propose', 'op', json, '--attach', join(folder, 'shot.png')], deps)).toBe(0)
+    expect(calls.find(c => c.action === 'proposalTarget')).toMatchObject({ conversationId: 'chat' })
+    expect(calls.at(-1)).toMatchObject({ operationId: 'op', command: { type: 'buddy.propose', attachmentIds: ['f1'] } })
+  } finally { rmSync(folder, { recursive: true, force: true }) }
+})
+
 it('attaches to a proposal only files inside the Buddy\'s own folder, uploaded to its chat, beside the files its owner sent', async () => {
   const { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync, rmSync } = await import('node:fs')
   const { join } = await import('node:path')
