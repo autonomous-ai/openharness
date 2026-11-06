@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../core/local_key_value_store.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
@@ -16,9 +18,15 @@ import 'model.dart';
 /// Conversations beside the Board. Buddies are pinned; closing a card only
 /// removes its local tab, never the conversation or its messages.
 class SuperTabRightPaneRow extends StatefulWidget {
-  const SuperTabRightPaneRow({super.key, required this.controller, this.app});
+  const SuperTabRightPaneRow({
+    super.key,
+    required this.controller,
+    this.app,
+    this.storage,
+  });
   final SuperTabController controller;
   final AppNotifier? app;
+  final LocalKeyValueStore? storage;
 
   @override
   State<SuperTabRightPaneRow> createState() => _SuperTabRightPaneRowState();
@@ -28,12 +36,95 @@ class _SuperTabRightPaneRowState extends State<SuperTabRightPaneRow> {
   SuperTabController get c => widget.controller;
   final _cards = <String>[];
   String? _selected;
+  final _closed = <String>{};
+  int _epoch = 0;
+  String? _storageError;
+  Future<void> _writing = Future.value();
+  String get _storageKey =>
+      'super-tab-open-chats:${jsonEncode([c.tabId, c.accountId])}';
+  LocalKeyValueStore? get _store => widget.storage ?? widget.app?.localStore;
+
+  bool _eligible(SuperTabConversation? group) =>
+      group != null &&
+      !group.isBuddyChat &&
+      !group.archived &&
+      c.snapshot?.isProjectLead(group.id) != true;
+
+  Future<void> _restore() async {
+    final epoch = ++_epoch;
+    final store = _store;
+    if (store == null) return;
+    try {
+      final raw = await store
+          .read(_storageKey)
+          .timeout(const Duration(seconds: 5));
+      if (!mounted || epoch != _epoch) return;
+      final decoded = raw == null ? <dynamic>[] : jsonDecode(raw);
+      if (decoded is! List || decoded.any((id) => id is! String)) {
+        throw const FormatException('Invalid conversation list');
+      }
+      setState(() {
+        final merged = <String>{
+          for (final id in decoded.take(30).cast<String>())
+            if (!_closed.contains(id) &&
+                _eligible(c.snapshot?.conversation(id)))
+              id,
+          ..._cards,
+        }.toList();
+        _cards
+          ..clear()
+          ..addAll(merged.skip(math.max(0, merged.length - 30)));
+      });
+      _save();
+    } catch (_) {
+      if (mounted && epoch == _epoch) {
+        setState(
+          () =>
+              _storageError = 'Could not restore open chats on this computer.',
+        );
+      }
+    }
+  }
+
+  void _save() {
+    final store = _store;
+    if (store == null) return;
+    final value = jsonEncode(_cards), key = _storageKey, epoch = _epoch;
+    _writing = _writing
+        .then(
+          (_) => store.write(key, value).timeout(const Duration(seconds: 5)),
+        )
+        .catchError((Object error) {
+          if (mounted && epoch == _epoch) {
+            setState(
+              () =>
+                  _storageError = 'Could not save open chats on this computer.',
+            );
+          }
+        });
+  }
+
+  @override
+  void didUpdateWidget(SuperTabRightPaneRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != c || oldWidget.storage != widget.storage) {
+      oldWidget.controller.removeListener(_changed);
+      _cards.clear();
+      _closed.clear();
+      _selected = null;
+      _storageError = null;
+      _remember();
+      c.addListener(_changed);
+      unawaited(_restore());
+    }
+  }
 
   @override
   void initState() {
     super.initState();
     _remember();
     c.addListener(_changed);
+    unawaited(_restore());
   }
 
   @override
@@ -46,18 +137,29 @@ class _SuperTabRightPaneRowState extends State<SuperTabRightPaneRow> {
     final group = c.selected;
     if (group == null || group.id == _selected) return;
     _selected = group.id;
-    if (!group.isBuddyChat && !_cards.contains(group.id)) {
+    if (_eligible(group) && !_cards.contains(group.id)) {
+      _closed.remove(group.id);
       _cards.add(group.id);
+      if (_cards.length > 30) _cards.removeAt(0);
     }
   }
 
   void _changed() {
+    final before = _cards.join(',');
+    if (c.snapshot != null) {
+      _cards.removeWhere((id) => !_eligible(c.snapshot?.conversation(id)));
+    }
     _remember();
+    if (_cards.join(',') != before) _save();
     if (mounted) setState(() {});
   }
 
   void _close(String id) {
-    setState(() => _cards.remove(id));
+    setState(() {
+      _cards.remove(id);
+      _closed.add(id);
+    });
+    _save();
     if (c.selectedId == id) {
       final next = c.buddies().firstOrNull?.id ?? _cards.firstOrNull;
       if (next != null) unawaited(c.select(next));
@@ -143,6 +245,12 @@ class _SuperTabRightPaneRowState extends State<SuperTabRightPaneRow> {
             },
           ),
         ),
+        if (_storageError != null)
+          Text(
+            _storageError!,
+            key: const ValueKey('super-chat-storage-error'),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
         if (c.selected?.isBuddyChat == true && c.canWrite)
           SuperTabBuddyMenu(controller: c, app: widget.app),
       ],

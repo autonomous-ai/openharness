@@ -5,7 +5,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/core/local_key_value_store.dart';
+
 import 'support/memory_key_value_store.dart';
+
 import 'package:harness/super_tabs/right_pane_row.dart';
 
 import 'super_tab_activity_lists_test.dart' show swarm;
@@ -50,21 +52,24 @@ Future<SuperTabController> controller(
   return c;
 }
 
-Future<void> showRow(WidgetTester tester, SuperTabController c, {LocalKeyValueStore? storage}) =>
-    tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.light),
-        home: Scaffold(
-          body: Align(
-            alignment: Alignment.topLeft,
-            child: SizedBox(
-              width: 500,
-              child: SuperTabRightPaneRow(controller: c, storage: storage),
-            ),
-          ),
+Future<void> showRow(
+  WidgetTester tester,
+  SuperTabController c, {
+  LocalKeyValueStore? storage,
+}) => tester.pumpWidget(
+  MaterialApp(
+    theme: grid.buildAppTheme(brightness: Brightness.light),
+    home: Scaffold(
+      body: Align(
+        alignment: Alignment.topLeft,
+        child: SizedBox(
+          width: 500,
+          child: SuperTabRightPaneRow(controller: c, storage: storage),
         ),
       ),
-    );
+    ),
+  ),
+);
 
 void main() {
   testWidgets(
@@ -136,27 +141,37 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
     },
   );
-  testWidgets('open card chats survive a new view and stay scoped to the signed in account', (tester) async {
-    final store = MemoryKeyValueStore();
-    final c = await controller(tester);
-    await showRow(tester, c, storage: store);
-    await tester.runAsync(() => c.select('plan'));
-    await tester.pumpAndSettle();
-    await tester.pumpWidget(const SizedBox());
-    await showRow(tester, c, storage: store);
-    await tester.pumpAndSettle();
-    expect(key('super-chat-tab-offline'), findsOneWidget);
-    await tester.pumpWidget(const SizedBox());
-    final other = await controller(tester, account: 'other', selected: 'lead');
-    await showRow(tester, other, storage: store);
-    await tester.pumpAndSettle();
-    expect(key('super-chat-tab-offline'), findsNothing);
-    await tester.pumpWidget(const SizedBox());
-    c.dispose(); other.dispose();
-    await tester.pump(const Duration(seconds: 1));
-  });
+  testWidgets(
+    'open card chats survive a new view and stay scoped to the signed in account',
+    (tester) async {
+      final store = MemoryKeyValueStore();
+      final c = await controller(tester);
+      await showRow(tester, c, storage: store);
+      await tester.runAsync(() => c.select('plan'));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox());
+      await showRow(tester, c, storage: store);
+      await tester.pumpAndSettle();
+      expect(key('super-chat-tab-offline'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      final other = await controller(
+        tester,
+        account: 'other',
+        selected: 'lead',
+      );
+      await showRow(tester, other, storage: store);
+      await tester.pumpAndSettle();
+      expect(key('super-chat-tab-offline'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+      other.dispose();
+      await tester.pump(const Duration(seconds: 1));
+    },
+  );
 
-  testWidgets('a failed local store is visible and leaves chats usable', (tester) async {
+  testWidgets('a failed local store is visible and leaves chats usable', (
+    tester,
+  ) async {
     final c = await controller(tester);
     await showRow(tester, c, storage: BrokenStore());
     await tester.pumpAndSettle();
@@ -166,7 +181,6 @@ void main() {
     c.dispose();
     await tester.pump(const Duration(seconds: 1));
   });
-
 }
 
 class BrokenStore extends MemoryKeyValueStore {
