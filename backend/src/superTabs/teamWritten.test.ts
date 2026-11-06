@@ -520,6 +520,25 @@ describe('a release task the Swarm opened', () => {
     expect(g.state.starts!.at(-1)!.request.machineId).toBe('mac')
   })
 
+  // Security review 2 of #3324: the exemption is for a step that names no code of its own. A step that names a pull request is read
+  // for that pull request, whatever task it is on, and the release task is never marked for it.
+  it('still reads a step that names its own pull request: Team-pushed code is refused to the main account, and the release task stays clean', () => {
+    const f = releaseTask()
+    const pull = 'https://github.com/acme/app/pull/99'
+    const own = f.group({ reviewOf: f.task, step: 'Check this branch', brief: `Check out ${pull} and run its tests.` })
+    const main = f.member('main-tester', 'mac')
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: own, agentId: main }, owner, { pushOrigin: 'team', pushOriginPulls: [pull] }))).toBe(TEAM_WRITTEN_WORK)
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: own, agentId: main }, owner, { pushOrigin: 'unknown' }))).toBe(TEAM_WRITTEN_WORK)
+    const step = () => f.state.conversations.find(c => c.id === own)!
+    expect(step().teamWritten).toBe(true)
+    expect(f.state.conversations.find(c => c.id === f.task)!.teamWritten).toBeUndefined()
+    // A Team agent takes it, and a clean read of that pull request lets the main account take a step that is not marked.
+    const clean = f.group({ reviewOf: f.task, step: 'Check that branch', brief: `Check out ${pull} too.` })
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: clean, agentId: main }, owner, { pushOrigin: 'clean', pushOriginPulls: [pull] }))).toBeNull()
+    // A step whose title names no code but whose result names a Team-pushed pull request is marked when it asks for review.
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: own, agentId: f.member('team-tester', 'mac-team') }, owner, { pushOrigin: 'team', pushOriginPulls: [pull] }))).toBeNull()
+  })
+
   it('does not change an ordinary task: the same step with the same read is still refused to the main account', () => {
     const f = swarm(), task = f.group(), step = f.group({ reviewOf: task, step: 'Test' })
     expect(refusal(() => f.run({ type: 'work.assign', conversationId: step, agentId: f.member('main-tester', 'mac') }, owner, { pushOrigin: 'unknown' }))).toBe(TEAM_WRITTEN_WORK)
