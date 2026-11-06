@@ -476,6 +476,10 @@ class SuperTabConversation {
   final String? kind;
   bool get isBuddyChat => kind == 'buddy' || kind == 'swarm-buddy';
 
+  /// A person's chat with one of their own agents (Swarm v3, backend #4116): the agent takes the message, so it needs no
+  /// Lead, as a Buddy chat needs none.
+  bool get isAgentChat => kind == 'agent-chat';
+
   /// A person's one Buddy chat for the whole Swarm (spec
   /// 2026-10-31-one-buddy-per-swarm): in no project, keyed by the empty id.
   bool get isSwarmBuddyChat => kind == 'swarm-buddy';

@@ -44,10 +44,7 @@ export interface QuotaWindow { name: string | null; leftPercent: number; resetsA
  * usage window to run out. */
 export interface Quota { known: boolean; leftPercent: number | null; resetsAt: number | null; windows?: QuotaWindow[]; account?: string; metered?: true
   /** Why an unknown allowance could not be read, as its machine said (cli superTabs/capacity.ts quotaUnknownReason). */
-  why?: string
-  /** The machine this reading is from, when it is not the candidate's own: a Harness Team account's Mac, whose subscription
-   *  the account spends (routeCommand.ts relayedReadings). */
-  from?: string }
+  why?: string }
 /** The task's folder as the routing agent's machine sees it. `unknown` means it could not be read, `none` that it is not a
  * repository, `missing` that this machine has no such folder (a member elsewhere may). */
 export interface TaskFolder { cwd: string; kind: 'git' | 'none' | 'missing' | 'unknown'; name: string | null; root: string | null; remote: string | null }
@@ -423,7 +420,6 @@ function weeklyResetsIn(resetsAt: number, now: number): string {
 function quotaText(q: Quota, now: number): string {
   if (q.metered) return 'quota metered'
   if (!q.known || q.leftPercent === null) return q.why ? `quota unknown (${q.why})` : 'quota unknown'
-  if (q.from) return `quota read on ${cut(q.from, 40)}, whose subscription this account spends: ${quotaText({ ...q, from: undefined }, now).replace(/^quota /, '')}`
   if (q.windows?.length) {
     return `quota ${q.windows.map(w => `${w.name ?? 'window'} ${Math.round(w.leftPercent)}% left${w.resetsAt === null ? '' : ` (resets in ${resetsIn(w.resetsAt, now)})`}`).join(', ')}`
   }

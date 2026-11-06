@@ -4,11 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_activity_lists_test.dart' show swarm;
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
+import 'swarm_state_test.dart' show createApp;
 
 /// Set to a folder to write the PR's screenshots there.
 final shots = Platform.environment['SUPER_TAB_V3_LEFT_SHOTS'];
@@ -60,7 +62,11 @@ void main() {
               'kind': 'buddy',
               'chatId': 'swarm-buddy-owner',
             },
-            {..._agent('kestrel', 'Kestrel'), 'kind': 'regular'},
+            {
+              ..._agent('kestrel', 'Kestrel'),
+              'kind': 'regular',
+              'chatId': 'agent-chat-kestrel',
+            },
             {..._agent('orion', 'Orion'), 'kind': 'pm', 'chatId': 'lead'},
           ];
           groups.add({
@@ -70,15 +76,30 @@ void main() {
             'agentIds': ['buddy'],
           });
           groups.firstWhere((g) => g['id'] == 'lead')['leadId'] = 'orion';
-          groups.firstWhere((g) => g['id'] == 'offline')['assignment'] = {
-            'id': 'a1',
-            'agentId': 'kestrel',
-            'status': 'working',
+          // A Regular agent's own chat with its person (backend #4116): it needs no Lead.
+          groups.add({
+            ...conversationFixture('agent-chat-kestrel', 'Kestrel'),
+            'kind': 'agent-chat',
+            'agentIds': ['kestrel'],
+          });
+          server.append(
+            'Please look at the build.',
+            conversationId: 'agent-chat-kestrel',
+          );
+          server.messages.last['author'] = {
+            'kind': 'person',
+            'id': 'owner',
+            'name': 'owner@example.com',
           };
           server.append(
-            'The change is ready for review.',
-            conversationId: 'offline',
+            'On it: the build fails on the lint step, fixing now.',
+            conversationId: 'agent-chat-kestrel',
           );
+          server.messages.last['author'] = {
+            'kind': 'agent',
+            'id': 'kestrel',
+            'name': 'Kestrel',
+          };
         }
         server.append('Working on the fix.', conversationId: 'offline');
         final c = server.controller(
@@ -91,6 +112,9 @@ void main() {
           },
         );
         await tester.runAsync(c.refresh);
+        // With an app the left pane has the org switcher and + New agent, as it does in the real window.
+        final AppNotifier app = createApp();
+        addTearDown(app.dispose);
         await tester.pumpWidget(
           MaterialApp(
             debugShowCheckedModeBanner: false,
@@ -98,6 +122,8 @@ void main() {
             home: Scaffold(
               body: SuperTabView(
                 controller: c,
+                app: app,
+                onNewSwarm: () {},
                 onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},

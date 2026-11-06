@@ -5,7 +5,7 @@
  * the decision in the tab. */
 import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
-import { RELAYED_QUOTA, requiredToolReason, startRequirements, USED_UP_WINDOW } from './capacity.js'
+import { requiredToolReason, startRequirements, USED_UP_WINDOW } from './capacity.js'
 import { START_DEADLINE_MS, START_WINDOW_MS } from './reservations.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
@@ -207,19 +207,6 @@ export function unreadyPool(pool: Json, project: Json | undefined, projectId: st
   const app = githubApp && projectOwner !== pool.contributorId
   return { all, engines, push: !app && checkout?.push === false ? NO_PUSH : null }
 }
-/** A Harness Team account's engines that spend its Mac owner's subscription through the owner's relay, each with the Mac's
- *  fresh reading of that subscription: the account itself holds no sign-in to read, so it reports its allowance unknown,
- *  and the route left out every such candidate while another machine's quota fit. Codex in Tony's team account was never
- *  offered for reviews on 2026-10-30 overnight, while all other Codex reviewers were out of quota. Only an engine the
- *  account says is relayed (capacity.ts RELAYED_QUOTA), and only from its own Mac under the same contribution. */
-export function relayedReadings(pool: Json, pools: Json[], now = Date.now()): { relayedQuotas?: Record<string, Json> } {
-  const host = typeof pool.hostMachineId === 'string' ? pools.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId) : undefined
-  const reading = object(host?.observation), reasons = object(object(pool.observation).quotaReasons)
-  if (!host || !finite(reading.receivedAt) || now - reading.receivedAt >= 45_000) return {}
-  const relayed = Object.fromEntries(list(reading.quotas).filter(q => q.known === true && reasons[String(q.engine)] === RELAYED_QUOTA)
-    .map(q => [String(q.engine), { quota: q, from: String(host.name), account: `${String(host.machineId)}:${String(q.engine)}` }]))
-  return Object.keys(relayed).length ? { relayedQuotas: relayed } : {}
-}
 /** A running member keeps its engine and memory, but still needs a live terminal and the task's tools and devices. Its
  *  allowance is information ([usedUp]). */
 function memberRefusals(running: boolean | null, closed: boolean, tools: string[], devices: string[], reportedTools: Json, reportedDevices: Json, toolProbeErrors: Json): string[] {
@@ -408,7 +395,6 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
       ...(keptFor(original) ? { keptForOthers: keptFor(original) } : {}),
       ...(original.scope === 'swarm' && repository.machineId !== original.machineId && typeof repository.repositoryUrl !== 'string'
         ? { repositoryUnavailable: true } : {}),
-      ...relayedReadings(original, list(state.machines)),
     }
     machines.set(String(pool.machineId), { name: String(pool.name), status: 'contributed', account: false, pool,
       unready: unreadyPool(original, project, projectId, object(value.tab).githubApp === true, projectOwner) })
@@ -771,9 +757,6 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     const quota = (engine: string): Probe['quota'] => {
       const q = quotas.find(q => q.engine === engine)
       if (!fresh || !q) return UNKNOWN_QUOTA
-      // A Harness Team account's engine on its Mac's subscription: that subscription's reading, on its account (relayedReadings).
-      const relayed = q.known !== true ? object(object(pool.relayedQuotas)[engine]) : {}
-      if (typeof relayed.from === 'string') return { ...read(object(relayed.quota), { account: String(relayed.account) }), from: relayed.from }
       return read(q, { why: text(object(observed.quotaReasons)[engine]) })
     }
     // What a new start can use, as its host admits it (reservations.ts): measured, less what starts still starting hold.

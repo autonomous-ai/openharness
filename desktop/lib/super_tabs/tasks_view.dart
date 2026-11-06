@@ -360,18 +360,14 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
           );
     // Keep controls stable while a divider changes only their layout.
     final controls = <Widget>[
-      DesktopPill(
-        key: const ValueKey('super-tasks-layout-board'),
-        label: 'Board',
-        selected: _layout == _Layout.board,
-        onPressed: () => _choose(layout: _Layout.board),
-      ),
-      const SizedBox(width: grid.AppDesktop.listRowGap),
+      // The Board is the project's Board tab above (or the view itself): List and Members are toggles back to it.
       DesktopPill(
         key: const ValueKey('super-tasks-layout-list'),
         label: 'List',
         selected: _layout == _Layout.list,
-        onPressed: () => _choose(layout: _Layout.list),
+        onPressed: () => _choose(
+          layout: _layout == _Layout.list ? _Layout.board : _Layout.list,
+        ),
       ),
       const SizedBox(width: grid.AppDesktop.listRowGap),
       DesktopPill(
@@ -379,7 +375,9 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
         label: 'Members',
         selected: _layout == _Layout.members,
         tooltip: 'Tasks by crew member',
-        onPressed: () => _choose(layout: _Layout.members),
+        onPressed: () => _choose(
+          layout: _layout == _Layout.members ? _Layout.board : _Layout.members,
+        ),
       ),
       const SizedBox(width: grid.AppDesktop.groupGap),
       DesktopPill(

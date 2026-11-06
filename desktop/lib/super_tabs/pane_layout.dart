@@ -21,7 +21,7 @@ class SuperTabPaneLayout extends StatefulWidget {
     this.storage,
     this.rightDefault = rightWidth,
     this.rightMinimum = rightWidth,
-    this.rightShare,
+    this.rightFixed = false,
     this.over,
   });
 
@@ -42,9 +42,8 @@ class SuperTabPaneLayout extends StatefulWidget {
   /// Under this the centre pane has no room for a header, let alone cards.
   static const _centerFloor = 160.0;
 
-  /// The Board's chat: a third of the window, never narrower than this.
-  static const boardChatMinimum = 420.0;
-  static const boardChatShare = 1 / 3;
+  /// The Desktop's right pane, the Tasks pane: a fixed width, the middle taking the rest (River, Swarm v3).
+  static const boardRightWidth = 340.0;
 
   /// The roster drawer's share of a narrow window at most. On a phone it filled the screen, leaving no
   /// veil to tap, so closing it was hard (owner, 2026-10-23).
@@ -64,13 +63,11 @@ class SuperTabPaneLayout extends StatefulWidget {
   /// width, saved, wins): [threadWidth] while it shows a thread.
   final double rightDefault;
 
-  /// The narrowest the right pane goes, before text scaling: the Board's chat
-  /// is the main interface and keeps [boardChatMinimum] (Dee, task #3863).
+  /// The narrowest the right pane goes, before text scaling.
   final double rightMinimum;
 
-  /// With no width chosen, the right pane takes this share of the window (at
-  /// least [rightMinimum]) instead of [rightDefault].
-  final double? rightShare;
+  /// The right pane is always [rightDefault] wide: no divider, and a width saved earlier is not used.
+  final bool rightFixed;
 
   /// Drawn over the left and centre panes, leaving the right one as it is:
   /// the picture viewer beside an open thread, as in Slack (Huy, 11-04).
@@ -182,10 +179,9 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
           ? math.min(
               width - left,
               limit(
-                _right ??
-                    (widget.rightShare == null
-                        ? widget.rightDefault
-                        : math.max(rightMin, width * widget.rightShare!)),
+                widget.rightFixed
+                    ? widget.rightDefault
+                    : _right ?? widget.rightDefault,
                 rightMin,
                 width - centerMin - left,
               ),
@@ -239,42 +235,44 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
                       child: ColoredBox(color: DesktopChrome.rim),
                     ),
                   ),
-                  PaneResizeHandle(
-                    key: ValueKey(
-                      'super-resize-${hasLeft && index == 0 ? 'left' : 'right'}',
+                  // A fixed right pane has no divider to drag.
+                  if (!widget.rightFixed || (hasLeft && index == 0))
+                    PaneResizeHandle(
+                      key: ValueKey(
+                        'super-resize-${hasLeft && index == 0 ? 'left' : 'right'}',
+                      ),
+                      arrangement: arrangement,
+                      divider: divider,
+                      extent: constraints.biggest,
+                      minimum: Size(
+                        math.min(
+                              leftMin == 0 ? rightMin : leftMin,
+                              rightMin == 0 ? leftMin : rightMin,
+                            ) /
+                            width,
+                        0,
+                      ),
+                      onLeave: widget.onLeave,
+                      onChanged: (next, persist) {
+                        ++_edit;
+                        setState(() {
+                          if (hasLeft && index == 0) {
+                            _left = limit(
+                              next.tiles.first.width * width,
+                              leftMin,
+                              width - centerMin - right,
+                            );
+                          } else {
+                            _right = limit(
+                              next.tiles.last.width * width,
+                              rightMin,
+                              width - centerMin - left,
+                            );
+                          }
+                        });
+                        if (persist) _save();
+                      },
                     ),
-                    arrangement: arrangement,
-                    divider: divider,
-                    extent: constraints.biggest,
-                    minimum: Size(
-                      math.min(
-                            leftMin == 0 ? rightMin : leftMin,
-                            rightMin == 0 ? leftMin : rightMin,
-                          ) /
-                          width,
-                      0,
-                    ),
-                    onLeave: widget.onLeave,
-                    onChanged: (next, persist) {
-                      ++_edit;
-                      setState(() {
-                        if (hasLeft && index == 0) {
-                          _left = limit(
-                            next.tiles.first.width * width,
-                            leftMin,
-                            width - centerMin - right,
-                          );
-                        } else {
-                          _right = limit(
-                            next.tiles.last.width * width,
-                            rightMin,
-                            width - centerMin - left,
-                          );
-                        }
-                      });
-                      if (persist) _save();
-                    },
-                  ),
                 ],
               ),
             ),

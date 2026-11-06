@@ -1,4 +1,3 @@
-import { realTeamRelayLaunch } from '../team/relay.js'
 import { createGridAssignments } from './agents/gridAssignments.js'
 import { createShortTurnGuard } from './turns/shortTurnGuard.js'
 import { createQuestionControls } from './engines/questionControls.js'
@@ -2446,7 +2445,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     capabilities: () => createBackend?.capabilities() ?? Promise.resolve({ sessionEnv: true }),
     installCodexHooks: (codexHome) => env.DISABLE_HOOK_INSTALL ? true : engineHookFacets.codex.installIn(hookPort, codexHome),
     dshLaunch: dshLaunch.relaunch,
-    ownerRelay: realTeamRelayLaunch,
   }
   // What a relaunch needs to bring a pane back (core/agents/launch.ts). Declared before the restore
   // pass below, which calls these for every pane it rebuilds.
@@ -2773,7 +2771,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     publishConfig: publishGridConfigDir,
     native: prepareNativeLaunch,
     dshLaunch,
-    ownerRelay: realTeamRelayLaunch,
     createBackend,
     recoverBackend,
     noBackendCode: createUnavailable,

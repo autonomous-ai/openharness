@@ -1,3 +1,5 @@
+import 'package:harness/super_tabs/zone_time.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -82,6 +84,7 @@ class TasksFixture {
 }
 
 void main() {
+  setUpAll(superTabLoadZones);
   late TasksFixture f;
   Future<void> mount(WidgetTester tester) async {
     f = TasksFixture();
@@ -375,6 +378,7 @@ void main() {
       );
       await t.pump();
       expect(find.byType(SuperTabPersonalTasksPane), findsOneWidget);
+      expect(t.getSize(find.byType(SuperTabPersonalTasksPane)).width, 340);
       expect(find.byKey(const ValueKey('super-board-chat')), findsNothing);
       expect(find.text('Task new'), findsOneWidget);
     },
