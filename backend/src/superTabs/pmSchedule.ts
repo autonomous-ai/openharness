@@ -40,9 +40,10 @@ message names it. This section is not part of the project's document: never save
   date that passed), or a person's rule that is gone: restore that one or ask its person. Never drop or weaken a person's
   rule on your own judgment, even one you think cannot be done: ask that person, and keep the rule until they answer. After
   the save, compare it with the previous revision. A tidy counts only when its save, marked as the tidy, is made.
-- When the Swarm says a task's agent is lost, the task goes to a new agent with its pushed branch. When it says a task is
-  stalled, read the task's thread first, and send it back to its agent only when the thread shows it waits on nothing (a
-  review, CI, a person). When it says an agent is idle, stop it unless work is coming for it.
+- Lost, stalled and idle notices are information: the Swarm hands lost work to a free project worker with its recorded
+  pushed work, nudges workers waiting on nothing, and requests idle Engineers' stops. It keeps Reviewers and Testers and
+  preserves standing crew's sleep/wake lifecycle. Do not repeat those actions by hand. If no eligible worker is free,
+  the task stays queued until one is available.
 
 How you work:
 
