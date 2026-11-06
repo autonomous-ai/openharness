@@ -4,6 +4,8 @@
 // words are one line when teammates' agents cannot run there.
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/agent_details.dart';
@@ -123,6 +125,68 @@ String? _problemText(WidgetTester tester, String id) =>
 
 void main() {
   setUpAll(() => loadCaptureFonts(Platform.environment['TEAM_RESTART_SHOTS']));
+  testWidgets('Manage menu preserves local Team setup and restart flows', (
+    tester,
+  ) async {
+    final daemon = _TeamDaemon();
+    final app = createApp(connectionForTest: (_) => daemon, connected: true)
+      ..teamAccountHereForTest = true;
+    app.machineStates['m']!.localOnly = true;
+    for (final restart in [false, true]) {
+      daemon.status = {'ok': true, 'state': restart ? 'exists' : 'none'};
+      final server = _swarm();
+      server.state['machines'] = [
+        _pool(
+          'm',
+          contributor: 'owner',
+          teamWork: _refused('TEAM_ACCOUNT_REQUIRED'),
+        ),
+        if (restart)
+          _pool('m-team', contributor: 'owner', host: 'm', age: _offlineAge),
+      ];
+      final c = server.controller();
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabMachines(
+              controller: c,
+              app: app,
+              manage: true,
+              ticks: false,
+              onAddAgent: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('super-machine-row-m')),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      final action = find.byKey(
+        const ValueKey('super-machine-menu-team-setup'),
+      );
+      expect(action, findsOneWidget);
+      expect(
+        find.descendant(
+          of: action,
+          matching: find.text(restart ? 'Restart' : 'Set up'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(action);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('team-account-setup-continue')),
+        findsOneWidget,
+      );
+      await _unmount(tester, c);
+    }
+    app.dispose();
+  });
+
   testWidgets(
     'a Mac and its Harness Team account are one row, with every agent of both under it',
     (tester) async {
