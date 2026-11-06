@@ -102,7 +102,7 @@ export function tasksHoldingMoves(state: SuperTabState, project: SwarmProject, b
  * several people needs each of them. A name that is no member is the project owner's to allow.
  */
 export function allowedDrops(state: SuperTabState, project: SwarmProject, before: string, after: string, sender: { kind: Author['kind']; id: string },
-  named: readonly string[], approvals: readonly ApprovalRow[], since: number, merges: Readonly<Record<string, number | null>> = {}, authority?: ProjectRules['instructionApprovals']): { told: Map<string, DroppedRule[]>; rules: DroppedRule[] } {
+  named: readonly string[], approvals: readonly ApprovalRow[], since: number, merges: Readonly<Record<string, number | null>> = {}, authority?: ProjectRules['instructionApprovals']): { told: Map<string, DroppedRule[]>; rules: DroppedRule[]; deciderId?: string } {
   const told = new Map<string, DroppedRule[]>()
   const membersOf = new Map<string, string[]>()
   const members = (name: string) => membersOf.get(name) ?? membersOf.set(name, membersNamed(state, name, authority)).get(name)!
@@ -113,9 +113,10 @@ export function allowedDrops(state: SuperTabState, project: SwarmProject, before
   // of #3112). A person's one Buddy chat belongs to no project.
   const here = (conversationId: string) => conversationId === project.leadConversationId || state.conversations.some(c => c.id === conversationId
     && !isSwarmBuddyChat(c) && (c.projectId ?? 'lead') === project.id)
+  const eligible = (id: string) => state.people.some(p => p.id === id && canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))
   const approvers = new Set(approvals.filter(a => named.includes(a.id) && a.author.kind === 'person' && !a.source && a.createdAt >= since
     && here(a.conversationId)).map(a => a.author.id)
-    .filter(id => state.people.some(p => p.id === id && canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))))
+    .filter(eligible))
   const decider = authority?.topDeciderId && approvers.has(authority.topDeciderId) ? authority.topDeciderId : undefined
   const refused: DroppedRule[] = []
   for (const rule of dropped) {
@@ -125,7 +126,9 @@ export function allowedDrops(state: SuperTabState, project: SwarmProject, before
       return ids.find(id => approvers.has(id))
     })
     if (by.some(id => !id)) { refused.push(rule); continue }
-    for (const id of new Set(by as string[])) if (id !== saver) told.set(id, [...told.get(id) ?? [], rule])
+    // With a decider override the rule's authors did not approve it themselves: tell their current, permitted accounts too.
+    const notify = decider ? [...by, ...rule.people.flatMap(members).filter(eligible)] : by
+    for (const id of new Set(notify as string[])) if (id !== saver) told.set(id, [...told.get(id) ?? [], rule])
   }
   if (refused.length) {
     const unknown = (rule: DroppedRule) => rule.people.filter(name => !members(name).length)
@@ -142,7 +145,7 @@ export function allowedDrops(state: SuperTabState, project: SwarmProject, before
     ].join('\n'), 409, { dropped: refused.map(rule => ({ rule: rule.text, people: rule.people, why: rule.why,
       ...rule.movedTo ? { movedTo: rule.movedTo } : {} })) })
   }
-  return { told, rules: dropped }
+  return { told, rules: dropped, ...decider ? { deciderId: decider } : {} }
 }
 
 /**
@@ -218,9 +221,9 @@ export function droppedLines(before: string, after: string, sorted: readonly Sor
   })
 }
 
-/** The one line a person is told when [who] changed their [rules] in [project]'s instructions with their approval. */
-export function approvedDropNotice(who: string, project: SwarmProject, rules: readonly DroppedRule[]): string {
+/** The one line a person is told when [who] changed [rules], naming the decider when someone else approved the change. */
+export function approvedDropNotice(who: string, project: SwarmProject, rules: readonly DroppedRule[], decider?: string): string {
   const each = rules.map(rule => `${rule.why === 'removed' ? 'removed' : 'changed'} "${cut(rule.text)}"`).join('; ')
-  return `${who} changed your ${rules.length === 1 ? 'rule' : `${rules.length} rules`} in the ${project.name} instructions, as you approved: ${each}.`
+  return `${who} changed ${decider ? 'the' : 'your'} ${rules.length === 1 ? 'rule' : `${rules.length} rules`} in the ${project.name} instructions, ${decider ? `approved by ${decider}` : 'as you approved'}: ${each}.`
     .replace(/\s*[\r\n]+\s*/g, ' ')
 }

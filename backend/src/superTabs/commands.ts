@@ -2094,17 +2094,17 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // No part grows past its size budget: core, each role section, people notes, the whole (#3392).
       refuseOverBudget(before, command.text)
       // A person's rule, or who gave it, needs their approval or the configured top decider's own message (#3151, #3710).
-      const { told, rules } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [],
+      const { told, rules, deciderId } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [],
         context.instructions?.at ?? 0, context.pullRequestMerges ?? {}, context.projectRules?.rules.instructionApprovals)
       // Every line it dropped, with its kind and who gave it, kept with the revision for the History (River, 11-05).
       saveInstructions(project, current, command.text, summary, askedBy, droppedLines(before, command.text, command.dropped ?? [], rules))
       // The coordinator's save that says it is the tidy is that tidy done (pmSchedule.ts tidyRequest); a correction it saves
       // meanwhile is not (review of #3112).
       if (actor.kind === 'agent' && command.tidy) tidySaved(projectOf(state, project.id), current + 1)
-      // Each approver is told in one line, privately, as person.tell does: in their one Buddy chat and their older one here.
+      // Approvers and authors affected by a decider's override hear privately, in their one Buddy chat and older one here.
       for (const [personId, rules] of told) {
         const to = person(state, personId)
-        const text = approvedDropNotice(who, project, rules)
+        const text = approvedDropNotice(who, project, rules, deciderId ? agentWrittenNameOf(state, deciderId) ?? 'the project top decider' : undefined)
         const id = stableId(operationId, 'rule-approved', personId)
         message(openSwarmBuddyChat(state, to).id, text, [], null, { kind: PM_LINE_KIND, projectId: project.id }, undefined, undefined, undefined, id)
         Object.assign(effects.messages.at(-1)!, { buddyProject: project.id })
