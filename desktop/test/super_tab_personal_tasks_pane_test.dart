@@ -12,6 +12,8 @@ import 'package:harness/state/harness_activity.dart';
 
 import 'swarm_state_test.dart' show createApp;
 
+import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/tasks/personal_task_card.dart';
 import 'package:harness/super_tabs/tasks/personal_tasks_pane.dart';
 
 import 'super_tab_parts_test.dart' show recorded;
@@ -94,6 +96,9 @@ class TasksFixture {
     },
   );
 }
+
+Finder inCard(String id, Finder f) =>
+    find.descendant(of: find.byKey(ValueKey('personal-task-$id')), matching: f);
 
 void main() {
   setUpAll(superTabLoadZones);
@@ -203,14 +208,17 @@ void main() {
       f.mode = mode;
       await f.controller.refresh();
       await t.pump();
-      await t.tap(find.text('Task new'));
-      await t.pump();
-      expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
-      expect(find.widgetWithText(TextButton, 'Reject'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'Approve'), findsOneWidget);
-      expect(find.text('Waiting for you'), findsNWidgets(2));
+      expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+      expect(
+        inCard('new', find.widgetWithText(TextButton, 'Reject')),
+        findsOneWidget,
+      );
+      expect(
+        inCard('new', find.widgetWithText(FilledButton, 'Approve')),
+        findsOneWidget,
+      );
       expect(find.text('Suggested'), findsNothing);
-      await t.tap(find.text('Approve'));
+      await t.tap(inCard('new', find.text('Approve')));
       await t.pumpAndSettle();
       expect(f.commands.single, {
         'type': 'task.approve',
@@ -220,12 +228,10 @@ void main() {
   }
   testWidgets('approve sends once while waiting and keeps the task', (t) async {
     await mount(t);
-    await t.tap(find.text('Task new'));
-    await t.pump();
     f.hold = Completer<void>();
-    await t.tap(find.text('Approve'));
+    await t.tap(inCard('new', find.text('Approve')));
     await t.pump();
-    await t.tap(find.text('Approve'));
+    await t.tap(inCard('new', find.text('Approve')));
     await t.pump();
     expect(f.commands.length, 1);
     f.hold!.complete();
@@ -238,9 +244,7 @@ void main() {
   });
   testWidgets('rejection needs a reason and remains in the list', (t) async {
     await mount(t);
-    await t.tap(find.text('Task new'));
-    await t.pump();
-    await t.tap(find.text('Reject'));
+    await t.tap(inCard('new', find.text('Reject')));
     await t.pumpAndSettle();
     expect(f.commands, isEmpty);
     await t.enterText(
@@ -261,10 +265,8 @@ void main() {
     t,
   ) async {
     await mount(t);
-    await t.tap(find.text('Task new'));
-    await t.pump();
     f.fail = true;
-    await t.tap(find.text('Approve'));
+    await t.tap(inCard('new', find.text('Approve')));
     await t.pumpAndSettle();
     expect(find.textContaining('fixture private'), findsNothing);
     expect(find.text('Retry'), findsOneWidget);
@@ -292,48 +294,12 @@ void main() {
     expect(find.text('Update Harness to use Tasks.'), findsOneWidget);
     expect(find.byKey(const ValueKey('tasks-approval-mode')), findsNothing);
   });
-  testWidgets(
-    'a suggestion changed on another device replaces the displayed choice',
-    (t) async {
-      await mount(t);
-      await t.tap(find.text('Task new'));
-      await t.pump();
-      final field = find.byType(DropdownButtonFormField<String>);
-      expect(t.state<FormFieldState<String>>(field).value, '0540');
-      f.rows.last['version'] = 2;
-      f.rows.last['agent'] = {'id': '0fcb', 'name': 'River'};
-      await f.controller.refresh();
-      await t.pump();
-      expect(t.state<FormFieldState<String>>(field).value, '0fcb');
-    },
-  );
-
-  testWidgets(
-    'a person can change the suggestion without approving or starting work',
-    (t) async {
-      await mount(t);
-      await t.tap(find.text('Task new'));
-      await t.pump();
-      await t.tap(find.byType(DropdownButtonFormField<String>));
-      await t.pumpAndSettle();
-      await t.tap(find.text('River').last);
-      await t.pumpAndSettle();
-      expect(f.commands.single, {
-        'type': 'task.suggest',
-        'conversationId': 'new',
-        'agentId': '0fcb',
-      });
-      expect(f.rows.last['status'], 'proposal');
-    },
-  );
 
   testWidgets(
     'an open rejection cannot be submitted under a replacement account',
     (t) async {
       await mount(t);
-      await t.tap(find.text('Task new'));
-      await t.pump();
-      await t.tap(find.text('Reject'));
+      await t.tap(inCard('new', find.text('Reject')));
       await t.pumpAndSettle();
       await t.enterText(
         find.byKey(const ValueKey('task-reject-reason')),
@@ -460,6 +426,114 @@ void main() {
       await toEnd(t);
       expect(find.text('Task older'), findsOneWidget);
       expect(f.olderReads.length, 2);
+    });
+  });
+
+  group('card', () {
+    testWidgets(
+      'shows the tag, a three-line title, the mark top right and two avatars without names',
+      (t) async {
+        f = TasksFixture()
+          ..rows = [
+            task('new', 1, 20)
+              ..['status'] = 'working'
+              ..['canApprove'] = false
+              ..['title'] = 'A long task title ' * 12
+              ..['requester'] = {'id': '6a86', 'name': 'Requester name'},
+          ];
+        addTearDown(() => f.controller.dispose());
+        await f.controller.refresh();
+        await t.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 340,
+                child: SuperTabPersonalTasksPane(
+                  controller: f.controller,
+                  onOpenTask: (_) {},
+                ),
+              ),
+            ),
+          ),
+        );
+        final card = find.byKey(const ValueKey('personal-task-new'));
+        final tag = inCard(
+          'new',
+          find.byKey(const ValueKey('personal-task-tag')),
+        );
+        final title = inCard('new', find.textContaining('A long task title'));
+        final mark = inCard(
+          'new',
+          find.byWidgetPredicate((w) => w is ActivityMark),
+        );
+        expect(t.widget<Text>(title).maxLines, 3);
+        expect(
+          t
+              .widget<DecoratedBox>(
+                find
+                    .descendant(of: tag, matching: find.byType(DecoratedBox))
+                    .first,
+              )
+              .decoration,
+          isA<BoxDecoration>().having(
+            (d) => d.color,
+            'color',
+            superTabProjectColor('lead5701'),
+          ),
+        );
+        // The mark sits top right: above the title, at the card's right side.
+        expect(t.getRect(mark).bottom, lessThanOrEqualTo(t.getRect(title).top));
+        expect(t.getRect(mark).left, greaterThan(t.getRect(card).center.dx));
+        // Two avatars bottom left, who asked first; no names, priority or checks.
+        final avatars = inCard('new', find.byType(SuperTabAvatar));
+        expect(avatars, findsNWidgets(2));
+        final asked = t.getRect(avatars.at(0)),
+            agent = t.getRect(avatars.at(1));
+        expect(t.widget<SuperTabAvatar>(avatars.at(0)).identity, 'person:6a86');
+        expect(asked.left, lessThan(agent.left));
+        expect(agent.right, lessThan(t.getRect(card).center.dx));
+        expect(asked.top, greaterThan(t.getRect(title).bottom));
+        expect(find.text('Requester name'), findsNothing);
+        expect(find.text('Old name'), findsNothing);
+        expect(find.textContaining('P0'), findsNothing);
+        expect(find.textContaining('/'), findsNothing);
+      },
+    );
+
+    testWidgets('a waiting card opens its task too', (t) async {
+      final opened = <String>[];
+      await mount(t);
+      await t.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 340,
+              child: SuperTabPersonalTasksPane(
+                controller: f.controller,
+                onOpenTask: opened.add,
+              ),
+            ),
+          ),
+        ),
+      );
+      await t.tap(find.text('Task new'));
+      await t.pump();
+      expect(opened, ['new']);
+      expect(f.commands, isEmpty);
+    });
+
+    test('a project keeps its colour', () {
+      expect(
+        superTabProjectColor('lead5701'),
+        superTabProjectColor('lead5701'),
+      );
+      expect(
+        {
+          for (final id in ['a', 'b', 'c', 'd', 'e', 'f', 'g'])
+            superTabProjectColor(id),
+        }.length,
+        greaterThan(1),
+      );
     });
   });
 }
