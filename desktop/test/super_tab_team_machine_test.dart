@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/agent_details.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/machines.dart';
+import 'package:harness/ws/local_cli_discovery.dart';
 
 import 'support/capture.dart';
 import 'support/rename_connection.dart';
@@ -132,6 +133,12 @@ void main() {
     final app = createApp(connectionForTest: (_) => daemon, connected: true)
       ..teamAccountHereForTest = true;
     app.machineStates['m']!.localOnly = true;
+    app.machineStates['m']!.localEndpoint = LocalCliEndpoint(
+      computerId: 'test-computer',
+      wsUri: Uri.parse('ws://127.0.0.1:18473'),
+      protocolVersion: 1,
+      terminalProtocolVersion: 1,
+    );
     for (final restart in [false, true]) {
       daemon.status = {'ok': true, 'state': restart ? 'exists' : 'none'};
       final server = _swarm();
@@ -166,6 +173,17 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      final metadata = tester.widget<Text>(
+        find.byKey(const ValueKey('machines-metadata-m')),
+      );
+      expect(
+        metadata.textSpan!.toPlainText(),
+        contains('This machine · m · port 18473'),
+      );
+      final identity = (metadata.textSpan! as TextSpan).children!
+          .whereType<TextSpan>()
+          .first;
+      expect(identity.style!.fontFamily, grid.AppType.monoFamily);
       await tester.tap(
         find.byKey(const ValueKey('super-machine-m')),
         buttons: kSecondaryMouseButton,
