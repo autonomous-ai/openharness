@@ -45,6 +45,23 @@ async function fixture() {
 }
 
 describe('durable proposal cards', () => {
+  it('delivers a decided notice inside the sending person’s private Buddy chat', async () => {
+    const f = await fixture()
+    const added = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } })
+    const startId = String(added.result.startId)
+    const host = (command: unknown) => f.store.execute(owner, f.tab, { operationId: randomUUID(), command: commandSchema.parse(command) }, undefined, 'proposal-mac')
+    await host({ type: 'agent.startDispatch', startId })
+    const buddyId = String((await host({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })).result.agentId)
+    await host({ type: 'agent.startSettled', startId, warning: null })
+    const id = await f.create(owner)
+    await f.execute({ type: 'proposal.decide', conversationId: id, decision: 'no', reason: 'Outside positioning' }, owner, f.pm)
+    const delivered = await f.store.deliveries(owner, f.tab, buddyId)
+    const notices = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: String(added.result.conversationId) } })
+    const decision = notices.find(m => (m.source as any)?.moment === 'decided')!
+    expect(decision).toBeDefined()
+    expect(delivered.some(d => d.messageId === decision.id)).toBe(true)
+  })
+
   it('delivers urgent proposals first on both a full poll and its fast repeat', async () => {
     const f = await fixture(), low = await f.create(), urgent = await f.create(owner, 'P0')
     for (let i = 0; i < 2; i++) {
