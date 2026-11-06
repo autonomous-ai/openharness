@@ -68,8 +68,8 @@ export function assignedNotice(state: SuperTabState, group: Conversation, author
     text: `News for your owner: #${group.number} "${group.title}", which they requested, is assigned and ${group.assignment.status}.` }
 }
 
-/** Work [group]'s requester asked for just shipped: the news the Shipped line brought their Buddy, now that the task's line
- *  says it (taskLine.ts), as one line for their Buddy alone inside the task, like the assignment's. */
+/** Work [group]'s requester asked for just shipped: a verified release holds it (releases.ts settleReleases), as one line for
+ *  their Buddy alone inside the task, like the assignment's. */
 export function shippedNotice(state: SuperTabState, group: Conversation, author: Author, operationId: string): MessageDraft | null {
   if (group.proposal) return null
   const buddy = group.requesterId ? listeningBuddy(state, group.requesterId, group) : undefined
