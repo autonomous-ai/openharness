@@ -3,7 +3,7 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { appendCodePullRequestUrls, createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 import { LEAD_CAPABILITY } from './leadStart.js'
-import { applyPushOrigin, codeFromPosts, markTeamWritten, stepMark, TEAM_WRITTEN_STOP, TEAM_WRITTEN_WORK, teamWrittenTask } from './teamWritten.js'
+import { applyPushOrigin, markTeamWritten, postedCode, stepMark, TEAM_WRITTEN_STOP, TEAM_WRITTEN_WORK, teamWrittenTask } from './teamWritten.js'
 
 // Audit H2: a branch a Team agent wrote runs only in a Team account, whoever's project it is, so nothing the branch
 // carries runs with the main account's rights (docs/plans/2026-11-02-team-written-branch-plan.md).
@@ -582,19 +582,27 @@ describe('a release task the Swarm opened', () => {
     expect(effects.messages.find(m => m.text === TEAM_WRITTEN_STOP)?.recipients).toEqual([tester])
   })
 
-  // Round 2, Important 2: a pull request cited in a post on a release task (the Integrator applying a merged task's rollout note, a
-  // person linking one) is not the code it builds, so it does not end the exemption and close its steps to the main account.
-  it('keeps a release task out of the gate when a post cites a pull request: its posts name no code', () => {
-    const f = releaseTask(), task = f.state.conversations.find(c => c.id === f.task)!
+  // Round 2, Important 2, and security review 1's round 3: a pull request on the project's release list, cited in a post on a release task
+  // (the Integrator applying a merged task's rollout note), is not the code it builds; one a builder posts, off that list, is.
+  it('counts a post\'s pull request as a release task\'s code unless it is on the project\'s release list', () => {
+    const f = releaseTask(), task = f.state.conversations.find(c => c.id === f.task)!, repo = 'https://github.com/acme/app'
+    const merged = 'https://github.com/acme/app/pull/77', mine = 'https://github.com/acme/app/pull/88'
     f.run({ type: 'work.assign', conversationId: f.task, agentId: f.member('team-integrator', 'mac-team') })
-    const cited = 'Applied the rollout note of https://github.com/acme/app/pull/77 first.'
-    // What the store does with a post in a task (store.ts): the links of a post by a person, the PM or the assignee are its code.
-    appendCodePullRequestUrls(task, [task.brief, task.title, ...codeFromPosts(task) ? [cited] : []], 'https://github.com/acme/app')
+    const onList = [merged]
+    // What the store does with a post in a task: the links of a post by a person, the PM or the assignee, off the release list.
+    const codeOf = (posts: string[]) => appendCodePullRequestUrls(task, [task.brief, task.title, ...postedCode(task, posts, onList, repo)], repo)
+    codeOf([`Applied the rollout note of ${merged} first.`])
+    expect(task.codePullRequestUrls).toEqual([])
     expect(refusal(() => f.run({ type: 'work.assign', conversationId: f.step, agentId: f.member('main-tester', 'mac') }))).toBeNull()
-    // An ordinary task does count them.
-    const plain = f.group()
-    const ordinary = f.state.conversations.find(c => c.id === plain)!
-    expect(codeFromPosts(ordinary)).toBe(true)
+    // A builder's own pull request, posted and never put in a result, is the release task's code, and ends the exemption.
+    codeOf([`Draft PR ${mine}, and the rollout note of ${merged}.`])
+    expect(task.codePullRequestUrls).toEqual([mine])
+    expect(teamWrittenTask(f.state, f.state.conversations.find(c => c.id === f.step)!)).toBe(false)
+    applyPushOrigin(f.state, task, 'team', [mine])
+    expect(teamWrittenTask(f.state, f.state.conversations.find(c => c.id === f.step)!)).toBe(true)
+    // An ordinary task counts every post.
+    const ordinary = f.state.conversations.find(c => c.id === f.group())!
+    expect(postedCode(ordinary, [`See ${merged}`], onList, repo)).toEqual([`See ${merged}`])
   })
 
   it('does not change an ordinary task: the same step with the same read is still refused to the main account', () => {
