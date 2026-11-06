@@ -9,6 +9,7 @@ import type { MachineRule } from './policy.js'
 import { activeWork, actorKey, stableId, type Agent, type AgentStart, type AgentStartRequest, type CrewTrouble, type MessageDraft, type SuperTabState } from './model.js'
 import { isBuddy } from './buddies.js'
 import { isCrew } from './crew.js'
+import { roleNameOf } from './instructions.js'
 import { AGENT_MEMORY_BYTES, projectFolder, type ContributedMachine } from './machines.js'
 import { agentProjectId, groupProject, onTeamAccount, projectsOf, teamAccountPool } from './projects.js'
 import { barredFromTeamWritten, teamWrittenTask } from './teamWritten.js'
@@ -94,8 +95,9 @@ export function fallbacks(state: SuperTabState, agent: Agent, now: number, deps:
   const from = standingPool(state, agent.machineId)
   const team = teamOnly(state, agent), kind = onTeamAccount(state, agent)
   const engine = agent.configuration.engine
-  // A crew Reviewer goes nowhere a no-Reviewer rule refuses its reviews (review of #3964).
-  const reviews = /^review/i.test(agent.crew?.role ?? '')
+  // A crew Reviewer goes nowhere a no-Reviewer rule refuses its reviews (review of #3964): any role the review steps take as a
+  // Reviewer's (reviewerPick.ts), its crew role or else its role name.
+  const reviews = /review/i.test(agent.crew?.role ?? roleNameOf(state, agent))
   const projectId = agentProjectId(state, agent)
   const rules = projectId ? deps.machineRules?.(projectId) ?? [] : []
   const weekly = (pool: ContributedMachine) => quotaOf(state, pool, engine, now)?.windows.find(w => w.name === 'weekly')
