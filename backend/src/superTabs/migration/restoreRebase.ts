@@ -124,8 +124,13 @@ async function restoreSwarm(tx: Transaction, { tabId, askedBy }: RebaseSwarm, no
     const { text, lines } = restoredDocument(before.text, stored.text, before.revision, lostByMove)
     if (!lines.length) { report.unchanged++; continue }
     if (Buffer.byteLength(text) > MAX_INSTRUCTIONS_BYTES) { report.held.push({ tabId, projectId: project.id, why: `with its ${lines.length} lines back it would pass 64 KB` }); continue }
-    // The job's own check, never the builder's word: every line of the old document is in the new one, and nothing the project has went.
-    if (removedLines(before.text, text).length || removedLines(stored.text, text).length) { report.held.push({ tabId, projectId: project.id, why: 'the restored document would still miss a line' }); continue }
+    // The job's own check, never the builder's word.
+    // Against what the project already lacked, not the whole old document: a later save of its own may have dropped lines the move kept
+    // (the daily tidy trims), and those stay dropped. Nothing the project has goes, and what is still missing of the old document is what
+    // it lacked before less the lines put back.
+    if (removedLines(stored.text, text).length || removedLines(before.text, text).length !== removedLines(before.text, stored.text).length - lines.length) {
+      report.held.push({ tabId, projectId: project.id, why: 'the restored document would not hold what it should' }); continue
+    }
     writes.push({ projectId: project.id, revision: current, text, lines })
   }
   if (!writes.length && !noted.length) return
