@@ -75,7 +75,9 @@ class _RestartBuddyDialogState extends State<_RestartBuddyDialog> {
   late final _flags = TextEditingController(
     text: launchArgsLine(_machineAgent?.launchArgs ?? const []),
   );
-  late final String _saved = _flags.text;
+  late final String _saved = launchArgsLine(
+    _machineAgent?.launchArgs ?? const [],
+  );
   bool _busy = false;
   String? _error;
 
@@ -103,6 +105,13 @@ class _RestartBuddyDialogState extends State<_RestartBuddyDialog> {
     final result = await app.restartAgent(
       buddy.machineId,
       buddy.harnessId,
+      // Every press is a new intent: an earlier attempt that never confirmed
+      // must not turn this one into a status check without the flags.
+      attempt: app.restartAttempt(
+        buddy.machineId,
+        buddy.harnessId,
+        fresh: true,
+      ),
       launchArgs: text.isEmpty && _saved.isEmpty ? null : text,
     );
     if (!mounted) return;
@@ -117,7 +126,7 @@ class _RestartBuddyDialogState extends State<_RestartBuddyDialog> {
           ? 'Update Harness on $machine to use launch flags.'
           : result.launchArgsRefused
           ? result.error
-          : _machineAgent == null
+          : !result.engineNotStarted
           ? result.error
           : "The Buddy didn't start with these flags. Fix or clear them and "
                 'restart.';
