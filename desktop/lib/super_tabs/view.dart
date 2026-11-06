@@ -3563,7 +3563,9 @@ class _SuperTabViewState extends State<SuperTabView>
         ),
       ])
         Padding(
-          padding: const EdgeInsets.only(right: 4),
+          padding: const EdgeInsetsDirectional.only(
+            end: grid.AppDesktop.listRowGap,
+          ),
           child: TextButton(
             key: ValueKey(key),
             onPressed: selected ? null : open,
@@ -5993,7 +5995,10 @@ class _SuperTabViewState extends State<SuperTabView>
                                 .firstOrNull
                             case final project?)
                           Padding(
-                            padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+                            padding: const EdgeInsetsDirectional.only(
+                              start: grid.AppDesktop.controlGap,
+                              top: grid.AppDesktop.listRowGap,
+                            ),
                             child: Align(
                               alignment: Alignment.centerLeft,
                               child: _projectTabs(project, board: false),
