@@ -63,7 +63,20 @@
 **Files:** Modify `chatLimits.ts`, `chatLimits.test.ts`, `answers.test.ts`, `commands.ts`.
 **Interfaces:** Store first answer on each ask; explicit `answers` or `answer` and direct person replies are answers. Existing PM owed settlement remains independent.
 
-- [ ] Commit failing tests: plain second answer, Engineer then PM, main then thread and thread then main, distinct person followups, and reply-to-agent continuation. Update the two old expectations superseded by this task.
-- [ ] Run focused tests; confirm duplicate-answer refusals are missing.
-- [ ] Implement common guard and record first answer only; preserve task/Buddy legacy behavior.
-- [ ] Run affected command/answer/read tests, typecheck, diff check and hot-path comparison; post red/green evidence, mark ready for CI and request one independent review.
+- [x] Commit failing tests: plain second answer, Engineer then PM, main then thread and thread then main, distinct person followups, and reply-to-agent continuation. Update the two old expectations superseded by this task.
+- [x] Run focused tests; confirm duplicate-answer refusals are missing.
+- [x] Implement common guard and record first answer only; preserve task/Buddy legacy behavior.
+- [x] Run affected command/answer/read tests, typecheck, diff check and hot-path comparison; post red/green evidence, mark ready for CI and request one independent review.
+
+
+## Evidence
+
+- Content guard: `3ac59da35` produced 9 failures / 1 pass; `07f9488c8` passed content + acknowledgement checks (48 tests).
+- Main budget: `2cc8137d5` produced 5 failures / 11 passes. Its transactional test let both competing posts through (expected only one). `fd3520c32` passed the focused integration file (3 tests), including replay and concurrent writes.
+- Duplicate answers: `bfbf589f4` produced 6 failures / 25 passes; `bd4cf457a` fixed them. The old two-post thread test now follows up under the agent response, since a second direct person reply is an answer.
+- Card-number bypass: `e3e37988f` failed on a repeated `PR #12` without its URL; `e274001c7` passed it. File/tag status bypasses are also covered.
+- Current-main merge: `d299e264e`; final affected run passed 575 tests across 9 files; backend typecheck passed. Focused store integration passed 3 tests. Ready PR CI supplies full backend unit/integration evidence.
+- Posting benchmark vs main `bb34f2907`: 2,000 tasks and 50 active asks, 20 warmup pairs + 200 interleaved measured pairs. Median 4.659 -> 4.635 ms; p95 5.442 -> 5.257 ms. Initial 40-pair pilot had median 4.321 -> 4.282 ms and noisy p95 4.900 -> 5.159 ms; increased sample addresses that uncertainty. These measure applyCommand only, not delivery/database latency. No query/index changed.
+- Empty-answer ledger with 50 asks is 2,746 JSON bytes. Each entry adds at most two 24-character post IDs and one first-answer record. The ledger stays bounded well below the conversation part's 4 MiB cap and disappears with the conversation. Production count/size/growth measurements could not be collected: the required read-only environment file is absent on this Team machine. No production access or write attempted; bounded local payload measurement replaces that evidence for this optional JSON field.
+- Rollout: existing chats initialize with the next person ask; existing recorded PM answers still apply. The ledger retains 50 asks. After eviction older main budgets and formal answers close conservatively, including equal-timestamp unknown asks; reply to an existing agent response to continue its thread. No transcript is removed. Revert the backend change to roll back; no schema migration.
+- Independent review and ready PR CI are the remaining delivery gates, owned by their steps/CI after submission.
