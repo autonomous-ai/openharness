@@ -225,9 +225,7 @@ void main() {
     });
   });
 
-  testWidgets('the title and Show more open the thread beside its chat', (
-    tester,
-  ) async {
+  testWidgets('the title opens the thread beside its chat', (tester) async {
     final server = swarm();
     final id = _thread(
       server,
@@ -243,11 +241,154 @@ void main() {
       final opened = await _show(tester, await _loaded(tester, server));
       await tester.tap(_key('super-thread-card-title:lead/$id'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Show 1 more reply'));
-      await tester.pumpAndSettle();
-      expect(opened, [('lead', id), ('lead', id)]);
+      expect(opened, [('lead', id)]);
       // A read thread has no New line.
       expect(_key('super-thread-card-new:lead/$id'), findsNothing);
+    });
+  });
+
+  // Task #3619 (Tony, 11-06): Show N more replies expands the card where it
+  // is. It used to open the chat with a Thread pane beside it.
+  Finder inCard(String id, Finder f) =>
+      find.descendant(of: _key('super-thread-card:lead/$id'), matching: f);
+
+  testWidgets('Show N more replies expands the card with every reply, loading '
+      'the older ones, and opens no pane', (tester) async {
+    final server = swarm()..messagePage = 3;
+    final id = _thread(
+      server,
+      'Long thread',
+      replies: [for (var i = 1; i <= 8; i++) ('Kestrel', 'Reply $i')],
+    );
+    server.followedThreads = {
+      'unread': [],
+      'read': [_followed(server, id)],
+      'more': false,
+    };
+    final reads = <String>[];
+    server.onRead = reads.add;
+    await withClock(Clock.fixed(_now), () async {
+      final opened = await _show(tester, await _loaded(tester, server));
+      expect(inCard(id, find.text('Show 6 more replies')), findsOneWidget);
+      expect(inCard(id, find.text('Reply 1')), findsNothing);
+      await tester.tap(find.text('Show 6 more replies'));
+      await _settle(tester);
+      for (var i = 1; i <= 8; i++) {
+        expect(inCard(id, find.text('Reply $i')), findsOneWidget);
+      }
+      // In order, root first, and the button is gone.
+      expect(
+        _top(tester, inCard(id, find.text('Reply 1'))),
+        lessThan(_top(tester, inCard(id, find.text('Reply 8')))),
+      );
+      expect(inCard(id, find.textContaining('more repl')), findsNothing);
+      expect(opened, isEmpty);
+      expect(reads.where((p) => p.contains('before=')), isNotEmpty);
+    });
+  });
+
+  testWidgets('a card that holds every reply already expands with no further '
+      'read', (tester) async {
+    final server = swarm();
+    final id = _thread(
+      server,
+      'Short thread',
+      replies: [for (var i = 1; i <= 4; i++) ('Kestrel', 'Reply $i')],
+    );
+    server.followedThreads = {
+      'unread': [],
+      'read': [_followed(server, id)],
+      'more': false,
+    };
+    final reads = <String>[];
+    server.onRead = reads.add;
+    await withClock(Clock.fixed(_now), () async {
+      final opened = await _show(tester, await _loaded(tester, server));
+      reads.clear();
+      await tester.tap(find.text('Show 2 more replies'));
+      await _settle(tester);
+      for (var i = 1; i <= 4; i++) {
+        expect(inCard(id, find.text('Reply $i')), findsOneWidget);
+      }
+      expect(opened, isEmpty);
+      expect(reads.where((p) => p.contains('thread=$id')), isEmpty);
+    });
+  });
+
+  testWidgets('a failed older read keeps the button and says so; the next tap '
+      'loads them', (tester) async {
+    final server = swarm()..messagePage = 3;
+    final id = _thread(
+      server,
+      'Flaky long thread',
+      replies: [for (var i = 1; i <= 8; i++) ('Kestrel', 'Reply $i')],
+    );
+    server.followedThreads = {
+      'unread': [],
+      'read': [_followed(server, id)],
+      'more': false,
+    };
+    var fail = true;
+    server.onRead = (path) {
+      if (fail && path.contains('before=')) throw StateError('Offline');
+    };
+    await withClock(Clock.fixed(_now), () async {
+      final opened = await _show(tester, await _loaded(tester, server));
+      await tester.tap(find.text('Show 6 more replies'));
+      await _settle(tester);
+      expect(
+        inCard(id, find.text('Could not load earlier replies.')),
+        findsOneWidget,
+      );
+      expect(inCard(id, find.text('Show 6 more replies')), findsOneWidget);
+      expect(inCard(id, find.text('Reply 1')), findsNothing);
+      fail = false;
+      await tester.tap(find.text('Show 6 more replies'));
+      await _settle(tester);
+      expect(inCard(id, find.text('Reply 1')), findsOneWidget);
+      expect(
+        inCard(id, find.text('Could not load earlier replies.')),
+        findsNothing,
+      );
+      expect(opened, isEmpty);
+    });
+  });
+
+  testWidgets('a card that gets a new reply after expanding keeps its older '
+      'replies', (tester) async {
+    final server = swarm()..messagePage = 3;
+    final id = _thread(
+      server,
+      'Growing thread',
+      replies: [for (var i = 1; i <= 8; i++) ('Kestrel', 'Reply $i')],
+    );
+    server.followedThreads = {
+      'unread': [],
+      'read': [_followed(server, id)],
+      'more': false,
+    };
+    await withClock(Clock.fixed(_now), () async {
+      final activity = await _loaded(tester, server);
+      final opened = await _show(tester, activity);
+      await tester.tap(find.text('Show 6 more replies'));
+      await _settle(tester);
+      expect(inCard(id, find.text('Reply 1')), findsOneWidget);
+      // Reply 9 arrives, and the followed list says so.
+      server.append('Reply 9');
+      server.messages.last
+        ..['thread'] = id
+        ..['author'] = _author('Kestrel');
+      server.followedThreads = {
+        'unread': [],
+        'read': [_followed(server, id)],
+        'more': false,
+      };
+      await tester.runAsync(activity.attention.load);
+      await _settle(tester);
+      expect(inCard(id, find.text('Reply 9')), findsOneWidget);
+      expect(inCard(id, find.text('Reply 1')), findsOneWidget);
+      expect(inCard(id, find.textContaining('more repl')), findsNothing);
+      expect(opened, isEmpty);
     });
   });
 
