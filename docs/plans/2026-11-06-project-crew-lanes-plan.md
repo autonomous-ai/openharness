@@ -43,10 +43,10 @@
 **Files:** policy.ts, policyStore.ts, policy.test.ts; focused project-rules integration.
 **Interfaces:** ProjectRules.dispatch {everyMs, maxHanded, nudgeAfterMs, returnAfterMs}; existing lanes list. Bounds: everyMs 30000–3600000, maxHanded 1–1000, nudgeAfterMs 60000–604800000, returnAfterMs at most 1209600000 and greater than nudgeAfterMs. Missing dispatch uses seed values.
 
-- [ ] Commit tests for exact seed behavior, custom firmware/no-mobile lists, duplicate/invalid names and invalid clock/cap ranges; old missing dispatch with empty lanes versus new explicit empty list.
-- [ ] Run affected policy tests and see missing seed/numbers failures.
-- [ ] Add schema/defaults and normalized indexed policy reads; keep history readable and size bounds intact.
-- [ ] Run policy tests and focused rules persistence/index integration, commit and push.
+- [x] Commit tests for exact seed behavior, custom firmware/no-mobile lists, duplicate/invalid names and invalid clock/cap ranges; old missing dispatch with empty lanes versus new explicit empty list.
+- [x] Run affected policy tests and see missing seed/numbers failures.
+- [x] Add schema/defaults and normalized indexed policy reads; keep history readable and size bounds intact.
+- [x] Run policy tests and focused rules persistence/index integration, commit and push.
 
 ### Task 2: Validate and dispatch using each project's lanes
 
@@ -67,3 +67,7 @@
 - [ ] Run focused tests and confirm fixed-number behavior fails.
 - [ ] Load project policy once per pass, thread the lookup through clock decisions, and use bounded expiry memory for periodic dispatch; no extra timer.
 - [ ] Run affected unit/integration/typecheck and query-plan checks. Record limits, red/green and timings; mark ready for CI and independent review.
+
+## Evidence
+
+- Task 1 red: `6f5666e84` fails 2 policy tests (25 pass) and the focused stored-legacy integration. Green: all 27 policy tests and all 6 project-rules integrations pass, including the existing indexed history query and explicit empty list. Backend typecheck clean. No new query/index or backfill.

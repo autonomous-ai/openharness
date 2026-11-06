@@ -25,25 +25,23 @@ export interface RulesRevision {
 /** The project's newest revision, or null when none is saved (the seed, revision 0). One indexed read. */
 export async function readRules(tx: Transaction, tabId: string, projectId: string): Promise<{ revision: number; rules: ProjectRules } | null> {
   const row = await tx.superTabProjectRules.findFirst({ where: { tabId, projectId }, orderBy: { revision: 'desc' }, select: { revision: true, rules: true } })
-  return row && { revision: row.revision, rules: row.rules as unknown as ProjectRules }
+  if (!row) return null
+  // Normalize legacy dispatch and fail closed for invalid saved rules on every command/worker read.
+  const parsed = projectRulesSchema.safeParse(row.rules)
+  if (!parsed.success) throw new Error(`project rules revision ${row.revision} does not pass the schema; save the rules again`)
+  return { revision: row.revision, rules: parsed.data }
 }
 
 /** The record a project runs on now, for a server worker (the merge train, the release schedule): its newest revision, or
  *  the seed at revision 0. Takes the client or a transaction. */
 export async function currentRules(tx: Transaction, tabId: string, projectId: string): Promise<{ revision: number; rules: ProjectRules }> {
-  const saved = await readRules(tx, tabId, projectId)
-  if (!saved) return { revision: 0, rules: SEED_RULES }
-  // Checked again on the way out (SecAlder, review of #3250): a stored row the schema refuses (one with no read count, a
-  // pattern from a looser past schema) would read as fewer reads. It throws, and the caller holds: never a partial record.
-  const parsed = projectRulesSchema.safeParse(saved.rules)
-  if (!parsed.success) throw new Error(`project rules revision ${saved.revision} does not pass the schema; save the rules again`)
-  return { revision: saved.revision, rules: parsed.data }
+  return await readRules(tx, tabId, projectId) ?? { revision: 0, rules: SEED_RULES }
 }
 
 /** Every kept revision, newest first: at most MAX_RULES_REVISIONS rows of the same index. */
 export async function readRulesHistory(tx: Transaction, tabId: string, projectId: string): Promise<RulesRevision[]> {
   const rows = await tx.superTabProjectRules.findMany({ where: { tabId, projectId }, orderBy: { revision: 'desc' }, take: MAX_RULES_REVISIONS })
-  return rows.map(row => ({ revision: row.revision, rules: row.rules as unknown as ProjectRules, diff: row.diff as unknown as RulesChange[],
+  return rows.map(row => ({ revision: row.revision, rules: projectRulesSchema.parse(row.rules), diff: row.diff as unknown as RulesChange[],
     summary: row.summary, writtenBy: { kind: row.writtenByKind, id: row.writtenBy }, askedBy: row.askedBy,
     askedIn: (row.askedIn ?? null) as RulesRevision['askedIn'], at: row.at }))
 }
