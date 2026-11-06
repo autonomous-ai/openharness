@@ -17,6 +17,7 @@ import { START_REQUIREMENTS } from './capacity.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
 import { ContributionPreparations, ownerRequest, prepareContribution, setMachineAgents } from './contribution.js'
 import { ClaudeSignIns } from './claudeSignIn.js'
+import { answerFirstRun } from '../engines/launchPrep.js'
 import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
@@ -537,6 +538,12 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             wake().engineSignedIn()
           }
           return answer
+        }
+        // The phone's answers to Claude Code's first-run questions here, asked as it set this computer up for its Buddy
+        // (engines/launchPrep.ts answerFirstRun): its owner's, as the setup is.
+        if (payload.action === 'claudeFirstRun') {
+          if (payload.acceptFullMode !== true || typeof payload.theme !== 'string') return { error: 'INVALID_REQUEST' }
+          return answerFirstRun('claude', { theme: payload.theme }) ? { ok: true } : { error: 'FIRST_RUN_UNANSWERED' }
         }
         // `harness super-tab set-agents`, typed by the person at this computer; never through the relay.
         if (payload.action === 'setMachineAgents') {

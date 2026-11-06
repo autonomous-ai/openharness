@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { launchClaudeConfigDir, launchCodexHome } from '../../lib/engineHomes.js'
 import { launch as claude } from '../claude/launch.js'
 import { launch as codex } from '../codex/launch.js'
-import { recordAcceptanceIn, recordTrustIn, trustsIn } from './folderTrust.js'
+import { acceptedIn, recordAcceptanceIn, recordSettingIn, recordTrustIn, trustsIn } from './folderTrust.js'
 
 // The former lib/claudeTrust.spec.ts, its cases unchanged, against the two engines' declared trust (`trust` in
 // claude/launch.ts and codex/launch.ts) applied by the kit, in the homes the former functions read.
@@ -319,6 +319,34 @@ describe('full mode\'s warning accepted as the engine records it', () => {
     for (const text of ['{not json', '[]', JSON.stringify({ [key]: false })]) {
       writeFileSync(file, text)
       expect(recordAcceptanceIn(file, key)).toBe('skipped')
+      expect(readFileSync(file, 'utf8')).toBe(text)
+    }
+  })
+})
+
+// The phone setting up a computer asks Claude Code's theme and full mode first, and reads whether they are answered (owner,
+// 2026-11-06).
+describe('first-run answers read and the theme recorded', () => {
+  it('reads a key as answered only when it is true in a readable object', () => {
+    const folder = mkdtempSync(join(tmpdir(), 'answered-')), file = join(folder, '.claude.json')
+    expect(acceptedIn(file, 'hasCompletedOnboarding')).toBe(false)
+    for (const [text, answered] of [['{not json', false], ['[]', false], ['{"hasCompletedOnboarding":false}', false],
+      ['{"hasCompletedOnboarding":"yes"}', false], ['{"hasCompletedOnboarding":true}', true]] as const) {
+      writeFileSync(file, text)
+      expect(acceptedIn(file, 'hasCompletedOnboarding')).toBe(answered)
+    }
+  })
+
+  it('sets the theme the person picked, keeping everything else, and creates a missing file holding it alone', () => {
+    const folder = mkdtempSync(join(tmpdir(), 'theme-')), file = join(folder, '.claude.json')
+    expect(recordSettingIn(file, 'theme', 'light')).toBe('recorded')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ theme: 'light' })
+    writeFileSync(file, JSON.stringify({ theme: 'dark', oauthAccount: { emailAddress: 'a@b.c' } }))
+    expect(recordSettingIn(file, 'theme', 'light')).toBe('recorded')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ theme: 'light', oauthAccount: { emailAddress: 'a@b.c' } })
+    for (const text of ['{not json', '[]']) {
+      writeFileSync(file, text)
+      expect(recordSettingIn(file, 'theme', 'light')).toBe('skipped')
       expect(readFileSync(file, 'utf8')).toBe(text)
     }
   })

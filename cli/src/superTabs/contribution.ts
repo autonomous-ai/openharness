@@ -10,6 +10,7 @@ import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { buildEngineInstallationArgv } from '../lib/engineLaunch.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
+import { firstRunAnswered } from '../engines/launchPrep.js'
 import { repairSwarmCloneTrust, swarmCloneRoot, swarmCloneRoots } from './cloneTrust.js'
 import { SwarmReads } from './swarmReads.js'
 
@@ -20,8 +21,11 @@ interface ContributionDeps {
   /** The daemon's Swarm reads (superTabs/swarmReads.ts); a one-off read of its own when none is given. */
   reads?: SwarmReads
   install: typeof installClaudeCode
+  /** Whether Claude Code's questions before an agent's first turn are answered here (engines/launchPrep.ts). */
+  firstRun: () => boolean | null
 }
-const CONTRIBUTION_DEPS = { backend, open: openDaemon, prepare: prepareProjectFolder, capacity: readCapabilities, install: installClaudeCode }
+const CONTRIBUTION_DEPS = { backend, open: openDaemon, prepare: prepareProjectFolder, capacity: readCapabilities, install: installClaudeCode,
+  firstRun: () => firstRunAnswered('claude') }
 
 /** How long Claude Code's install may take here before the setup gives up on it: as long as a pane's installer gets
  *  (engines/kit/nativeInstall.ts). Over a slow Wi-Fi it took more than 5 minutes (the Dell, 2026-11-05). */
@@ -157,7 +161,10 @@ export async function prepareContribution(core: CoreApi, input: Json, given: Par
     // The suggestion keeps its 16, so a machine that joins by itself still sends what a server from before 1024 accepts.
     const maxAvailableAgents = machineMaximum(total)
     const maxAgents = Math.max(1, Math.min(16, Math.floor(total / (2 * START_REQUIREMENTS.memoryBytes))))
-    return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], signedIn: [...new Set(signedIn)], maxAgents, maxAvailableAgents,
+    // Claude Code here with its theme and full mode still to answer: the phone asks them, then `claudeFirstRun` records them,
+    // rather than its first Buddy waiting on its screen with nobody there (owner, 2026-11-06).
+    const firstRun = engines.includes('claude') && deps.firstRun() === false ? { firstRun: ['claude'] } : {}
+    return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], signedIn: [...new Set(signedIn)], ...firstRun, maxAgents, maxAvailableAgents,
       ...(swarm ? { scope: 'swarm' } : {}) }
   } finally { connection.close() }
 }
