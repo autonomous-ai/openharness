@@ -1369,6 +1369,9 @@ model SuperTabDecision {
   defaultAt      DateTime?
   /// The server applied the recommendation at defaultAt; never a person’s choice or a legacy overdue answer.
   defaulted      Boolean?
+  /// A rule says the person must agree (task #3826): no default applies. At defaultAt the PM is told once and defaultAt is
+  /// cleared, and the 24-hour sweep never takes it, so it waits for the person. Absent on every other decision.
+  mustAgree      Boolean?
   unblocks       String
   createdAt      DateTime
   answeredAt     DateTime?

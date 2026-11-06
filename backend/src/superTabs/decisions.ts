@@ -28,7 +28,9 @@ const line = (max: number) => z.string().trim().min(1).max(max)
 /** What a question offers besides itself: 2–5 distinct options, the index of the recommended one, and what an answer unblocks. */
 export const decisionChoices = z.object({ options: z.array(line(200)).min(2).max(5).refine(o => new Set(o).size === o.length, 'Give distinct options.'),
   recommended: z.number().int().min(0), unblocks: line(300),
-  defaultAt: z.string().datetime({ offset: true }).transform(value => new Date(value).toISOString()).optional() }).strict()
+  defaultAt: z.string().datetime({ offset: true }).transform(value => new Date(value).toISOString()).optional(),
+  /** A rule says the person must agree (task #3826): at defaultAt the PM is told instead of the default applying. */
+  mustAgree: z.literal(true).optional() }).strict()
 export const decisionQuestion = decisionChoices.extend({ question: line(1000) }).strict()
 type Question = z.infer<typeof decisionQuestion>
 
@@ -62,6 +64,7 @@ export interface DecisionTarget {
   kind?: string | null
   /** Closed unanswered once its work was over (withdrawIn). */
   withdrawn?: boolean
+  mustAgree?: boolean
 }
 /** `delegated`: the person asked left it to the PM, who took the recommended option. */
 /** `choice` null with a `note`: the person typed their own answer instead of choosing an option (task #2996). */
@@ -201,6 +204,23 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
   return { answer, noticeIn: noticeIn.id, notice, recipients, source: { ...AGENT_ONLY, decisionId: asked.id }, line }
 }
 
+export const MUST_AGREE_KIND = 'decision-must-agree'
+/** What the PM is told when a decision its person must agree to reaches its time unanswered: none of the question, which the
+ *  PM reads in its decisions; the sweep never applies the default (task #3826, spec "When an agent needs a person"). */
+export function mustAgreePassed(state: SuperTabState, actor: Actor, decision: DecisionTarget | undefined, now: number) {
+  const group = answerable(state, actor, decision)
+  const asked = decision!
+  if (asked.withdrawn || workOver(state, group)) fail('DECISION_ANSWERED', NO_LONGER_WAITS)
+  if (asked.answeredAt !== null) fail('DECISION_ANSWERED', 'This decision is already answered.')
+  if (!asked.mustAgree || asked.defaultAt == null || asked.defaultAt > now) fail('INVALID_DECISION', 'This decision has not reached its default time.', 400)
+  const project = groupProject(state, group)
+  const lead = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
+  const noticeIn = isClosedPmChat(group) ? state.conversations.find(c => c.id === project.leadConversationId)! : group
+  const text = `A decision ${usernameOf(state, asked.personId)} must agree to reached its default time unanswered, so no default applied: `
+    + 'it waits for them. Read it with: harness super-tab decisions'
+  return { noticeIn: noticeIn.id, text, recipients: lead && noticeIn.agentIds.includes(lead) ? [lead] : [], source: { kind: MUST_AGREE_KIND, decisionId: asked.id } }
+}
+
 /** The Lead's one line saying what it chose, in the person's own Buddy chat of that project: only they and their Buddy read
  *  it, and they were asked the question. Opened for the line when they have none (buddies.ts openBuddyChat), so it never
  *  drops: Buddies replaced Chat with PM (Ken, 10-29). */
@@ -319,9 +339,16 @@ export async function expireReflections(tx: Tx, tabId: string, projectId: string
 export async function readAskedDecision(tx: Tx, tabId: string, id: string): Promise<DecisionTarget | undefined> {
   const row = await tx.superTabDecision.findFirst({ where: { id, tabId },
     select: { id: true, personId: true, conversationId: true, projectId: true, askerAgentId: true, question: true, options: true, recommended: true,
-      answeredAt: true, defaultAt: true, createdAt: true, assignmentId: true, kind: true, withdrawn: true } })
+      answeredAt: true, defaultAt: true, createdAt: true, assignmentId: true, kind: true, withdrawn: true, mustAgree: true } })
   return row ? { ...row, answeredAt: row.answeredAt?.getTime() ?? null, defaultAt: row.defaultAt?.getTime() ?? null, createdAt: row.createdAt.getTime(), assignmentId: row.assignmentId ?? null,
-    withdrawn: row.withdrawn === true } : undefined
+    withdrawn: row.withdrawn === true, mustAgree: row.mustAgree === true } : undefined
+}
+
+/** A must-agree decision past its time keeps waiting for its person: its time is cleared, so the due range never reads it again
+ *  and the PM is told once. Conflicts with a concurrent answer, as recordAnswer does. */
+export async function keepWaiting(tx: Tx, tabId: string, id: string): Promise<void> {
+  const kept = await tx.superTabDecision.updateMany({ where: { id, tabId, mustAgree: true, defaultAt: { not: null }, ...waiting }, data: { defaultAt: null } })
+  if (!kept.count) fail('DECISION_ANSWERED', 'This decision is already answered.')
 }
 
 /** Conflicts with a concurrent answer of the same decision: only the first one counts. */
