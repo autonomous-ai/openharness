@@ -1,3 +1,4 @@
+import { AGENT_FOLDER_MARK, agentFolderFor } from './agentFolder.js'
 import { RELAY_REASONS } from './relayHealth.js'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -2188,6 +2189,44 @@ describe('removed machine cleanup', () => {
     await m.open().removeStoppedWorktree('tab', 'h-recorded')
     expect(startIds(m)).toEqual(['kept'])
     expect(readFileSync(join(m.ownWorktree, 'unpushed.txt'), 'utf8')).toBe('work')
+  })
+
+  // #3713: an agent whose start named a temporary folder ran in a folder Harness made for it (agentFolder.ts); its stop
+  // removes it, and only it: a folder of Harness's agent-home, with its mark, that no session works in.
+  describe('a stopped agent\'s own folder', () => {
+    const agentFolder = (m: ReturnType<typeof machine>, startId: string, marked = true) => {
+      const folder = agentFolderFor(join(m.home, 'harnesses'), startId)
+      mkdirSync(folder, { recursive: true })
+      writeFileSync(join(folder, 'notes.md'), 'the agent\'s work')
+      if (marked) writeFileSync(join(folder, AGENT_FOLDER_MARK), '')
+      return folder
+    }
+
+    it('goes with its record once no session works in it', async () => {
+      const m = machine()
+      const folder = agentFolder(m, 'agent-start')
+      addRecord(m, { tabId: 'tab', startId: 'agent-start', harnessId: 'h-agent', source: folder, path: folder, kind: 'agent-folder' })
+      m.setLive([session('h-agent', join(folder, 'sub'), 'agent')])
+      await m.open().removeStoppedWorktree('tab', 'h-agent')
+      expect(existsSync(folder)).toBe(true)
+      m.setLive([])
+      await m.open().removeStoppedWorktree('tab', 'h-agent')
+      expect(existsSync(folder)).toBe(false)
+      expect(startIds(m)).not.toContain('agent-start')
+    })
+
+    it('is kept, with its record, when it is not one Harness marked as an agent\'s, wherever its record says it is', async () => {
+      const m = machine()
+      m.setLive([])
+      const unmarked = agentFolder(m, 'unmarked', false)
+      addRecord(m, { tabId: 'tab', startId: 'unmarked', harnessId: 'h-unmarked', source: unmarked, path: unmarked, kind: 'agent-folder' })
+      addRecord(m, { tabId: 'tab', startId: 'own', harnessId: 'h-own', source: m.own, path: m.own, kind: 'agent-folder' })
+      await m.open().removeStoppedWorktree('tab', 'h-unmarked')
+      await m.open().removeStoppedWorktree('tab', 'h-own')
+      expect(readFileSync(join(unmarked, 'notes.md'), 'utf8')).toBe('the agent\'s work')
+      expect(existsSync(m.own)).toBe(true)
+      expect(startIds(m)).toEqual(expect.arrayContaining(['unmarked', 'own']))
+    })
   })
 
   // #2284: a folder whose .git proof disappeared is kept with its record and logged without its path.
