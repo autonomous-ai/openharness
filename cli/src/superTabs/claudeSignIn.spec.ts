@@ -45,6 +45,40 @@ describe('Claude Code signed in from the phone', () => {
     expect(f.done).toHaveBeenCalled()
   })
 
+  // Review of #3149: a token exchange slower than the replay's 20 s wait still signs in.
+  it('lets the login\'s own exit decide when the replay of its redirect fails, and says not delivered only when it failed', async () => {
+    for (const [status, after] of [[0, { ok: true, state: 'done' }], [1, { error: 'NOT_DELIVERED' }]] as const) {
+      const f = fakeLogin()
+      const signIns = new ClaudeSignIns(() => f.login, vi.fn(async () => { throw new Error('timed out') }))
+      await signIns.read({ operationId: 'op1' })
+      f.child.stdout.write(OUTPUT)
+      await tick()
+      await signIns.read({ operationId: 'op1' })
+      expect(await signIns.read({ operationId: 'op1', callback: 'http://localhost:57823/callback?code=c&state=s' }))
+        .toMatchObject({ state: 'checking' })
+      f.close(status)
+      expect(await signIns.read({ operationId: 'op1' })).toMatchObject(after)
+    }
+    // Already gone when the replay failed: not delivered at once.
+    const f = fakeLogin()
+    const signIns = new ClaudeSignIns(() => f.login, vi.fn(async () => { f.child.exitCode = 1; throw new Error('refused') }))
+    await signIns.read({ operationId: 'op1' })
+    f.child.stdout.write(OUTPUT)
+    await tick()
+    await signIns.read({ operationId: 'op1' })
+    expect(await signIns.read({ operationId: 'op1', callback: 'http://localhost:57823/callback?code=c&state=s' }))
+      .toMatchObject({ error: 'NOT_DELIVERED' })
+  })
+
+  it('tells a redirect or code for a sign-in no longer here to start again, and starts none for it', async () => {
+    const start = vi.fn(() => fakeLogin().login)
+    const signIns = new ClaudeSignIns(start, vi.fn(async () => 200))
+    expect(await signIns.read({ operationId: 'gone', callback: 'http://localhost:57823/callback?code=c' }))
+      .toMatchObject({ error: 'SIGN_IN_EXPIRED' })
+    expect(await signIns.read({ operationId: 'gone', code: 'abc#def' })).toMatchObject({ error: 'SIGN_IN_EXPIRED' })
+    expect(start).not.toHaveBeenCalled()
+  })
+
   it('never reaches another port or path of this machine', async () => {
     const f = fakeLogin()
     const replay = vi.fn(async () => 200)

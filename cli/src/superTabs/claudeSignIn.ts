@@ -55,7 +55,13 @@ function executable(path: string): boolean {
 /** A login under way: its process, and the file its BROWSER writes the localhost page to. */
 export interface ClaudeLogin { child: ChildProcess; page: () => string | null; done: () => void }
 
-interface Job { id: string; login: ClaudeLogin; output: string; result: Json; timer: NodeJS.Timeout; codeUrl: string | null; codeAt: number }
+interface Job {
+  id: string; login: ClaudeLogin; output: string; result: Json; timer: NodeJS.Timeout; codeUrl: string | null; codeAt: number
+  /** The redirect's replay failed or timed out: the login's own exit says whether it took all the same. */
+  undelivered?: boolean
+}
+
+const NOT_DELIVERED: Json = { error: 'NOT_DELIVERED', detail: 'Claude Code on this computer did not take the sign-in. Try again.' }
 
 /** How long after its printed page the localhost one may still be on its way from BROWSER. */
 const LOCAL_PAGE_WAIT_MS = 3_000
@@ -75,6 +81,11 @@ export class ClaudeSignIns {
     if (!identifier(input.operationId)) return { error: 'INVALID_REQUEST' }
     let job = this.job
     if (job?.id !== input.operationId) {
+      // A redirect or a code for a sign-in no longer here (stopped as this computer's connection dropped): a new one would
+      // never take it, so the phone is told to open Claude's page again (review of #3149).
+      if (typeof input.callback === 'string' || typeof input.code === 'string') {
+        return { error: 'SIGN_IN_EXPIRED', detail: 'The sign-in stopped on this computer. Open Claude\'s page again.' }
+      }
       this.stop()
       job = this.job = this.begin(input.operationId as string)
     }
@@ -92,7 +103,10 @@ export class ClaudeSignIns {
       try {
         await this.replay(`http://127.0.0.1:${expected.port}${caught.pathname}${caught.search}`)
       } catch {
-        job.result = { error: 'NOT_DELIVERED', detail: 'Claude Code on this computer did not take the sign-in. Try again.' }
+        // A token exchange slower than the replay's wait still signs in: while the login runs, its exit decides (review of
+        // #3149). One already gone did not take it.
+        job.undelivered = true
+        if (job.login.child.exitCode !== null && job.result.state === 'checking') job.result = NOT_DELIVERED
       }
       return job.result
     }
@@ -145,11 +159,13 @@ export class ClaudeSignIns {
     child.on('close', (status) => {
       clearTimeout(job.timer)
       login.done()
+      // Signed in, whatever the replay of its redirect said on the way.
+      if (status === 0) { job.result = { ok: true, state: 'done' }; return }
       if (job.result.error) return
+      if (job.undelivered) { job.result = NOT_DELIVERED; return }
       // Its last line says why, in its words ("Invalid code", …); never a page, which carries the sign-in's state.
       const last = job.output.replace(/https?:\/\/\S+/g, '').trim().split('\n').pop()?.trim().slice(0, 200)
-      job.result = status === 0 ? { ok: true, state: 'done' }
-        : { error: 'SIGN_IN_FAILED', detail: last ? `Claude did not take it: ${last}` : 'Claude did not take it. Try again.' }
+      job.result = { error: 'SIGN_IN_FAILED', detail: last ? `Claude did not take it: ${last}` : 'Claude did not take it. Try again.' }
     })
     return job
   }
