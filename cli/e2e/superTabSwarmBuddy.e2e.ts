@@ -95,6 +95,10 @@ it.skipIf(isTeamAccount())('starts and switches its engine in the same folder an
   expect(existsSync(join(homes, folders[0]!, 'projects', 'API', 'README.md'))).toBe(true)
   expect(existsSync(start.request.cwd)).toBe(false)
   const original = agents[0].harnessId
+  const registered = (id: string) => JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8'))
+    .find((agent: Record<string, any>) => agent.agentId === id)
+  const originalCwd = registered(original).cwd
+  expect(originalCwd).toBe(join(homes, folders[0]!))
   const before = await until('the original Buddy to bind its native conversation', async () => {
     const row = (await client!.request('agents_list')).agents.find((agent: Record<string, any>) => agent.id === original)
     return row?.sessionId ? row : null
@@ -111,9 +115,10 @@ it.skipIf(isTeamAccount())('starts and switches its engine in the same folder an
   expect(rebinds).toBe(1)
   const live = (await client.request('agents_list')).agents
   expect(live).toHaveLength(1)
-  expect(live[0]).toMatchObject({ id: agents[0].harnessId, engine: 'codex', cwd: before.cwd })
+  expect(live[0]).toMatchObject({ id: agents[0].harnessId, engine: 'codex' })
   expect(live[0].id).not.toBe(original)
-  const saved = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')).find((agent: Record<string, any>) => agent.agentId === live[0].id)
+  const saved = registered(live[0].id)
+  expect(saved.cwd).toBe(originalCwd)
   expect(saved.swarmSkill).toMatchObject({ role: 'buddy' })
   expect(saved.swarmSkill.github).not.toBe(true)
   await until('the replacement to read its private chat and handoff', () => {
