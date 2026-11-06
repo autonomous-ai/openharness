@@ -3,7 +3,7 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 import { LEAD_CAPABILITY } from './leadStart.js'
-import { applyPushOrigin, TEAM_WRITTEN_STOP, TEAM_WRITTEN_WORK, teamWrittenTask } from './teamWritten.js'
+import { applyPushOrigin, markTeamWritten, stepMark, TEAM_WRITTEN_STOP, TEAM_WRITTEN_WORK, teamWrittenTask } from './teamWritten.js'
 
 // Audit H2: a branch a Team agent wrote runs only in a Team account, whoever's project it is, so nothing the branch
 // carries runs with the main account's rights (docs/plans/2026-11-02-team-written-branch-plan.md).
@@ -475,5 +475,53 @@ describe('a step\'s push read', () => {
     const f = setup()
     applyPushOrigin(f.s.state, f.step(), 'team', [OTHER])
     expect(f.task().teamWritten).toBe(true)
+  })
+})
+
+// Task #3604 (anh Dee, 2026-11-06): the web release's Safari check deadlocked. Tony's Team account refused the Tester (it takes
+// only Team-written work) and his own entry was refused too (GitHub cannot show who pushed a task built from main, so its
+// step had to run in a Team account). A release task and its steps test main at a named commit, which every member may read.
+describe('a release task the Swarm opened', () => {
+  /** A release task as settleReleases opens it (releases.ts): the server's own `release` mark, no pull request, and a step on it. */
+  function releaseTask() {
+    const f = swarm(), task = f.group()
+    f.state.conversations.find(c => c.id === task)!.release = true
+    const step = f.group({ reviewOf: task, step: 'Test' })
+    return { ...f, task, step }
+  }
+
+  it('is never Team-written, whoever it was assigned to or whatever GitHub says of a branch', () => {
+    const f = releaseTask(), task = () => f.state.conversations.find(c => c.id === f.task)!
+    f.run({ type: 'work.assign', conversationId: f.task, agentId: f.member('team-builder', 'mac-team') })
+    expect(task().teamWritten).toBeUndefined()
+    expect(teamWrittenTask(f.state, task())).toBe(false)
+    markTeamWritten(f.state, task(), f.state.agents.find(a => a.id === 'team-builder')!)
+    applyPushOrigin(f.state, task(), 'team', ['https://github.com/acme/app/pull/1'])
+    expect(task().teamWritten).toBeUndefined()
+    expect(stepMark(f.state, task())).toEqual({})
+    expect(teamWrittenTask(f.state, f.state.conversations.find(c => c.id === f.step)!)).toBe(false)
+  })
+
+  it('takes its step on an owner entry and on a Team account, even while GitHub cannot say who pushed', () => {
+    const f = releaseTask()
+    const main = f.member('main-tester', 'mac'), team = f.member('team-tester', 'mac-team')
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: f.step, agentId: main }, owner, { pushOrigin: 'unknown' }))).toBeNull()
+    const g = releaseTask()
+    expect(refusal(() => g.run({ type: 'work.assign', conversationId: g.step, agentId: g.member('team-tester', 'mac-team') }, owner, { pushOrigin: 'unknown' }))).toBeNull()
+    expect(team).toBeTruthy()
+  })
+
+  it('starts its Tester on the Mac itself and in its Team account, never moved or refused for the push read', () => {
+    const f = releaseTask()
+    expect(refusal(() => f.start(f.step, 'mac'))).toBeNull()
+    const g = releaseTask()
+    expect(refusal(() => g.run({ type: 'agent.start', request: { conversationId: g.step, machineId: 'mac', engine: 'claude', name: 'Tester', cwd: '/swarm/lead', worktree: true,
+      requirements } }, owner, { pushOrigin: 'unknown' }))).toBeNull()
+    expect(g.state.starts!.at(-1)!.request.machineId).toBe('mac')
+  })
+
+  it('does not change an ordinary task: the same step with the same read is still refused to the main account', () => {
+    const f = swarm(), task = f.group(), step = f.group({ reviewOf: task, step: 'Test' })
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: step, agentId: f.member('main-tester', 'mac') }, owner, { pushOrigin: 'unknown' }))).toBe(TEAM_WRITTEN_WORK)
   })
 })
