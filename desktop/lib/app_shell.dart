@@ -129,7 +129,13 @@ class HarnessApp extends StatelessWidget {
     this.keymap,
     required this.authenticatedScreen,
     this.frame,
+    this.deferFirstScreen,
   });
+
+  /// Whether the first frame draws only the window colour, leaving the app
+  /// state and the screen to the next frame (task #3563). Null: on, except in
+  /// widget tests, which expect the screen on their first pump.
+  final bool? deferFirstScreen;
   final AppKeymap? keymap;
   final AuthenticatedScreenBuilder authenticatedScreen;
   final AppFrameBuilder? frame;
