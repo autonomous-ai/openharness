@@ -1116,6 +1116,45 @@ describe('the last action of the project\'s agents on a task', () => {
     f.run({ type: 'agent.startFailed', startId, error: 'Could not prepare the worktree' }, f.leadActor, { contribution: f.contribution, now: 7000 })
     expect(task().liveness).toEqual({ state: 'orphaned', why: 'start-failed', since: 7000 })
   })
+
+  // Task #3861: a start stayed Queued for hours with its machine's fault only in that machine's log. Its host reports why it waits.
+  describe('a start its machine reports waiting', () => {
+    const FOLDER = 'CREATION_STORAGE_FAILED: The creation folder ~/.harness/cli/data/agent-creations is not usable by this account (permissions). It must belong to this account with mode 700; the owner of this computer fixes that, Harness does not change it.'
+    const started = () => {
+      const f = routed(), group = f.group()
+      f.define(group)
+      const request = { conversationId: group, machineId: 'machine', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+        requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+      const startId = f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group) }).result.startId as string
+      const start = () => f.state.starts!.find(s => s.id === startId)!
+      return { f, startId, start, wait: (reason: string, now = 5000) => f.run({ type: 'agent.startWaiting', startId, reason }, f.leadActor, { contribution: f.contribution, now }) }
+    }
+
+    it('keeps the reason and when it was first told, on the start', () => {
+      const { start, wait } = started()
+      wait(FOLDER, 5000)
+      expect(start().waiting).toEqual({ reason: FOLDER, at: 5000 })
+      wait(FOLDER, 9000)
+      expect(start().waiting).toEqual({ reason: FOLDER, at: 5000 })
+      wait('CREATION_STORAGE_FAILED: other', 9500)
+      expect(start().waiting).toEqual({ reason: 'CREATION_STORAGE_FAILED: other', at: 9500 })
+    })
+    it('is read whole by its coordinator and as what it means by anyone else', () => {
+      const { f, start, wait } = started()
+      wait(FOLDER)
+      expect(visibleState(f.state, f.leadActor).starts!.find(s => s.id === start().id)!.waiting!.reason).toBe(FOLDER)
+      expect(visibleState(f.state, peer).starts!.find(s => s.id === start().id)!.waiting!.reason).toContain("Its machine's creation folder ~/.harness/cli/data/agent-creations is not usable")
+    })
+    it('ends with the start: failed or started', () => {
+      const { f, startId, start, wait } = started()
+      wait(FOLDER)
+      f.run({ type: 'agent.startFailed', startId, error: FOLDER }, f.leadActor, { contribution: f.contribution, now: 6000 })
+      expect(start().waiting).toBeUndefined()
+      // A report that arrives after the start ended changes nothing.
+      wait(FOLDER, 7000)
+      expect(start().waiting).toBeUndefined()
+    })
+  })
 })
 
 // The Lead's ruling, 2026-10-29: the project chat and the Leads chat carry only what people read or decide on, and agent
