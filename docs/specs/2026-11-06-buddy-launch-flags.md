@@ -37,7 +37,8 @@ His choices:
   - Field **"Extra launch flags"**, monospace, one line, prefilled with the Buddy's current flags (empty when none). Hint:
     `--chrome`.
   - Detail line: "Added to <engine>'s command line each time this Buddy starts on <machine name>. Your Buddy runs with full
-    permissions. Clear the field to remove them."
+    permissions. Don't put secrets here: other people on that computer can see them. Clear the field to remove them."
+  - The item shows only when the Buddy has an agent on a machine (`harnessId` and `machineId` set).
   - Buttons **Restart** (primary) and Cancel. Enter restarts.
 - Restart sends `agent_restart` with `launchArgs` to the Buddy's machine. While it runs, the button shows progress and the field
   is read-only.
@@ -46,7 +47,7 @@ His choices:
   - **Refused** (`INVALID_LAUNCH_ARGS`): the dialog stays open with the daemon's message under the field, for example
     "--model is set by Harness and can't be added here.".
   - **The engine did not start** (the restart's or resume's unconfirmed or `RESTART_FAILED` outcome): the dialog stays open with
-    "The Buddy didn't start with these flags. Fix or clear them and restart." The flags are already saved. Each press of
+    "The Buddy didn't start with these flags. Fix or clear them and restart." Nothing was saved, so the Buddy keeps the flags that last worked. Each press of
     Restart in the dialog is a new intent with its own receipt and always sends the field, so clearing it and pressing Restart
     recovers.
   - **Any other failure** (offline, busy, not installed, a lost reply): the dialog stays open with that failure's own text.
@@ -69,27 +70,36 @@ His choices:
     before any `=`. The list is per engine, because the same short flag means different things: `-c` is Claude Code's
     `--continue` but Codex's config override, which stays allowed.
     - **Claude Code:** `--resume`, `-r`, `--continue`, `-c`, `--model`, `--permission-mode`,
-      `--dangerously-skip-permissions`, `--session-id`, `--settings`, `--append-system-prompt`, `--system-prompt`,
-      `--mcp-config`, `--fork-session`.
-    - **Codex:** `--model`, `-m`, `--dangerously-bypass-approvals-and-sandbox`, `--ask-for-approval`, `-a`, `--sandbox`,
-      `-s`, `--profile`, `-p`, and the words `resume` and `fork` as the first word.
+      `--dangerously-skip-permissions`, `--session-id`, `--settings`, `--setting-sources`, `--append-system-prompt`,
+      `--append-system-prompt-file`, `--system-prompt`, `--system-prompt-file`, `--mcp-config`, `--fork-session`, `--effort`.
+    - **Codex:** `--model`, `-m`, `--dangerously-bypass-approvals-and-sandbox`, `--yolo`, `--full-auto`,
+      `--ask-for-approval`, `-a`, `--sandbox`, `-s`, `--profile`, `-p`, the words `resume` and `fork`, and a `-c` /
+      `--config` whose key (before `=`, also when the value is the next word) is `model`, `model_provider`, `profile`,
+      `sandbox_mode`, `approval_policy`, `developer_instructions`, or starts with `mcp_servers` or `model_providers`.
     - **Any other engine:** only the length, word-count and character rules.
   - For every engine, the word `--` is refused (it would turn Harness's own later arguments into positional ones).
   - A refused short flag with its value attached is refused too: a single-dash word whose first letter is a refused short
     flag (Claude `-r<id>`, Codex `-mo3`, `-sdanger-full-access`).
   - For Codex, a bare `resume` or `fork` word is refused anywhere, not only first: Codex reads it as its subcommand after
     other flags too.
-- **Saving:** the record gets `launchArgs?: string[]`, the parsed words. It is never written when empty. When the restart or
-  resume is refused before anything is stopped (for example no live process, the agent busy, the engine not installed), the
-  previous flags are put back, so a reboot never applies flags the owner saw fail.
-- **Applying:** `buildLaunchOverrides` appends `source.launchArgs` after the Swarm's args and before Harness's instructions, so
-  the instructions stay last and are still joined as they are today. The first `agent_create` never carries them.
+- **Saving (audit):** the new words travel with the relaunch (in its launch source, as a retarget carries its target) and are
+  saved on the record only when the relaunch succeeds, the way `launchModel` is. A refused or failed restart or resume
+  (busy, no live process, the engine not starting with them) saves nothing, so the record keeps the flags that last worked
+  and nothing is rolled back. The record field is `launchArgs?: string[]`, never written when empty.
+- **Stopped agents:** `agent_resume` with `launchArgs` finds a stopped agent in the stopped-agents store as resume does,
+  and resumes it with the new words; the resumed row keeps them.
+- **Applying (audit):** the owner's words go LAST on the command line, after Harness's instructions, the model and the first
+  prompt, in their own slot (`ownerArgs`), so a trailing flag that takes a value fails loudly at startup instead of
+  swallowing Harness's own arguments. Each launch checks the saved words again with the same validator; if any is refused
+  (a hand-edited row, or a flag a later release refuses), none is applied and the daemon logs why. The first `agent_create`
+  never carries them.
 - **Answer:** a successful restart answers as today plus `launchArgs: string[]`, the words now saved (`[]` when cleared).
   Desktop reads the echo to tell a new daemon from an old one.
 - **Reading them back:** the agent's frame (`agents_list` and agent pushes) carries `launchArgs` when it has any, so the
   dialog can prefill.
-- **Audience:** `agent_restart` keeps its existing checks. Only the machine's owner's own clients reach it, as any restart does.
-  A team-written agent refuses `launchArgs` (`INVALID_LAUNCH_ARGS`), as it refuses a permission change.
+- **Audience (audit):** `launchArgs` is taken only from the machine owner's own app clients (Desktop, the web viewer); a
+  device (dial, Pro), a local tool client (an agent's own harness CLI) or anyone else gets `INVALID_LAUNCH_ARGS`. A
+  team-written agent refuses it too, as it refuses a permission change.
 
 ## Design
 
