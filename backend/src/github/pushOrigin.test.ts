@@ -38,6 +38,21 @@ describe('who pushed a pull request', () => {
     expect(await origin({ activity: [[push(HEAD), push(BASE_COMMIT, bot)]] })).toBe('team')
   })
 
+  // Task #3554: a branch that merged main carries main's commits, some a Team agent wrote, but GitHub lists a pull request's
+  // commits without what its base holds: only the builder's own commits and its merge commit are read, so it reads clean.
+  it('reads clean for a branch that merged main holding a Team agent\'s commits: GitHub lists none of main\'s', async () => {
+    const MERGE = 'merge-of-main', MAIN_TEAM_COMMIT = 'main-team-commit'
+    expect(await origin({ commits: [commit(HEAD), commit(MERGE)],
+      activity: [[push(HEAD), push(MERGE), { ...push(MAIN_TEAM_COMMIT, bot), ref: 'refs/heads/main' }]] })).toBe('clean')
+  })
+
+  // Task #3554 (River's ruling): a main-account builder told to merge a Team pull request into its branch carries that pull
+  // request's commits, which the bot pushed on the Team branch. The builder pushed its own head, and the read is still team.
+  it('reads team for a main-account builder\'s pull request that merged a Team pull request\'s commits', async () => {
+    const TEAM_COMMIT = 'team-commit'
+    expect(await origin({ commits: [commit(HEAD), commit(TEAM_COMMIT)], activity: [[push(HEAD), { ...push(TEAM_COMMIT, bot), ref: 'refs/heads/team-branch' }]] })).toBe('team')
+  })
+
   it('finds a bot\'s push on a later page', async () => {
     expect(await origin({ activity: [[push(HEAD), ...Array(99).fill(push('other'))], [push(BASE_COMMIT, bot)]] })).toBe('team')
   })

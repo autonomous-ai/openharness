@@ -14,7 +14,7 @@ import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
-  activeWork, occupiesAgent, actorKey, agent, appendPullRequestUrls, author, projectPullRequestUrl, pullRequestLinks, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, occupiesAgent, actorKey, agent, appendCodePullRequestUrls, appendPullRequestUrls, author, projectPullRequestUrl, pullRequestLinks, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, seenMachineIds, SuperTabError, swarmGridName, visibleState, AGENT_ONLY, STATUS_LABELS, forRecipients,
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
@@ -652,6 +652,8 @@ export interface CommandContext {
   pushOrigin?: PushOrigin
   /** The pull requests [pushOrigin] read, as the store read them; none for a branch. A clean read clears only a mark it covered (teamWritten.ts). */
   pushOriginPulls?: string[]
+  /** For a step, the read of its task's own code alone (store.ts pushOriginFor): only it marks the task (task #3554). */
+  pushOriginTask?: { origin: 'clean' | 'team' | 'unknown'; pulls: string[] }
   /** The files a Ready for review's task changes in its pull requests, and the head they were read at, read before the command
    *  (store.ts pullRequestFilesFor): `files` null when GitHub could not say. Absent with nothing to read: no step opens then. */
   pullRequestFiles?: { urls: string[]; head: string | null; files: string[] | null; heads?: Array<{ url: string; head: string | null; base?: string | null }> }
@@ -1131,7 +1133,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** What GitHub's read says for an agent about to take [group]'s work (store.ts pushOriginFor): a bot's push marks the task and
    *  refuses the main account, and the store keeps that mark after this command is refused. Unknown refuses it unmarked. */
   const pushedRefusal = (group: Conversation, worker: Agent) => {
-    marking(group, () => applyPushOrigin(state, group, context.pushOrigin, context.pushOriginPulls))
+    marking(group, () => applyPushOrigin(state, group, context.pushOrigin, context.pushOriginPulls, context.pushOriginTask))
     if (onTeamAccount(state, worker) || ledProject(state, worker.id)?.id === groupProject(state, group).id) return
     if (context.pushOrigin === 'unknown') failPushUnknown(unknownPushReason(context.repositoryReach))
     if (context.pushOrigin === 'team') failTeamWritten({ pushed: true })
@@ -1758,7 +1760,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       agentIds: leadId ? [leadId] : [], archived: false, brief, reviewOf: task.id,
       // A step keeps its task's mark, as conversation.create's does (teamWritten.ts stepMark).
       ...stepMark(state, task), step: planned.name,
-      assignment: null, lastMessageSequence: 0, checks: storedChecks([{ description: stepCheck(planned), independent: true }], id) })
+      assignment: null, lastMessageSequence: 0, codePullRequestUrls: [], checks: storedChecks([{ description: stepCheck(planned), independent: true }], id) })
     const step = state.conversations.at(-1)!
     listStep(task, id)
     message(id, brief, [], null, SYSTEM_ROW, undefined, undefined, undefined, stableId(id, 'brief'))
@@ -2572,7 +2574,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         ...(command.reviewOf ? stepMark(state, conversation(state, command.reviewOf)) : {}),
         ...(command.step ? { step: command.step } : {}),
         ...(prioritized ? { priority: command.priority ?? (proposal ? proposalPriority(proposalNamed(context.proposal)?.source?.priority) : DEFAULT_PRIORITY) } : {}),
-        assignment: null, lastMessageSequence: 0,
+        // Its own code's pull requests, read for its Team-written mark: never a link in a post (task #3554, model.ts).
+        assignment: null, lastMessageSequence: 0, codePullRequestUrls: [],
         checks: storedChecks(command.checks, operationId),
       })
       stampLane(state.conversations.at(-1)!)
@@ -2714,6 +2717,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         ?? fail('PULL_REQUEST_REPOSITORY', `This pull request is not in the project's repository (${own!.fullName}).`, 400)
       const shippedAt = group.ledger?.shippedAt, linked = group.pullRequestUrls?.includes(pullRequestUrl)
       appendPullRequestUrls(group, [pullRequestUrl], repositoryUrl)
+      // The pull request that merged is the task's own code.
+      appendCodePullRequestUrls(group, [pullRequestUrl], repositoryUrl)
       recordMerged(group, mergedAt)
       // On its project's release list, for the next verified release to mark it shipped (releases.ts, task #3405). A Swarm from
       // before projects keeps no list: its one project is not stored.
@@ -2896,7 +2901,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // that names no model runs its engine's own: role defaults live in the project's instructions now.
       // So does a start for code a Team agent wrote, whoever's project it is, with its project settings off (audit H2).
       const startGroup = conversation(state, command.request.conversationId)
-      marking(startGroup, () => applyPushOrigin(state, startGroup, context.pushOrigin, context.pushOriginPulls))
+      marking(startGroup, () => applyPushOrigin(state, startGroup, context.pushOrigin, context.pushOriginPulls, context.pushOriginTask))
       const written = teamWrittenTask(state, startGroup)
       // Named the Team account's entry itself, which its owner's choice keeps teammates' work off (task #3060). A branch GitHub
       // cannot place runs only in a Team account (below), so it counts as Team-written here (security review 2 of #3081).
@@ -4093,7 +4098,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         else effects.result.notAsked = `Not asked ${agentWrittenNameOf(state, person(state, personId).id)}: ${context.openDecisions} decisions you asked them are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`
       }
       // A Team agent's push can land on any branch: its Ready reads who pushed (teamWritten.ts, audit H2).
-      if (command.status === 'review') marking(group, () => applyPushOrigin(state, group, context.pushOrigin, context.pushOriginPulls))
+      if (command.status === 'review') marking(group, () => applyPushOrigin(state, group, context.pushOrigin, context.pushOriginPulls, context.pushOriginTask))
       const changed = assignment.status !== command.status || assignment.result !== command.result || !!command.ask, previous = assignment.status
       const waited = waitingForReview(assignment)
       assignment.status = command.status

@@ -10,7 +10,7 @@
  * GitHub read covers every pull request it rests on (applyPushOrigin).
  */
 import type { PushOrigin } from '../github/pushOrigin.js'
-import { fail, type Agent, type Conversation, type SuperTabState } from './model.js'
+import { codePullRequests, fail, type Agent, type Conversation, type SuperTabState } from './model.js'
 import { groupProject, ledProject, onTeamAccount, teamAccountPool } from './projects.js'
 
 export const TEAM_WRITTEN_WORK = 'TEAM_WRITTEN_WORK'
@@ -97,26 +97,32 @@ export function mainAccountMembers(state: SuperTabState, group: Conversation, ex
 }
 
 /**
- * GitHub's record of who pushed [pulls], the pull requests the store read (none for a branch). A bot among them marks [group]
- * and its task. A clean read clears a mark only where it covered everything that mark rests on (#3304): every pull request
- * the task and that conversation record, and for a push's mark the pull requests it was read on. An assignment's mark and a
+ * GitHub's record of who pushed [pulls], the pull requests the store read (none for a branch). A bot among them marks [group],
+ * and its task too unless [group] is a step and [taskRead], the read of the task's own code, is not team (#3554). A clean read
+ * clears a mark only where it covered everything that mark rests on (#3304): the code each of the task and that conversation
+ * is in (model.ts codePullRequests), and for a push's mark the pull requests it was read on. An assignment's mark and a
  * branch's stay. A pull request recorded after the read was not covered, so it clears nothing.
  */
-export function applyPushOrigin(state: SuperTabState, group: Conversation, origin: PushOrigin | undefined, pulls: readonly string[] = []): void {
+export function applyPushOrigin(state: SuperTabState, group: Conversation, origin: PushOrigin | undefined, pulls: readonly string[] = [],
+  taskRead?: { origin: PushOrigin; pulls: readonly string[] }): void {
   const task = taskOf(state, group)
-  if (origin === 'team') {
-    const cause: Cause = pulls.length ? { kind: 'pushed', pulls: [...new Set(pulls)] } : { kind: 'branch' }
-    if (task) mark(task, cause)
-    mark(group, cause)
+  // A step's own links (a reviewer citing another pull request, log lines) are read for the step alone; its task is marked by the
+  // read of the task's own code (task #3554: #3462 was marked for its Team reviewers' links). Without that read, as before.
+  const own = group.reviewOf && taskRead ? taskRead : { origin, pulls }
+  const causeOf = (read: readonly string[]): Cause => read.length ? { kind: 'pushed', pulls: [...new Set(read)] } : { kind: 'branch' }
+  if (origin === 'team' || own.origin === 'team') {
+    if (task && own.origin === 'team') mark(task, causeOf(own.pulls))
+    if (origin === 'team') mark(group, causeOf(pulls))
     return
   }
-  if (origin !== 'clean' || !task?.pullRequestUrls?.length) return
+  const code = task ? codePullRequests(task) : []
+  if (origin !== 'clean' || !task || !code.length) return
   const read = new Set(pulls.map(url => url.toLowerCase()))
   const covers = (urls: readonly string[]) => urls.every(url => read.has(url.toLowerCase()))
-  if (!covers(task.pullRequestUrls)) return
+  if (!covers(code)) return
   for (const marked of [task, ...state.conversations.filter(c => c.reviewOf === task.id)]) {
     const by = marked.teamWrittenBy
-    if (!marked.teamWritten || (by && (by.kind !== 'pushed' || !covers(by.pulls))) || !covers(marked.pullRequestUrls ?? [])) continue
+    if (!marked.teamWritten || (by && (by.kind !== 'pushed' || !covers(by.pulls))) || !covers(codePullRequests(marked))) continue
     delete marked.teamWritten
     delete marked.teamWrittenBy
   }
