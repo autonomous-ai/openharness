@@ -35,6 +35,10 @@ class SuperTabPaneLayout extends StatefulWidget {
   /// the narrowest the pane goes.
   static const threadWidth = 340.0;
 
+  /// The Board's floor: the room it keeps while text scaling widens the
+  /// side panes.
+  static const boardFloor = 280.0;
+
   /// Under this the centre pane has no room for a header, let alone cards.
   static const _centerFloor = 160.0;
 
@@ -77,6 +81,7 @@ class SuperTabPaneLayout extends StatefulWidget {
 }
 
 class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
+  static const _leftBase = 180.0;
   double _left = SuperTabPaneLayout.leftWidth;
   // Null until a person sets it, or it is restored: the right pane then
   // takes the widget's default for what it shows.
@@ -148,11 +153,26 @@ class _SuperTabPaneLayoutState extends State<SuperTabPaneLayout> {
       final scale = MediaQuery.textScalerOf(context);
       final hasLeft = widget.left != null, hasRight = widget.right != null;
       final centerMin = math.min(scale.scale(360), width);
-      final leftMin = hasLeft ? scale.scale(180) : 0.0;
-      final rightMin = hasRight ? scale.scale(widget.rightMinimum) : 0.0;
-      // The centre yields before either side pane: a side's minimum wins
-      // over the room the centre's own minimum asks for, and only the
-      // window itself can take a pane's width (review of #3863).
+      // Text scaling widens the side panes only while the Board keeps its
+      // floor: the chat's scaled minimum gives back first, down to its own
+      // 420, then projects, down to 180 (reviews of #3863). The centre then
+      // yields before either side pane: a side's minimum wins over the room
+      // the centre's own preference asks for.
+      var leftMin = hasLeft ? scale.scale(_leftBase) : 0.0;
+      var rightMin = hasRight ? scale.scale(widget.rightMinimum) : 0.0;
+      var short =
+          leftMin +
+          rightMin +
+          math.min(SuperTabPaneLayout.boardFloor, width) -
+          width;
+      if (hasRight && short > 0) {
+        final give = math.min(short, rightMin - widget.rightMinimum);
+        rightMin -= give;
+        short -= give;
+      }
+      if (hasLeft && short > 0) {
+        leftMin -= math.min(short, leftMin - _leftBase);
+      }
       double limit(double value, double floor, double ceiling) =>
           value.clamp(floor, math.max(floor, ceiling)).toDouble();
       final left = hasLeft
