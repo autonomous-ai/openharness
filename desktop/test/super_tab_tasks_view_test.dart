@@ -1020,6 +1020,12 @@ void main() {
       isFalse,
     );
     expect(line('no-code', 'Done'), findsOneWidget);
+    // Finished with no pull request waits for no merge: never the warning,
+    // however long ago it was done.
+    expect(
+      tester.widget<Text>(line('no-code', 'Done')).style?.color,
+      isNot(grid.AppPalette.warn),
+    );
     expect(_cardsIn(tester, 'shipped'), ['sender']);
     await _close(tester, c);
   });
