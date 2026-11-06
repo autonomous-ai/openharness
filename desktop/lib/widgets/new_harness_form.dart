@@ -22,6 +22,7 @@ import '../state/new_harness.dart';
 import '../state/device_form.dart';
 import '../state/lead_placement.dart';
 import '../super_tabs/identity.dart' show SuperTabAvatar;
+import '../super_tabs/project_process.dart';
 import '../super_tabs/project_visibility.dart';
 import 'box_chrome.dart' show kTerminalCornerRadius, terminalPaneBorder;
 import 'dsh_install_panel.dart' show describeInstallFailure;
@@ -2610,6 +2611,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       if (includeProjectVisibility &&
           box.integration?.projectVisibility != null)
         _desktopProjectVisibility(9.95),
+      if (includeProjectVisibility && box.integration?.projectProcess != null)
+        _desktopProjectProcess(9.96),
       _desktopStartButton(),
     ],
   );
@@ -2628,6 +2631,22 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           ? null
           : (value) =>
                 setState(() => box.integration!.projectVisibility = value),
+    ),
+  );
+
+  Widget _desktopProjectProcess(double order) => FocusTraversalOrder(
+    order: NumericFocusOrder(order),
+    child: ProjectProcessPicker(
+      key: const ValueKey('new-harness-project-process'),
+      value: box.integration!.projectProcess!,
+      disabledReason: box.integration!.projectVisibilityLocked
+          ? 'Project creation has started. The process is fixed for this request.'
+          : box.locked
+          ? 'Finish the current request before changing the process.'
+          : null,
+      onChanged: box.locked || box.integration!.projectVisibilityLocked
+          ? null
+          : (value) => setState(() => box.integration!.projectProcess = value),
     ),
   );
 

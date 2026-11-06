@@ -69,6 +69,7 @@ import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
 import 'buddy_list.dart';
 import 'project_people.dart';
+import 'project_process.dart';
 import 'proposal_form.dart';
 import 'backlog.dart'
     show
@@ -4320,6 +4321,13 @@ class _SuperTabViewState extends State<SuperTabView>
       ),
       // The project's numbers, read only (task #3393): every member reads them; the PM changes them when asked.
       row('Project rules', 'rules'),
+      // Simple or Full (#3897): its owner changes it, everyone else reads it.
+      (
+        label: 'Process',
+        value: project.isSimple ? 'Simple' : 'Full',
+        action: () => unawaited(showProjectProcess(context, c, project)),
+        danger: false,
+      ),
       // Who may write in its chat, once it works from the Board (#3820).
       if (project.boardMode)
         row(

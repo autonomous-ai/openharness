@@ -134,6 +134,7 @@ class SuperTabLaunch {
                         saved['creationRequest'] == null) {
                       saved['visibility'] =
                           integration.projectVisibility ?? 'public';
+                      saved['process'] = integration.projectProcess ?? 'full';
                     }
                     try {
                       // A start already sent is repeated as it is: the server may
@@ -173,6 +174,7 @@ class SuperTabLaunch {
                         saved['creationRequest'] == null) {
                       saved['visibility'] =
                           integration.projectVisibility ?? 'public';
+                      saved['process'] = integration.projectProcess ?? 'full';
                     }
                     try {
                       return await launch.createRepository(ask, task);
@@ -206,6 +208,10 @@ class SuperTabLaunch {
             projectVisibilityLocked:
                 saved['projectPrepared'] == true ||
                 saved['creationRequest'] != null,
+            projectProcess:
+                saved['lead'] == true && saved['coordinator'] != true
+                ? saved['process'] as String? ?? 'full'
+                : null,
             prepare: (machine, task, engine) async {
               if (integration.leadMachines != null) {
                 await launch.recheckLeadMachine(
@@ -231,6 +237,7 @@ class SuperTabLaunch {
               if (saved['projectPrepared'] != true &&
                   saved['creationRequest'] == null) {
                 saved['visibility'] = integration.projectVisibility ?? 'public';
+                saved['process'] = integration.projectProcess ?? 'full';
               }
               try {
                 final prompt = await launch.prepare(machine, task);
@@ -1122,6 +1129,8 @@ class SuperTabLaunch {
           'type': 'project.create',
           'name': 'New project',
           'visibility': saved['visibility'] ?? 'public',
+          // Full is what an older server already does, so only Simple is sent.
+          if (saved['process'] == 'simple') 'process': 'simple',
           'brief': String.fromCharCodes(task.runes.take(4000)),
         },
       };

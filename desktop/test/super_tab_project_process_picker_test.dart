@@ -156,18 +156,17 @@ void main() {
     ) async {
       final (c, server) = await show(tester);
       await openProcess(tester);
-      server.refuse = {
-        'code': 'FORBIDDEN',
-        'message': 'Only the project\'s owner changes its process.',
-      };
+      server
+        ..refuse = {
+          'code': 'PROCESS_FORBIDDEN',
+          'message': 'Only the project\'s owner changes its process.',
+        }
+        ..refuseStatus = 403;
       await tester.tap(_key('project-process-simple'));
       await _settle(tester);
       expect(
-        find.descendant(
-          of: _key('project-process-error'),
-          matching: find.textContaining('Only the project'),
-        ),
-        findsOneWidget,
+        tester.widget<Text>(_key('project-process-error')).data,
+        'Only the project\'s owner changes its process.',
       );
       expect(c.snapshot!.projectById('lead')!.isSimple, isFalse);
       await end(tester, c);
@@ -180,7 +179,6 @@ void main() {
       bool locked = false,
     }) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-      addTearDown(() => debugDefaultTargetPlatformOverride = null);
       tester.view.physicalSize = const Size(760, 600);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -221,6 +219,11 @@ void main() {
       return box;
     }
 
+    Future<void> unmount(WidgetTester tester) async {
+      await tester.pumpWidget(const SizedBox());
+      debugDefaultTargetPlatformOverride = null;
+    }
+
     testWidgets('Full is chosen, and Simple is one pick away', (tester) async {
       final box = await mount(tester);
       final pill = _key('new-harness-project-process');
@@ -243,7 +246,7 @@ void main() {
         find.descendant(of: pill, matching: find.text('Simple')),
         findsOneWidget,
       );
-      await tester.pumpWidget(const SizedBox());
+      await unmount(tester);
     });
 
     testWidgets('once creation has started it is fixed for the request', (
@@ -254,7 +257,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.widgetWithText(AppMenuItem, 'Simple'), findsNothing);
       expect(box.integration!.projectProcess, 'full');
-      await tester.pumpWidget(const SizedBox());
+      await unmount(tester);
     });
   });
 }

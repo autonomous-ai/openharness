@@ -34,6 +34,7 @@ class HarnessLaunchIntegration {
     this.actionLabel = 'New Harness',
     this.projectVisibility,
     this.projectVisibilityLocked = false,
+    this.projectProcess,
     this.initialTask,
     this.engines,
     this.forcedPermissionMode,
@@ -67,6 +68,10 @@ class HarnessLaunchIntegration {
   final String? forcedPermissionMode;
   String? projectVisibility;
   bool projectVisibilityLocked;
+
+  /// A new project's process, `full` or `simple` (task #3897), chosen beside its visibility and fixed by the same lock;
+  /// null hides the choice.
+  String? projectProcess;
 
   /// A new project in a Swarm: the Swarm's machines its Product Manager may
   /// start on, best first. The form then shows only the task, repo and
