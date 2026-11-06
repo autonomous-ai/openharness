@@ -18,10 +18,12 @@ import 'message_link.dart';
 import 'identity.dart' show superTabMachineName;
 import 'machine_status.dart' show kSuperTabMachineOfflineAfter;
 import 'model.dart';
+import 'my_agents.dart';
 import 'task_groups.dart';
 import 'buddy_chat.dart';
 import 'project_github.dart';
 import 'parts.dart';
+import 'tasks/personal_tasks.dart';
 import 'read_marks.dart';
 import 'reading.dart';
 import 'linked_tasks.dart';
@@ -248,6 +250,7 @@ class SuperTabController extends ChangeNotifier {
       unreadOnly = initial['unreadOnly'] == true;
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
       buddiesGroupOpen = initial['buddiesGroupOpen'] as bool? ?? true;
+      projectsGroupOpen = initial['projectsGroupOpen'] as bool?;
       modelsGroupOpen = initial['modelsGroupOpen'] as bool? ?? true;
       offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
       sessionProjectId = initial['sessionProjectId'] as String? ?? '';
@@ -434,6 +437,8 @@ class SuperTabController extends ChangeNotifier {
 
   /// The Swarm's parts as last read: what the next read asks changes for, and what [snapshot] is built from.
   SuperTabParts? _parts;
+
+  SuperTabPersonalTasks? get personalTasks => _parts?.personalTasks;
 
   /// The visibility epoch of the last read: it moves when who may read what changes (backend parts/commit.ts
   /// `visibilityChanged`). Null before a read.
@@ -1106,6 +1111,13 @@ class SuperTabController extends ChangeNotifier {
   /// and Machines (Dee, 2026-10-30: every section the same).
   bool buddiesGroupOpen = true, modelsGroupOpen = true;
 
+  /// Whether the left pane's Projects is open when the reader chose (Swarm v3, task #4118); null until they do: it is then
+  /// closed while they have an agent and open when they have none.
+  bool? projectsGroupOpen;
+  bool get projectsOpen =>
+      projectsGroupOpen ??
+      (snapshot == null || superTabMyAgents(snapshot!, accountId).isEmpty);
+
   bool isMachineExpanded(String id) => expandedMachines.contains(id);
 
   void toggleMachineExpanded(String id) {
@@ -1172,6 +1184,12 @@ class SuperTabController extends ChangeNotifier {
 
   void toggleMachinesGroup() {
     machinesGroupOpen = !machinesGroupOpen;
+    _saveSoon();
+    _changed();
+  }
+
+  void toggleProjectsGroup() {
+    projectsGroupOpen = !projectsOpen;
     _saveSoon();
     _changed();
   }
@@ -2818,6 +2836,7 @@ class SuperTabController extends ChangeNotifier {
     'unreadOnly': unreadOnly,
     'machinesGroupOpen': machinesGroupOpen,
     'buddiesGroupOpen': buddiesGroupOpen,
+    if (projectsGroupOpen != null) 'projectsGroupOpen': projectsGroupOpen,
     'modelsGroupOpen': modelsGroupOpen,
     'offlineMachinesOpen': offlineMachinesOpen,
     'sessionProjectId': sessionProjectId,

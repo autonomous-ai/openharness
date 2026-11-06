@@ -41,7 +41,9 @@ const refusal = (run: () => unknown) => { try { run(); return null } catch (erro
 describe('a start follows the machine rules', () => {
   const start = (s: ReturnType<typeof swarm>, group: string, machineId: string, engine: string, now = BACK) => s.run({ type: 'agent.start',
     request: { conversationId: group, machineId, engine, name: 'Worker', cwd: '/repo', worktree: true,
-      requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } } }, s.as(s.pm), { now })
+      requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } } }, s.as(s.pm),
+    // The PM's own person's computer (task #4120: a start runs as the machine's own person, through no share).
+    { now, contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
 
   it('refuses an engine a machine refuses, a Reviewer where none runs, and anything while the machine is away, with the why', () => {
     const s = swarm()
@@ -61,7 +63,7 @@ describe('a start follows the machine rules', () => {
     const work = s.task('Server', ['backend/src/a.ts'])
     expect(refusal(() => s.run({ type: 'agent.start', request: { conversationId: work, machineId: 'no-codex', engine: 'codex', name: 'Worker', cwd: '/repo',
       worktree: true, requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } } },
-    s.as(s.pm), { projectRules: { revision: 0, rules: SEED_RULES } }))).toBeNull()
+    s.as(s.pm), { projectRules: { revision: 0, rules: SEED_RULES }, contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }))).toBeNull()
   })
 })
 

@@ -34,6 +34,10 @@ export interface BroughtMachine {
 
 export interface PersonScore {
   personId: string
+  /** Weekly org board only: requests first assigned this week, credited once to their requester. */
+  accepted?: number
+  /** Weekly org board only: visible own-account agents currently contributed; never earns points. */
+  agentsBrought?: number
   /** Their profile name, else their email's local part. */
   displayName: string
   points: number

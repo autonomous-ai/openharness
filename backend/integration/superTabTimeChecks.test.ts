@@ -57,8 +57,9 @@ async function swarm() {
   const generations = new Map<string, string>()
   for (const machineId of ['lead-host', 'test-host']) generations.set(machineId, (await poolRows(timed, host, machineId)).find(p => p.tabId === tab)!.machine.generation)
   const harness = { lead: randomUUID(), worker: randomUUID() }
+  // Added by the host, whose machines they run on: an agent is its own person's, on their own computer (task #4120).
   const add = async (conversationId: string, machineId: string, harnessId: string, name: string, lead = false) => String((await execute({ type: 'agent.add',
-    conversationId, machineId, harnessId, name, configuration: config, lead })).result.agentId)
+    conversationId, machineId, harnessId, name, configuration: config, lead }, host)).result.agentId)
   const lead = await add('lead', 'lead-host', harness.lead, 'Lead', true)
   const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
     checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
@@ -149,7 +150,7 @@ describe('the time checks with the PM down', () => {
     const tag = () => db.superTabMention.findMany({ where: { tabId: f.tab, messageId: told[0]!.id } })
     expect(await tag()).toEqual([expect.objectContaining({ personId: owner.sub, conversationId: f.group, resolvedAt: null })])
     const taker = String((await f.execute({ type: 'agent.add', conversationId: f.group, machineId: 'lead-host', harnessId: randomUUID(), name: 'Taker',
-      configuration: config, lead: false })).result.agentId)
+      configuration: config, lead: false }, host)).result.agentId)
     await f.execute({ type: 'work.assign', conversationId: f.group, agentId: taker })
     f.clock.now += MINUTE
     // Its tag resolves on the `[tabId, conversationId, personId]` index, examining only that person's tags there (backend AGENTS.md 3).

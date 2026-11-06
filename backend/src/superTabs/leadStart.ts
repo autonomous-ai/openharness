@@ -1,13 +1,11 @@
 /** A project's Product Manager started by the Swarm on one of its machines (Dee, 10-29, option B), as a Buddy's start is
- *  (buddies.ts): recorded on the machine's contribution and launched by its host. Any machine of the Swarm takes it (Ken,
- *  10-29): on another person's Mac it runs in that Mac's Harness Team account when the account can take it now, else on the
- *  Mac itself, as its owner, whatever the Swarm's switch (machines.ts teamAccountRequired) says for workers. Its person always
- *  names the machine: only they know which one stays on (Ken, 10-29). Desktop's own-machine flow (project.create, a local
- *  start, agent.add) is unchanged. */
-import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, projectFolder, projectsOnMachine, teamAccountPool, teamPoolOf,
-  noRepositoryStart, slotCounter, teamWorkRefusal, ownAccountWork, ownAccountTeamEntry, failOwnAccountTeamEntry, type ContributedMachine } from './machines.js'
+ *  (buddies.ts): recorded on the machine's contribution and launched by its host. Its person names the machine, which is their
+ *  own computer: Swarm v3 starts no agent on another person's computer and none in a Team account (task #4120). Desktop's
+ *  own-machine flow (project.create, a local start, agent.add) is unchanged. */
+import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, NOT_YOUR_COMPUTER, projectFolder, projectsOnMachine, teamAccountPool,
+  noRepositoryStart, slotCounter, TEAM_ACCOUNTS_GONE, type ContributedMachine } from './machines.js'
 import { actorKey, fail, person, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
-import { BUILT_IN_ROLE_DEFAULTS, ownsProject, projectsOf, type SwarmProject } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
 import { coordinatorNameOf } from './instructions.js'
 
@@ -35,7 +33,6 @@ export interface LeadContext {
   now: number
   teamMachines?: readonly string[]
   otherWorkspaceMachines?: readonly string[]
-  teamAccountsIdle?: boolean
   /** The slots of each pool, counted once for a read that admits many (machines.ts slotCounter). */
   slots?: (pool: ContributedMachine) => number
 }
@@ -92,45 +89,13 @@ export function leadHost(state: SuperTabState, project: SwarmProject, machineId:
   const startIn = (pool: ContributedMachine): AgentStartRequest => noRepositoryStart(pool, project, { conversationId: project.leadConversationId, machineId: pool.machineId,
     engine: request.engine, ...(request.model ? { model: request.model } : {}), ...(request.effort ? { effort: request.effort } : {}), name: coordinatorNameOf(project),
     cwd: projectFolder(pool, project), worktree: true, ...(request.branchRef ? { branchRef: request.branchRef } : {}), requirements: LEAD_REQUIREMENTS, leadFor })
-  const teamMachines = context.teamMachines ?? []
-  // With no GitHub App a Team account takes no work (machines.ts teamMachineFor).
-  const teamsWork = !context.teamAccountsIdle
-  const refusal = (pool: ContributedMachine) => teamWorkRefusal(pool, context.now, teamMachines.includes(pool.machineId), true,
-    (context.otherWorkspaceMachines ?? []).includes(pool.machineId))
-  let candidates: ContributedMachine[]
-  if (ownsProject(state, named.contributorId, project)) candidates = [named]
-  else if (teamAccountPool(named)) {
-    // Its Mac's owner runs teammates' work in their own account: the Mac, not this entry (machines.ts ownAccountTeamEntry, #3060).
-    const mac = ownAccountTeamEntry(state, named.machineId, project, false)
-    if (mac) failOwnAccountTeamEntry(mac)
-    if (!teamsWork) fail('TEAM_ACCOUNT_REQUIRED', `Harness Team accounts take no work in this Swarm yet, so ${named.name} runs only its owner's projects.`, 403)
-    const why = refusal(named)
-    if (why) failTeamWork(why)
-    candidates = [named]
-  } else {
-    const team = teamsWork ? teamPoolOf(state, named, teamMachines) : undefined
-    // Its owner lets teammates' work run in their own account there (machines.ts ownAccountWork): the Mac itself, as its owner.
-    if (ownAccountWork(named)) candidates = [named]
-    // A Mac added as its person joined, not lent, takes teammates' work only in its Team account (machines.ts teamAccountOnly).
-    else if (named.teamAccountOnly) {
-      const pool = team ?? named
-      const why = refusal(pool)
-      if (why) failTeamWork(why)
-      candidates = [pool]
-    } else candidates = team && !refusal(team) ? [team, named] : [named]
-  }
-  // The Team account first, with every check its start has (engine, sign-in, room, other projects' work, its host); refused
-  // there for any reason, the Mac itself (security reviews 1 and 2 of #2228). The last one's reason is the answer.
-  for (const [i, pool] of candidates.entries()) {
-    const start = startIn(pool)
-    try {
-      admitLead(state, project, pool, start, context)
-      return start
-    } catch (error) {
-      if (!(error instanceof SuperTabError) || i === candidates.length - 1) throw error
-    }
-  }
-  throw new Error('unreachable: a Product Manager has at least one candidate machine')
+  // A PM starts only on its person's own computer, as them, and never in a Team account (task #4120, the PM's ruling): the
+  // person starting it is [leadFor]'s, else the project's owner.
+  if (teamAccountPool(named)) failTeamWork(TEAM_ACCOUNTS_GONE)
+  if (named.contributorId !== (leadFor?.personId ?? project.ownerId)) failTeamWork({ code: 'NOT_YOUR_COMPUTER', reason: NOT_YOUR_COMPUTER })
+  const start = startIn(named)
+  admitLead(state, project, named, start, context)
+  return start
 }
 
 /** Where New Project's Product Manager would run on each teammate's machine, for [personId] as its owner, by engine: the
