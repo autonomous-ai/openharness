@@ -4,6 +4,7 @@ import { createSuperTab, forRecipients, type Actor, type Conversation, type Mess
 import { buddyChatId } from './buddies.js'
 import { assignedNotice, buddiesTold } from './buddyNews.js'
 import { SHIP_KIND } from './ship.js'
+import { pendingKey, settleReleases } from './releases.js'
 import { TASK_LINE_KIND } from './taskLine.js'
 import { leaderboard } from './leaderboard/stats.js'
 import { weekStart } from './leaderboard/week.js'
@@ -200,12 +201,34 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
     expect(done.messages.filter(m => m.recipients.includes('buddy'))).toEqual([])
     const merged = f.run({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/o/r/pull/7' }, agentActor(worker))
     expect(merged.messages).toEqual(expect.arrayContaining([expect.objectContaining({ thread: find().cards!.line!.messageId, text: 'Merged: PR #7. Ships in the next release.' })]))
-    expect(merged.messages.filter(m => m.recipients.includes('buddy'))).toEqual([expect.objectContaining({ conversationId: group,
-      source: { kind: 'agent-only' }, text: expect.stringContaining('which they requested, shipped') })])
+    // A merge is not shipped: the news waits for the release that holds it (task #4217).
+    expect(merged.messages.filter(m => m.recipients.includes('buddy'))).toEqual([])
     expect(f.run({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/o/r/pull/7' }, agentActor(worker))
       .messages.filter(m => m.recipients.includes('buddy'))).toEqual([])
     const board = leaderboard({ state: f.state, groups: f.state.conversations, machines: [], projectId: f.app.projectId, week: weekStart(1000), now: 1000 })
     expect(board.people.find(p => p.personId === 'peer')).toMatchObject({ points: 3, shipped: { count: 1 } })
+  })
+
+  it('tells the Buddy its work shipped only when a verified release holds it, once (task #4217)', () => {
+    const { f, group, find } = opened()
+    const worker = f.add(group, 'worker')
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    const url = 'https://github.com/o/r/pull/7'
+    expect(f.run({ type: 'conversation.merged', conversationId: group, pullRequestUrl: url }, agentActor(worker))
+      .messages.filter(m => m.recipients.includes('buddy'))).toEqual([])
+    const key = pendingKey({ groupId: group, url })
+    const settle = (tag: string, carries: string[], at: number) => {
+      const state = structuredClone(f.state)
+      const out = settleReleases(state, f.app.projectId, { resolved: [{ groupId: group, url, components: ['backend'], sha: 'merge' }],
+        releases: { backend: { tag, sha: tag, at, carries, compared: [key] } } }, at)
+      Object.assign(f.state, state)
+      return out.messages.filter(m => m.recipients.includes('buddy'))
+    }
+    // A release that does not hold the merge says nothing; the one that does tells the Buddy, inside the task, once.
+    expect(settle('v1.0.1_backend', [], 5000)).toEqual([])
+    expect(settle('v1.0.2_backend', [key], 6000)).toEqual([expect.objectContaining({ conversationId: group, recipients: ['buddy'],
+      source: { kind: 'agent-only' }, text: expect.stringMatching(/^News for your owner: #\d+ "Offline edits", .*shipped\.$/) })])
+    expect(settle('v1.0.3_backend', [key], 7000)).toEqual([])
   })
 
   it('keeps the requester the PM names, even someone else', () => {
