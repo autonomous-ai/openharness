@@ -26,7 +26,12 @@ function setup() {
   const owes = () => (f.group('lead').owed ?? []).map(a => a.id)
   const count = () => storedPulse(f.state, project())!.asks.count
   const lines = () => owedLines(f.state, project(), f.now).join('\n')
-  return { f, guest, project, ask, handoffCommand, handoff, reply, owes, count, lines }
+  const anotherGuide = () => {
+    const task = f.step('More support'), guide = f.add('other-guide', task)
+    f.run({ type: 'work.assign', conversationId: task, agentId: guide }, f.as(f.lead))
+    return guide
+  }
+  return { f, guest, project, ask, handoffCommand, handoff, reply, owes, count, lines, anotherGuide }
 }
 
 describe('an ask entrusted to a project agent', () => {
@@ -90,8 +95,8 @@ describe('an ask entrusted to a project agent', () => {
   })
 
   it('requires the entrusted agent, the ask thread, and a public thread reply', () => {
-    const { f, ask, handoff, reply, owes } = setup()
-    const otherAgent = f.add('other', f.task)
+    const { f, ask, handoff, reply, owes, anotherGuide } = setup()
+    const otherAgent = anotherGuide()
     const id = ask(), otherAsk = ask()
     handoff(id)
     reply(otherAgent, id)
@@ -116,8 +121,8 @@ describe('an ask entrusted to a project agent', () => {
   })
 
   it('uses the latest explicit handoff and still allows the PM to answer', () => {
-    const { f, ask, handoff, reply, owes } = setup()
-    const otherAgent = f.add('next-guide', f.task)
+    const { f, ask, handoff, reply, owes, anotherGuide } = setup()
+    const otherAgent = anotherGuide()
     const id = ask()
     handoff(id)
     handoff(id, otherAgent)
