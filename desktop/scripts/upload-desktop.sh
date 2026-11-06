@@ -243,9 +243,10 @@ packaging_time() {
 }
 # `stapler staple` fetches the ticket and validates it. Apple's connection can drop even after
 # notarization is Accepted: candidate 1.3.87 lost all five calls in the old 150s retry window.
-# Retry only transport failures over a bounded 465s backoff window; a bad ticket still fails closed.
+# Extend transport failures to a bounded 465s backoff window. Keep the old five attempts for
+# other failures: an Accepted ticket may not have reached CloudKit yet. Bad tickets still fail closed.
 staple() {
-  local attempt output status delay=15
+  local attempt output status delay limit
   for attempt in 1 2 3 4 5 6; do
     if output="$(xcrun stapler staple "$1" 2>&1)"; then
       printf '%s\n' "$output"
@@ -256,16 +257,18 @@ staple() {
     printf '%s\n' "$output" >&2
     # Error 68 alone is ambiguous. Require an actual transport diagnostic, including Apple's
     # NSURLErrorDomain codes for timeout, DNS, connect, connection lost and offline failures.
-    if ! grep -Eiq 'NSURLErrorDomain Code=-(1001|1003|1004|1005|1006|1009)([^0-9]|$)|network connection was lost|connection (reset|refused)|network is (unreachable|down)|request timed out' <<< "$output"; then
-      echo "error: stapling failed with a non-network error (attempt $attempt of 6)" >&2
-      return "$status"
+    if grep -Eiq 'NSURLErrorDomain Code=-(1001|1003|1004|1005|1006|1009)([^0-9]|$)|network connection was lost|connection (reset|refused)|network is (unreachable|down)|request timed out' <<< "$output"; then
+      limit=6
+      delay=$((15 << (attempt - 1)))
+    else
+      limit=5
+      delay=$((attempt * 15))
     fi
-    [ "$attempt" -lt 6 ] || break
-    echo ">> stapling network failure (attempt $attempt of 6) — retrying in ${delay}s" >&2
+    [ "$attempt" -lt "$limit" ] || break
+    echo ">> stapling failed (attempt $attempt of $limit) — retrying in ${delay}s" >&2
     sleep "$delay" || return
-    delay=$((delay * 2))
   done
-  echo "error: could not staple the notarization ticket after 6 attempts (network failure)" >&2
+  echo "error: could not staple the notarization ticket after $attempt attempts" >&2
   return "$status"
 }
 
