@@ -262,6 +262,20 @@ describe('leaving a decision to the PM', () => {
     expect(answered.messages[0]!.text).toBe(overdueNotice('Product Manager'))
   })
 
+  it('takes a timed default only at its trusted deadline, and never accepts the marker from a client', () => {
+    const s = swarm()
+    const decision = open(s, { defaultAt: 1000 })
+    const command = { type: 'decision.answer', decisionId: 'decision-1', delegate: true } as const
+    expect(() => s.run(command, peer, { decision, defaulted: true, now: 999 } as Partial<CommandContext>)).toThrow(/default.*time|deadline/i)
+    expect(() => s.run(command, peer, { decision: open(s), defaulted: true, now: 1000 } as Partial<CommandContext>)).toThrow(/default.*time|deadline/i)
+    expect(() => s.run(command, peer, { decision: open(s, { defaultAt: 1000, kind: 'routing-reflection' }), defaulted: true, now: 1000 } as Partial<CommandContext>)).toThrow(/default|reflection/i)
+    expect(commandSchema.safeParse({ ...command, defaulted: true }).success).toBe(false)
+    const taken = s.run(command, peer, { decision, defaulted: true, now: 1000 } as Partial<CommandContext>)
+    expect(taken.decisionAnswer).toMatchObject({ delegated: true, defaulted: true, choice: 1 })
+    expect(taken.messages[0]!.text).toMatch(/default.*time|deadline/i)
+    expect(taken.messages[1]!.text).toBe('Default applied: To everyone — Ship how?')
+  })
+
   it('overdue without delegate is refused', () => {
     const s = swarm()
     expect(() => answerDecision(s.state, peer, open(s), { choice: 0, note: null, delegate: false, overdue: true }))
