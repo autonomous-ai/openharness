@@ -47,9 +47,11 @@ async function runClaudeCodeInstall(run: typeof spawn): Promise<void> {
   if (!recipe || process.platform === 'win32') throw new Error('Install Claude Code on this machine, then try again.')
   const [command, ...args] = buildEngineInstallationArgv('claude', recipe, { HOME: homedir() })
   await new Promise<void>((resolve, reject) => {
-    const child = run(command!, args, { stdio: 'ignore' })
+    // A group of its own, ended whole at the deadline as the pane's installer is (engines/kit/nativeInstall.ts): the shell
+    // alone killed left npm running, and the next try's install fought it over the prefix.
+    const child = run(command!, args, { stdio: 'ignore', detached: true })
     const deadline = setTimeout(() => {
-      child.kill('SIGKILL')
+      try { process.kill(-child.pid!, 'SIGKILL') } catch { child.kill('SIGKILL') }
       reject(new Error('Installing Claude Code took too long. Try again.'))
     }, INSTALL_FOR_MS)
     child.on('error', (error) => { clearTimeout(deadline); reject(error) })
