@@ -1682,3 +1682,40 @@ describe('several Buddies: where a person\'s lines go', () => {
     expect(buddiesTold(f.state, answer, proposal)).toEqual([first.agentId])
   })
 })
+
+// Task #3818: on its machine, each of a person's Buddies and its thread sessions are told their own chat, so the host ends a
+// session and moves a model switch in the right one; an older host, which names the main chat, still ends the right session.
+describe('several Buddies on their machine', () => {
+  const host = { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }
+  const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [], githubApp: false }
+  const user = { sub: 'peer', email: peer.email, role: 'user', autonomousEnv: 'test' } as never
+  function withSession() {
+    const f = fresh()
+    const start = (command: Record<string, unknown>) => {
+      const added = f.run(command as Command, peer, host)
+      const startId = added.result.startId as string
+      const agentId = f.run({ type: 'agent.started', startId, harnessId: `native-${startId}`, configuration }, peer, host).result.agentId as string
+      f.run({ type: 'agent.startSettled', startId, warning: null }, peer, host)
+      return { agentId, conversationId: added.result.conversationId as string, messageId: added.result.messageId as string }
+    }
+    const first = start({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude' })
+    const second = start({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude', name: 'Research' })
+    const session = start({ type: 'message.send', conversationId: second.conversationId, text: 'Dig into the CPU spike', replyTo: null, recipientIds: [], newSession: true })
+    return { f, first, second, session }
+  }
+
+  it('tells each Buddy and its thread sessions their own chat', async () => {
+    const { f, first, second, session } = withSession()
+    const rows = (await hostTab('swarm', f.state, 'peer-mac', user, null, lookups)).roster
+    const chatOf = (agentId: string) => rows.find(r => r.agent.id === agentId)?.buddyChatId
+    expect([chatOf(first.agentId), chatOf(second.agentId), chatOf(session.agentId)]).toEqual([peerSwarmChat, second.conversationId, second.conversationId])
+    expect(rows.find(r => r.agent.id === f.pm)?.buddyChatId).toBeUndefined()
+  })
+
+  it('ends a thread session of another Buddy that an older host names by the main chat', () => {
+    const { f, second, session } = withSession()
+    const ended = f.run({ type: 'buddy.sessionEnd', conversationId: peerSwarmChat, thread: session.messageId, reason: 'idle' }, peer)
+    expect(ended.result.ended).toBe(true)
+    expect(group(f, second.conversationId).buddySessions ?? []).toEqual([])
+  })
+})
