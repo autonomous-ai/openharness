@@ -3344,6 +3344,7 @@ class SuperTabController extends ChangeNotifier {
     required String goal,
     required String why,
     required String doneWhen,
+    required List<String> evidence,
     required SuperTabTaskPriority priority,
   }) async {
     final done = await command({
@@ -3355,7 +3356,7 @@ class SuperTabController extends ChangeNotifier {
       'goal': goal,
       'why': why,
       'doneWhen': doneWhen,
-      'evidence': <String>[],
+      'evidence': evidence,
       'priority': priority.badge,
     });
     return done != null

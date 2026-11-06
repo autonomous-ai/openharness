@@ -8,9 +8,10 @@ import '../widgets/desktop_chrome.dart';
 import 'model.dart';
 
 /// + New proposal on a project's Board (task #3820, spec "Propose directly from the Board"): what to do, its goal,
-/// why and what done looks like, and its priority, sent as #3817's `proposal.create`. The server refuses one that
-/// misses its goal, why or done when, and a P0 from someone who may not set it; the form asks for all three and offers
-/// P0 only to whoever may set it ([SuperTabController.maySteer]).
+/// why, what done looks like and its evidence, and its priority, sent as #3817's `proposal.create`. The server
+/// refuses one that misses any of them, takes one to five pieces of evidence (proposalCards.ts `proposalFields`), and
+/// refuses a P0 from someone who may not set it; the form asks for all of them, one piece of evidence per line, and
+/// offers P0 only to whoever may set it ([SuperTabController.maySteer]).
 Future<void> showNewProposal(
   BuildContext context,
   SuperTabController c,
@@ -37,6 +38,10 @@ class _NewProposalDialogState extends State<_NewProposalDialog> {
   final _goal = TextEditingController();
   final _why = TextEditingController();
   final _done = TextEditingController();
+  final _evidence = TextEditingController();
+
+  /// The most pieces of evidence the server takes (#3817).
+  static const _maxEvidence = 5;
   var _priority = SuperTabTaskPriority.p2;
   bool _busy = false;
   String? _error;
@@ -44,25 +49,34 @@ class _NewProposalDialogState extends State<_NewProposalDialog> {
   @override
   void initState() {
     super.initState();
-    for (final field in [_title, _goal, _why, _done]) {
+    for (final field in [_title, _goal, _why, _done, _evidence]) {
       field.addListener(() => setState(() {}));
     }
   }
 
   @override
   void dispose() {
-    for (final field in [_title, _goal, _why, _done]) {
+    for (final field in [_title, _goal, _why, _done, _evidence]) {
       field.dispose();
     }
     super.dispose();
   }
 
-  bool get _complete => [
-    _title,
-    _goal,
-    _why,
-    _done,
-  ].every((field) => field.text.trim().isNotEmpty);
+  /// The evidence, one piece per non-empty line: a link, a log line, what a screenshot shows.
+  List<String> get _pieces => [
+    for (final line in _evidence.text.split('\n'))
+      if (line.trim().isNotEmpty) line.trim(),
+  ];
+
+  bool get _complete =>
+      [
+        _title,
+        _goal,
+        _why,
+        _done,
+      ].every((field) => field.text.trim().isNotEmpty) &&
+      _pieces.isNotEmpty &&
+      _pieces.length <= _maxEvidence;
 
   Future<void> _submit() async {
     if (_busy || !_complete) return;
@@ -76,6 +90,7 @@ class _NewProposalDialogState extends State<_NewProposalDialog> {
       goal: _goal.text.trim(),
       why: _why.text.trim(),
       doneWhen: _done.text.trim(),
+      evidence: _pieces,
       priority: _priority,
     );
     if (!mounted) return;
@@ -95,6 +110,8 @@ class _NewProposalDialogState extends State<_NewProposalDialog> {
     TextEditingController controller, {
     int lines = 1,
     bool autofocus = false,
+    String? helper,
+    String? error,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: grid.AppDesktop.controlGap),
     child: TextField(
@@ -104,7 +121,11 @@ class _NewProposalDialogState extends State<_NewProposalDialog> {
       enabled: !_busy,
       minLines: lines,
       maxLines: lines == 1 ? 1 : lines + 2,
-      decoration: InputDecoration(labelText: label),
+      decoration: InputDecoration(
+        labelText: label,
+        helperText: helper,
+        errorText: error,
+      ),
     ),
   );
 
@@ -133,6 +154,16 @@ class _NewProposalDialogState extends State<_NewProposalDialog> {
               _field('super-proposal-goal', 'Goal', _goal, lines: 2),
               _field('super-proposal-why', 'Why', _why, lines: 2),
               _field('super-proposal-done', 'Done when', _done, lines: 2),
+              _field(
+                'super-proposal-evidence',
+                'Evidence',
+                _evidence,
+                lines: 2,
+                helper: 'One per line: a link, a log line, what you saw.',
+                error: _pieces.length > _maxEvidence
+                    ? 'At most $_maxEvidence, one per line.'
+                    : null,
+              ),
               Wrap(
                 spacing: grid.AppDesktop.listRowGap,
                 children: [
