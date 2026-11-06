@@ -444,4 +444,21 @@ describe('lost work goes to an ordinary project worker', () => {
     expect(text).toContain('Parser committed; continue with the writer.')
     expect(text).not.toContain('refs/pull/')
   })
+
+  it.each(['Review', 'Test'])('recovers a lost %s step with an independent worker of adequate strength', stepName => {
+    const s = crewSwarm(['Builder', 'Old', 'New'])
+    for (const agent of s.state.agents) agent.configuration = { ...config, model: 'opus' }
+    const api = s.task('API', ['backend/src/api.ts'])
+    s.run({ type: 'work.assign', conversationId: api, agentId: s.ids.Builder! })
+    s.group(api).assignment!.status = 'review'
+    const step = s.run({ type: 'conversation.create', title: stepName, brief: 'Check the API.', reviewOf: api,
+      step: stepName, checks: [] }).result.conversationId as string
+    for (const name of ['Old', 'New']) s.state.agents.find(a => a.id === s.ids[name])!.roleName = stepName === 'Test' ? 'Tester' : 'Reviewer'
+    s.run({ type: 'work.assign', conversationId: step, agentId: s.ids.Old! })
+    s.group(step).assignment!.status = 'lost'
+    s.group(step).lostAttempt = { id: s.group(step).assignment!.id, agentId: s.ids.Old! }
+    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, NOW).map(p => [p.conversationId, p.agentId])).toEqual([[step, s.ids.New]])
+    s.state.agents.find(a => a.id === s.ids.New)!.gridModel = 'grid-model'
+    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, NOW)).toEqual([])
+  })
 })
