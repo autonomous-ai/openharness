@@ -66,7 +66,7 @@ import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged }
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, setTimeZone, statusSchema, type AvatarUpload } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
 import { namedDefault } from './catalog.js'
-import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, onTeamAccount, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, isAgentChat, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, onTeamAccount, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing, sessionClosed } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
@@ -1840,7 +1840,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     projectChatJoin(group, worker.id, worker.displayName ?? worker.name)
     assignable(worker)
-    sameProject(state, group, worker)
+    sameProject(state, group, worker, true)
     const home = groupProject(state, group)
     // A teammate's agent on a personal machine keeps what it has; it takes no new task for another person's project.
     requireTeamWork(state, worker.machineId, worker.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines, taskAccess(group))
@@ -2196,6 +2196,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const project = manageProject(state, actor, command.projectId)
       project.members = projectMembers(state, command.memberIds)
       project.visibility = command.visibility
+      // Made private: a Regular agent already in its conversations holds what it heard there, so it is this project's from now
+      // on, as one assigned here would be (assignTo; security review 2 of #4116).
+      if (project.visibility === 'private') {
+        for (const target of state.agents.filter(a => a.regular && !a.privateProjectId)) {
+          if (state.conversations.some(c => c.agentIds.includes(target.id) && !isAgentChat(c) && groupProject(state, c).id === project.id)) target.privateProjectId = project.id
+        }
+      }
       // Whoever no longer reads it loses it from their Buddy in this same write (spec: Access): its sessions in their one Buddy
       // chat end, and its threads and PM lines there hide (buddies.ts hiddenProjectRow).
       endLostProjectSessions(project)
@@ -4022,7 +4029,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (isBuddyChat(group)) fail('BUDDY_CHAT_FIXED', 'A Buddy chat stays its owner\'s and their Buddy\'s: nobody else is added to it.', 403)
       const member = agent(state, command.agentId)
       if (isBuddy(member)) fail('BUDDY_CHAT_ONLY', 'A Buddy stays in its own chat: its owner\'s alone.', 403)
-      sameProject(state, group, member)
+      sameProject(state, group, member, !command.present)
       // Any agent may lead a task or be added to one, a linked one included, whatever its role (project instructions, phase 4).
       if (member.workDecision === 'stop' && (command.lead || command.present)) fail('STOP_REQUESTED', 'This agent is stopping. Wait for its execution host.')
       if (!command.present) {

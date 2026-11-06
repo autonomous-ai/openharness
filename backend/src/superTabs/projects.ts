@@ -614,10 +614,16 @@ function regularMayWorkIn(state: SuperTabState, target: Agent, project: SwarmPro
     && (!target.privateProjectId || target.privateProjectId === project.id)
 }
 
-export function sameProject(state: SuperTabState, group: Conversation, target: Agent): void {
+/** [admitsIdleRegular]: an assignment, the one way an idle Regular agent comes into a project (task #4116), which records its
+ *  private mark (commands.ts assignTo), or taking an agent out, which admits nobody. A chat join admits none: added while idle,
+ *  it would hear a private project with nothing recorded, or sit in several projects at once (security review 2 of #4116). */
+export function sameProject(state: SuperTabState, group: Conversation, target: Agent, admitsIdleRegular = false): void {
   const project = groupProject(state, group)
-  // An idle Regular agent takes its task's project, if its person reads it (task #4116); a busy one stays in its task's.
-  if (target.regular && agentProjectId(state, target) === NO_PROJECT && regularMayWorkIn(state, target, project)) return
+  // An idle Regular agent takes its task's project, if it may work there; a busy one stays in its task's.
+  if (target.regular && agentProjectId(state, target) === NO_PROJECT) {
+    if (!admitsIdleRegular) fail('REGULAR_TASK_ONLY', 'A Regular agent joins a project through a task there: give it one.', 403)
+    if (regularMayWorkIn(state, target, project)) return
+  }
   if (agentProjectId(state, target) !== project.id) {
     fail('PROJECT_SESSION', 'Start a separate agent for another project. This terminal belongs to its original project.')
   }

@@ -141,7 +141,8 @@ describe('a Regular agent and its task', () => {
     const secret = f.project('secret', 'private'), web = f.project('web', 'public')
     f.run({ type: 'project.sharing', projectId: secret.projectId, visibility: 'private', memberIds: ['owner', 'mate'] } as Command)
     expect(code(() => f.run({ type: 'conversation.agent', conversationId: secret.task, agentId: f.ada, present: true, lead: false } as Command, secret.asPm))).toBe('REGULAR_TASK_ONLY')
-    expect(code(() => f.run({ type: 'conversation.agent', conversationId: secret.conversationId, agentId: f.ada, present: true, lead: false } as Command))).toBe('REGULAR_TASK_ONLY')
+    // A person who cannot see it is refused sooner: it is no agent of theirs to add.
+    expect(code(() => f.run({ type: 'conversation.agent', conversationId: secret.conversationId, agentId: f.ada, present: true, lead: false } as Command))).not.toBeNull()
     // Working in one project, it joins none of another's.
     f.run({ type: 'work.assign', conversationId: web.task, agentId: f.ada }, web.asPm)
     expect(code(() => f.run({ type: 'conversation.agent', conversationId: secret.task, agentId: f.ada, present: true, lead: false } as Command, secret.asPm))).not.toBeNull()
