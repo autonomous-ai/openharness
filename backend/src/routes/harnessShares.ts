@@ -51,7 +51,8 @@ function shareListTeller(): (recipientId: string) => Promise<void> {
     held.set(recipientId, next)
     setTimeout(() => {
       held.delete(recipientId)
-      if (next.again) void tell(recipientId).catch(() => {})
+      // The bus never rejects a publish (bus.ts safePublish): nothing to catch.
+      if (next.again) void tell(recipientId)
     }, SHARES_TOLD_MS).unref?.()
     await publishDeviceMachineListChanged(recipientId, { reason: 'harness_shares' })
   }
