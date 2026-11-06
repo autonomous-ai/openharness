@@ -34,6 +34,12 @@ const ID = /^[A-Za-z0-9_-]{1,64}$/
 export const BUDDY_COPIES_FILE = 'project-copies.txt'
 const REFRESH_EVERY_MS = 60 * 60_000
 /** All of one pass's fetches share this: 50 projects offline must not hold a Buddy's start for 50 timeouts. */
+/**
+ * A hooks folder that holds none, for every git command on a Buddy's copy: the person's hooks are written for their own work.
+ * `worktree add` ran their post-checkout in the copy (WinTest3348's diagnostic, #3815). On Windows `/dev/null` names C:\dev\null,
+ * a folder any account may make, so there it is the NUL device, which can hold no hook.
+ */
+const NO_HOOKS = process.platform === 'win32' ? 'NUL' : '/dev/null'
 const FETCH_BUDGET_MS = 30_000
 const FETCH_TIMEOUT_MS = 20_000
 const FETCHES_AT_ONCE = 4
@@ -106,7 +112,7 @@ export async function prepareBuddyHome(home: string, projects: readonly BuddyPro
     try {
       // A folder of this name removed before (a link taken out, a folder deleted) may still be listed by its checkout.
       await run('git', ['-C', project.cwd, 'worktree', 'prune'], { timeout: 60_000 }).catch(() => undefined)
-      await run('git', ['-C', project.cwd, 'worktree', 'add', '--detach', '--', join(home, 'projects', dir), 'HEAD'], { timeout: 120_000 })
+      await run('git', ['-c', `core.hooksPath=${NO_HOOKS}`, '-C', project.cwd, 'worktree', 'add', '--detach', '--', join(home, 'projects', dir), 'HEAD'], { timeout: 120_000 })
       if (!known) rows.push({ id: project.id, name: project.name, dir })
       ready.push(project.name)
     } catch { missing.push(project.name) }
@@ -184,7 +190,7 @@ async function refreshCopy(path: string, name: string, deadline: number, signal:
   const state = (next: CopyState['state'], revision: string | null = null): CopyState => ({ name, revision, state: next })
   const entry = lstatSync(path, { throwIfNoEntry: false })
   if (!entry || !entry.isDirectory()) return state('failed')
-  const words = (args: string[]) => ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', path, ...args]
+  const words = (args: string[]) => ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${NO_HOOKS}`, '-C', path, ...args]
   const git = async (args: string[], options: { timeout?: number; signal?: AbortSignal } = {}) => (await run('git', words(args),
     { timeout: options.timeout ?? 60_000, maxBuffer: 64 * 1024 * 1024, env: gitEnv(process.env), ...(options.signal ? { signal: options.signal } : {}) })).stdout.trim()
   let at: string | null = null
