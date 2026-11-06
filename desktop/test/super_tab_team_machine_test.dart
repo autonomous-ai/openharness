@@ -142,7 +142,13 @@ void main() {
           teamWork: _refused('TEAM_ACCOUNT_REQUIRED'),
         ),
         if (restart)
-          _pool('m-team', contributor: 'owner', host: 'm', age: _offlineAge),
+          _pool(
+            'm-team',
+            contributor: 'owner',
+            host: 'm',
+            age: _offlineAge,
+            teamWork: _refused('MACHINE_OFFLINE'),
+          ),
       ];
       final c = server.controller();
       await c.refresh();
@@ -161,7 +167,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       await tester.tap(
-        find.byKey(const ValueKey('super-machine-row-m')),
+        find.byKey(const ValueKey('super-machine-m')),
         buttons: kSecondaryMouseButton,
       );
       await tester.pumpAndSettle();
