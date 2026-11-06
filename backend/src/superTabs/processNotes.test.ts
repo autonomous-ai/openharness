@@ -70,6 +70,39 @@ describe('a release\'s what-changed note for PMs', () => {
   })
 })
 
+describe('every note a PM has not confirmed', () => {
+  // SecAlder's review: only the newest note reached a PM, so no PM ever saw the crew note once a second note shipped.
+  it('reaches a PM that confirmed nothing, in its wake and inbox, and confirming the newest clears them all', () => {
+    expect(PROCESS_NOTES.length).toBeGreaterThan(1)
+    const state = swarm()
+    const wake = scheduleRequest(state, pm(state), T)!
+    const inbox = owedLines(state, project(state), T).join('\n')
+    for (const each of PROCESS_NOTES) {
+      expect(wake.draft.text).toContain(each.text)
+      expect(inbox).toContain(each.text)
+    }
+    expect(projectPulse(state, project(state), T).process).toEqual({ noteId: note.id })
+    recordWake(project(state), wake, T, wake.draft.id)
+    project(state).processNote = { ...project(state).processNote, confirmed: note.id }
+    expect(owedLines(state, project(state), T)).toEqual([])
+  })
+
+  it('shows only the notes after the one it confirmed', () => {
+    const state = swarm()
+    project(state).processNote = { confirmed: PROCESS_NOTES[0]!.id }
+    const inbox = owedLines(state, project(state), T).join('\n')
+    expect(inbox).not.toContain(PROCESS_NOTES[0]!.text)
+    expect(inbox).toContain(note.text)
+  })
+
+  it('never goes back when a PM confirms an older note after a newer one', () => {
+    const f = confirmFixture()
+    f.run({ type: 'process.confirm', projectId: f.app.projectId, noteId: note.id }, asAgent(f.pm))
+    f.run({ type: 'process.confirm', projectId: f.app.projectId, noteId: PROCESS_NOTES[0]!.id }, asAgent(f.pm))
+    expect(f.state.projects!.find(p => p.id === f.app.projectId)!.processNote).toMatchObject({ confirmed: note.id })
+  })
+})
+
 describe('a project with no crew', () => {
   const confirmed = (crew: boolean) => {
     const state = swarm(crew)
@@ -93,27 +126,27 @@ describe('a project with no crew', () => {
   })
 })
 
-describe('process.confirm', () => {
-  const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
-  const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
-  function fixture() {
-    let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
-    let next = 0
-    const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
-      const effects = applyCommand(state, actor, command, { operationId: `op${next++}`, now: T,
-        contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, ...context })
-      state = effects.state
-      return effects
-    }
-    const app = run({ type: 'project.create', name: 'App', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
-    const add = (harnessId: string, lead: boolean) => run({ type: 'agent.add', conversationId: app.conversationId, harnessId, machineId: 'machine', name: harnessId,
-      lead, configuration }).result.agentId as string
-    return { run, app, pm: add('pm', true), worker: add('worker', false), get state() { return state } }
+const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
+const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
+function confirmFixture() {
+  let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
+  let next = 0
+  const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
+    const effects = applyCommand(state, actor, command, { operationId: `op${next++}`, now: T,
+      contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, ...context })
+    state = effects.state
+    return effects
   }
-  const asAgent = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'owner' })
+  const app = run({ type: 'project.create', name: 'App', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
+  const add = (harnessId: string, lead: boolean) => run({ type: 'agent.add', conversationId: app.conversationId, harnessId, machineId: 'machine', name: harnessId,
+    lead, configuration }).result.agentId as string
+  return { run, app, pm: add('pm', true), worker: add('worker', false), get state() { return state } }
+}
+const asAgent = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'owner' })
 
+describe('process.confirm', () => {
   it('records the PM\'s confirmation of a note, and refuses an unknown note or another agent', () => {
-    const f = fixture()
+    const f = confirmFixture()
     expect(() => f.run({ type: 'process.confirm', projectId: f.app.projectId, noteId: 'no-such-note' }, asAgent(f.pm)))
       .toThrow(expect.objectContaining({ code: 'INVALID_NOTE' }))
     expect(() => f.run({ type: 'process.confirm', projectId: f.app.projectId, noteId: note.id }, asAgent(f.worker)))

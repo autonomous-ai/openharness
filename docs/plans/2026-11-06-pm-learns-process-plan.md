@@ -9,6 +9,8 @@ tools, hears once when a release changes how PMs work and confirms it, and is to
 **As built:** the no-crew line rides on the PM's wakes only, as the brief says ("at its next wake until it marks one"),
 not on every inbox digest; the what-changed note is in both until confirmed. To fit the manual's 24 KB, the route and
 start blocks say the same in fewer words, and the manual has 2 bytes left: the next addition needs a trim or a new cap.
+After SecAlder's review, a PM's wakes and inbox list every note after the newest it confirmed (oldest first), not only the
+newest, and confirming the newest clears them all; confirming an older note after a newer one never brings the newer back.
 
 **Architecture:**
 1. The manual (cli/src/lib/swarmTools.ts) gains a "Crew and lanes" section, carried by the coordinator's sheet

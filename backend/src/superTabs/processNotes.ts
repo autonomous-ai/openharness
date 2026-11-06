@@ -3,7 +3,7 @@
  * that a release changed how PMs work). A release that changes the coordinator's tool sheet (cli lib/swarmToolSheets.ts, which
  * pins the note it was announced with) or the built-in PM schedule (pmSchedule.ts PM_SCHEDULE_TEXT, pinned by `schedule`)
  * adds a note here, newest last. Each project's PM is woken once for the newest note it has not confirmed, and its wakes and
- * inbox list it as owed until it sends `process.confirm`; the board's pulse names it until then (pulse.ts).
+ * inbox list every note it has not confirmed as owed until it confirms the newest with `process.confirm`; the board's pulse names it until then (pulse.ts).
  */
 import type { SuperTabState } from './model.js'
 import { agentProjectId, type SwarmProject } from './projects.js'
@@ -32,23 +32,32 @@ export const PROCESS_NOTES: readonly ProcessNote[] = [
 
 export const latestProcessNote = (): ProcessNote | undefined => PROCESS_NOTES.at(-1)
 
-/** The newest note [project]'s PM has not confirmed, or null. */
-export function unconfirmedNote(project: Pick<SwarmProject, 'processNote'>): ProcessNote | null {
-  const note = latestProcessNote()
-  return note && project.processNote?.confirmed !== note.id ? note : null
+/** Every note after the newest one [project]'s PM confirmed, oldest first: all of them when it confirmed none (SecAlder's review:
+ *  a PM that missed a note still reads it when the next one ships). Confirming the newest clears them all. */
+export function unconfirmedNotes(project: Pick<SwarmProject, 'processNote'>): ProcessNote[] {
+  return PROCESS_NOTES.slice(noteIndex(project.processNote?.confirmed) + 1)
 }
+
+/** The newest note [project]'s PM has not confirmed, or null: the one a wake is for and the board names. */
+export const unconfirmedNote = (project: Pick<SwarmProject, 'processNote'>): ProcessNote | null => unconfirmedNotes(project).at(-1) ?? null
+
+/** [id]'s place in PROCESS_NOTES, or -1 for none or an unknown one. */
+export const noteIndex = (id: string | undefined): number => PROCESS_NOTES.findIndex(note => note.id === id)
 
 /** Whether [project] has an agent marked crew (crew.ts). */
 export const hasCrew = (state: SuperTabState, project: SwarmProject): boolean =>
   state.agents.some(a => !!a.crew && agentProjectId(state, a) === project.id)
 
-/** The what-changed note [project]'s PM owes, for its wakes and its inbox (inbox.ts owedLines), until it confirms it. */
+/** The what-changed notes [project]'s PM owes, oldest first, for its wakes and its inbox (inbox.ts owedLines), until it confirms it. */
 export function noteLines(project: SwarmProject): string[] {
-  const note = unconfirmedNote(project)
-  return note ? [`What changed for PMs (note ${note.id}): ${note.text} Confirm you read it: command process.confirm {"projectId":"${project.id}","noteId":"${note.id}"}.`] : []
+  const notes = unconfirmedNotes(project)
+  const newest = notes.at(-1)
+  if (!newest) return []
+  return [...notes.map(note => `What changed for PMs (note ${note.id}): ${note.text}`),
+    `Confirm you read ${notes.length > 1 ? 'them' : 'it'}: command process.confirm {"projectId":"${project.id}","noteId":"${newest.id}"}.`]
 }
 
-/** What [project]'s PM hears at each wake about the process (pmSchedule.ts): its unconfirmed note, and, while the project has no
+/** What [project]'s PM hears at each wake about the process (pmSchedule.ts): its unconfirmed notes, and, while the project has no
  *  crew, that it has none (the brief: "at its next wake until it marks one"). Neither wakes the PM by itself but the note's
  *  first time. */
 export function processLines(state: SuperTabState, project: SwarmProject): string[] {
