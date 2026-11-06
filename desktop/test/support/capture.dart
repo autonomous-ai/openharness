@@ -10,17 +10,21 @@ import 'real_fonts.dart';
 
 /// Fonts for a test that can also write what it draws.
 ///
-/// With [captureDir] set on a Mac, the actual system face and the app's icon
-/// faces, so the picture is the app's and not Ahem's boxes; otherwise the
-/// shared metric-compatible faces every regression run uses.
+/// Captures load the app's icon faces alongside the actual Mac system face
+/// or the shared metric-compatible text faces on Windows and Linux.
 Future<void> loadCaptureFonts(String? captureDir) async {
-  if (captureDir == null || !Platform.isMacOS) return loadRealFonts();
-  for (final family in ['.AppleSystemUIFont', 'Roboto']) {
-    final bytes = ByteData.sublistView(
-      await File('/System/Library/Fonts/SFNS.ttf').readAsBytes(),
-    );
-    await (FontLoader(family)..addFont(Future.value(bytes))).load();
+  if (captureDir == null) return loadRealFonts();
+  if (Platform.isMacOS) {
+    for (final family in ['.AppleSystemUIFont', 'Roboto']) {
+      final bytes = ByteData.sublistView(
+        await File('/System/Library/Fonts/SFNS.ttf').readAsBytes(),
+      );
+      await (FontLoader(family)..addFont(Future.value(bytes))).load();
+    }
+  } else {
+    await loadRealFonts();
   }
+  // Widget tests omit icon faces unless loaded explicitly on every platform.
   final manifest =
       jsonDecode(await rootBundle.loadString('FontManifest.json')) as List;
   for (final entry in manifest.cast<Map<String, dynamic>>()) {
