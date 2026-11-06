@@ -221,7 +221,11 @@ class SuperTabThreadCards extends ChangeNotifier {
         expanded: keepOlder,
         next: keepOlder
             ? held!.next
-            : (page['next'] is Map ? superTabMap(page['next']) : null),
+            : (held?.loadingOlder == true
+                  ? held!.next
+                  : (page['next'] is Map ? superTabMap(page['next']) : null)),
+        loadingOlder: held?.loadingOlder ?? false,
+        olderFailed: held?.olderFailed ?? false,
       );
       notifyListeners();
     } catch (_) {
@@ -285,18 +289,30 @@ class SuperTabThreadCards extends ChangeNotifier {
         }
         from = answer['next'] is Map ? superTabMap(answer['next']) : null;
       }
-      final all = replies.values.toList()..sort(superTabMessageOrder);
-      _cards[key] = (_cards[key] ?? card)._older(
+      // A reply that came in while this read ran is in the card, not in
+      // [replies]: both stay.
+      final now = _cards[key] ?? card;
+      final all = {
+        ...replies,
+        for (final m in now.replies) m.id: m,
+      }.values.toList()..sort(superTabMessageOrder);
+      _cards[key] = now._older(
         replies: List.unmodifiable(all),
         next: from,
-        expanded: true,
+        // Only when no older page is left: a read the cap stopped keeps its
+        // button, with what is still hidden counted.
+        expanded: from == null,
         loadingOlder: false,
       );
     } catch (_) {
       if (!current()) return;
       // What was read stays, so the next tap goes on from there.
-      final all = replies.values.toList()..sort(superTabMessageOrder);
-      _cards[key] = (_cards[key] ?? card)._older(
+      final now = _cards[key] ?? card;
+      final all = {
+        ...replies,
+        for (final m in now.replies) m.id: m,
+      }.values.toList()..sort(superTabMessageOrder);
+      _cards[key] = now._older(
         replies: List.unmodifiable(all),
         next: from,
         loadingOlder: false,
