@@ -1,3 +1,4 @@
+import { personalTasksFor } from './personalTasks.js'
 /**
  * The read API by parts (design section 4; shapes in contract.ts). Every read takes its time `T0` before any query and
  * makes the next cursor from it, so a write that commits late, inside the overlap, is still seen by the next poll.
@@ -133,6 +134,7 @@ export class SwarmReads {
       return { format: READ_FORMAT, tabId, cursor: cursorFor(t0, loaded.visibilityEpoch), serverTime: t0, lastChangedAt, epoch: loaded.visibilityEpoch,
         // This backend opens steps (task steps design): a newer CLI sends `step` only to a backend that says so.
         ...(this.options.githubApp ? { githubApp: true as const } : {}), steps: true as const, ...view.parts,
+        ...read.actor.kind === 'person' ? { personalTasks: personalTasksFor(loaded.groups, view, read.actor, true) } : {},
         ...stamped({ ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
           await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) }) }
     })
@@ -219,6 +221,7 @@ export class SwarmReads {
       if (!asAgentId) sent.groups = await this.servedTops.served(tabId, read.view.state, sent.groups)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
         epoch: read.parts.visibilityEpoch, ...sent,
+        ...read.actor.kind === 'person' ? { personalTasks: personalTasksFor(changed, read.view, read.actor, false) } : {},
         ...stamped({ ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) }, options.derivedEtag) }
     })
   }

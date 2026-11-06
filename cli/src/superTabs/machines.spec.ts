@@ -1,5 +1,4 @@
 import { AGENT_FOLDER_MARK, agentFolderFor } from './agentFolder.js'
-import { RELAY_REASONS } from './relayHealth.js'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -22,7 +21,7 @@ import { object } from './wire.js'
 import { processCoreApi } from '../services/processCoreApi.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 
-function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null, relayed: () => boolean = () => false) {
+function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null) {
   let now = 1000, stamp = 's0', team = false
   const core = fakeCore({ dataDir: '/isolated-pool-fixture', agents: {
     byAgent: vi.fn(id => id === 'running' ? { agentId: id } as never : undefined),
@@ -59,7 +58,7 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
     method === 'POST' && path.endsWith('/readings') ? readings(core, path, body) : backend(core, method, path, body)
   const claudeProfiles = vi.fn((): unknown[] => [])
   const codexProfiles = vi.fn((): unknown[] => [])
-  const deps = { team: () => team, backend: wire, open, capabilities, claudeProfiles, codexProfiles, start, prepare, log, env, privacy, modelsStamp, relayed, now: () => now }
+  const deps = { team: () => team, backend: wire, open, capabilities, claudeProfiles, codexProfiles, start, prepare, log, env, privacy, modelsStamp, now: () => now }
   const machine = new ContributedMachines(core, 'host', deps as never)
   return { setTeam: (on: boolean) => { team = on }, deps, claudeProfiles, codexProfiles, machine, pool, core, backend, readings, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
     stamp: (next: string) => { stamp = next } }
@@ -355,7 +354,7 @@ describe('contributed machine executor', () => {
     Object.assign(f.pool, { capabilitiesWanted: true })
     await f.machine.tick()
     const posted = (g: typeof f) => g.backend.mock.calls.filter(c => c[1] === 'POST').map(c => c[3] as Record<string, unknown>)
-    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'leadSwitch', 'buddyModel', 'buddyEngine', 'turnInbox'] })
+    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent', 'leadSwitch', 'buddyModel', 'buddyEngine', 'turnInbox'] })
     // A backend from before them does not ask, and would refuse the field.
     const older = fixture()
     await older.machine.tick()
@@ -429,75 +428,6 @@ describe('contributed machine executor', () => {
       expect(probes(f)).toHaveLength(1)
       f.step(10 * 60_000); await f.machine.tick()
       expect(probes(f)).toHaveLength(2)
-    })
-
-    it('reads a Harness Team account\'s engine it has not signed in as ready when its owner\'s relay is there', async () => {
-      const f = fixture({}, () => null, () => true)
-      withEngines(f)
-      await f.machine.tick()
-      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: null }])
-    })
-
-    // Task #3106: Kay's Mac read Claude as signed in for its Team account while the owner's relay refused every request, as
-    // the readiness looked only for the relay's file. Routing kept sending work there, and each start lost its task.
-    it('reads a Team account\'s relayed engine as signed out while the relay does not answer, says why, and ready again within a minute', async () => {
-      const f = fixture({}, () => null, () => true)
-      withEngines(f)
-      let health: { ok: true } | { ok: false; reason: string } = { ok: false, reason: RELAY_REASONS.down }
-      const relayHealth = vi.fn(async () => health)
-      const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never)
-      await machine.tick()
-      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }])
-      health = { ok: true }
-      f.advance(); await machine.tick()
-      // Within the minute the relay's answer is kept for: still read as it was.
-      expect(readings(f)[1]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }])
-      f.step(60_000); await machine.tick()
-      expect(readings(f).at(-1)!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: null }])
-      // The engines themselves were probed once: only the relay is asked again.
-      expect(probes(f)).toHaveLength(1)
-      expect(relayHealth).toHaveBeenCalledTimes(2)
-    })
-
-    // Security review 2 of #3098: the probe asks Claude's path, so an owner sign-in it cannot read is Claude's alone. A Mac
-    // whose owner has only ChatGPT kept getting Codex work before, and must still.
-    it('reads only Claude signed out when the owner\'s Claude sign-in cannot be read, Codex still on the relay', async () => {
-      const f = fixture({}, () => null, () => true)
-      const usage = f.request.getMockImplementation()!
-      f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe'
-        ? { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: false }] } : usage(type, ...rest as []))
-      const relayHealth = vi.fn(async () => ({ ok: false as const, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true as const }))
-      await new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never).tick()
-      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: true }])
-    })
-
-    // Each probe has the owner's daemon read the owner's Keychain item: while macOS refuses it, it may ask on the owner's screen.
-    it('asks again only five minutes after the owner\'s Claude sign-in could not be read', async () => {
-      const f = fixture({}, () => null, () => true)
-      withEngines(f)
-      const relayHealth = vi.fn(async () => ({ ok: false as const, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true as const }))
-      const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never)
-      await machine.tick()
-      f.step(4 * 60_000); await machine.tick()
-      expect(relayHealth).toHaveBeenCalledOnce()
-      f.step(60_000); await machine.tick()
-      expect(relayHealth).toHaveBeenCalledTimes(2)
-    })
-
-    it('reads a probe that failed outright as a relay that does not answer', async () => {
-      const f = fixture({}, () => null, () => true)
-      withEngines(f)
-      const relayHealth = vi.fn(async () => { throw new Error('unexpected') })
-      await new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never).tick()
-      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }])
-    })
-
-    it('never asks the relay on a machine without one', async () => {
-      const f = fixture()
-      withEngines(f)
-      const relayHealth = vi.fn(async () => ({ ok: true as const }))
-      await new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth } as never).tick()
-      expect(relayHealth).not.toHaveBeenCalled()
     })
 
     it('reads an engine the probe calls not installed as unknown, since a timed-out shell probe says the same (review of #1743)', async () => {
@@ -2647,17 +2577,17 @@ describe('removed machine cleanup', () => {
   })
 })
 
-// 2026-10-29: Anthropic answered 5 quick allowance reads, then refused them for 5 minutes (HTTP 429, retry-after 300). Each
-// machine read the allowance on every 15-second report, so Claude's showed as unknown on Ken's MacBook Pro while its
-// agents ran there. The reading is now kept for a while, and an unknown one says why.
+// The allowance is the CLIs' own report (services/usage.ts): Codex's costs a start of its app-server, so it is read at most
+// once in 3 minutes however often the machine reports, a reading that fails keeps the last good windows a while, and an
+// unknown one says why.
 describe('the allowance a machine reports', () => {
   const reads = (f: ReturnType<typeof fixture>) => f.request.mock.calls.filter(c => c[0] === 'usage_read').length
   const last = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).at(-1)![3] as Record<string, unknown>
   const answer = (codex: Record<string, unknown>) => async (type: string): Promise<Record<string, unknown>> =>
     type === 'usage_read' ? { providers: [{ provider: 'codex', account: 'k', ...codex }] } : {}
-  const limited = answer({ outcome: 'answered', httpStatus: 429, body: { error: {} } })
+  const limited = answer({ outcome: 'unreachable', source: 'cli', message: 'Codex did not answer when asked for its allowance on this machine.' })
 
-  it('is read from the vendor at most once in 3 minutes, however often the machine reports', async () => {
+  it('is read at most once in 3 minutes, however often the machine reports', async () => {
     const f = fixture()
     await f.machine.tick(); f.advance(); await f.machine.tick(); f.advance(); await f.machine.tick()
     expect(f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).length).toBe(3)
@@ -2666,7 +2596,7 @@ describe('the allowance a machine reports', () => {
     expect(reads(f)).toBe(2)
   })
 
-  it('keeps the last good windows while the vendor limits reads, and asks again only after 5 minutes', async () => {
+  it('keeps the last good windows while the CLI does not answer, and asks again 3 minutes later', async () => {
     const f = fixture()
     await f.machine.tick()
     f.request.mockImplementation(limited)
@@ -2674,9 +2604,9 @@ describe('the allowance a machine reports', () => {
     expect(reads(f)).toBe(2)
     expect(last(f)).toMatchObject({ quotas: [{ engine: 'codex', known: true, windows: [{ usedPercent: 25 }] }] })
     expect(last(f).quotaReasons).toBeUndefined()
-    f.step(180_000); await f.machine.tick()
-    expect(reads(f)).toBe(2)
     f.step(120_000); await f.machine.tick()
+    expect(reads(f)).toBe(2)
+    f.step(60_000); await f.machine.tick()
     expect(reads(f)).toBe(3)
   })
 
@@ -2686,10 +2616,10 @@ describe('the allowance a machine reports', () => {
     f.request.mockImplementation(limited)
     for (let i = 0; i < 4; i++) { f.step(300_000); await f.machine.tick() }
     expect(last(f)).toMatchObject({ quotas: [{ engine: 'codex', known: true }] })
-    // The next report, past the 15-second beat, still on the 429 read: the kept windows are now too old.
+    // The next report, past the 15-second beat, still on the failed read: the kept windows are now too old.
     f.step(16_000); await f.machine.tick()
     expect(last(f)).toMatchObject({ quotas: [{ engine: 'codex', known: false, windows: [] }],
-      quotaReasons: { codex: 'OpenAI is limiting how often the allowance can be read.' } })
+      quotaReasons: { codex: 'Codex did not answer when asked for its allowance on this machine.' } })
   })
 
   it('drops the kept windows at once when the engine signs out', async () => {
@@ -2710,27 +2640,11 @@ describe('the allowance a machine reports', () => {
     expect(reads(f)).toBe(2)
   })
 
-  it("says a Harness Team account's allowance is read on its owner's machine", async () => {
-    const f = fixture({}, () => null, () => true)
-    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
+  it('says the reason the CLI gave when its allowance report is not there', async () => {
+    const f = fixture()
+    f.request.mockImplementation(answer({ outcome: 'unreachable', source: 'cli', message: 'Codex did not answer when asked for its allowance on this machine.' }))
     await f.machine.tick()
-    expect(last(f).quotaReasons).toEqual({ codex: "This account runs on its owner's subscription; its allowance is read on the owner's machine." })
-  })
-
-  it("says why a Harness Team account cannot use its owner's subscription when the owner's relay does not answer", async () => {
-    const f = fixture({}, () => null, () => true)
-    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
-    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth: async () => ({ ok: false, reason: RELAY_REASONS.refused }) } as never)
-    await machine.tick()
-    expect(last(f).quotaReasons).toEqual({ codex: RELAY_REASONS.refused })
-  })
-
-  it("keeps Codex's reason when only the owner's Claude sign-in cannot be read", async () => {
-    const f = fixture({}, () => null, () => true)
-    f.request.mockImplementation(answer({ outcome: 'signedOut' }))
-    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, relayHealth: async () => ({ ok: false, reason: RELAY_REASONS.ownerSignIn, claudeOnly: true }) } as never)
-    await machine.tick()
-    expect(last(f).quotaReasons).toEqual({ codex: "This account runs on its owner's subscription; its allowance is read on the owner's machine." })
+    expect(last(f).quotaReasons).toEqual({ codex: 'Codex did not answer when asked for its allowance on this machine.' })
   })
 
   it('drops the reasons for a backend that refuses them, keeping the allowance, and offers them again ten minutes later', async () => {
@@ -2900,7 +2814,7 @@ describe('the profiles a machine reports', () => {
     expect(f.request.mock.calls.filter(c => (c[1] as { profile?: unknown } | undefined)?.profile).length).toBeLessThanOrEqual(8)
   })
 
-  it('reads each profile at most once in 3 minutes and not at all while Anthropic limits the reads', async () => {
+  it('reads each profile at most once in 3 minutes', async () => {
     const f = both()
     const profileReads = () => f.request.mock.calls.filter(c => c[0] === 'usage_read' && (c[1] as { profile?: unknown } | undefined)?.profile).length
     await f.machine.tick(); f.advance(); await f.machine.tick()
@@ -2908,14 +2822,8 @@ describe('the profiles a machine reports', () => {
     expect(first).toBe(2)
     f.step(180_000); await f.machine.tick()
     expect(profileReads()).toBe(first + 2)
-    const answer = f.request.getMockImplementation() as (type: string, payload?: unknown) => Promise<Record<string, unknown>>
-    f.request.mockImplementation(async (type: string, payload?: unknown): Promise<Record<string, unknown>> => (payload as { profile?: unknown } | undefined)?.profile
-      ? { providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 429, body: {} }] } : answer(type, payload))
-    f.step(180_000); await f.machine.tick()
-    const limited = profileReads()
-    f.step(180_000); await f.machine.tick()
-    expect(profileReads()).toBe(limited)
-    expect((posted(f).at(-1)!.profiles as Array<{ engine: string; leftPercent: number | null }>).find(p => p.engine === 'claude')!.leftPercent).toBe(70)
+    f.advance(); await f.machine.tick()
+    expect(profileReads()).toBe(first + 2)
   })
 
   it('drops the profiles after the backend refuses the field, and offers them again ten minutes later', async () => {
@@ -3128,5 +3036,18 @@ describe('fresh Buddy idle proof (#3824)', () => {
     expect(posts(f)).toHaveLength(2)
     expect(posts(f).every(p => (p.idleBuddyHarnessIds as string[])?.join() === 'idle')).toBe(true)
     expect(f.core.agents.activity).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Task #4116 (Swarm v3): a Regular agent's start comes apart from `starts` (backend read/hostRows.ts), so a host from before
+// never launches it as a project's agent; this host launches it, and says it can.
+describe('a Regular agent\'s start', () => {
+  it('is launched from its own list', async () => {
+    const f = fixture()
+    const pool = f.pool as Record<string, unknown>
+    pool.regularStarts = pool.starts
+    pool.starts = []
+    await f.machine.tick()
+    expect(f.start).toHaveBeenCalledTimes(1)
   })
 })

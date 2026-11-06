@@ -45,6 +45,87 @@ async function fixture() {
 }
 
 describe('durable proposal cards', () => {
+  it('persists personal Review decisions, enforces direct identity before replay, and reads only changed task summaries', async () => {
+    const f = await fixture()
+    const read = new SwarmReads(f.store)
+    await f.execute({ type: 'member.approvalMode', mode: 'review' }, peer)
+    const initial = await read.firstLoad(peer, f.tab)
+    expect(initial.personalTasks).toMatchObject({ approvalMode: 'review', reset: true, upserts: [], removed: [] })
+    f.clock.now += 100
+    const id = String((await f.execute({ type: 'conversation.create', title: 'Own task', requesterId: peer.sub, priority: 'P2',
+      task: { goal: 'Keep edits', changes: 'Restore drafts', constraints: 'No login reads', owns: ['backend/src/superTabs/'] },
+      checks: [{ description: 'Restores draft', independent: false }] }, owner, f.pm)).result.conversationId)
+    expect((await f.card(id)).taskApproval).toMatchObject({ personId: peer.sub, state: 'proposal' })
+    f.clock.now += 100
+    const changed = await read.changes(peer, f.tab, initial.cursor)
+    expect(changed).toMatchObject({ reload: false, personalTasks: { reset: false, upserts: [{ id, status: 'proposal', canApprove: true }] } })
+    const decision = { type: 'task.reject', conversationId: id, reason: 'Do later' }, operationId = randomUUID()
+    await expect(f.execute(decision, owner, f.pm, operationId)).rejects.toThrow()
+    await f.execute(decision, peer, undefined, operationId)
+    expect((await f.card(id)).taskApproval).toMatchObject({ state: 'rejected', reason: 'Do later' })
+    await expect(f.execute(decision, owner, undefined, operationId)).rejects.toThrow()
+    f.clock.now = Date.now() + 60_000 // Existing cursors intentionally overlap writes by thirty seconds.
+    const latest = await read.firstLoad(peer, f.tab)
+    expect(latest.personalTasks!.upserts).toContainEqual(expect.objectContaining({ id, status: 'rejected', reason: 'Do later', canApprove: false }))
+    f.clock.now += 100
+    expect(await read.changes(peer, f.tab, latest.cursor)).toMatchObject({ personalTasks: { upserts: [], removed: [] } })
+    const actorRead = await read.firstLoad(owner, f.tab, f.pm)
+    expect(actorRead.personalTasks).toBeUndefined()
+    // Revocation must invalidate a cursor before any private rows can be served again.
+    await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    expect(await read.changes(peer, f.tab, latest.cursor)).toMatchObject({ reload: true })
+    expect((await read.firstLoad(peer, f.tab)).personalTasks!.upserts).toEqual([])
+  })
+
+  it('keeps legacy Buddy delivery, carries its person gate to one task, and rejects conversion after the mirror is dormant', async () => {
+    const f = await fixture()
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: false })
+    await f.execute({ type: 'member.approvalMode', mode: 'review' })
+    const added = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } })
+    const startId = String(added.result.startId), chatId = String(added.result.conversationId)
+    const host = (command: unknown) => f.store.execute(owner, f.tab, { operationId: randomUUID(), command: commandSchema.parse(command) }, undefined, 'proposal-mac')
+    await host({ type: 'agent.startDispatch', startId })
+    const buddyId = String((await host({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })).result.agentId)
+    await host({ type: 'agent.startSettled', startId, warning: null })
+    const text = 'Keep offline drafts'
+    const ask = await f.execute({ type: 'message.send', conversationId: chatId, text, recipientIds: [buddyId], replyTo: null })
+    const sent = await f.execute({ type: 'buddy.propose', conversationId: chatId, projectId: 'lead', ownerMessageId: ask.result.messageId,
+      text, goal: text, scope: 'Drafts', priority: 'normal' }, owner, buddyId)
+    const messageId = String(sent.result.messageId)
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: f.pm, messageId } })).toBe(1)
+    const create = { type: 'conversation.create', title: text, priority: 'P2', proposalMessageId: messageId,
+      task: { goal: text, changes: 'Restore drafts', constraints: 'No login', owns: ['backend/src/superTabs/'] },
+      checks: [{ description: 'Draft returns', independent: false }] }
+    const id = String((await f.execute(create, owner, f.pm)).result.conversationId)
+    expect((await f.card(id)).taskApproval).toMatchObject({ state: 'proposal', personId: owner.sub })
+    const { legacyProposalId } = await import('../src/superTabs/proposalCards.js')
+    const mirrorId = legacyProposalId('lead', messageId)
+    const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: mirrorId } } })
+    await db.swarmGroup.update({ where: { id: row.id }, data: { dormant: true, data: { ...(row.data as object), dormant: true }, version: { increment: 1 } } })
+    await expect(f.execute(create, owner, f.pm)).rejects.toThrow()
+    expect((await new SwarmReads(f.store).firstLoad(owner, f.tab)).personalTasks!.upserts.map(r => r.id)).toEqual([id])
+  })
+  it('keeps Auto approve automatic, then hands an approved Review choice through the normal store assignment', async () => {
+    const f = await fixture(), read = new SwarmReads(f.store)
+    const create = () => f.execute({ type: 'conversation.create', title: 'Keep drafts', requesterId: owner.sub, priority: 'P2',
+      task: { goal: 'Keep drafts', changes: 'Restore', constraints: 'No login', owns: ['backend/src/superTabs/'] },
+      checks: [{ description: 'Draft returns', independent: false }] }, owner, f.pm)
+    const auto = String((await create()).result.conversationId)
+    expect((await f.card(auto)).taskApproval).toBeUndefined()
+    expect((await read.firstLoad(owner, f.tab)).personalTasks).toMatchObject({ approvalMode: 'autoApprove', upserts: [{ id: auto, status: 'planned' }] })
+    const worker = String((await f.execute({ type: 'agent.add', conversationId: auto, machineId: 'proposal-mac', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId)
+    await f.execute({ type: 'member.approvalMode', mode: 'review' })
+    const review = String((await create()).result.conversationId)
+    await expect(f.execute({ type: 'work.assign', conversationId: review, agentId: worker }, owner, f.pm)).rejects.toThrow()
+    await f.execute({ type: 'task.suggest', conversationId: review, agentId: worker }, owner, f.pm)
+    const approve = { type: 'task.approve', conversationId: review }, operation = randomUUID()
+    await f.execute(approve, owner, undefined, operation)
+    await f.execute(approve, owner, undefined, operation)
+    expect((await f.card(review))).toMatchObject({ assignment: null, taskApproval: { state: 'approved', suggestedAgentId: worker } })
+    await f.execute({ type: 'work.assign', conversationId: review, agentId: worker }, owner, f.pm)
+    expect((await f.card(review)).assignment).toMatchObject({ agentId: worker, status: 'working' })
+    expect((await read.firstLoad(owner, f.tab)).personalTasks!.upserts).toContainEqual(expect.objectContaining({ id: review, status: 'working', agent: { id: worker, name: expect.any(String) } }))
+  })
   it('turns verified unanswered original messages into cards once on switch, preserving words and ownership', async () => {
     const f = await fixture()
     await f.execute({ type: 'project.boardMode', projectId: 'lead', on: false })

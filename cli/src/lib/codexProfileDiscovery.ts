@@ -1,5 +1,5 @@
 /**
- * Finds references to Codex state folders, without executing a shell or reading auth.json. This is
+ * Finds references to Codex state folders, without executing a shell or reading a sign-in. This is
  * a bounded reader of literal shell configuration, not a shell interpreter: computed paths remain
  * available through explicit linking (see `codexProfiles.ts`).
  *
@@ -121,7 +121,8 @@ class CodexProfileDiscovery {
       const base = entry.split('/').pop() ?? entry
       const name = base.replace(/^\./, '')
       if (!name.toLowerCase().startsWith('codex')) continue
-      if (existsSync(join(entry, 'auth.json')) || existsSync(join(entry, 'config.toml'))) {
+      // Its config, never its sign-in: whether a sign-in file is there is not Harness's to look at (loginReads.spec.ts).
+      if (existsSync(join(entry, 'config.toml'))) {
         this.paths.add(entry)
       }
     }
