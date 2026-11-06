@@ -9,6 +9,7 @@ import 'package:harness_mobile/core/models.dart' show Machine;
 import 'package:harness_mobile/shared/widgets/app_icon_button.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
+import '../../swarm/swarm_inbox.dart' show SwarmListing;
 import '../../swarm/swarm_session.dart';
 import '../machines_tab.dart';
 import '../phone_navigation.dart' show phoneRoute;
@@ -302,6 +303,12 @@ class _AddDevicePageState extends State<AddDevicePage> {
   /// Swarm is on: Intern 3 is set up for it — no OpenCode of its own on its screen (os/setup.py `swarm`), and Start goes
   /// to Set up Swarm ([SetUpSwarmPage]) rather than to a "new" row whose Start opens one.
   bool get _forSwarm => SwarmScope.of(context) != null;
+
+  /// The Swarm the person picked for Start, when they have two or more ([_swarmChoice]).
+  String? _swarmPick;
+
+  /// The person's Swarms were asked for, once, as Start was offered before they were read.
+  bool _swarmsAsked = false;
 
   @override
   void dispose() {
@@ -900,6 +907,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
           machineId: machine.machineId,
           machineName: name.isEmpty ? machine.displayName : name,
           ownerName: owner.isEmpty ? 'My' : owner,
+          swarmId: _pickedSwarm(session)?.id,
         ),
       ),
     );
@@ -1253,18 +1261,68 @@ class _AddDevicePageState extends State<AddDevicePage> {
           ),
           if (offered) ...[
             const SizedBox(height: 12),
-            say(switch (Intern3Swarm.targetOf(SwarmScope.of(context)!)) {
-              null =>
-                'Start makes your Swarm, adds it there and starts your Buddy on it. '
-                    'Claude Code is installed on it first.',
-              final swarm =>
-                'Start adds it to "${swarm.name}" and starts your Buddy there. '
-                    'Claude Code is installed on it first.',
-            }),
+            ..._swarmChoice(tty, say),
           ],
         ];
     }
   }
+
+  /// Which Swarm Start adds it to. With two or more, the person picks one, Home's picked to begin with; with one, it goes
+  /// there; with none, Start makes one (owner, 2026-11-06).
+  List<Widget> _swarmChoice(Tty tty, Text Function(String) say) {
+    final session = SwarmScope.of(context)!;
+    // Not read yet: "makes your Swarm" would be said of a person who has some.
+    if (!session.inbox.loaded && !_swarmsAsked) {
+      _swarmsAsked = true;
+      unawaited(
+        session.inbox.refreshAll().then((_) {
+          if (mounted) setState(() {});
+        }),
+      );
+    }
+    final choices = Intern3Swarm.choicesOf(session);
+    final picked = _pickedSwarm(session);
+    if (choices.length < 2) {
+      return [
+        say(switch (picked) {
+          null =>
+            'Start makes your Swarm, adds it there and starts your Buddy on it. '
+                'Claude Code is installed on it first.',
+          final swarm =>
+            'Start adds it to "${swarm.name}" and starts your Buddy there. '
+                'Claude Code is installed on it first.',
+        }),
+      ];
+    }
+    return [
+      say(
+        'Add it to which Swarm? Start adds it there and starts your Buddy. '
+        'Claude Code is installed on it first.',
+      ),
+      const SizedBox(height: 8),
+      SettingsGroup(
+        children: [
+          for (final swarm in choices)
+            SettingsRow(
+              key: ValueKey('add-device-swarm-${swarm.id}'),
+              title: swarm.name,
+              trailing: swarm.id == picked?.id
+                  ? Icon(LucideIcons.check300, size: 18, color: tty.green)
+                  : null,
+              onTap: _busy ? null : () => setState(() => _swarmPick = swarm.id),
+            ),
+        ],
+      ),
+    ];
+  }
+
+  /// The Swarm picked on this page ([_swarmChoice]), while it is still one of the person's; else the one Start would
+  /// choose by itself.
+  SwarmListing? _pickedSwarm(SwarmSession session) =>
+      Intern3Swarm.choicesOf(
+        session,
+      ).where((s) => s.id == _swarmPick).firstOrNull ??
+      Intern3Swarm.targetOf(session);
 
   List<Widget> _actions() {
     switch (_step) {

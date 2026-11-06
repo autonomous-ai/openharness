@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../../swarm/swarm_buddy.dart';
+import '../../swarm/swarm_home_top.dart' show swarmHomeOffers;
 import '../../swarm/swarm_inbox.dart';
 import '../../swarm/swarm_reader.dart';
 import '../../swarm/swarm_request.dart';
@@ -37,8 +38,13 @@ class Intern3Swarm extends ChangeNotifier {
     required this.machineId,
     required this.machineName,
     required this.ownerName,
+    this.swarmId,
     this.pause = const Duration(seconds: 2),
   });
+
+  /// The Swarm the person picked on Set up Intern 3, when they have two or more (owner, 2026-11-06); null for the one
+  /// [targetOf] chooses.
+  final String? swarmId;
 
   final SwarmSession session;
   final SwarmComputers computers;
@@ -93,13 +99,22 @@ class Intern3Swarm extends ChangeNotifier {
   /// The setup of Intern 3 for the Swarm, kept until it settles so a retry joins it.
   String? _setupId;
 
-  /// The Swarm Intern 3 joins: the one Home shows, else the first listed; null when the person has none, and a new one
-  /// is made.
-  SwarmListing? get target => targetOf(session);
+  /// The Swarm Intern 3 joins: the one the person picked ([swarmId]), else the one Home shows, else the first listed; null
+  /// when the person has none, and a new one is made.
+  SwarmListing? get target =>
+      choicesOf(session).where((s) => s.id == swarmId).firstOrNull ??
+      targetOf(session);
 
-  /// [target] for [session], before any run: what Start says it does.
+  /// The Swarms Intern 3 can join: every one the person reads, as Home offers them. Any member adds a computer of their
+  /// own (backend superTabs/commands.ts `machine.contribute`: the machine's owner), so none is left out for its role.
+  static List<SwarmListing> choicesOf(SwarmSession session) => [
+    for (final swarm in session.inbox.swarms)
+      if (swarmHomeOffers(session.inbox, swarm.id)) swarm,
+  ];
+
+  /// [target] with nothing picked: the one Home shows, else the first.
   static SwarmListing? targetOf(SwarmSession session) {
-    final swarms = session.inbox.swarms;
+    final swarms = choicesOf(session);
     if (swarms.isEmpty) return null;
     final shown = session.home.swarmId;
     return swarms.where((s) => s.id == shown).firstOrNull ?? swarms.first;
