@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type SuperTabState } from './model.js'
 import { projectOf } from './projects.js'
-import { canChat, steers, switched } from './boardRights.js'
+import { canChat, legacyAsks, steers, switched } from './boardRights.js'
 import { openTasks } from './dispatch.js'
 import { PM_SCHEDULE_TEXT, pmScheduleText, sweepDue } from './pmSchedule.js'
 import { owedLines } from './inbox.js'
@@ -244,5 +244,20 @@ describe('the PM text in a switched project', () => {
     const before = f.state.conversations.find(c => c.id === f.app.conversationId)!.owed?.length ?? 0
     ask()
     expect(f.state.conversations.find(c => c.id === f.app.conversationId)!.owed?.length ?? 0).toBe(before)
+  })
+})
+
+describe('switching a project on', () => {
+  it('hands over every message still owed to its PM, oldest first, and keeps each until its card exists', () => {
+    const f = boardFixture()
+    const ask = (text: string, actor: Actor) => f.run({ type: 'message.send', conversationId: f.app.conversationId, text, replyTo: null, recipientIds: [f.pm] }, actor).messageId as string
+    const first = ask('First', member), second = ask('Second', granted)
+    expect(legacyAsks(f.state, f.project())).toEqual([
+      { messageId: first, conversationId: f.app.conversationId, personId: 'd', at: 1000, thread: first },
+      { messageId: second, conversationId: f.app.conversationId, personId: 'c', at: 1000, thread: second },
+    ])
+    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
+    // No card is made here yet (#3817 makes them): the asks stay, so nothing is dropped.
+    expect(legacyAsks(f.state, f.project()).map(a => a.messageId)).toEqual([first, second])
   })
 })
