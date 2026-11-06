@@ -32,8 +32,12 @@ import { RebindSender, replacementObservations } from './replacements.js'
 import { TerminalHost, type TerminalRelay } from './terminal.js'
 import { realRelayRecovery } from './relayRecovery.js'
 import { LimitResume } from './limitResume.js'
+import { PmRotation, type PmAccount, type PmRotationDeps } from './pmRotation.js'
+import { appendPmMove, readPmPool } from '../lib/pmAccountPool.js'
+import { listClaudeProfiles } from '../lib/claudeProfiles.js'
+import type { CredentialReadDeps } from '../lib/agentCredentials.js'
 import { CrewKeeper, isCrewRow } from './crew.js'
-import { LeadSwitchRequests, type SwitchRow } from './leadSwitchRequest.js'
+import { LeadSwitchRequests, profileSignedIn, type SwitchRow } from './leadSwitchRequest.js'
 import { BuddyModelRequests, type BuddyModelRow } from './buddyModel.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { conversationTokens } from '../lib/conversationSize.js'
@@ -216,6 +220,10 @@ export interface SuperTabHostOptions {
   buddyModels?: Pick<BuddyModelRequests, 'serve'>
   /** What restarts a stuck Product Manager in its own pane, on the same session (watchLead), for a spec. */
   restartLead?: (harnessId: string) => Promise<{ ok: true } | { ok: false; error: string }>
+  /** Where the PM account rotation reads whether an account is signed in (the Keychain on macOS, files elsewhere), for a spec. */
+  credentials?: CredentialReadDeps
+  /** What a PM's account rotation does outside this host's own state (superTabs/pmRotation.ts), for a spec. */
+  pmRotation?: Partial<PmRotationDeps>
 }
 
 const defaultAgentCommand = (core: CoreApi, machineId: string) => agentCommandPrefix(core.daemon, machineId,
@@ -386,6 +394,7 @@ const LEAD_RETRY_MS = 5_000
 const LATE_REPLACEMENT_MS = SWITCH_RECOVERY_MS
 const LEAD_RETRY_MAX_MS = 30 * 60_000
 const LEAD_REOPEN_WAIT_MS = 60_000
+const PM_ACCOUNTS_MS = 30_000
 /** How often a running Product Manager is checked for a hang (watchLead): its owed ask's time is in minutes. */
 const LEAD_WATCH_MS = 30_000
 /** How long a restart of a stuck Product Manager may take: the relaunch waits on the engine's command and its pane. */
@@ -665,6 +674,12 @@ export class SuperTabHost {
   private readonly limitResume: LimitResume
   /** Restarts a frozen crew session and continues a reopened one (crew.ts); the keep-alive below reopens it. */
   private readonly crew: CrewKeeper
+  /** Moves a Claude PM between the accounts its owner ticked (pmRotation.ts), and the PMs it serves with their names. */
+  private readonly pmRotation: PmRotation
+  private readonly pmNames = new Map<string, string>()
+  private readonly credentials: CredentialReadDeps | undefined
+  /** This machine's Claude accounts, read again after PM_ACCOUNTS_MS: listing them scans folders, and the rotation asks each tick. */
+  private pmAccountsRead: { at: number; value: PmAccount[] } | null = null
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
@@ -704,6 +719,8 @@ export class SuperTabHost {
       owns: async harnessId => (await this.sources.feed.fresh()).assignments.some(a => a.harnessId === harnessId) })
     this.rebinds = new RebindSender((path, body) => backend(this.core, 'POST', path, body), this.now)
     this.leadSwitches = new LeadSwitchRequests(core, machineId, { now: this.now, log: this.log, team: isTeamDaemon })
+    this.credentials = options.credentials
+    this.pmRotation = new PmRotation(this.pmRotationDeps(options.pmRotation))
     // Over this machine's own daemon socket, which answers as the machine owner: the Buddy runs only on its owner's machine.
     this.buddyModels = options.buddyModels ?? new BuddyModelRequests({ dataDir: core.dataDir, now: this.now, log: this.log,
       open: () => openDaemon({ dataDir: core.dataDir, port: core.daemon.port, machineId }),
@@ -816,6 +833,81 @@ export class SuperTabHost {
     return this.machines ??= new ContributedMachines(this.core, this.machineId,
       { ...this.machineDeps, sources: this.sources, progress: ids => this.terminal.progressOf(ids) })
   }
+  private pmAccounts(): PmAccount[] {
+    const now = this.now()
+    if (this.pmAccountsRead && now - this.pmAccountsRead.at < PM_ACCOUNTS_MS) return this.pmAccountsRead.value
+    const value = listClaudeProfiles([], { machineId: this.machineId }).map(p => ({ id: p.id, label: p.label, reportLabel: p.reportLabel, home: p.default ? null : p.path }))
+    this.pmAccountsRead = { at: now, value }
+    return value
+  }
+  /** The account a PM runs on: its registry claudeHome, none meaning the default account. Compared by real folder, as a profile's
+   *  path may be a link to what the registry holds. */
+  private pmCurrent(harnessId: string): string | undefined {
+    const home = this.core.agents.byAgent(harnessId)?.claudeHome
+    const real = (path: string) => { try { return realpathSync(path) } catch { return path } }
+    return this.pmAccounts().find(a => home ? a.home !== null && real(a.home) === real(home) : a.home === null)?.id
+  }
+  /** Names of the PMs running here on an account, for the owner's account list (pmAccountsRequests.ts). */
+  pmHere(accountId: string): string[] {
+    return [...this.pmNames].filter(([harnessId]) => this.pmCurrent(harnessId) === accountId).map(([, name]) => name)
+  }
+  private pmRotationDeps(over: Partial<PmRotationDeps> = {}): PmRotationDeps {
+    const core = this.core
+    return {
+      pool: readPmPool,
+      accounts: () => this.pmAccounts(),
+      windows: id => this.contributed().claudeWindows(this.pmAccounts().find(a => a.id === id)?.home === null ? 'default' : id),
+      signedIn: id => profileSignedIn('claude', this.pmAccounts().find(a => a.id === id)?.home ?? 'default', this.now(), this.credentials).catch(() => false),
+      current: harnessId => this.pmCurrent(harnessId),
+      name: harnessId => { const session = core.agents.byAgent(harnessId); return session ? core.agents.displayName(session) : 'Your Product Manager' },
+      screen: async harnessId => { const read = await core.superTabs!.screen(harnessId, 0).catch(() => null); return read?.ok ? { text: read.text, hold: read.hold } : null },
+      turn: async harnessId => {
+        const state = (await core.agents.activity([harnessId]).catch(() => ({} as Record<string, string>)))[harnessId]
+        return state === 'working' ? 'busy' : state === 'idle' ? 'idle' : 'unknown'
+      },
+      alive: harnessId => !!core.agents.byAgent(harnessId) && core.agents.terminalAvailable(harnessId),
+      restart: (harnessId, claudeHome) => this.restartPm(harnessId, claudeHome),
+      restarting: harnessId => this.leadWatches.get(harnessId)?.restarting === true,
+      type: async (harnessId, text) => (await core.superTabs!.input(harnessId, text, ['Enter']).catch(() => ({ ok: false as const }))).ok,
+      // As the PM, to the person this machine's account is: the machine's owner, whose Buddy chat it lands in.
+      tell: async (row, text) => {
+        const personId = (await core.account.identity().catch(() => null))?.accountId
+        if (!identifier(personId)) throw new Error('this machine has no account to tell')
+        await backend(core, 'POST', `/api/super-tabs/${row.tabId}/commands`, { operationId: `pm-rotation-${randomUUID()}`, asAgentId: row.agent.id,
+          command: { type: 'person.tell', personId, text } })
+      },
+      record: move => { try { appendPmMove(move) } catch (error) { this.log(`PM account rotation: could not write the history: ${error instanceof Error ? error.message : String(error)}`) } },
+      now: this.now,
+      log: this.log,
+      ...over,
+    }
+  }
+  /** Relaunches a PM's own pane on the same session under another account, by the core's own restarter (`restartOnAccount`):
+   *  no wire request carries the account, and the restarter itself refuses a home that is not one of this machine's profiles.
+   *  Only an account its owner ticked is a target. The relaunch reads as a restart to keepAlive and watchLead, which leave
+   *  the session be until it is up. */
+  private async restartPm(harnessId: string, claudeHome: string | null): Promise<{ ok: true } | { ok: false; error: string }> {
+    const real = (path: string) => { try { return realpathSync(path) } catch { return path } }
+    const target = this.pmAccounts().find(a => claudeHome === null ? a.home === null : a.home !== null && real(a.home) === real(claudeHome))
+    if (!target || !readPmPool().includes(target.id)) {
+      this.log(`PM account rotation: ${target ? `the account ${target.label}` : 'an account of this machine'} is not ticked for Product Managers: not moving ${harnessId}.`)
+      return { ok: false, error: 'NOT_IN_POOL' }
+    }
+    const watch = this.leadWatches.get(harnessId) ?? { checkedAt: -Infinity, checking: false, restarting: false, settleUntil: -Infinity }
+    this.leadWatches.set(harnessId, watch)
+    watch.restarting = true
+    try {
+      const result = await (this.core.agents.restartOnAccount?.(harnessId, claudeHome) ?? Promise.resolve({ ok: false as const, code: 'UNSUPPORTED' }))
+      return result.ok ? { ok: true } : { ok: false, error: result.code }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    } finally {
+      watch.restarting = false
+      watch.settleUntil = this.now() + LEAD_REOPEN_WAIT_MS
+    }
+  }
+  /** The windows last read for a Claude account here (`'default'` or a profile id), for the owner's PM account list. */
+  accountWindows(id: string) { return this.contributed().claudeWindows(id) }
   private pollMachines() {
     void this.contributed().tick().catch(error => this.log(error instanceof Error ? error.message : String(error)))
     // Beside the pass, never behind it: a slow pass still keeps the machine's reading fresh (machines.ts beat).
@@ -1302,6 +1394,7 @@ export class SuperTabHost {
         leads.add(target.agent.harnessId)
         this.keepAlive(target.agent.harnessId, buddy ? row.buddySleepManaged === true ? 'buddy' : 'buddy-switch' : 'pm')
         if (row.lead === true) this.watchLead(target.agent.harnessId, row.owed)
+        if (row.lead === true) this.rotatePm(target)
         void this.leadSwitches.serve(target as unknown as SwitchRow).catch(error => this.log(`Engine switch: ${error instanceof Error ? error.name : typeof error}`))
       } else if (isCrewRow(row)) {
         // A project's crew is kept alive as its PM is (task #3397): reopened in place, then told to continue its task.
@@ -1426,6 +1519,8 @@ export class SuperTabHost {
     // A Lead the roster no longer marks (its project deleted) is never reopened again.
     for (const harnessId of this.buddySwitches.keys()) if (!rosterHarnesses.has(harnessId)) this.buddySwitches.delete(harnessId)
     for (const [harnessId, state] of this.keepAlives) if (!leads.has(harnessId) && !state.running) this.keepAlives.delete(harnessId)
+    for (const harnessId of this.pmNames.keys()) if (!leads.has(harnessId)) this.pmNames.delete(harnessId)
+    this.pmRotation.keep(leads)
     for (const [harnessId, watch] of this.leadWatches) if (!leads.has(harnessId) && !watch.checking && !watch.restarting) this.leadWatches.delete(harnessId)
     for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
     for (const deliveryId of this.unreadable) if (!seen.has(deliveryId)) this.unreadable.delete(deliveryId)
@@ -1601,6 +1696,18 @@ export class SuperTabHost {
    * review of #3213); a newer ask owed past its time may restart it again. Nothing during an engine switch or a reopen, checked
    * again right before the restart, as either may begin while its turn is read.
    */
+  /** A Claude PM running here may move to another account its owner ticked (pmRotation.ts). Not while it is being reopened,
+   *  restarted or switched: those are the keep-alive's, the watch's and the switch's. */
+  private rotatePm(target: HostAgent): void {
+    const harnessId = target.agent.harnessId
+    const session = this.core.agents.byAgent(harnessId)
+    if (session?.engine !== 'claude') return
+    this.pmNames.set(harnessId, this.core.agents.displayName(session))
+    const watch = this.leadWatches.get(harnessId)
+    if (this.keepAlives.get(harnessId)?.running || watch?.restarting || leadSwitchOf(this.core.dataDir, harnessId)) return
+    void this.pmRotation.serve(target, this.now()).catch(error => this.log(`PM account rotation: ${error instanceof Error ? error.message : String(error)}`))
+  }
+
   private watchLead(harnessId: string, owed: unknown): void {
     const watch = this.leadWatches.get(harnessId) ?? { checkedAt: -Infinity, checking: false, restarting: false, settleUntil: -Infinity }
     this.leadWatches.set(harnessId, watch)

@@ -79,6 +79,11 @@ export function retainedSleepingBuddies(dataDir: string, now = Date.now()): Set<
   } catch { return new Set() }
 }
 
+/** Account moves belong to project Leads alone; crew keepalive retention grants no authority to change accounts. */
+export function retainedProjectLeads(dataDir: string): Set<string> {
+  try { return new Set(read(retentionFile(dataDir)).leads ?? []) } catch { return new Set() }
+}
+
 /** Whether a stop may reach a Lead, for the core's guard, which fails closed (the review of #1635): with no file this
  *  machine never had a roster, so no Lead; one from before Leads were kept names no Lead apart, so each member may be one;
  *  one that cannot be read may name anyone, until the host's next roster rewrites it. */

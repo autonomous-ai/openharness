@@ -46,7 +46,8 @@ export function profileId(machineId: string, engine: 'claude' | 'codex', realpat
   return createHash('sha256').update(`${machineId}:${engine}:${realpath}`).digest('hex').slice(0, 16)
 }
 
-function accountOf(folder: string): { displayName?: string; emailAddress?: string } {
+/** The name and email a folder's `.claude.json` holds, for the owner's own screens only. */
+export function claudeAccountOf(folder: string): { displayName?: string; emailAddress?: string } {
   try {
     const file = join(folder, '.claude.json')
     if (statSync(file).size > MAX_ACCOUNT_FILE_BYTES) return {}
@@ -70,7 +71,7 @@ function reportLabelFor(path: string, home: string): string {
 }
 
 function profileFor(machineId: string, path: string, real: string, home: string, offered: boolean, isDefault = false): ClaudeProfile {
-  const { displayName, emailAddress } = accountOf(path)
+  const { displayName, emailAddress } = claudeAccountOf(path)
   return {
     id: profileId(machineId, 'claude', isDefault ? 'default' : real),
     ...(isDefault ? { default: true as const } : {}),

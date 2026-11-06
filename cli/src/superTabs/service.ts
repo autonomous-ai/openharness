@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
 import { validModelTokens } from '../lib/agentUsageWire.js'
 import { ASSIGNMENT_COMMANDS, staleAssignmentHint, wantsCurrent, withCurrentAssignment } from './assignmentIds.js'
+import { pmAccountsRequests, realPmAccountsDeps, type PmAccountsDeps } from './pmAccountsRequests.js'
 import { backend, swarmListedFor, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError, type SuperTabHostOptions, type SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
@@ -300,6 +301,8 @@ export interface SuperTabServiceOptions {
   setMachineAgents?: typeof setMachineAgents
   capacity?: typeof readCapabilities
   host?: (core: CoreApi, machineId: string, options: SuperTabHostOptions) => SuperTabHost
+  /** The owner's PM account requests' reads of this machine's accounts and sign-ins (superTabs/pmAccountsRequests.ts), for a spec. */
+  pmAccounts?: Partial<PmAccountsDeps>
   reservations?: (core: CoreApi, machineId: string) => ReservationBook
   /** The Swarm cards' reader (superTabs/cards.ts), for a spec. */
   cards?: (core: CoreApi, machineId: string) => SwarmCards
@@ -426,7 +429,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     stop: () => { disconnect(); void relay.stop() },
     swarmRole: async (harnessId: string) => (await within(swarmRoleFor(sources(), harnessId).then(grant => ({ grant }))))?.grant,
   }
+  // No host is woken to list accounts: with none running there are no readings yet, which the list says as no windows.
+  const pmAccounts = pmAccountsRequests(core, { ...realPmAccountsDeps(id => host?.accountWindows?.(id) ?? []), pmHere: id => host?.pmHere?.(id) ?? [], ...options.pmAccounts })
   const requests: ServiceRequests = {
+    ...pmAccounts,
     super_tabs: async (payload, asker, closed) => {
       // Help when the caller cannot be read from the roster (no tab, offline, not listed): a harness this computer started as a
       // Buddy still gets a Buddy's help, so a failed read never offers it the stdin its guard refuses.

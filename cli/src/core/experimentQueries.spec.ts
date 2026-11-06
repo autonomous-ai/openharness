@@ -337,6 +337,24 @@ it('lets only the Swarm service reopen a Lead or close a member, by a valid agen
   expect(closeMember).toHaveBeenCalledTimes(2)
 })
 
+it('lets only the Swarm service restart an agent on another Claude account, and returns what the core says', async () => {
+  const restartOnAccount = vi.fn(async (): Promise<{ ok: true } | { ok: false; code: string; message?: string }> => ({ ok: true }))
+  const core = fakeCore({ agents: { restartOnAccount } })
+  const allowed = new Set(['superTabs', 'orchestrator'])
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'restart_on_account', { agentId: 'pm', claudeHome: '/work/.claude-b' })).toEqual({ ok: true })
+  expect(restartOnAccount).toHaveBeenLastCalledWith('pm', '/work/.claude-b')
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'restart_on_account', { agentId: 'pm', claudeHome: null })).toEqual({ ok: true })
+  expect(restartOnAccount).toHaveBeenLastCalledWith('pm', null)
+  restartOnAccount.mockResolvedValueOnce({ ok: false, code: 'INVALID_PROFILE' })
+  expect(await answerExperimentQuery(core, allowed, 'superTabs', 'restart_on_account', { agentId: 'pm', claudeHome: null })).toEqual({ ok: false, code: 'INVALID_PROFILE' })
+  expect(await answerExperimentQuery(core, allowed, 'orchestrator', 'restart_on_account', { agentId: 'pm', claudeHome: null })).toEqual({ error: 'NOT_SUPER_TABS' })
+  for (const payload of [{ agentId: '', claudeHome: null }, { agentId: '../x', claudeHome: null }, { agentId: 'pm' }, { agentId: 'pm', claudeHome: 5 }, { agentId: 'pm', claudeHome: '' }]) {
+    expect(await answerExperimentQuery(core, allowed, 'superTabs', 'restart_on_account', payload)).toEqual({ error: 'INVALID_REQUEST' })
+  }
+  expect(restartOnAccount).toHaveBeenCalledTimes(3)
+  expect(await answerExperimentQuery(fakeCore(), allowed, 'superTabs', 'restart_on_account', { agentId: 'pm', claudeHome: null })).toEqual({ ok: false, code: 'UNSUPPORTED' })
+})
+
 describe('what the add-ons of a device that is this machine ask of the core', () => {
   it('is told this daemon\'s address, though not an experiment, and nothing else of the experiments\' doors', async () => {
     const core = fakeCore({ daemon: { machineId: () => 'm_account' } as never })

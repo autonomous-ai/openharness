@@ -59,9 +59,10 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
     method === 'POST' && path.endsWith('/readings') ? readings(core, path, body) : backend(core, method, path, body)
   const claudeProfiles = vi.fn((): unknown[] => [])
   const codexProfiles = vi.fn((): unknown[] => [])
-  const deps = { team: () => team, backend: wire, open, capabilities, claudeProfiles, codexProfiles, start, prepare, log, env, privacy, modelsStamp, relayed, now: () => now }
+  const pmPool = vi.fn((): string[] => [])
+  const deps = { pmPool, team: () => team, backend: wire, open, capabilities, claudeProfiles, codexProfiles, start, prepare, log, env, privacy, modelsStamp, relayed, now: () => now }
   const machine = new ContributedMachines(core, 'host', deps as never)
-  return { setTeam: (on: boolean) => { team = on }, deps, claudeProfiles, codexProfiles, machine, pool, core, backend, readings, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
+  return { setTeam: (on: boolean) => { team = on }, deps, pmPool, claudeProfiles, codexProfiles, machine, pool, core, backend, readings, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
     stamp: (next: string) => { stamp = next } }
 }
 
@@ -2824,6 +2825,48 @@ describe('one call for all of a machine\'s readings (DB 2.5)', () => {
 })
 
 // The accounts a Product Manager could move to (spec 2026-11-02-pm-switch-engine-account, section 5): ids and labels, never a path.
+describe('the accounts the owner ticked for a Product Manager', () => {
+  const posted = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
+  const id = (n: string) => n.repeat(16).slice(0, 16)
+  const setup = () => {
+    const f = fixture()
+    Object.assign(f.pool.machine, { engines: ['claude'] })
+    Object.assign(f.pool, { capabilitiesWanted: true })
+    f.claudeProfiles.mockReturnValue([{ id: id('d'), default: true, path: '/h', label: 'x', reportLabel: 'x', offered: true },
+      { id: id('a'), path: '/h/.claude-work', label: 'Work', reportLabel: 'Work', offered: false },
+      { id: id('b'), path: '/h/.claude-spare', label: 'Spare', reportLabel: 'Spare', offered: false }])
+    f.request.mockImplementation(async (type: string): Promise<Record<string, unknown>> => type !== 'usage_read' ? {}
+      : { providers: [{ provider: 'claude', outcome: 'answered', httpStatus: 200, body: { five_hour: { utilization: 30, resets_at: '2026-11-02T10:00:00Z' }, seven_day: { utilization: 96 } } }] })
+    return f
+  }
+  const profileReads = (f: ReturnType<typeof fixture>) => f.request.mock.calls.filter(c => c[0] === 'usage_read' && (c[1] as { profile?: unknown } | undefined)?.profile).length
+
+  it('are read for their windows but never reported while they are not offered', async () => {
+    const f = setup()
+    f.pmPool.mockReturnValue([id('a'), id('d')])
+    await f.machine.tick()
+    expect(profileReads(f)).toBe(1)
+    expect(f.machine.claudeWindows(id('a'))).toEqual([{ name: '5-hour', leftPercent: 70, resetsAt: '2026-11-02T10:00:00.000Z' }, { name: 'weekly', leftPercent: 4 }])
+    expect(f.machine.claudeWindows(id('b'))).toEqual([])
+    expect(JSON.stringify(posted(f))).not.toContain(id('a'))
+  })
+
+  it('are read at most once in 3 minutes, once a pass for any number of Swarms', async () => {
+    const f = setup()
+    f.pmPool.mockReturnValue([id('a'), id('b')])
+    await f.machine.tick(); f.advance(); await f.machine.tick()
+    expect(profileReads(f)).toBe(2)
+    f.step(180_000); await f.machine.tick()
+    expect(profileReads(f)).toBe(4)
+  })
+
+  it('are not read when nothing is ticked', async () => {
+    const f = setup()
+    await f.machine.tick()
+    expect(profileReads(f)).toBe(0)
+  })
+})
+
 describe('the profiles a machine reports', () => {
   const posted = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
   const id = (n: string) => n.repeat(16).slice(0, 16)

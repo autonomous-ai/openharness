@@ -27,6 +27,10 @@ vi.mock('../lib/buddyGuard.js', async original => {
   // Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
   return { ...actual, forgetBuddyReads: vi.fn(actual.forgetBuddyReads), buddyOwnerOf: () => 'peer' }
 })
+// The history a PM's account move writes and the pool its owner ticked: neither touches this machine's data.
+const pm = vi.hoisted(() => ({ moves: [] as unknown[], pool: [] as string[] }))
+vi.mock('../lib/pmAccountPool.js', async original => ({ ...await original<typeof import('../lib/pmAccountPool.js')>(),
+  appendPmMove: (move: unknown) => { pm.moves.push(move) }, readPmPool: () => pm.pool, readPmTold: () => [], writePmTold: () => {} }))
 import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
@@ -50,6 +54,9 @@ const hosts: SuperTabHost[] = []
 /** The machine's host form and Swarm reads, as the service hands them to the host and the role lookup. */
 const sourcesOf = (core: CoreApi) => ({ feed: new HostFeed(core, 'machine-1'), reads: new SwarmReads(core) })
 afterEach(() => { team.value = false; for (const host of hosts.splice(0)) host.stop(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+
+/** Every credential reader of the host reads nothing here: never the developer's Keychain (`security`) or sign-in files. */
+const noCredentials = { platform: 'linux' as const, home: join(tmpdir(), 'super-tab-host-no-home'), readKeychain: vi.fn(async () => null) }
 
 function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
@@ -86,7 +93,7 @@ function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<
     turns: { onDelivery: vi.fn(fn => { listeners.add(fn); return () => { listeners.delete(fn) } }) },
   })
   const log = vi.fn()
-  const open = (options: SuperTabHostOptions = {}) => { const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock, ...options }); hosts.push(host); return host }
+  const open = (options: SuperTabHostOptions = {}) => { const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock, credentials: noCredentials, ...options }); hosts.push(host); return host }
   const event = (state: TurnDelivery['state'], reason?: string) => {
     for (const fn of listeners) fn({ deliveryId: 'team:service:superTabs:delivery', sessionId: 'harness', state, reason })
   }
@@ -6431,6 +6438,125 @@ describe('the PM\'s turn on its list read', () => {
   })
 })
 
+// PM account rotation (spec 2026-11-06): the host's side of it, wiring a Claude PM's roster row to superTabs/pmRotation.ts.
+describe('a PM\'s account rotation', () => {
+  const accounts = [{ id: 'A', label: 'Ann', home: null }, { id: 'B', label: 'Bo', home: '/b' }]
+  const windows = (id: string) => id === 'A' ? [{ name: 'weekly' as const, leftPercent: 3 }] : [{ name: 'weekly' as const, leftPercent: 80 }]
+  function rotationFixture(engine: string) {
+    const restart = vi.fn(async (_h: string, _home: string | null) => ({ ok: true as const }))
+    const tell = vi.fn(async (_row: unknown, _text: string) => {})
+    const t = lifeFixture([leadRow()], { pmRotation: { pool: () => ['A', 'B'], accounts: () => accounts, windows, signedIn: async () => true,
+      current: () => 'A', screen: async () => ({ text: '', hold: null }), restart, tell, name: () => 'River' } })
+    t.live(true)
+    t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', engine }) as never)
+    t.core.agents.displayName = vi.fn(() => 'River')
+    return { ...t, restart, tell }
+  }
+
+  it('moves a Claude PM that is low at its turn end', async () => {
+    const t = rotationFixture('claude')
+    await t.poll()
+    await vi.waitFor(() => expect(t.restart).toHaveBeenCalledWith('harness', '/b'))
+    expect(t.tell).toHaveBeenCalledWith(expect.anything(), 'River moved to Bo: Ann had 3% of its week left. Same conversation.')
+    expect(t.host.pmHere('A')).toEqual([])
+  })
+
+  it('leaves a Codex PM alone', async () => {
+    const t = rotationFixture('codex')
+    await t.poll()
+    expect(t.restart).not.toHaveBeenCalled()
+  })
+
+  it('is not served while the PM is being switched or restarted', async () => {
+    const t = rotationFixture('claude')
+    ;(t.host as any).leadWatches.set('harness', { checkedAt: 0, checking: false, restarting: true, settleUntil: 0 })
+    await t.poll()
+    expect(t.restart).not.toHaveBeenCalled()
+  })
+
+  it('reads the real accounts, restarts as the owner\'s app, and tells the owner as the PM', async () => {
+    const t = lifeFixture([leadRow()])
+    const host = t.host as any
+    const deps = host.pmRotationDeps()
+    pm.moves.length = 0
+    pm.pool = ['p']
+    expect(deps.pool()).toEqual(['p'])
+    t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', engine: 'claude', claudeHome: undefined }) as never)
+    t.core.agents.displayName = vi.fn(() => 'River')
+    t.core.agents.terminalAvailable = vi.fn(() => true)
+    t.core.agents.activity = vi.fn(async () => ({ harness: 'working' })) as never
+    expect(deps.name('harness')).toBe('River')
+    t.core.agents.byAgent = vi.fn(() => undefined as never)
+    expect(deps.name('harness')).toBe('Your Product Manager')
+    expect(deps.alive('harness')).toBe(false)
+    expect(await deps.turn('harness')).toBe('busy')
+    t.core.agents.activity = vi.fn(async () => ({ harness: 'idle' })) as never
+    expect(await deps.turn('harness')).toBe('idle')
+    t.core.agents.activity = vi.fn(async () => { throw new Error('x') }) as never
+    expect(await deps.turn('harness')).toBe('unknown')
+    // The screen and typing go through the core's terminal door.
+    ;(t.core as any).superTabs = { screen: vi.fn(async () => ({ ok: true, text: 'hi', hold: null })), input: vi.fn(async () => ({ ok: true })) }
+    expect(await deps.screen('harness')).toEqual({ text: 'hi', hold: null })
+    expect(await deps.type('harness', 'Continue')).toBe(true)
+    ;(t.core as any).superTabs = { screen: vi.fn(async () => ({ ok: false, error: 'x' })), input: vi.fn(async () => { throw new Error('x') }) }
+    expect(await deps.screen('harness')).toBeNull()
+    expect(await deps.type('harness', 'Continue')).toBe(false)
+    // The history is written, and a write that fails is logged, not thrown.
+    deps.record({ at: 1, pm: 'River', from: 'A', to: 'B', why: 'low', ok: true })
+    expect(pm.moves).toHaveLength(1)
+    // A restart goes through the core's own restarter, to a profile its owner ticked, and its real answer is returned.
+    const restartOnAccount = vi.fn(async (_id: string, _home: string | null): Promise<{ ok: true } | { ok: false; code: string; message?: string }> => ({ ok: true }))
+    t.core.agents.restartOnAccount = restartOnAccount
+    const target = deps.accounts().find((a: { home: string | null }) => a.home !== null)
+    const dflt = deps.accounts().find((a: { home: string | null }) => a.home === null)
+    pm.pool = [dflt.id]
+    expect(await deps.restart('harness', null)).toEqual({ ok: true })
+    expect(restartOnAccount).toHaveBeenLastCalledWith('harness', null)
+    restartOnAccount.mockResolvedValueOnce({ ok: false, code: 'RESTART_FAILED', message: 'tmux gone' })
+    expect(await deps.restart('harness', null)).toEqual({ ok: false, error: 'RESTART_FAILED' })
+    restartOnAccount.mockRejectedValueOnce(new Error('closed'))
+    expect(await deps.restart('harness', null)).toEqual({ ok: false, error: 'closed' })
+    restartOnAccount.mockRejectedValueOnce('plain')
+    expect(await deps.restart('harness', null)).toEqual({ ok: false, error: 'plain' })
+    // Not ticked, or not an account of this machine: refused and logged, and the core is not asked.
+    restartOnAccount.mockClear()
+    pm.pool = []
+    expect(await deps.restart('harness', null)).toEqual({ ok: false, error: 'NOT_IN_POOL' })
+    expect(await deps.restart('harness', '/nowhere/.claude-x')).toEqual({ ok: false, error: 'NOT_IN_POOL' })
+    expect(restartOnAccount).not.toHaveBeenCalled()
+    expect(t.log.mock.calls.some(([line]) => /not ticked/i.test(String(line)))).toBe(true)
+    if (target) { pm.pool = [target.id]; expect(await deps.restart('harness', target.home)).toEqual({ ok: true }) }
+    // A core with no such door says so.
+    t.core.agents.restartOnAccount = undefined
+    pm.pool = [dflt.id]
+    expect(await deps.restart('harness', null)).toEqual({ ok: false, error: 'UNSUPPORTED' })
+    // No account to tell: the move is not held against it.
+    t.core.account.identity = vi.fn(async () => null) as never
+    await expect(deps.tell({ tabId: 'tab', agent: { id: 'agent' } }, 'x')).rejects.toThrow('no account')
+    t.core.account.identity = vi.fn(async () => ({ accountId: 'owner-1' })) as never
+    await deps.tell({ tabId: 'tab', agent: { id: 'agent' } }, 'hello')
+    expect(t.commands.at(-1)).toMatchObject({ asAgentId: 'agent', command: { type: 'person.tell', personId: 'owner-1', text: 'hello' } })
+    // A restart already under way (a manual one, watchLead's) is seen by the rotation; the list carries the report label.
+    expect(deps.restarting('harness')).toBe(false)
+    host.leadWatches.set('harness', { checkedAt: 0, checking: false, restarting: true, settleUntil: 0 })
+    expect(deps.restarting('harness')).toBe(true)
+    host.leadWatches.delete('harness')
+    for (const a of deps.accounts()) expect(a.reportLabel).toBeTypeOf('string')
+    // The PM account list names the PMs on an account, by the account their registry folder says.
+    expect(deps.windows('none')).toEqual([])
+    // Read through the injected credential readers: no Keychain, and no `security`.
+    expect(await deps.signedIn('none')).toBe(false)
+    expect(noCredentials.readKeychain).toHaveBeenCalled()
+    expect(await deps.signedIn(dflt.id)).toBe(false)
+    expect(deps.accounts().length).toBeGreaterThan(0)
+    host.pmNames.set('harness', 'River')
+    const here = deps.accounts()[0].id
+    t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', engine: 'claude' }) as never)
+    expect(host.pmHere(here)).toEqual(['River'])
+    t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', engine: 'claude', claudeHome: '/nowhere' }) as never)
+    expect(deps.current('harness')).toBeUndefined()
+  })
+})
 
 describe('a managed main Buddy sleeps and wakes (#3824)', () => {
   const buddyRow = (agent: Record<string, unknown> = {}, row: Record<string, unknown> = {}) => ({ tabId: 'tab', active: true, buddySleepManaged: true,

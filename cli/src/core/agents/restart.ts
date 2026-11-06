@@ -6,6 +6,7 @@
 import type { AdoptSwarmSkill } from '../api.js'
 import { homedir } from 'node:os'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
+import { carryClaudeTranscript } from '../../lib/claudeTranscriptCarry.js'
 import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
@@ -21,6 +22,7 @@ import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import type { HeldRestart } from './heldLaunches.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
+import type { LaunchOverrides } from '../../lib/launchOverrides.js'
 import type { RestartAgent } from './launches.js'
 import type { PaneSwap } from './swap.js'
 import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
@@ -105,15 +107,29 @@ export interface RestartDeps {
   /** A held agent runs no engine to swap: its restart is its launch, now (core/agents/heldLaunches.ts). Null for
    *  any other agent. */
   restartHeld: (agentId: string) => Promise<HeldRestart> | null
+  /** The Claude account folders this machine lists, the default account's excluded (`listClaudeProfiles`): the only homes
+   *  a restart may move an agent to. */
+  profileHomes: () => readonly string[]
   /** An agent a move a dead daemon left may still run beside (main.ts `moveHeld`): no engine of it starts this start. */
   moveHeld?: (agentId: string) => boolean
+}
+
+/**
+ * The launch's environment for a Claude account: its folder as CLAUDE_CONFIG_DIR, or, for the default account, none: the
+ * pane may still hold the old account's from its first launch, which a respawn would hand on.
+ */
+function withClaudeHome(overrides: LaunchOverrides, claudeHome: string | null): LaunchOverrides {
+  const { CLAUDE_CONFIG_DIR: _old, ...env } = overrides.env
+  return claudeHome
+    ? { ...overrides, env: { ...env, CLAUDE_CONFIG_DIR: claudeHome } }
+    : { ...overrides, env, clearEnv: [...overrides.clearEnv, 'CLAUDE_CONFIG_DIR'] }
 }
 
 export function createAgentRestarter({
   native: inspectNative, adoptSwarmSkill,
   restartJobs, registry, purgeBusy, stopJobs, pinnedControls, terminals, sameRestartTarget, agentReconciler,
   terminalHintMachineName, announceSession, refreshGridAssignment, relaunchOverrides, downgradedPermission, refreshGridWebSearch,
-  liveBypassPermission, paneSwapDeps, restartHeld, moveHeld,
+  liveBypassPermission, paneSwapDeps, restartHeld, moveHeld, profileHomes,
 }: RestartDeps) {
   /**
    * Web or device restarted an agent (`agent_restart`): exit the live engine process and relaunch it in
@@ -138,8 +154,14 @@ export function createAgentRestarter({
    * only once the engine is back, so any refusal or failure before that leaves the flags that last worked. Another ask
    * with other words is refused while this one runs (`restartJobs.run`'s variant), so the row is never left with words
    * a different launch used.
+   *
+   * [claudeHome] moves a Claude agent to another of this machine's Claude accounts (a PM keeping its conversation while its
+   * own account runs out; spec 2026-11-06-pm-account-rotation): `null` is the default account, a string must be one of
+   * `profileHomes()`. Refused (INVALID_PROFILE, nothing touched) for any other home or engine. The transcript is carried
+   * across, the relaunch resumes the same session with that home as CLAUDE_CONFIG_DIR, and the row learns the home before
+   * the engine starts (its hooks bind there) and gives it back if the engine does not.
    */
-  const restartAgentHandler: RestartAgentHandler = (agentId, launchArgs) => restartJobs.run(registry.resolve(agentId)?.agentId ?? agentId, async (operationCurrent) => {
+  const restartAgentHandler: RestartAgentHandler = (agentId, launchArgs, claudeHome) => restartJobs.run(registry.resolve(agentId)?.agentId ?? agentId, async (operationCurrent) => {
     if (purgeBusy(agentId) || stopJobs.has(agentId) || pinnedControls.has(agentId)) return { ok: false, error: 'AGENT_BUSY' }
     // A pane a stopped move left may still run this conversation's engine: neither a swap nor a held launch starts
     // another beside it (core/main.ts, `removeOrphanMovePanes`).
@@ -151,6 +173,10 @@ export function createAgentRestarter({
     let session = registry.resolve(agentId)
     if (!session) return { ok: false, error: 'AGENT_NOT_FOUND' }
     if (session.guest) return GUEST_HARNESS_REFUSAL
+    const moving = claudeHome !== undefined
+    if (moving && (session.engine !== 'claude' || (claudeHome !== null && !profileHomes().includes(claudeHome)))) {
+      return { ok: false, error: 'INVALID_PROFILE' }
+    }
     if (!session.sessionId && (session.launch?.state === 'held' || session.launch?.state === 'starting') && session.launch.nativeToken) {
       return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: 'The original launch is held for recovery. Its first prompt or fork cannot be replaced by a fresh launch.' }
     }
@@ -208,6 +234,19 @@ export function createAgentRestarter({
       if (!adopted || !current()) return changed
       session = adopted
     }
+    // The conversation's file is in the other account's folder before anything is stopped; the source is kept, so a refusal
+    // below leaves the agent where it was. The relaunch is built from the row as it will be.
+    const originalSession = session
+    const previousHome = session.claudeHome ?? undefined, previousTranscript = session.transcriptPath ?? null
+    if (moving) {
+      try {
+        const carried = carryClaudeTranscript(previousHome, claudeHome ?? undefined, session.cwd ?? '', session.sessionId)
+        session = { ...session, claudeHome, transcriptPath: carried.transcriptPath }
+      } catch (error) {
+        const code = (error as { code?: unknown } | null)?.code
+        return { ok: false, error: code === 'NOT_FOUND' ? 'NOT_FOUND' : 'RESTART_FAILED', detail: error instanceof Error ? error.message : String(error) }
+      }
+    }
     // The relaunch runs the engine's command again, so an engine uninstalled since the agent started
     // cannot come back. Asked anyway, the swap killed the working agent and gave up twenty seconds
     // later with "did not come back up" (updates.e2e.ts, round 24). Asked here, before anything is
@@ -231,25 +270,74 @@ export function createAgentRestarter({
     const built = await relaunchOverrides(session, launchArgs ? { ...session, launchArgs } : session, current, native)
     if (!current()) return changed
     if (!built.ok) return built
+    // An ordinary restart keeps the account supplied by the launch shell. Only an absent launch value needs to clear
+    // a stale pane value; an explicit account move replaces either one.
+    const overrides = moving || (engine === 'claude' && !session.claudeHome && !built.overrides.env.CLAUDE_CONFIG_DIR)
+      ? withClaudeHome(built.overrides, session.claudeHome ?? null) : built.overrides
 
     // Shell startup and native checks can outlast the reconciler's default 30-second hold.
     // Keep this route through publication, and release only this operation's own reservation.
     const releaseRoute = agentReconciler.holdRoute(routeKey, null)
     try {
       const restartPermission = await downgradedPermission(session,
-        await bypassPermissionFor(session, () => liveBypassPermission(session)), 'restart', built.overrides.native)
-      if (restartPermission.nativeHold || built.overrides.native?.current() === false) return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: restartPermission.nativeHold ?? 'Waiting for fresh executable and hook evidence.' }
-      const dispatchCurrent = () => current() && built.overrides.native?.current() !== false
-      const outcome = await restartAgent(
-        { engine, sessionId: session.sessionId, ...(session.resumeOnly ? { resumeOnly: true as const } : {}) },
-        restartPermission.bypassPermission === true,
-        { ...paneSwapDeps(session, place, built.overrides, restartPermission.permissionMode ?? null, dispatchCurrent), isCurrent: dispatchCurrent },
-      )
+        await bypassPermissionFor(session, () => liveBypassPermission(session)), 'restart', overrides.native)
+      if (restartPermission.nativeHold || overrides.native?.current() === false) return { ok: false, error: 'NATIVE_LAUNCH_HELD', detail: restartPermission.nativeHold ?? 'Waiting for fresh executable and hook evidence.' }
+      const dispatchCurrent = () => current() && overrides.native?.current() !== false
+      // The row is where it was before this restart, whichever way it ends without the engine coming back.
+      const rollback = () => {
+        if (!moving) return
+        registry.setClaudeHome(session.agentId, previousHome)
+        registry.setTranscriptPath(session.agentId, previousTranscript)
+      }
+      if (moving) {
+        registry.setClaudeHome(session.agentId, claudeHome ?? undefined)
+        registry.setTranscriptPath(session.agentId, session.transcriptPath)
+      }
+      let stoppedForMove = false
+      // Once the old writer stopped, restoring metadata alone leaves a dead PM. Recover the original conversation
+      // once in the same pane, while this operation still owns it. Never turn a failed resume into a new conversation.
+      const recoverMove = async () => {
+        rollback()
+        if (!stoppedForMove || !dispatchCurrent()) return
+        try {
+          const backOverrides = withClaudeHome(overrides, previousHome ?? null)
+          const backSwap = paneSwapDeps(originalSession, place, backOverrides, restartPermission.permissionMode ?? null, dispatchCurrent)
+          const back = await restartAgent({ engine, sessionId: originalSession.sessionId, resumeOnly: true },
+            restartPermission.bypassPermission === true, { ...backSwap, isCurrent: dispatchCurrent })
+          if (back.ok && dispatchCurrent()) {
+            await commitRelaunchedEngine({ registry, announceSession, refreshGridAssignment }, session.agentId, back.processIdentity, place, dispatchCurrent)
+          } else console.warn(`[restart] ${sid(session.agentId)} account move recovery failed`)
+        } catch {
+          console.warn(`[restart] ${sid(session.agentId)} account move recovery failed`)
+        }
+      }
+      let outcome: Awaited<ReturnType<typeof restartAgent>>
+      try {
+        const swap = paneSwapDeps(session, place, overrides, restartPermission.permissionMode ?? null, dispatchCurrent)
+        outcome = await restartAgent(
+          { engine, sessionId: session.sessionId, ...(moving || session.resumeOnly ? { resumeOnly: true as const } : {}) },
+          restartPermission.bypassPermission === true,
+          { ...swap, isCurrent: dispatchCurrent,
+            // The old engine kept writing until it stopped, after the copy made above: copy again once it has exited and
+            // before the new one starts, so the conversation it resumes has every line.
+            ...(moving ? { prepareResume: async () => {
+              stoppedForMove = true
+              carryClaudeTranscript(previousHome, claudeHome ?? undefined, session.cwd ?? '', session.sessionId)
+              await swap.prepareResume?.()
+            } } : {}) },
+        )
+      } catch (error) {
+        await recoverMove()
+        throw error
+      }
 
-      if (!current()) return changed
+      if (!current()) { rollback(); return changed }
       // A refused relaunch (Windows: a batch-file engine cmd.exe would misread) stopped nothing: its own code.
-      if (!outcome.ok) return { ok: false, error: outcome.error ?? 'RESTART_FAILED', detail: outcome.detail }
-      refreshGridWebSearch(session.agentId, built.overrides)
+      if (!outcome.ok) {
+        await recoverMove()
+        return { ok: false, error: outcome.error ?? 'RESTART_FAILED', detail: outcome.detail }
+      }
+      refreshGridWebSearch(session.agentId, overrides)
       // The engine is back with the words: now they are the record's, as `launchModel` is committed.
       if (launchArgs) registry.setLaunchArgs(session.agentId, launchArgs)
 
@@ -265,6 +353,6 @@ export function createAgentRestarter({
     } finally {
       releaseRoute()
     }
-  }, 'restart', launchArgs && JSON.stringify(launchArgs))
+  }, 'restart', claudeHome !== undefined ? JSON.stringify({ ...(launchArgs ? { launchArgs } : {}), claudeHome }) : launchArgs && JSON.stringify(launchArgs))
   return restartAgentHandler
 }

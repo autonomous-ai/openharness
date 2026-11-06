@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -11,6 +11,7 @@ import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../.
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { processLaunchArgs } from '../../lib/processTable.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
+import { carryClaudeTranscript } from '../../lib/claudeTranscriptCarry.js'
 import { createAgentRestarter, type RestartDeps } from './restart.js'
 import { createLaunchAuthority } from './launchAuthority.js'
 import { createSwarmSkillAdoption } from '../../superTabs/inCore/adoption.js'
@@ -34,6 +35,12 @@ vi.mock('../../lib/processTable.js', async (real) => ({
   ...await real<object>(),
   processLaunchArgs: vi.fn(async () => '/bin/claude --model opus -c model_provider=grid'),
 }))
+// The real carry by default, over throwaway homes; a test that would reach the default account's own projects folder
+// (the developer's real ~/.claude) replaces it for that call.
+vi.mock('../../lib/claudeTranscriptCarry.js', async (real) => {
+  const actual = await real<typeof import('../../lib/claudeTranscriptCarry.js')>()
+  return { ...actual, carryClaudeTranscript: vi.fn(actual.carryClaudeTranscript) }
+})
 vi.mock('../../lib/workspaceCheck.js', () => ({ workspaceMissing: vi.fn(() => null) }))
 
 const runtime = { backend: 'tmux' as const, paneId: '%4' }
@@ -59,6 +66,8 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
       updateProcessIdentity: vi.fn(),
       setActive: vi.fn(),
       setLaunchArgs: vi.fn(() => true),
+      setClaudeHome: vi.fn(),
+      setTranscriptPath: vi.fn(),
     } as unknown as RestartDeps['registry'],
     purgeBusy: vi.fn(() => false),
     stopJobs: new Map(),
@@ -69,12 +78,13 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
     terminalHintMachineName: () => 'studio',
     announceSession: vi.fn(),
     refreshGridAssignment: vi.fn(),
-    relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { env: { GRID_KEY: 'k' } } })) as never,
+    relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { env: { GRID_KEY: 'k' }, clearEnv: [] } })) as never,
     downgradedPermission: vi.fn(async (_s, bypass: boolean) => ({ bypassPermission: bypass, permissionMode: 'auto' })) as never,
     refreshGridWebSearch: vi.fn() as never,
     liveBypassPermission: vi.fn(async () => true),
     paneSwapDeps: vi.fn(() => ({ swap: true })) as never,
     restartHeld: vi.fn(() => null),
+    profileHomes: () => [],
     ...over,
   }
   return { deps, state, tmuxBackend, restart: createAgentRestarter(deps) }
@@ -484,7 +494,7 @@ describe('restarting an agent', () => {
       const row = agent({ runtimes: [pty] })
       const run = setup(row, { terminals: { backendFor: () => backend as never } })
       expect(await run.restart('a1')).toMatchObject({ ok: true, resumed: true })
-      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(row, { backend, runtime: pty }, { env: { GRID_KEY: 'k' } }, 'auto', expect.any(Function))
+      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(row, { backend, runtime: pty }, { env: { GRID_KEY: 'k' }, clearEnv: ['CLAUDE_CONFIG_DIR'] }, 'auto', expect.any(Function))
       expect(backend.releaseHold).toHaveBeenCalledWith(pty)
       expect(releaseHold).not.toHaveBeenCalled()
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(terminalRouteKey(pty))
@@ -564,13 +574,13 @@ describe('restarting an agent', () => {
       expect(bypassPermissionFor).toHaveBeenCalledWith(agent(), expect.any(Function))
       expect(run.deps.liveBypassPermission).toHaveBeenCalledWith(agent())
       expect(run.deps.downgradedPermission).toHaveBeenCalledWith(agent(), true, 'restart', undefined)
-      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(agent(), { backend: run.tmuxBackend, runtime }, { env: { GRID_KEY: 'k' } }, 'auto', expect.any(Function))
+      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(agent(), { backend: run.tmuxBackend, runtime }, { env: { GRID_KEY: 'k' }, clearEnv: ['CLAUDE_CONFIG_DIR'] }, 'auto', expect.any(Function))
       const [target, bypass, swapDeps] = vi.mocked(restartAgent).mock.calls[0]
       expect(target).toEqual({ engine: 'claude', sessionId: 's1' })
       expect(bypass).toBe(true)
       expect(swapDeps).toMatchObject({ swap: true })
       expect(swapDeps.isCurrent?.()).toBe(true)
-      expect(run.deps.refreshGridWebSearch).toHaveBeenCalledWith('a1', { env: { GRID_KEY: 'k' } })
+      expect(run.deps.refreshGridWebSearch).toHaveBeenCalledWith('a1', { env: { GRID_KEY: 'k' }, clearEnv: ['CLAUDE_CONFIG_DIR'] })
       expect(probeGatewayRuntime).toHaveBeenCalledWith(newProcess)
       // Its command line, where a Codex or pi grid's address and model are: never its executable alone.
       expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, 'none')
@@ -588,7 +598,7 @@ describe('restarting an agent', () => {
       const run = setup(grid, { downgradedPermission: vi.fn(async () => ({ bypassPermission: false })) as never })
       vi.mocked(restartAgent).mockResolvedValueOnce({ ok: true, resumed: false, processIdentity: newProcess } as never)
       expect(await run.restart('a1')).toEqual({ ok: true, session: grid, resumed: false })
-      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(grid, { backend: run.tmuxBackend, runtime }, { env: { GRID_KEY: 'k' } }, null, expect.any(Function))
+      expect(run.deps.paneSwapDeps).toHaveBeenCalledWith(grid, { backend: run.tmuxBackend, runtime }, { env: { GRID_KEY: 'k' }, clearEnv: ['CLAUDE_CONFIG_DIR'] }, null, expect.any(Function))
       expect(vi.mocked(restartAgent).mock.calls[0][1]).toBe(false)
       expect(console.log).toHaveBeenCalledWith('[restart] a1 claude · fresh session · grid Home')
     })
@@ -603,7 +613,7 @@ describe('restarting an agent', () => {
 
     it('stops at whichever step finds the operation overtaken', async () => {
       const built = setup()
-      vi.mocked(built.deps.relaunchOverrides).mockImplementationOnce(async () => { built.state.live = false; return { ok: true, overrides: {} } as never })
+      vi.mocked(built.deps.relaunchOverrides).mockImplementationOnce(async () => { built.state.live = false; return { ok: true, overrides: { env: {}, clearEnv: [] } } as never })
       expect(await built.restart('a1')).toEqual(changed)
       expect(built.deps.agentReconciler.holdRoute).not.toHaveBeenCalled()
 
@@ -629,6 +639,279 @@ describe('restarting an agent', () => {
       expect(await run.restart('a1')).toEqual({ ok: false, error: 'RESTART_FAILED', detail: 'agent vanished from the registry mid-restart' })
       expect(run.deps.announceSession).not.toHaveBeenCalled()
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
+    })
+  })
+  describe('under another Claude account', () => {
+    const ID = '0a1b2c3d-1111-2222-3333-444455556666'
+    let root: string, from: string, to: string
+    beforeEach(() => {
+      root = mkdtempSync(join(tmpdir(), 'restart-home-'))
+      from = join(root, 'from'); to = join(root, 'to')
+      mkdirSync(join(from, 'projects', '-work'), { recursive: true })
+      mkdirSync(to)
+      writeFileSync(join(from, 'projects', '-work', `${ID}.jsonl`), '{}\n')
+    })
+    afterEach(() => { rmSync(root, { recursive: true, force: true }) })
+    const row = (over: Partial<RegisteredSession> = {}) => agent({ sessionId: ID, claudeHome: from, transcriptPath: join(from, 'projects', '-work', `${ID}.jsonl`), ...over } as Partial<RegisteredSession>)
+    const launchOf = () => vi.mocked(restartAgent).mock.calls[0]
+
+    it('a restart with claudeHome resumes the same session under that home', async () => {
+      const run = setup(row(), { profileHomes: () => [to] })
+      expect(await run.restart('a1', undefined, to)).toMatchObject({ ok: true, resumed: true })
+      const carried = join(to, 'projects', '-work', `${ID}.jsonl`)
+      expect(existsSync(carried)).toBe(true)
+      expect(launchOf()[0]).toMatchObject({ engine: 'claude', sessionId: ID })
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ claudeHome: to }), expect.objectContaining({ claudeHome: to }), expect.any(Function), undefined)
+      expect(vi.mocked(run.deps.paneSwapDeps).mock.calls[0][2]).toMatchObject({ env: { GRID_KEY: 'k', CLAUDE_CONFIG_DIR: to } })
+      expect(run.deps.registry.setClaudeHome).toHaveBeenCalledWith('a1', to)
+      expect(run.deps.registry.setTranscriptPath).toHaveBeenCalledWith('a1', carried)
+    })
+
+    it('claudeHome null restarts on the default account', async () => {
+      const kept = join(root, 'default-projects', '-work', `${ID}.jsonl`)
+      vi.mocked(carryClaudeTranscript).mockReturnValueOnce({ transcriptPath: kept, copied: true })
+      const run = setup(row(), { relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { env: { GRID_KEY: 'k', CLAUDE_CONFIG_DIR: from }, clearEnv: ['X'] } })) as never })
+      expect(await run.restart('a1', undefined, null)).toMatchObject({ ok: true })
+      expect(carryClaudeTranscript).toHaveBeenCalledWith(from, undefined, '/work', ID)
+      const overrides = vi.mocked(run.deps.paneSwapDeps).mock.calls[0][2] as { env: Record<string, string>; clearEnv: string[] }
+      expect(overrides.env).toEqual({ GRID_KEY: 'k' })
+      expect(overrides.clearEnv).toEqual(['X', 'CLAUDE_CONFIG_DIR'])
+      expect(run.deps.registry.setClaudeHome).toHaveBeenCalledWith('a1', undefined)
+      expect(run.deps.registry.setTranscriptPath).toHaveBeenCalledWith('a1', kept)
+    })
+
+    it('a row on the default account carries from the default', async () => {
+      vi.mocked(carryClaudeTranscript).mockReturnValueOnce({ transcriptPath: '/t', copied: false })
+      const run = setup(row({ claudeHome: null, cwd: undefined } as never), { profileHomes: () => [to] })
+      await run.restart('a1', undefined, to)
+      expect(carryClaudeTranscript).toHaveBeenCalledWith(undefined, to, '', ID)
+    })
+
+    it('a claudeHome that is not a profile of this machine is refused', async () => {
+      const run = setup(row(), { profileHomes: () => [to] })
+      expect(await run.restart('a1', undefined, join(root, 'elsewhere'))).toEqual({ ok: false, error: 'INVALID_PROFILE' })
+      expect(carryClaudeTranscript).not.toHaveBeenCalled()
+      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(restartAgent).not.toHaveBeenCalled()
+      expect(run.deps.registry.setClaudeHome).not.toHaveBeenCalled()
+    })
+
+    it.each([['codex', '/any/home'], ['codex', null], ['terminal', null]] as const)('is refused for a %s agent, whatever the home (%s)', async (engine, home) => {
+      const run = setup(row({ engine } as never), { profileHomes: () => ['/any/home'] })
+      expect(await run.restart('a1', undefined, home)).toEqual({ ok: false, error: 'INVALID_PROFILE' })
+      expect(restartAgent).not.toHaveBeenCalled()
+      expect(run.tmuxBackend.respawn).not.toHaveBeenCalled()
+    })
+
+    it('refuses before anything is stopped when the transcript cannot be carried', async () => {
+      const missing = setup(row({ sessionId: 'b1b2c3d4-1111-2222-3333-444455556666' } as never), { profileHomes: () => [to] })
+      expect(await missing.restart('a1', undefined, to)).toMatchObject({ ok: false, error: 'NOT_FOUND' })
+      vi.mocked(carryClaudeTranscript).mockImplementationOnce(() => { throw new Error('disk full') })
+      const broken = setup(row(), { profileHomes: () => [to] })
+      expect(await broken.restart('a1', undefined, to)).toEqual({ ok: false, error: 'RESTART_FAILED', detail: 'disk full' })
+      vi.mocked(carryClaudeTranscript).mockImplementationOnce(() => { throw 'odd' })
+      expect(await setup(row(), { profileHomes: () => [to] }).restart('a1', undefined, to)).toMatchObject({ error: 'RESTART_FAILED' })
+      expect(restartAgent).not.toHaveBeenCalled()
+    })
+
+    it('puts the row back on its old account when the relaunch did not start', async () => {
+      vi.mocked(restartAgent).mockResolvedValueOnce({ ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: 'no' })
+      const run = setup(row(), { profileHomes: () => [to] })
+      expect(await run.restart('a1', undefined, to)).toMatchObject({ ok: false, error: 'ENGINE_LAUNCH_REFUSED' })
+      expect(vi.mocked(run.deps.registry.setClaudeHome).mock.calls).toEqual([['a1', to], ['a1', from]])
+      expect(vi.mocked(run.deps.registry.setTranscriptPath).mock.calls.at(-1)).toEqual(['a1', join(from, 'projects', '-work', `${ID}.jsonl`)])
+    })
+
+    it('puts a row that was on the default account back on it', async () => {
+      vi.mocked(restartAgent).mockResolvedValueOnce({ ok: false, error: 'ENGINE_LAUNCH_REFUSED', detail: 'no' })
+      vi.mocked(carryClaudeTranscript).mockReturnValueOnce({ transcriptPath: '/t', copied: false })
+      const run = setup(row({ claudeHome: null, transcriptPath: null } as never), { profileHomes: () => [to] })
+      await run.restart('a1', undefined, to)
+      expect(vi.mocked(run.deps.registry.setClaudeHome).mock.calls.at(-1)).toEqual(['a1', undefined])
+      expect(vi.mocked(run.deps.registry.setTranscriptPath).mock.calls.at(-1)).toEqual(['a1', null])
+    })
+
+    // M2: the carry happens before the old process stops, so lines it wrote while stopping must still reach the target.
+    it('copies the lines the old process wrote while it stopped, after it exited and before the new one starts', async () => {
+      const source = join(from, 'projects', '-work', `${ID}.jsonl`), target = join(to, 'projects', '-work', `${ID}.jsonl`)
+      const prepared = vi.fn()
+      let seen = ''
+      vi.mocked(restartAgent).mockImplementationOnce((async (_s: unknown, _b: unknown, deps: { prepareResume?: () => Promise<void> }) => {
+        // The old engine is still writing when it is told to stop; the first carry has already happened.
+        expect(readFileSync(target, 'utf8')).toBe('{}\n')
+        appendFileSync(source, '{"late":1}\n')
+        await deps.prepareResume?.()
+        seen = readFileSync(target, 'utf8')
+        return { ok: true, resumed: true, processIdentity: newProcess }
+      }) as never)
+      const run = setup(row(), { profileHomes: () => [to], paneSwapDeps: vi.fn(() => ({ prepareResume: prepared })) as never })
+      expect(await run.restart('a1', undefined, to)).toMatchObject({ ok: true })
+      expect(seen).toBe('{}\n{"late":1}\n')
+      // The engine's own resume repair runs after the copy, on the file it was copied to.
+      expect(prepared).toHaveBeenCalledOnce()
+    })
+
+    it('copies the late lines to the default account too', async () => {
+      vi.mocked(carryClaudeTranscript).mockReturnValueOnce({ transcriptPath: '/t', copied: true }).mockReturnValueOnce({ transcriptPath: '/t', copied: true })
+      vi.mocked(restartAgent).mockImplementationOnce((async (_s: unknown, _b: unknown, deps: { prepareResume?: () => Promise<void> }) => {
+        await deps.prepareResume?.()
+        return { ok: true, resumed: true, processIdentity: newProcess }
+      }) as never)
+      const run = setup(row({ cwd: undefined } as never))
+      await run.restart('a1', undefined, null)
+      expect(vi.mocked(carryClaudeTranscript).mock.calls).toEqual([[from, undefined, '', ID], [from, undefined, '', ID]])
+    })
+
+    it('copies again even where the swap brings no resume step of its own', async () => {
+      const source = join(from, 'projects', '-work', `${ID}.jsonl`), target = join(to, 'projects', '-work', `${ID}.jsonl`)
+      vi.mocked(restartAgent).mockImplementationOnce((async (_s: unknown, _b: unknown, deps: { prepareResume?: () => Promise<void> }) => {
+        appendFileSync(source, '{"late":2}\n')
+        await deps.prepareResume?.()
+        return { ok: true, resumed: true, processIdentity: newProcess }
+      }) as never)
+      const run = setup(row(), { profileHomes: () => [to] })
+      await run.restart('a1', undefined, to)
+      expect(readFileSync(target, 'utf8')).toBe('{}\n{"late":2}\n')
+    })
+
+    // M3: a throw, or the harness no longer being this operation's after the outcome, rolls the row back too.
+    it('puts the row back when the swap throws', async () => {
+      vi.mocked(restartAgent).mockRejectedValueOnce(new Error('tmux gone'))
+      const run = setup(row(), { profileHomes: () => [to] })
+      await expect(run.restart('a1', undefined, to)).rejects.toThrow('tmux gone')
+      expect(vi.mocked(run.deps.registry.setClaudeHome).mock.calls).toEqual([['a1', to], ['a1', from]])
+      expect(vi.mocked(run.deps.registry.setTranscriptPath).mock.calls.at(-1)).toEqual(['a1', join(from, 'projects', '-work', `${ID}.jsonl`)])
+    })
+
+    it('puts the row back when preparing the swap throws', async () => {
+      const run = setup(row(), { profileHomes: () => [to], paneSwapDeps: vi.fn(() => { throw new Error('no deps') }) as never })
+      await expect(run.restart('a1', undefined, to)).rejects.toThrow('no deps')
+      expect(vi.mocked(run.deps.registry.setClaudeHome).mock.calls.at(-1)).toEqual(['a1', from])
+    })
+
+    it('puts the row back when the harness is no longer this operation\'s after the swap', async () => {
+      const run = setup(row(), { profileHomes: () => [to] })
+      vi.mocked(restartAgent).mockImplementationOnce((async () => { run.state.live = false; return { ok: true, resumed: true, processIdentity: newProcess } }) as never)
+      expect(await run.restart('a1', undefined, to)).toEqual(changed)
+      expect(vi.mocked(run.deps.registry.setClaudeHome).mock.calls).toEqual([['a1', to], ['a1', from]])
+    })
+
+    it('preserves the launch shell account on an ordinary restart without a recorded home', async () => {
+      const shell = vi.fn(async () => ({ ok: true, overrides: { env: { GRID_KEY: 'k', CLAUDE_CONFIG_DIR: from }, clearEnv: ['X'] } }))
+      const run = setup(row({ claudeHome: null } as never), { relaunchOverrides: shell as never })
+      expect(await run.restart('a1')).toMatchObject({ ok: true })
+      const overrides = vi.mocked(run.deps.paneSwapDeps).mock.calls[0][2] as { env: Record<string, string>; clearEnv: string[] }
+      expect(overrides.env).toEqual({ GRID_KEY: 'k', CLAUDE_CONFIG_DIR: from })
+      expect(overrides.clearEnv).toEqual(['X'])
+      expect(carryClaudeTranscript).not.toHaveBeenCalled()
+    })
+
+    it('clears a stale pane account when neither the row nor the launch sets one', async () => {
+      const plain = vi.fn(async () => ({ ok: true, overrides: { env: { GRID_KEY: 'k' }, clearEnv: ['X'] } }))
+      const run = setup(row({ claudeHome: null } as never), { relaunchOverrides: plain as never })
+      expect(await run.restart('a1')).toMatchObject({ ok: true })
+      const overrides = vi.mocked(run.deps.paneSwapDeps).mock.calls[0][2] as { env: Record<string, string>; clearEnv: string[] }
+      expect(overrides.env).toEqual({ GRID_KEY: 'k' })
+      expect(overrides.clearEnv).toEqual(['X', 'CLAUDE_CONFIG_DIR'])
+      expect(carryClaudeTranscript).not.toHaveBeenCalled()
+      expect(run.deps.registry.setClaudeHome).not.toHaveBeenCalled()
+    })
+
+    it('never starts a fresh conversation when an account move cannot resume', async () => {
+      const actual = await vi.importActual<typeof import('../../lib/restartAgent.js')>('../../lib/restartAgent.js')
+      vi.mocked(restartAgent).mockImplementationOnce(actual.restartAgent)
+      const launches: unknown[] = []
+      const run = setup(row(), { profileHomes: () => [to], paneSwapDeps: vi.fn(() => ({
+        holdOpen: async () => ({ ok: true }), terminate: async () => 'gone',
+        buildArgv: (options: unknown) => { launches.push(options); return ['claude'] },
+        respawn: async () => ({ ok: true }), waitForProcess: async () => null, log: () => {},
+      })) as never })
+      expect(await run.restart('a1', undefined, to)).toMatchObject({ ok: false })
+      expect(launches).toEqual([{ bypassPermission: true, resumeSessionId: ID }])
+    })
+
+    it.each(['copy', 'resume', 'throw'] as const)('recovers the original conversation after a post-stop %s failure', async failure => {
+      vi.mocked(restartAgent).mockImplementationOnce(async (_session, _bypass, deps) => {
+        if (failure === 'copy') vi.mocked(carryClaudeTranscript).mockImplementationOnce(() => { throw new Error('disk full') })
+        try { await deps.prepareResume?.() } catch { return { ok: false, detail: 'copy failed' } }
+        if (failure === 'throw') throw new Error('resume failed')
+        return { ok: false, detail: 'resume failed' }
+      })
+      const run = setup(row(), { profileHomes: () => [to] })
+      await run.restart('a1', undefined, to).catch(() => undefined)
+      expect(restartAgent).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(restartAgent).mock.calls[1][0]).toMatchObject({ sessionId: ID, resumeOnly: true })
+      const recovery = vi.mocked(run.deps.paneSwapDeps).mock.calls[1]
+      expect(recovery[0]).toMatchObject({ claudeHome: from, transcriptPath: join(from, 'projects', '-work', `${ID}.jsonl`) })
+      expect(recovery[2]).toMatchObject({ env: { CLAUDE_CONFIG_DIR: from } })
+      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, 'none')
+    })
+
+    it.each(['reply', 'throw'] as const)('a failed recovery to the default account stops after one %s', async failure => {
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.mocked(carryClaudeTranscript).mockReturnValueOnce({ transcriptPath: '/t', copied: true })
+        .mockReturnValueOnce({ transcriptPath: '/t', copied: true })
+      vi.mocked(restartAgent).mockImplementationOnce(async (_session, _bypass, deps) => {
+        await deps.prepareResume?.()
+        return { ok: false, detail: 'move failed' }
+      }).mockImplementationOnce(async () => {
+        if (failure === 'throw') throw new Error('private recovery detail')
+        return { ok: false, detail: 'private recovery detail' }
+      })
+      const run = setup(row({ claudeHome: null }), { profileHomes: () => [to],
+        downgradedPermission: vi.fn(async () => ({ bypassPermission: false })) as never })
+      expect(await run.restart('a1', undefined, to)).toMatchObject({ ok: false, error: 'RESTART_FAILED', detail: 'move failed' })
+      expect(restartAgent).toHaveBeenCalledTimes(2)
+      const recovery = vi.mocked(run.deps.paneSwapDeps).mock.calls[1]
+      expect(recovery[2]).toMatchObject({ env: { GRID_KEY: 'k' }, clearEnv: ['CLAUDE_CONFIG_DIR'] })
+      expect(recovery[2]?.env).not.toHaveProperty('CLAUDE_CONFIG_DIR')
+      expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+      expect(warning).toHaveBeenCalledWith('[restart] a1 account move recovery failed')
+      expect(warning.mock.calls.flat().join(' ')).not.toContain('private recovery detail')
+    })
+
+    it.each(['before recovery', 'during recovery'] as const)('does not reactivate a PM stopped %s', async when => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const run = setup(row(), { profileHomes: () => [to] })
+      vi.mocked(restartAgent).mockImplementationOnce(async (_session, _bypass, deps) => {
+        await deps.prepareResume?.()
+        if (when === 'before recovery') { run.state.live = false; throw new Error('cancelled') }
+        return { ok: false, detail: 'move failed' }
+      }).mockImplementationOnce(async () => {
+        run.state.live = false
+        return { ok: true, resumed: true, processIdentity: newProcess }
+      })
+      await run.restart('a1', undefined, to).catch(() => undefined)
+      expect(restartAgent).toHaveBeenCalledTimes(when === 'before recovery' ? 1 : 2)
+      expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+      expect(run.deps.registry.setActive).not.toHaveBeenCalled()
+      // The unused one-shot must not become the next spec's restart.
+      vi.mocked(restartAgent).mockReset().mockResolvedValue({ ok: true, resumed: true, processIdentity: newProcess })
+    })
+
+    it('leaves another engine\'s relaunch environment as it is', async () => {
+      const run = setup(row({ engine: 'codex', claudeHome: null } as never))
+      await run.restart('a1')
+      expect(vi.mocked(run.deps.paneSwapDeps).mock.calls[0][2]).toEqual({ env: { GRID_KEY: 'k' }, clearEnv: [] })
+    })
+
+    it('a restart without claudeHome is unchanged', async () => {
+      const run = setup(row())
+      expect(await run.restart('a1')).toMatchObject({ ok: true })
+      expect(carryClaudeTranscript).not.toHaveBeenCalled()
+      expect(run.deps.registry.setClaudeHome).not.toHaveBeenCalled()
+      expect(run.deps.registry.setTranscriptPath).not.toHaveBeenCalled()
+      expect(vi.mocked(run.deps.paneSwapDeps).mock.calls[0][2]).toEqual({ env: { GRID_KEY: 'k' }, clearEnv: [] })
+      expect(run.deps.restartJobs.run).toHaveBeenCalledWith('a1', expect.any(Function), 'restart', undefined)
+    })
+
+    it('another account asked for while one runs is a different restart', async () => {
+      vi.mocked(carryClaudeTranscript).mockReturnValueOnce({ transcriptPath: '/t', copied: false }).mockReturnValueOnce({ transcriptPath: '/t', copied: false })
+      const run = setup(row(), { profileHomes: () => [to], relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { env: {}, clearEnv: [] } })) as never })
+      await run.restart('a1', undefined, to)
+      expect(run.deps.restartJobs.run).toHaveBeenCalledWith('a1', expect.any(Function), 'restart', JSON.stringify({ claudeHome: to }))
+      await run.restart('a1', ['--chrome'], null)
+      expect(vi.mocked(run.deps.restartJobs.run).mock.calls[1][3]).toBe(JSON.stringify({ launchArgs: ['--chrome'], claudeHome: null }))
     })
   })
 })

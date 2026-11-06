@@ -409,6 +409,27 @@ it('carries the exact native close identity through the service process and fail
   expect(await processCoreApi('/data', 'superTabs').agents.closeSwarm!(request)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
 })
 
+it('asks the core to restart an agent on another Claude account and waits for its real answer', async () => {
+  const ask = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => ({ ok: true }))
+  const api = processCoreApi('/data', 'superTabs', { ask })
+  expect(await api.agents.restartOnAccount!('pm', '/work/.claude-b')).toEqual({ ok: true })
+  expect(ask).toHaveBeenLastCalledWith('restart_on_account', { agentId: 'pm', claudeHome: '/work/.claude-b' })
+  expect(await api.agents.restartOnAccount!('pm', null)).toEqual({ ok: true })
+  expect(ask).toHaveBeenLastCalledWith('restart_on_account', { agentId: 'pm', claudeHome: null })
+  ask.mockResolvedValueOnce({ ok: false, code: 'RESTART_FAILED', message: 'tmux gone' })
+  expect(await api.agents.restartOnAccount!('pm', null)).toEqual({ ok: false, code: 'RESTART_FAILED', message: 'tmux gone' })
+  ask.mockResolvedValueOnce({ ok: false, code: 'INVALID_PROFILE' })
+  expect(await api.agents.restartOnAccount!('pm', null)).toEqual({ ok: false, code: 'INVALID_PROFILE' })
+  // A core that answers with something else, an error of the link itself, or none to ask: unavailable, never a success.
+  ask.mockResolvedValueOnce({ error: 'NOT_SUPER_TABS' })
+  expect(await api.agents.restartOnAccount!('pm', null)).toEqual({ ok: false, code: 'SERVICE_UNAVAILABLE' })
+  ask.mockResolvedValueOnce({ ok: 'yes' })
+  expect(await api.agents.restartOnAccount!('pm', null)).toEqual({ ok: false, code: 'SERVICE_UNAVAILABLE' })
+  ask.mockRejectedValueOnce(new Error('offline'))
+  expect(await api.agents.restartOnAccount!('pm', null)).toEqual({ ok: false, code: 'SERVICE_UNAVAILABLE' })
+  expect(await processCoreApi('/data', 'superTabs').agents.restartOnAccount!('pm', null)).toEqual({ ok: false, code: 'SERVICE_UNAVAILABLE' })
+})
+
 it('asks the core to reopen a Lead or close a member, and fails closed without it', async () => {
   const ask = vi.fn(async (query: string): Promise<Record<string, unknown>> => query === 'keep_lead_alive' ? { ok: true } : { closed: true })
   const api = processCoreApi('/data', 'superTabs', { ask })

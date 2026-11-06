@@ -63,13 +63,16 @@ import { ensureHarnessGrid, type EnsureStatus } from './lib/gridEnsure.js'
 import { passThroughToGridLogout } from './lib/gridLogout.js'
 import { warnIfGridSignInRemains } from './lib/gridCredentials.js'
 import { gridExec } from './lib/gridExec.js'
-import { ENGINE_CLI_COMMANDS, PROCESS_ENGINES } from './lib/engineBin.js'
+import { ENGINE_CLI_COMMANDS, PROCESS_ENGINES, engineBin } from './lib/engineBin.js'
 import { SESSION_SEARCH_FILE, searchCommand } from './lib/sessionSearch/command.js'
 import { dshCommand, dshUsage } from './dsh/command.js'
 import { ApiConnections } from './lib/apiConnections.js'
 import { apiCommand, apiUsage } from './lib/apiCommand.js'
 import { connectionsCommand, connectionsUsage } from './lib/connectors/command.js'
 import { remoteCommand } from './remoteCommand.js'
+import { openDaemon, whereFor } from './agentClient/daemon.js'
+import { pmAccountsCommand } from './pmAccountsCommand.js'
+import { linkClaudeProfile } from './lib/claudeProfiles.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
 import { gridSetupCommand } from './lib/gridSetupCommand.js'
@@ -214,6 +217,7 @@ Machine:
                                ask another of your machines now which engines it has: installed, signed in, first prompt
   harness e2e plan             which coding tools have a new version out (the grid-switch e2e trigger)
   harness e2e grid-switch      move a fresh agent subscription -> grid -> back home with its tool + MCP; leaves a review bundle
+  harness pm accounts [add|use|history]  the Claude accounts your Product Managers may move between: list, sign one in, tick, moves
   harness remote               from a Harness terminal tile: open a terminal on another of your machines and move this tile to it
   harness version              print the installed version (v${VERSION})
   harness update [--force]     update to the latest build now (it also self-updates in the background;
@@ -3012,6 +3016,25 @@ switch (cmd) {
     break
   case 'tui':
     tuiCommand(rest, { port: env.PORT, dataDir: env.ADAPTER_DATA_DIR, identity: wantedDaemonIdentity }).then((code) => { process.exitCode = code }).catch(onError)
+    break
+  case 'pm':
+    if (args[0] !== 'accounts') { console.error('Unknown command: pm ' + (args[0] ?? '') + ' (accounts)'); usage(1) }
+    pmAccountsCommand({
+      argv: rest.slice(1),
+      home: homedir(),
+      request: async (type, payload) => {
+        if (!isDaemonRunning()) throw new Error(daemonUnreachableText())
+        // The tool line every agent command uses: it is this machine's own caller, so the daemon answers it as the owner, and it
+        // is never counted as a Desktop window (a `harness pm accounts` run must not make the daemon believe an app is open).
+        const daemon = await openDaemon({ ...whereFor(undefined), port: daemonPort() }, wantedDaemonIdentity())
+        try { return await daemon.request(type, payload) } finally { daemon.close() }
+      },
+      claudeBin: engineBin('claude'),
+      env: process.env,
+      link: (folder) => linkClaudeProfile(folder, wantedDaemonIdentity()),
+      output: (line) => console.log(line),
+      error: (line) => console.error(line),
+    }).then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'remote':
     remoteCommand({
