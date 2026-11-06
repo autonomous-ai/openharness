@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client'
 import { agentOnly, conversation, fail, isLeads, type AgentStart, type Conversation, type MessageDraft, type SuperTabState } from '../model.js'
 import { autoJoinOn } from '../autoJoinDomain.js'
+import { wakeBuddies } from '../buddySleep.js'
 import { split } from './shape.js'
 import { guardedWrite, PartConflict, plainHost, type HeadColumns, type HostColumns, type PartWrite } from './write.js'
 import type { GroupData, MachineData, Part, PartKind, SwarmParts } from './types.js'
@@ -132,6 +133,7 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
     const sequence = (group.messageSeq ?? state.sequenceBase ?? 0) + 1
     group.messageSeq = sequence
     sequences.set(message.id, sequence)
+    wakeBuddies(state, message, now)
     if (agentOnly(message.source, message.recipients)) continue
     group.lastMessageSequence = sequence
     if (!message.thread || message.alsoInChat) {

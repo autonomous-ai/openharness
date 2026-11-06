@@ -46,7 +46,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   if ('roleId' in command && command.roleId) head()
   if (command.type === 'agent.start' && command.request.roleId) head()
 
-  // News for a Buddy relies on its person still reading there (buddyNews.ts): their part guards it, as a person.tell's does.
+  // Buddy input also guards an already awake recipient, so a concurrent sleep retries against that input (#3824).
   for (const buddy of buddiesHearing(effects.state, effects.messages)) { agent(buddy.id); member(buddy.buddyOf!.personId) }
 
   switch (command.type) {
@@ -60,6 +60,26 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       break
     case 'machine.contribute':
       if (!before.machines?.some(m => m.machineId === command.machineId)) head()
+      break
+    case 'proposal.create':
+      head()
+      group(leadGroupOf(command.projectId))
+      break
+    case 'proposal.decide': case 'proposal.ask': case 'proposal.answer': case 'proposal.merge': {
+      head()
+      const card = before.conversations.find(c => c.id === command.conversationId)
+      leadCheck(card && groupProject(before, card).id)
+      for (const identity of card?.proposal?.senders ?? []) member(identity.personId)
+      if (command.type === 'proposal.merge') {
+        group(command.intoConversationId)
+        for (const id of card?.proposal?.mergedFrom ?? []) group(id)
+      }
+      break
+    }
+    case 'buddy.propose':
+      head()
+      leadCheck(command.projectId)
+      if (actor.kind === 'agent') member(before.agents.find(a => a.id === actor.agentId)?.buddyOf?.personId)
       break
     case 'buddy.create':
       // It may record a Buddy-only machine, or count on one that a concurrent removal of its last Buddy ends.

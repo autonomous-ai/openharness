@@ -1,4 +1,11 @@
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { createInterface } from 'node:readline'
+import { createSuperTabTerminal } from './inCore/terminal.js'
+import { screen as codexScreen } from '../engines/codex/screen.js'
+import type { RegisteredSession } from '../lib/registry.js'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
@@ -649,5 +656,83 @@ describe('reading a model that keeps failing off a screen', () => {
     expect(modelFailing('• Reconnecting... waiting for network (4h 21m 27s • esc to interrupt)\n  └ Connection failed: error sending request\n› Ask Codex to do anything')).toBe(true)
     expect(modelFailing('work\n  └ Connection failed: error sending request\n› ')).toBe(true)
     expect(modelFailing(`I will make the client say "Unable to connect to API" when the relay is down.\n${'line\n'.repeat(30)}> `)).toBe(false)
+  })
+})
+
+// #3904: a resumed Swarm Codex already has an identity, so startup settlement never sees its folder prompt.
+describe.each([
+  { version: '0165', secondRow: 'Quit' },
+  { version: '0166', secondRow: 'Back to Agent Command Center' },
+])('opening a Swarm Codex folder restricted after start or resume ($version)', ({ version, secondRow }) => {
+  const restricted = fixture(`codex-${version}-open-restricted`)
+  it.each(['start', 'resume'])('continues a fake Codex %s without granting trust', async (mode) => {
+    const home = mkdtempSync(join(tmpdir(), 'codex-restricted-'))
+    const config = join(home, 'config.toml')
+    const savedConfig = '[projects."/worktree"]\ntrust_level = "untrusted"\n'
+    writeFileSync(config, savedConfig)
+    // A separate fake engine waits on input on both startup paths, reading only its disposable home.
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `
+      import { readFileSync } from 'node:fs';
+      import { createInterface } from 'node:readline';
+      const [mode, config, prompt] = process.argv.slice(1);
+      if (!['start', 'resume'].includes(mode) || !readFileSync(config, 'utf8').includes('"untrusted"')) process.exit(1);
+      console.log(JSON.stringify(prompt));
+      createInterface({ input: process.stdin }).on('line', key => {
+        if (key === 'Enter') console.log(JSON.stringify('› Ask Codex to do anything'));
+      });
+    `, mode, config, restricted], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+    const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]()
+    const nextScreen = async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const line = await Promise.race([lines.next(), new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Fake Codex did not draw its next screen')), 2_000)
+        })])
+        if (line.done) throw new Error('Fake Codex exited before drawing its screen')
+        return JSON.parse(line.value) as string
+      } finally { clearTimeout(timer) }
+    }
+    try {
+      let capture = await nextScreen()
+      const t = setup({ engine: 'codex' })
+      const terminal = createSuperTabTerminal({
+        resolve: id => id === 'h1' ? { agentId: id, engine: 'codex' } as RegisteredSession : undefined,
+        capture: async () => ({ state: 'succeeded', value: capture }),
+        read: async (_session, text) => codexScreen.inspect(text ?? ''),
+        type: async () => false,
+        key: async (_id, key) => { child.stdin.write(`${key}\n`); capture = await nextScreen(); return true },
+        locked: async (_id, write) => write(),
+      })
+      Object.assign(t.core.superTabs!, terminal)
+      await t.host.tick([row()])
+      expect(capture).toBe('› Ask Codex to do anything')
+      expect(readFileSync(config, 'utf8')).toBe(savedConfig)
+      t.wait(180_000); await t.host.tick([row()])
+      expect(t.alerts()).toEqual([])
+    } finally {
+      child.kill()
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it.each([
+    ['trust grant', CODEX_TRUST_PROMPT, 'codex', [row()]],
+    ['another engine', restricted, 'claude', [row()]],
+    ['personal session outside the roster', restricted, 'codex', []],
+    ['the second row highlighted', restricted.replace('› 1. Open restricted', '  1. Open restricted').replace(`  2. ${secondRow}`, `› 2. ${secondRow}`), 'codex', [row()]],
+  ])('never types on %s', async (_name, text, engine, rows) => {
+    const t = setup({ engine, screen: () => ({ ok: true, text, hold: 'trust_open' }) })
+    await t.host.tick(rows)
+    expect(t.core.superTabs!.inputIfScreen).not.toHaveBeenCalled()
+  })
+
+  it('bounds failed conditional inputs and alerts when the prompt persists', async () => {
+    const t = setup({ engine: 'codex', screen: () => ({ ok: true, text: restricted, hold: 'trust_open' }) })
+    vi.mocked(t.core.superTabs!.inputIfScreen).mockResolvedValue({ ok: false, error: 'Screen changed.' })
+    for (let i = 0; i < 5; i++) { await t.host.tick([row()]); t.wait(15_000) }
+    expect(t.core.superTabs!.inputIfScreen).toHaveBeenCalledTimes(3)
+    expect(t.core.superTabs!.inputIfScreen).toHaveBeenCalledWith('h1', ['Enter'], restricted)
+    t.wait(180_000); await t.host.tick([row()])
+    expect(t.alerts()).toContainEqual(expect.objectContaining({ alert: 'prompt', active: true }))
   })
 })
