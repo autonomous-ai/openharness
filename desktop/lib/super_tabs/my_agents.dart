@@ -25,10 +25,6 @@ List<SuperTabAgent> superTabMyAgents(
 bool superTabAgentIsPm(SuperTabSnapshot snapshot, SuperTabAgent agent) =>
     agent.kind != null ? agent.kind == 'pm' : snapshot.isLead(agent.id);
 
-/// What a new agent is (Swarm v3, task #4118): a Regular agent is tied to no project, the task decides where it works; a PM
-/// names and starts a project.
-enum SuperTabAgentKind { regular, pm }
-
 /// The chat that opens when [agent] is chosen in My agents: a PM's is its project's chat, a Regular agent's is the open task
 /// it works on now (the newest, when several); null while it has none.
 SuperTabConversation? superTabAgentChat(

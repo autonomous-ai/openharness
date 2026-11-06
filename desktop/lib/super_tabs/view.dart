@@ -62,7 +62,7 @@ import 'crew_panel.dart';
 import 'instructions_panel.dart';
 import 'project_rules.dart';
 import 'model.dart';
-import 'my_agents.dart';
+import 'join/new_agent_dialog.dart';
 import 'agent_details.dart';
 import 'identity.dart' show superTabMachineName;
 import 'identity_card.dart';
@@ -137,7 +137,6 @@ class SuperTabView extends StatefulWidget {
     this.app,
     this.onNewProject,
     this.rightPane,
-    this.belowDecisions,
     this.onNewSwarm,
     this.onChooseAgentTerminal,
     this.linkSwarms,
@@ -172,9 +171,6 @@ class SuperTabView extends StatefulWidget {
   /// slot. Given, the chat of the selected agent or project is in the middle; without it the right pane keeps the Board's
   /// chat as before.
   final Widget Function(BuildContext context)? rightPane;
-
-  /// A row directly below Decisions in the left pane (the Leaderboard, task #4122).
-  final Widget? belowDecisions;
 
   /// The existing New Swarm, for the Swarm dropdown atop the left bar; none
   /// without it.
@@ -2103,8 +2099,7 @@ class _SuperTabViewState extends State<SuperTabView>
     compact: _phone,
     app: widget.app,
     onNewProject: widget.onNewProject,
-    onNewAgent: _newAgent,
-    belowDecisions: widget.belowDecisions,
+    onNewAgent: widget.app == null ? null : _newAgent,
     onOpenAgentChat: _openAgentChat,
     onNewSwarm: widget.onNewSwarm,
     page: _pageShown,
@@ -2136,19 +2131,12 @@ class _SuperTabViewState extends State<SuperTabView>
     onOpenBuddyChat: (projectId) => unawaited(_openBuddyChat(projectId)),
   );
 
-  /// + New agent's choice (Swarm v3, task #4118): a PM names and starts a project, so New project opens; a Regular agent
-  /// starts from the open chat's creation flow until the v3 creation flow (#4116) replaces it.
-  void _newAgent(SuperTabAgentKind kind) {
-    switch (kind) {
-      case SuperTabAgentKind.pm:
-        widget.onNewProject?.call();
-      case SuperTabAgentKind.regular:
-        final group =
-            c.selected ??
-            c.snapshot?.conversation(
-              c.snapshot?.projects.firstOrNull?.leadConversationId ?? '',
-            );
-        if (group != null) widget.onAddAgent(group);
+  /// + New agent (Swarm v3, task #4118): the creation dialog, where Regular or PM is chosen and the agent starts on this
+  /// computer. It needs the app: a view without one has no +.
+  void _newAgent() {
+    final app = widget.app;
+    if (app != null) {
+      unawaited(showSwarmNewAgentDialog(context, controller: c, app: app));
     }
   }
 

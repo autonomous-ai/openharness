@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../shared/theme/appearance_prefs_store.dart';
 import '../state/app_state.dart';
@@ -28,7 +27,6 @@ import 'project_github.dart';
 import 'private_project_lock.dart';
 import '../widgets/laid_out_list.dart';
 import 'swarm_type.dart';
-import 'detail_dialog.dart';
 
 /// The reader's one Buddy for the whole Swarm, listed first among the projects
 /// as a channel (Dee, 10-31).
@@ -67,7 +65,6 @@ class ProjectSidebar extends StatelessWidget {
     this.board = false,
     this.onNewAgent,
     this.onOpenAgentChat,
-    this.belowDecisions,
   });
   final SuperTabController controller;
 
@@ -77,13 +74,9 @@ class ProjectSidebar extends StatelessWidget {
   /// Desktop's Board layout (anh Dee, task #3787): no Threads row and no Buddy entry, the Buddy being the right pane.
   final bool board;
 
-  /// + New agent's choice, Regular or PM (Swarm v3, task #4118): the creation flow takes it from here. Without it the
-  /// section has no + .
-  final ValueChanged<SuperTabAgentKind>? onNewAgent;
-
-  /// A row the Desktop's left pane keeps directly below Decisions, such as the Leaderboard (Swarm v3, task #4122); nothing
-  /// is reserved while it is not given.
-  final Widget? belowDecisions;
+  /// + New agent (Swarm v3, task #4118): opens the creation dialog, where Regular or PM is chosen. Without it the section
+  /// has no + .
+  final VoidCallback? onNewAgent;
 
   /// Opens the chat of an agent chosen in My agents in the middle; [onSelect] when not given.
   final ValueChanged<String>? onOpenAgentChat;
@@ -633,9 +626,7 @@ class ProjectSidebar extends StatelessWidget {
         key: const ValueKey('project-sidebar-agents'),
         'My agents',
         titleStyle: _headingStyle,
-        onAdd: controller.canWrite && onNewAgent != null
-            ? () => unawaited(_newAgent(context))
-            : null,
+        onAdd: controller.canWrite ? onNewAgent : null,
         addTooltip: 'New agent',
         endInset: 0,
       ),
@@ -665,50 +656,6 @@ class ProjectSidebar extends StatelessWidget {
       unread: chat != null && controller.unreadShown(chat),
       onTap: chat == null ? null : () => (onOpenAgentChat ?? onSelect)(chat.id),
     );
-  }
-
-  /// + New agent: Regular or PM, and the creation flow takes the choice.
-  Future<void> _newAgent(BuildContext context) async {
-    final kind = await showAppDialog<SuperTabAgentKind>(
-      context: context,
-      builder: (context) => SuperTabDetailDialog(
-        title: 'New agent',
-        body: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (final (kind, title, detail) in const [
-              (
-                SuperTabAgentKind.regular,
-                'Regular',
-                'Works on the tasks it is given, in any project.',
-              ),
-              (
-                SuperTabAgentKind.pm,
-                'PM',
-                'Names and starts a project, and directs its crew.',
-              ),
-            ])
-              InkWell(
-                key: ValueKey('super-new-agent-${kind.name}'),
-                onTap: () => Navigator.of(context).pop(kind),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: grid.AppDesktop.listRowGap,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(title, style: DesktopChrome.control()),
-                      Text(detail, style: DesktopChrome.metadata()),
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-    if (kind != null) onNewAgent?.call(kind);
   }
 
   /// The Buddy's activity mark, drawn as the Agents list draws an agent's.
@@ -879,7 +826,6 @@ class ProjectSidebar extends StatelessWidget {
                       waiting: threads,
                     ),
                 ],
-                if (board) ?belowDecisions,
                 const SizedBox(height: 20),
                 if (board) ..._myAgents(context, snapshot, reading),
                 SuperTabSectionHeading(
