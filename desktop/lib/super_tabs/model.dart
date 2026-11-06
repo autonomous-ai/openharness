@@ -380,6 +380,9 @@ class SuperTabConversation {
       kind = row['kind'] as String?,
       buddyOwnerId = row['buddyOwnerId'] as String?,
       buddyName = row['buddyName'] as String?,
+      buddyDefault = row['buddyDefault'] == true,
+      paused = SuperTabPause.read(row['paused']),
+      proposal = SuperTabProposalCard.read(row['proposal']),
       buddySessions = List.unmodifiable(
         (row['buddySessions'] is List ? row['buddySessions'] as List : const [])
             .whereType<Map>()
@@ -465,6 +468,17 @@ class SuperTabConversation {
   /// The name a Buddy chat's person chose for their Buddy, kept while no
   /// Buddy runs; null for the default (backend buddies.ts renameBuddy).
   final String? buddyName;
+
+  /// Whether this Buddy chat is its person's default Buddy, of several (#3818): it opens first and takes what is
+  /// addressed to the person. False from a backend before several Buddies, where the first chat is the default.
+  final bool buddyDefault;
+
+  /// While its task is paused (#3819, a project on the Board): who paused it, when and why; null otherwise.
+  final SuperTabPause? paused;
+
+  /// The proposal this card began as, with the PM's decision and its questions (#3817, a project on the Board);
+  /// null for a card that was never a proposal, and from an older backend.
+  final SuperTabProposalCard? proposal;
 
   /// A Buddy chat's thread sessions, live or starting (at most 3); empty on
   /// every other conversation and from older backends.
@@ -607,8 +621,36 @@ class SuperTabProject {
           : null,
       repositoryCreation = SuperTabRepositoryCreation.read(
         row['repositoryCreation'],
-      );
+      ),
+      boardMode = row['boardMode'] == true,
+      canChatIds = List.unmodifiable(
+        (row['canChat'] as List? ?? const []).whereType<String>(),
+      ),
+      deciderId = row['decider'] is String ? row['decider'] as String : null;
   final String id, name, ownerId, leadConversationId;
+
+  /// Whether its owner switched it to the Board way of working (#3819, spec 2026-11-06-buddy-board-final-spec):
+  /// people talk to their Buddies, work comes in as proposals, and only people with Can chat write in its chat.
+  /// False when not switched and from an older backend: everything then works as today.
+  final bool boardMode;
+
+  /// The people granted Can chat in it; its owner and the Swarm's owner always have it and are not listed.
+  final List<String> canChatIds;
+
+  /// Its top decider (for openharness, Dee), who may set P0 and pause like its owner; null when none is set.
+  final String? deciderId;
+
+  /// Whether [personId] may write in its chat: anyone who may write, while it is not on the Board.
+  bool canChat(String personId, {bool swarmOwner = false}) =>
+      !boardMode ||
+      swarmOwner ||
+      personId == ownerId ||
+      canChatIds.contains(personId);
+
+  /// Whether [personId] may set P0 on any card and pause or resume any task: its owner, the Swarm's owner and its
+  /// decider. The server enforces it; the app only offers what it would allow.
+  bool canSteer(String personId, {bool swarmOwner = false}) =>
+      swarmOwner || personId == ownerId || personId == deciderId;
 
   /// The zone its day is read in, as the server reads it for the crew
   /// dispatch and the morning digest: its digest's, else
@@ -646,6 +688,154 @@ class SuperTabProject {
   /// sign-in made of it (task #3374); null when none was asked, and from a
   /// backend before it.
   final SuperTabRepositoryCreation? repositoryCreation;
+}
+
+DateTime? _epoch(Object? value) =>
+    value is num ? DateTime.fromMillisecondsSinceEpoch(value.toInt()) : null;
+
+String? _words(Object? value) =>
+    value is String && value.trim().isNotEmpty ? value : null;
+
+/// A Board card's proposal (#3817): what was proposed and by whom, the PM's decision, and its questions.
+class SuperTabProposalCard {
+  SuperTabProposalCard._(Map row)
+    : text = _words(row['text']) ?? '',
+      goal = _words(row['goal']),
+      why = _words(row['why']),
+      doneWhen = _words(row['doneWhen']),
+      createdAt = _epoch(row['createdAt']),
+      senderIds = List.unmodifiable([
+        for (final sender in row['senders'] as List? ?? const [])
+          if (sender is Map && sender['personId'] is String)
+            sender['personId'] as String,
+      ]),
+      decision = SuperTabProposalDecision.read(row['decision']),
+      questions = List.unmodifiable([
+        for (final q in row['questions'] as List? ?? const [])
+          ?SuperTabProposalQuestion.read(q),
+      ]),
+      mergedInto = _words(row['mergedInto']),
+      overdue = row['overdue'] == true;
+
+  static SuperTabProposalCard? read(Object? value) =>
+      value is Map ? SuperTabProposalCard._(value) : null;
+
+  final String text;
+  final String? goal, why, doneWhen;
+  final DateTime? createdAt;
+
+  /// The people who agreed to it, first the one who proposed it.
+  final List<String> senderIds;
+  final SuperTabProposalDecision? decision;
+  final List<SuperTabProposalQuestion> questions;
+
+  /// The card it was merged into as a duplicate: it is no longer on the Board.
+  final String? mergedInto;
+
+  /// Waiting on the PM longer than the project's limit (spec Design, Failure).
+  final bool overdue;
+
+  /// The question still waiting for its answer, if any.
+  SuperTabProposalQuestion? get openQuestion =>
+      questions.where((q) => !q.answered).firstOrNull;
+
+  /// Whether it became a task: accepted, or reshaped into the version the PM will do.
+  bool get becameTask => switch (decision?.kind) {
+    'accept' || 'reshape' => true,
+    _ => false,
+  };
+}
+
+/// The PM's decision on a proposal: `accept`, `reshape`, `later` (until [revisitAt]) or `no`, with its reason.
+class SuperTabProposalDecision {
+  const SuperTabProposalDecision({
+    required this.kind,
+    this.reason,
+    this.revisitAt,
+  });
+
+  static SuperTabProposalDecision? read(Object? value) {
+    if (value is! Map) return null;
+    final kind = value['kind'];
+    const kinds = {'accept', 'reshape', 'later', 'no'};
+    if (kind is! String || !kinds.contains(kind)) return null;
+    return SuperTabProposalDecision(
+      kind: kind,
+      reason: _words(value['reason']),
+      revisitAt: _epoch(value['revisitAt']),
+    );
+  }
+
+  final String kind;
+  final String? reason;
+  final DateTime? revisitAt;
+}
+
+/// A question the PM asked on a card, of one person, with the answer it takes by [deadline] if none comes.
+class SuperTabProposalQuestion {
+  const SuperTabProposalQuestion({
+    required this.id,
+    required this.personId,
+    required this.question,
+    required this.defaultAnswer,
+    required this.deadline,
+    required this.answered,
+    this.requiresConsent = false,
+  });
+
+  static SuperTabProposalQuestion? read(Object? value) {
+    if (value is! Map) return null;
+    final (id, person, question) = (
+      value['id'],
+      value['personId'],
+      value['question'],
+    );
+    final deadline = _epoch(value['deadline']);
+    if (id is! String ||
+        person is! String ||
+        question is! String ||
+        deadline == null) {
+      return null;
+    }
+    return SuperTabProposalQuestion(
+      id: id,
+      personId: person,
+      question: question,
+      defaultAnswer: _words(value['defaultAnswer']) ?? '',
+      deadline: deadline,
+      answered: value['answer'] is Map,
+      requiresConsent: value['requiresConsent'] == true,
+    );
+  }
+
+  final String id, personId, question, defaultAnswer;
+  final DateTime deadline;
+  final bool answered, requiresConsent;
+}
+
+/// A paused task (#3819): who paused it, when, and the reason they gave, if any.
+class SuperTabPause {
+  const SuperTabPause({required this.by, required this.at, this.reason});
+
+  static SuperTabPause? read(Object? value) {
+    if (value is! Map || value['by'] is! String) return null;
+    final at = switch (value['at']) {
+      final num ms => DateTime.fromMillisecondsSinceEpoch(ms.toInt()),
+      final String iso => DateTime.tryParse(iso)?.toLocal(),
+      _ => null,
+    };
+    if (at == null) return null;
+    final reason = value['reason'];
+    return SuperTabPause(
+      by: value['by'] as String,
+      at: at,
+      reason: reason is String && reason.trim().isNotEmpty ? reason : null,
+    );
+  }
+
+  final String by;
+  final DateTime at;
+  final String? reason;
 }
 
 /// A new repository asked for a project (backend projects.ts
@@ -831,6 +1021,7 @@ class SuperTabSnapshot {
       threadSessions = row['threadSessions'] == true,
       sessionsFromChat = row['sessionsFromChat'] == true,
       swarmBuddy = row['swarmBuddy'] == true,
+      buddyCap = (row['buddyCap'] as num?)?.toInt(),
       autoJoin = row['autoJoin'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
@@ -959,6 +1150,10 @@ class SuperTabSnapshot {
   /// session in a project. False from an older one, whose Buddies are per
   /// project.
   final bool swarmBuddy;
+
+  /// How many Buddies a person may have in this Swarm (#3818); its presence says the server makes several, each in
+  /// its own chat. Null from a server that makes one.
+  final int? buddyCap;
 
   /// People at the owner's email domain are added automatically (head
   /// `autoJoin`, every member reads it): someone who leaves is not added back.
