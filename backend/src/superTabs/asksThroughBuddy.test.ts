@@ -80,6 +80,16 @@ describe('in a switched project, an agent’s ask reaches the person through the
     expect(asked.messages.filter(m => m.conversationId === f.buddyChat).map(m => (m.source as { decisionId: string }).decisionId)).toEqual(asked.result.decisionIds)
   })
 
+  it('tells the person that a required agreement never applies a default', () => {
+    const f = fixture(true)
+    const asked = f.run({ type: 'decision.ask', conversationId: f.group, personId: 'peer',
+      questions: [{ question: 'Authorize the release?', ...choices, defaultAt, mustAgree: true }] }, asAgent(f.worker))
+    const line = asked.messages.find(m => m.conversationId === f.buddyChat)!
+    expect(line.text).toContain('No default applies')
+    expect(line.text).toContain(defaultAt)
+    expect(line.text).not.toContain('if not answered: Behind a flag')
+  })
+
   it('refuses an ask with no default time, saying what to add', () => {
     const f = fixture(true)
     expect(() => f.run({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'needs_human',

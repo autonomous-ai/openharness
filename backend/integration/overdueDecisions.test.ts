@@ -297,6 +297,37 @@ describe('a switched project’s direct asks at their default time', () => {
     return { ...f, pm, worker, task, ask, told }
   }
 
+  it('notifies the default Buddy only once when decision.ask repeats an open question', async () => {
+    const f = await direct()
+    const chat = String((await f.execute({ type: 'buddy.chat' }, peer)).result.conversationId)
+    const command: Command = { type: 'decision.ask', conversationId: f.task, personId: peer.sub,
+      questions: [{ question: 'Ship this copy?', options: ['Yes', 'No'], recommended: 0, unblocks: 'Release', defaultAt: at(HOUR) }] }
+    const first = await f.execute(command, owner, f.worker)
+    const repeated = await f.execute(command, owner, f.worker)
+    expect(repeated.result.decisionIds).toEqual(first.result.decisionIds)
+    const lines = (await f.store.messages(peer, f.tab, chat, {})).messages.filter(m => (m.source as { kind?: string })?.kind === 'decision-asked')
+    expect(lines).toHaveLength(1)
+    expect(lines[0]!.source).toMatchObject({ decisionId: (first.result.decisionIds as string[])[0] })
+  })
+
+  it.each([false, true])('keeps a changed agreement requirement distinct (original mustAgree: %s)', async firstMustAgree => {
+    const f = await direct()
+    const question = { question: 'Authorize the release?', options: ['Yes', 'No'], recommended: 0, unblocks: 'Release', defaultAt: at(HOUR) }
+    const ask = async (mustAgree: boolean) => (await f.execute({ type: 'decision.ask', conversationId: f.task, personId: peer.sub,
+      questions: [{ ...question, ...(mustAgree ? { mustAgree: true as const } : {}) }] }, owner, f.worker)).result.decisionIds as string[]
+    const first = await ask(firstMustAgree)
+    const changed = await ask(!firstMustAgree)
+    expect(changed).not.toEqual(first)
+    expect((await f.row(changed[0]!)).mustAgree === true).toBe(!firstMustAgree)
+  })
+
+  it('never tells the person the PM can take over a required agreement', async () => {
+    const f = await direct()
+    const id = await f.ask(HOUR, { defaultAt: at(0), mustAgree: true })
+    const row = (await f.store.decisions(peer, f.tab, 'open')).decisions.find(d => d.id === id)!
+    expect(row.pmTakesOver).toBe(false)
+  })
+
   it('applies the recommendation at its time, and the asking agent hears it', async () => {
     const f = await direct()
     const id = await f.ask(HOUR, { defaultAt: at(0) })
