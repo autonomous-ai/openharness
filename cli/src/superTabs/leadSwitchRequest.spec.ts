@@ -12,6 +12,7 @@ import { FIXTURE, readFixture } from './fixtures/read/index.js'
 // Each trust fixture moves the engine homes; do not reuse a login-shell snapshot captured by another fixture.
 vi.mock('../engines/kit/launchExecutable.js', async original => ({ ...await original<object>(),
   launchEnvironment: async () => Object.fromEntries(['HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) }))
+import type { EngineStatusRun } from '../lib/engineAccount.js'
 import { LeadSwitchRequests, profileSignedIn, switchChangeId, type SwitchRow } from './leadSwitchRequest.js'
 
 afterEach(() => { vi.unstubAllEnvs() })
@@ -347,49 +348,66 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
 })
 
 describe('whether a profile folder holds a sign-in', () => {
-  it('reads the default account where its engine keeps it', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'lead-switch-default-'))
-    const keychain = (raw: string | null) => ({ home, platform: 'linux' as const, readKeychain: async () => raw })
-    const good = JSON.stringify({ claudeAiOauth: { accessToken: 't', expiresAt: NOW + 1000 } })
-    expect(await profileSignedIn('claude', 'default', NOW, keychain(null), {})).toBe(false)
-    expect(await profileSignedIn('claude', 'default', NOW, keychain(good), {})).toBe(true)
-    expect(await profileSignedIn('claude', 'default', NOW, keychain(null), { ANTHROPIC_API_KEY: 'k' })).toBe(true)
-    expect(await profileSignedIn('codex', 'default', NOW, { home }, {})).toBe(false)
-    mkdirSync(join(home, '.codex'))
-    writeFileSync(join(home, '.codex', 'auth.json'), JSON.stringify({ OPENAI_API_KEY: 'k' }))
-    expect(await profileSignedIn('codex', 'default', NOW, { home }, {})).toBe(true)
+  /** A fake `claude auth status --json` / `codex login status`, recording what it was asked. */
+  const cli = (signedIn: boolean | null) => {
+    const calls: Array<{ engine: string; args: readonly string[]; env: NodeJS.ProcessEnv }> = []
+    const run: EngineStatusRun = async (engine, args, env) => {
+      calls.push({ engine, args, env })
+      if (signedIn === null) return null
+      return { code: signedIn ? 0 : 1, stdout: engine === 'claude' ? JSON.stringify({ loggedIn: signedIn, authMethod: 'claude.ai', apiProvider: 'firstParty' }) : '' }
+    }
+    return { run, calls }
+  }
+  /** A folder holding the sign-in files the CLIs once kept: their presence must never count. */
+  const folder = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'profile-signed-in-'))
+    writeFileSync(join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'a', refreshToken: 'r' } }))
+    writeFileSync(join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'a@b.c' } }))
+    writeFileSync(join(dir, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: 'k', tokens: { access_token: 'a', refresh_token: 'r' } }))
+    return dir
+  }
+
+  it('asks the engine itself for the default account, under the daemon\'s own environment, or takes its key', async () => {
+    const yes = cli(true)
+    expect(await profileSignedIn('claude', 'default', { PATH: '/bin' }, yes.run)).toBe(true)
+    expect(await profileSignedIn('codex', 'default', { PATH: '/bin', CODEX_HOME: '/mine' }, yes.run)).toBe(true)
+    expect(yes.calls).toEqual([
+      { engine: 'claude', args: ['auth', 'status', '--json'], env: { PATH: '/bin' } },
+      { engine: 'codex', args: ['login', 'status'], env: { PATH: '/bin', CODEX_HOME: '/mine' } },
+    ])
+    const no = cli(false)
+    expect(await profileSignedIn('claude', 'default', {}, no.run)).toBe(false)
+    expect(await profileSignedIn('claude', 'default', { ANTHROPIC_API_KEY: 'k' }, no.run)).toBe(true)
+    expect(no.calls).toHaveLength(1)
   })
 
-  const folder = () => mkdtempSync(join(tmpdir(), 'profile-signed-in-'))
-  const claude = (oauth: unknown) => ({ platform: 'linux' as const, readKeychain: async () => JSON.stringify({ claudeAiOauth: oauth }) })
-  const jwt = (claims: Record<string, unknown>) => ['e30', Buffer.from(JSON.stringify(claims)).toString('base64url'), 'sig'].join('.')
-  const codex = (tokens: unknown) => { const dir = folder(); writeFileSync(join(dir, 'auth.json'), JSON.stringify({ tokens })); return dir }
-
-  it('Claude: a token that has not expired, or one its refresh token renews, is signed in; none is not', async () => {
-    expect(await profileSignedIn('claude', folder(), NOW, { platform: 'linux', readKeychain: async () => null })).toBe(false)
-    expect(await profileSignedIn('claude', folder(), NOW, claude({ refreshToken: 'r' }))).toBe(false)
-    expect(await profileSignedIn('claude', folder(), NOW, claude({ accessToken: 'a' }))).toBe(true)
-    expect(await profileSignedIn('claude', folder(), NOW, claude({ accessToken: 'a', expiresAt: NOW + 1 }))).toBe(true)
-    expect(await profileSignedIn('claude', folder(), NOW, claude({ accessToken: 'a', expiresAt: NOW - 1, refreshToken: 'r' }))).toBe(true)
-    expect(await profileSignedIn('claude', folder(), NOW, claude({ accessToken: 'a', expiresAt: NOW - 1 }))).toBe(false)
+  it('asks Claude Code about a profile folder as its CLAUDE_CONFIG_DIR, and reads none of its files', async () => {
+    const dir = folder(), no = cli(false), yes = cli(true)
+    expect(await profileSignedIn('claude', dir, { PATH: '/bin' }, no.run)).toBe(false)
+    expect(no.calls).toEqual([{ engine: 'claude', args: ['auth', 'status', '--json'], env: { PATH: '/bin', CLAUDE_CONFIG_DIR: dir } }])
+    expect(await profileSignedIn('claude', dir, {}, yes.run)).toBe(true)
+    // A key the daemon has is the default account's, not the folder's.
+    expect(await profileSignedIn('claude', dir, { ANTHROPIC_API_KEY: 'k' }, no.run)).toBe(false)
+    expect(await profileSignedIn('claude', dir, {}, cli(null).run)).toBe(false)
   })
 
-  it('Codex: the same rule over auth.json and the token\'s own expiry', async () => {
-    expect(await profileSignedIn('codex', folder(), NOW)).toBe(false)
-    expect(await profileSignedIn('codex', codex({}), NOW)).toBe(false)
-    expect(await profileSignedIn('codex', codex({ access_token: 'opaque' }), NOW)).toBe(true)
-    expect(await profileSignedIn('codex', codex({ access_token: jwt({ exp: NOW / 1000 + 60 }) }), NOW)).toBe(true)
-    expect(await profileSignedIn('codex', codex({ access_token: jwt({ exp: NOW / 1000 - 60 }), refresh_token: 'r' }), NOW)).toBe(true)
-    expect(await profileSignedIn('codex', codex({ access_token: jwt({ exp: NOW / 1000 - 60 }) }), NOW)).toBe(false)
+  it('asks Codex about a profile folder as its CODEX_HOME, by its exit code, and reads none of its files', async () => {
+    const dir = folder(), no = cli(false)
+    expect(await profileSignedIn('codex', dir, { CODEX_HOME: '/other' }, no.run)).toBe(false)
+    expect(no.calls).toEqual([{ engine: 'codex', args: ['login', 'status'], env: { CODEX_HOME: dir } }])
+    expect(await profileSignedIn('codex', dir, {}, cli(true).run)).toBe(true)
+    expect(await profileSignedIn('codex', dir, {}, cli(null).run)).toBe(false)
   })
 
-  it('a switch to a profile asks the real reader by default', async () => {
+  it('a switch to a profile asks the engine by default', async () => {
     const t = setup()
+    const dir = folder(), no = cli(false)
     const switches = new LeadSwitchRequests(fakeCore({ dataDir: t.dataDir, account: { backend: vi.fn(async () => ({ status: 200, body: { success: true, data: { result: {} } } })) },
       agents: { byAgent: vi.fn(() => ({ ...PM }) as never) } }), 'm1',
-      { now: () => NOW, profiles: (() => folder()) as never, credentials: { platform: 'linux', readKeychain: async () => null } })
+      { now: () => NOW, profiles: (() => dir) as never, run: no.run })
     await switches.serve(row())
-    // Nothing signed in under that folder: refused before anything is closed.
+    expect(no.calls.map(call => [call.engine, call.env.CLAUDE_CONFIG_DIR])).toEqual([['claude', dir]])
+    // Signed out under that folder: refused before anything is closed.
     expect(vi.mocked(switches['core'].account.backend).mock.calls.at(-1)![2]).toMatchObject({ command: { type: 'agent.switchResult', ok: false, error: 'that account is signed out' } })
   })
 })
