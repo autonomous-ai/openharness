@@ -660,8 +660,11 @@ describe('reading a model that keeps failing off a screen', () => {
 })
 
 // #3904: a resumed Swarm Codex already has an identity, so startup settlement never sees its folder prompt.
-describe('opening a Swarm Codex folder restricted after start or resume', () => {
-  const restricted = fixture('codex-0165-open-restricted')
+describe.each([
+  { version: '0165', secondRow: 'Quit' },
+  { version: '0166', secondRow: 'Back to Agent Command Center' },
+])('opening a Swarm Codex folder restricted after start or resume ($version)', ({ version, secondRow }) => {
+  const restricted = fixture(`codex-${version}-open-restricted`)
   it.each(['start', 'resume'])('continues a fake Codex %s without granting trust', async (mode) => {
     const home = mkdtempSync(join(tmpdir(), 'codex-restricted-'))
     const config = join(home, 'config.toml')
@@ -716,7 +719,7 @@ describe('opening a Swarm Codex folder restricted after start or resume', () => 
     ['trust grant', CODEX_TRUST_PROMPT, 'codex', [row()]],
     ['another engine', restricted, 'claude', [row()]],
     ['personal session outside the roster', restricted, 'codex', []],
-    ['Quit highlighted', restricted.replace('› 1. Open restricted', '  1. Open restricted').replace('  2. Quit', '› 2. Quit'), 'codex', [row()]],
+    ['the second row highlighted', restricted.replace('› 1. Open restricted', '  1. Open restricted').replace(`  2. ${secondRow}`, `› 2. ${secondRow}`), 'codex', [row()]],
   ])('never types on %s', async (_name, text, engine, rows) => {
     const t = setup({ engine, screen: () => ({ ok: true, text, hold: 'trust_open' }) })
     await t.host.tick(rows)
