@@ -3566,17 +3566,24 @@ class _SuperTabViewState extends State<SuperTabView>
     child: Row(
       children: [
         const SizedBox(width: 8),
-        Flexible(
-          child: Text(
-            project.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: DesktopChrome.heading(),
+        // The name and its tabs take the room left, so what follows sits at the right edge: a Flexible name beside a
+        // Spacer split the free space, and the name's unused half left the controls mid-bar (#3846).
+        Expanded(
+          child: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  project.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.heading(),
+                ),
+              ),
+              const SizedBox(width: 12),
+              _projectTabs(project, board: true),
+            ],
           ),
         ),
-        const SizedBox(width: 12),
-        _projectTabs(project, board: true),
-        const Spacer(),
         // Propose straight from the Board (#3820), on a project that works from proposals.
         if (project.boardMode && c.canWrite)
           TextButton.icon(
@@ -3616,6 +3623,8 @@ class _SuperTabViewState extends State<SuperTabView>
               foregroundColor: selected
                   ? DesktopChrome.foreground
                   : DesktopChrome.muted,
+              // The tab shown has no action, so a disabled button would grey it: it reads as selected instead.
+              disabledForegroundColor: DesktopChrome.foreground,
             ),
             child: Text(label),
           ),
@@ -6262,17 +6271,16 @@ class _SuperTabViewState extends State<SuperTabView>
                               : chatBeside
                               ? chat
                               : null),
-                rightDefault: !boardLayout && thread == null && !chatBeside
+                rightDefault: boardLayout
+                    ? SuperTabPaneLayout.boardRightWidth
+                    : !boardLayout && thread == null && !chatBeside
                     ? SuperTabPaneLayout.rightWidth
                     : SuperTabPaneLayout.threadWidth,
-                // The Board's chat is the main interface: a third of the
-                // window, never under 420 (Dee, task #3863).
+                // The Desktop's right pane is a fixed 340, the Tasks pane's: the middle takes the rest (River, Swarm v3).
                 rightMinimum: boardLayout
-                    ? SuperTabPaneLayout.boardChatMinimum
+                    ? SuperTabPaneLayout.boardRightWidth
                     : SuperTabPaneLayout.rightWidth,
-                rightShare: boardLayout
-                    ? SuperTabPaneLayout.boardChatShare
-                    : null,
+                rightFixed: boardLayout,
                 // Over the chat, beside an open thread, as in Slack.
                 over: wide ? viewer : null,
                 // A project's own chat keeps its header and tabs (Project options, Tasks): the full chat view.

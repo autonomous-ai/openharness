@@ -1068,8 +1068,13 @@ void main() {
       testWidgets('Mine and Search name themselves in the $layout, '
           'and Show all brings the cards back', (tester) async {
         final c = await _show(tester, tasksServer());
-        await tester.tap(find.byKey(ValueKey('super-tasks-layout-$layout')));
-        await tester.pumpAndSettle();
+        // The Board is the view itself; List is one tap away.
+        if (layout == 'list') {
+          await tester.tap(
+            find.byKey(const ValueKey('super-tasks-layout-list')),
+          );
+          await tester.pumpAndSettle();
+        }
         expect(noCards, findsNothing);
 
         // Mine alone hides every card the reader did not ask for: the

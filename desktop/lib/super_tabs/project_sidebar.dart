@@ -626,8 +626,6 @@ class ProjectSidebar extends StatelessWidget {
         key: const ValueKey('project-sidebar-agents'),
         'My agents',
         titleStyle: _headingStyle,
-        onAdd: controller.canWrite ? onNewAgent : null,
-        addTooltip: 'New agent',
         endInset: 0,
       ),
       if (controller.oneBuddy)
@@ -635,6 +633,14 @@ class ProjectSidebar extends StatelessWidget {
       else
         ..._buddies([...snapshot.projects], reading),
       for (final agent in mine) _agentRow(snapshot, agent),
+      // The last row opens the creation dialog, where Regular or PM is chosen.
+      if (controller.canWrite && onNewAgent != null)
+        _navigationRow(
+          key: 'super-new-agent-row',
+          label: 'New agent',
+          icon: AppIcons.plus,
+          onTap: onNewAgent,
+        ),
       const SizedBox(height: 16),
     ];
   }
@@ -759,6 +765,27 @@ class ProjectSidebar extends StatelessWidget {
     final decisions = activity?.needsCount ?? snapshot?.decisionsWaiting ?? 0;
     final mentions = activity?.mentionsCount ?? snapshot?.mentionsWaiting ?? 0;
     final threads = activity?.threadsCount ?? 0;
+    final switcher = switch ((app, onNewSwarm)) {
+      (final app?, final onNewSwarm?) => SwarmSwitcher(
+        app: app,
+        controller: controller,
+        onNewSwarm: onNewSwarm,
+        row:
+            ({
+              required label,
+              required icon,
+              required onTap,
+              required trailing,
+            }) => _navigationRow(
+              key: 'super-swarm-switcher',
+              label: label,
+              icon: icon,
+              onTap: onTap,
+              trailing: trailing,
+            ),
+      ),
+      _ => null,
+    };
     return Material(
       // The page's color: the rule at its edge is what separates them. A
       // theme may give the sidebar its own (Plum's plum).
@@ -771,26 +798,11 @@ class ProjectSidebar extends StatelessWidget {
             child: LaidOutListView(
               padding: const EdgeInsets.all(8),
               children: [
+                // The Desktop's org switcher is the first thing in the pane (Swarm v3 spec); elsewhere it follows the
+                // back and forward arrows.
+                if (board) ?switcher,
                 if (places case final places?) _arrows(places),
-                if ((app, onNewSwarm) case (final app?, final onNewSwarm?))
-                  SwarmSwitcher(
-                    app: app,
-                    controller: controller,
-                    onNewSwarm: onNewSwarm,
-                    row:
-                        ({
-                          required label,
-                          required icon,
-                          required onTap,
-                          required trailing,
-                        }) => _navigationRow(
-                          key: 'super-swarm-switcher',
-                          label: label,
-                          icon: icon,
-                          onTap: onTap,
-                          trailing: trailing,
-                        ),
-                  ),
+                if (!board) ?switcher,
                 // Three rows, each one thing, in anh Dee's order (11-05, task
                 // #2996): bold when something waits, grey when not, and no
                 // numbers (task #3128). The Swarm switcher stands apart from
