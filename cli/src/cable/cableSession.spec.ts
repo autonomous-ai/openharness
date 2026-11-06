@@ -5499,18 +5499,20 @@ describe('swarm cards', () => {
         } finally { await session.stop() }
       })
 
-      it('a swarmThread dial is sent the face\'s thread and its recap\'s thread', async () => {
-        for (const [hello, expected] of [[THREAD, { thread: 'm9', threadTitle: 'build it', threadReplies: 2 }], [ROUND_THREAD, { thread: 'm9', threadTitle: 'build it' }]] as const) {
+      // Task #3908 (Diego, 11-06, the final Board spec): people talk only to their Buddies and there is no Threads feature, so a dial
+      // that still announces swarmThread (shipped firmware) is sent no thread data at all.
+      it('a dial that still announces swarmThread is sent no thread, on its face or in its recap', async () => {
+        for (const hello of [THREAD, ROUND_THREAD]) {
           const host = cardHost({ cards: [card('st1', [threaded()])] }, {
             swarmCardRecap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'on it', at: 7, none: false, chatId: 'lead-c1', thread: 'm9' })) })
           const { session, port } = await connect(host)
           try {
             port.say(hello)
             await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
-            expect(threadKeys((ofType(port, 'supertab')[0].leads as Array<Record<string, unknown>>)[0])).toEqual(expected)
+            expect(threadKeys((ofType(port, 'supertab')[0].leads as Array<Record<string, unknown>>)[0])).toEqual({})
             port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' })
-            await vi.waitFor(() => expect(ofType(port, 'supertab.recap')).toEqual([
-              { t: 'supertab.recap', tab: 'st1', lead: 'lead1', text: 'on it', at: 7, none: false, chatId: 'lead-c1', thread: 'm9' }]))
+            await vi.waitFor(() => expect(ofType(port, 'supertab.recap')).toHaveLength(1))
+            expect(ofType(port, 'supertab.recap')[0]).not.toHaveProperty('thread')
           } finally { await session.stop() }
         }
       })
@@ -5536,26 +5538,25 @@ describe('swarm cards', () => {
         }
       })
 
-      it('supertab.thread.leave asks the service and closes the window\'s thread', async () => {
+      it('ignores supertab.thread.leave and supertab.side from any dial, without an error or a host call', async () => {
         const swarmThreadLeave = vi.fn(async (): Promise<{ tabId: string; conversationId: string } | null> => ({ tabId: 'st1', conversationId: 'lead-c1' }))
-        const host = cardHost({ cards: [card('st1', [threaded()])] }, { swarmThreadLeave })
+        const swarmCardSide = vi.fn()
+        const host = cardHost({ cards: [card('st1', [threaded()])] }, { swarmThreadLeave, swarmCardSide })
         const { session, port } = await connect(host)
         try {
           port.say(THREAD)
           await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
-          for (const bad of [{ tab: 'bad id', lead: 'lead1' }, { tab: 'st1', lead: 'x'.repeat(48) }, { tab: 'st1' }, { lead: 'lead1' }]) port.say({ t: 'supertab.thread.leave', ...bad })
+          const frames = JSON.stringify(ofType(port, 'supertab'))
+          port.say({ t: 'supertab.thread.leave', tab: 'st1', lead: 'lead1' })
+          for (const side of ['pm', 'buddy']) port.say({ t: 'supertab.side', tab: 'st1', side })
+          port.say({ t: 'supertab.side', tab: 'st1', side: 'buddy', kept: true })
           await settle(); await settle()
           expect(swarmThreadLeave).not.toHaveBeenCalled()
-          port.say({ t: 'supertab.thread.leave', tab: 'st1', lead: 'lead1' }); await settle(); await settle()
-          // The dial's own chat flag rides along (a swarmBuddy dial: 'buddy').
-          expect(swarmThreadLeave.mock.calls).toEqual([['st1', 'lead1', 'buddy']])
-          // A leave closes the thread in the window without a project pick.
-          expect(vi.mocked(host.superTabThread!).mock.calls).toEqual([['st1', 'lead-c1', null]])
+          expect(swarmCardSide).not.toHaveBeenCalled()
+          expect(host.superTabThread).not.toHaveBeenCalled()
           expect(host.superTabSelected).not.toHaveBeenCalled()
-          // A Lead that was in no thread closes nothing.
-          swarmThreadLeave.mockResolvedValueOnce(null)
-          port.say({ t: 'supertab.thread.leave', tab: 'st1', lead: 'lead1' }); await settle(); await settle()
-          expect(host.superTabThread).toHaveBeenCalledTimes(1)
+          expect(ofType(port, 'error')).toEqual([])
+          expect(JSON.stringify(ofType(port, 'supertab'))).toBe(frames)
         } finally { await session.stop() }
       })
 
