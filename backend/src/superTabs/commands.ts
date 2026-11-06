@@ -2893,7 +2893,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (actor.kind === 'person' && actor.userId !== state.ownerId && !ownsProject(state, actor.userId, groupProject(state, group))) {
         fail('FORBIDDEN', 'Among people, only the Swarm owner or the project\'s owner names who asked for a task.', 403)
       }
-      if (command.personId) group.requesterId = requester(state, groupProject(state, group), command.personId)
+      if (command.personId) {
+        const next = requester(state, groupProject(state, group), command.personId)
+        if (next !== group.requesterId) {
+          group.requesterId = next
+          stageTaskApproval(state, group, context.now)
+          if (group.assignment && group.taskApproval?.state === 'proposal')
+            fail('TASK_APPROVAL_REQUIRED', 'Cannot attribute assigned work to a person who must approve it first.', 409)
+        }
+      }
       else delete group.requesterId
       break
     }
