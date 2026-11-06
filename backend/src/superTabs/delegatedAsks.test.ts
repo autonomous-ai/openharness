@@ -46,6 +46,7 @@ describe('an ask entrusted to a project agent', () => {
     const other = ask()
     const routed = handoff(first)
     expect(routed.messages.find(m => m.id === routed.result.messageId)?.recipients).toEqual([f.dev])
+    expect(routed.messages.find(m => m.id === routed.result.messageId)?.text).toContain(`Answer message ${first} in lead in its thread.`)
     expect(owes()).toEqual([first, other])
     expect(count()).toBe(2)
     expect(f.group('lead').answered).toBeUndefined()
