@@ -314,7 +314,7 @@ export function observedPrivacy(previous: StoredPrivacy | undefined, reported: M
 }
 
 export type TeamWorkCode = 'TEAM_WRITTEN_WORK' | 'MACHINE_OFFLINE' | 'TEAM_ACCOUNT_REQUIRED' | 'PRIVACY_UNCHECKED' | 'PRIVACY_CHECK_FAILED' | 'PRIVACY_CHECK_STALE'
-  | 'MACHINE_IN_OTHER_WORKSPACE' | 'NOT_SWARM_MACHINE' | 'MACHINE_PROJECTS' | 'ACCESS_MISSING' | 'TEAM_ACCOUNT_JOINING' | 'TEAM_ACCOUNTS_REMOVED' | 'NOT_YOUR_COMPUTER'
+  | 'MACHINE_IN_OTHER_WORKSPACE' | 'NOT_SWARM_MACHINE' | 'MACHINE_PROJECTS' | 'ACCESS_MISSING' | 'TEAM_ACCOUNT_JOINING' | 'TEAM_ACCOUNTS_REMOVED' | 'NOT_YOUR_COMPUTER' | 'READ_ONLY'
 export interface TeamWorkRefusal { code: TeamWorkCode; reason: string }
 /** Refusals that hold until a person acts on the machine; a stale check or an offline machine may pass again by itself. */
 export const LASTING_TEAM_REFUSALS: readonly string[] = ['TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED', 'MACHINE_IN_OTHER_WORKSPACE']
@@ -398,6 +398,8 @@ export function teamWorkCheck(state: SuperTabState, machineId: string, contribut
   // new work and no new agent starts there, which their own gates refuse (admitMachineStart, work.assign, the route, the picks).
   if (pool && pool.contributorId !== contributorId) return { code: 'NOT_YOUR_COMPUTER', reason: NOT_YOUR_COMPUTER }
   const person = state.people.find(p => p.id === contributorId)
+  // Reading is not working: a viewer's agent takes no work (security review 1 of #3446).
+  if (person?.role === 'viewer') return { code: 'READ_ONLY', reason: 'This agent\'s person is a viewer here, so their agents take no work.' }
   if (ownsProject(state, contributorId, project) || (person && canReadProject(state, { kind: 'person', userId: person.id, email: person.email }, project))) return null
   return { code: 'NOT_YOUR_COMPUTER', reason: `${pool?.name ?? 'This machine'}'s person cannot read this project, so its agents take none of its work.` }
 }
