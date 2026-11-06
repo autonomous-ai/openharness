@@ -5944,6 +5944,22 @@ class AppNotifier extends ChangeNotifier {
                   FileSystemEntityType.notFound;
         };
 
+  /// Whether the CLI's own sign-in file is on this computer (task #3561). Looked at, never read: this app holds no
+  /// token. `harness logout` deletes it, so a sign-out in a terminal while the app was closed waits for the signed-in
+  /// check as before. Product installs keep it at `~/.harness/auth/session.json`; tests answer no.
+  @visibleForTesting
+  bool Function() cliSessionOnDisk = kUnderTest
+      ? () => false
+      : () {
+          final home = maybeHomeDir();
+          if (home == null) return false;
+          final sep = Platform.pathSeparator;
+          return FileSystemEntity.typeSync(
+                '$home$sep.harness${sep}auth${sep}session.json',
+              ) ==
+              FileSystemEntityType.file;
+        };
+
   TerminalPane? get focusedPane {
     final id = focusedPaneId;
     if (id == null) return null;
@@ -7550,6 +7566,7 @@ class AppNotifier extends ChangeNotifier {
     // refreshes it itself. This app never reads, stores, or refreshes a token of its own; it just
     // asks the CLI whether this computer is currently signed in.
     try {
+      if (early != null && await _openFromKeptSignIn(early, revision)) return;
       final authStatus = await early ?? await cliLogin.checkStatus();
       _markStartup('signed-in check');
       if (!_authWorkCurrent(revision)) return;
@@ -7586,6 +7603,84 @@ class AppNotifier extends ChangeNotifier {
       }
       notifyListeners();
     }
+  }
+
+  /// Opens the window as the account this computer was last proven signed in as, while `harness auth status` still
+  /// runs (task #3561: 245 ms of a launch, a Node start). What is stored is the kept profile ([ProfileCache]): written
+  /// only once the CLI named its machine and the server named the account, and cleared by every sign-out this app sees
+  /// and every signed-out launch. With none kept, or no CLI sign-in file, the launch waits for the check as before.
+  /// Whatever the check then says, [_confirmKeptSignIn] ends the launch where a launch that waited would have ended.
+  Future<bool> _openFromKeptSignIn(
+    Future<CliAuthStatus?> check,
+    int revision,
+  ) async {
+    if (viewer != null || !cliSessionOnDisk()) return false;
+    final kept = await _profileCache.readKept();
+    if (kept == null || !_authWorkCurrent(revision)) return false;
+    signedIn = true;
+    // Shown, not proven: nothing is kept and no picture is claimed under it until the check names this machine.
+    _provenMachineId = null;
+    _keptProfileId = kept.profile.id;
+    _profileConfirmed = false;
+    currentUser = kept.profile;
+    status = AppStatus.bootstrapping;
+    notifyListeners();
+    unawaited(_confirmKeptSignIn(check, kept.machineId, revision));
+    await _finishBootstrapSignedIn();
+    unawaited(_offerPhoneAtLaunch(revision));
+    return true;
+  }
+
+  /// The signed-in check behind a window [_openFromKeptSignIn] opened. The same machine: proven, as
+  /// [_useKeptProfile] would have proven it. Signed out: the sign-in page, as when a sign-out elsewhere is noticed.
+  /// Another account, or no answer: the launch starts again from the CLI's answer, as one with nothing kept does.
+  Future<void> _confirmKeptSignIn(
+    Future<CliAuthStatus?> check,
+    String keptMachineId,
+    int revision,
+  ) async {
+    CliAuthStatus? answer;
+    try {
+      answer = await check ?? await cliLogin.checkStatus();
+    } catch (error) {
+      debugPrint('bootstrap: signed-in check failed behind the window: $error');
+    }
+    _markStartup('signed-in check');
+    if (!_authWorkCurrent(revision)) return;
+    if (answer != null &&
+        answer.loggedIn &&
+        answer.machineId == keptMachineId) {
+      _provenMachineId = keptMachineId;
+      unawaited(superTabImageCache.claim(keptMachineId));
+      // The server may have answered first, when nothing could be kept yet.
+      final profile = currentUser;
+      if (_profileConfirmed && profile != null) {
+        unawaited(_keepProfile(profile, revision));
+      }
+      return;
+    }
+    if (answer != null && !answer.loggedIn) {
+      _signedOutAtRuntime(_signedOutMessage);
+      return;
+    }
+    final again = _invalidateAuthWork();
+    currentUser = null;
+    _provenMachineId = null;
+    _keptProfileId = null;
+    _profileConfirmed = false;
+    _clearAccountWorkspace();
+    status = AppStatus.checkingEnvironment;
+    notifyListeners();
+    // Gone before the launch starts again, so it cannot open from it a second time.
+    await _profileCache.clear();
+    if (!_authWorkCurrent(again)) return;
+    if (_workspaceCleanup case final cleanup?) {
+      await cleanup;
+      if (!_authWorkCurrent(again)) return;
+    }
+    await _continueAfterEnvironmentReady(
+      early: answer == null ? null : Future.value(answer),
+    );
   }
 
   void showEnvironmentReview() {
