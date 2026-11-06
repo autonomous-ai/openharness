@@ -1,0 +1,101 @@
+// Task #3593 (anh Dee, rules to code): the server writes the project's status card from task, step, pull request and release state,
+// one line per active task, so the PM is not woken every 15 minutes to reread messages and rewrite it.
+import { describe, expect, it } from 'vitest'
+import { visibleState } from './model.js'
+import { projectOf } from './projects.js'
+import { PROJECT_STATUS_MAX } from './projects.js'
+import { cardText } from './statusCard.js'
+import { owner, stepsFixture } from './steps.test-support.js'
+
+const PR = 'https://github.com/acme/app/pull/7'
+
+function cardFixture() {
+  const f = stepsFixture()
+  const chat = () => f.group('lead')
+  const lines = () => chat().card?.lines ?? []
+  const line = (id = f.task) => lines().find(l => l.id === id)
+  const text = () => visibleState(f.state, owner).projects!.find(p => p.id === 'lead')!.status?.text
+  const assignment = () => f.group(f.task).assignment!.id
+  const work = (status: 'working' | 'review' | 'blocked' | 'needs_human' | 'done', result: string | null = null) =>
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: assignment(), status, result }, f.as(f.dev))
+  return Object.assign(f, { chat, lines, line, text, work, assignment })
+}
+
+describe('the status card the server writes (#3593)', () => {
+  it('has one line per active task with its state, what it waits on and its owner', () => {
+    const f = cardFixture()
+    expect(f.lines()).toHaveLength(1)
+    expect(f.line()!.text).toBe('#1 "Fix login": working. Waits on: nothing. Owner: dev.')
+    const second = f.run({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks: [{ description: 'Saves', independent: true }],
+      priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
+    expect(f.lines().map(l => l.id).sort()).toEqual([f.task, second].sort())
+    expect(f.line(second)!.text).toContain('to do. Waits on: an owner. Owner: none.')
+  })
+
+  it('says review with its pull request and the steps it waits on, and blocked, needs a person and lost', () => {
+    const f = cardFixture()
+    f.step('Review')
+    f.work('review', `Ready for review: ${PR} at abc1234`)
+    expect(f.line()!.text).toBe(`#1 "Fix login": in review (PR #7). Waits on: step Review. Owner: dev.`)
+    f.work('blocked', 'Needs the CI key.')
+    expect(f.line()!.text).toContain('blocked. Waits on: the PM.')
+    f.work('needs_human', 'Which API?')
+    expect(f.line()!.text).toContain('needs a person. Waits on: a decision.')
+    f.group(f.task).assignment!.status = 'lost'
+    f.run({ type: 'message.send', conversationId: f.task, text: 'ping', replyTo: null, recipientIds: [] })
+    expect(f.line()!.text).toContain('lost. Waits on: another engineer.')
+  })
+
+  it('drops a task whose work ended, and shows a merged one until its release carries it', () => {
+    const f = cardFixture()
+    f.work('review', `Ready for review: ${PR} at abc1234`)
+    f.run({ type: 'conversation.merged', conversationId: f.task, pullRequestUrl: PR }, f.as(f.lead))
+    f.work('done', `Merged ${PR}`)
+    expect(f.line()!.text).toBe('#1 "Fix login": merged (PR #7). Waits on: the next release. Owner: dev.')
+    const ledger = projectOf(f.state, 'lead').releases!
+    ledger.pending[0]!.components = ['backend']
+    ledger.pending[0]!.shippedIn = { backend: 'v1.4.18' }
+    f.run({ type: 'message.send', conversationId: 'lead', text: 'hello', replyTo: null, recipientIds: [] })
+    expect(f.line()).toBeUndefined()
+  })
+
+  it('keeps a line\'s time while it says the same, and moves it when it changes', () => {
+    const f = cardFixture()
+    const first = f.line()!.since
+    f.tick(60_000)
+    f.run({ type: 'message.send', conversationId: f.task, text: 'Halfway.', replyTo: null, recipientIds: [] }, f.as(f.dev))
+    f.work('working', 'Tests written')
+    expect(f.line()!.since).toBe(first)
+    f.tick(60_000)
+    f.work('review', `Ready for review: ${PR} at abc1234`)
+    expect(f.line()!.since).toBe(first + 120_000)
+  })
+
+  it('shows readers the lines and the PM\'s extra text, in the card\'s own text', () => {
+    const f = cardFixture()
+    expect(f.text()).toBe('#1 "Fix login": working. Waits on: nothing. Owner: dev. Since 00:00 UTC.')
+    f.run({ type: 'project.report', projectId: 'lead', through: {}, text: 'Freeze starts Friday.' }, f.as(f.lead))
+    expect(f.text()).toBe('#1 "Fix login": working. Waits on: nothing. Owner: dev. Since 00:00 UTC.\nFreeze starts Friday.')
+    // A change of the lines does not lose it.
+    f.work('review', `Ready for review: ${PR} at abc1234`)
+    expect(f.text()).toContain('Freeze starts Friday.')
+    expect(f.text()).toContain('in review (PR #7)')
+    // Without text the report leaves the extra lines as they are.
+    f.run({ type: 'project.report', projectId: 'lead', through: {}, text: null }, f.as(f.lead))
+    expect(f.text()).toContain('Freeze starts Friday.')
+  })
+
+  it('keeps the card within its limit, naming how many tasks the last line leaves out', () => {
+    const lines = Array.from({ length: 200 }, (_, i) => ({ id: `t${i}`, text: `#${i} "A task with a title that takes room": working. Waits on: nothing. Owner: dev.`, since: 0 }))
+    const text = cardText(lines, 'Extra line.')
+    expect(text.length).toBeLessThanOrEqual(PROJECT_STATUS_MAX)
+    expect(text).toContain('Extra line.')
+    expect(text).toMatch(/\n\d+ more tasks\./)
+  })
+
+  it('reaches only those who read the project chat', () => {
+    const f = cardFixture()
+    const withoutChat = { ...f.state, conversations: f.state.conversations.filter(c => c.id !== 'lead') }
+    expect(visibleState(withoutChat, owner).projects?.find(p => p.id === 'lead')).not.toHaveProperty('status')
+  })
+})
