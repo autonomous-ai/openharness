@@ -14,5 +14,8 @@ const COLUMNS: Record<ProjectProcess, readonly BoardColumn[]> = {
 export const processOf = (project: SwarmProject): ProjectProcess => project.process ?? 'full'
 export const projectColumns = (project: SwarmProject): readonly BoardColumn[] => COLUMNS[processOf(project)]
 
-/** A task keeps the process it was opened with when its project changes later. */
-export const taskProcess = (project: SwarmProject, task: Pick<Conversation, 'process'>): ProjectProcess => task.process ?? processOf(project)
+/** Simple simplifies existing tasks. Returning to Full keeps those tasks Simple, even if they were dormant during the
+ *  switch. An unnumbered legacy task predates the switch; new tasks always receive a number from the head counter. */
+export const taskProcess = (project: SwarmProject, task: Pick<Conversation, 'process' | 'number'>): ProjectProcess =>
+  processOf(project) === 'simple' || task.process === 'simple'
+    || (project.simpleThrough !== undefined && (task.number ?? 0) <= project.simpleThrough) ? 'simple' : 'full'

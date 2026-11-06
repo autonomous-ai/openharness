@@ -2046,7 +2046,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('PROJECT_OWNER_REQUIRED', 'Only the project owner or Swarm owner can change its process.', 403)
       }
       mutableProjects(state)
-      projectOf(state, command.projectId).process = command.process
+      const target = projectOf(state, command.projectId)
+      if (processOf(target) === 'simple' && command.process === 'full') target.simpleThrough = nextConversationNumber(state) - 1
+      target.process = command.process
       break
     }
     case 'project.rename': {

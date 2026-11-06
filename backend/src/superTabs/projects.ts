@@ -46,6 +46,9 @@ export interface SwarmProject {
   updateMinutes: 1 | 5 | 15 | 30
   /** The project's board and work process; absent on older projects, which keep Full (task #3896). */
   process?: import('./process.js').ProjectProcess
+  /** Tasks up to this number stay Simple after returning to Full. One watermark covers dormant tasks and repeated
+   *  switches without loading or rewriting any task history; absent until the first Simple→Full switch (#3896). */
+  simpleThrough?: number
   /** The morning digest (digest.ts): its local time ("08:00") and zone, and the local date and time of the last one sent.
    *  On by default: a project without one gets the default on its coordinator's next poll, unless a person turned it off. */
   digest?: { time: string; timeZone: string; lastOn?: string; lastAt?: number }

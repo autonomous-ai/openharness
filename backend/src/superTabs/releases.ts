@@ -116,7 +116,7 @@ export const shipped = (entry: PendingRelease): boolean => !!entry.components &&
 
 /** Puts [group]'s merge of [url] at [mergedAt] on [project]'s release list, in the merge record's own write. The same merge
  *  recorded again adds nothing; a later merge of the same task waits on its own. Returns the entries the cap pushed out. */
-export function notePendingRelease(project: SwarmProject, group: Pick<Conversation, 'id' | 'releasing' | 'process'>, url: string, mergedAt: number): PendingRelease[] {
+export function notePendingRelease(project: SwarmProject, group: Pick<Conversation, 'id' | 'releasing' | 'process' | 'number'>, url: string, mergedAt: number): PendingRelease[] {
   if (taskProcess(project, group) === 'simple') return []
   const ledger = project.releases ??= { pending: [] }
   if (ledger.pending.some(e => e.groupId === group.id && e.url === url)) return []
