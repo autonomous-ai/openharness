@@ -46,7 +46,7 @@ import { logger } from '../utils/logger.js'
 import { noteClaim, recordDeliveryCall } from '../lib/deliveryCalls.js'
 import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
-import { buddyChatId, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
+import { buddyChatId, isSwarmBuddyChat, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
 import { accountOf, wordsOf, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
@@ -1001,6 +1001,8 @@ export class SuperTabStore {
       // And their one Buddy chat, which takes it too (spec: Guard).
       if (asked && command.delegate) swarmChat(asked.personId)
     }
+    // A private line from an agent goes to the person's default Buddy (task #3818): their Buddy chats, quiet or not.
+    if (command.type === 'person.tell') swarmChat(command.personId)
     // A switch's result tells the machine's owner in their one Buddy chat, quiet or not (commands.ts agent.switchResult).
     if (command.type === 'agent.switchResult') swarmChat(state.agents.find(a => a.id === command.agentId)?.machineOwnerId)
     // A project's sharing ends its sessions in the one Buddy chats of whoever loses it (commands.ts endLostProjectSessions).
@@ -1730,7 +1732,10 @@ export class SuperTabStore {
       // A Workspace removal leaves a deleted Swarm too, so its restore cannot bring the person back (security review 2 of #2457).
       const leavingDeleted = workspaceLeave && command.type === 'member.remove' && command.userId === user.sub && !asAgentId
       const first = await this.load(tx, user, tabId, namedFor(command), DELETED_SWARM_COMMANDS.has(command.type) || leavingDeleted)
-      const loaded = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command, asAgentId ? null : user.sub, asAgentId))
+      const named = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command, asAgentId ? null : user.sub, asAgentId))
+      // A person's other Buddies' chats load with their main one, which lists them (task #3818): a command that reads that person's
+      // Buddies, their default's chat included, reads all of them. Nothing more is read when none is listed.
+      const loaded = await this.ensure(tx, named, { groupIds: listedBuddyChats(named.state) })
       const original = loaded.state
       const team = await this.teamHost(tx, user)
       // Removal retries can arrive after the actor itself left. Return only this host's exact prior receipt.
@@ -5630,9 +5635,19 @@ export async function buddyNames(tx: Transaction, tabId: string, state: SuperTab
   const keys = [...projectsOf(state).flatMap(project => state.people.map(person => buddyChatId(project.id, person))),
     ...state.people.map(person => swarmBuddyChatId(person))]
   if (!keys.length) return []
-  const rows = await groupsBy(tx, 'key', [
-    { $match: { tabId, key: { $in: keys }, deleted: false, 'data.buddyName': { $gt: '' } } },
-    { $project: { _id: 0, key: 1, name: '$data.buddyName' } },
-  ]) as Array<{ key: string; name: string }>
-  return rows.map(row => ({ conversationId: row.key, name: row.name }))
+  const named = (match: Record<string, unknown>) => groupsBy(tx, 'key', [
+    { $match: { tabId, deleted: false, ...match } },
+    { $project: { _id: 0, key: 1, name: '$data.buddyName', chats: '$data.buddyChats' } },
+  ]) as Promise<Array<{ key: string; name?: string; chats?: string[] }>>
+  // A main Buddy chat may list a person's other Buddies' chats (task #3818), whose ids no one derives: they are read by those keys.
+  const rows = await named({ key: { $in: keys }, $or: [{ 'data.buddyName': { $gt: '' } }, { 'data.buddyChats.0': { $exists: true } }] })
+  const listed = rows.flatMap(row => row.chats ?? [])
+  const more = listed.length ? await named({ key: { $in: listed }, 'data.buddyName': { $gt: '' } }) : []
+  return [...rows, ...more].flatMap(row => row.name ? [{ conversationId: row.key, name: row.name }] : [])
+}
+
+/** The Buddy chats listed on [state]'s loaded main Buddy chats (task #3818) that are not loaded yet. */
+function listedBuddyChats(state: SuperTabState): string[] {
+  const loaded = new Set(state.conversations.map(c => c.id))
+  return [...new Set(state.conversations.filter(isSwarmBuddyChat).flatMap(c => c.buddyChats ?? []))].filter(id => !loaded.has(id))
 }

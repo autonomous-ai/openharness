@@ -27,7 +27,11 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
  *  (autoJoin.ts), from the sharing the head holds; who declined is never sent. */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'projects' | 'leadsConversationId' | 'ownerId'
   | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'workspaceId' | 'workspaceVisibility' | 'buddies' | 'removedMachines'
-  | 'autoJoin'>
+  | 'autoJoin'> & {
+  /** How many Buddies each person may have (task #3818): always sent, 5 unless the Swarm's owner set another. An older backend
+   *  sends none, so an app offers several Buddies only where this is present. */
+  buddyCap: number
+}
 /** A member's avatar says only `{ kind: 'upload' }` for an upload: its link comes signed in `derived.avatars`. */
 export type MemberView = Omit<Person, 'avatar'> & { avatar?: import('../profile.js').AvatarView }
 /** The stored agent. Time-based and cross-part values (`downSince`, `limitedUntil`, an awaiting decision, the custom
@@ -37,7 +41,7 @@ export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' |
 export interface Audience { people: Array<{ id: string; generation: string }> }
 /** A conversation with its own message counter (`lastMessageSequence` and message sequences compare within one group).
  *  `dormant` is set only on a dormant group fetched on demand; `audience` only on a private conversation. */
-export type GroupView = Omit<Conversation, 'chatLimits' | 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'> & {
+export type GroupView = Omit<Conversation, 'chatLimits' | 'talkedAt' | 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'> & {
   /** A task's lane, as the crew dispatch hands it out (dispatch.ts laneOf: its PM's, else its owned paths'), null when no
    *  lane owns its paths; absent on a chat or a step. From the group alone, so a change read's changed tasks keep every lane's
    *  count whole on the reader's side (task #3400). Absent from an older backend. */
@@ -299,6 +303,9 @@ export interface HostAgentRow {
    *  names that loss, since one task can be lost, resumed and lost again. */
   resume: { conversationId: string; assignmentId: string; lostAt: number; at: string } | null
   agent: Agent
+  /** A Buddy's own chat, its main one's or the thread session's (task #3818): its host ends a session and moves a model switch
+   *  there. Absent on every other agent; null while its chat is not loaded. An older backend sends none: the person's main chat. */
+  buddyChatId?: string | null
   joinSwarm: boolean
   skillMode: 'default' | 'orchestration'
   role?: { id: string; name: string; kind: string; version: string; projectId: string } | null
