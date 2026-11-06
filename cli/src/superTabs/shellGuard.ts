@@ -22,7 +22,7 @@ const PREFIX = 'Harness shell guard:'
 export const GUARD_REASONS = {
   killByName: `${PREFIX} stop only processes you started, by the process id you recorded; never by name or pattern `
     + '(pkill, killall, kill $(pgrep …), taskkill /IM).',
-  killAll: `${PREFIX} kill -1 signals every process this account can reach, every other agent's work on a shared machine; `
+  killAll: `${PREFIX} nonpositive kill targets can signal other agents' process groups or every process this account can reach; `
     + 'stop only processes you started, by the process id you recorded.',
   systemWide: `${PREFIX} no sudo and no system-wide installs on a shared machine; put the tools you need in your session folder.`,
   fixedTmp: `${PREFIX} a fixed name in /tmp can be read or planted by every account; make a folder with `
@@ -358,12 +358,8 @@ function killsByName(commands: Simple[]): boolean {
   return kills && looksUp
 }
 
-/**
- * `kill … -1`: a target of -1 signals every process the account may signal (POSIX kill(2)), on a shared Team account every
- * other agent's work (Rowan's security review, 11-06). The first word after `kill` that starts with `-` is the signal
- * (`kill -1 4242` sends SIGHUP to 4242), unless it is `--`; every word after it is a target. A negative group id other than
- * -1 is a process group the agent started, by its id, and passes.
- */
+/** Negative and zero targets reach process groups or the whole account, not a single recorded process.
+ *  A bare negative argument is refused even where a shell interprets it as a signal with a missing target. */
 function killsAll({ words }: Simple): boolean {
   if (programName(words[0]) !== 'kill') return false
   let at = 1
@@ -371,7 +367,9 @@ function killsAll({ words }: Simple): boolean {
   else if (words[at] === '-l' || words[at] === '-L') return false
   else if (words[at]?.startsWith('-') && words[at] !== '--') at += 1
   if (words[at] === '--') at += 1
-  return words.slice(at).includes('-1')
+  const targets = words.slice(at)
+  return (!targets.length && /^-\d+$/.test(words[1] ?? ''))
+    || targets.some((word) => /^-?\d+$/.test(word) && Number(word) <= 0)
 }
 
 const TMP_ROOTS = ['/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp']
