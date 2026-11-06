@@ -1,6 +1,6 @@
 /**
- * The Swarm hands the next task to a free crew member by itself (task #3400, anh Dee's Swarm redesign, 2026-11-05: the
- * server does the routine). What it decides is here, from the state alone: each task's lane, who of the crew is free, what
+ * The Swarm hands the next task to a free project worker by itself (#3592 extends #3400's crew dispatch). What it decides
+ * is here, from the state alone: each task's lane, who is free, what
  * each free member gets, the two clocks and the capacity line. The store's pass (store.ts dispatchCrew) sends each pick
  * through work.assign, whose own write refuses a second assignment.
  */
@@ -14,6 +14,9 @@ import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 import { queueOrder, queueSiblings } from './taskQueue.js'
 import { unavailableReason } from './liveness.js'
 import { FAILED, type PullRequestWatch } from './pullRequestEvents.js'
+import { roleNameOf } from './instructions.js'
+import { reviewerCandidates } from './reviewerPick.js'
+import { stepName } from './steps.js'
 
 const HOUR_MS = 3_600_000
 
@@ -78,18 +81,17 @@ export function laneOf(group: Pick<Conversation, 'lane' | 'task'>, lanes: readon
 /** The reason the 3-hour clock gives a task it puts back in its lane (liveness.ts); the dispatch reads it to keep that task
  *  from its last member for one pass. */
 export const returnReason = (lane: string | null): string => `no progress for 3 hours: back in the ${lane ?? 'project'} lane`
-const RETURN_PREFIX = 'no progress for 3 hours'
 
-/** What a crew member hears after 2 hours without progress on its task. */
+/** What a worker hears after 2 hours without progress on its task. */
 export const nudgeLine = (lane: string | null): string =>
   `No progress on this task for 2 hours. Post where it stands, or set it blocked with why; at 3 hours it goes back to the ${lane ?? 'project'} lane.`
 
-/** The crew's clocks on [assignment] of [group], held by [worker] (liveness.ts): from its own last progress (its assignment,
- *  status, check or post: `progressAt`), only while a crew member is working on a task. `nudge` after `nudgeAfterMs`, once
+/** The progress clocks on [assignment] of [group], held by any project worker (liveness.ts): from its own last progress
+ *  (its assignment, status, check or post: `progressAt`), only while working. `nudge` after `nudgeAfterMs`, once
  *  per spell of quiet; `return` after `returnAfterMs`. Waiting on a person, blocked or handed: no clock. */
-export function crewClock(group: Conversation, worker: Agent, assignment: Assignment, now: number, rules: DispatchRules): 'nudge' | 'return' | null {
+export function crewClock(_group: Conversation, _worker: Agent, assignment: Assignment, now: number, rules: DispatchRules): 'nudge' | 'return' | null {
   const since = assignment.progressAt
-  if (!worker.crew || group.reviewOf || assignment.status !== 'working' || since === undefined) return null
+  if (assignment.status !== 'working' || since === undefined) return null
   if (now - since >= rules.returnAfterMs) return 'return'
   return now - since >= rules.nudgeAfterMs && !(assignment.nudgedAt !== undefined && assignment.nudgedAt >= since) ? 'nudge' : null
 }
@@ -100,7 +102,7 @@ const moving = (agent: Agent): boolean => !!(agent as { movedTo?: unknown }).mov
 /** Asleep (task #3398, crewSleep.ts): its session closed on purpose; work.assign wakes it in the same write. */
 const asleep = (agent: Agent): boolean => !!(agent as { asleep?: unknown }).asleep
 
-/** The crew of [projectId] free for a task: crew members (not its PM, not a Buddy, not stopping or moving, a session not
+/** The workers of [projectId] free for a task (the name is kept for callers): not its PM, not a Buddy, not stopping or moving, a session not
  *  closed unless asleep, no launch still pending) with nothing in their hands and fewer than `maxHanded` handed tasks;
  *  fewest handed first, then as the roster lists them. */
 export function freeCrew(state: SuperTabState, projectId: string, rules: DispatchRules, now: number): Agent[] {
@@ -119,7 +121,7 @@ export function freeCrew(state: SuperTabState, projectId: string, rules: Dispatc
   const reachable = (agent: Agent) => !lead || !onTeamAccount(state, lead) || agent.machineId === lead.machineId || onTeamAccount(state, agent)
   const launching = (agent: Agent) => !!state.starts?.some(s => !s.poolSettled && s.poolGeneration && s.request.machineId === agent.machineId && s.harnessId === agent.harnessId)
   return state.agents
-    .filter(agent => !!agent.crew && agentProjectId(state, agent) === projectId && !leads.has(agent.id) && !isBuddy(agent)
+    .filter(agent => agentProjectId(state, agent) === projectId && !leads.has(agent.id) && !isBuddy(agent)
       && agent.workDecision !== 'stop' && !moving(agent) && (asleep(agent) || !sessionClosed(state, agent, now)) && !launching(agent)
       && !busy.has(agent.id) && (handedBy.get(agent.id) ?? 0) < rules.maxHanded && reachable(agent)
       // A member its machine or engine cannot serve now would lose the task at once (liveness.ts): until that clears.
@@ -129,45 +131,61 @@ export function freeCrew(state: SuperTabState, projectId: string, rules: Dispatc
     .map(entry => entry.agent)
 }
 
-/** The open tasks of [projectId] a member may be handed, in the order they go out: a task (not its chat, a Buddy chat, a
- *  private chat or a step) with a brief, no active work, not finished, whose not-before day has come; P0 first, then the
+/** The open tasks of [projectId] a worker may be handed, plus lost review/test steps whose build is still active: never a
+ *  chat or private chat. A brief, no active work, not finished, whose not-before day has come; P0 first, then the
  *  project's Next up. */
 export function openTasks(state: SuperTabState, projectId: string, now: number): Conversation[] {
   const project = projectOf(state, projectId)
   // The day people meant: the project's own (its digest's time zone), Vietnam's without one, as the PM schedule reads it.
   const today = localNow(digestOf(project)?.timeZone ?? DEFAULT_TIME_ZONE, now).date
-  const open = queueSiblings(state, project).filter(group => (group.task || group.brief.trim())
+  const lostSteps = state.conversations.filter(group => {
+    if (group.archived || group.kind || group.audience || !group.reviewOf || group.assignment?.status !== 'lost' || (group.projectId ?? 'lead') !== projectId) return false
+    const task = state.conversations.find(g => g.id === group.reviewOf)
+    return !!task && !task.archived && (task.projectId ?? 'lead') === projectId && activeWork(task)
+  })
+  const open = [...queueSiblings(state, project), ...lostSteps].filter(group => (group.task || group.brief.trim())
     && !activeWork(group) && !['done', 'cancelled'].includes(group.assignment?.status ?? '') && !(group.notBefore && group.notBefore > today))
   const ordered = queueOrder(open)
   return [...ordered.filter(g => g.priority === 'P0'), ...ordered.filter(g => g.priority !== 'P0')]
 }
 
-/** Whether [member] takes work in [lane]: its own lane, or any for a crew Engineer with none. */
-function takes(member: Agent, lane: string | null, rules: DispatchRules): boolean {
-  const own = member.crew?.lane
-  if (own) return lane !== null && laneNamed(rules.lanes, own) === lane
-  return /^engineer$/i.test(member.crew?.role.trim() ?? '')
+/** The lanes an Engineer takes: its crew lane or last known task area, otherwise any project area. */
+function takes(state: SuperTabState, member: Agent, rules: DispatchRules): (lane: string | null) => boolean {
+  if (!/^(engineer|builder)$/i.test((member.crew?.role ?? roleNameOf(state, member)).trim())) return () => false
+  // Ordinary workers have no crew lane: retain the area of their last task when the server knows it.
+  const previous = member.crew ? undefined : state.conversations.findLast(g => g.task && !g.reviewOf && g.assignment?.agentId === member.id)
+  const own = member.crew?.lane ?? (previous ? laneOf(previous, rules.lanes) : null)
+  return own ? lane => lane !== null && laneNamed(rules.lanes, own) === lane : () => true
 }
 
 /** The tasks [member] could be handed now, best first: those pinned to it (oldest pin first), then its lane's open tasks.
  *  A task it just lost to the 3-hour clock is not offered to it. */
 export function candidatesFor(state: SuperTabState, member: Agent, rules: DispatchRules, now: number, open = openTasks(state, agentProjectId(state, member)!, now),
   skip: Skip = () => false) {
-  const lostByIt = (group: Conversation) => group.lostAttempt?.agentId === member.id && lostToClock(group)
+  const lostByIt = (group: Conversation) => group.lostAttempt?.agentId === member.id && group.assignment?.status === 'lost'
   const pinned = open.filter(g => pinOf(g)?.agentId === member.id).sort((a, b) => pinOf(a)!.at - pinOf(b)!.at)
-  const crewIds = new Set(state.agents.filter(a => a.crew).map(a => a.id))
-  const lane = open.filter(g => !pinned.includes(g) && !(pinOf(g) && crewIds.has(pinOf(g)!.agentId)) && !lostByIt(g)
-    && takes(member, laneOf(g, rules.lanes), rules))
+  const members = new Set(state.agents.filter(a => a.workDecision !== 'stop' && !moving(a)).map(a => a.id))
+  const acceptsLane = takes(state, member, rules)
+  const steps = open.filter(g => g.reviewOf && !lostByIt(g)).filter(step => {
+    const task = state.conversations.find(g => g.id === step.reviewOf)!
+    const kind = /test/i.test(stepName(step)) ? 'test' : /security/i.test(stepName(step)) ? 'security' : 'review'
+    const latest = task.pullRequestUrls?.at(-1)
+    const head = latest ? task.pullRequestHeads?.[latest]?.head ?? null : null
+    return reviewerCandidates(state, task, kind, head, now).some(a => a.id === member.id)
+  })
+  const lane = open.filter(g => !g.reviewOf && !pinned.includes(g) && !(pinOf(g) && members.has(pinOf(g)!.agentId)) && !lostByIt(g)
+    // Ordinary workers recover work; new tasks still need the PM's route or a standing crew lane.
+    && (member.crew || (g.assignment?.status === 'lost' && g.lostAttempt))
+    && acceptsLane(laneOf(g, rules.lanes)))
   // Team-written code goes to Team accounts only (teamWritten.ts); a pick refused this round is not sent again (store.ts).
-  const allowed = (group: Conversation) => !barredFromTeamWritten(state, group, member) && !skip(group.id, member.id)
-  return [...pinned.filter(allowed).map(group => ({ group, why: 'pin' as const })), ...lane.filter(allowed).map(group => ({ group, why: 'lane' as const }))]
+  const allowed = (group: Conversation) => (!group.reviewOf || steps.includes(group)) && !barredFromTeamWritten(state, group, member) && !skip(group.id, member.id)
+  return [...pinned.filter(allowed).map(group => ({ group, why: 'pin' as const })),
+    ...[...steps.filter(g => !pinned.includes(g)), ...lane].filter(allowed).map(group => ({ group, why: 'lane' as const }))]
 }
 
-/** Lost to the 3-hour clock: its last member gets it not again at once (review 1 of #3230's plan, Review Focus). */
-const lostToClock = (group: Conversation): boolean => group.assignment?.status === 'lost' && !!group.assignment.lost?.reason.startsWith(RETURN_PREFIX)
-/** [group]'s pin, unless it names the member that just lost it to the clock: then it goes to the lane (review 2 of #3230). */
+/** A pin never sends a lost task straight back to the failed agent; another free worker takes it. */
 const pinOf = (group: Conversation): Conversation['pin'] =>
-  group.pin && !(lostToClock(group) && group.lostAttempt?.agentId === group.pin.agentId) ? group.pin : undefined
+  group.pin && !(group.assignment?.status === 'lost' && group.lostAttempt?.agentId === group.pin.agentId) ? group.pin : undefined
 
 /** A pick the caller leaves out: one whose work.assign was refused this round (store.ts dispatchCrew). */
 export type Skip = (conversationId: string, agentId: string) => boolean
@@ -179,7 +197,7 @@ export const roundOf = (group: Conversation): string => group.ledger?.runs?.at(-
 /** One assignment the dispatch makes. */
 export interface DispatchPick { conversationId: string; agentId: string; why: 'pin' | 'lane'; lane: string | null }
 
-/** What each free crew member of [projectId] gets in one pass: its first candidate no other member took first. Nothing while
+/** What each free worker of [projectId] gets in one pass: its first candidate no other worker took first. Nothing while
  *  the Swarm is paused. */
 export function dispatchPlan(state: SuperTabState, projectId: string, rules: DispatchRules, now: number, skip: Skip = () => false): DispatchPick[] {
   if (state.paused) return []
@@ -230,7 +248,7 @@ export function pullRequestPin(watch: Pick<PullRequestWatch, 'mergeable' | 'chec
 }
 
 /** Pins [group], a task with no active work, to its last attempt's agent for [why]: the dispatch hands it to that member
- *  first, while it is in the crew (candidatesFor). A pin already there keeps its time; active work is never pinned. */
+ *  first, while it is available (candidatesFor). A pin already there keeps its time; active work is never pinned. */
 export function pinBuilder(group: Conversation, why: NonNullable<Conversation['pin']>['why'], now: number): void {
   // Its last round's agent: a stopped round's, not an older lost one's.
   const builder = group.assignment?.agentId ?? group.lostAttempt?.agentId
