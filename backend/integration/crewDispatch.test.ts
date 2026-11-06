@@ -111,11 +111,11 @@ describe('the crew dispatch pass', () => {
     expect(['Cedar', 'Dune']).toContain(held[0])
   })
 
-  it('hands work to an ordinary Engineer in a project without crew', async () => {
+  it('leaves never-assigned work to the PM route in a project without crew', async () => {
     const s = await swarm({}, { Api: 'backend/src/a.ts' })
-    const plain = String((await s.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Plain', configuration: config, lead: false })).result.agentId)
-    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
-    expect(await s.holders()).toEqual({ Api: plain })
+    await s.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Plain', configuration: config, lead: false })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0 })
+    expect(await s.holders()).toEqual({ Api: null })
   })
 
   it('assigns as a PM that runs in a Harness Team account, with no one\'s sign-in', async () => {
@@ -151,11 +151,15 @@ describe('the crew dispatch pass', () => {
     expect(plain.store.dispatchScheduled(plain.tab)).toBe(false)
   })
 
-  it('automatically dispatches an opened task without any crew', async () => {
-    const s = await swarm({}, {}, true)
+  it('automatically recovers lost work without any crew', async () => {
+    const s = await swarm({}, { Api: 'backend/src/a.ts' }, true)
+    const old = String((await s.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Old', configuration: config, lead: false })).result.agentId)
     const plain = String((await s.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Plain', configuration: config, lead: false })).result.agentId)
-    const id = String((await s.execute({ type: 'conversation.create', title: 'Api', checks: [],
-      task: { goal: 'Api.', changes: 'The change.', constraints: 'None.', owns: ['backend/src/a.ts'] } })).result.conversationId)
+    const id = s.tasks.Api!
+    await s.execute({ type: 'work.assign', conversationId: id, agentId: old })
+    await editGroup(s.tab, id, group => ({ ...group, assignment: { ...group.assignment!, status: 'lost', lost: { reason: 'its session stopped', at: NOW } },
+      lostAttempt: { id: group.assignment!.id, agentId: old } }))
+    await s.execute({ type: 'work.queue', conversationId: id, after: null })
     await vi.waitFor(async () => expect((await readGroup(s.tab, id)).assignment?.agentId).toBe(plain), { timeout: 5_000, interval: 200 })
   })
 

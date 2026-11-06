@@ -396,6 +396,15 @@ describe('pins: a task without active work waits for its builder after findings,
 })
 
 describe('lost work goes to an ordinary project worker', () => {
+  it('leaves never-assigned tasks to the PM route unless pinned to the ordinary Engineer', () => {
+    const s = crewSwarm(['Engineer'])
+    const fresh = s.task('New API', ['backend/src/api.ts'])
+    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, NOW)).toEqual([])
+    s.group(fresh).pin = { agentId: s.ids.Engineer!, why: 'ci', at: NOW }
+    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, NOW).map(p => [p.conversationId, p.agentId, p.why]))
+      .toEqual([[fresh, s.ids.Engineer, 'pin']])
+  })
+
   function lost() {
     const s = crewSwarm(['Old', 'New', 'Reviewer', 'Tester'])
     s.state.agents.find(a => a.id === s.ids.Reviewer)!.roleName = 'Reviewer'
