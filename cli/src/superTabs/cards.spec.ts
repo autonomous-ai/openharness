@@ -1688,7 +1688,7 @@ describe('the face thread', () => {
     t.cards.want(false)
   })
 
-  // Review of #2756 (ENGINEERING.md §6): a failed read of the root was dropped silently and never tried again, so the face kept a
+  // Review of #2756 (AGENTS.md standard 6): a failed read of the root was dropped silently and never tried again, so the face kept a
   // blank title. It is logged, by its code and nothing of the thread, and read again after a wait.
   it('a failed read of an app thread\'s root is logged and read again after a wait', async () => {
     let fails = true

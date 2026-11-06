@@ -194,7 +194,7 @@ describe('pull request events', () => {
     expect(cancelled.asked).not.toContain(cancelled.PR)
   })
 
-  // ENGINEERING.md 4: no loop grows without a bound. A pass reads a capped number of tasks, the most recently active first.
+  // AGENTS.md standard 4: no loop grows without a bound. A pass reads a capped number of tasks, the most recently active first.
   it('reads at most its cap of tasks a pass, the most recently active first', async () => {
     const f = await swarm()
     f.pulls.set(f.PR, f.pull())
@@ -205,7 +205,7 @@ describe('pull request events', () => {
     expect(f.asked).toEqual([f.PR])
   })
 
-  // ENGINEERING.md 6 and 8: a pull request GitHub cannot read is not skipped in silence, and each pass that did something
+  // AGENTS.md standards 6 and 8: a pull request GitHub cannot read is not skipped in silence, and each pass that did something
   // says how much.
   it('says how many pull requests it could not read', async () => {
     const f = await swarm()

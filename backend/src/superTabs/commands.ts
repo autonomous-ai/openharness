@@ -1856,8 +1856,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const resumeAt = command.alert === 'limit' && command.resetAt && Date.parse(command.resetAt) > context.now
           ? agent(state, command.agentId).limitedUntil ?? undefined : undefined
         effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId, resumeAt))
-        // A Buddy on a shared model goes back to its owner's subscription: the member serving it set that limit (PRODUCT.md,
-        // Contribution, Safe), and a model that keeps failing answers nothing.
+        // A Buddy on a shared model goes back to its owner's subscription: the member serving it set that limit (AGENTS.md,
+        // contributed capacity, Safe), and a model that keeps failing answers nothing.
         sendBuddyHome(state, agent(state, command.agentId), command.alert === 'limit' ? 'limit' : 'failing', operationId, context.now)
       }
       break

@@ -73,7 +73,7 @@ describe('a frozen crew session', () => {
     expect(t.log).toHaveBeenCalledWith(expect.stringContaining('froze'))
   })
 
-  // Review of #3222 (ENGINEERING.md 4, the daemon's idle work): the keeper reads no screen of its own for this, and asks the
+  // Review of #3222 (AGENTS.md standard 4, the daemon's idle work): the keeper reads no screen of its own for this, and asks the
   // engines' activity once a minute for all its crew in one call, whatever the host's poll rate.
   it('reads no screen and asks activity once a minute for all crew in one call', async () => {
     const t = setup()
