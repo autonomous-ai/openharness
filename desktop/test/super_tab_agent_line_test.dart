@@ -196,7 +196,7 @@ void main() {
         final server = ConversationServer();
         server.state['machines'] = [_machine('m1', 'Mac Studio')];
         server.state['agents'] = [_agent('Lamp', 'm1')];
-        (server.state['conversations'] as List).addAll([
+        (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
           _taskNamed('Lamp', 'old', 'First customers', 'lost'),
           _taskNamed('Lamp', 'now', 'Mobile guide link', 'working'),
         ]);
