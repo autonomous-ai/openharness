@@ -1,3 +1,4 @@
+import { CODEX_SHELL_GUARD } from '../../lib/agentShellGuard.js'
 import type { HookContract } from '../facets/hooks.js'
 
 /**
@@ -64,6 +65,10 @@ export const hooks: HookContract = {
       events: { SessionStart: 'session_start', UserPromptSubmit: 'user_prompt_submit', PostToolUse: 'post_tool_use' },
       matcherEvents: ['SessionStart'],
       defaultTimeout: 600,
+      // The Swarm's shell guard (task #3596), given to a Swarm session by `-c` and never written in hooks.json: Codex runs
+      // a session flag's hook only once its hash is recorded here (codex-cli 0.166.0, `hooks/list`).
+      sessionHooks: (platform) => [{ key: CODEX_SHELL_GUARD.key, label: 'pre_tool_use', matcher: CODEX_SHELL_GUARD.matcher,
+        command: CODEX_SHELL_GUARD.command(platform), timeout: CODEX_SHELL_GUARD.timeout }],
       messages: {
         recorded: "[hooks] recorded Harness's own Codex hooks as reviewed → {config}",
         skipped: "[hooks] {config} defines hooks.state in a form Harness does not edit; Codex will ask to review Harness's hooks",

@@ -132,9 +132,22 @@ export type HarnessAllowance =
  * `<real path of the settings file>:<event>:<block>:<hook>`, holding the hash the engine computes of that hook
  * (Codex 0.162 `hooks.state`, `trusted_hash`). A hook whose hash differs from the recorded one is asked about again.
  */
+/** A hook the engine is given on its command line for a session, not in its hooks file: what its record holds. */
+export interface SessionHook {
+  /** The record's key, as the engine names a session flag's hook. */
+  key: string
+  /** The engine's name for the hook's event, in the hash. */
+  label: string
+  matcher: string
+  command: string
+  timeout: number
+}
+
 export interface HookReviewRecord {
   /** The engine's config file, in the settings' home. */
   file: string
+  /** Hooks Harness gives on the command line for some sessions (lib/agentShellGuard.ts, task #3596), recorded beside its own. */
+  sessionHooks?: (platform: NodeJS.Platform) => SessionHook[]
   /** The TOML table the records are sub-tables of. */
   table: string
   /** The field of a record that holds the hash. */
