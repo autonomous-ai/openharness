@@ -81,6 +81,9 @@ jobs:
           sparse-checkout: |
             /desktop/scripts/release-desktop.sh
             /.github/workflows/release-desktop.yml
+            /scripts/release-window.sh
+            /scripts/release-window.py
+            /scripts/release-window.json
           sparse-checkout-cone-mode: false
 
       - id: plan
