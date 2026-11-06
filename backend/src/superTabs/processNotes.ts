@@ -20,6 +20,14 @@ export const PROCESS_NOTES: readonly ProcessNote[] = [
       + '`harness super-tab help tools` has every rule.',
     schedule: '058d05641d40',
   },
+  {
+    id: '2026-11-06-v2-text',
+    text: 'Your built-in PM text now opens with the Swarm v2 process, which replaces every process line in your project\'s instructions: '
+      + 'they keep only your project\'s own facts. Review and test steps open by themselves when a pull request is ready; don\'t open them by '
+      + 'hand. Lost, stalled and idle notices are information: the Swarm hands lost work on, nudges stalled workers and stops idle Engineers '
+      + 'by itself, so don\'t repeat those by hand. A rule a program can check belongs in code, not in your instructions.',
+    schedule: '52cb6172d956',
+  },
 ]
 
 export const latestProcessNote = (): ProcessNote | undefined => PROCESS_NOTES.at(-1)
