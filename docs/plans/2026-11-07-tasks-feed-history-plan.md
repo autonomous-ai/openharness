@@ -60,10 +60,10 @@ Test: `backend/src/superTabs/read/personalTasks.test.ts`, `backend/integration/s
 **Interfaces:** Produces `feedIdsOf(group: Conversation): string[]` (unique ids; `[]` for a kind, audience or step);
 `markFeedIds(db: PrismaClient): Promise<number>`; `GROUP_INDEX.feed = { tabId: 1, feedIds: 1, lastActivityAt: 1, key: 1 }`.
 
-- [ ] Failing tests: `feedIdsOf` lists requester, approval person, suggested agent, proposal senders and assignee once each,
+- [x] Failing tests: `feedIdsOf` lists requester, approval person, suggested agent, proposal senders and assignee once each,
   and nothing for a buddy chat, private chat or step; the backfill gives an old row the same ids `extracted` writes.
-- [ ] Run them; record red.
-- [ ] Implement; run them green; commit.
+- [x] Run them; record red.
+- [x] Implement; run them green; commit.
 
 ### Task 2: Feed pages, first load and the older-page read
 
@@ -75,11 +75,11 @@ Test: `backend/integration/superTabPersonalTasksFeed.test.ts`, `backend/integrat
 `PersonalTasks.olderCursor?: string | null`; `SwarmReads.personalTasks(user, tabId, before?): Promise<PersonalTasks>`;
 `GET /api/super-tabs/:tabId/personal-tasks?before=`.
 
-- [ ] Failing tests: first load lists a dormant archived task of the person's own agent and their own proposal, newest first,
+- [x] Failing tests: first load lists a dormant archived task of the person's own agent and their own proposal, newest first,
   with `olderCursor`; the next page continues with no repeat; another member's view and an outsider's never list it; a hidden
   project's task never shortens a page nor names the cursor; the read plan is IXSCAN `feed` with examined ≈ returned.
-- [ ] Run them; record red.
-- [ ] Implement; run them and the read tests green; commit.
+- [x] Run them; record red.
+- [x] Implement; run them and the read tests green; commit.
 
 ### Task 3: Row fields and live updates
 
@@ -88,7 +88,14 @@ Test: `backend/integration/superTabPersonalTasksFeed.test.ts`, `backend/integrat
 **Interfaces:** `PersonalTask` gains `requester: { id, name, avatar? } | null` and optional `pullRequestUrl` (newest linked);
 `at` is `lastActivityAt` in ms.
 
-- [ ] Failing tests: a poll keeps a dormant or archived own task and a task of the person's agent requested by someone else;
+- [x] Failing tests: a poll keeps a dormant or archived own task and a task of the person's agent requested by someone else;
   removes deleted, merged and no-longer-own ones; rows carry requester, newest pull request and canApprove.
-- [ ] Run them; record red.
-- [ ] Implement; run them green; commit; mark the pull request ready.
+- [x] Run them; record red.
+- [x] Implement; run them green; commit; mark the pull request ready.
+
+## Validation receipt
+
+- Feed column: red at f93cab251 (3 of the new write tests fail, no `feedIds`), green at 43c517602.
+- Feed summaries: the new unit tests fail 4 of 15 against the old feed code, pass 15 of 15 at the feature commit.
+- Feed paging, audience, plan and backfill (integration): red at f93cab251 (no module), 5 of 5 green at the feature commit.
+- Older-page route: red at c8ab3d181 (404), green at the feature commit.
