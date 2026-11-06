@@ -469,6 +469,12 @@ export interface Conversation {
   /** The name a Buddy chat's owner chose for their Buddy (buddies.ts renameBuddy): kept here, which outlives the Buddy, so
    *  one added again takes it. Absent: the default, "<person>'s Buddy". */
   buddyName?: string
+  /** A person's main Buddy chat (buddies.ts swarmBuddyChatId) lists their other Buddies' chats, oldest first, so they load
+   *  with it, whose id every command can derive (task #3818). At most the Swarm's Buddy cap. Absent: one Buddy. */
+  buddyChats?: string[]
+  /** This Buddy chat's Buddy is its person's default (task #3818): their lines go to it. One per person; with none marked, the
+   *  main chat's. */
+  buddyDefault?: true
   /** A Buddy chat's live and starting thread sessions (buddySessions.ts); absent while it has none. */
   buddySessions?: BuddySessionEntry[]
   /** An older project Buddy chat whose person was told their one Buddy cannot start there now (commands.ts buddyDownLine):
@@ -634,6 +640,8 @@ export interface SuperTabState {
   deletion?: { at: string; by: string; purgeAt: string }
   /** Idle workers stop and finished groups archive by themselves (tidy.ts); false once the owner turns it off. */
   tidy?: false
+  /** The most Buddies a person may have in this Swarm (buddies.ts BUDDY_CAP), set by its owner (task #3818). */
+  buddyCap?: number
   /** Buddies (buddies.ts) are on in every Swarm; readers are always told so (visibleState), as apps from before 10-29 hide
    *  Buddies and show Chat with PM without it. A stored value from the old switch is ignored. */
   buddies?: true
