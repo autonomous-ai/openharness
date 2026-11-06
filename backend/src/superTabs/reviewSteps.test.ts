@@ -136,7 +136,7 @@ describe('a handed task opens its review steps', () => {
       expect(open(step), step).toThrow(expect.objectContaining({ code: 'STEP_OPEN' }))
     }
     expect(open('Test')).toThrow(/Test/)
-    expect(f.steps()).toHaveLength(3)
+    expect(f.steps()).toHaveLength(4)
   })
 
   it('refuses an agent\'s step of a name it already has open, and opens its own second step of a kind under another name', () => {
@@ -217,10 +217,12 @@ describe('a handed task opens its review steps', () => {
     expect(stepsOf(f.state, f.task).filter(s => s.step === 'Test on Windows').map(s => [s.id, s.assignment?.agentId])).toEqual([[step!.id, win]])
   })
 
-  it('leaves Windows open when only Mac and unlisted Testers are available', () => {
+  it('leaves Windows open when its only Windows Tester built the task', () => {
     const f = fixture()
     f.add('rev', f.task, 'Reviewer'); f.add('mac-tst', f.task, 'Tester'); f.add('unknown-tst', f.task, 'Tester', 'unknown')
-    f.state.machines = [machine('host', 'macOS')] as never
+    const prior = f.add('prior-builder', f.task, 'Tester', 'win')
+    f.group(f.task).ledger!.runs.push({ agentId: prior } as never)
+    f.state.machines = [machine('host', 'macOS'), machine('win', 'Windows')] as never
     const effects = f.ready(['desktop/lib/view.dart'])
     expect(f.steps().find(s => s.name === 'Test on Windows')).toEqual({ name: 'Test on Windows', agent: null, status: null })
     expect(effects.messages.some(m => m.recipients.includes(f.lead) && m.text.includes('Test on Windows'))).toBe(true)
