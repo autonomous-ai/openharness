@@ -24257,6 +24257,11 @@ class AppNotifier extends ChangeNotifier {
     agentAlerts.dispose();
     agentUnread.dispose();
     _disposed = true;
+    // Its sockets would go on redialling, each refusal reporting into this disposed notifier
+    // (task #3711). Closing marks each one closing at once, so a dial still on its way ends quietly.
+    final pool = _pool;
+    _pool = null;
+    if (pool != null) unawaited(pool.closeAll());
     _closeAttachmentSessions();
     _sharingDiscoveryTimer?.cancel();
     _machinesPushTimer?.cancel();
