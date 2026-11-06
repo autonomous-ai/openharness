@@ -32,10 +32,10 @@
 
 **Interfaces:** Export `verdictPullRequest(task: Conversation, repositoryUrl?: string | null): string | undefined`; consume existing code PR list and Engineer result; preserve old-list fallback through `codePullRequests`.
 
-- [ ] Write tests for code PR versus watched brief references, result-named code PR, missing watched head, legacy list and no code PR. Test task and step verdicts including a stale head.
-- [ ] Commit tests and watch the regression fail.
-- [ ] Implement the shared selector and use it in work.check; choose the code PR independently of whether its head was read.
-- [ ] Run affected verdict, command and step tests; commit and push.
+- [x] Write tests for code PR versus watched brief references, result-named code PR, missing watched head, legacy list and no code PR. Test task and step verdicts including a stale head.
+- [x] Commit tests and watch the regression fail.
+- [x] Implement the shared selector and use it in work.check; choose the code PR independently of whether its head was read.
+- [x] Run affected verdict, command and step tests; commit and push.
 
 ## Task 2: Throttle on-demand heads and return Ready promptly
 
@@ -43,9 +43,17 @@
 
 **Interfaces:** A reader wrapper preserving `PullRequestReader`, sharing watch/patch/merge results and promises for 30 seconds, at most 1,000 entries per operation cache. Each caller keeps its own reader cleanup. The store uses Task 1's selector in its pre-check refresh and code PRs for Ready refresh.
 
-- [ ] Integrate current main after reviewed dependency #3337 lands; inspect the combined code before implementation.
-- [ ] Write tests: sequential/concurrent old-head checks read once; cache expires at 30 seconds; different PRs and head/base pairs stay independent; failures retry only after expiry; two tasks linking the same PR both learn its head; Ready returns while a deferred head read waits and eventually records it.
-- [ ] Commit tests and observe the expected failures before production changes.
-- [ ] Add the bounded reader cache, use the common selector for refresh, and make Ready refresh unawaited with existing caught errors.
-- [ ] Run affected unit tests, focused real-store integrations and backend typecheck; commit and push. Record exact red/green counts and before/after GitHub read counts.
-- [ ] Mark ready, record acceptance evidence at the head and request independent review through task status.
+- [x] Integrate current main and reviewed dependency #3337 into the draft; inspect the combined code before implementation. Main will be merged again once the dependency lands so the final review diff contains only this task.
+- [x] Write tests: sequential/concurrent old-head checks read once; cache expires at 30 seconds; different PRs and head/base pairs stay independent; failures retry only after expiry; two tasks linking the same PR both learn its head; Ready returns while a deferred head read waits and eventually records it.
+- [x] Commit tests and observe the expected failures before production changes.
+- [x] Add the bounded reader cache, use the common selector for refresh, and make Ready refresh unawaited with existing caught errors.
+- [x] Run affected unit tests, focused real-store integrations and backend typecheck; commit and push. Record exact red/green counts and before/after GitHub read counts.
+- [x] Mark ready, record acceptance evidence at the head and request independent review through task status (handoff follows this commit).
+
+## Validation notes
+
+- Own-PR regressions: 3 expected failures before selection code; an additional brief-only case failed before preserving the no-code boundary.
+- Reader throttle: 6 behavioral failures with a passthrough reader, then green; store regressions showed 3 external watches instead of 1, 2 instead of 1 across tasks, and Ready blocked by a deferred read.
+- A later real-store regression showed cached observations could undo a newer watcher record. The cache now refuses that older observation against the caller's newer stored head; test committed and failed before the guard.
+- 660 affected unit tests, 10 focused real-store integration tests and backend typecheck pass. The local client was already generated from the unchanged schema.
+- Cache entries expire after 30 seconds, including failures; active reads are shared and never evicted. Each operation cache has at most 1,000 entries, with no timer or stored tokens. A verdict for a newer push within that window may wait for expiry or the independent minute watcher; it is never approved by assuming a head.

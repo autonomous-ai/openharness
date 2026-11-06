@@ -10,13 +10,14 @@ function fixture() {
   let now = 0, current: PullRequestWatch | null = watch(), closed = 0
   const reads: string[] = []
   const wrap = throttleHeadReads(() => now)
-  const reader = (): PullRequestReader => wrap({
+  const raw = (): PullRequestReader => ({
     watch: async url => { reads.push(`watch ${url}`); return current },
     patch: async (url, head, base) => { reads.push(`patch ${url} ${head} ${base}`); return `${head}@${base}` },
     merge: async (url, head, base) => { reads.push(`merge ${url} ${head} ${base}`); return head === B ? A : null },
     botLogin: async () => 'harness[bot]', done: async () => { closed++ },
   })
-  return { reader, wrap, reads, setNow: (at: number) => { now = at }, setWatch: (value: PullRequestWatch | null) => { current = value },
+  const reader = () => wrap(raw())
+  return { reader, raw, wrap, reads, setNow: (at: number) => { now = at }, setWatch: (value: PullRequestWatch | null) => { current = value },
     closed: () => closed }
 }
 
@@ -85,7 +86,7 @@ describe('on-demand PR head reads', () => {
     const f = fixture()
     await f.reader().watch(PR)
     f.setNow(1)
-    const r = f.wrap(f.reader(), { [PR]: { head: B, base: 'main', patch: null, at: 1 } })
+    const r = f.wrap(f.raw(), { [PR]: { head: B, base: 'main', patch: null, at: 1 } })
     expect(await r.watch(PR)).toBeNull()
     expect(f.reads).toEqual([`watch ${PR}`])
     f.setWatch(watch(B))

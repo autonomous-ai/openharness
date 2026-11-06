@@ -90,7 +90,8 @@ import { commitParts, indexesOf, machineContentChanged, numberMessages, type Tou
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
 import { pullRequestEvents, readPullRequestsNow, type PullRequestReader, type PullRequestWatch, type TaskHeads } from './pullRequestEvents.js'
-import { deriveCheck, keepHead, refreshChecks, watchedLinks } from './checkVerdicts.js'
+import { deriveCheck, keepHead, refreshChecks, verdictPullRequest, watchedLinks } from './checkVerdicts.js'
+import { throttleHeadReads } from './headReadThrottle.js'
 import { reopenOnEvents } from './handed.js'
 import type { TrainTask } from './mergeTrain/plan.js'
 import type { TrainTaskPull } from './mergeTrain/train.js'
@@ -690,6 +691,7 @@ async function outsiderRefusal(state: SuperTabState, userId: string, check: () =
 }
 
 export class SuperTabStore {
+  private readonly headReader = throttleHeadReads(() => this.now())
   /** Where lag-tolerant reads go (SuperTabStoreHooks.replica); the store's own client without one. */
   readonly replica: PrismaClient
   readonly native: SuperTabNativeStore
@@ -2366,8 +2368,8 @@ export class SuperTabStore {
     this.startWork(tabId, started)
     // A write that may free a worker or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
     if (hasWorkers && freesOrOpens(command)) this.dispatchSoon(tabId)
-    // A task's Ready records its pull request's head as GitHub has it now, for the Reviewers it hands over to (task #3628).
-    if (command.type === 'work.status' && command.status === 'review') await this.readyHeadRead(user, tabId, command)
+    // Ready is already committed: its head refresh catches and logs failures itself, and must not hold up the response (#3731).
+    if (command.type === 'work.status' && command.status === 'review') void this.readyHeadRead(user, tabId, command)
     return done
   }
 
@@ -2383,9 +2385,9 @@ export class SuperTabStore {
     await this.headsReadNow(user, tabId, command, (state) => {
       const group = state.conversations.find(c => c.id === command.conversationId)
       const task = group?.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : group
-      const urls = task?.pullRequestUrls ?? [], heads = task?.pullRequestHeads
-      // The pull request the command records the verdict on (commands.ts work.check).
-      const url = urls.findLast(u => heads?.[u]) ?? urls.at(-1)
+      const heads = task?.pullRequestHeads
+      // Exactly the code PR the command records its verdict on, even before any head is watched (#3731).
+      const url = task ? verdictPullRequest(task, groupRepositoryUrl(state, task)) : undefined
       const known = url ? heads?.[url] : undefined
       const same = (sha: string) => sha.toLowerCase() === head.toLowerCase()
       if (!task || !url || (known && (same(known.head) || known.carries?.some(same)) && (base === undefined || base === known.base))) return null
@@ -2393,16 +2395,14 @@ export class SuperTabStore {
     }, [command.conversationId])
   }
 
-  /** After a task's Ready, the heads of the pull requests it names that the task links, else its newest link (task #3628). */
+  /** After a task's Ready, its code PR's head, in the background (#3628, #3731). */
   private async readyHeadRead(user: AuthUser, tabId: string, command: Extract<Command, { type: 'work.status' }>): Promise<void> {
     if (!this.hooks.pullRequestReader) return
     await this.headsReadNow(user, tabId, command, (state) => {
       const task = state.conversations.find(c => c.id === command.conversationId)
-      if (!task || task.reviewOf || !task.pullRequestUrls?.length) return null
-      const linked = watchedLinks(task.pullRequestUrls)
-      const named = typeof command.result === 'string' ? pullRequestsIn(command.result, groupProject(state, task).repository?.repositoryUrl ?? null) : []
-      const urls = linked.filter(url => named.includes(url))
-      return { task, urls: urls.length ? urls : linked.slice(-1) }
+      if (!task || task.reviewOf) return null
+      const url = verdictPullRequest(task, groupRepositoryUrl(state, task))
+      return url ? { task, urls: [url] } : null
     }, [])
   }
 
@@ -2423,7 +2423,8 @@ export class SuperTabStore {
           steps: chosen.task.stepIds ?? null }, urls: chosen.urls } : null
       })
       if (!picked) return
-      const unread = await readPullRequestsNow(this.db, this, this.hooks.pullRequestReader!(), tabId, picked.task, picked.urls, this.now())
+      const reader = this.headReader(this.hooks.pullRequestReader!(), picked.task.heads ?? undefined)
+      const unread = await readPullRequestsNow(this.db, this, reader, tabId, picked.task, picked.urls, this.now())
       if (unread.length) logger.warn('[swarm-pr-head] not read', { tabId, group: picked.task.key, pulls: unread.length })
     } catch (error) {
       if (error instanceof SuperTabError) return
