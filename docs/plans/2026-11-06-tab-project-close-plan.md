@@ -3,7 +3,7 @@
 > Written by the project's Engineer way of working (project instructions, Engineer): plan first, then each task test first,
 > the failing test committed before its code. No Execution Handoff.
 
-**Goal:** One server command, `project.closeTab { projectId }`, that the person's Desktop sends when a no-repo tab closes
+**Goal:** One server command, `project.closeTab { projectId, tabOperation }`, that the person's Desktop sends when a no-repo tab closes
 (#3903): in the caller's own Personal Swarm, a tab's project is deleted if none of its conversations has a message at that
 moment, and archived (read-only, out of the sidebar) otherwise. Anything else is refused (task #3929, requested by Diego
 through Harness).
@@ -11,8 +11,10 @@ through Harness).
 **Architecture:** A tab's project is created with the operation id `personal-tab-<hash>` (desktop personal_projects.dart
 `personalProjectOperation`), which becomes its id (commands.ts `project.create`). The command:
 
-- **Who and what:** a person, the Swarm's owner, in their own Personal Swarm (`deletion.ts isPersonalSwarm`); a project whose
-  id starts `personal-tab-` and which has no repository. A repo project (`personal-repo-`, or any with a repository), another
+- **Who and what:** a person, the Swarm's owner, in their own Personal Swarm (`deletion.ts isPersonalSwarm`); a project with no
+  repository whose id is the one `project.create` made from `tabOperation` (a `personal-tab-…` request) and this caller. A
+  project's id is a hash of the Swarm, its sender and the request, so this proves it is the caller's tab's project, with no
+  marker stored, and covers tab projects made before. A repo project (`personal-repo-`, or any with a repository), another
   Swarm, another person, or an agent: refused, in the words a missing project gets.
 - **Empty:** every conversation of the project, dormant ones loaded (the command names its project, as `project.delete`
   does), has `lastMessageSequence` 0. Then it is deleted exactly as `project.delete` deletes (its agents, starts, machines'
@@ -45,7 +47,7 @@ through Harness).
 - No path deletes a project with any message, a repo project, or one outside the caller's own Personal Swarm.
 
 ## Task 1: the command
-- [ ] Test first (unit): an empty tab project is deleted; one with a message is archived (project and conversations, read-only);
+- [x] Test first (unit): an empty tab project is deleted; one with a message is archived (project and conversations, read-only);
   a repo project, another person, an agent and a Swarm that is not Personal are refused.
-- [ ] Test first (integration): a message sent during the call archives it instead; the same operation id twice is a no-op.
-- [ ] Code.
+- [x] Test first (integration): a message sent during the call archives it instead; the same operation id twice is a no-op.
+- [x] Code.
