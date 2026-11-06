@@ -1,3 +1,4 @@
+import { migrateLegacyProposals, type LegacyProposalAsk, pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalRoot } from './proposalCards.js'
 import { pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
 import { applyPushOrigin, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import { crewMoveFailed, takeOverCrewMember, wakeCrewMember } from './crewKeep.js'
@@ -199,6 +200,13 @@ const task = z.object({
 const MAX_REMOVED_MACHINES = 64
 
 export const commandSchema = z.discriminatedUnion('type', [
+  proposalCreateSchema,
+  z.object({ type: z.literal('proposal.decide'), conversationId: id, decision: z.enum(['accept', 'reshape', 'later', 'no']), reason: text,
+    task: task.optional(), checks: z.array(check).min(1).max(50).optional(), revisitAt: z.number().int().positive().max(8_640_000_000_000_000).optional() }).strict(),
+  z.object({ type: z.literal('proposal.ask'), conversationId: id, personId: id, question: text, defaultAnswer: text,
+    deadline: z.number().int().positive().max(8_640_000_000_000_000), requiresConsent: z.boolean().optional() }).strict(),
+  z.object({ type: z.literal('proposal.answer'), conversationId: id, questionId: id, text }).strict(),
+  z.object({ type: z.literal('proposal.merge'), conversationId: id, intoConversationId: id, reason: text }).strict(),
   z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(swarmEngine).min(1).max(2), maxAgents,
     // Its Agents setting (machines.ts agentLimit): an older client leaves it out.
     agents: z.enum(['memory', 'atMost']).optional(),
@@ -344,7 +352,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   // showed them before their ok, as long as any message. `title` is an older Buddy's, which is refused for its missing text.
   z.object({ type: z.literal('buddy.propose'), conversationId: id, ownerMessageId: id, projectId: id.optional(), text: text.optional(),
     title: z.string().trim().min(1).max(80).optional(), goal: z.string().trim().min(1).max(2000),
-    scope: z.string().trim().min(1).max(4000), priority: z.enum(['low', 'normal', 'high']),
+    scope: z.string().trim().min(1).max(4000), priority: z.enum(['low', 'normal', 'high', 'P0', 'P1', 'P2', 'P3', 'hotfix']),
+    why: proposalFields.why.optional(), doneWhen: proposalFields.doneWhen.optional(), evidence: proposalFields.evidence.optional(),
     attachmentIds: z.array(id).max(MAX_PROPOSAL_ATTACHMENTS, `Attach at most ${MAX_PROPOSAL_ATTACHMENTS} files to a proposal.`).optional() }).strict(),
   // Without `projectId`, the person's one Buddy (Dee, 10-31); an older app names a project, and removes that same one Buddy.
   // `conversationId`: which of the person's Buddies, by its chat (task #3818); without it, their default.
@@ -557,6 +566,8 @@ export function withoutCredentials(command: Command, removed: CredentialKind[]):
 /** A message row a group names as its proposal, as the store loads it. */
 interface ProposalRow { id: string; conversationId: string; author: Author; source: Record<string, unknown> | null }
 export interface CommandContext {
+  /** Indexed original bodies verified by the store for the staged Board handover. */
+  legacyProposals?: LegacyProposalAsk[]
   operationId: string
   now: number
   /** For a terminal request: its agent's session is confidential in some Swarm, read by the store (confidential.ts). */
@@ -811,6 +822,13 @@ function dropClosing(state: SuperTabState, keep: (request: NonNullable<SuperTabS
 const SWARM_BUDDY_CHAT_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'message.edit', 'message.delete', 'buddy.propose', 'buddy.rename', 'buddy.sessionEnd',
   // Which of a person's several Buddies (task #3818).
   'buddy.create', 'buddy.remove', 'buddy.default', 'buddy.model', 'buddy.engine'])
+function viewerProposal(state: SuperTabState, actor: Actor, command: Command): boolean {
+  if (command.type === 'proposal.create' || command.type === 'proposal.answer') return true
+  if (command.type !== 'buddy.propose' || actor.kind !== 'agent') return false
+  const self = state.agents.find(a => a.id === actor.agentId && isBuddy(a))
+  return !!self && !!projectsOf(state).find(p => p.id === (command.projectId ?? agentProjectId(state, self)))?.boardMode
+}
+
 
 export function authorizeCommandAccess(state: SuperTabState, actor: Actor, command: Command, context: Partial<CommandContext> = {}) {
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
@@ -822,9 +840,16 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if (command.type === 'mention.done' || command.type === 'decision.answer' || command.type === 'member.username'
     || command.type === 'member.name' || command.type === 'member.timeZone') return void author(state, actor)
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
-  author(state, actor, !leaving)
+  author(state, actor, !leaving && !viewerProposal(state, actor, command))
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
   if (buddy) requireBuddyCommand(buddy, command, state.conversations)
+  if (command.type === 'proposal.create') authorizePersonProposal(state, actor, command)
+  if (command.type === 'buddy.propose' && buddy) {
+    if (isSwarmBuddy(buddy) && !command.projectId) fail('BUDDY_PROPOSE_PROJECT', 'Name the project to send this to, from your status. If it is unclear which, ask your owner.', 400)
+    const project = readProject(state, actor, command.projectId ?? agentProjectId(state, buddy))
+    if (project.boardMode) cardPriority(state, project, buddy.buddyOf!.personId, command.priority)
+  }
+  if (command.type === 'proposal.decide' || command.type === 'proposal.ask' || command.type === 'proposal.answer' || command.type === 'proposal.merge') authorizeProposalAction(state, actor, command)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
   // A Buddy command names a chat only to pick one of the person's Buddies (task #3818): without one, it names none.
   if ('conversationId' in command && command.conversationId && command.type !== 'invite.create') {
@@ -994,6 +1019,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   let sender: Author | undefined
   try { sender = author(effects.state, actor) } catch { sender = undefined }
   syncTaskLines(original, effects, sender, stableId(original.id, actorKey(actor), context.operationId))
+  for (const row of effects.messages) row.recipients = row.recipients.filter(id => pmAcceptsMessage(effects.state, id, row.source))
   // Every open group is loaded for a command (parts/load.ts): the board's pulse is worked out on it (pulse.ts), for the project
   // of the conversation the command names when it names one (it moves no other), else for every project.
   recordPulse(effects.state, context.now, pulseProjectOf(effects.state, input))
@@ -1105,7 +1131,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   if (command.type === 'swarm.delete' && (actor.kind !== 'person' || actor.userId !== state.ownerId)) notThere()
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   const sender = author(state, actor, !leaving && command.type !== 'decision.answer' && command.type !== 'member.username'
-    && command.type !== 'member.name' && command.type !== 'member.timeZone')
+    && command.type !== 'member.name' && command.type !== 'member.timeZone' && !viewerProposal(state, actor, command))
   authorizeCommandAccess(state, actor, command, context)
   /** A machine's owner said so: they sent the command, or the Lead of the chat [askedIn] names passes on a message they wrote
    *  there in the last day, as routing rules are (machine.engineResume, machine.projects). */
@@ -1729,6 +1755,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** Every check work.assign makes before [worker] takes [group]'s work, throwing its refusal; nothing changes here, so a
    *  caller trying candidates in turn (openReviewSteps) catches the refusal and tries the next. */
   const assignRefusal = (group: Conversation, worker: Agent) => {
+    if (group.proposal && !['accept', 'reshape'].includes(group.proposal.decision?.kind ?? '')) fail('PROPOSAL_UNDECIDED', 'The PM must accept or reshape this proposal before assigning work.', 409)
     if (state.starts?.some(s => s.poolGeneration && !s.poolSettled && s.request.machineId === worker.machineId && s.harnessId === worker.harnessId)) {
       fail('START_PENDING', 'Wait for the host to finish this agent’s launch and model selection.')
     }
@@ -2098,7 +2125,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'project.boardMode': {
       const project = boardOwned(command.projectId)
-      if (command.on) project.boardMode = true
+      if (command.on) {
+        project.boardMode = true
+        effects.messages.push(...migrateLegacyProposals(state, project, context.legacyProposals ?? [], context.now))
+      }
       else delete project.boardMode
       break
     }
@@ -3029,6 +3059,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     }
     case 'agent.start': {
+      const proposed = conversation(state, command.request.conversationId).proposal
+      if (proposed && !['accept', 'reshape'].includes(proposed.decision?.kind ?? '')) fail('PROPOSAL_UNDECIDED', 'The PM must accept or reshape this proposal before starting work.', 409)
       chatOnly(command.request.conversationId)
       projectChatWork(command.request.conversationId)
       // A coordinator starts there through lead.start alone.
@@ -3110,6 +3142,20 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       break
     }
+    case 'proposal.decide': case 'proposal.ask': case 'proposal.answer': case 'proposal.merge': {
+      const outcome = applyProposalAction(state, actor, command, operationId, context.now)
+      effects.messages.push(...outcome.messages)
+      Object.assign(result, outcome.result)
+      break
+    }
+    case 'proposal.create': {
+      const card = createPersonProposal(state, actor, command, operationId, context.now)
+      effects.messages.push(proposalRoot(state, card, stableId(operationId, 'root'), sender))
+      result.messageId = stableId(operationId, 'root')
+      result.conversationId = card.id
+      result.number = card.number
+      break
+    }
     case 'buddy.propose': {
       const self = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
       if (!self) fail('BUDDY_ONLY', 'Only a Buddy sends a proposal, for its owner.', 403)
@@ -3150,6 +3196,21 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         .map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       chat.proposals = [...chat.proposals ?? [], command.ownerMessageId].slice(-MAX_PROPOSAL_ASKS)
       const project = readProject(state, actor, command.projectId ?? agentProjectId(state, self)), home = conversation(state, project.leadConversationId)
+      if (project.boardMode) {
+        const card = createProposalCard(state, project, { personId: owner.id, generation: owner.generation, buddyId: self.id }, {
+          title: command.title ?? command.goal.slice(0, 160), text: words, goal: command.goal, why: command.why!,
+          doneWhen: command.doneWhen!, evidence: command.evidence!, priority: cardPriority(state, project, owner.id, command.priority),
+        }, operationId, context.now)
+        card.proposal!.scope = command.scope
+        const root = proposalRoot(state, card, stableId(operationId, 'root'), author(state, { kind: 'person', userId: owner.id, email: owner.email }))
+        if (attachments.length) root.attachments = attachments
+        effects.messages.push(root)
+        result.messageId = root.id
+        result.conversationId = card.id
+        result.number = card.number
+        break
+      }
+      if (!['low', 'normal', 'high'].includes(command.priority)) fail('BOARD_MODE_REQUIRED', 'P0–P3 proposal priorities require proposal cards.', 409)
       // One message, its owner's, delivered to the PM: its goal, scope and priority ride in its source for the PM and the task's
       // brief (proposalBrief), with no reply from the Buddy in the chat (anh Dee, task #2926).
       message(home.id, words, home.leadId && home.agentIds.includes(home.leadId) ? [home.leadId] : [], null,
@@ -4046,7 +4107,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         && group.assignment?.agentId === automatic && group.assignment.status === 'done' && group.leadId && group.leadId !== automatic
         && group.agentIds.includes(group.leadId) ? group.leadId : null
       // An agent the post named and may not be named is no recipient by any route: not the assignee, nor the author it answers.
-      const recipients = [...new Set([...addressed, ...answeredAgent ? [answeredAgent] : [], ...(addressed.length ? [] : [below, automatic, doneWith].filter((id): id is string => !!id))])].filter(id => !barred.includes(id))
+      let recipients = [...new Set([...addressed, ...answeredAgent ? [answeredAgent] : [], ...(addressed.length ? [] : [below, automatic, doneWith].filter((id): id is string => !!id))])].filter(id => !barred.includes(id))
       for (const id of recipients) {
         const target = agent(state, id)
         // In a Buddy chat a session hears its own thread alone, and the main Buddy none of it.
@@ -4066,6 +4127,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('INVALID_RECIPIENT', 'An agent sends an agent-only notice to itself alone.', 400)
       }
       if (command.notice && !command.agentOnly) fail('VALIDATION_ERROR', 'A skills notice is an agent-only notice to the agent itself.', 400)
+      // Apply the Board's PM boundary before reporting delivery or recording work that depends on who heard the post.
+      const excludedPm = command.agentOnly ? [] : recipients.filter(id => !pmAcceptsMessage(state, id, undefined))
+      recipients = recipients.filter(id => !excludedPm.includes(id))
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
       message(group.id, text, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, tagged,
         tagged.length ? command.mentionsIfNoWorker : undefined)
@@ -4076,8 +4140,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // After the person's message: nobody answers it, so its person is told why (Dee, review of #2447).
       if (buddyDown) buddyDownLine(group, buddyDown)
-      if (poster && !command.agentOnly && !recipients.length) effects.result.reachedNoAgent = REACHED_NO_AGENT
+      if ((poster || excludedPm.length) && !command.agentOnly && !recipients.length) effects.result.reachedNoAgent = REACHED_NO_AGENT
       if (barred.length) effects.result.notReached = notReachedLine(barred.map(id => agent(state, id).displayName ?? agent(state, id).name))
+      if (excludedPm.length) {
+        const names = excludedPm.map(id => agent(state, id).displayName ?? agent(state, id).name).join(', ')
+        effects.result.notReached = [effects.result.notReached, `This post did not reach ${names}: the PM takes proposals and proposal answers from cards. Use a proposal card when the PM must act.`].filter(Boolean).join('\n')
+      }
       // A Personal Swarm project chat with no Lead: the message waits for the Lead its person's Desktop starts (task #2633).
       // A Team Swarm's says Not sent, as before.
       const unled = actor.kind === 'person' && !recipients.length && !isBuddyChat(group) && isPersonalSwarm(state) ? groupProject(state, group) : undefined

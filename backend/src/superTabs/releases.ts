@@ -1,3 +1,4 @@
+import { proposalNotices } from './proposalCards.js'
 /**
  * Releases scheduled by the Swarm (task #3405, anh Dee's Swarm redesign, 2026-11-05: the server does the routine). A merge
  * recorded on a task puts it on its project's release list; the worker (releaseWatch.ts) reads GitHub for each component's
@@ -274,6 +275,15 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
     if (!group) continue
     if (parts) group.releasing = RELEASE_COMPONENTS.filter(c => parts.has(c.id)).map(c => c.id)
     else delete group.releasing
+  }
+
+
+  if (lead) for (const id of new Set(outcome.shipped)) {
+    const group = state.conversations.find(c => c.id === id)
+    if (!group?.proposal || group.releasing) continue
+    const sender = { kind: 'agent' as const, id: lead.id, name: lead.name, membershipGeneration: lead.membershipGeneration }
+    outcome.messages.push(...proposalNotices(state, group as Conversation & { proposal: NonNullable<Conversation['proposal']> },
+      'shipped', `${group.title} shipped.`, sender, stableId(group.id, 'shipped', String(group.released!.at))))
   }
 
   for (const component of RELEASE_COMPONENTS) {
