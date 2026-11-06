@@ -1,6 +1,7 @@
 """Dry-run the uploader's real staple function; never invoke Apple or signing tools."""
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 UPLOADER = Path(__file__).with_name('upload-desktop.sh')
@@ -11,31 +12,25 @@ class StapleTests(unittest.TestCase):
         source = UPLOADER.read_text()
         function = source[source.index('staple() {'):source.index('\nif [ "$DO_NOTARIZE"', source.index('staple() {'))]
         fixture = r'''
-attempts=0
 xcrun() {
   [ "$1 $2" = 'stapler staple' ] || return 99
   [ "$3" = 'fixture with spaces.app' ] || return 98
-  attempts=$((attempts + 1))
-  echo "call $attempts" >> "$calls"
+  attempts=$(($(wc -l < "$calls") + 1))
+  echo call >> "$calls"
   if [ "$attempts" -le "$failures" ]; then
     echo "$failure"
     return 68
   fi
   echo 'The staple and validate action worked!'
 }
-sleep() { echo "backoff $1" >> "$calls"; }
+sleep() { echo "backoff $1"; }
 '''
-        # A file holds counts because production captures each tool's output in a subshell.
-        fixture = fixture.replace('attempts=$((attempts + 1))',
-            'attempts=$(($(wc -l < "$calls") + 1))')
-        fixture = fixture.replace('echo "call $attempts" >> "$calls"', 'echo call >> "$calls"')
-        fixture = fixture.replace('echo "backoff $1" >> "$calls"', 'echo "backoff $1"')
-        import tempfile
+        # A file holds counts because production captures tool output in a subshell.
         with tempfile.TemporaryDirectory() as folder:
             calls = Path(folder) / 'calls'
             calls.touch()
             result = subprocess.run(
-                ['bash', '-c', 'calls=$1; failure=$2; failures=$3\n' + fixture + function +
+                ['bash', '-c', 'set -euo pipefail\ncalls=$1; failure=$2; failures=$3\n' + fixture + function +
                  '\nstaple "fixture with spaces.app"', 'fixture', str(calls), failure, str(failures)],
                 text=True, capture_output=True, timeout=5)
             return result, len(calls.read_text().splitlines())
