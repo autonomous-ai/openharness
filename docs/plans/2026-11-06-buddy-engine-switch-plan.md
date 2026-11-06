@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript backend and daemon; Flutter Desktop; Vitest and Flutter widget tests. No new dependencies.
 
-**Spec:** Swarm task #3833, conversation `45894032d75e4f44a6a34c21`. Requested by dee through Harness. The task's mockup is posted there. Current Swarm engines with verified sign-in are Claude Code and Codex; broader engine admission is being clarified with the PM.
+**Spec:** Swarm task #3833, conversation `45894032d75e4f44a6a34c21`. Requested by dee through Harness. The task's mockup is posted there. PM ruling: ship Claude Code and Codex here; other engines and their sign-in probes are follow-up #3839.
 
 ## Global Constraints
 
@@ -66,7 +66,7 @@
 
 **Files:** new `desktop/lib/super_tabs/buddy_engine.dart`, `buddy_model.dart`, `buddies.dart`, `controller.dart`, `model.dart`; new `desktop/test/super_tab_buddy_engine_test.dart`, screenshot test and existing Buddy test support.
 
-**Interfaces:** `switchBuddyEngine(String engine)` submits Task 1's command. Offers come from a fresh machine `observation.engines` with installed/signedIn both true. `switchRequest` drives pending text and disables model changes.
+**Interfaces:** `switchBuddyEngine(String engine)` submits Task 1's command. Offers come from a fresh machine `observation.readiness.engines` with installed/signedIn both true. `switchRequest` drives pending text and disables model changes.
 
 - [ ] Commit failing widget tests with memory store/fake sign-in for selecting Codex, hidden signed-out/unknown/stale engines, pending state, command refusal and limit-action menu.
 - [ ] Run them and record the expected failures.

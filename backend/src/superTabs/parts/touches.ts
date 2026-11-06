@@ -61,6 +61,11 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'machine.contribute':
       if (!before.machines?.some(m => m.machineId === command.machineId)) head()
       break
+    case 'buddy.engine': {
+      const buddy = before.agents.find(a => actor.kind === 'person' && a.buddyOf?.personId === actor.userId && !a.buddySession)
+      if (buddy) machine(buddy.machineId)
+      break
+    }
     case 'buddy.create':
       // It may record a Buddy-only machine, or count on one that a concurrent removal of its last Buddy ends.
       slots(command.machineId)

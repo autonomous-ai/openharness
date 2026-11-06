@@ -1,5 +1,6 @@
 import { checksOpenWork, isStep, taskEnded } from './steps.js'
-import { isBuddy } from './buddies.js'
+import { isBuddy, isSwarmBuddy } from './buddies.js'
+import { buddyEngineChat } from './buddyEngine.js'
 import { isCrew } from './crew.js'
 import { expiredModelRequests, unservedBuddyModels } from './buddyModel.js'
 import { agentDisplayName } from './agentNames.js'
@@ -105,12 +106,13 @@ export function staleSwitches(state: SuperTabState, now: number): MessageDraft[]
   const rows: MessageDraft[] = []
   for (const pm of state.agents) {
     const request = pm.switchRequest, project = request && ledProject(state, pm.id)
-    if (!request || !project) continue
+    const chat = isSwarmBuddy(pm) && !pm.buddySession ? buddyEngineChat(pm) : project?.leadConversationId
+    if (!request || !chat) continue
     if (!switchExpired(request, now)) continue
     delete pm.switchRequest
-    rows.push({ id: stableId('switch-stale', pm.id, request.id), conversationId: project.leadConversationId, replyTo: null, recipients: [],
+    rows.push({ id: stableId('switch-stale', pm.id, request.id), conversationId: chat, replyTo: null, recipients: [],
       author: { kind: 'agent', id: pm.id, name: pm.name, displayName: agentDisplayName(state.agents, pm.id), membershipGeneration: pm.membershipGeneration },
-      text: "Couldn't switch the PM: its machine did not answer.", source: { kind: 'switch', agentId: pm.id } })
+      text: `Couldn't switch ${isBuddy(pm) ? 'your Buddy' : 'the PM'}: its machine did not answer.`, source: { kind: 'switch', agentId: pm.id } })
   }
   return rows
 }

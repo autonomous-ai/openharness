@@ -289,6 +289,8 @@ export type HostRosterRow =
   | { tabId: string; cleanup: { machineId: string; removalId: string } }
   | { tabId: string; joinTeam: { machineId: string; name: string; maxAgents: number } }
 export interface HostAgentRow {
+  /** A main Buddy's private chat, used only by its own host to restart it on another engine. */
+  buddyConversationId?: string
   tabId: string
   tabName: string
   lastChangedAt: number | null

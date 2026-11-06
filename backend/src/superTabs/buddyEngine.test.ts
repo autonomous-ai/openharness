@@ -17,7 +17,7 @@ function setup() {
       resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null,
         projectDiskFreeBytes: null, deviceType: null, chip: null, os: null, gpuPercent: null },
       tools: {}, quotas: [], runningHarnessIds: ['h-old'], stoppedHarnessIds: [], capabilities: ['swarmBuddy', 'buddyModel', 'buddyEngine'],
-      engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: true }] } } satisfies ContributedMachine]
+      readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: true }] } } } satisfies ContributedMachine]
   let operation = 0
   const run = (command: Record<string, unknown>, actor = person, now = NOW) => {
     const effects = applyCommand(state, actor, command as Command, { operationId: `op${++operation}`, now,
@@ -55,7 +55,7 @@ describe('a person switching their Buddy engine', () => {
 
   it.each([false, null])('refuses a destination with sign-in %s before changing the Buddy', signedIn => {
     const f = setup()
-    f.pool().observation!.engines![1]!.signedIn = signedIn
+    f.pool().observation!.readiness!.engines![1]!.signedIn = signedIn
     expect(() => f.run({ type: 'buddy.engine', engine: 'codex' })).toThrow(/signed in/i)
     expect(f.target().harnessId).toBe('h-old')
     expect(f.target().switchRequest).toBeUndefined()
@@ -63,8 +63,8 @@ describe('a person switching their Buddy engine', () => {
 
   it('refuses an engine not installed, a missing reading, a stale reading and an old host', () => {
     for (const edit of [
-      (f: ReturnType<typeof setup>) => { f.pool().observation!.engines![1]!.installed = false },
-      (f: ReturnType<typeof setup>) => { delete f.pool().observation!.engines },
+      (f: ReturnType<typeof setup>) => { f.pool().observation!.readiness!.engines![1]!.installed = false },
+      (f: ReturnType<typeof setup>) => { delete f.pool().observation!.readiness!.engines },
       (f: ReturnType<typeof setup>) => { f.pool().observation!.receivedAt -= 600_000 },
       (f: ReturnType<typeof setup>) => { f.pool().observation!.capabilities = ['swarmBuddy'] },
     ]) {
