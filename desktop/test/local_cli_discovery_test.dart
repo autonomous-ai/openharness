@@ -22,6 +22,14 @@ void main() {
     if (await scratch.exists()) await scratch.delete(recursive: true);
   });
 
+  // Task #3724: on a computer running Harness, a test's app reached its real daemon on the loopback
+  // port, found it not ready and waited out the 45 s ready timeout (sign_in_measurement_test timed out).
+  test('a discovery given nothing of its own never probes the real daemon under flutter test', () async {
+    final probe = await LocalCliDiscovery(config: AppConfig.dev).probe();
+    expect(probe.state, LocalCliProbeState.down);
+    expect(probe.reason, contains('flutter test'));
+  });
+
   test('uses the stable Harness computer id path', () {
     final path = LocalMachineIdentity.defaultComputerIdPath(
       environment: {'HOME': '/Users/tester'},
