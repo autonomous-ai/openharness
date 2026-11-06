@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createSuperTab, type Agent } from './model.js'
+import { createSuperTab, visibleState, type Agent } from './model.js'
 import { openSwarmBuddyChat } from './buddies.js'
 import { projectsOf } from './projects.js'
 import { machine, NOW, config } from './crewKeep.test-support.js'
@@ -26,6 +26,12 @@ function fixture() {
 }
 
 describe('server-owned Buddy sleep', () => {
+  it('keeps private engine-idle proof out of member reads', () => {
+    const f = fixture()
+    const visible = visibleState(f.state, { kind: 'person', userId: f.owner.id, email: f.owner.email }, NOW)
+    expect(visible.machines![0]!.observation).not.toHaveProperty('idleBuddyHarnessIds')
+  })
+
   it('sleeps at one idle hour, once, and preserves identity and the session', () => {
     const f = fixture()
     expect(buddySleepCandidates(f.state, NOW - 1)).toEqual([])
