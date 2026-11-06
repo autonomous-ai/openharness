@@ -3,6 +3,7 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type SuperTabState } from './model.js'
 import { agentKind } from './agentKind.js'
+import { hostTab } from './read/hostRows.js'
 
 // Task #4116 (Swarm v3, anh Dee 11-07): "+ New agent" makes a Regular or a PM agent on the person's own computer and account.
 // A PM names and starts a project; a Regular agent is in no project, and the task it is given decides where it works.
@@ -12,7 +13,7 @@ const mate: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'mate
 const resources = { cpuPercent: 1, memoryTotalBytes: 8, memoryUsedBytes: 1, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
   deviceType: null, chip: null, os: null, gpuPercent: null }
 const reading = { generation: 'g1', receivedAt: NOW, sessionKind: 'computer' as const, resources, tools: {}, quotas: [], runningHarnessIds: [],
-  stoppedHarnessIds: [], capabilities: ['leadStart'] }
+  stoppedHarnessIds: [], capabilities: ['leadStart', 'regularAgent'] }
 const own = (userId: string) => ({ contribution: { machineOwnerId: userId, contributorId: userId } })
 const code = (body: () => unknown): string | null => {
   // A schema refusal (a missing field) has no code of its own.
@@ -142,5 +143,28 @@ describe('joining by bringing your own agent', () => {
     // Its computer is its own: nobody else's agent starts there.
     expect(code(() => f.run({ type: 'buddy.create', machineId: 'mate-laptop', engine: 'codex',
       setup: { name: 'Mate laptop', cwd: '/home/mate/swarm', engines: ['codex'] } } as Command, owner, { contribution: { machineOwnerId: 'mate', contributorId: 'mate' } }))).not.toBeNull()
+  })
+})
+
+// A host from before Regular agents would launch one as a project's agent, in a project folder it does not have: the start is
+// listed apart, and a computer whose host cannot run one is told to update instead.
+describe('a Regular agent\'s start on its computer', () => {
+  const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [], githubApp: false }
+  const user = { sub: 'mate', email: mate.email, role: 'user', autonomousEnv: 'test' } as never
+
+  it('is listed to its host apart from other starts, in no project\'s folder', async () => {
+    const f = swarm()
+    const made = f.add({ kind: 'regular', name: 'Ada' })
+    const pool = (await hostTab('tab', f.state, 'mate-mac', user, null, lookups)).pool!
+    expect(pool.starts).toEqual([])
+    expect(pool.regularStarts!.map(s => s.id)).toEqual([made.result.startId])
+    expect((pool.projects ?? []).flatMap(p => p.conversationIds)).not.toContain(made.result.conversationId)
+  })
+
+  it('is refused on a computer whose Harness cannot run one yet, saying to update it', () => {
+    const f = swarm()
+    f.state.machines!.find(m => m.machineId === 'mate-mac')!.observation!.capabilities = ['leadStart']
+    expect(code(() => f.add({ kind: 'regular', name: 'Ada' }))).toBe('HOST_OUTDATED')
+    expect(f.state.starts ?? []).toEqual([])
   })
 })
