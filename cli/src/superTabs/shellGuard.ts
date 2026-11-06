@@ -158,6 +158,7 @@ function programWords(words: string[]): string[] {
  */
 function split(text: string, nested: string[]): Simple[] {
   const out: Simple[] = []
+  const variables = new Map<string, string>()
   let words: string[] = [], targets: string[] = []
   let word = '', inWord = false, redirect = false
   const heredocs: { delimiter: string; strip: boolean }[] = []
@@ -167,13 +168,29 @@ function split(text: string, nested: string[]): Simple[] {
     if (!inWord) return
     if (pendingHeredoc) { heredocs.push({ delimiter: word, strip: pendingHeredoc.strip }); pendingHeredoc = null }
     else if (redirect) { targets.push(word); redirect = false }
-    else words.push(word)
+    else {
+      // Only leading shell assignments and export declarations set values; an echo argument never does.
+      const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s.exec(word)
+      if (assignment && words.every((value) => value === 'export' || /^[A-Za-z_][A-Za-z0-9_]*=/.test(value))) {
+        if (/[$`]/.test(assignment[2])) variables.delete(assignment[1])
+        else variables.set(assignment[1], assignment[2])
+      }
+      words.push(word)
+    }
     word = ''; inWord = false
   }
   const endCommand = () => {
     endWord()
     if (words.length || targets.length) out.push({ words, targets })
     words = []; targets = []; redirect = false
+  }
+
+  // Expand at the lexical position, so single quotes and escaped dollars remain literal and reassignments keep order.
+  const variableAt = (at: number): { value: string; end: number } | null => {
+    const match = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/.exec(text.slice(at))
+    if (!match) return null
+    const value = variables.get(match[1] ?? match[2])
+    return value === undefined ? null : { value, end: at + match[0].length }
   }
 
   let i = 0
@@ -211,11 +228,15 @@ function split(text: string, nested: string[]): Simple[] {
         if (text[i] === '\\' && '"\\$`\n'.includes(text[i + 1] ?? '')) { word += text[i + 1]; i += 2; continue }
         const sub = substitution(text, i)
         if (sub) { nested.push(sub.inner); word += text.slice(i, sub.end); i = sub.end; continue }
+        const variable = variableAt(i)
+        if (variable) { word += variable.value; i = variable.end; continue }
         word += text[i]; i++
       }
       i++
       continue
     }
+    const variable = variableAt(i)
+    if (variable) { word += variable.value; inWord = true; i = variable.end; continue }
     const sub = substitution(text, i)
     if (sub) { nested.push(sub.inner); word += text.slice(i, sub.end); inWord = true; i = sub.end; continue }
     if ((c === '<' || c === '>') && text[i + 1] === '(') {
