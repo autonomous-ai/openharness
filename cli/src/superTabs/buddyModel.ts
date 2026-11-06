@@ -22,14 +22,23 @@ export const FRESH_SHARE = 0.8
 const MOVE_TIMEOUT_MS = 120_000
 /** How soon a request that waits (a Buddy sent home mid-turn) or a report that failed is tried again. */
 const RETRY_MS = 15_000
+/** How long the Swarm keeps a request before dropping it unanswered (backend superTabs/buddyModel.ts BUDDY_MODEL_LEASE_MS). */
+const LEASE_MS = 10 * 60_000
+/** A thread session the request moves (task #3810), by harness id, at most: the Swarm's own limit on what it records. */
+const MAX_STAYED = 64
 
-interface ModelRequest { id: string; gridModel: string | null; gridName?: string; name?: string; servedBy?: string[]; contextWindow?: number; reason?: string }
+interface ModelRequest { id: string; gridModel: string | null; gridName?: string; name?: string; servedBy?: string[]; contextWindow?: number; reason?: string
+  /** When the Swarm asked, in ms: a busy thread session is waited for only within the request's lease. */
+  at?: number
+  /** Only the thread sessions move: the Buddy is already there (backend superTabs/buddyModel.ts, task #3810). */
+  sessionsOnly?: true }
 /** A Buddy agent's row as this machine's host reads it (backend read/hostRows.ts). */
 export interface BuddyModelRow {
   tabId: string
   agent: { id: string; harnessId: string; buddyOf?: unknown; buddySession?: unknown; modelRequest?: unknown }
 }
-interface Outcome { ok: boolean; fresh?: true; error?: string }
+/** `stayed`: the thread sessions that could not move, by harness id, so the Swarm records them where they still run (#3810). */
+interface Outcome { ok: boolean; fresh?: true; error?: string; stayed?: string[] }
 export interface BuddyModelDeps {
   dataDir: string
   now: () => number
@@ -49,7 +58,9 @@ function requestOf(value: unknown): ModelRequest | null {
     ...(typeof r.name === 'string' ? { name: r.name } : {}),
     ...(Array.isArray(r.servedBy) ? { servedBy: r.servedBy.filter((s): s is string => typeof s === 'string') } : {}),
     ...(typeof r.contextWindow === 'number' && r.contextWindow > 0 ? { contextWindow: r.contextWindow } : {}),
-    ...(typeof r.reason === 'string' ? { reason: r.reason } : {}) }
+    ...(typeof r.reason === 'string' ? { reason: r.reason } : {}),
+    ...(typeof r.at === 'string' && Number.isFinite(Date.parse(r.at)) ? { at: Date.parse(r.at) } : {}),
+    ...(r.sessionsOnly === true ? { sessionsOnly: true as const } : {}) }
 }
 
 /** Why a move was refused, in words its owner can act on: never the daemon's detail, which can name paths on this machine.
@@ -71,6 +82,8 @@ export class BuddyModelRequests {
   /** Requests reported, or settled elsewhere: never carried out again by this process. */
   private readonly done = new Set<string>()
   private readonly waiting = new Map<string, { busy: boolean; retryAt: number }>()
+  /** What a request that waits has already moved, so a retry never moves the Buddy twice (task #3810). */
+  private readonly progress = new Map<string, { moved: Set<string>; fresh: boolean; since: number }>()
   constructor(private readonly deps: BuddyModelDeps) {}
 
   /** One poll of a main Buddy row of this machine, with its thread sessions' rows. */
@@ -84,9 +97,10 @@ export class BuddyModelRequests {
       const recorded = this.recorded(row.agent.id)
       let outcome = recorded?.requestId === request.id ? recorded.outcome : undefined
       if (!outcome) {
-        const carried = await this.carryOut(row, sessions, request)
+        const carried = await this.carryOut(row, sessions, request, now)
         if (carried === 'wait') { this.waiting.set(request.id, { busy: false, retryAt: now + RETRY_MS }); return }
         outcome = carried
+        this.progress.delete(request.id)
         this.record(row.agent.id, { requestId: request.id, outcome })
       }
       try {
@@ -104,7 +118,9 @@ export class BuddyModelRequests {
     }
   }
 
-  private async carryOut(row: BuddyModelRow, sessions: readonly BuddyModelRow[], request: ModelRequest): Promise<Outcome | 'wait'> {
+  private async carryOut(row: BuddyModelRow, sessions: readonly BuddyModelRow[], request: ModelRequest, now: number): Promise<Outcome | 'wait'> {
+    const progress = this.progress.get(request.id) ?? { moved: new Set<string>(), fresh: false, since: now }
+    this.progress.set(request.id, progress)
     const daemon = await this.deps.open()
     try {
       const move = async (harnessId: string): Promise<{ error?: string; detail?: string; fresh: boolean }> => {
@@ -115,20 +131,34 @@ export class BuddyModelRequests {
         return { ...(typeof reply.error === 'string' ? { error: reply.error } : {}),
           ...(typeof reply.detail === 'string' ? { detail: reply.detail } : {}), fresh }
       }
-      const moved = await move(row.agent.harnessId)
-      if (moved.error) {
-        // Sent home by the Swarm (a limit, a model gone) while it answers: moved once the turn ends, within the request's lease.
-        if (moved.error === 'AGENT_BUSY' && request.reason) return 'wait'
-        return { ok: false, error: refusal(moved.error, request, moved.detail) }
+      if (!request.sessionsOnly && !progress.moved.has(row.agent.harnessId)) {
+        const moved = await move(row.agent.harnessId)
+        if (moved.error) {
+          // Sent home by the Swarm (a limit, a model gone) while it answers: moved once the turn ends, within the request's lease.
+          if (moved.error === 'AGENT_BUSY' && request.reason) return 'wait'
+          return { ok: false, error: refusal(moved.error, request, moved.detail) }
+        }
+        progress.moved.add(row.agent.harnessId)
+        progress.fresh = moved.fresh
       }
-      const stayed: string[] = []
+      // A thread session sent home while it answers is waited for like the Buddy, until shortly before the Swarm drops the
+      // request: then it is reported as stayed, so the Swarm records where it runs and asks again (task #3810).
+      const deadline = (request.at ?? progress.since) + LEASE_MS - 2 * RETRY_MS
+      const stayed: Array<{ harnessId: string; why: string }> = []
+      let busy = false
       for (const session of sessions) {
-        const result = await move(session.agent.harnessId)
-        if (result.error) stayed.push(result.error === 'AGENT_BUSY' ? 'it was answering' : refusal(result.error, request, result.detail))
+        const harnessId = session.agent.harnessId
+        if (progress.moved.has(harnessId)) continue
+        const result = await move(harnessId)
+        if (!result.error) { progress.moved.add(harnessId); continue }
+        if (result.error === 'AGENT_BUSY' && request.reason && now < deadline) { busy = true; continue }
+        stayed.push({ harnessId, why: result.error === 'AGENT_BUSY' ? 'it was answering' : refusal(result.error, request, result.detail) })
       }
-      return { ok: true, ...(moved.fresh ? { fresh: true as const } : {}),
-        ...(stayed.length === 1 ? { error: `A thread session stayed where it was: ${stayed[0]}` }
-          : stayed.length ? { error: `${stayed.length} thread sessions stayed where they were: ${stayed[0]}` } : {}) }
+      if (busy) return 'wait'
+      return { ok: true, ...(progress.fresh ? { fresh: true as const } : {}),
+        ...(stayed.length ? { stayed: stayed.slice(0, MAX_STAYED).map(s => s.harnessId) } : {}),
+        ...(stayed.length === 1 ? { error: `A thread session stayed where it was: ${stayed[0]!.why}` }
+          : stayed.length ? { error: `${stayed.length} thread sessions stayed where they were: ${stayed[0]!.why}` } : {}) }
     } finally { daemon.close() }
   }
 
@@ -151,8 +181,9 @@ export class BuddyModelRequests {
     try {
       const row = object(JSON.parse(readPrivateStateFile(file, 4_096))), outcome = object(row.outcome)
       if (!identifier(row.requestId) || typeof outcome.ok !== 'boolean') return null
+      const stayed = Array.isArray(outcome.stayed) ? outcome.stayed.filter(identifier).slice(0, MAX_STAYED) : []
       return { requestId: row.requestId, outcome: { ok: outcome.ok, ...(outcome.fresh === true ? { fresh: true } : {}),
-        ...(typeof outcome.error === 'string' ? { error: outcome.error.slice(0, 300) } : {}) } }
+        ...(typeof outcome.error === 'string' ? { error: outcome.error.slice(0, 300) } : {}), ...(stayed.length ? { stayed } : {}) } }
     } catch { return null }
   }
   private record(agentId: string, value: { requestId: string; outcome: Outcome }): void {

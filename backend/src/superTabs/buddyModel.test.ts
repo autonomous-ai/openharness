@@ -9,7 +9,7 @@ import { swarmBuddyChatId } from './buddies.js'
 import { sweepLiveness } from './liveness.js'
 import { withoutMachineNames } from './store.js'
 import { BUDDY_MODEL_GONE_MS, BUDDY_MODEL_LEASE_MS } from './tidy.js'
-import { unservedBuddyModels } from './buddyModel.js'
+import { expiredModelRequests, unservedBuddyModels } from './buddyModel.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -355,6 +355,17 @@ describe('a Buddy coming home by itself', () => {
       'A thread session is still on DeepSeek 4.1 Flash: it was answering. End that thread\'s session to bring it back to your subscription.'])
     unservedBuddyModels(f.state, NOW, () => 'again')
     expect(f.agent().modelRequest).toBeUndefined()
+  })
+
+  it('counts a sessions-only move home its machine never answered as a try, and says nothing for it', () => {
+    const f = onModel()
+    const session = addSession(f, 'session', 'h-session', MODEL)
+    f.run({ type: 'agent.alert', agentId: f.buddyId, alert: 'limit', active: true }, f.buddy())
+    f.run({ type: 'buddy.modelResult', agentId: f.buddyId, requestId: f.agent().modelRequest!.id, ok: true, stayed: ['h-session'] }, f.buddy())
+    unservedBuddyModels(f.state, NOW, () => 'follow-up')
+    expect(expiredModelRequests(f.state, NOW + BUDDY_MODEL_LEASE_MS)).toEqual([])
+    expect(f.agent().modelRequest).toBeUndefined()
+    expect(session().homeOwed).toEqual({ reason: 'limit', tries: 2 })
   })
 
   it('goes back when the model keeps failing', () => {
