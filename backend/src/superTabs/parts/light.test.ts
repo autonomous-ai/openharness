@@ -91,6 +91,7 @@ const conversation: Required<Conversation> = {
   stuck: { key: 'k', messageId: 'm', tagged: [], fixed: 'f' },
   talkedAt: { w: { person: 1, answer: 2 } },
   task: { goal: '', changes: '', constraints: '', owns: [] },
+  taskApproval: { personId: 'p', generation: 'g', state: 'proposal', createdAt: 1 },
   teamWritten: true,
   teamWrittenBy: { kind: 'assigned' },
   title: 't',
