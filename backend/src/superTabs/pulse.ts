@@ -39,7 +39,7 @@ const counted = (group: Conversation): boolean => !group.audience && !group.kind
 
 /** Records [message] as owed when a person wrote it and it reached [group]'s PM. */
 export function owe(state: SuperTabState, group: Conversation, message: { id: string; author: Author; recipients: readonly string[]; thread: string | null; source?: unknown }, now: number): void {
-  if (message.author.kind !== 'person' || message.source || !counted(group)) return
+  if (message.author.kind !== 'person' || (message.source && (message.source as { kind?: string }).kind !== 'buddy-proposal') || !counted(group)) return
   const project = projectOfGroup(state, group)
   const pm = project && pmOf(state, project)
   if (!pm || !message.recipients.includes(pm)) return

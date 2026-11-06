@@ -3023,6 +3023,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         { kind: 'buddy-proposal', personId: owner.id, buddyId: self.id, ownerMessageId: command.ownerMessageId,
           goal: command.goal, scope: command.scope, priority: command.priority }, attachments)
       effects.messages.at(-1)!.author = { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation }
+      const relayed = effects.messages.at(-1)!
+      owe(state, home, { ...relayed, thread: relayed.thread ?? null }, context.now)
       // Its own id: this command's id is the proposal's, and a second row with it rolls the command back. Marked with its project,
       // so it goes from view as a PM's line does when its person loses that project (buddySessions.ts lostProjectRow).
       if (isSwarmBuddy(self)) effects.messages.push({ id: stableId('proposal-sent', operationId), conversationId: chat.id, author: sender,

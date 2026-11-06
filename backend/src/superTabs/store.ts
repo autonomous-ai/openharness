@@ -4780,6 +4780,21 @@ export class SuperTabStore {
       // A Buddy reads no machine names, in what it is handed too (security review 2 of #2178). News from outside its chat
       // (buddyNews.ts) is marked, so its host words it as news to note, never a message to answer there.
       const target = agent(state, agentId), group = conversation(state, delivery.conversationId)
+      // #3609: only a confirmed native receipt means the PM has received a person's words. Keep the eyes
+      // and receipt in one transaction, using the same identity as a manual reaction; eyes never answers the ask.
+      if (action.type === 'ack' && !action.uncertain && !delivery.deliveredAt && row && !row.deletedAt
+        && delivery.authorKind === 'person' && ledProject(state, agentId)) {
+        const actor: Actor = { kind: 'agent', agentId, machineOwnerId: target.machineOwnerId }
+        const command: ReactCommand = { type: 'message.react', conversationId: group.id, messageId: row.id, emoji: 'eyes', on: true }
+        if (!await tx.superTabReaction.findUnique({ where: { id: reactionId(tabId, actor, command) } })) {
+          // Delivery authority uses light groups. Read the complete one before updating, so no task fields are lost.
+          const stored = await tx.swarmGroup.findUniqueOrThrow({ where: { id: partId(tabId, group.id) } })
+          const data = stored.data as unknown as Conversation
+          await this.writeReaction(tx, tabId, actor, command, this.now())
+          await guardedWrite(tx, tabId, { op: 'update', kind: 'group', key: group.id, seen: stored.version,
+            data: { ...data, reactionSeq: (data.reactionSeq ?? 0) + 1 } }, stamp)
+        }
+      }
       // An agent reads people by name, never email (task #2954).
       const named = row && namesPerson(row) ? rowForAgent(state, lazyUsernames(state), row) : row
       const shown = named && isBuddy(target) ? rowForBuddy(named) : named
