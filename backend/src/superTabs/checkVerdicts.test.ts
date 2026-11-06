@@ -205,3 +205,25 @@ describe('a verdict and the base branch it read against', () => {
     expect(c.passedBy).toBe('agent:r')
   })
 })
+
+// Task #3553: a head that is git's own merge of the reviewed head and main (mergeCarry.ts) carries its verdicts, on the same
+// base only, and through a chain of such merges; any other head does not.
+describe('a verdict at a head a clean main merge carries', () => {
+  const C = 'ccccccc3333333333333333333333333333333cc', D = 'ddddddd4444444444444444444444444444444dd'
+  const on = (head: string, carries: string[] | undefined, base = 'main'): PullRequestHeads => ({ [PR]: { head, patch: 'p9', at: 1, base, ...carries ? { carries } : {} } })
+  const read = (head: string, base = 'main'): CheckVerdict => ({ ...verdict('r', true, head, 'p1'), base })
+
+  it('counts at a head that carries its own', () => {
+    expect(verdictCounts(read(A), on(B, [A]))).toBe(true)
+    // Through a chain: D merged main into C, which merged main into A.
+    expect(verdictCounts(read(A), on(D, [C, A]))).toBe(true)
+  })
+
+  it('counts only on its own base, and never for a head that carries another', () => {
+    expect(verdictCounts(read(A, 'release'), on(B, [A]))).toBe(false)
+    expect(verdictCounts(read(A), on(B, [C]))).toBe(false)
+    expect(verdictCounts(read(A), on(B, undefined))).toBe(false)
+    // Never a shortened head, as at its own head.
+    expect(verdictCounts(read(A.slice(0, 7)), on(B, [A]))).toBe(false)
+  })
+})

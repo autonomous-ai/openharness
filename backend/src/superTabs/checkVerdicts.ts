@@ -40,8 +40,10 @@ export function verdictCounts(verdict: CheckVerdict, heads: PullRequestHeads | u
   if (current === undefined) return true
   if (!current || !verdict.head) return false
   // Its head counts only on the base it names (security review of #3218, round 4; review round 7): naming none, on none once a
-  // base is watched. A patch id names its base.
-  return (sameHead(current.head, verdict.head) && verdict.base === current.base) || (!!verdict.patch && current.patch === verdict.patch)
+  // base is watched. A patch id names its base. A head that is git's own merge of its head and main carries it, on that same
+  // base only (mergeCarry.ts, task #3553).
+  const read = sameHead(current.head, verdict.head) || !!current.carries?.some(carried => sameHead(carried, verdict.head!))
+  return (read && verdict.base === current.base) || (!!verdict.patch && current.patch === verdict.patch)
 }
 
 /** The links of a task its PR watch reads: its newest HEADS_KEPT (review of #3218: one task links 369 pull requests in

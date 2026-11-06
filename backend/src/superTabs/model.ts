@@ -287,7 +287,10 @@ export interface CheckVerdict { by: string; passed: boolean; evidence: string; a
 export interface PullRequestHead { head: string; patch: string | null; at: number
   /** The branch it merges into as the watch read it: a new one is read again like a new head, as the patch id names it
    *  (security review of #3218, round 3). Absent on a head recorded before. */
-  base?: string }
+  base?: string
+  /** The heads whose verdicts this one carries, newest first, at most CARRIES_KEPT: it is git's own merge of the first and
+   *  main, the first of the next, and so on (mergeCarry.ts, task #3553). Absent on any other head. */
+  carries?: string[] }
 export interface Assignment {
   id: string
   agentId: string
