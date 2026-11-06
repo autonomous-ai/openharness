@@ -110,15 +110,37 @@ describe('the lines the first move lost, given back', () => {
     expect((await store.instructions(owner, tab, 'lead')).revision).toBe(4)
   })
 
-  it('leaves a project saved since the move alone, and reports how many lines it lacks', async () => {
+  // Review of #3327: the daily tidy is a save, so most projects are saved since the move. The lines the move lost were never in a later
+  // revision, so no later save chose to drop them.
+  it('gives a project saved since the move the lines the move lost, and keeps what its own save did', async () => {
     const tab = await moved()
     const text = `${(await store.instructions(owner, tab, 'lead')).text}\n- The PM's own note.\n`
-    await run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 3, text, summary: 'Its PM acted.' })
+    await run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 3, text, summary: 'The daily tidy.' })
+    const report = await restoreAll(db, { now: () => now, swarms: swarms(tab) })
+    expect(report.held).toEqual([])
+    expect(report.restored).toEqual([expect.objectContaining({ tabId: tab, projectId: 'lead', from: 4, to: 5 })])
+    const after = await store.instructions(owner, tab, 'lead')
+    expect(after.text).toContain("- The PM's own note.")
+    expect(removedLines(BEFORE, after.text)).toEqual([])
+    expect((await store.instructionRevision(owner, tab, 'lead', 4)).text).toBe(text)
+  })
+
+  it('leaves a project whose PM restored by hand alone, and tells that PM by a note which lines are still missing', async () => {
+    const tab = await moved()
+    // Its PM put one lost line back by hand and chose to leave the rest out, as harness did at revision 81.
+    const text = `${(await store.instructions(owner, tab, 'lead')).text}\n- Stop only processes you started, by id, never by name or pattern.\n`
+    await run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 3, text, summary: 'Restored a safety rule.' })
     const report = await restoreAll(db, { now: () => now, swarms: swarms(tab) })
     expect(report.restored).toEqual([])
     expect(report.left).toEqual([expect.objectContaining({ tabId: tab, projectId: 'lead', missing: expect.any(Number) })])
     expect(report.left[0]!.missing).toBeGreaterThan(0)
     expect((await store.instructions(owner, tab, 'lead')).text).toBe(text)
+    const notes = await db.superTabPmNote.findMany({ where: { tabId: tab, projectId: 'lead' } })
+    expect(notes.map(n => n.text)).toEqual([expect.stringContaining('still missing')])
+    expect(notes[0]!.askedBy).toBe(DEE)
+    // Told once: a second pass adds no second note.
+    await restoreAll(db, { now: () => now, swarms: swarms(tab) })
+    expect(await db.superTabPmNote.count({ where: { tabId: tab, projectId: 'lead' } })).toBe(1)
   })
 
   it('does nothing for a project that lost nothing, and touches only the Swarm named', async () => {

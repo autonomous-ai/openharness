@@ -51,4 +51,19 @@ describe('the lines a project is given back after the first move (#3679)', () =>
     const once = restoredDocument(BEFORE, MOVED, 80)
     expect(restoredDocument(BEFORE, once.text, 80)).toEqual({ text: once.text, lines: [] })
   })
+
+  // Review of #3327: a project saved since the move (the daily tidy is a save) is given back what the move lost, and never what its own
+  // later save chose to drop.
+  it('gives back only what the move lost, never a line a later save dropped', () => {
+    const lostByMove = removedLines(BEFORE, MOVED)
+    // A later save of the PM: it kept the moved document and dropped nothing the move had kept; here it added a line.
+    const later = `${MOVED.trimEnd()}\n\n- The PM's own note.\n`
+    const { text, lines } = restoredDocument(BEFORE, later, 80, new Set(lostByMove))
+    expect(lines).toEqual(lostByMove)
+    expect(text).toContain('- The PM\'s own note.')
+    // A line the later save dropped from the moved document is not the move's loss: it stays dropped.
+    const withoutOwn = MOVED.replace(/^.*Owns the product.*$/m, '')
+    expect(removedLines(BEFORE, withoutOwn)).toContain('Owns the product (Dee, 2026-11-03).')
+    expect(restoredDocument(BEFORE, withoutOwn, 80, new Set(lostByMove)).lines).not.toContain('Owns the product (Dee, 2026-11-03).')
+  })
 })
