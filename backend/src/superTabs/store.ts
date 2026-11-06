@@ -3379,11 +3379,13 @@ export class SuperTabStore {
   }
 
   /** A project's machine rules alone, from its newest revision (policy.ts machines), for the route (task #3964): one
-   *  indexed read, never the history. Who reads the project reads them, as its record. */
+   *  indexed read, never the history, and those that pass even when the rest of the record does not. Who reads the project
+   *  reads them, as its record. */
   async projectMachineRules(user: AuthUser, tabId: string, projectId: string, asAgentId?: string) {
     return this.instructionHistory(user, tabId, projectId, asAgentId, async tx => {
-      const current = await currentRules(tx, tabId, projectId)
-      return { projectId, revision: current.revision, machines: current.rules.machines ?? [] }
+      // The rules that pass, from a record that may not, as the server applies them (machineRulesOf).
+      const read = await readRules(tx, tabId, projectId, true)
+      return { projectId, revision: read?.revision ?? 0, machines: validMachineRules(read?.rules) }
     })
   }
 
