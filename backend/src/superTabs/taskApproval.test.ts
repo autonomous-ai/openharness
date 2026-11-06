@@ -121,13 +121,24 @@ describe('personal approval enforced before work', () => {
   it('keeps a legacy proposal’s decision when the PM converts it to a task and refuses a second conversion', () => {
     const f = fixture(false); f.mode('review'); const sent = f.propose()
     const row = sent.messages.find(m => m.source?.kind === 'buddy-proposal')!
-    const proposal = { id: row.id, conversationId: row.conversationId, author: row.author, source: row.source }
+    const proposal = { id: row.id, conversationId: row.conversationId, author: row.author, source: row.source ?? null }
     const input = { type: 'conversation.create', title: 'Prepared', task, priority: 'P2', proposalMessageId: row.id,
       checks: [{ description: 'Restores drafts' }] }
     const id = f.runCommand(input, f.pm, { proposal }).result.conversationId
     expect(f.card(id).taskApproval?.state).toBe('proposal')
     expect(f.state.conversations.filter(c => !c.archived && c.requesterId === peer.userId && (c.task || c.proposal))).toHaveLength(1)
     expect(() => f.runCommand(input, f.pm, { proposal })).toThrow()
+  })
+  it('keeps a chosen agent binding when the person approves before PM preparation', () => {
+    const f = fixture(); f.mode('review'); f.propose()
+    const card = f.state.conversations.find(c => c.proposal)!
+    f.runCommand({ type: 'task.suggest', conversationId: card.id, agentId: f.candidate })
+    f.runCommand({ type: 'task.approve', conversationId: card.id })
+    f.runCommand({ type: 'proposal.decide', conversationId: card.id, decision: 'accept', reason: 'Build', task,
+      checks: [{ description: 'Restores drafts' }] }, f.pm)
+    expect(() => f.runCommand({ type: 'work.assign', conversationId: card.id, agentId: f.other }, f.pm)).toThrow()
+    f.runCommand({ type: 'work.assign', conversationId: card.id, agentId: f.candidate }, f.pm)
+    expect(f.card(card.id).assignment?.agentId).toBe(f.candidate)
   })
   it('guards the person and selected agent against concurrent changes, and keeps approval in light loads', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
