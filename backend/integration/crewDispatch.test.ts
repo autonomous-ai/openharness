@@ -257,6 +257,24 @@ describe('the crew dispatch pass', () => {
     expect((await readGroup(s.tab, phone)).handOutLane).toBe('mobile')
   })
 
+  // Task #3964: the store reads the project's machine rules for a start, an assignment and the dispatch pass.
+  it('follows the project\'s machine rules from its record in a start, an assignment and the dispatch pass', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    await save(s, 0, { machines: [{ machineIds: ['owner-mac'], why: 'This Mac takes no new work for now', noEngines: ['claude'] }] })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 0 })
+    await expect(s.execute({ type: 'work.assign', conversationId: s.tasks.Api!, agentId: s.crew.Ash! }, s.pm))
+      .rejects.toMatchObject({ code: 'MACHINE_RULE', message: 'This Mac takes no new work for now' })
+    await s.execute({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Owner Mac', cwd: '/swarm', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 4 })
+    const request = (engine: string) => ({ conversationId: s.tasks.Api!, machineId: 'owner-mac', engine, name: 'Builder', cwd: '/swarm/lead', worktree: false,
+      requirements: { memoryBytes: 1e9, diskBytes: 1e9, maxCpuPercent: 90, tools: [], devices: [], quotaRequired: false } })
+    await expect(s.execute({ type: 'agent.start', request: request('claude') })).rejects.toMatchObject({ code: 'MACHINE_RULE' })
+    expect((await s.execute({ type: 'agent.start', request: request('codex') })).result.startId).toBeTruthy()
+    // Cleared by the people who set it: the member takes the task again.
+    await save(s, 1, { machines: [] })
+    expect(await s.store.dispatchCrew(s.tab)).toMatchObject({ assigned: 1 })
+    expect(await s.holders()).toEqual({ Api: 'Ash' })
+  })
+
   it('hands a free member its pinned task first, then its lane\'s top task, as the PM, through work.assign', async () => {
     const s = await swarm({ Ash: 'backend', Birch: 'desktop' }, { Api: 'backend/src/a.ts', Store: 'backend/src/b.ts', Board: 'desktop/lib/c.dart' })
     await editGroup(s.tab, s.tasks.Store!, group => ({ ...group, pin: { agentId: s.crew.Ash!, why: 'ci', at: NOW } }))
