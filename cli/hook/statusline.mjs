@@ -7,6 +7,7 @@
  * (`__STATUS_LINE_SCRIPT__`), so an installed CLI needs nothing beside cli.js.
  *
  *   node statusline.mjs --data <harness data folder> [--then <base64url of the person's own status line command>]
+ *     [--bash <the Git Bash Claude Code runs status lines in, on Windows>]
  *
  * Claude Code hands its status line command a JSON status on stdin, with the plan's rate limits in it
  * (`rate_limits.five_hour` / `seven_day`: `used_percentage` 0-100, `resets_at` in epoch seconds; null for an API key).
@@ -19,7 +20,7 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 
 // Claude Code closes stdin once it has written the status. Should it not, the person's line still shows, a little late.
 const INPUT_WAIT_MS = 2000
@@ -107,13 +108,49 @@ function ownCommand() {
   }
 }
 
+/**
+ * [command] as Claude Code 2.1.316 runs a status line in Git Bash on Windows (task #4164): a line whose first word, unquoted,
+ * is a `.sh` file runs as `bash <line>`.
+ */
+function asGitBashRunsIt(command) {
+  const line = command.trim()
+  let first = ''
+  for (let i = 0; i < line.length;) {
+    const c = line[i]
+    if (c === '"' || c === "'") {
+      const end = line.indexOf(c, i + 1)
+      if (end === -1) { first += line.slice(i + 1); break }
+      first += line.slice(i + 1, end)
+      i = end + 1
+    } else if (c === '\\' && i + 1 < line.length) {
+      first += line[i + 1]
+      i += 2
+    } else if (/\s/.test(c)) {
+      break
+    } else {
+      first += c
+      i++
+    }
+  }
+  return first.endsWith('.sh') ? `bash ${command}` : command
+}
+
+/** [env] with [folder] first on its PATH, whatever its key's case, as Claude Code starts Git Bash. */
+function firstOnPath(env, folder) {
+  const key = Object.keys(env).find((name) => name.toUpperCase() === 'PATH') ?? 'PATH'
+  return { ...env, [key]: env[key] ? folder + delimiter + env[key] : folder }
+}
+
 async function main() {
   const input = await readInput()
   try { record(input, option('--data')) } catch { /* never in the way of the person's own line */ }
   const command = ownCommand()
   if (!command) process.exit(0)
   // Through the shell, as Claude Code runs a status line command. No window on Windows, and no `detached`.
-  const child = spawn(command, { shell: true, stdio: ['pipe', 'inherit', 'inherit'], windowsHide: true })
+  const bash = option('--bash')
+  const child = bash
+    ? spawn(asGitBashRunsIt(command), { shell: bash, env: firstOnPath(process.env, dirname(bash)), stdio: ['pipe', 'inherit', 'inherit'], windowsHide: true })
+    : spawn(command, { shell: true, stdio: ['pipe', 'inherit', 'inherit'], windowsHide: true })
   child.on('error', () => process.exit(1))
   child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)))
   // A command that does not read its input closes the pipe early.

@@ -5,6 +5,7 @@ import { launch as codex } from './codex/launch.js'
 import { attributionArgsIn, attributionInstruction, instructionsArgsIn, type Instruction } from './kit/attribution.js'
 import { contextArgsOf, envArgsOf, fill, ownProviderArgs, readConfig } from './kit/launchArgs.js'
 import { joinedSettings, statusLineSetting } from './kit/statusLine.js'
+import { claudeCodeGitBash } from './claude/gitBash.js'
 import { env } from '../config/env.js'
 import { launchHome, launchHomeOf, launchPersonalHome } from '../lib/engineHomes.js'
 
@@ -123,6 +124,7 @@ function statusLineArgs(contract: StatusLineContract | undefined, place: Attribu
   if (!contract) return []
   const files = { home: launchHomeOf(contract.home, place.profile, place.environment), personal: launchPersonalHome(place.environment),
     cwd: place.cwd, read: place.read ?? readConfig, folder: !place.swarmInstructions }
-  const setting = statusLineSetting(contract, files, env.ADAPTER_DATA_DIR)
+  const setting = statusLineSetting(contract, files, env.ADAPTER_DATA_DIR, process.platform,
+    () => claudeCodeGitBash({ env: place.environment ?? process.env }))
   return setting ? contract.args.map((arg) => fill(arg, 'settings', JSON.stringify(setting))) : []
 }
