@@ -162,6 +162,11 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
             const SizedBox(width: grid.AppDesktop.controlGap),
           ],
           KeyedSubtree(key: const ValueKey('super-buddy-model'), child: picker),
+          // A picked shared model that stopped is a failure the reader acts on, so it stays (review 4 of #3464).
+          if (request == null && current != null && on == null) ...[
+            const SizedBox(width: grid.AppDesktop.menuInset),
+            Text('not served now', style: DesktopChrome.metadata()),
+          ],
         ],
       );
     }

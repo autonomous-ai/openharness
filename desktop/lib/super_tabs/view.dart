@@ -3567,11 +3567,6 @@ class _SuperTabViewState extends State<SuperTabView>
   /// chat chosen another way is under its agent's header.
   String? _taskInMiddle;
 
-  /// A chat in the middle is under its one-row header, which carries the Buddy's pickers (#4204).
-  bool get _chatUnderHeader =>
-      widget.board &&
-      (widget.rightPane != null || c.personalTasks?.supported == true);
-
   /// How many of [project]'s tasks need the reader: the Tasks icon's count.
   int _tasksNeedingYou(SuperTabProject project) => superTabTasksNeedingYouIn(
     superTabProjectBoard(
@@ -5149,7 +5144,8 @@ class _SuperTabViewState extends State<SuperTabView>
     ),
   );
 
-  Widget _conversation(bool narrow) {
+  /// [underHeader]: the chat is under the middle's one-row header, which carries the Buddy's pickers.
+  Widget _conversation(bool narrow, {bool underHeader = false}) {
     if (!widget.board &&
         c.snapshot?.projects.isEmpty == true &&
         !c.accessRevoked) {
@@ -5388,7 +5384,7 @@ class _SuperTabViewState extends State<SuperTabView>
                   controller: c,
                   chat: group,
                   app: widget.app,
-                  line: !_chatUnderHeader,
+                  line: !underHeader,
                 ),
                 decisions(edge: false),
               ],
@@ -6215,10 +6211,6 @@ class _SuperTabViewState extends State<SuperTabView>
           !_manageVisible &&
           !_notificationsVisible &&
           c.snapshot?.projects.isEmpty != true;
-      final chat = SuperTabImageGallery(
-        images: () => _images(_shownMessages(c.selectedId)),
-        child: _conversation(narrow),
-      );
       // With the Tasks slot, a project that is selected shows its Board first, though its chat is the selected
       // conversation (Swarm v3, task #4118).
       final impliedBoard = hasTasksPane && !agentChat
@@ -6230,6 +6222,16 @@ class _SuperTabViewState extends State<SuperTabView>
       final boardProject = boardLayout
           ? c.snapshot?.projectById(_boardProjectId ?? impliedBoard ?? '')?.id
           : null;
+      // The chat alone in the middle, under its one-row header (#4204); a project's own chat keeps the full view.
+      final fullView =
+          !boardLayout ||
+          boardProject != null ||
+          c.snapshot?.isProjectLead(c.selectedId) == true;
+      final underHeader = !fullView && chatInMiddle;
+      final chat = SuperTabImageGallery(
+        images: () => _images(_shownMessages(c.selectedId)),
+        child: _conversation(narrow, underHeader: underHeader),
+      );
       final chatCovered =
           (narrow && _sidebarOpen) || (!wide && _rosterOpen) || threadDrawer;
       if (_chatCovered && !chatCovered) {
@@ -6314,11 +6316,8 @@ class _SuperTabViewState extends State<SuperTabView>
                 // Over the chat, beside an open thread, as in Slack.
                 over: wide ? viewer : null,
                 // A project's own chat keeps its header and tabs (Project options, Tasks): the full chat view.
-                center:
-                    boardLayout &&
-                        boardProject == null &&
-                        c.snapshot?.isProjectLead(c.selectedId) != true
-                    ? (chatInMiddle
+                center: !fullView
+                    ? (underHeader
                           ? _middleChat(chat)
                           : const SizedBox.shrink())
                     : Column(
