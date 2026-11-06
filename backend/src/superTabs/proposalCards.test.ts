@@ -96,6 +96,12 @@ describe('proposal card creation', () => {
       .toThrow(expect.objectContaining({ code: 'PROPOSAL_UNDECIDED' }))
   })
 
+  it('refuses a manual agent start before a decision', () => {
+    const f = fixture(), id = f.create().result.conversationId
+    expect(() => f.run({ type: 'agent.start', request: { conversationId: id, machineId: 'host', name: 'Builder', engine: 'codex', cwd: '/fixture', worktree: false, requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } } }, f.pm))
+      .toThrow(expect.objectContaining({ code: 'PROPOSAL_UNDECIDED' }))
+  })
+
   it('rejects dates outside the supported timestamp range at the command boundary', () => {
     const f = fixture(), id = f.create().result.conversationId
     expect(commandSchema.safeParse(ask(id, { deadline: 1e20 })).success).toBe(false)
