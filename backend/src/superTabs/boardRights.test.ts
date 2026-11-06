@@ -130,3 +130,47 @@ describe('Can chat in a switched project', () => {
     f.run(say(f.app.conversationId), member)
   })
 })
+
+describe('priority by role in a switched project', () => {
+  const card = (f: ReturnType<typeof boardFixture>, requesterId: string, actor: Actor = projectOwner, priority: 'P0' | 'P1' | 'P2' | 'P3' = 'P2') =>
+    f.run({ type: 'conversation.create', title: 'Card', priority, requesterId,
+      task: { goal: 'Do it', changes: 'It', constraints: 'None', owns: ['x'] }, checks: [{ description: 'Done', independent: false }] }, actor).conversationId as string
+  const set = (f: ReturnType<typeof boardFixture>, conversationId: string, priority: 'P0' | 'P1' | 'P2' | 'P3', actor: Actor) =>
+    f.run({ type: 'work.priority', conversationId, priority }, actor)
+  const switchedFixture = () => {
+    const f = boardFixture()
+    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
+    f.run({ type: 'project.decider', projectId: f.app.projectId, personId: 'c' })
+    return f
+  }
+
+  it('lets a member set P1-P3 on their own card, never P0 and never another\'s card', () => {
+    const f = switchedFixture()
+    const mine = card(f, 'd'), theirs = card(f, 'p')
+    set(f, mine, 'P1', member)
+    set(f, mine, 'P3', member)
+    expect(() => set(f, mine, 'P0', member)).toThrow(expect.objectContaining({ code: 'PRIORITY_FORBIDDEN', status: 403 }))
+    expect(() => set(f, theirs, 'P1', member)).toThrow(expect.objectContaining({ code: 'PRIORITY_FORBIDDEN' }))
+    // A P0 the owners set stays theirs to lower.
+    set(f, mine, 'P0', projectOwner)
+    expect(() => set(f, mine, 'P2', member)).toThrow(expect.objectContaining({ code: 'PRIORITY_FORBIDDEN' }))
+    expect(() => card(f, 'd', member, 'P0')).toThrow(expect.objectContaining({ code: 'PRIORITY_FORBIDDEN' }))
+  })
+
+  // The rule is for people: the PM's rights are today's (coordinatorOrPerson), untouched.
+  it('lets the owners and the decider set any priority on any card', () => {
+    const f = switchedFixture()
+    const theirs = card(f, 'd')
+    set(f, theirs, 'P0', projectOwner)
+    set(f, theirs, 'P1', swarmOwner)
+    set(f, theirs, 'P0', granted)
+    card(f, 'd', granted, 'P0')
+  })
+
+  it('changes nothing in a project not switched', () => {
+    const f = boardFixture()
+    const theirs = card(f, 'p')
+    set(f, theirs, 'P0', member)
+    card(f, 'd', member, 'P0')
+  })
+})
