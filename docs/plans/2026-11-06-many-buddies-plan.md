@@ -77,25 +77,29 @@ Buddy again; neither: as today on the default); `buddy.remove { conversationId? 
 default's role passes to the oldest remaining); `buddy.default { conversationId }`; `tab.buddyCap { cap }`; refusal
 `BUDDY_CAP`. `defaultBuddy` reads the marked default.
 
-- [ ] Test: a second Buddy is created with its name in its own chat; the cap refuses one more; remove and default behave as
+- [x] Test: a second Buddy is created with its name in its own chat; the cap refuses one more; remove and default behave as
   above; only the person acts on their Buddies; a person with one Buddy sees no change.
-- [ ] Watch it fail; commit. Code; watch it pass; commit.
+- [x] Watch it fail; commit. Code; watch it pass; commit.
 
 ## Task 3: lines for a person go to their default Buddy; a proposal's news to its sender
 
 **Files:** backend/src/superTabs/{commands.ts (person.tell, instructions notice, machine.moved, switch notice, proposalOf,
 startOldChatBuddy, buddyDownLine), decisions.ts, othersWork.ts, buddyNews.ts, leaderboard/stats.ts, buddyModel.ts}
 
-- [ ] Test: with two Buddies and the second as default, a PM line, a delegated decision and a move notice go to the second's
+- [x] Test: with two Buddies and the second as default, a PM line, a delegated decision and a move notice go to the second's
   chat; a proposal's news goes to the Buddy that sent it, and to the default once it is removed; a model switch moves only
   the chosen Buddy and its own sessions.
-- [ ] Watch it fail; commit. Code; watch it pass; commit.
+- [x] Watch it fail; commit. Code; watch it pass; commit.
 
 ## Task 4: the CLI host with several Buddies
 
-**Files:** cli/src/superTabs/{host.ts (session end's chat, model serve grouping), cards.ts (the dial's default),
-start.ts (prompt names the Buddy)}
+**Files:** cli/src/superTabs/{host.ts (session end's chat, model serve grouping), cards.ts (the dial's default)};
+backend read/hostRows.ts and read/contract.ts (`buddyChatId` on a Buddy's host row), commands.ts (an older host's session end
+naming the main chat finds the thread in another Buddy's chat).
 
-- [ ] Test: a second Buddy's thread session ends in its own chat; a model switch groups by the Buddy's chat; the dial shows
+Left out: the Buddy start prompt's "one Buddy" wording (start.ts), and the leaderboard's credit of a thread session's proposal
+(leaderboard/stats.ts creditee), which still folds into the person's first Buddy.
+
+- [x] Test: a second Buddy's thread session ends in its own chat; a model switch groups by the Buddy's chat; the dial shows
   the default Buddy.
-- [ ] Watch it fail; commit. Code; watch it pass; commit.
+- [x] Watch it fail; commit. Code; watch it pass; commit.
