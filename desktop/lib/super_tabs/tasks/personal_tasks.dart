@@ -66,9 +66,10 @@ class SuperTabPersonalTasks {
     return changed;
   }
 
-  /// Adds an older page below the rows held, and moves [olderCursor] past it.
-  bool applyOlder(Object? page) {
-    if (page is! Map) return false;
+  /// Adds an older page, read [from] a cursor, below the rows held, and moves [olderCursor] past it. A page read
+  /// before a reset moved the cursor is dropped: its range may no longer follow the rows held.
+  bool applyOlder(Object? page, {required String from}) {
+    if (page is! Map || olderCursor != from) return false;
     olderCursor = page['olderCursor'] as String?;
     final changed = _upsert(page['upserts']);
     if (changed) _ordered = null;

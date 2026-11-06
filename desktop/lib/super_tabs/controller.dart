@@ -456,7 +456,7 @@ class SuperTabController extends ChangeNotifier {
         '$_path/personal-tasks?before=${Uri.encodeQueryComponent(cursor)}',
       );
       if (_disposed || !identical(parts, _parts)) return true;
-      if (parts.personalTasks.applyOlder(page)) _changed();
+      if (parts.personalTasks.applyOlder(page, from: cursor)) _changed();
       return true;
     } catch (failure) {
       if (_isUpdateRequired(failure)) _requireUpdate();
