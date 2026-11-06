@@ -96,3 +96,22 @@ The Engineer implements this plan task by task using test-driven development.
   `[Buddy] [Buddy] | [card•] [card] … [+N] [+]` with selected Buddy options below it and chat filling the rest.
 - Store failure is visible as a compact persistence error while the in-memory chats remain usable; serialized
   writes preserve close/open ordering and a slow initial read cannot overwrite chats opened meanwhile.
+
+### 6. Selected Buddy header and terminal access (River relaying Scholes)
+
+**Files:** `desktop/lib/super_tabs/buddy_list.dart`, `buddies.dart`, `buddy_model.dart`,
+`buddy_restart.dart`, `controller.dart`, `view.dart`; tests in
+`desktop/test/super_tab_right_pane_board_test.dart` and `super_tab_right_pane_header_test.dart`.
+
+**Interfaces:** `SuperTabRightPaneRow.onOpenTerminal(SuperTabAgent)` uses the view's existing terminal callback.
+`SuperTabBuddyBar(compact: true)` preserves its status/recovery controls and uses a single truncating metadata line
+with privacy in a tooltip. `BuddyModelLine(compact: true)` keeps the existing subscription picker, laid out within
+available width. Existing full chat callers keep their layout.
+
+- [ ] Commit and run failing tests: labelled Open terminal and the same menu item open the selected Buddy's
+  terminal, with two Buddies whose agents differ; legacy name-click path remains.
+- [ ] Implement the button beside ⋮, menu entry, and selected-conversation lookup for restart.
+- [ ] Commit and run failing header tests at 280 and 600 px, light and dark: name first, actions aligned right,
+  one metadata line, long machine and subscription ellipsized, privacy in tooltip; no overflow.
+- [ ] Implement using shared typography, spacing and menu tokens; preserve subscription switching and offline states.
+- [ ] Capture minimum and wide headers plus the Board with unread and overflow; run the style/icon checks and affected tests.
