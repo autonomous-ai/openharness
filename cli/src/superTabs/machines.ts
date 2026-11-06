@@ -565,10 +565,10 @@ export class ContributedMachines {
         const ids = [...new Set(pools.filter(row => row.buddySleepWanted === true).flatMap(row =>
           Array.isArray(row.harnessIds) ? row.harnessIds.filter(identifier) : []))]
           .filter(id => this.core.agents.byAgent(id)?.swarmSkill?.role === 'buddy').slice(0, 1000)
-        const running = (await Promise.all(ids.map(async id => await this.core.agents.stopped?.(id) ? [] : [id]))).flat()
+        // byAgent is the live registry; each pool already checks stopped sessions before it builds its running list.
         // The core accepts 64 activity IDs per request (core/experimentQueries.ts); more must not remain awake forever.
         const states: Record<string, 'working' | 'idle' | 'unknown'> = {}
-        for (let offset = 0; offset < running.length; offset += 64) Object.assign(states, await this.core.agents.activity(running.slice(offset, offset + 64)))
+        for (let offset = 0; offset < ids.length; offset += 64) Object.assign(states, await this.core.agents.activity(ids.slice(offset, offset + 64)))
         return states
       }
       // The sessions the idle cleanup closed, read once a pass: only those the backend refuses work (review of #2953).
