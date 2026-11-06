@@ -132,6 +132,18 @@ describe('reviewerCandidates', () => {
   })
 
   // Review of #3227 (Digest): on the live Swarm the Guides carry the role Reviewer and the Integrator none (an Engineer).
+  // Task #3602: #3576's Test step went to an Engineer. A server-opened step goes only to its own role, with no stand-in.
+  it('is only the step\'s own role: never an Engineer, nor an agent of no role', () => {
+    const f = fixture()
+    f.add('eng', f.task, opus, { roleName: 'Engineer' }); f.add('plain', f.task, opus)
+    expect(f.pick('review')).toEqual([])
+    expect(f.pick('test')).toEqual([])
+    f.add('rev', f.task, opus, { roleName: 'Reviewer' }); f.add('tst', f.task, opus, { roleName: 'Tester' })
+    expect(f.pick('review')).toEqual(['rev'])
+    expect(f.pick('security')).toEqual(['rev'])
+    expect(f.pick('test')).toEqual(['tst'])
+  })
+
   it('is never the Guide or the Integrator, whatever role name they carry', () => {
     const f = fixture()
     f.add('Guide', f.task, opus, { roleName: 'Reviewer' })
