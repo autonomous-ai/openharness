@@ -105,6 +105,27 @@ describe('durable proposal cards', () => {
     await expect(f.execute(create, owner, f.pm)).rejects.toThrow()
     expect((await new SwarmReads(f.store).firstLoad(owner, f.tab)).personalTasks!.upserts.map(r => r.id)).toEqual([id])
   })
+  it('keeps Auto approve automatic, then hands an approved Review choice through the normal store assignment', async () => {
+    const f = await fixture(), read = new SwarmReads(f.store)
+    const create = () => f.execute({ type: 'conversation.create', title: 'Keep drafts', requesterId: owner.sub, priority: 'P2',
+      task: { goal: 'Keep drafts', changes: 'Restore', constraints: 'No login', owns: ['backend/src/superTabs/'] },
+      checks: [{ description: 'Draft returns', independent: false }] }, owner, f.pm)
+    const auto = String((await create()).result.conversationId)
+    expect((await f.card(auto)).taskApproval).toBeUndefined()
+    expect((await read.firstLoad(owner, f.tab)).personalTasks).toMatchObject({ approvalMode: 'autoApprove', upserts: [{ id: auto, status: 'planned' }] })
+    const worker = String((await f.execute({ type: 'agent.add', conversationId: auto, machineId: 'proposal-mac', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId)
+    await f.execute({ type: 'member.approvalMode', mode: 'review' })
+    const review = String((await create()).result.conversationId)
+    await expect(f.execute({ type: 'work.assign', conversationId: review, agentId: worker }, owner, f.pm)).rejects.toThrow()
+    await f.execute({ type: 'task.suggest', conversationId: review, agentId: worker }, owner, f.pm)
+    const approve = { type: 'task.approve', conversationId: review }, operation = randomUUID()
+    await f.execute(approve, owner, undefined, operation)
+    await f.execute(approve, owner, undefined, operation)
+    expect((await f.card(review))).toMatchObject({ assignment: null, taskApproval: { state: 'approved', suggestedAgentId: worker } })
+    await f.execute({ type: 'work.assign', conversationId: review, agentId: worker }, owner, f.pm)
+    expect((await f.card(review)).assignment).toMatchObject({ agentId: worker, status: 'working' })
+    expect((await read.firstLoad(owner, f.tab)).personalTasks!.upserts).toContainEqual(expect.objectContaining({ id: review, status: 'working', agent: { id: worker, name: expect.any(String) } }))
+  })
   it('turns verified unanswered original messages into cards once on switch, preserving words and ownership', async () => {
     const f = await fixture()
     await f.execute({ type: 'project.boardMode', projectId: 'lead', on: false })
