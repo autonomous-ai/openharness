@@ -22,9 +22,11 @@ export function stageTaskApproval(state: SuperTabState, group: Conversation, now
     personId: member.id, generation: member.generation, state: 'proposal', createdAt: now,
   }
 }
-export function requireTaskApproval(group: Conversation): void {
+export function requireTaskApproval(group: Conversation, agentId?: string | null): void {
   if (group.taskApproval && group.taskApproval.state !== 'approved')
     fail('TASK_APPROVAL_REQUIRED', 'The person who requested this task must approve it before work starts.', 409)
+  if (!group.assignment && group.taskApproval?.suggestedAgentId && agentId !== undefined && group.taskApproval.suggestedAgentId !== agentId)
+    fail('TASK_AGENT_CHANGED', 'Use the agent the requesting person approved for this task.', 409)
 }
 /** Authority is checked before receipt replay too; a decision's state is checked only when applying it. */
 export function authorizeTaskApproval(state: SuperTabState, actor: Actor, type: string, conversationId?: string): Conversation | undefined {

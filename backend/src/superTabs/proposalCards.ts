@@ -1,4 +1,4 @@
-import { requireTaskApproval, stageTaskApproval } from './taskApproval.js'
+import { stageTaskApproval } from './taskApproval.js'
 import { steers } from './boardRights.js'
 import { expireProposalQuestion } from './proposalClock.js'
 export { advanceProposalCards, proposalDueAt } from './proposalClock.js'
@@ -220,10 +220,10 @@ export function applyProposalAction(state: SuperTabState, actor: Actor, command:
     row(`${command.decision}: ${command.reason}`, { kind: 'proposal-decision', decision: command.decision })
     messages.push(...proposalNotices(state, card, 'decided', `${card.title}: ${command.decision}. ${command.reason}`, sender, operationId))
   } else {
-    requireTaskApproval(card)
+    if (card.taskApproval) fail('TASK_APPROVAL_REQUIRED', 'Keep Review proposals separate so each person’s decision and chosen agent stay attached.', 409)
     pending(card)
     const target = namedCard(state, actor, command.intoConversationId)
-    requireTaskApproval(target)
+    if (target.taskApproval) fail('TASK_APPROVAL_REQUIRED', 'Keep Review proposals separate so each person’s decision and chosen agent stay attached.', 409)
     pending(target)
     if (target.id === card.id) fail('PROPOSAL_MERGE_SELF', 'Merge another proposal into this card.', 400)
     if (hasOpenQuestion(card)) fail('PROPOSAL_QUESTION_OPEN', 'Answer the source card’s questions before merging.', 409)

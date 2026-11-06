@@ -1804,7 +1804,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   /** Every check work.assign makes before [worker] takes [group]'s work, throwing its refusal; nothing changes here, so a
    *  caller trying candidates in turn (openReviewSteps) catches the refusal and tries the next. */
   const assignRefusal = (group: Conversation, worker: Agent, suggestion = false) => {
-    if (!suggestion) requireTaskApproval(group)
+    if (!suggestion) requireTaskApproval(group, worker.id)
     if (!suggestion && group.proposal && !['accept', 'reshape'].includes(group.proposal.decision?.kind ?? '')) fail('PROPOSAL_UNDECIDED', 'The PM must accept or reshape this proposal before assigning work.', 409)
     if (state.starts?.some(s => s.poolGeneration && !s.poolSettled && s.request.machineId === worker.machineId && s.harnessId === worker.harnessId)) {
       fail('START_PENDING', 'Wait for the host to finish this agent’s launch and model selection.')
@@ -2822,6 +2822,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const created = state.conversations.at(-1)!
       if (proposal) {
         const mirror = state.conversations.find(c => c.id === legacyProposalId(project.id, proposal.messageId))
+        if (mirror?.proposal?.mergedInto) fail('PROPOSAL_DECIDED', 'This proposal already became a task.', 409)
         if (mirror?.taskApproval) {
           if (requesterId !== mirror.taskApproval.personId) fail('TASK_APPROVAL_FORBIDDEN', 'Keep the proposal’s requesting person.', 403)
           created.taskApproval = { ...mirror.taskApproval }
@@ -3049,7 +3050,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     }
     case 'agent.add': {
-      requireTaskApproval(conversation(state, command.conversationId))
+      requireTaskApproval(conversation(state, command.conversationId), state.agents.find(a => a.machineId === command.machineId && a.harnessId === command.harnessId)?.id ?? null)
       if (!['claude', 'codex'].includes(command.configuration.engine)) fail('SWARM_ENGINE', 'A Swarm agent runs only Claude Code or Codex.', 400)
       // A person shares a session already running (Desktop sends this as its person); an agent starts a new one. From an
       // agent it re-added a person's Buddy to a task, added to the project chat, and registered any session of its
@@ -3145,7 +3146,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     }
     case 'agent.start': {
-      requireTaskApproval(conversation(state, command.request.conversationId))
+      requireTaskApproval(conversation(state, command.request.conversationId), null)
       const proposed = conversation(state, command.request.conversationId).proposal
       if (proposed && !['accept', 'reshape'].includes(proposed.decision?.kind ?? '')) fail('PROPOSAL_UNDECIDED', 'The PM must accept or reshape this proposal before starting work.', 409)
       chatOnly(command.request.conversationId)
@@ -3326,6 +3327,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const project = readProject(state, actor, command.projectId)
       if (actor.kind === 'agent') coordinatorOf(project)
       const { messageId } = proposalOf(state, project, proposalNamed(context.proposal))
+      const mirror = state.conversations.find(c => c.id === legacyProposalId(project.id, messageId))
+      if (mirror?.proposal && !mirror.proposal.mergedInto) {
+        mirror.archived = true
+        mirror.proposal.decision = { kind: 'no', reason: command.reason, at: context.now, by: sender.id }
+      }
       effects.closedProposal = { messageId, conversationId: project.leadConversationId, reason: command.reason }
       result.proposalId = messageId
       break
@@ -4447,13 +4453,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         approval.state = command.type === 'task.approve' ? 'approved' : 'rejected'
         approval.decidedAt = context.now
         if (command.type === 'task.reject') approval.reason = command.reason
-        const prepared = !!group.task && (!group.proposal || ['accept', 'reshape'].includes(group.proposal.decision?.kind ?? ''))
-        if (command.type === 'task.approve' && approval.suggestedAgentId && prepared) {
-          const worker = readAgent(state, actor, approval.suggestedAgentId)
-          assignRefusal(group, worker)
-          assignTo(group, worker, operationId)
-          result.assignmentId = operationId
-        } else message(group.id, command.type === 'task.approve' ? 'Approved. Prepare and route this task.' : `Rejected: ${command.reason}`,
+        // This decision releases the gate; the ordinary work.assign path alone launches work, with all of the
+        // store's global session, repository, machine and account checks. Never introduce a second assignment path here.
+        if (command.type === 'task.approve' && approval.suggestedAgentId)
+          assignRefusal(group, readAgent(state, actor, approval.suggestedAgentId), true)
+        message(group.id, command.type === 'task.approve' ? 'Approved. Prepare and route this task using its chosen agent, if any.' : `Rejected: ${command.reason}`,
           group.leadId ? [group.leadId] : [], null, { kind: 'task-approval', state: approval.state })
       }
       result.conversationId = group.id

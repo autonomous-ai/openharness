@@ -78,6 +78,10 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       leadCheck(card && groupProject(before, card).id)
       break
     }
+    case 'proposal.close':
+      head()
+      leadCheck(command.projectId)
+      break
     case 'proposal.create':
       head()
       group(leadGroupOf(command.projectId))
