@@ -366,6 +366,52 @@ void main() {
   );
 
   test(
+    'a layout change before the check proves the machine is saved only once it does (review of #3293)',
+    () async {
+      await keptFrom('machine-a');
+      unawaited(app.bootstrap());
+      await _ticks();
+      expect(app.swarms, isNotEmpty);
+      final before = storage.values['swarm_layout_v1'];
+      app.renameSwarm(app.swarms.first.id, 'Renamed early');
+      await _ticks();
+      expect(
+        storage.values['swarm_layout_v1'],
+        before,
+        reason: 'nothing saved under an account not proven yet',
+      );
+      cli.answer.complete(
+        const CliAuthStatus(loggedIn: true, machineId: 'machine-a'),
+      );
+      await _ticks();
+      final saved =
+          jsonDecode(storage.values['swarm_layout_v1']!)
+              as Map<String, dynamic>;
+      expect(saved['owner'], 'ada');
+      expect(jsonEncode(saved['swarms']), contains('Renamed early'));
+    },
+  );
+
+  test(
+    'a layout change before the check names another machine is never saved under the kept account',
+    () async {
+      await keptFrom('machine-a');
+      unawaited(app.bootstrap());
+      await _ticks();
+      app.renameSwarm(app.swarms.first.id, 'Renamed early');
+      await _ticks();
+      cli.answer.complete(
+        const CliAuthStatus(loggedIn: true, machineId: 'machine-b'),
+      );
+      await _ticks();
+      final raw = storage.values['swarm_layout_v1'];
+      if (raw != null) {
+        expect((jsonDecode(raw) as Map<String, dynamic>)['owner'], isNot('ada'));
+      }
+    },
+  );
+
+  test(
     'another machine, and the kept record cannot be deleted: the launch starts again once, never from it (review of #3293)',
     () async {
       final stuck = _Undeletable();
