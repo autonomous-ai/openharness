@@ -36,6 +36,7 @@ class SuperTabTaskCard extends StatefulWidget {
     this.captionLines = 1,
     this.tile = false,
     this.selected = false,
+    this.warn = false,
     this.trailing,
     this.note,
     this.noteKey,
@@ -59,6 +60,9 @@ class SuperTabTaskCard extends StatefulWidget {
   /// How many lines the caption takes; null takes as many as it needs.
   final int? captionLines;
   final bool tile, selected;
+
+  /// The caption is a warning (a merge that has waited too long).
+  final bool warn;
   final Widget? trailing;
 
   /// A tile's padding: the spacing scale's 12, between the control and the
@@ -195,7 +199,9 @@ class _SuperTabTaskCardState extends State<SuperTabTaskCard> {
                     overflow: w.captionLines == null
                         ? TextOverflow.clip
                         : TextOverflow.ellipsis,
-                    style: DesktopChrome.metadata(),
+                    style: DesktopChrome.metadata(
+                      color: w.warn ? grid.AppPalette.warn : null,
+                    ),
                   ),
                 ),
               ],
