@@ -121,6 +121,13 @@ class _SwarmAgentDialogState extends State<SwarmAgentDialog> {
             const SizedBox(height: 16),
             if (!widget.bringing) ...[
               SegmentedButton<String>(
+                style: ButtonStyle(
+                  foregroundColor: WidgetStateProperty.resolveWith(
+                    (states) => states.contains(WidgetState.selected)
+                        ? DesktopChrome.onSelection
+                        : DesktopChrome.foreground,
+                  ),
+                ),
                 segments: const [
                   ButtonSegment(value: 'regular', label: Text('Regular')),
                   ButtonSegment(value: 'pm', label: Text('PM')),
