@@ -398,7 +398,7 @@ void main() {
       await toEnd(t);
       await toEnd(t);
       expect(f.olderReads, [
-        '/api/super-tabs/c51479bd73b59e58176ad9e4/personal-tasks?before=c+1',
+        '/api/super-tabs/c51479bd73b59e58176ad9e4/personal-tasks?before=c%201',
       ]);
       f.olderHold!.complete();
       await t.pumpAndSettle();
