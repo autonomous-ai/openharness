@@ -20,7 +20,7 @@ import {
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
-import { reviewPlan, stepBrief, stepCheck, type PlannedStep, type StepKind } from './reviewTable.js'
+import { osesIn, reviewPlan, stepBrief, stepCheck, type PlannedStep, type StepKind } from './reviewTable.js'
 import { builtBy, reviewerCandidates } from './reviewerPick.js'
 import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
@@ -1798,7 +1798,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const taken = new Set<string>(), unassigned: string[] = []
     for (const planned of reviewPlan(read.files, context.projectRules?.rules)) {
       const free = (step: Conversation) => !taken.has(step.id)
-      let step = existing.find(s => free(s) && stepName(s) === planned.name) ?? existing.find(s => free(s) && stepKind(s) === planned.kind)
+      let step = existing.find(s => free(s) && stepName(s) === planned.name) ?? existing.find(s => {
+        if (!free(s) || stepKind(s) !== planned.kind) return false
+        // A named OS step keeps its identity: adding a Mac test must not consume Windows through the kind fallback (#3778).
+        const oses = planned.kind === 'test' ? osesIn([stepName(s)]) : []
+        return !oses.length || (!!planned.os && oses.includes(planned.os))
+      })
       if (step) taken.add(step.id)
       if (step && activeWork(step)) continue
       // A step whose every check passed at this very head keeps its verdict: a repeated Ready (a CI rerun) asks nothing again.

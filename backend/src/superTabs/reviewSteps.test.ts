@@ -200,7 +200,7 @@ describe('a handed task opens its review steps', () => {
     const win = f.add('win-tst', f.task, 'Tester', 'win')
     const prior = f.add('prior-builder', f.task, 'Tester', 'win')
     // A former builder with the Tester role must still be excluded.
-    f.group(f.task).ledger!.runs.push({ agentId: prior } as never)
+    f.group(f.task).ledger!.runs!.push({ agentId: prior } as never)
     f.state.machines = [machine('host', 'macOS'), machine('win', 'Windows')] as never
     f.ready([file])
     const step = stepsOf(f.state, f.task).find(s => s.step === 'Test on Windows')
@@ -221,7 +221,7 @@ describe('a handed task opens its review steps', () => {
     const f = fixture()
     f.add('rev', f.task, 'Reviewer'); f.add('mac-tst', f.task, 'Tester'); f.add('unknown-tst', f.task, 'Tester', 'unknown')
     const prior = f.add('prior-builder', f.task, 'Tester', 'win')
-    f.group(f.task).ledger!.runs.push({ agentId: prior } as never)
+    f.group(f.task).ledger!.runs!.push({ agentId: prior } as never)
     f.state.machines = [machine('host', 'macOS'), machine('win', 'Windows')] as never
     const effects = f.ready(['desktop/lib/view.dart'])
     expect(f.steps().find(s => s.name === 'Test on Windows')).toEqual({ name: 'Test on Windows', agent: null, status: null })
