@@ -7550,6 +7550,7 @@ class AppNotifier extends ChangeNotifier {
   /// load and update-check startup, which already ran on the launch that got stuck here.
   Future<void> _continueAfterEnvironmentReady({
     Future<CliAuthStatus?>? early,
+    bool fromKept = true,
   }) async {
     agentPrefetch?.setupRunning = false;
     final revision = _authRevision;
@@ -7566,7 +7567,11 @@ class AppNotifier extends ChangeNotifier {
     // refreshes it itself. This app never reads, stores, or refreshes a token of its own; it just
     // asks the CLI whether this computer is currently signed in.
     try {
-      if (early != null && await _openFromKeptSignIn(early, revision)) return;
+      if (early != null &&
+          fromKept &&
+          await _openFromKeptSignIn(early, revision)) {
+        return;
+      }
       final authStatus = await early ?? await cliLogin.checkStatus();
       _markStartup('signed-in check');
       if (!_authWorkCurrent(revision)) return;
@@ -7625,11 +7630,17 @@ class AppNotifier extends ChangeNotifier {
     currentUser = kept.profile;
     status = AppStatus.bootstrapping;
     notifyListeners();
+    _launchProof = (revision: revision, settled: Completer<void>());
     unawaited(_confirmKeptSignIn(check, kept.machineId, revision));
     await _finishBootstrapSignedIn();
     unawaited(_offerPhoneAtLaunch(revision));
     return true;
   }
+
+  /// Settles once the check behind a window [_openFromKeptSignIn] opened has answered. Until then the window shows only
+  /// this computer's restored desk: the account's work (its profile, devices, machine list and desk) waits for it, since
+  /// the CLI may be signed in as someone else and that work would run through their session (review of #3293).
+  ({int revision, Completer<void> settled})? _launchProof;
 
   /// The signed-in check behind a window [_openFromKeptSignIn] opened. The same machine: proven, as
   /// [_useKeptProfile] would have proven it. Signed out: the sign-in page, as when a sign-out elsewhere is noticed.
@@ -7646,17 +7657,19 @@ class AppNotifier extends ChangeNotifier {
       debugPrint('bootstrap: signed-in check failed behind the window: $error');
     }
     _markStartup('signed-in check');
+    // Each branch below decides synchronously, so the account work waiting on this resumes under its outcome: proven,
+    // or invalidated.
+    final proof = _launchProof;
+    if (proof != null && proof.revision == revision) {
+      _launchProof = null;
+      proof.settled.complete();
+    }
     if (!_authWorkCurrent(revision)) return;
     if (answer != null &&
         answer.loggedIn &&
         answer.machineId == keptMachineId) {
       _provenMachineId = keptMachineId;
       unawaited(superTabImageCache.claim(keptMachineId));
-      // The server may have answered first, when nothing could be kept yet.
-      final profile = currentUser;
-      if (_profileConfirmed && profile != null) {
-        unawaited(_keepProfile(profile, revision));
-      }
       return;
     }
     if (answer != null && !answer.loggedIn) {
@@ -7678,8 +7691,10 @@ class AppNotifier extends ChangeNotifier {
       await cleanup;
       if (!_authWorkCurrent(again)) return;
     }
+    // Never from the kept record again: a delete that failed leaves it readable (review of #3293).
     await _continueAfterEnvironmentReady(
       early: answer == null ? null : Future.value(answer),
+      fromKept: false,
     );
   }
 
@@ -7961,6 +7976,12 @@ class AppNotifier extends ChangeNotifier {
     appLog.info('startup', startupLogLine(_startupTimings));
     _startupClock.stop();
     notifyListeners();
+    // A window opened from the kept sign-in asks nothing of the account until the check proves it ([_launchProof]).
+    final proof = _launchProof;
+    if (proof != null && proof.revision == revision) {
+      await proof.settled.future;
+      if (!_authWorkCurrent(revision)) return;
+    }
     // The CLI has confirmed daemon readiness. Display-name/avatar metadata is
     // independent of machine discovery and must not delay work — and a guest
     // has no profile to load.

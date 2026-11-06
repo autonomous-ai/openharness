@@ -83,7 +83,8 @@ class ProfileCache {
     try {
       await _storage?.delete(key);
     } catch (_) {
-      /* A record left behind is read only under its own machine id. */
+      /* A record left behind is read only under its own machine id, or by [readKept] for a launch that waits for the CLI
+         to name that id before it trusts it, and that never opens from it twice (task #3561). */
     }
   });
 }
