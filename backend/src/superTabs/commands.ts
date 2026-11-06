@@ -2761,6 +2761,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (!reviewed || isLeads(reviewed) || reviewed.kind || reviewed.audience || reviewed.id === project.leadConversationId
           || groupProject(state, reviewed).id !== project.id) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
         open(state, reviewed.id)
+        requireTaskApproval(reviewed)
         // One level: a step's own work is a task's step, never a task with steps of its own (task steps design).
         if (command.step && isStep(reviewed)) fail('STEP_OF_STEP', 'A step belongs to a task, not to another step.', 400)
         // Never doubled (task #3602: #3561 got its server's Security reviews and Test, then its Engineer's review, review and
