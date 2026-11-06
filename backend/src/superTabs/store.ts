@@ -1719,8 +1719,8 @@ export class SuperTabStore {
     const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([this.pushOriginFor(user, tabId, command, preRead),
       this.repositoryReachFor(user, tabId, command, preRead), this.pullRequestFilesFor(user, tabId, command, preRead), this.pullRequestMergesFor(user, tabId, command)])
     let ended: WorkHold[] = [], started: WorkHold[] = []
-    // With only PMs and Buddies, no dispatch pass can hand out work.
-    let hasWorkers = false
+    // Whether the crew dispatch has a pick after this write: only then does its pass read the whole Swarm (task #3661).
+    let dispatches = false
     const done = await transaction(this.db, async tx => {
       // A retried attempt starts again: only the attempt that commits says which tasks ended or started.
       ended = []
@@ -2034,7 +2034,11 @@ export class SuperTabStore {
         : command.type === 'work.assign' || command.type === 'agent.start' ? command.routeDecisionId : undefined
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
       const effects = applyCommand(original, actor, command, context)
-      hasWorkers = effects.state.agents.some(a => !isBuddy(a) && !ledProject(effects.state, a.id))
+      // As the 30-second sweep decides (sweep, below): a free worker with a task for it in a project whose PM is not waiting.
+      // Before, every freeing write in a Swarm with any worker started a pass, which read the whole Swarm on the primary to
+      // find nothing when nobody was free or nothing waited (Ken's scan on v1.4.20). What it skips, the sweep still sees.
+      dispatches = !!this.hooks.dispatch && freesOrOpens(command) && projectsOf(effects.state).some(p => !this.pmWaiting(tabId, effects.state, p, context.now)
+        && dispatchPlan(effects.state, p.id, DISPATCH_RULES, context.now, this.refusedSkip(tabId, effects.state, context.now)).length > 0)
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source, message.recipients))
       for (const group of effects.state.conversations) {
@@ -2363,7 +2367,7 @@ export class SuperTabStore {
     this.endWork(tabId, ended)
     this.startWork(tabId, started)
     // A write that may free a worker or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
-    if (hasWorkers && freesOrOpens(command)) this.dispatchSoon(tabId)
+    if (dispatches) this.dispatchSoon(tabId)
     return done
   }
 
