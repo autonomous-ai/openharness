@@ -59,6 +59,13 @@
 
 - Feed red at 7f42f8686, green at a4a26797d; widget red at a7782272c, green at ecf949b13. Cached tombstone regression red at b9059b20e, green at 5e50f13ea. Portable status-mark regression red at 691a9bf8d, green at 0940e2037.
 - 73 affected feed, parts, pane and shell tests pass on macOS; two screenshot tests produce six inspected light/dark auto, review and rejection captures. Memory store and fake sign-in only.
-- New-file Dart analysis, UI style gate and icon audit pass. Linux/Windows platform checks and automatic CI are review gates; native window/IME and live-account launch are not claimed.
+- New-file Dart analysis and icon audit pass. The initial style command checked allowlist growth only; CI caught the pane spacing violations. d732846b8 uses shared tokens and the actual UI style scan passes. Linux/Windows platform checks and automatic CI are review gates; native window/IME and live-account launch are not claimed.
 - Mac debug microbenchmark, same recorded parts-overlap workload, 2,000 warm-ups then 21 batches of 1,000: baseline d78772f median 4.047 µs / p95 5.179 µs; Tasks branch median 3.903–4.432 µs / p95 4.604–4.961 µs (run variation, no observed p95 regression). A single new version in 1,000 Tasks including sorted list materialization: median 263 µs / p95 519 µs over 100 updates. Temporary benchmark fixtures removed.
 - Merged main at 7356cf633 (real #3449 contract), without conflicts. Shell #3445 and join #3448 remain merge-order dependencies.
+
+## Review correction
+
+- Ordinary Buddy proposals are status-only: approval controls require the server's `canApprove: true` and proposal status. Missing/false capability opens the conversation and sends no approval command. Backend owner Fir is adding this field; ship that backend correction before Desktop.
+- Regression 9d6832e0d failed because tapping an ordinary proposal did not open it; 0bb8c1777 passes it with two production lines. Existing approval flows remain covered.
+- Integrated shell head 2ef2b153c without conflicts; only its date-dependent Board-card fixture changed beyond the already integrated merges. 22 feed/pane/Board-card tests pass; 13 pane/capture tests pass after token correction. Six updated light/dark captures inspected.
+- CI run 42270921697 failed shard 1's style scan before tests: six numeric EdgeInsets and one border radius. Corrected at d732846b8; no rerun requested. Automatic CI will run for the corrected pushed head.
