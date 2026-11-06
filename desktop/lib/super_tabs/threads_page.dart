@@ -94,24 +94,28 @@ class _SuperTabThreadsPageState extends State<SuperTabThreadsPage> {
         onOpenThread: widget.onOpenThread,
         message: widget.message,
       );
-      return LaidOutListView(
-        key: const ValueKey('super-threads-list'),
-        padding: const EdgeInsets.only(bottom: grid.AppDesktop.groupGap),
-        children: [
-          if (attention.error case final error?)
-            superTabPageError(error, () => unawaited(attention.load())),
-          if (unread.isEmpty && read.isEmpty)
-            superTabPageEmpty('No threads yet')
-          else ...[
-            for (final t in unread) card(t),
-            for (final t in read) card(t),
-            if (attention.canReadMore)
-              SuperTabReadMore(
-                key: const ValueKey('super-threads-more'),
-                onShown: attention.readMore,
-              ),
+      // As in the chat and the thread pane, a message's text can be selected
+      // and copied (task #3751); a tap on a card's title still opens it.
+      return SelectionArea(
+        child: LaidOutListView(
+          key: const ValueKey('super-threads-list'),
+          padding: const EdgeInsets.only(bottom: grid.AppDesktop.groupGap),
+          children: [
+            if (attention.error case final error?)
+              superTabPageError(error, () => unawaited(attention.load())),
+            if (unread.isEmpty && read.isEmpty)
+              superTabPageEmpty('No threads yet')
+            else ...[
+              for (final t in unread) card(t),
+              for (final t in read) card(t),
+              if (attention.canReadMore)
+                SuperTabReadMore(
+                  key: const ValueKey('super-threads-more'),
+                  onShown: attention.readMore,
+                ),
+            ],
           ],
-        ],
+        ),
       );
     },
   );
