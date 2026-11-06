@@ -237,16 +237,17 @@ class _SuperTabRightPaneRowState extends State<SuperTabRightPaneRow> {
                         child: Text('+${rest.length}'),
                       ),
                     ),
-                  if (c.snapshot?.buddyCap != null) AppIconButton(
-                    key: const ValueKey('super-buddy-new'),
-                    icon: AppIcons.plus,
-                    tooltip: 'New Buddy',
-                    onPressed: c.canWrite
-                        ? () => unawaited(
-                            showNewBuddy(context, c, app: widget.app),
-                          )
-                        : null,
-                  ),
+                  if (c.snapshot?.buddyCap != null)
+                    AppIconButton(
+                      key: const ValueKey('super-buddy-new'),
+                      icon: AppIcons.plus,
+                      tooltip: 'New Buddy',
+                      onPressed: c.canWrite
+                          ? () => unawaited(
+                              showNewBuddy(context, c, app: widget.app),
+                            )
+                          : null,
+                    ),
                 ],
               );
             },
@@ -324,7 +325,9 @@ class _ConversationAvatarState extends State<_ConversationAvatar> {
                   child: InkWell(
                     onTap: widget.onSelect,
                     onFocusChange: (v) => setState(() => _focus = v),
-                    borderRadius: BorderRadius.circular(24),
+                    borderRadius: BorderRadius.circular(
+                      grid.AppDesktop.identitySize,
+                    ),
                     child: Center(
                       child: DecoratedBox(
                         decoration: BoxDecoration(
@@ -337,7 +340,9 @@ class _ConversationAvatarState extends State<_ConversationAvatar> {
                           ),
                         ),
                         child: Padding(
-                          padding: const EdgeInsets.all(2),
+                          padding: const EdgeInsets.all(
+                            grid.AppDesktop.listRowGap,
+                          ),
                           child: SuperTabAvatarFace(
                             identity: group.id,
                             name: name,

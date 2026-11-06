@@ -529,9 +529,11 @@ class SuperTabBuddyBar extends StatelessWidget {
     required this.controller,
     required this.chat,
     this.app,
+    this.compact = false,
   });
   final SuperTabController controller;
   final SuperTabConversation chat;
+  final bool compact;
 
   /// For the Start bar's Add this Mac, as Add a Buddy has it (#2105).
   final AppNotifier? app;
@@ -687,7 +689,10 @@ class SuperTabBuddyBar extends StatelessWidget {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final c = controller;
-    final agent = c.buddy(chat.projectId);
+    final agent = c.buddy(
+      chat.projectId,
+      conversationId: chat.agentIds.isEmpty ? null : chat.id,
+    );
     if (agent == null) return _starting(c);
     final name = c.snapshot!.agentName(agent.id, fallback: agent.name);
     final machine = buddyMachineName(c, agent.machineId, app: app);
@@ -716,7 +721,30 @@ class SuperTabBuddyBar extends StatelessWidget {
         children: [
           // The one Buddy switches between its person's subscription and a
           // model shared in the Swarm (task #2354); a project's Buddy cannot.
-          if (chat.isSwarmBuddyChat)
+          if (compact)
+            Tooltip(
+              message:
+                  '${chat.isSwarmBuddyChat ? 'Reads all your projects · ' : ''}'
+                  '${access[0].toUpperCase()}${access.substring(1)}',
+              child: KeyedSubtree(
+                key: const ValueKey('super-buddy-context'),
+                child: chat.isSwarmBuddyChat
+                    ? BuddyModelLine(
+                        controller: c,
+                        agent: agent,
+                        machine: machine,
+                        compact: true,
+                        rest: '${buddyEngineName(agent.engine)} · $machine',
+                      )
+                    : Text(
+                        '${buddyEngineName(agent.engine)} · $machine',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: DesktopChrome.metadata(),
+                      ),
+              ),
+            )
+          else if (chat.isSwarmBuddyChat)
             BuddyModelLine(
               controller: c,
               agent: agent,

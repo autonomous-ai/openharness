@@ -3604,7 +3604,10 @@ class _SuperTabViewState extends State<SuperTabView>
         ),
         if (!onBuddy)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(
+              horizontal: grid.AppDesktop.composerTop,
+              vertical: grid.AppDesktop.controlGap,
+            ),
             child: Align(
               alignment: AlignmentDirectional.centerStart,
               child: Text(
@@ -5248,7 +5251,12 @@ class _SuperTabViewState extends State<SuperTabView>
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
-                SuperTabBuddyBar(controller: c, chat: group, app: widget.app),
+                SuperTabBuddyBar(
+                  controller: c,
+                  chat: group,
+                  app: widget.app,
+                  compact: _boardProjectId != null,
+                ),
                 decisions(edge: false),
               ],
             ),

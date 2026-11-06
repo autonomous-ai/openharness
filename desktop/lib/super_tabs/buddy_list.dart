@@ -49,7 +49,10 @@ class SuperTabBuddyMenu extends StatelessWidget {
     return shown == null
         ? const SizedBox.shrink()
         : Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            padding: const EdgeInsets.symmetric(
+              horizontal: grid.AppDesktop.composerTop,
+              vertical: grid.AppDesktop.paneCloseInset,
+            ),
             child: Row(
               children: [
                 Expanded(
@@ -57,7 +60,9 @@ class SuperTabBuddyMenu extends StatelessWidget {
                     _name(controller, shown),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: DesktopChrome.control(),
+                    style: DesktopChrome.control().copyWith(
+                      fontWeight: grid.AppFont.semibold,
+                    ),
                   ),
                 ),
                 TextButton.icon(

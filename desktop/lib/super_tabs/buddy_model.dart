@@ -68,6 +68,7 @@ class BuddyModelLine extends StatefulWidget {
     required this.agent,
     required this.machine,
     required this.rest,
+    this.compact = false,
   });
 
   final SuperTabController controller;
@@ -80,6 +81,7 @@ class BuddyModelLine extends StatefulWidget {
 
   /// The bar's line after the picker.
   final String rest;
+  final bool compact;
 
   @override
   State<BuddyModelLine> createState() => _BuddyModelLineState();
@@ -128,6 +130,8 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
             request.gridModel == null
                 ? 'Switching to your subscription…'
                 : 'Switching to ${request.name ?? nameOf(request.gridModel!)}…',
+            maxLines: widget.compact ? 1 : null,
+            overflow: widget.compact ? TextOverflow.ellipsis : null,
             style: DesktopChrome.metadata(),
           )
         : _anchor(
@@ -136,6 +140,28 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
             phone: phone,
             busy: busy,
           );
+    if (widget.compact) {
+      return Row(
+        children: [
+          Expanded(
+            flex: 2,
+            child: Text(
+              after,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.metadata(),
+            ),
+          ),
+          Text(' · ', style: DesktopChrome.metadata()),
+          Flexible(
+            child: KeyedSubtree(
+              key: const ValueKey('super-buddy-model'),
+              child: picker,
+            ),
+          ),
+        ],
+      );
+    }
     return Text.rich(
       TextSpan(
         children: [
@@ -217,10 +243,24 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                label,
-                style: DesktopChrome.metadata(color: DesktopChrome.foreground),
-              ),
+              if (widget.compact)
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.metadata(
+                      color: DesktopChrome.foreground,
+                    ),
+                  ),
+                )
+              else
+                Text(
+                  label,
+                  style: DesktopChrome.metadata(
+                    color: DesktopChrome.foreground,
+                  ),
+                ),
               Icon(
                 AppIcons.chevronDown,
                 size: AppIcons.inlineSize,
