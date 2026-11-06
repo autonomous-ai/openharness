@@ -126,6 +126,18 @@ describe('a project\'s rules record', () => {
     expect((await currentRules(db, tab, 'lead')).rules.lanes).toEqual([])
   })
 
+  it('holds workers on invalid stored policy while a person can read and repair it', async () => {
+    const { tab } = await swarm()
+    await run(tab, set(0, rules('10:00')))
+    await db.superTabProjectRules.updateMany({ where: { tabId: tab }, data: { rules: { ...rules('10:00'), dispatch: { ...SEED_RULES.dispatch, maxHanded: 0 } } } })
+    await expect(currentRules(db, tab, 'lead')).rejects.toThrow(/does not pass the schema/)
+    const read = await get(owner, tab)
+    expect(read.statusCode).toBe(200)
+    expect(read.json().data.rules.dispatch.maxHanded).toBe(0)
+    await run(tab, set(1, rules('10:00')))
+    expect(await currentRules(db, tab, 'lead')).toEqual({ revision: 2, rules: rules('10:00') })
+  })
+
   it('keeps one of two saves on the same revision, refusing the other', async () => {
     const { tab } = await swarm()
     const outcomes = await Promise.allSettled([run(tab, set(0, rules('10:00'))), run(tab, set(0, rules('11:00')), peer)])
