@@ -68,7 +68,7 @@ class BuddyModelLine extends StatefulWidget {
     required this.controller,
     required this.agent,
     required this.machine,
-    required this.rest,
+    this.rest,
   });
 
   final SuperTabController controller;
@@ -79,8 +79,8 @@ class BuddyModelLine extends StatefulWidget {
   /// Its machine's name, for the line that asks to add it to the Swarm.
   final String machine;
 
-  /// The bar's line after the picker.
-  final String rest;
+  /// The bar's line after the picker; null for the pickers alone, as the one-row chat header has them (#4204).
+  final String? rest;
 
   @override
   State<BuddyModelLine> createState() => _BuddyModelLineState();
@@ -128,7 +128,7 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
     final after = [
       if (request == null && current != null)
         on == null ? 'not served now' : _servers(on),
-      widget.rest,
+      ?widget.rest,
     ].join(' · ');
     final picker = request != null
         ? Text(
@@ -143,6 +143,28 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
             phone: phone,
             busy: busy,
           );
+    if (widget.rest == null) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (buddyEngineCapable(snapshot, agent)) ...[
+            BuddyEnginePicker(
+              key: const ValueKey('super-buddy-engine'),
+              controller: c,
+              agent: agent,
+            ),
+            const SizedBox(width: grid.AppDesktop.controlGap),
+          ] else ...[
+            Text(
+              buddyEngineLabel(agent.engine),
+              style: DesktopChrome.metadata(color: DesktopChrome.foreground),
+            ),
+            const SizedBox(width: grid.AppDesktop.controlGap),
+          ],
+          KeyedSubtree(key: const ValueKey('super-buddy-model'), child: picker),
+        ],
+      );
+    }
     // Text.rich scales inline widgets as well as the Text they contain.
     // Ordinary children scale once and wrap naturally on a narrow header.
     return Wrap(

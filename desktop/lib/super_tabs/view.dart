@@ -114,6 +114,7 @@ import 'visible_tick.dart';
 import 'buddy_rows.dart';
 import 'task_groups.dart';
 import 'tasks_view.dart';
+import 'chat/agent_chat_header.dart';
 import 'tasks/personal_tasks_pane.dart';
 import 'tasks/task_header.dart';
 import 'voice_length.dart';
@@ -257,6 +258,7 @@ class _SuperTabViewState extends State<SuperTabView>
       _showManage = _showTasks = _showPullRequests = false;
       _boardProjectId = null;
       _agentChatId = id;
+      _taskInMiddle = null;
     });
     c.select(id);
     _closeSidebar();
@@ -3558,7 +3560,17 @@ class _SuperTabViewState extends State<SuperTabView>
   Future<void> _openPersonalTask(String id) async {
     if (!await c.loadGroup(id) || !mounted) return;
     _openAgentChat(id);
+    setState(() => _taskInMiddle = id);
   }
+
+  /// The task opened from its Tasks card, shown under the task's header while it stays the selected chat; the same
+  /// chat chosen another way is under its agent's header.
+  String? _taskInMiddle;
+
+  /// A chat in the middle is under its one-row header, which carries the Buddy's pickers (#4204).
+  bool get _chatUnderHeader =>
+      widget.board &&
+      (widget.rightPane != null || c.personalTasks?.supported == true);
 
   /// How many of [project]'s tasks need the reader: the Tasks icon's count.
   int _tasksNeedingYou(SuperTabProject project) => superTabTasksNeedingYouIn(
@@ -3653,38 +3665,27 @@ class _SuperTabViewState extends State<SuperTabView>
     unawaited(c.select(project.leadConversationId));
   }
 
-  /// The chat of the selected agent in the middle (Swarm v3, task #4118), under its name; a task opened from its
-  /// Tasks card, under the task's header (#4204).
+  /// The chat of the selected agent in the middle (Swarm v3, task #4118), under its one-row header; a task opened
+  /// from its Tasks card, under the task's header (#4204).
   Widget _middleChat(Widget chat) {
     final group = c.selected;
-    final task = c.personalTasks?.row(group?.id ?? '');
+    final task = group != null && group.id == _taskInMiddle
+        ? c.personalTasks?.row(group.id)
+        : null;
     return Column(
       key: const ValueKey('super-middle-chat'),
       children: [
         if (task != null)
           SuperTabTaskHeader(controller: c, task: task)
+        else if (group != null)
+          SuperTabAgentChatHeader(
+            controller: c,
+            group: group,
+            menu: _options(group),
+            app: widget.app,
+          )
         else
-          SizedBox(
-            height: 44,
-            child: Row(
-              children: [
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    group?.isBuddyChat == true
-                        ? 'Your Buddy'
-                        : group?.label ?? '',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: DesktopChrome.control().copyWith(
-                      fontWeight: grid.AppFont.semibold,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-              ],
-            ),
-          ),
+          const SizedBox(height: 44),
         Expanded(child: chat),
       ],
     );
@@ -5383,7 +5384,12 @@ class _SuperTabViewState extends State<SuperTabView>
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
-                SuperTabBuddyBar(controller: c, chat: group, app: widget.app),
+                SuperTabBuddyBar(
+                  controller: c,
+                  chat: group,
+                  app: widget.app,
+                  line: !_chatUnderHeader,
+                ),
                 decisions(edge: false),
               ],
             ),
