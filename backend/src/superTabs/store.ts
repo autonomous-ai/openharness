@@ -4173,11 +4173,11 @@ export class SuperTabStore {
    *  under the same checks an agent.start meets, Team-account facts read once per sweep. */
   private async crewDeps(tx: Transaction, state: SuperTabState, now: number): Promise<CrewDeps> {
     const teamMachines = await this.teamMachines(tx, state), otherWorkspaceMachines = await this.otherWorkspaceMachines(tx, state)
-    // Each project's machine rules from its record (machineRules.ts): one indexed read per project of the Swarm, only in a
-    // sweep where a member needs a machine. A record that does not pass the schema holds none, as for a start.
+    // Each crew project's machine rules from its record (machineRules.ts): one indexed read per project with crew (at most
+    // the Swarm's 100), only in a sweep where a member needs a machine. A record that does not pass the schema holds none.
     const rules = new Map<string, readonly MachineRule[]>()
-    for (const project of projectsOf(state)) {
-      rules.set(project.id, await currentRules(tx, state.id, project.id).then(r => r.rules.machines ?? [], (error: unknown) => {
+    for (const projectId of new Set(state.agents.filter(a => a.crew).map(a => agentProjectId(state, a)).filter(id => id !== undefined))) {
+      rules.set(projectId, await currentRules(tx, state.id, projectId).then(r => r.rules.machines ?? [], (error: unknown) => {
         if (!(error instanceof SuperTabError) || error.code !== 'RULES_INVALID') throw error
         logger.warn('[swarm-machine-rules] record invalid; no machine rule applied', { tabId: state.id, command: 'crew.move' })
         return []
