@@ -3525,14 +3525,17 @@ class _SuperTabViewState extends State<SuperTabView>
           onPressed: () => _togglePane(left: true),
         ),
         const SizedBox(width: 8),
-        Expanded(
+        Flexible(
           child: Text(
-            '${project.name} · Board',
+            project.name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: DesktopChrome.heading(),
           ),
         ),
+        const SizedBox(width: 12),
+        _projectTabs(project, board: true),
+        const Spacer(),
         if (_rightHidden)
           AppIconButton(
             key: const ValueKey('super-pane-right-toggle'),
@@ -3544,6 +3547,43 @@ class _SuperTabViewState extends State<SuperTabView>
       ],
     ),
   );
+
+  /// Board and Chat (Ken's review of the spec): the project's Board first, its chat a tab away while projects still
+  /// talk to their PM there.
+  Widget _projectTabs(SuperTabProject project, {required bool board}) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      for (final (key, label, selected, open) in [
+        ('super-board-tab-board', 'Board', board, () => _openBoard(project)),
+        (
+          'super-board-tab-chat',
+          'Chat',
+          !board,
+          () => _openProjectChat(project),
+        ),
+      ])
+        Padding(
+          padding: const EdgeInsets.only(right: 4),
+          child: TextButton(
+            key: ValueKey(key),
+            onPressed: selected ? null : open,
+            style: TextButton.styleFrom(
+              backgroundColor: selected ? grid.AppSurface.selectedFill : null,
+              foregroundColor: selected
+                  ? DesktopChrome.foreground
+                  : DesktopChrome.muted,
+            ),
+            child: Text(label),
+          ),
+        ),
+    ],
+  );
+
+  /// The project's chat in the middle, as before the Board: the Chat tab.
+  void _openProjectChat(SuperTabProject project) {
+    setState(() => _boardProjectId = null);
+    unawaited(c.select(project.leadConversationId));
+  }
 
   /// The right pane beside the Board: the selected chat, flat, under a small header that goes back to the Buddy.
   Widget _boardChat(Widget chat) {
@@ -4140,12 +4180,7 @@ class _SuperTabViewState extends State<SuperTabView>
             item(
               'Restart Buddy…',
               () => unawaited(
-                showRestartBuddy(
-                  context,
-                  c,
-                  group.projectId,
-                  app: widget.app,
-                ),
+                showRestartBuddy(context, c, group.projectId, app: widget.app),
               ),
             ),
           if (editable && c.buddy(group.projectId) != null)
@@ -4421,14 +4456,17 @@ class _SuperTabViewState extends State<SuperTabView>
     final agent = message.fromAgent
         ? c.snapshot?.agent(message.authorId)
         : null;
+    // In a flat chat a thread reply answers the message it names, else its thread's root (task #3787).
+    final flatReply =
+        _flatChat && message.threadReply && message.thread != message.id;
+    final answers = message.replyTo ?? (flatReply ? message.thread : null);
     // An original outside the pages read is read by itself for its quote.
-    final quoted = message.replyTo == null || byId.containsKey(message.replyTo)
+    final quoted = answers == null || byId.containsKey(answers)
         ? null
-        : c.quoted(message.conversationId, message.replyTo!);
+        : c.quoted(message.conversationId, answers);
     final fetched = quoted?.message;
     final reply =
-        byId[message.replyTo] ??
-        (fetched != null && _shown(fetched) ? fetched : null);
+        byId[answers] ?? (fetched != null && _shown(fetched) ? fetched : null);
     final writable =
         c.canWrite &&
         c.selected?.archived == false &&
@@ -4491,6 +4529,7 @@ class _SuperTabViewState extends State<SuperTabView>
       reply: reply,
       replyAuthor: reply == null ? null : _shownAuthor(c, reply),
       replyGone: quoted != null && reply == null,
+      quoteThreadReply: flatReply,
       onOpenReply: (row) => unawaited(_openOriginal(message, row)),
       link: SwarmMessageLink(
         tabId: c.tabId,
@@ -5942,8 +5981,26 @@ class _SuperTabViewState extends State<SuperTabView>
                   children: [
                     if (boardProject != null)
                       _boardHeader(c.snapshot!.projectById(boardProject)!)
-                    else
+                    else ...[
+                      if (widget.board &&
+                          !_manageVisible &&
+                          !_notificationsVisible &&
+                          _pageShown == null)
+                        if (c.snapshot?.projects
+                                .where(
+                                  (p) => p.leadConversationId == c.selectedId,
+                                )
+                                .firstOrNull
+                            case final project?)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: _projectTabs(project, board: false),
+                            ),
+                          ),
                       _header(c.selected, narrow),
+                    ],
                     if (_manageOpen)
                       Align(
                         alignment: Alignment.centerLeft,

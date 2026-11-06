@@ -132,7 +132,8 @@ void main() {
     await _settle(tester);
     await tester.tap(_key('super-task-card-offline'));
     await _settle(tester);
-    expect(find.text('Working on the fix.'), findsOneWidget);
+    // The root, and its quote on the reply below.
+    expect(find.text('Working on the fix.'), findsWidgets);
     expect(find.text('A reply in its thread.'), findsOneWidget);
     expect(find.textContaining('1 reply'), findsNothing);
     // Each reply says what it answers, as on the phone (Ken's review of the spec).
