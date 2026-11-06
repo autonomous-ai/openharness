@@ -21,11 +21,7 @@ import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
 import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
 import { AUTO_SETUP_REASONS, realTeamAutoSetup, type AutoSetupReason, type TeamAutoSetup } from '../team/autoSetup.js'
-import { openDaemon } from '../agentClient/daemon.js'
 import { readTeamConfig } from '../team/config.js'
-import { realTeamRelayPublisher, TEAM_RELAY_GRANT_FILE, type TeamRelayPublisher } from '../team/relay.js'
-import { readLastTry, refreshCreationId, refreshTeamAccount, teamRefreshFile, writeLastTry, type TeamRefreshDeps } from '../team/refresh.js'
-import { readTeamStatusOffThread } from '../team/privacy.js'
 import { ensureTeamTmux, TMUX_MANIFEST_URL, tmuxRunsAt, untarGz, type TeamTmuxDeps, type TeamTmuxOutcome } from '../team/tmux.js'
 import { downloadVerified } from '../lib/selfUpdate.js'
 import { managedTmuxPath, tmuxInstallDirectories } from '../lib/tmuxOnPath.js'
@@ -35,10 +31,8 @@ import { linkTeamNodeTools, type TeamNodeToolsDeps } from '../team/nodeTools.js'
 import { env as appEnv } from '../config/env.js'
 import { homedir, userInfo } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
-import { createOwnerSubscriptions } from '../lib/ownerSubscriptions.js'
 import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import { buddyArchived, buddyStatus, isBuddyIn, isSwarmBuddyIn, projectNamed, type BuddyStatusDeps } from './buddyStatus.js'
-import { startSubscriptionRelay } from '../lib/subscriptionRelay.js'
 import { peopleNamed, personName } from './personName.js'
 
 const POST_ABOUT = 'reply in that conversation. Use a unique ID per message and reuse it after an interrupted request. Answer a message once, with its ID: --answers puts your answer right below that message, in the main chat; --reply-to puts it in that message\'s thread. --attach sends a file (a screenshot, a log; up to 10 files of 256 MB each), and TEXT may then be empty. --to names the agents it reaches (any agent of this project, by id from status; up to 16): they join the conversation if they are not in it. With no --to or @Name it reaches no agent, except the agent a reply answers and, in a task or step, its assignee. Your status tells the PM your work: never post it results, verdicts or acknowledgements. In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person\'s answer to its line reaches it; --to there adds no agent, so name only the PM.'
@@ -317,8 +311,6 @@ export interface SuperTabServiceOptions {
   teamGh?: () => Promise<TeamGhOutcome>
   /** What links the Harness Team account's npm and npx (team/nodeTools.ts), for a spec. */
   teamNodeTools?: () => unknown
-  /** The owner's subscriptions for the Harness Team account (team/relay.ts), for a spec. */
-  teamRelay?: () => Pick<TeamRelayPublisher, 'start' | 'stop'>
   /** What reads a Buddy's pull requests with this machine's own GitHub (lib/pullRequestsStatus.ts), for a spec. */
   pullRequests?: BuddyStatusDeps['pullRequests']
 }
@@ -373,15 +365,6 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api, sources)))(core)
   // In the Harness Team account only: whether its Claude Code and Codex are installed and signed in, for its owner to read.
   const engines = (options.teamEngines ?? teamEngineReporter)()
-  // On the Mac's owner's daemon, while a Harness Team account exists here: the owner's subscriptions for it, through a
-  // relay of its own (team/relay.ts). Kept through a lost backend connection, which running agents do not need.
-  const relay = (options.teamRelay ?? (() => realTeamRelayPublisher(
-    port => startSubscriptionRelay({ owner: createOwnerSubscriptions(), log: line => console.log(`[team] relay · ${line}`), ...(port ? { port } : {}) }),
-    () => readTeamConfig(), options.team ?? (() => readAuthSession()?.kind === 'team'), line => console.log(`[team] ${line}`),
-    // In the owner's closed home: a running Team agent's relay outlives this daemon (task #2125).
-    join(core.dataDir, TEAM_RELAY_GRANT_FILE),
-    // A team account still on a build that cannot use the relay is updated from here (team/refresh.ts).
-    (publishedAt) => refreshTeamAccount(realTeamRefreshDeps(core, publishedAt)))))()
   let autoSetup: Promise<Pick<TeamAutoSetup, 'offer' | 'decline'> & Partial<Pick<TeamAutoSetup, 'status'>>> | null = null
   // In the Harness Team account: a tmux and a gh of its own when it has none it can run (team/tmux.ts, team/gh.ts). Looked
   // at as it connects, and a failed install again half an hour later.
@@ -407,7 +390,6 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     connected: () => {
       tokens.start()
       engines.start()
-      relay.start()
       checkTmux()
       // A daemon that runs team work only is there for its Swarms: its host runs from its first connection. Its Mac's daemon adds
       // a Harness Team account to a Swarm without waking it (host.ts joinTeams), and a host that never ran reports no privacy
@@ -423,7 +405,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
       })
     },
     disconnected: disconnect,
-    stop: () => { disconnect(); void relay.stop() },
+    stop: disconnect,
     swarmRole: async (harnessId: string) => (await within(swarmRoleFor(sources(), harnessId).then(grant => ({ grant }))))?.grant,
   }
   const requests: ServiceRequests = {
@@ -942,37 +924,6 @@ function realTeamGhDeps(): TeamGhDeps {
     unzip: unzipArchive,
     runtimeDir: appEnv.ADAPTER_RUNTIME_DIR,
     binDir,
-    log: (line) => console.log(`[team] ${line}`),
-  }
-}
-
-/** The owner's daemon's own: its account's machine list, and the link to its Mac's team account (team/refresh.ts). */
-function realTeamRefreshDeps(core: CoreApi, publishedAt: number | null): TeamRefreshDeps {
-  const file = teamRefreshFile(core.dataDir)
-  return {
-    config: () => readTeamConfig(),
-    // Never on this thread on Windows: the Team account can hold its file's open for as long as it likes (audit W4).
-    status: (path) => readTeamStatusOffThread(path),
-    publishedAt: () => publishedAt,
-    machines: async () => {
-      const reply = await core.account.backend('GET', '/api/machines')
-      const body = object(reply.body), data = object(body.data)
-      const rows = Array.isArray(data.machines) ? data.machines : Array.isArray(body.machines) ? body.machines : []
-      return rows.map(object).filter(m => typeof m.machineId === 'string')
-        .map(m => ({ machineId: m.machineId as string, sessionKind: typeof m.sessionKind === 'string' ? m.sessionKind : null,
-          hostMachineId: typeof m.hostMachineId === 'string' ? m.hostMachineId : null }))
-    },
-    machineId: () => core.daemon.machineId(),
-    run: async (machineId, argv, cwd) => {
-      const link = await openDaemon({ dataDir: core.dataDir, port: core.daemon.port, machineId: core.daemon.machineId() }, machineId)
-      try {
-        const answer = object(await link.request('shell_open', { argv, cwd, creationId: refreshCreationId() }, 30_000))
-        return answer.state === 'created' ? { ok: true } : { ok: false, error: String(answer.error ?? answer.state ?? 'no answer') }
-      } finally { link.close() }
-    },
-    lastTry: () => readLastTry(file),
-    remember: (at) => writeLastTry(file, at),
-    now: () => Date.now(),
     log: (line) => console.log(`[team] ${line}`),
   }
 }

@@ -17,8 +17,6 @@ import { prepareSwarmSkill } from './swarmSkills.js'
 import { swarmEngineArgs } from './swarmEngineArgs.js'
 import { swarmGitHubLaunch } from './swarmGitHub.js'
 import { writeMachineMcp } from './machineMcp.js'
-import { NO_CLAUDE_RELAY, NO_CODEX_RELAY, teamRelayLaunch, type TeamRelayGrant } from '../team/relay.js'
-import type { TeamConfig } from '../team/config.js'
 
 const GRID: GridLaunchOverride = {
   networkId: 'grid-abc',
@@ -34,6 +32,8 @@ vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), b
 // The account the gate runs under does not decide these launches: a Harness Team account is refused by prepareBuddyFolder before any
 // launch, which lib/swarmSkills.spec.ts tests on its own. These Buddies are their owner's, so the boundary is fixed to "not a Team account".
 vi.mock('../team/config.js', async (original) => ({ ...await original<object>(), isTeamAccount: () => false }))
+// Harness's status line rides every Claude launch beside what these pin (engines/claude/statusLine.spec.ts, the launch golden).
+vi.mock('../engines/kit/statusLine.js', async (original) => ({ ...await original<object>(), statusLineSetting: () => null }))
 vi.mock('../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
@@ -224,56 +224,15 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     expect(calls).toEqual([])
   })
 
-  it('in the Harness Team account, spends the owner\'s subscription through the relay on every relaunch', async () => {
-    const relay = { env: { HARNESS_RELAY_TOKEN: 't' }, args: ['-c', 'model_provider="harness_owner"'] }
-    const ownerRelay = vi.fn(async (engine: string) => engine === 'codex' ? relay
-      : engine === 'claude' ? { env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9/claude', ANTHROPIC_AUTH_TOKEN: 't' }, args: [] } : null)
-    // Codex is told the relay's provider in place of its own login's: two `-c model_provider` would leave it to pick.
-    expect(await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { subscriptionModel: 'gpt-5-codex' }, 'a'))
-      .toMatchObject({ ok: true, overrides: { env: { HARNESS_RELAY_TOKEN: 't' }, extraArgs: ['-c', 'model_provider="harness_owner"', '-m', 'gpt-5-codex'] } })
-    expect(await buildLaunchOverrides(deps({ ownerRelay }).d, 'claude', {}, 'a'))
-      .toMatchObject({ ok: true, overrides: { env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9/claude', ANTHROPIC_AUTH_TOKEN: 't' }, extraArgs: [] } })
-    expect(await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { gridLaunch: null, codexHome: '/home/u/.codex-work' }, 'a'))
-      .toMatchObject({ ok: true, overrides: { env: { CODEX_HOME: '/home/u/.codex-work', HARNESS_RELAY_TOKEN: 't' }, extraArgs: relay.args } })
-    // The relay readies, and asks about, that home: a Swarm Product Manager's own, whose sign-in and models are its own.
-    expect(ownerRelay).toHaveBeenLastCalledWith('codex', '/home/u/.codex-work')
-    // A relaunch (restart, resume, restore) the relay cannot sign in is held with why, as a launch that waits is: after a
-    // reboot the Team daemon may restore before the owner's relay is there.
-    expect(await buildLaunchOverrides(deps({ ownerRelay: vi.fn(async () => ({ refused: 'No relay here.' })) }).d, 'codex', { gridLaunch: null, codexHome: '/home/u/.codex-work' }, 'a'))
-      .toEqual({ ok: false, error: 'OWNER_RELAY_UNAVAILABLE', unavailable: 'native', detail: 'No relay here.' })
-    // A grid is its own provider: the relay is not asked.
-    ownerRelay.mockClear()
-    await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { gridLaunch: GRID }, 'a')
-    expect(ownerRelay).not.toHaveBeenCalled()
-  })
-
-  // Task #3301: a CLI release restarts the owner's daemon, which publishes a new grant a little later, and the Team daemon,
-  // which restores its agents meanwhile. A Claude restored in that gap started with no credentials and sat signed out.
-  it('in the Harness Team account, holds a Claude or Codex relaunch across the owner\'s daemon restart and launches it on the new grant', async () => {
-    const config = { user: 'harnessteam', owner: 'owner', ownerHome: '/Users/owner' } as TeamConfig
-    const before: TeamRelayGrant = { url: 'http://127.0.0.1:41001', token: 'b'.repeat(43) }
-    const after: TeamRelayGrant = { url: 'http://127.0.0.1:41002', token: 'c'.repeat(43) }
-    let published: TeamRelayGrant | null = before
-    const ownerRelay = (engine: Parameters<typeof teamRelayLaunch>[0], home?: string) => teamRelayLaunch(engine, {
-      team: () => true, config: () => config, signedIn: async () => false, read: () => published, onboarded: () => {}, codexHome: async () => {},
-    }, home)
-    const relaunch = () => buildLaunchOverrides(deps({ ownerRelay }).d, 'claude', {}, 'agent-1')
-    // Mid-session, on the grant it was launched with.
-    expect(await relaunch()).toMatchObject({ ok: true, overrides: { env: { ANTHROPIC_BASE_URL: `${before.url}/claude`, ANTHROPIC_AUTH_TOKEN: before.token } } })
-    // The owner's daemon restarts: its grant is gone until it publishes again. The Team daemon's restore is held, with why.
-    published = null
-    expect(await relaunch()).toEqual({ ok: false, error: 'OWNER_RELAY_UNAVAILABLE', unavailable: 'native', detail: NO_CLAUDE_RELAY })
-    // Published again on a new port and token: the held pass (core/agents/heldLaunches.ts) launches it on that one.
-    published = after
-    const resumed = await relaunch()
-    expect(resumed).toMatchObject({ ok: true, overrides: { env: { ANTHROPIC_BASE_URL: `${after.url}/claude`, ANTHROPIC_AUTH_TOKEN: after.token } } })
-    expect(JSON.stringify(resumed)).not.toContain(before.token)
-    // A Team Codex in the daemon's own home (a Builder's) is held the same way, and comes back on the relay's provider.
-    published = null
-    const codex = () => buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', {}, 'agent-2')
-    expect(await codex()).toEqual({ ok: false, error: 'OWNER_RELAY_UNAVAILABLE', unavailable: 'native', detail: NO_CODEX_RELAY })
-    published = after
-    expect(await codex()).toMatchObject({ ok: true, overrides: { env: { HARNESS_RELAY_TOKEN: after.token }, extraArgs: expect.arrayContaining(['model_provider="harness_owner"']) } })
+  // No owner subscription relay (task #4137): a relaunch (restart, resume, restore) of Claude Code or Codex, a Product
+  // Manager's Codex home among them, comes back on its own settings, with nothing of a relay in it.
+  it('relaunches every engine on its own settings: no relay variables or provider', async () => {
+    for (const [engine, source] of [['claude', {}], ['codex', { subscriptionModel: 'gpt-5-codex' }], ['codex', { gridLaunch: null, codexHome: '/home/u/.codex-work' }]] as const) {
+      const result = await buildLaunchOverrides(deps().d, engine, source, 'a')
+      expect(result.ok).toBe(true)
+      const text = JSON.stringify(result)
+      for (const marker of ['HARNESS_RELAY_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'harness_owner']) expect(text).not.toContain(marker)
+    }
   })
 
   it('builds OpenCode overrides without optional code and uses the requested engine facts', async () => {
@@ -675,10 +634,9 @@ describe('buildLaunchOverrides — the owner\'s private temporary folder (audit 
   })
 
   it('gives way to the launch\'s own variables', async () => {
-    told({ TMPDIR: '/data/agent-tmp' })
-    const ownerRelay = async () => ({ env: { TMPDIR: '/chosen' }, args: [] })
-    const result = await buildLaunchOverrides(deps({ ownerRelay }).d, 'claude', {}, 'a')
-    expect(result).toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/chosen' } } })
+    told({ TMPDIR: '/data/agent-tmp', CODEX_HOME: '/data/not-this' })
+    const result = await buildLaunchOverrides(deps().d, 'codex', { codexHome: '/home/u/.codex-work' }, 'a')
+    expect(result).toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/data/agent-tmp', CODEX_HOME: '/home/u/.codex-work' } } })
   })
 })
 

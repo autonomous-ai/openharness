@@ -108,14 +108,6 @@ describe('the folders the Windows setup script makes, by what each account may d
     expect(rights(aces, 'BU', 'children') & CHANGES).toBe(0)
   })
 
-  it('the relay folder: the owner\'s, the team account reads the grant, nobody else is named', () => {
-    const { protected: closed, aces } = dacl(sddlOf(/SetSecurityDescriptorSddlForm\("(D:P[^"]+)", 'Access'\)/))
-    expect(closed).toBe(true)
-    expect(ONLY(aces)).toEqual([OWNER, TEAM, ADMINS, SYSTEM].sort())
-    expect(rights(aces, TEAM, 'folder') & CHANGES).toBe(0)
-    expect(rights(aces, TEAM, 'children') & CHANGES).toBe(0)
-  })
-
   it('the shared folder and this run\'s stage: Administrators\' and SYSTEM\'s, read by the rest', () => {
     for (const line of [/Set-Folder \$SHARED "([^"]+)"/, /\$RT = New-Stage "([^"]+)"/]) {
       const { protected: closed, aces } = dacl(sddlOf(line))

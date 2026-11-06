@@ -1139,7 +1139,7 @@ describe('GitHub App tokens through the service', () => {
   })
 
   it('runs a team daemon\'s Swarm host from its first connection, and a person\'s only once it hosts Swarm work', () => {
-    const quiet = { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }), teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }), teamRelay: () => ({ start: vi.fn(), stop: vi.fn(async () => {}) }) }
+    const quiet = { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }), teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }) }
     const started = (team: boolean) => {
       const start = vi.fn()
       const service = superTabService(fakeCore({ dataDir: mkdtempSync(join(tmpdir(), 'team-wake-')) }),
@@ -1167,24 +1167,9 @@ describe('GitHub App tokens through the service', () => {
   })
 })
 
-describe('the owner\'s subscriptions for the Harness Team account', () => {
-  it('start with the service\'s first connection and stop only with the service, not a lost connection', async () => {
-    const relay = { start: vi.fn(), stop: vi.fn(async () => {}) }
-    const service = superTabService(fakeCore(), { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }) as never,
-      teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }) as never, teamRelay: () => relay })
-    service.port.connected()
-    expect(relay.start).toHaveBeenCalledOnce()
-    service.port.disconnected()
-    expect(relay.stop).not.toHaveBeenCalled()
-    service.port.stop()
-    expect(relay.stop).toHaveBeenCalledOnce()
-  })
-})
-
 describe('the Harness Team account\'s own tmux', () => {
   it('is looked at as the service connects, and not again once there or installed; a failure again later', async () => {
-    const quiet = { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }) as never, teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }) as never,
-      teamRelay: () => ({ start: vi.fn(), stop: vi.fn(async () => {}) }) }
+    const quiet = { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }) as never, teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }) as never }
     const installed = vi.fn(async () => 'installed' as const)
     const service = superTabService(fakeCore(), { ...quiet, teamTmux: installed })
     service.port.connected()
