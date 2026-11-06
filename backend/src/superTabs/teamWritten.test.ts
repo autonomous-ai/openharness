@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
-import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
+import { appendCodePullRequestUrls, createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 import { LEAD_CAPABILITY } from './leadStart.js'
-import { applyPushOrigin, markTeamWritten, stepMark, TEAM_WRITTEN_STOP, TEAM_WRITTEN_WORK, teamWrittenTask } from './teamWritten.js'
+import { applyPushOrigin, codeFromPosts, markTeamWritten, stepMark, TEAM_WRITTEN_STOP, TEAM_WRITTEN_WORK, teamWrittenTask } from './teamWritten.js'
 
 // Audit H2: a branch a Team agent wrote runs only in a Team account, whoever's project it is, so nothing the branch
 // carries runs with the main account's rights (docs/plans/2026-11-02-team-written-branch-plan.md).
@@ -565,6 +565,36 @@ describe('a release task the Swarm opened', () => {
     const task = () => f.state.conversations.find(c => c.id === f.task)!
     applyPushOrigin(f.state, task(), 'team', [pull])
     expect(task().teamWritten).toBe(true)
+  })
+
+  // Security review 2 of #3324 (round 2), Important 1: the mark itself ends the exemption, so the first mark tells the main account to stop.
+  it('tells a main-account agent on a step to stop when its own Ready is the first to show a bot\'s push', () => {
+    const f = releaseTask(), pull = 'https://github.com/acme/app/pull/77'
+    const builder = f.member('team-builder', 'mac-team'), tester = f.member('main-tester', 'mac')
+    f.run({ type: 'work.assign', conversationId: f.task, agentId: builder })
+    f.run({ type: 'work.assign', conversationId: f.step, agentId: tester })
+    const assignmentId = f.state.conversations.find(c => c.id === f.task)!.assignment!.id
+    const effects = f.run({ type: 'work.status', conversationId: f.task, assignmentId, status: 'review', result: pull },
+      { kind: 'agent', agentId: builder, machineOwnerId: 'owner' }, { pushOrigin: 'team', pushOriginPulls: [pull] })
+    const task = f.state.conversations.find(c => c.id === f.task)!
+    expect(task.teamWritten).toBe(true)
+    expect(teamWrittenTask(f.state, task)).toBe(true)
+    expect(effects.messages.find(m => m.text === TEAM_WRITTEN_STOP)?.recipients).toEqual([tester])
+  })
+
+  // Round 2, Important 2: a pull request cited in a post on a release task (the Integrator applying a merged task's rollout note, a
+  // person linking one) is not the code it builds, so it does not end the exemption and close its steps to the main account.
+  it('keeps a release task out of the gate when a post cites a pull request: its posts name no code', () => {
+    const f = releaseTask(), task = f.state.conversations.find(c => c.id === f.task)!
+    f.run({ type: 'work.assign', conversationId: f.task, agentId: f.member('team-integrator', 'mac-team') })
+    const cited = 'Applied the rollout note of https://github.com/acme/app/pull/77 first.'
+    // What the store does with a post in a task (store.ts): the links of a post by a person, the PM or the assignee are its code.
+    appendCodePullRequestUrls(task, [task.brief, task.title, ...codeFromPosts(task) ? [cited] : []], 'https://github.com/acme/app')
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: f.step, agentId: f.member('main-tester', 'mac') }))).toBeNull()
+    // An ordinary task does count them.
+    const plain = f.group()
+    const ordinary = f.state.conversations.find(c => c.id === plain)!
+    expect(codeFromPosts(ordinary)).toBe(true)
   })
 
   it('does not change an ordinary task: the same step with the same read is still refused to the main account', () => {
