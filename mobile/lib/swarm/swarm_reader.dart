@@ -540,7 +540,8 @@ class SwarmReader extends ChangeNotifier {
   /// Closed conversations read for the Board's Merged and Shipped, as many
   /// pages as Desktop reads (`readClosedShipped`).
   static const _shippedPages = 40;
-  final _shippedFailed = <String>{};
+  final _shippedFailed = <String>{}, _shippedRead = <String>{};
+  final _shippedReads = <String, Future<void>>{};
 
   /// Whether the last read of [projectId]'s closed work for the Board failed;
   /// [loadShipped] tries it again.
@@ -549,9 +550,19 @@ class SwarmReader extends ChangeNotifier {
   /// Reads [projectId]'s closed conversations back to [since], newest first and
   /// a page at a time, for the Board's Merged and Shipped: the first page once,
   /// then earlier ones until a page ends before [since] or [_shippedPages] are
-  /// read. A failed page is logged by its name and flagged, not thrown: the
-  /// Board shows the rest, and asking again reads again.
-  Future<void> loadShipped(String projectId, DateTime since) async {
+  /// read. Once, whatever follows: a task that closes later is one the read
+  /// holds already. A failed page is logged by its name and flagged, not
+  /// thrown: the Board shows the rest, and asking again reads again.
+  Future<void> loadShipped(String projectId, DateTime since) {
+    if (_disposed || _shippedRead.contains(projectId)) return Future.value();
+    // A block, not an arrow: `remove` returns the very future being completed.
+    return _shippedReads[projectId] ??= _loadShipped(projectId, since)
+        .whenComplete(() {
+          _shippedReads.remove(projectId);
+        });
+  }
+
+  Future<void> _loadShipped(String projectId, DateTime since) async {
     try {
       await loadDormant(projectId);
       for (var page = 1; page < _shippedPages; page++) {
@@ -562,6 +573,7 @@ class SwarmReader extends ChangeNotifier {
         }
         await loadDormant(projectId, earlier: true);
       }
+      _shippedRead.add(projectId);
       if (_shippedFailed.remove(projectId)) notifyListeners();
     } catch (failure) {
       if (_disposed) return;
