@@ -769,9 +769,6 @@ class SuperTabController extends ChangeNotifier {
   /// When the parts held were last read: how old a [savedView] of them is.
   DateTime? _partsReadAt;
 
-  /// When the Swarm was last read (Manage ▸ Backlog's "Synced", #2774).
-  DateTime? get syncedAt => _partsReadAt;
-
   /// The rows each conversation's messages were read from, kept only to save
   /// the view ([SuperTabReading.drawsSaved]).
   final _rows = <String, Map<String, Map<String, dynamic>>>{};
@@ -4341,8 +4338,8 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
-  /// Closed tasks read for the Backlog whose `shippedAt` falls in the read's
-  /// window, by id; the Backlog places them, as some wait for their merge. Kept here so an open of the tab reads nothing again: a task
+  /// Closed tasks read for the Board whose `shippedAt` falls in the read's
+  /// window, by id; the Board places them, as some wait for their merge. Kept here so an open of the tab reads nothing again: a task
   /// that closes later is one this reader holds, and [snapshot] keeps it. They
   /// join no snapshot, which is built again on every change, and no project's
   /// "Closed" count.
@@ -4353,14 +4350,10 @@ class SuperTabController extends ChangeNotifier {
   DateTime? _closedShippedSince;
   int _closedShippedEpoch = 0;
 
-  /// Whether a project's closed tasks could not be read; [readClosedShipped]
-  /// tries it again.
-  bool closedShippedFailed = false;
-
   Iterable<SuperTabConversation> get closedShipped => _closedShipped.values;
 
-  /// Tells of a change to [closedShipped] or [closedShippedFailed], and nobody
-  /// else who watches this controller: a page changes only the Backlog.
+  /// Tells of a change to [closedShipped], and nobody else who watches this
+  /// controller: a page changes only the Board.
   Listenable get closedShippedChanged => _closedShippedChanged;
 
   /// Reads the closed tasks shipped since [since] of each project not read yet.
@@ -4377,10 +4370,6 @@ class SuperTabController extends ChangeNotifier {
 
   Future<void> _readClosedShipped(DateTime since, int epoch) async {
     _closedShippedSince = since;
-    if (closedShippedFailed) {
-      closedShippedFailed = false;
-      _closedShippedChanged.value++;
-    }
     final projects = snapshot?.projects ?? const <SuperTabProject>[];
     for (final project in projects) {
       if (_closedShippedProjects.contains(project.id)) continue;
@@ -4396,8 +4385,6 @@ class SuperTabController extends ChangeNotifier {
           'closed tasks read failed: '
               '${failure is SuperTabFailure ? '${failure.code} (status ${failure.statusCode})' : failure.runtimeType}',
         );
-        closedShippedFailed = true;
-        _closedShippedChanged.value++;
       }
     }
   }
@@ -4525,7 +4512,6 @@ class SuperTabController extends ChangeNotifier {
     _closedShippedRead = null;
     _closedShipped.clear();
     _closedShippedProjects.clear();
-    closedShippedFailed = false;
     if (!_disposed) _closedShippedChanged.value++;
   }
 

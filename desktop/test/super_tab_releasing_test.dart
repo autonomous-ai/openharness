@@ -120,32 +120,4 @@ void main() {
       expect(superTabTaskShipped(done()), isTrue);
     });
   });
-
-  group('Manage ▸ Backlog', () {
-    String? group(SuperTabConversation task) =>
-        superTabBacklogGroupOf(task, at)?.name;
-
-    test('a merged task still releasing is in Releasing', () {
-      expect(group(merged(releasing: ['desktop'])), 'releasing');
-      expect(group(merged(releasing: [])), 'releasing');
-    });
-
-    test('a released task is Shipped', () {
-      expect(
-        group(
-          merged(
-            released: {
-              'at': now,
-              'tags': ['v1.4.2_desktop'],
-            },
-          ),
-        ),
-        'shipped',
-      );
-    });
-
-    test('a merge from before releases were recorded is Shipped', () {
-      expect(group(merged()), 'shipped');
-    });
-  });
 }
