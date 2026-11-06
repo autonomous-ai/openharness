@@ -17,6 +17,7 @@ import { revokeNativeContexts } from '../src/superTabs/native.js'
 import { stableId, type MessageDraft, type SuperTabState } from '../src/superTabs/model.js'
 import { logger } from '../src/utils/logger.js'
 import { plan, profiled, reads } from './plans.test-support.js'
+import { quotaReset } from './holds.test-support.js'
 
 // Ken, 2026-11-02 (docs/plans/2026-11-02-pm-notice-digest-design.md): the server's routine notices to a project's coordinator
 // go in one message at most every 5 minutes; what someone waits on still goes at once. A fresh loopback replica set, created here.
@@ -824,7 +825,7 @@ describe('a step\'s Stuck, skills notices and quiet alerts', () => {
       reviewOf: orphan })).result.conversationId)
     const reviewer = await f.add(step, 'test-host', 'Reviewer')
     const assignmentId = String((await f.execute({ type: 'work.assign', conversationId: step, agentId: reviewer })).result.assignmentId)
-    await f.execute({ type: 'work.status', conversationId: step, assignmentId, status: 'blocked', hold: { kind: 'reset', what: 'quota', at: new Date(f.clock.now + MINUTE).toISOString() }, result: 'Needs the owner\'s account' }, host, reviewer)
+    await f.execute({ type: 'work.status', conversationId: step, assignmentId, status: 'blocked', hold: quotaReset(f.clock.now), result: 'Needs the owner\'s account' }, host, reviewer)
     const row = await statusRow(f.tab, step, 'Stuck')
     expect(row.recipientIds).toEqual([f.lead])
     expect((await deliveryOf(row.id, f.lead)).status).toBe('queued')

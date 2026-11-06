@@ -309,8 +309,9 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
 Future<void> confirmRemoveBuddy(
   BuildContext context,
   SuperTabController c,
-  String projectId,
-) async {
+  String projectId, {
+  String? conversationId,
+}) async {
   final remove = await showAppDialog<bool>(
     context: context,
     builder: (context) => _BuddyDialogScope(
@@ -336,7 +337,9 @@ Future<void> confirmRemoveBuddy(
       ),
     ),
   );
-  if (remove == true) await c.removeBuddy(projectId);
+  if (remove == true) {
+    await c.removeBuddy(projectId, conversationId: conversationId);
+  }
 }
 
 /// What the reader's Buddy is called until they name it, as the backend
@@ -355,13 +358,18 @@ String buddyDefaultName(SuperTabController c) {
 Future<void> showRenameBuddy(
   BuildContext context,
   SuperTabController c,
-  String projectId,
-) => showAppDialog<void>(
+  String projectId, {
+  String? conversationId,
+}) => showAppDialog<void>(
   context: context,
   builder: (context) => _BuddyDialogScope(
     controller: c,
     projectId: projectId,
-    child: _RenameBuddyDialog(controller: c, projectId: projectId),
+    child: _RenameBuddyDialog(
+      controller: c,
+      projectId: projectId,
+      conversationId: conversationId,
+    ),
   ),
 );
 
@@ -394,9 +402,16 @@ class _BuddyDialogScope extends StatelessWidget {
 }
 
 class _RenameBuddyDialog extends StatefulWidget {
-  const _RenameBuddyDialog({required this.controller, required this.projectId});
+  const _RenameBuddyDialog({
+    required this.controller,
+    required this.projectId,
+    this.conversationId,
+  });
   final SuperTabController controller;
   final String projectId;
+
+  /// One Buddy of several (#3818); null for the default.
+  final String? conversationId;
 
   @override
   State<_RenameBuddyDialog> createState() => _RenameBuddyDialogState();
@@ -408,7 +423,12 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
   /// The backend's limit: a longer name is refused there anyway.
   static const _maxLength = 32;
   late final _name = TextEditingController(
-    text: c.buddyChat(widget.projectId)?.buddyName ?? '',
+    text:
+        (widget.conversationId == null
+                ? c.buddyChat(widget.projectId)
+                : c.snapshot?.conversation(widget.conversationId!))
+            ?.buddyName ??
+        '',
   );
   bool _busy = false;
   String? _error;
@@ -425,7 +445,11 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
       _busy = true;
       _error = null;
     });
-    final renamed = await c.renameBuddy(widget.projectId, _name.text);
+    final renamed = await c.renameBuddy(
+      widget.projectId,
+      _name.text,
+      conversationId: widget.conversationId,
+    );
     if (!mounted) return;
     if (renamed) {
       Navigator.pop(context);
