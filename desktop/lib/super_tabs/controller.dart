@@ -3219,6 +3219,7 @@ class SuperTabController extends ChangeNotifier {
     required String machineId,
     required String engine,
     Map<String, dynamic>? setup,
+    String? name,
   }) async {
     final result = await command({
       'type': 'buddy.create',
@@ -3226,6 +3227,8 @@ class SuperTabController extends ChangeNotifier {
       'machineId': machineId,
       'engine': engine,
       'setup': ?setup,
+      // A name and no chat: a new Buddy in a chat of its own (#3818).
+      'name': ?name,
     });
     if (result == null) return false;
     final id = result['conversationId'];
@@ -3233,19 +3236,37 @@ class SuperTabController extends ChangeNotifier {
     return true;
   }
 
-  /// Removes the reader's Buddy in [projectId]; its chat stays.
-  Future<bool> removeBuddy(String projectId) async =>
+  /// Removes the reader's Buddy in [projectId], or the one of [conversationId] of several (#3818); its chat stays.
+  Future<bool> removeBuddy(String projectId, {String? conversationId}) async =>
       await command({
         'type': 'buddy.remove',
-        if (projectId != kSwarmBuddyKey) 'projectId': projectId,
+        if (conversationId != null)
+          'conversationId': conversationId
+        else if (projectId != kSwarmBuddyKey)
+          'projectId': projectId,
+      }) !=
+      null;
+
+  /// Makes the Buddy of [conversationId] the reader's default of several (#3818): it opens first and takes what is
+  /// addressed to them. False when refused: [operationError] says why.
+  Future<bool> setDefaultBuddy(String conversationId) async =>
+      await command({
+        'type': 'buddy.default',
+        'conversationId': conversationId,
       }) !=
       null;
 
   /// Names the reader's Buddy in [projectId] from its chat, or clears the
   /// name for the default when [name] is empty. Everyone in the Swarm sees it.
   /// False when refused: [operationError] says why.
-  Future<bool> renameBuddy(String projectId, String name) async {
-    final chat = buddyChat(projectId);
+  Future<bool> renameBuddy(
+    String projectId,
+    String name, {
+    String? conversationId,
+  }) async {
+    final chat = conversationId == null
+        ? buddyChat(projectId)
+        : snapshot?.conversation(conversationId);
     if (chat == null) return false;
     final trimmed = name.trim();
     return await command({

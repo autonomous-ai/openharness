@@ -67,6 +67,7 @@ import 'identity.dart' show superTabMachineName;
 import 'identity_card.dart';
 import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
+import 'buddy_list.dart';
 import 'project_people.dart';
 import 'proposal_form.dart';
 import 'backlog.dart'
@@ -3702,6 +3703,9 @@ class _SuperTabViewState extends State<SuperTabView>
               style: DesktopChrome.metadata(),
             ),
           ),
+        // Several Buddies (#3818): one tab each over the chat, + New Buddy, and the open one's menu.
+        if (onBuddy && c.snapshot?.buddyCap != null)
+          SuperTabBuddyList(controller: c, app: widget.app),
         Expanded(child: chat),
       ],
     );

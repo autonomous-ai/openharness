@@ -203,6 +203,8 @@ class SwarmPartsBackend {
     if (state['sessionsFromChat'] == true) 'sessionsFromChat': true,
     // A server with one Buddy per person for the whole Swarm.
     if (state['swarmBuddy'] == true) 'swarmBuddy': true,
+    // A server that makes several Buddies per person (#3818).
+    if (state['buddyCap'] case final int cap) 'buddyCap': cap,
     // The reader's own read marks alone, as backend readMarks.ts sends them.
     if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
       'readMarks': Map<String, dynamic>.from(marks),
@@ -1446,6 +1448,48 @@ class ConversationServer {
             'availableSlots': command['maxAgents'],
           },
         ];
+        revision++;
+      } else if (command['type'] == 'buddy.create' &&
+          command['name'] is String &&
+          command['conversationId'] == null) {
+        // As #3818 makes one of several: a new Buddy in a chat of its own, up to the Swarm's cap.
+        final person = reader ?? 'owner';
+        final conversations = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>();
+        final count = conversations
+            .where(
+              (g) => g['kind'] == 'swarm-buddy' && g['buddyOwnerId'] == person,
+            )
+            .length;
+        if (count >= (state['buddyCap'] as int? ?? 5)) {
+          throw SuperTabFailure(
+            'BUDDY_CAP',
+            'You have $count Buddies, the most this Swarm allows. Remove one '
+                'to add another.',
+            statusCode: 409,
+          );
+        }
+        revision++;
+        final chatId = 'swarm-buddy-$person-$revision';
+        conversations.add({
+          ...conversationFixture(chatId, command['name'] as String),
+          'kind': 'swarm-buddy',
+          'projectId': null,
+          'buddyOwnerId': person,
+          'buddyName': command['name'],
+          'agentIds': <String>[],
+        });
+        output
+          ..['startId'] = 'start-$revision'
+          ..['conversationId'] = chatId;
+      } else if (command['type'] == 'buddy.default') {
+        final person = reader ?? 'owner';
+        for (final g
+            in (state['conversations'] as List).cast<Map<String, dynamic>>()) {
+          if (g['kind'] == 'swarm-buddy' && g['buddyOwnerId'] == person) {
+            g['buddyDefault'] = g['id'] == command['conversationId'];
+          }
+        }
         revision++;
       } else if (command['type'] == 'buddy.create') {
         // As the backend's Buddy create: a start for the reader's Buddy and

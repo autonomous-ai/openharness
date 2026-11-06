@@ -107,7 +107,11 @@ void main() {
     expect(c.selectedId, 'b-plan');
     final plan = tester.getTopLeft(_key('super-buddy-tab-b-plan'));
     final code = tester.getTopLeft(_key('super-buddy-tab-b-code'));
-    expect(plan.dx, lessThan(code.dx));
+    // Reading order, in a pane narrow enough to wrap them.
+    expect(
+      plan.dy < code.dy || plan.dy == code.dy && plan.dx < code.dx,
+      isTrue,
+    );
     expect(
       find.descendant(
         of: _key('super-buddy-tab-b-plan'),
@@ -151,6 +155,7 @@ void main() {
     await tester.tap(_key('super-buddy-new'));
     await _settle(tester);
     await tester.enterText(_key('super-buddy-new-name'), 'Research');
+    await tester.pump();
     server
       ..refuse = {
         'code': 'BUDDY_CAP',

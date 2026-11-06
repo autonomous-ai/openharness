@@ -1022,6 +1022,7 @@ class SuperTabSnapshot {
       threadSessions = row['threadSessions'] == true,
       sessionsFromChat = row['sessionsFromChat'] == true,
       swarmBuddy = row['swarmBuddy'] == true,
+      buddyCap = (row['buddyCap'] as num?)?.toInt(),
       autoJoin = row['autoJoin'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
@@ -1150,6 +1151,10 @@ class SuperTabSnapshot {
   /// session in a project. False from an older one, whose Buddies are per
   /// project.
   final bool swarmBuddy;
+
+  /// How many Buddies a person may have in this Swarm (#3818); its presence says the server makes several, each in
+  /// its own chat. Null from a server that makes one.
+  final int? buddyCap;
 
   /// People at the owner's email domain are added automatically (head
   /// `autoJoin`, every member reads it): someone who leaves is not added back.
