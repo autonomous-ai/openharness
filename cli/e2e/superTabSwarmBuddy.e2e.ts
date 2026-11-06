@@ -65,9 +65,11 @@ it.skipIf(isTeamAccount())('starts and switches its engine in the same folder an
       else if (command.type === 'agent.rebind') {
         expect(command).toMatchObject({ agentId: 'buddy', previousHarnessId: buddy.harnessId, configuration: { engine: 'codex' } })
         expect(command).not.toHaveProperty('projectId')
+        // Like the real backend, retain the completed request until the host reports its outcome.
+        buddy.switchLanded = { id: buddy.switchRequest.id, requestedBy: buddy.switchRequest.requestedBy }
         buddy.harnessId = command.harnessId; buddy.configuration = command.configuration; delete buddy.switchRequest; rebinds++
       } else if (command.type === 'agent.switchResult') {
-        outcomes.push(command); delete buddy.switchRequest
+        outcomes.push(command); delete buddy.switchRequest; delete buddy.switchLanded
       } else if (command.type === 'agent.configuration') buddy.configuration = command.configuration
       else throw new Error(`Unexpected command ${command.type}`)
       return { data: { result: {} } }
