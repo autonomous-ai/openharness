@@ -3281,8 +3281,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const written = teamWrittenTask(state, startGroup)
       // A new agent starts only on its own person's computer, as them (task #4120, the PM's ruling): never the PM on another
       // person's, and never in a Team account (machines.ts admitMachineStart).
+      // The machine's own owner, as its contributor, with no machine share, Team account or Team session, as agent.new checks
+      // (security review 2 of #3446: off the Machines list, or through a share, the contributor is not the machine's owner).
       const starter = actor.kind === 'person' ? actor.userId : agent(state, actor.agentId).contributorId
-      if (starter !== grant.contributorId) failTeamWork({ code: 'NOT_YOUR_COMPUTER', reason: NOT_YOUR_COMPUTER })
+      if (grant.hostMachineId || grant.teamSession) failTeamWork(TEAM_ACCOUNTS_GONE)
+      if (starter !== grant.contributorId || starter !== grant.machineOwnerId || grant.hostGrant) failTeamWork({ code: 'NOT_YOUR_COMPUTER', reason: NOT_YOUR_COMPUTER })
       // Code a Team agent wrote, or a branch GitHub cannot place, runs only on the project owner's own computer, with its project
       // settings off (teamWritten.ts, the PM's ruling; audit H2, security review 2 of #3081).
       if (written) requireTeamWrittenMachine(state, startGroup, named.machineId)

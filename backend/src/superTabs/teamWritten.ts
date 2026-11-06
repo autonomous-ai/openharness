@@ -68,9 +68,12 @@ export function requireTeamWrittenAccount(state: SuperTabState, group: Conversat
 export const barredFromTeamWritten = (state: SuperTabState, group: Conversation, worker: Agent, marked = teamWrittenTask(state, group)): boolean =>
   marked && !coordinates(state, group, worker) && !onTeamAccount(state, worker) && !ownersOwnAgent(state, group, worker)
 
-/** Whether [worker] is [group]'s project owner's own agent, outside a Team account (task #4120, the PM's ruling). */
-export const ownersOwnAgent = (state: SuperTabState, group: Conversation, worker: Agent): boolean =>
-  worker.contributorId === groupProject(state, group).ownerId && !onTeamAccount(state, worker)
+/** Whether [worker] is [group]'s project owner's own agent, on their own machine: brought by them, on a machine they own, through no
+ *  machine share and outside a Team account (task #4120, the PM's ruling; security review 2 of #3446). */
+export const ownersOwnAgent = (state: SuperTabState, group: Conversation, worker: Agent): boolean => {
+  const ownerId = groupProject(state, group).ownerId
+  return worker.contributorId === ownerId && worker.machineOwnerId === ownerId && !worker.hostGrant && !onTeamAccount(state, worker)
+}
 
 /** Whether [machineId] is [group]'s project owner's own computer: a listed machine they contributed, never a Team account's. */
 export function ownersOwnMachine(state: SuperTabState, group: Conversation, machineId: string): boolean {

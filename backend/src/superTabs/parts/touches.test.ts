@@ -128,7 +128,7 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     const f = swarm()
     const request = { conversationId: f.group('A').id, machineId: 'host', engine: 'codex', name: 'New', cwd: '/w', worktree: false,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
-    const { touches } = f.run({ type: 'agent.start', request }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } })
+    const { touches } = f.run({ type: 'agent.start', request }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
     expect(has(touches, 'machine', 'host')).toBe(true)
     expect(has(touches, 'head', 'head')).toBe(true)
   })

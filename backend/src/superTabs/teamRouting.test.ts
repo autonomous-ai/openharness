@@ -212,8 +212,10 @@ describe('starting a teammate\'s work', () => {
     const f = swarm(), group = f.group()
     f.run({ type: 'agent.start', request: { ...f.request(group, 'mate-laptop'), cwd: '/work' } }, mate, { contribution: { machineOwnerId: 'mate', contributorId: 'mate' } })
     f.run({ type: 'agent.start', request: { ...f.request(f.group(f.mine, mate), 'mate-laptop'), cwd: '/work' } }, mate, { contribution: { machineOwnerId: 'mate', contributorId: 'mate' } })
-    f.run({ type: 'agent.start', request: { ...f.request(group, 'shared-mac'), cwd: '/work' } }, owner, { contribution: { machineOwnerId: 'mate', contributorId: 'owner', hostGrant: 'grant-1' } })
-    expect(f.state.starts).toHaveLength(3)
+    // Through another person's machine share it would run in their account: refused (security review 2 of #3446).
+    expect(refusal(() => f.run({ type: 'agent.start', request: { ...f.request(group, 'shared-mac'), cwd: '/work' } }, owner,
+      { contribution: { machineOwnerId: 'mate', contributorId: 'owner', hostGrant: 'grant-1' } }))?.code).toBe('NOT_YOUR_COMPUTER')
+    expect(f.state.starts).toHaveLength(2)
   })
 })
 

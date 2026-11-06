@@ -850,11 +850,11 @@ describe('Super Tab collaboration policy', () => {
 it('starts only in the chosen conversation, captures authority, and never assigns on join', () => {
   const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
   const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-  const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+  const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
   const request = { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
   const startId = f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) }).result.startId as string
-  expect(f.state.starts![0]).toMatchObject({ request, hostGrant: 'grant-1', dispatched: false })
+  expect(f.state.starts![0]).toMatchObject({ request, hostGrant: null, dispatched: false })
   expect(f.state.agents).toHaveLength(1)
   expect(f.state.conversations).toHaveLength(2) // Lead and the group
   expect(() => f.run({ type: 'agent.startDispatch', startId }, actor, { contribution: { ...contribution, hostGrant: 'new-grant' } })).toThrow('revoked')
@@ -874,7 +874,7 @@ describe('a Codex start that asks for default', () => {
   const stored = (patch: Record<string, unknown>, withVia = false) => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
     const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-    const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+    const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
     const request = { conversationId: group, machineId: 'host', engine: 'codex', name: 'Builder', cwd: '/repo', worktree: true,
       requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false }, ...patch }
     f.run({ type: 'agent.start', request, ...(withVia ? { routeDecisionId: 'd1' } : via) } as Command, actor, { contribution, ...decisionIn(group,
@@ -900,7 +900,7 @@ describe('a Codex start that asks for default', () => {
     for (const asked of [{ model: 'default', effort: 'default' }, { model: 'gpt-6.1-sol', effort: 'high' }]) {
       const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
       const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-      const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+      const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
       const request = { conversationId: group, machineId: 'host', engine: 'codex', name: 'Builder', cwd: '/repo', worktree: true, ...asked,
         requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
       const routing = decisionIn(group, { candidates: [candidate('c0', { machineId: 'host', engine: 'codex', ...asked })], pick: undefined, via: 'instructions', p: null })
@@ -913,7 +913,7 @@ describe('a Codex start that asks for default', () => {
 it.each(['opencode', 'kilo'])('refuses to dispatch a stored legacy %s start before native launch', engine => {
   const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
   const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-  const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+  const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
   const request = { conversationId: group, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
   const startId = f.run({ type: 'agent.start', request, ...via }, actor, { contribution, ...decisionIn(group) }).result.startId as string
@@ -925,7 +925,7 @@ it.each(['opencode', 'kilo'])('refuses to dispatch a stored legacy %s start befo
 describe('agent.start on the Swarm\'s listed machines', () => {
   const request = (group: string, machineId: string) => ({ conversationId: group, machineId, engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
-  const grant = { machineOwnerId: 'target-owner', contributorId: 'owner' }
+  const grant = { machineOwnerId: 'owner', contributorId: 'owner' }
 
   it('refuses an agent\'s start on a machine nobody listed, and records nothing', () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
@@ -1065,7 +1065,7 @@ function routed() {
     f.state.starts.push({ id: `start-${agentId}`, harnessId: member.harnessId, request: { machineId: member.machineId } } as never)
     return `start-${agentId}`
   }
-  return { ...f, get state() { return f.state }, lead, worker, define, startedFor, contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' },
+  return { ...f, get state() { return f.state }, lead, worker, define, startedFor, contribution: { machineOwnerId: 'owner', contributorId: 'owner' },
     leadActor: agentActor(lead), workerActor: agentActor(worker) }
 }
 
@@ -1162,7 +1162,7 @@ describe('agent bookkeeping in the chats people read', () => {
   it('keeps an agent\'s joined and ready lines out of the project chat, and in a task\'s chat', () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
     const actor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-    const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+    const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
     const lines = (conversationId: string, harnessId: string) => {
       const request = { conversationId, machineId: 'host', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
         requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
@@ -2460,7 +2460,7 @@ describe('any agent of the project', () => {
 // An older client's role kind (builder or reviewer) is stored for older readers and decides nothing; its custom role or
 // kind becomes the agent's role name (project instructions, phase 4, decision 2).
 describe('role kinds decide nothing', () => {
-  const contribution = { machineOwnerId: 'host-owner', contributorId: 'owner' }
+  const contribution = { machineOwnerId: 'owner', contributorId: 'owner' }
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   const request = (group: string, extra: Record<string, unknown> = {}) => ({ conversationId: group, machineId: 'host', engine: 'claude', name: 'Reviewer',
     cwd: '/repo', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }, ...extra })
@@ -2816,7 +2816,7 @@ it('allows routing directly to the awaiting worker without first keeping it', ()
 })
 
 describe('Reviewer role', () => {
-  const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner' }
+  const contribution = { machineOwnerId: 'owner', contributorId: 'owner' }
   const request = (group: string, extra: Record<string, unknown> = {}) => ({ conversationId: group, machineId: 'host', engine: 'claude', name: 'Reviewer',
     cwd: '/repo', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }, ...extra })
   function reviewed() {
@@ -2885,7 +2885,7 @@ describe('Reviewer role', () => {
     const check = { type: 'work.check', conversationId: review, assignmentId: verdict.assignment!.id, checkId: verdict.checks[0]!.id, passed: true, evidence: 'Looks fine.' } as Command
     f.run(check, { kind: 'agent', agentId: builder, machineOwnerId: 'host-owner' })
     expect(f.state.conversations.find(c => c.id === review)!.checks[0]!.passedBy).toBe(`agent:${builder}`)
-    f.run(check, { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' })
+    f.run(check, { kind: 'agent', agentId: reviewer, machineOwnerId: 'owner' })
     expect(f.state.conversations.find(c => c.id === review)!.checks[0]!.passedBy).toBe(`agent:${reviewer}`)
   })
 
@@ -2967,7 +2967,7 @@ describe('Reviewer role', () => {
     f.run({ type: 'route.record', conversationId: review, decision: pick(reviewer) } as Command, leadActor)
     const built = f.run({ type: 'work.assign', conversationId: group, agentId: builder }).result.assignmentId as string
     const assignmentId = f.run({ type: 'work.assign', conversationId: review, agentId: reviewer }).result.assignmentId as string
-    const reviewerActor: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' }
+    const reviewerActor: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'owner' }
     const checkId = f.state.conversations.find(c => c.id === group)!.checks[0]!.id
     f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId, passed: true, evidence: 'Ready: yes — revision abc' }, reviewerActor)
     expect(f.state.conversations.find(c => c.id === group)!.checks[0]!.passedBy).toBe(`agent:${reviewer}`)
@@ -2986,7 +2986,7 @@ describe('Reviewer role', () => {
       const { f, group, builder, reviewer } = setup
       const built = f.run({ type: 'work.assign', conversationId: group, agentId: builder }).result.assignmentId as string
       const builderActor: Actor = { kind: 'agent', agentId: builder, machineOwnerId: 'host-owner' }
-      const reviewerActor: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' }
+      const reviewerActor: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'owner' }
       f.run({ type: 'work.status', conversationId: group, assignmentId: built, status, result: 'Ready for review: PR #42 at abc1234' }, builderActor, { now: 2000 })
       const checkId = f.state.conversations.find(c => c.id === group)!.checks[0]!.id
       const verdict = (passed: boolean, now: number) => f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId, passed,
@@ -3068,7 +3068,7 @@ describe('Reviewer role', () => {
     const review = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: group, checks: [{ description: 'Verdict', independent: false }] },
       leadActor).result.conversationId as string
     f.run({ type: 'work.assign', conversationId: review, agentId: reviewer })
-    f.run({ type: 'agent.alert', agentId: reviewer, alert: 'model', active: true }, { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' })
+    f.run({ type: 'agent.alert', agentId: reviewer, alert: 'model', active: true }, { kind: 'agent', agentId: reviewer, machineOwnerId: 'owner' })
     expect(f.state.conversations.find(c => c.id === review)!.assignment).toMatchObject({ status: 'lost', lost: { reason: 'its model keeps failing' } })
     expect(f.state.agents.find(a => a.id === reviewer)!.lostTask).toMatchObject({ conversationId: review })
   })
@@ -4201,7 +4201,7 @@ describe('the Local models add-on', () => {
   const start = (gridName: string, patch: Record<string, unknown> = {}) => ({ conversationId: 'lead', machineId: 'host', engine: 'claude', name: 'Local builder',
     cwd: '/repo/lead', worktree: true, gridModel: 'qwen3-30b', gridName, ...patch,
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
-  const grant = { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }
+  const grant = { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }
 
   it('is on in a new Swarm, its grid named, so the owner\'s computer sets it up in the background', () => {
     const f = fixture()
@@ -5355,7 +5355,7 @@ describe('an engine that cannot run on a contributed machine', () => {
 // Scholes, 2026-10-30: the sidebar's Models showed "Codex, model not reported". A Codex agent at its own default reported its
 // model only after the work it was assigned 30 s after its start was recorded; the start now settles with what it saw.
 describe('a settling start names the model its agent runs', () => {
-  const contribution = { machineOwnerId: 'target-owner', contributorId: 'owner', hostGrant: 'grant-1' }
+  const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
   const reported = { engine: 'codex', model: 'gpt-6.1-sol', effort: 'auto', contextWindow: null, engineVersion: '0.165.0' }
   const setup = () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
@@ -5398,7 +5398,7 @@ describe('a settling start names the model its agent runs', () => {
     expect(activeWork(t.f.state.conversations.find(c => c.id === t.group)!)).toBe(false)
     const agent = t.worker(agentId)
     t.f.run({ type: 'agent.configuration', previousVersion: agent.configurationVersion!, configuration: reported },
-      { kind: 'agent', agentId, machineOwnerId: 'target-owner' })
+      { kind: 'agent', agentId, machineOwnerId: 'owner' })
     expect(t.run()).toMatchObject({ assignmentId, model: 'gpt-6.1-sol' })
   })
 
