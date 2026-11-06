@@ -172,7 +172,8 @@ describe('watchReleases', () => {
       // g1's merge commit waits for Desktop and Web, which GitHub could not read: it is found again next pass.
       resolved: [{ groupId: 'g1', url: 'https://github.com/acme/app/pull/7', components: ['desktop', 'web'] },
         { groupId: 'g2', url: 'https://github.com/acme/app/pull/8', sha: 'm8' }],
-      releases: { backend: { tag: 'v1.4.17_backend', sha: 'b', at: T, carries: [pendingKey({ groupId: 'g2', url: 'https://github.com/acme/app/pull/8' })] } } } }])
+      releases: { backend: { tag: 'v1.4.17_backend', sha: 'b', at: T, carries: [pendingKey({ groupId: 'g2', url: 'https://github.com/acme/app/pull/8' })],
+        compared: [pendingKey({ groupId: 'g2', url: 'https://github.com/acme/app/pull/8' })] } } } }])
   })
 
   it('reads an open step\'s component too, and nothing for a project with nothing to settle', async () => {
@@ -203,7 +204,7 @@ describe('watchReleases', () => {
     const same = scene(known)
     await watchReleases(same.db, same.store, same.fake, T, { warn: () => {}, info: () => {} })
     expect(same.read).toEqual(['latest backend', 'done'])
-    const unsure = scene({ ...known, last: {} }, { contains: async () => null })
+    const unsure = scene({ pending: [{ ...known.pending[0]!, checked: undefined }], last: {} }, { contains: async () => null })
     await watchReleases(unsure.db, unsure.store, unsure.fake, T, { warn: () => {}, info: () => {} })
     expect(unsure.settled[0]!.facts.releases).toEqual({})
   })
@@ -223,7 +224,7 @@ describe('watchReleases', () => {
       { ...readReleases(g.get), done: async () => {} })
     await watchReleases(s.db, s.store, s.fake, T + 6 * 60_000, { warn: () => {}, info: () => {} })
     expect(s.settled[0]!.facts.releases.cli).toEqual({ tag: 'v0.5.55_cli', sha: 'm7', at: T + 5 * 60_000,
-      carries: [pendingKey({ groupId: 'g1', url: 'https://github.com/acme/app/pull/7' })] })
+      carries: [pendingKey({ groupId: 'g1', url: 'https://github.com/acme/app/pull/7' })], compared: [pendingKey({ groupId: 'g1', url: 'https://github.com/acme/app/pull/7' })] })
   })
 
   // Task #3586 (anh Dee, 2026-11-06): #3307 and #3353 went out in CLI 0.5.57, cut before the backend recorded releases, and the Swarm
