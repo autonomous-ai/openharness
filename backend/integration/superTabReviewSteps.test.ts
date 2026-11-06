@@ -60,6 +60,15 @@ const stepsIn = async (tab: string, task: string) => (await db.swarmGroup.findMa
   .filter(group => group.reviewOf === task)
 
 describe('a Ready through the store', () => {
+  it('does not read review files or open steps for a task switched to Simple', async () => {
+    const pullRequestFiles = vi.fn(async (_repository: string | null, urls: string[]) => ({ urls, head: 'abc1234', files: ['desktop/lib/a.dart'] }))
+    const { tab, execute, task, dev, assignment } = await swarm({ pullRequestFiles })
+    await execute({ type: 'project.process', projectId: 'lead', process: 'simple' })
+    await execute({ type: 'work.status', conversationId: task, assignmentId: assignment, status: 'review', result: `Ready: ${REPO}/pull/7` }, host, dev)
+    expect(pullRequestFiles).not.toHaveBeenCalled()
+    expect(await stepsIn(tab, task)).toEqual([])
+  })
+
   it('reads the pull request\'s files and opens two security reviews for a sign-in change', async () => {
     const pullRequestFiles = vi.fn(async (_repository: string | null, urls: string[]) => ({ urls, head: 'abc1234', files: ['backend/src/routes/auth.ts'] }))
     const { tab, execute, task, dev, reviewers, assignment } = await swarm({ pullRequestFiles })
