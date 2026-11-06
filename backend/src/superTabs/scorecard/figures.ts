@@ -23,6 +23,7 @@ export interface ScorecardMessage {
   private?: boolean
   thread: string | null
   createdAt: number
+  sequence?: number
   /** People the post tagged. */
   mentions?: string[]
 }
@@ -137,7 +138,7 @@ export function scorecardDay(input: ScorecardInput): ScorecardFigures {
   const { start, end } = input
   const limits = input.limits ?? { ...SCORECARD_LIMITS }
   const inDay = (t: number) => t >= start && t < end
-  const messages = [...new Map(input.messages.map(m => [m.id, m])).values()].sort((a, b) => a.createdAt - b.createdAt)
+  const messages = [...new Map(input.messages.map(m => [m.id, m])).values()].sort((a, b) => a.createdAt - b.createdAt || (a.sequence ?? 0) - (b.sequence ?? 0))
   const byId = new Map(messages.map(m => [m.id, m]))
   const pm = new Set(input.pmAgentIds)
   const dayRows = messages.filter(m => inDay(m.createdAt))
