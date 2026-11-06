@@ -54,7 +54,7 @@ const list = async (as: AuthUser = recipient) => {
 const listedIds = (machines: Awaited<ReturnType<typeof list>>) => machines.flatMap(m => m.shares.map(s => s.id)).sort()
 const percentile = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.floor(values.length * p))]!
 
-interface Profiled { collection: string; plans: string[]; keysExamined: number; docsExamined: number; returned: number }
+interface Profiled { collection: string; plans: string[]; keysExamined: number; docsExamined: number; returned: number; reads: number }
 /** What Mongo did for each collection while `read` ran: plans, documents examined and rows returned. */
 async function profiled(read: () => Promise<unknown>): Promise<Profiled[]> {
   const db = database.db
@@ -68,7 +68,8 @@ async function profiled(read: () => Promise<unknown>): Promise<Profiled[]> {
   for (const row of found.cursor.firstBatch) {
     const collection = row.ns.slice(row.ns.indexOf('.') + 1)
     if (collection.startsWith('system.') || collection.startsWith('$cmd')) continue
-    const entry = byCollection.get(collection) ?? { collection, plans: [], keysExamined: 0, docsExamined: 0, returned: 0 }
+    const entry = byCollection.get(collection) ?? { collection, plans: [], keysExamined: 0, docsExamined: 0, returned: 0, reads: 0 }
+    entry.reads++
     if (row.planSummary && !entry.plans.includes(row.planSummary)) entry.plans.push(row.planSummary)
     entry.keysExamined += row.keysExamined ?? 0
     entry.docsExamined += row.docsExamined ?? 0
@@ -164,6 +165,17 @@ describe('the harness shares list on a Swarm-sized database', () => {
     process.stdout.write(`harness shares list: ${JSON.stringify(numbers)}\n`)
     expect(numbers.p95Ms).toBeLessThan(100)
     expect(numbers.waveOf20Ms).toBeLessThan(1000)
+  })
+
+  // Task #3925 (Ken's scan, 11-06 16:20 VN): after v1.4.24 the list cost 19.6 s of database time per pod-minute, mostly one
+  // Machine.findFirst per machine its shared agents run on (~850 a pod-minute). One list reads its machines at most twice:
+  // the route's own read and one for every grant it checks, however many machines the Swarm's agents run on.
+  it('reads the machines at most twice a call, however many machines its shared agents run on', async () => {
+    await list()
+    const reads = await profiled(list)
+    const machines = reads.find(r => r.collection === 'machines')
+    expect(CONFIG.machines).toBeGreaterThan(2)
+    expect(machines?.reads ?? 0).toBeLessThanOrEqual(2)
   })
 
   it('reads every collection through an index, examining about as many documents as it returns', async () => {
