@@ -58,14 +58,15 @@ export function tellBuddies(state: SuperTabState, message: MessageDraft, threadS
   if (buddies.length) message.buddyRecipients = buddies
 }
 
-/** Work [group]'s requester asked for was just assigned: one line for their Buddy alone, inside the task, saying only what
- *  its person reads there (its number, title and status, Lead's ruling 10-29). None when the Buddy cannot read the task. */
+/** Work recorded as [group]'s requester's was just assigned: one line for their Buddy alone, inside the task, saying only what
+ *  its person reads there (its number, title and status, Lead's ruling 10-29). None when the Buddy cannot read the task.
+ *  An agent may name a task's requester, so the line says only what the server knows: the record (task #4217). */
 export function assignedNotice(state: SuperTabState, group: Conversation, author: Author, operationId: string): MessageDraft | null {
   if (groupProject(state, group).boardMode) return null
   const buddy = group.requesterId ? listeningBuddy(state, group.requesterId, group) : undefined
   if (!buddy || !group.assignment) return null
   return { id: stableId(operationId, 'buddy-news'), conversationId: group.id, author, replyTo: null, recipients: [buddy.id], source: AGENT_ONLY,
-    text: `News for your owner: #${group.number} "${group.title}", which they requested, is assigned and ${group.assignment.status}.` }
+    text: `News for your owner: #${group.number} "${group.title}", recorded as their request, is assigned and ${group.assignment.status}.` }
 }
 
 /** Work [group]'s requester asked for just shipped: a verified release holds it (releases.ts settleReleases), as one line for
@@ -75,7 +76,7 @@ export function shippedNotice(state: SuperTabState, group: Conversation, author:
   const buddy = group.requesterId ? listeningBuddy(state, group.requesterId, group) : undefined
   if (!buddy) return null
   return { id: stableId(operationId, 'buddy-news', 'shipped'), conversationId: group.id, author, replyTo: null, recipients: [buddy.id], source: AGENT_ONLY,
-    text: `News for your owner: #${group.number} "${group.title}", which they requested, shipped.` }
+    text: `News for your owner: #${group.number} "${group.title}", recorded as their request, shipped.` }
 }
 
 /** Every Buddy hearing input, in its own chat too: the agent guard meets a concurrent sleep (#3824), and the person's
