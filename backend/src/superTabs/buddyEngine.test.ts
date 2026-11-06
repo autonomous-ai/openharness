@@ -37,7 +37,73 @@ function setup() {
   return { run, target, request, rebind, id, chat, host, get state() { return state }, pool: () => state.machines![0]! }
 }
 
+function addBuddy(f: ReturnType<typeof setup>) {
+  const startId = f.run({ type: 'buddy.create', machineId: 'mac', engine: 'claude', name: 'Moss' }).result.startId
+  const id = f.run({ type: 'agent.started', startId, harnessId: 'h-moss', configuration }).result.agentId as string
+  f.run({ type: 'agent.startSettled', startId, warning: null })
+  const chat = f.state.conversations.find(c => c.agentIds.includes(id))!.id
+  return { id, chat, target: () => f.state.agents.find(a => a.id === id)!,
+    host: { kind: 'agent', agentId: id, machineOwnerId: 'peer' } as Actor }
+}
+
 describe('a person switching their Buddy engine', () => {
+  it('switches the default Buddy when an older client names no chat', () => {
+    const f = setup(), second = addBuddy(f)
+    f.run({ type: 'buddy.default', conversationId: second.chat })
+    f.run({ type: 'buddy.engine', engine: 'codex' })
+    expect(second.target().switchRequest?.engine).toBe('codex')
+    expect(f.target().switchRequest).toBeUndefined()
+  })
+
+  it('switches exactly the named Buddy even when another is the default, preserving its private chat', () => {
+    const f = setup(), second = addBuddy(f)
+    f.run({ type: 'buddy.engine', engine: 'codex', conversationId: second.chat })
+    expect(f.target().switchRequest).toBeUndefined()
+    const switchId = second.target().switchRequest!.id
+    f.run({ type: 'agent.switchClaim', agentId: second.id, switchId }, second.host)
+    f.run({ type: 'agent.rebind', agentId: second.id, machineId: 'mac', previousHarnessId: 'h-moss', harnessId: 'h-moss-new',
+      configuration: { ...configuration, engine: 'codex' } }, second.host)
+    const result = f.run({ type: 'agent.switchResult', agentId: second.id, switchId, ok: true }, second.host)
+    expect(result.messages).toEqual([expect.objectContaining({ conversationId: second.chat, text: 'Your Buddy now runs on Codex.' })])
+    expect(f.state.agents).toHaveLength(2)
+    expect(f.state.conversations.find(c => c.id === second.chat)?.agentIds).toEqual([second.id])
+    expect(f.target().configuration.engine).toBe('claude')
+  })
+
+  it('refuses another person, archived, missing or old-membership chat instead of falling back', () => {
+    for (const kind of ['other person', 'archived', 'missing', 'old membership']) {
+      const f = setup(), second = addBuddy(f)
+      const chat = f.state.conversations.find(c => c.id === second.chat)!
+      if (kind === 'archived') chat.archived = true
+      if (kind === 'old membership') chat.audience!.people[0]!.generation = 'old'
+      const actor = kind === 'other person' ? { kind: 'person', userId: 'owner', email: 'owner@example.com' } as Actor : person
+      expect(() => f.run({ type: 'buddy.engine', engine: 'codex', conversationId: kind === 'missing' ? 'gone' : second.chat }, actor))
+        .toThrow(/unavailable/)
+      expect(f.target().switchRequest).toBeUndefined()
+      expect(second.target().switchRequest).toBeUndefined()
+    }
+  })
+
+  it('reports a failed or expired named Buddy switch in that Buddy chat', () => {
+    for (const expire of [false, true]) {
+      const f = setup(), second = addBuddy(f)
+      second.target().switchRequest = { id: 'switch-moss', engine: 'codex', profileId: 'default', requestedBy: 'peer', at: new Date(NOW).toISOString() }
+      const messages = expire ? staleSwitches(f.state, NOW + 120_001)
+        : f.run({ type: 'agent.switchResult', agentId: second.id, switchId: 'switch-moss', ok: false, error: 'signed out' }, second.host).messages
+      expect(messages).toEqual([expect.objectContaining({ conversationId: second.chat, text: expect.stringMatching(/Couldn't switch/) })])
+    }
+  })
+
+  it('gives the host each Buddy’s own private chat and keeps its subscription alert there', async () => {
+    const f = setup(), second = addBuddy(f)
+    const rows = await hostTab('swarm', f.state, 'mac', { sub: 'peer', email: 'peer@example.com' } as never, NOW,
+      { people: [], confidential: new Set(), agentGrant: async () => {}, teams: [], githubApp: false })
+    expect(rows.roster.find(r => 'agent' in r && r.agent.id === second.id)).toMatchObject({ buddyConversationId: second.chat })
+    expect(rows.roster.find(r => 'agent' in r && r.agent.id === f.id)).toMatchObject({ buddyConversationId: f.chat })
+    expect(f.run({ type: 'agent.alert', agentId: second.id, alert: 'limit', active: true }, second.host).messages)
+      .toEqual([expect.objectContaining({ conversationId: second.chat, text: expect.stringMatching(/subscription limit/) })])
+  })
+
   it('keeps the same Buddy and chat through claim, replacement and result', () => {
     const f = setup(), before = structuredClone(f.state.conversations.find(c => c.id === f.chat))
     f.run({ type: 'buddy.engine', engine: 'codex' })
