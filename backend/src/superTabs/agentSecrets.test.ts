@@ -64,6 +64,11 @@ function fixture() {
     'person.tell': text => ({ type: 'person.tell', personId: 'owner', text }),
     'decision.ask': text => ({ type: 'decision.ask', conversationId: group, personId: 'owner',
       questions: [{ question: text, options: ['Yes', 'No'], recommended: 0, unblocks: 'The release' }] }),
+    // SecAlder's security review 1 of #3310: a needs_human question's options and what it unblocks are text too.
+    'work.status ask options': text => ({ type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: 'Which key?',
+      ask: { personId: 'owner', options: [text, 'Another'], recommended: 0, unblocks: 'The deploy' } }),
+    'work.status ask unblocks': text => ({ type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: 'Which key?',
+      ask: { personId: 'owner', options: ['A', 'B'], recommended: 0, unblocks: text } }),
   }
   return { run, paths, pm, worker, group, get state() { return state } }
 }
