@@ -84,6 +84,14 @@ describe('a person switching their Buddy engine', () => {
     expect(f.target().switchRequest?.engine).toBe('codex')
   })
 
+  it('refuses an owner machine whose account became a Team account', () => {
+    const f = setup()
+    f.pool().observation!.sessionKind = 'team'
+    expect(() => f.run({ type: 'buddy.engine', engine: 'codex' })).toThrow(/own machine/i)
+    expect(f.target().switchRequest).toBeUndefined()
+    expect(f.target().harnessId).toBe('h-old')
+  })
+
   it('excludes concurrent engine and model changes in both directions', () => {
     const f = setup()
     f.run({ type: 'buddy.engine', engine: 'codex' })
