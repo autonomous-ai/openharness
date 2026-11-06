@@ -3,6 +3,7 @@ import { removedLines } from '../instructionsDiff.js'
 import { rebasedDocument } from '../instructionsRebase.js'
 import { INSTRUCTIONS_TEMPLATE } from '../instructionsTemplate.js'
 import { PAST_TEMPLATE_LINES } from '../instructionsTemplateHistory.js'
+import { removedLineItems } from '../instructionsDiff.js'
 import { moveLoss, restoredDocument, stillMissing, templateLines } from './restoreRebase.js'
 
 // Task #3679 (anh Dee, P0): the first move onto the new base lost the lines no person's name guarded. A project moved by it is given
@@ -120,6 +121,20 @@ describe('the lines a project is given back after the first move (#3679)', () =>
     const loss = moveLoss(before, '# P\n')
     expect([...loss.keys()]).toEqual(['Never run a test that signs the Mac out of the real CLI.'])
     expect(templateLines().has(old)).toBe(true)
+  })
+
+  // Second review round 3 of #3327 (Linuxtest2): v2 builds in Roles, Workflow and the intro, but not the template's Routing section (the
+  // assignment order, the quota rules, which model does which work), which the brief names as lost. Those lines come back.
+  it('gives back the lines of a template-made project\'s Routing section, and skips its Roles and Workflow', () => {
+    const items = removedLineItems(INSTRUCTIONS_TEMPLATE, '')
+    const routing = items.find(line => line.path.startsWith('Routing'))!
+    const roles = items.find(line => line.path.startsWith('Roles'))!
+    const before = `# P\n\n## Roles\n\n- ${roles.text}\n\n## Routing\n\n- ${routing.text}\n`
+    const loss = moveLoss(before, '# P\n')
+    expect([...loss.keys()]).toEqual([routing.text])
+    expect(templateLines().has(roles.text)).toBe(true)
+    expect(templateLines().has(routing.text)).toBe(false)
+    expect(restoredDocument(before, '# P\n', 80, loss).lines).toEqual([routing.text])
   })
 })
 
