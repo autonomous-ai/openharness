@@ -395,3 +395,54 @@ describe('pins: a task without active work waits for its builder after findings,
     expect(fresh).not.toHaveProperty('pin')
   })
 })
+
+describe('lost work goes to an ordinary project worker', () => {
+  function lost() {
+    const s = crewSwarm(['Old', 'New', 'Reviewer', 'Tester'])
+    s.state.agents.find(a => a.id === s.ids.Reviewer)!.roleName = 'Reviewer'
+    s.state.agents.find(a => a.id === s.ids.Tester)!.roleName = 'Tester'
+    const api = s.task('Recover API', ['backend/src/api.ts'])
+    s.run({ type: 'work.assign', conversationId: api, agentId: s.ids.Old! })
+    const group = s.group(api), assignment = group.assignment!
+    assignment.status = 'lost'
+    assignment.result = 'Parser committed; continue with the writer.'
+    assignment.lost = { reason: 'its session stopped', at: NOW }
+    group.lostAttempt = { id: assignment.id, agentId: s.ids.Old!, machineId: 'host', engine: 'claude' }
+    group.pullRequestUrls = ['https://github.com/example/repo/pull/21']
+    group.pullRequestHeads = { [group.pullRequestUrls[0]!]: { head: 'a'.repeat(40), base: 'main', patchId: null } }
+    return { ...s, api, get state() { return s.state } }
+  }
+
+  it('hands a lost task to a free non-crew Engineer, never its last owner or a Reviewer/Tester', () => {
+    const s = lost()
+    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, NOW)).toEqual([
+      { conversationId: s.api, agentId: s.ids.New, why: 'lane', lane: 'backend' },
+    ])
+    // A stale builder pin must not put work back in the failed agent's hands.
+    s.group(s.api).pin = { agentId: s.ids.Old!, why: 'ci', at: NOW }
+    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, NOW).map(p => p.agentId)).toEqual([s.ids.New])
+    s.state.agents.find(a => a.id === s.ids.New)!.workDecision = 'stop'
+    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, NOW)).toEqual([])
+  })
+
+  it('delivers the previous result and pushed PR ref and head to the replacement', () => {
+    const s = lost()
+    const effects = s.run({ type: 'work.assign', conversationId: s.api, agentId: s.ids.New! })
+    const text = effects.messages.filter(m => m.recipients.includes(s.ids.New!)).map(m => m.text).join('\n')
+    expect(text).toContain('Parser committed; continue with the writer.')
+    expect(text).toContain('https://github.com/example/repo/pull/21')
+    expect(text).toContain('refs/pull/21/head')
+    expect(text).toContain('a'.repeat(40))
+    expect(s.group(s.api).assignment).toMatchObject({ agentId: s.ids.New, status: 'working' })
+  })
+
+  it('does not invent a pushed branch when the prior attempt recorded none', () => {
+    const s = lost()
+    delete s.group(s.api).pullRequestUrls
+    delete s.group(s.api).pullRequestHeads
+    const text = s.run({ type: 'work.assign', conversationId: s.api, agentId: s.ids.New! }).messages
+      .filter(m => m.recipients.includes(s.ids.New!)).map(m => m.text).join('\n')
+    expect(text).toContain('Parser committed; continue with the writer.')
+    expect(text).not.toContain('refs/pull/')
+  })
+})
