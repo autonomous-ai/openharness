@@ -81,6 +81,18 @@ describe('on-demand PR head reads', () => {
     expect(f.reads).toHaveLength(2)
   })
 
+  it('does not replay an older cached head over a newer stored observation', async () => {
+    const f = fixture()
+    await f.reader().watch(PR)
+    f.setNow(1)
+    const r = f.wrap(f.reader(), { [PR]: { head: B, base: 'main', patch: null, at: 1 } })
+    expect(await r.watch(PR)).toBeNull()
+    expect(f.reads).toEqual([`watch ${PR}`])
+    f.setWatch(watch(B))
+    f.setNow(30_000)
+    expect(await r.watch(PR)).toMatchObject({ head: B })
+  })
+
   it('turns a thrown read into a cached failure without skipping reader cleanup', async () => {
     const f = fixture()
     let reads = 0

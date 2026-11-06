@@ -546,6 +546,19 @@ describe('pull request events', () => {
       expect(f.asked).toEqual([f.PR, f.PR])
     })
 
+    it('does not let a cached head undo a newer observation from the regular watcher', async () => {
+      const { f, review, recorded } = await pushed()
+      expect(await review(HEAD3)).toMatchObject({ counts: true })
+      f.clock.advance(1)
+      f.pulls.set(f.PR, f.pull({ head: HEAD2 }))
+      await watchPullRequests(db, f.store, f.reader, f.clock.now)
+      expect(await recorded()).toMatchObject({ head: HEAD2 })
+      f.asked.length = 0
+      expect(await review(HEAD3)).toMatchObject({ counts: false })
+      expect(await recorded()).toMatchObject({ head: HEAD2 })
+      expect(f.asked).toEqual([])
+    })
+
     it('refreshes and records its code PR, ignoring watched PRs merely referenced in its brief', async () => {
       const other = 'https://github.com/acme/app/pull/90001', another = 'https://github.com/acme/app/pull/90002'
       const f = await swarm({ reads: true, brief: `Follow ${other} and ${another}` })
