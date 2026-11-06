@@ -175,8 +175,8 @@ export class LeadSwitchRequests {
         return { ok: false, error: 'the Buddy owner or session could not be verified on this computer' }
       }
     }
-    // The default account too; a Team daemon's is signed in through its owner's relay (team/relay.ts), which this cannot read.
-    if (!team && !await this.deps.signedIn(engine, home)) return { ok: false, error: SIGNED_OUT }
+    // The default account too, in a Team daemon as well: each is its own sign-in, which its CLI reports.
+    if (!await this.deps.signedIn(engine, home)) return { ok: false, error: SIGNED_OUT }
     const daemon = await this.deps.open({ dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId })
     try {
       const { changeId } = run, agentId = run.harnessId
