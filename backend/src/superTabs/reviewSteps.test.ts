@@ -33,6 +33,21 @@ function fixture() {
 }
 
 describe('a handed task opens its review steps', () => {
+  // Task #3964 (review of PR #3436): the Ready that hands out review steps follows the project's machine rules too.
+  it('hands no review step to a Reviewer on a machine where no Reviewer runs, and gives it to one elsewhere', () => {
+    const rules = { projectRules: { revision: 1, rules: { ...SEED_RULES, machines: [{ machineIds: ['host'], why: 'Its Codex defaults to a local model', noReviews: true as const }] } } }
+    const alone = fixture()
+    alone.add('rev-local', alone.task, 'Reviewer')
+    alone.ready(['docs/a.md'], 'abc1234', true, rules)
+    expect(alone.steps()).toEqual([{ name: 'Review', agent: null, status: null }])
+    const f = fixture()
+    f.add('rev-local', f.task, 'Reviewer')
+    const elsewhere = f.run({ type: 'agent.add', conversationId: f.task, machineId: 'other', harnessId: 'rev-other', name: 'rev-other', configuration: opus,
+      lead: false, roleName: 'Reviewer' } as Command, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
+    f.ready(['docs/a.md'], 'abc1234', true, rules)
+    expect(f.steps()).toEqual([{ name: 'Review', agent: elsewhere, status: 'working' }])
+  })
+
   it('a pull request touching sign-in code opens two security reviews, each to a different free Reviewer, never the Engineer', () => {
     const f = fixture()
     const a = f.add('rev-a', f.task, 'Reviewer'), b = f.add('rev-b', f.task, 'Reviewer')

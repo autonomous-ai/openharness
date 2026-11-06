@@ -234,3 +234,19 @@ it('keeps a crew member with no open group, past the lapse, and names it among t
   expect([...retainedHarnesses(dir, now)]).toEqual(['pm'])
   expect([...retainedLeads(dir)]).toEqual(['pm'])
 })
+
+
+it('grants resume only to server-managed main Buddies and revokes it on stop or removal (#3824)', () => {
+  const dir = root()
+  const buddy = (id: string, extra: Record<string, unknown> = {}, agent: Record<string, unknown> = {}) => row(id,
+    { agent: { harnessId: id, machineId: 'machine', buddyOf: { personId: 'peer', generation: 'g' }, ...agent }, ...extra })
+  retainContributions(dir, 'machine', [buddy('managed', { buddySleepManaged: true }), buddy('old'),
+    buddy('thread', { buddySleepManaged: true }, { buddySession: { thread: 'root' } }),
+    buddy('stopping', { buddySleepManaged: true, stopRequested: true })])
+  expect([...retainedLeads(dir)]).toEqual(['managed'])
+  expect(mayBeBuddy(dir, 'managed')).toBe(true)
+  retainContributions(dir, 'machine', [buddy('managed', { stopRequested: true }), buddy('old')])
+  expect([...retainedLeads(dir)]).toEqual([])
+  retainContributions(dir, 'machine', [])
+  expect([...retainedHarnesses(dir)]).toEqual([])
+})

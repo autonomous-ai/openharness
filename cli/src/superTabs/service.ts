@@ -775,6 +775,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             throw error
           }
         }
+        // The project's machine rules alone, for the route (backend machine-rules read, task #3964).
+        if (payload.action === 'machineRules') {
+          if (!identifier(payload.projectId)) return { error: 'INVALID_REQUEST' }
+          return { ok: true, value: await backend(core, 'GET', `${path}/projects/${encodeURIComponent(String(payload.projectId))}/machine-rules?${identity}`) }
+        }
         if (payload.action === 'decisions' && (payload.state === 'open' || payload.state === 'answered')) {
           return { ok: true, value: await backend(core, 'GET', `${path}/decisions?state=${payload.state}&${identity}`) }
         }

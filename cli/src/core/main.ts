@@ -1021,7 +1021,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ...(swarm ? { retainedProjectLeads: () => swarm.retainedProjectLeads(env.ADAPTER_DATA_DIR) } : {}),
     // What it may close and reopen is decided in this process, on what its host retains (superTabs/inCore/agents.ts).
     ...(swarm ? { swarmAgents: (agentDeps) => swarm.createSwarmAgents({ ...agentDeps,
-      members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR) },
+      members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR),
+        sleepingBuddies: () => swarm.retainedSleepingBuddies(env.ADAPTER_DATA_DIR) },
       // On a Team daemon, an ended confidential member's session data goes (set below, with the Team daemon's policy).
       purgeEnded: async (agentId) => teamPurge ? teamPurge(agentId) : { skipped: true } }) } : {}),
     dsh: (session) => backendRef?.dshFrameProvider?.(session) ?? null,

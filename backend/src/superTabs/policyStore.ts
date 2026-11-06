@@ -4,7 +4,7 @@
  */
 import type { Prisma } from '@prisma/client'
 import { fail, stableId } from './model.js'
-import { MAX_RULES_REVISIONS, projectRulesSchema, SEED_RULES, type ProjectRules, type RulesChange, type RulesWrite } from './policy.js'
+import { MAX_RULES_REVISIONS, projectRulesSchema, seedRules, type ProjectRules, type RulesChange, type RulesWrite } from './policy.js'
 
 type Transaction = Prisma.TransactionClient
 
@@ -30,13 +30,13 @@ export async function readRules(tx: Transaction, tabId: string, projectId: strin
   // Normalize legacy dispatch; only the repair path may read an invalid saved record.
   const parsed = projectRulesSchema.safeParse(row.rules)
   if (!parsed.success && !forEdit) fail('RULES_INVALID', `Project ${projectId} rules revision ${row.revision} does not pass the schema; repair the project rules by saving them again.`, 409)
-  return { revision: row.revision, rules: parsed.success ? parsed.data : row.rules as unknown as ProjectRules }
+  return { revision: row.revision, rules: seedRules(tabId, projectId, parsed.success ? parsed.data : row.rules as unknown as ProjectRules) }
 }
 
 /** The record a project runs on now, for a server worker (the merge train, the release schedule): its newest revision, or
  *  the seed at revision 0. Takes the client or a transaction. */
 export async function currentRules(tx: Transaction, tabId: string, projectId: string): Promise<{ revision: number; rules: ProjectRules }> {
-  return await readRules(tx, tabId, projectId) ?? { revision: 0, rules: SEED_RULES }
+  return await readRules(tx, tabId, projectId) ?? { revision: 0, rules: seedRules(tabId, projectId) }
 }
 
 /** Every kept revision, newest first: at most MAX_RULES_REVISIONS rows of the same index.
