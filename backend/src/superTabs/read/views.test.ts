@@ -34,6 +34,15 @@ const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machin
 const keys = (list: Array<{ key: string }>) => list.map(p => p.key)
 
 describe('reader view of the parts (design 4.1, 4.3)', () => {
+  // Task #3818 (Desktop's ask, #3820): the head always says how many Buddies a person may have, so an app tells a backend that
+  // makes several from an older one, which sends none.
+  it('always sends the Swarm\'s Buddy cap: its owner\'s number, else the default', () => {
+    const { s } = scene()
+    const head = (state: typeof s.state) => readerView(store.split(state, { tabId: 'tab', version: R, now: NOW }), peer, NOW, { teamMachines: [] }).parts.head.data
+    expect(head(s.state).buddyCap).toBe(5)
+    expect(head({ ...s.state, buddyCap: 3 }).buddyCap).toBe(3)
+  })
+
   it('sends the head without owner-only and internal fields, and projects without their progress', () => {
     const { parts } = scene()
     const { head } = readerView(parts, peer, NOW, { teamMachines: [] }).parts
@@ -117,8 +126,16 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     const view = readerView(parts, peer, NOW, { teamMachines: [] })
     const worker = view.parts.agents.find(a => a.key === s.worker)!
     for (const hidden of ['downNamed', 'downSince', 'limitedUntil', 'roleId']) expect(worker.data).not.toHaveProperty(hidden)
-    expect(view.derived.agents[s.worker]).toEqual({ downSince: new Date(NOW - 5 * MINUTE).toISOString(), limitedUntil: null, workDecision: null, roleId: null, roleName: 'Engineer' })
+    expect(view.derived.agents[s.worker]).toEqual({ downSince: new Date(NOW - 5 * MINUTE).toISOString(), limitedUntil: null, workDecision: null, roleId: null, roleName: 'Engineer', kind: 'regular', chatId: null })
     expect(Object.keys(view.derived.agents).sort()).toEqual([s.lead, s.worker].sort())
+  })
+
+  // Task #4116 (Swarm v3): the left pane's "My agents" reads each agent's kind and its chat from the derived summary.
+  it('says each agent\'s kind and the chat its person talks to it in', () => {
+    const { parts, s } = scene()
+    const view = readerView(parts, owner, NOW, { teamMachines: [] })
+    expect(view.derived.agents[s.lead]).toMatchObject({ kind: 'pm', chatId: 'lead' })
+    expect(view.derived.agents[s.worker]).toMatchObject({ kind: 'regular', chatId: null })
   })
 
   // Free slots count every session the machine runs, as today, even ones this reader cannot see.
@@ -237,6 +254,22 @@ describe('the pulse on the read', () => {
     expect(view.parts.groups.find(g => g.key === 'lead')!.data).not.toHaveProperty('pulse')
     const owners = readerView(parts, owner, NOW, { teamMachines: [] })
     expect(Object.keys(owners.derived.pulse ?? {})).toHaveLength(2)
+  })
+
+  // Task #3827: the board's Merged cards say when the next release is due. The server records it on the project's release list
+  // (never sent whole) and the read sends only that: a time per component, for the projects the reader sees.
+  it('sends each visible project\'s next release times, and nothing else of its release list', () => {
+    const { s } = scene()
+    s.edit(state => {
+      state.projects!.find(p => p.name === 'Pilot')!.releases = { pending: [], nextAt: { desktop: 0, backend: NOW + 60 * MINUTE } }
+    })
+    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
+    const view = readerView(parts, peer, NOW, { teamMachines: [] })
+    const pilot = view.parts.head.data.projects!.find(p => p.name === 'Pilot')!
+    expect(view.derived.releaseTimes).toEqual({ [pilot.id]: { desktop: 0, backend: NOW + 60 * MINUTE } })
+    expect(pilot).not.toHaveProperty('releases')
+    const other = view.parts.head.data.projects!.find(p => p.name !== 'Pilot')
+    if (other) expect(view.derived.releaseTimes).not.toHaveProperty(other.id)
   })
 
   // River, on ReviewPulse2's review of #3209: the pulse's lists name conversations, so a reader gets only those they read; a

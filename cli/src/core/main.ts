@@ -1,4 +1,3 @@
-import { realTeamRelayLaunch } from '../team/relay.js'
 import { createGridAssignments } from './agents/gridAssignments.js'
 import { createShortTurnGuard } from './turns/shortTurnGuard.js'
 import { createQuestionControls } from './engines/questionControls.js'
@@ -1019,7 +1018,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     resumeAgent: async (agentId) => lifecycle.resumeAgent(agentId),
     // What it may close and reopen is decided in this process, on what its host retains (superTabs/inCore/agents.ts).
     ...(swarm ? { swarmAgents: (agentDeps) => swarm.createSwarmAgents({ ...agentDeps,
-      members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR) },
+      members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR),
+        sleepingBuddies: () => swarm.retainedSleepingBuddies(env.ADAPTER_DATA_DIR) },
       // On a Team daemon, an ended confidential member's session data goes (set below, with the Team daemon's policy).
       purgeEnded: async (agentId) => teamPurge ? teamPurge(agentId) : { skipped: true } }) } : {}),
     dsh: (session) => backendRef?.dshFrameProvider?.(session) ?? null,
@@ -2445,7 +2445,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     capabilities: () => createBackend?.capabilities() ?? Promise.resolve({ sessionEnv: true }),
     installCodexHooks: (codexHome) => env.DISABLE_HOOK_INSTALL ? true : engineHookFacets.codex.installIn(hookPort, codexHome),
     dshLaunch: dshLaunch.relaunch,
-    ownerRelay: realTeamRelayLaunch,
   }
   // What a relaunch needs to bring a pane back (core/agents/launch.ts). Declared before the restore
   // pass below, which calls these for every pane it rebuilds.
@@ -2772,7 +2771,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     publishConfig: publishGridConfigDir,
     native: prepareNativeLaunch,
     dshLaunch,
-    ownerRelay: realTeamRelayLaunch,
     createBackend,
     recoverBackend,
     noBackendCode: createUnavailable,
@@ -2924,7 +2922,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       leadProtected: (agentId: string, changeId?: string) => swarm.leadCloseProtected(env.ADAPTER_DATA_DIR, agentId, changeId),
       leadSwitching: (agentId: string, changeId: string) => swarm.leadSwitching(env.ADAPTER_DATA_DIR, agentId, changeId),
       leadSwitchEnded: (agentId: string, changeId: string, stopped: boolean) => swarm.leadSwitchEnded(env.ADAPTER_DATA_DIR, agentId, changeId, stopped),
-      buddyProtected: (agentId: string) => swarm.mayBeBuddy(env.ADAPTER_DATA_DIR, agentId),
+      buddyProtected: (agentId: string, changeId?: string) => swarm.buddyCloseProtected(env.ADAPTER_DATA_DIR, agentId, changeId),
     } : {}),
   })
   backend.closeAgentService = closing.closeAgentService

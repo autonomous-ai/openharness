@@ -7,7 +7,7 @@ import { machineSuspensionReason, suspendedEngines } from '../engineHealth.js'
 import { DISPATCH_RULES, laneOf } from '../dispatch.js'
 import { leadChoices } from '../leadStart.js'
 import { heldView } from '../heldReason.js'
-import { isBuddyChat, isBuddyReader } from '../buddies.js'
+import { buddyCapOf, isBuddyChat, isBuddyReader } from '../buddies.js'
 import { agentForBuddy, agentWithoutMachine, groupForBuddy, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { availableSlots, slotCounter, machineTeamWork, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
@@ -16,6 +16,7 @@ import { canReadGroup } from '../projects.js'
 import { promptWaits } from '../promptWaits.js'
 import { storedPulse, type Pulse } from '../pulse.js'
 import { coordinatorNameOf, roleNameOf } from '../instructions.js'
+import { agentChatId, agentKind } from '../agentKind.js'
 import { withAvatarView } from '../profile.js'
 import { swarmUsernames } from '../usernames.js'
 import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
@@ -61,7 +62,9 @@ export interface ReadExtras {
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
-  'routingPolicy', 'rules', 'paused', 'invitations', 'localModels', 'workspaceId', 'workspaceVisibility', 'buddies', 'removedMachines', 'autoJoin'] as const
+  'routingPolicy', 'rules', 'paused', 'invitations', 'localModels', 'workspaceId', 'workspaceVisibility', 'buddies', 'removedMachines', 'autoJoin',
+  // How many Buddies each person may have (task #3818): apps offer a new one below it.
+  'buddyCap'] as const
 
 export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, data: T): LivePart<T> =>
   ({ key: part.key, version: part.version, changedAt: part.changedAt, data })
@@ -69,7 +72,7 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
 /** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping or the
  *  leaderboard's (the leaderboard read sums it), except when it shipped. */
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
-  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, answered: _answered, chatLimits: _chatLimits, pulse: _pulse, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
+  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, answered: _answered, chatLimits: _chatLimits, talkedAt: _talkedAt, pulse: _pulse, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
   // A Buddy chat names its owner instead of an audience: an app from before Buddies takes a private chat of the reader
   // alone for their Chat with PM, and would send what they write for the PM to their Buddy instead (buddies.ts).
   const readers = isBuddyChat(group) ? { buddyOwnerId: audience!.people[0]!.id } : audience ? { audience } : {}
@@ -109,6 +112,9 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   // no reader shows them. What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
   if (head.projects) head.projects = head.projects.map(({ progress: _progress, schedule: _schedule, releases: _releases, owed: _owed, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
+  // Always, its default too (task #3818): an app offers several Buddies only where the head says how many, so an older backend,
+  // which sends none, is never taken for one that makes them.
+  head.buddyCap = buddyCapOf(state)
   const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
   const buddy = isBuddyReader(state, actor)
   return {
@@ -190,13 +196,22 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
       ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(machineSuspended ? { machineSuspended } : {}), ...(leads[pool.machineId] ? { lead: leads[pool.machineId] } : {}) }] as const
   }
   const pulse = pulses(state, visible, actor, isBuddyReader(state, actor))
+  // The next release times the settle recorded (releases.ts), for the projects this reader sees: the release list itself stays
+  // the server's (task #3827).
+  const releaseTimes = Object.fromEntries(visible.projects?.flatMap(seen => {
+    const nextAt = state.projects?.find(p => p.id === seen.id)?.releases?.nextAt
+    return nextAt ? [[seen.id, nextAt] as const] : []
+  }) ?? [])
   return {
     ...(pulse ? { pulse } : {}),
+    ...(Object.keys(releaseTimes).length ? { releaseTimes } : {}),
     agents: Object.fromEntries(visible.agents.map(seen => [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,
       workDecision: seen.workDecision === 'awaiting' && state.agents.find(a => a.id === seen.id)!.workDecision !== 'awaiting' ? 'awaiting' as const : null,
       roleId: seen.roleId ?? null,
       // Derived on every read: who leads a project, and its role set, live outside the agent's own part.
-      roleName: roleNameOf(state, state.agents.find(a => a.id === seen.id)!) }])),
+      roleName: roleNameOf(state, state.agents.find(a => a.id === seen.id)!),
+      // What it is and where its person talks to it, for the left pane's "My agents" (agentKind.ts, task #4116).
+      kind: agentKind(state, state.agents.find(a => a.id === seen.id)!), chatId: agentChatId(state, state.agents.find(a => a.id === seen.id)!) }])),
     machines: Object.fromEntries((visible.machines ?? []).map(machine)),
     ...(visible.otherProjectsWork ? { otherProjectsWork: visible.otherProjectsWork } : {}),
     ...(visible.pmAccounts ? { pmAccounts: visible.pmAccounts } : {}),

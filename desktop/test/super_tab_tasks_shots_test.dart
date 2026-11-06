@@ -32,11 +32,17 @@ void main() {
   });
 
   for (final brightness in Brightness.values) {
-    for (final layout in ['board', 'list']) {
+    // The Board at the three widths its columns must fill, and the List.
+    for (final (layout, size) in [
+      ('board-1280', const Size(1280, 900)),
+      ('board-1920', const Size(1920, 900)),
+      ('board-2560', const Size(2560, 900)),
+      ('list', const Size(1900, 1500)),
+    ]) {
       testWidgets('screenshots for review ($layout, ${brightness.name})', (
         tester,
       ) async {
-        await tester.binding.setSurfaceSize(const Size(1900, 900));
+        await tester.binding.setSurfaceSize(size);
         addTearDown(() => tester.binding.setSurfaceSize(null));
         final before = grid.AppTheme.brightness.value;
         grid.AppTheme.brightness.value = brightness;
@@ -91,7 +97,95 @@ void main() {
             pullRequest: 3007,
             shippedAt: DateTime(2026, 11, 5),
           ),
+          // The six columns (task #3812): done and waiting for a merge, one of
+          // them past an hour; merged and waiting for a release; released.
+          taskFixture(
+            'done-fresh',
+            'Review and test passed',
+            22,
+            requester: 'tony',
+            status: 'done',
+            pullRequest: 3500,
+            shippedAt: DateTime.now().subtract(const Duration(minutes: 12)),
+            checks: {
+              'https://github.com/autonomous-ai/openharness/pull/3500': 'green',
+            },
+          ),
+          taskFixture(
+            'done-red',
+            'Checks failed after review',
+            27,
+            requester: 'owner',
+            status: 'done',
+            pullRequest: 3502,
+            shippedAt: DateTime.now().subtract(const Duration(minutes: 5)),
+            checks: {
+              'https://github.com/autonomous-ai/openharness/pull/3502': 'red',
+            },
+          ),
+          taskFixture(
+            'done-stuck',
+            'Waiting on the merge train',
+            23,
+            requester: 'scholes',
+            status: 'done',
+            pullRequest: 3501,
+            shippedAt: DateTime.now().subtract(const Duration(minutes: 90)),
+            checks: {
+              'https://github.com/autonomous-ai/openharness/pull/3501': 'green',
+            },
+          ),
+          taskFixture(
+            'merged-two',
+            'Dial recap on main',
+            24,
+            requester: 'owner',
+            status: 'done',
+            merged: true,
+            pullRequest: 3498,
+            shippedAt: DateTime.now().subtract(const Duration(hours: 1)),
+            releasing: ['desktop', 'cli'],
+          ),
+          taskFixture(
+            'merged-backend',
+            'A backend read on main',
+            25,
+            requester: 'ken',
+            status: 'done',
+            merged: true,
+            pullRequest: 3499,
+            shippedAt: DateTime.now().subtract(const Duration(minutes: 30)),
+            releasing: ['backend'],
+          ),
+          taskFixture(
+            'released',
+            'Chat limits out in a release',
+            26,
+            requester: 'scholes',
+            status: 'done',
+            merged: true,
+            pullRequest: 3480,
+            shippedAt: DateTime.now().subtract(const Duration(hours: 3)),
+            released: {
+              'at': DateTime.now().millisecondsSinceEpoch,
+              'tags': ['v1.3.84_desktop'],
+            },
+          ),
         ]);
+        // What the server sends in `derived.releaseTimes` (task #3827): the apps may release in two hours, the backend later.
+        server.state['releaseTimes'] = {
+          'lead': {
+            'desktop': DateTime.now()
+                .add(const Duration(hours: 2))
+                .millisecondsSinceEpoch,
+            'cli': DateTime.now()
+                .add(const Duration(hours: 2))
+                .millisecondsSinceEpoch,
+            'backend': DateTime.now()
+                .add(const Duration(hours: 4))
+                .millisecondsSinceEpoch,
+          },
+        };
         final conversations = (server.state['conversations'] as List)
             .cast<Map<String, dynamic>>();
         conversations.firstWhere((task) => task['id'] == 'sender')['liveness'] =

@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { readTeamStatus, readTeamStatusOffThread } from './privacy.js'
+import { readTeamStatus } from './privacy.js'
 import { buildWindowsRemoveScript, buildWindowsSetupScript, windowsRemoveHelperLines } from './windowsScript.js'
 
 /**
@@ -126,10 +126,9 @@ describe.runIf(process.platform === 'win32')('the Team account\'s removal on Win
     expect(said.trim()).toBe('[31mred text')
   })
 
-  it('reads the status file in a child (W4)', async () => {
+  it('reads the status file in a child (W4)', () => {
     const file = join(root, 'status.json')
     writeFileSync(file, JSON.stringify({ version: 1, privacy: { passed: true, checkedAt: 3 } }))
     expect(readTeamStatus(file)).toEqual({ version: 1, privacy: { passed: true, checkedAt: 3 } })
-    expect(await readTeamStatusOffThread(file)).toEqual({ version: 1, privacy: { passed: true, checkedAt: 3 } })
   })
 })

@@ -859,3 +859,15 @@ it('waits on a real timer when no sleep is given', async () => {
   expect(await closing).toEqual({ closed: true })
   expect(Date.now() - start).toBe(1_000)
 })
+
+
+it('passes the prepared change id to the Buddy guard only for an immediate switch, and records its stop', async () => {
+  const changeId = 'a'.repeat(32)
+  const ended = vi.fn()
+  const buddyProtected = (id: string, change?: string) => id === row.agentId && change !== changeId
+  const svc = new CloseAgentService({ ...deps, buddyProtected, leadSwitchEnded: ended })
+  expect(await svc.request({ ...request('idle'), changeId })).toMatchObject({ error: 'BUDDY_PROTECTED' })
+  expect(await svc.request({ ...request('now'), changeId })).toEqual({ closed: true })
+  expect(ended).toHaveBeenCalledWith(row.agentId, changeId, true)
+  svc.dispose()
+})

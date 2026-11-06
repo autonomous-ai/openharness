@@ -22,6 +22,7 @@ import { sweepPendingUploads } from '../src/lib/pendingUploadSweep.js'
 import { IGNORED_NOTE, type Command } from '../src/superTabs/commands.js'
 import { nextMachineShareGrants } from '../src/lib/machineSharePolicy.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
+import { SEED_RULES } from '../src/superTabs/policy.js'
 import { stableId, type Agent, type SuperTabState } from '../src/superTabs/model.js'
 import { agentDisplayName } from '../src/superTabs/agentNames.js'
 import { roleVersion } from '../src/superTabs/projects.js'
@@ -37,6 +38,7 @@ import { beforeFirstWrite } from './interleave.test-support.js'
 import { wantDefaultDigest } from './noDefaultDigest.test-support.js'
 import { startMessageReachStats } from '../src/superTabs/messageReachStats.js'
 import { plan as planOf, profiled, reads } from './plans.test-support.js'
+import { quotaReset } from './holds.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -2453,9 +2455,9 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
     const row = async () => (await rosterRows(store, host, 'test-host')).find(t => t.tabId === tab && t.agent.id === worker)!
     expect(await row()).toMatchObject({ tabName: 'Pilot', attention: null })
-    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'blocked', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'No access to staging.' } as Command, host, worker)
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'blocked', hold: quotaReset(), result: 'No access to staging.' } as Command, host, worker)
     expect((await row()).attention).toEqual({ assignmentId, status: 'blocked', result: 'No access to staging.' })
-    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: null } as Command, host, worker)
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', hold: quotaReset(), result: null } as Command, host, worker)
     expect((await row()).attention).toEqual({ assignmentId, status: 'needs_human', result: null })
     await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null } as Command, host, worker)
     expect((await row()).attention).toBeNull()
@@ -4717,7 +4719,7 @@ describe('leaderboard credits written by the store (leaderboard/record.ts)', () 
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Builder', configuration: config, lead: false })).result.agentId as string
     const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
-    const ask = { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Ship how?',
+    const ask = { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', hold: quotaReset(), result: 'Ship how?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } } as Command
     await run(tab, ask, host, worker)
     await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null } as Command, host, worker)
@@ -5575,5 +5577,116 @@ describe('a migrated Swarm\'s kept old state (Stability 2.1)', () => {
 
     // Reads and writes leave it in place: only the maintenance script removes it.
     for (const id of [tab, own]) expect((await db.superTab.findUnique({ where: { id }, select: { legacyState: true } }))!.legacyState).toEqual(OLD_STATE)
+  })
+})
+
+// Task #3929 (for Diego's #3903): a closed tab's Personal project is deleted only if it has no message at that moment, in the same
+// write; a message that lands meanwhile makes it archived instead. Desktop sends it under one operation id from every computer.
+describe('a closed tab\'s Personal project', () => {
+  const person: AuthUser = { sub: '100000000000000000000391', email: 'tabs-3929@example.com', autonomousEnv: 'prod', role: 'user' }
+  const personal = async (visibility: 'private' | 'public' = 'private') => {
+    await db.user.upsert({ where: { id: person.sub }, create: { id: person.sub, externalId: `fixture-${person.sub}`, email: person.email,
+      autonomousEnv: person.autonomousEnv }, update: {} })
+    const tab = (await store.create(person, 'personal-swarm', 'Personal', 'private')).id
+    const tabOperation = `personal-tab-${randomUUID()}`
+    const projectId = String((await run(tab, { type: 'project.create', name: 'Untitled tab', visibility, brief: '' }, person, undefined,
+      tabOperation)).result.projectId)
+    const chat = (await store.read(person, tab)).state.projects!.find(p => p.id === projectId)!.leadConversationId
+    return { tab, projectId, chat, tabOperation }
+  }
+
+  it('archives it when a message lands while it is being closed', async () => {
+    const { tab, projectId, chat, tabOperation } = await personal()
+    let sent = false
+    const raced = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (sent) return
+      sent = true
+      await run(tab, { type: 'message.send', conversationId: chat, text: 'Written as the tab closed', replyTo: null, recipientIds: [] }, person)
+    }))
+    const closed = await raced.execute(person, tab, { operationId: randomUUID(), command: { type: 'project.closeTab', projectId, tabOperation } as Command })
+    expect(sent).toBe(true)
+    expect(closed.result).toMatchObject({ outcome: 'archived' })
+    expect((await store.read(person, tab)).state.projects!.find(p => p.id === projectId)).toMatchObject({ archived: true })
+  })
+
+  // Security review 2 (Phonecheck2): a project whose instructions or rules the person saved is kept, also when the save lands
+  // while the tab closes.
+  const instructions = { type: 'instructions.save', baseRevision: 1, text: '# Mine\n\nKeep this.', summary: 'My own' }
+  const rulesSave = { type: 'rules.set', baseRevision: 0, rules: { ...SEED_RULES, mergeTrain: { enabled: true, everyMinutes: 10 } }, summary: 'My own rules' }
+  const kept = async (tab: string, projectId: string) => {
+    expect((await store.read(person, tab)).state.projects!.find(p => p.id === projectId)).toMatchObject({ archived: true })
+    expect(await db.superTabInstructionsRevision.count({ where: { tabId: tab, projectId } })).toBeGreaterThan(0)
+  }
+  for (const [what, save] of [['instructions', instructions], ['rules', rulesSave]] as const) {
+    it(`archives it, keeping what was written, when its ${what} were saved before the close`, async () => {
+      const { tab, projectId, tabOperation } = await personal()
+      await run(tab, { ...save, projectId } as Command, person)
+      const closed = await store.execute(person, tab, { operationId: randomUUID(), command: { type: 'project.closeTab', projectId, tabOperation } as Command })
+      expect(closed.result).toMatchObject({ outcome: 'archived' })
+      await kept(tab, projectId)
+      if (what === 'rules') expect(await db.superTabProjectRules.count({ where: { tabId: tab, projectId } })).toBe(1)
+    })
+    it(`archives it, keeping what was written, when its ${what} are saved while it is being closed`, async () => {
+      const { tab, projectId, tabOperation } = await personal()
+      let saved = false
+      const raced = new SuperTabStore(beforeFirstWrite(db, async () => {
+        if (saved) return
+        saved = true
+        await run(tab, { ...save, projectId } as Command, person)
+      }))
+      const closed = await raced.execute(person, tab, { operationId: randomUUID(), command: { type: 'project.closeTab', projectId, tabOperation } as Command })
+      expect(saved).toBe(true)
+      expect(closed.result).toMatchObject({ outcome: 'archived' })
+      await kept(tab, projectId)
+      if (what === 'rules') expect(await db.superTabProjectRules.count({ where: { tabId: tab, projectId } })).toBe(1)
+    })
+  }
+
+  // Security review 2, second pass (Phonecheck2): another person's first rules save shares a guard with the close, and with a
+  // project delete, through the project's Lead chat, so the two never both commit on the same project.
+  const collaborator: AuthUser = { sub: '100000000000000000000392', email: 'tabs-3929-peer@example.com', autonomousEnv: 'prod', role: 'user' }
+  const withCollaborator = async () => {
+    const made = await personal('public')
+    await db.user.upsert({ where: { id: collaborator.sub }, create: { id: collaborator.sub, externalId: `fixture-${collaborator.sub}`,
+      email: collaborator.email, autonomousEnv: collaborator.autonomousEnv }, update: {} })
+    // The person has one Personal Swarm: the collaborator joins it once.
+    if (!(await store.read(person, made.tab)).state.people.some(p => p.id === collaborator.sub)) {
+      const invited = await run(made.tab, { type: 'invite.create', email: collaborator.email, role: 'collaborator', conversationId: 'lead' }, person)
+      await run(made.tab, { type: 'invite.accept', inviteId: invited.result.inviteId as string }, collaborator)
+    }
+    return made
+  }
+  const racing = (tab: string, projectId: string, saved: { done: boolean }) => new SuperTabStore(beforeFirstWrite(db, async () => {
+    if (saved.done) return
+    saved.done = true
+    await run(tab, { ...rulesSave, projectId } as Command, collaborator)
+  }))
+  it('archives it, keeping the rules, when another person saves its first rules while it is being closed', async () => {
+    const { tab, projectId, tabOperation } = await withCollaborator()
+    const saved = { done: false }
+    const closed = await racing(tab, projectId, saved).execute(person, tab, { operationId: randomUUID(),
+      command: { type: 'project.closeTab', projectId, tabOperation } as Command })
+    expect(saved.done).toBe(true)
+    expect(closed.result).toMatchObject({ outcome: 'archived' })
+    expect((await store.read(person, tab)).state.projects!.find(p => p.id === projectId)).toMatchObject({ archived: true })
+    expect(await db.superTabProjectRules.count({ where: { tabId: tab, projectId } })).toBe(1)
+  })
+  it('leaves no rules behind when another person saves its first rules while it is deleted', async () => {
+    const { tab, projectId } = await withCollaborator()
+    const saved = { done: false }
+    await racing(tab, projectId, saved).execute(person, tab, { operationId: randomUUID(), command: { type: 'project.delete', projectId } })
+    expect(saved.done).toBe(true)
+    expect((await store.read(person, tab)).state.projects!.some(p => p.id === projectId)).toBe(false)
+    expect(await db.superTabProjectRules.count({ where: { tabId: tab, projectId } })).toBe(0)
+  })
+
+  it('does its work once under one operation id, from any of the person\'s computers', async () => {
+    const { tab, projectId, tabOperation } = await personal()
+    const operationId = `close-tab-${randomUUID()}`
+    const first = await store.execute(person, tab, { operationId, command: { type: 'project.closeTab', projectId, tabOperation } as Command })
+    const again = await store.execute(person, tab, { operationId, command: { type: 'project.closeTab', projectId, tabOperation } as Command })
+    expect(first.result).toMatchObject({ outcome: 'deleted' })
+    expect(again.result).toEqual(first.result)
+    expect((await store.read(person, tab)).state.projects!.some(p => p.id === projectId)).toBe(false)
   })
 })

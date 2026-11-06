@@ -873,6 +873,7 @@ class MainPlannerTests(unittest.TestCase):
         (self.root / "scripts").mkdir(exist_ok=True)
         (self.root / "scripts/ci-plan.py").write_text(planner_source)
         (self.root / "scripts/record-ci-validation.py").write_text((scripts / "record-ci-validation.py").read_text())
+        (self.root / "scripts/local-checks.py").write_text((scripts / "local-checks.py").read_text())
         self.git("add", "-A")
         self.git("commit", "-qm", "main")
         return self.git("rev-parse", "HEAD")

@@ -6,7 +6,7 @@ import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, occupiesAgent, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
 import { startFinished } from './parts/write.js'
-import { agentProjectId, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
+import { agentProjectId, isAgentChat, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
 export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
@@ -162,6 +162,8 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   quotaReasons: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), z.string().min(1).max(300)).refine(v => Object.keys(v).length <= 8).optional(),
   runningHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedHarnessIds: z.array(z.string().max(160)).max(1000),
+  /** Running Buddy sessions positively idle in this reading; absent is unknown, never idle (#3824). */
+  idleBuddyHarnessIds: z.array(z.string().max(160)).max(1000).optional(),
   /** Of the stopped ones, those this machine's idle cleanup closed (cli superTabs/cleanupCloses.ts): only such a session is
    *  refused new work (closedAgents.ts sessionClosed), never one stopped by Change agent or a restart (review of #2953).
    *  Absent from hosts before it. */
@@ -235,7 +237,7 @@ export const refusableStart = (start: AgentStart, machineId: string): boolean =>
  */
 export function storedObservation(pool: ContributedMachine, observation: MachineObservation,
   opts: { team: boolean; now: number; preparable: (startId: string) => boolean; refusable?: (startId: string) => boolean }): StoredReading {
-  const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, refusedStarts, profiles, ...reading } = observation
+  const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, refusedStarts, profiles, idleBuddyHarnessIds, ...reading } = observation
   const running = (id: string) => observation.runningHarnessIds.includes(id)
   const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => running(id)))
   const tokens = harnessTokens && Object.fromEntries(Object.entries(harnessTokens).filter(([id]) => running(id)))
@@ -245,6 +247,7 @@ export function storedObservation(pool: ContributedMachine, observation: Machine
   const privacy = observedPrivacy(pool.observation?.privacy, reported, opts.team, opts.now)
   const engines = contributedEngines(pool, observation)
   return { ...reading, quotas: observation.quotas.filter(q => engines.includes(q.engine)), receivedAt: opts.now,
+    ...(idleBuddyHarnessIds ? { idleBuddyHarnessIds: [...new Set(idleBuddyHarnessIds.filter(running))] } : {}),
     ...(profiles ? { profiles: profiles.filter(p => engines.includes(p.engine)) } : {}),
     sessionKind: opts.team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}),
     ...(tokens ? { harnessTokens: tokens } : {}), ...(preparing ? { preparingStartIds: preparing } : {}),
@@ -269,7 +272,8 @@ export function readingOnly(previous: StoredReading | undefined, next: StoredRea
   if (!previous || next.stoppedReservations?.length || next.refusedStarts?.length || previous.sessionKind !== next.sessionKind) return false
   if (!sameSet(previous.runningHarnessIds, next.runningHarnessIds) || !sameSet(previous.stoppedHarnessIds, next.stoppedHarnessIds)
     || !sameSet(previous.closedHarnessIds ?? [], next.closedHarnessIds ?? [])
-    || !sameSet(previous.preparingStartIds, next.preparingStartIds)) return false
+    || !sameSet(previous.preparingStartIds, next.preparingStartIds)
+    || !sameSet(previous.idleBuddyHarnessIds, next.idleBuddyHarnessIds)) return false
   if (!previous.harnessProgress || !next.harnessProgress) return !previous.harnessProgress && !next.harnessProgress
   const before = previous.harnessProgress, after = next.harnessProgress
   return sameSet(Object.keys(before), Object.keys(after)) && Object.entries(before).every(([id, at]) => after[id]! >= at)
@@ -880,7 +884,8 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   // A person's one Buddy chat has no project (Dee, 10-31): its project session works in the one it names, and its main Buddy
   // and plain sessions in none, in their own folder (buddyHomeFolder).
   const group = forProject ? undefined : conversation(state, request.conversationId)
-  const project = forProject ?? (!isSwarmBuddyChat(group!) ? groupProject(state, group!)
+  // A Regular agent's own chat has none either (agent.new, task #4116): it starts in its person's home folder.
+  const project = forProject ?? (isAgentChat(group!) ? undefined : !isSwarmBuddyChat(group!) ? groupProject(state, group!)
     : request.buddySession?.projectId ? projectOf(state, request.buddySession.projectId) : undefined)
   if (project && !pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
   // Kept by its owner for other projects: a Product Manager too. A Buddy is its owner's own (commands.ts buddy.create).
@@ -895,11 +900,11 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   // a Product Manager outside a Team account: any machine of the Swarm takes it (leadStart.ts, Ken 10-29).
   // What the task needs to reach, checked here for every start whatever the route sent (an older CLI drops needs.access):
   // a Buddy and a Product Manager need none (design section 3).
-  const needed = !request.buddyOf && !request.leadFor ? taskAccess(group) : []
-  if (!request.buddyOf && !(request.leadFor && !teamAccountPool(pool))) requireTeamWork(state, pool.machineId, pool.contributorId, project!, now, teamMachines, otherWorkspaceMachines, needed)
+  const needed = !request.buddyOf && !request.leadFor && !request.regular ? taskAccess(group) : []
+  if (!request.buddyOf && !request.regular && !(request.leadFor && !teamAccountPool(pool))) requireTeamWork(state, pool.machineId, pool.contributorId, project!, now, teamMachines, otherWorkspaceMachines, needed)
   const missing = project ? accessRefusal(state, pool.machineId, project, needed) : null
   if (missing) failTeamWork(missing)
-  const cwd = project ? projectFolder(pool, project) : buddyHomeFolder(pool, { id: request.buddyOf!.personId })
+  const cwd = project ? projectFolder(pool, project) : buddyHomeFolder(pool, { id: request.buddyOf?.personId ?? pool.contributorId })
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.
   const refused: string[] = []

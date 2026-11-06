@@ -19,6 +19,7 @@ import { endedReply } from './taskLine.js'
 import { crewClock, DISPATCH_RULES, laneOf, nudgeLine, returnReason, type DispatchLookup } from './dispatch.js'
 import { handed, pickUp, unclaimedAt, unclaimedReason } from './handed.js'
 import { isBuddy } from './buddies.js'
+import { closeMergedLost } from './mergedTasks.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
@@ -452,7 +453,12 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
  *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
 export function sweepLiveness(state: SuperTabState, now: number, rulesFor: DispatchLookup = () => DISPATCH_RULES): MessageDraft[] {
-  const drafts = [...loseTasks(state, now, undefined, undefined, rulesFor), ...crewNudges(state, now, rulesFor), ...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now)]
+  const drafts = [...loseTasks(state, now, undefined, undefined, rulesFor), ...crewNudges(state, now, rulesFor), ...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now),
+    // A lost task whose own merge is recorded is done, never handed out again (mergedTasks.ts, task #4032); written as its PM.
+    ...closeMergedLost(state, now, task => {
+      const pm = projectChatOf(state, task)?.leadId, writer = state.agents.find(a => a.id === pm)
+      return writer ? writtenBy(state, writer) : null
+    })]
   // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
   dropIdleBuddyMachines(state, now)
   return drafts

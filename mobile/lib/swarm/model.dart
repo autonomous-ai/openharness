@@ -172,6 +172,8 @@ class SuperTabAgent {
       machineOwnerId =
           row['machineOwnerId'] as String? ?? _text(row, 'contributorId'),
       role = row['role'] as String?,
+      kind = row['kind'] as String?,
+      chatId = row['chatId'] as String?,
       roleId = row['roleId'] as String?,
       roleName = row['roleName'] as String?,
       buddyOf = switch (row['buddyOf']) {
@@ -230,6 +232,9 @@ class SuperTabAgent {
   final bool buddyNarrow;
 
   final String id, projectId, name, machineId, harnessId, contributorId;
+
+  /// What it is and where its person talks to it (Swarm v3, backend #4116), read as the desktop's model reads them.
+  final String? kind, chatId;
 
   /// Set by its contributor or its project's Lead; null draws its pattern.
   final SuperTabAvatarPicture? avatar;
@@ -381,6 +386,9 @@ class SuperTabConversation {
       kind = row['kind'] as String?,
       buddyOwnerId = row['buddyOwnerId'] as String?,
       buddyName = row['buddyName'] as String?,
+      buddyDefault = row['buddyDefault'] == true,
+      paused = SuperTabPause.read(row['paused']),
+      proposal = SuperTabProposalCard.read(row['proposal']),
       buddySessions = List.unmodifiable(
         (row['buddySessions'] is List ? row['buddySessions'] as List : const [])
             .whereType<Map>()
@@ -426,6 +434,18 @@ class SuperTabConversation {
       releasing = row['releasing'] is List
           ? List.unmodifiable((row['releasing'] as List).whereType<String>())
           : null,
+      pullRequestChecks = row['pullRequestChecks'] is Map
+          ? Map.unmodifiable({
+              for (final MapEntry(:key, :value)
+                  in (row['pullRequestChecks'] as Map).entries)
+                if (key is String && value is String) key: value,
+            })
+          : const {},
+      releasedTags = row['released'] is Map && row['released']['tags'] is List
+          ? List.unmodifiable(
+              (row['released']['tags'] as List).whereType<String>(),
+            )
+          : const [],
       shippedAt = row['shippedAt'] is num
           ? DateTime.fromMillisecondsSinceEpoch(
               (row['shippedAt'] as num).toInt(),
@@ -474,6 +494,11 @@ class SuperTabConversation {
   /// Buddy runs; null for the default (backend buddies.ts renameBuddy).
   final String? buddyName;
 
+  /// Read as the desktop's model reads them (Board Phase 2, #3820); the phone draws them with #3821.
+  final bool buddyDefault;
+  final SuperTabPause? paused;
+  final SuperTabProposalCard? proposal;
+
   /// A Buddy chat's live or starting thread sessions (desktop model.dart).
   final List<SuperTabBuddySession> buddySessions;
 
@@ -495,6 +520,14 @@ class SuperTabConversation {
   /// when it is not on the server's release list (the desktop's model reads
   /// it for its board; the phone carries it as the desktop does).
   final List<String>? releasing;
+
+  /// Each linked pull request's check state as the server's PR watch last read it, by URL: `green`, `red` or `running`
+  /// (backend pullRequestEvents.ts checksStateOf, task #3827). Read as the desktop does; the phone draws no board yet.
+  final Map<String, String> pullRequestChecks;
+
+  /// The release tags that carried it to people, once they have (backend releases.ts `released`); empty before. Read as the
+  /// desktop does; the phone draws no board yet.
+  final List<String> releasedTags;
 
   /// Its place in its project's shared Next up and the day before which it
   /// may not start, as Desktop's Tasks view reads them (task #2569); read here
@@ -623,8 +656,29 @@ class SuperTabProject {
       leadWaiting = {
         for (final entry in row['leadWaiting'] as List? ?? const [])
           if (entry is Map && entry['id'] is String) entry['id'] as String,
-      };
+      },
+      boardMode = row['boardMode'] == true,
+      canChatIds = List.unmodifiable(
+        (row['canChat'] as List? ?? const []).whereType<String>(),
+      ),
+      deciderId = row['decider'] is String ? row['decider'] as String : null;
   final String id, name, ownerId, leadConversationId;
+
+  /// The Board way of working (#3819), read as the desktop's model reads it; the phone draws it with #3821.
+  final bool boardMode;
+  final List<String> canChatIds;
+  final String? deciderId;
+
+  /// Whether [personId] may write in its chat: anyone who may write, while it is not on the Board.
+  bool canChat(String personId, {bool swarmOwner = false}) =>
+      !boardMode ||
+      swarmOwner ||
+      personId == ownerId ||
+      canChatIds.contains(personId);
+
+  /// Whether [personId] may set P0 and pause or resume any task: its owner, the Swarm's owner and its decider.
+  bool canSteer(String personId, {bool swarmOwner = false}) =>
+      swarmOwner || personId == ownerId || personId == deciderId;
 
   /// The zone its day is read in, read as the desktop's model reads it (its
   /// digest's, else [superTabDefaultTimeZone]); the phone shows no lanes yet.
@@ -680,6 +734,155 @@ class SuperTabProject {
 
 /// A project's status card text, as the desktop's model reads it
 /// (`../desktop/lib/super_tabs/model.dart`).
+// Board Phase 2 (#3817, #3819), as the desktop's model.dart reads it.
+DateTime? _epoch(Object? value) =>
+    value is num ? DateTime.fromMillisecondsSinceEpoch(value.toInt()) : null;
+
+String? _words(Object? value) =>
+    value is String && value.trim().isNotEmpty ? value : null;
+
+/// A Board card's proposal (#3817): what was proposed and by whom, the PM's decision, and its questions.
+class SuperTabProposalCard {
+  SuperTabProposalCard._(Map row)
+    : text = _words(row['text']) ?? '',
+      goal = _words(row['goal']),
+      why = _words(row['why']),
+      doneWhen = _words(row['doneWhen']),
+      createdAt = _epoch(row['createdAt']),
+      senderIds = List.unmodifiable([
+        for (final sender in row['senders'] as List? ?? const [])
+          if (sender is Map && sender['personId'] is String)
+            sender['personId'] as String,
+      ]),
+      decision = SuperTabProposalDecision.read(row['decision']),
+      questions = List.unmodifiable([
+        for (final q in row['questions'] as List? ?? const [])
+          ?SuperTabProposalQuestion.read(q),
+      ]),
+      mergedInto = _words(row['mergedInto']),
+      overdue = row['overdue'] == true;
+
+  static SuperTabProposalCard? read(Object? value) =>
+      value is Map ? SuperTabProposalCard._(value) : null;
+
+  final String text;
+  final String? goal, why, doneWhen;
+  final DateTime? createdAt;
+
+  /// The people who agreed to it, first the one who proposed it.
+  final List<String> senderIds;
+  final SuperTabProposalDecision? decision;
+  final List<SuperTabProposalQuestion> questions;
+
+  /// The card it was merged into as a duplicate: it is no longer on the Board.
+  final String? mergedInto;
+
+  /// Waiting on the PM longer than the project's limit (spec Design, Failure).
+  final bool overdue;
+
+  /// The question still waiting for its answer, if any.
+  SuperTabProposalQuestion? get openQuestion =>
+      questions.where((q) => !q.answered).firstOrNull;
+
+  /// Whether it became a task: accepted, or reshaped into the version the PM will do.
+  bool get becameTask => switch (decision?.kind) {
+    'accept' || 'reshape' => true,
+    _ => false,
+  };
+}
+
+/// The PM's decision on a proposal: `accept`, `reshape`, `later` (until [revisitAt]) or `no`, with its reason.
+class SuperTabProposalDecision {
+  const SuperTabProposalDecision({
+    required this.kind,
+    this.reason,
+    this.revisitAt,
+  });
+
+  static SuperTabProposalDecision? read(Object? value) {
+    if (value is! Map) return null;
+    final kind = value['kind'];
+    const kinds = {'accept', 'reshape', 'later', 'no'};
+    if (kind is! String || !kinds.contains(kind)) return null;
+    return SuperTabProposalDecision(
+      kind: kind,
+      reason: _words(value['reason']),
+      revisitAt: _epoch(value['revisitAt']),
+    );
+  }
+
+  final String kind;
+  final String? reason;
+  final DateTime? revisitAt;
+}
+
+/// A question the PM asked on a card, of one person, with the answer it takes by [deadline] if none comes.
+class SuperTabProposalQuestion {
+  const SuperTabProposalQuestion({
+    required this.id,
+    required this.personId,
+    required this.question,
+    required this.defaultAnswer,
+    required this.deadline,
+    required this.answered,
+    this.requiresConsent = false,
+  });
+
+  static SuperTabProposalQuestion? read(Object? value) {
+    if (value is! Map) return null;
+    final (id, person, question) = (
+      value['id'],
+      value['personId'],
+      value['question'],
+    );
+    final deadline = _epoch(value['deadline']);
+    if (id is! String ||
+        person is! String ||
+        question is! String ||
+        deadline == null) {
+      return null;
+    }
+    return SuperTabProposalQuestion(
+      id: id,
+      personId: person,
+      question: question,
+      defaultAnswer: _words(value['defaultAnswer']) ?? '',
+      deadline: deadline,
+      answered: value['answer'] is Map,
+      requiresConsent: value['requiresConsent'] == true,
+    );
+  }
+
+  final String id, personId, question, defaultAnswer;
+  final DateTime deadline;
+  final bool answered, requiresConsent;
+}
+
+/// A paused task (#3819): who paused it, when, and the reason they gave, if any.
+class SuperTabPause {
+  const SuperTabPause({required this.by, required this.at, this.reason});
+
+  static SuperTabPause? read(Object? value) {
+    if (value is! Map || value['by'] is! String) return null;
+    final at = switch (value['at']) {
+      final num ms => DateTime.fromMillisecondsSinceEpoch(ms.toInt()),
+      final String iso => DateTime.tryParse(iso)?.toLocal(),
+      _ => null,
+    };
+    if (at == null) return null;
+    final reason = value['reason'];
+    return SuperTabPause(
+      by: value['by'] as String,
+      at: at,
+      reason: reason is String && reason.trim().isNotEmpty ? reason : null,
+    );
+  }
+
+  final String by;
+  final DateTime at;
+  final String? reason;
+}
+
 class SuperTabProjectStatus {
   const SuperTabProjectStatus({required this.text, this.at, this.by});
 
@@ -757,10 +960,20 @@ class SuperTabSnapshot {
       threadSessions = row['threadSessions'] == true,
       sessionsFromChat = row['sessionsFromChat'] == true,
       swarmBuddy = row['swarmBuddy'] == true,
+      buddyCap = (row['buddyCap'] as num?)?.toInt(),
       autoJoin = row['autoJoin'] == true,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       pulses = SuperTabPulse.readAll(row['pulse']),
+      _releaseTimes = {
+        if (row['releaseTimes'] case final Map projects)
+          for (final MapEntry(key: project, value: times) in projects.entries)
+            if (project is String && times is Map)
+              project: {
+                for (final MapEntry(key: part, value: at) in times.entries)
+                  if (part is String && at is num) part: at.toInt(),
+              },
+      },
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
       promptsWaiting = List.unmodifiable([
@@ -870,6 +1083,10 @@ class SuperTabSnapshot {
   /// does not draw it yet.
   final bool swarmBuddy;
 
+  /// How many Buddies a person may have (#3818); its presence says the server makes several. Null from one that
+  /// makes one.
+  final int? buddyCap;
+
   /// People at the owner's email domain are added automatically (head
   /// `autoJoin`, every member reads it): someone who leaves is not added
   /// back. Read as the desktop's model reads it; the phone does not show it
@@ -891,6 +1108,11 @@ class SuperTabSnapshot {
   /// [projectId]'s board pulse; null where the server sent none, and the
   /// board draws no strip.
   SuperTabPulse? pulseOf(String projectId) => pulses[projectId];
+
+  /// When each release part of [projectId] may next open, in ms: 0 is now (backend releases.ts nextReleaseAt, task #3827).
+  Map<String, int> releaseTimesOf(String projectId) =>
+      _releaseTimes[projectId] ?? const {};
+  final Map<String, Map<String, int>> _releaseTimes;
 
   /// Decisions asked of the reader and not yet answered, Swarm-wide; 0 from a
   /// backend before decisions (backend superTabs/decisions.ts).

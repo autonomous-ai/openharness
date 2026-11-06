@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client'
 import { agentOnly, conversation, fail, isLeads, type AgentStart, type Conversation, type MessageDraft, type SuperTabState } from '../model.js'
 import { autoJoinOn } from '../autoJoinDomain.js'
+import { wakeBuddies } from '../buddySleep.js'
 import { split } from './shape.js'
 import { guardedWrite, PartConflict, plainHost, type HeadColumns, type HostColumns, type PartWrite } from './write.js'
 import type { GroupData, MachineData, Part, PartKind, SwarmParts } from './types.js'
@@ -101,6 +102,25 @@ function toCoordinator(state: SuperTabState, group: Conversation, message: Messa
   return !!coordinator && message.recipients.includes(coordinator)
 }
 
+/** How long a chat remembers that a person talked with an agent there: well past the 15 minutes an idle agent waits. */
+export const TALKED_KEEP_MS = 60 * 60_000
+
+/** Who a person talked with in [group] (task #3816): each agent a person's message reaches (`person`), and that agent's first
+ *  post to people after it (`answer`): a post to no agent, once per person's message, so an agent never keeps itself or another
+ *  agent from idling (review of #3389). Who wrote and whom it reached, never the words; a system row or notice marks nobody.
+ *  Entries older than TALKED_KEEP_MS go first, before this message is read, so an old one never comes back. */
+function markTalked(group: Conversation, message: MessageDraft, now: number): void {
+  if (message.source || !group.talkedAt && message.author.kind !== 'person') return
+  const talked = Object.fromEntries(Object.entries(group.talkedAt ?? {})
+    .filter(([, at]) => now - Math.max(at.person, at.answer ?? 0) <= TALKED_KEEP_MS))
+  if (message.author.kind === 'person') for (const id of message.recipients) talked[id] = { person: now }
+  else if (message.author.kind === 'agent' && !message.recipients.length) {
+    const entry = talked[message.author.id]
+    if (entry && (entry.answer === undefined || entry.answer < entry.person)) talked[message.author.id] = { ...entry, answer: now }
+  }
+  if (group.talkedAt || Object.keys(talked).length) group.talkedAt = talked
+}
+
 /**
  * Numbers each message in its conversation (design section 1.1 D4): the conversation's counter moves by one per message, in
  * draft order. A shown message is the conversation's latest and wakes a dormant one; an agent-only notice is numbered but
@@ -113,6 +133,7 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
     const sequence = (group.messageSeq ?? state.sequenceBase ?? 0) + 1
     group.messageSeq = sequence
     sequences.set(message.id, sequence)
+    wakeBuddies(state, message, now)
     if (agentOnly(message.source, message.recipients)) continue
     group.lastMessageSequence = sequence
     if (!message.thread || message.alsoInChat) {
@@ -120,6 +141,7 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
       if (message.author.kind === 'person' && !message.source) group.lastPersonSequence = sequence
     }
     if (toCoordinator(state, group, message)) group.heardAt = now
+    markTalked(group, message, now)
     group.lastActivityAt = new Date(now).toISOString()
     delete group.dormant
   }
