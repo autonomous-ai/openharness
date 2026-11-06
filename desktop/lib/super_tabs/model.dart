@@ -380,6 +380,8 @@ class SuperTabConversation {
       kind = row['kind'] as String?,
       buddyOwnerId = row['buddyOwnerId'] as String?,
       buddyName = row['buddyName'] as String?,
+      buddyDefault = row['buddyDefault'] == true,
+      paused = SuperTabPause.read(row['paused']),
       buddySessions = List.unmodifiable(
         (row['buddySessions'] is List ? row['buddySessions'] as List : const [])
             .whereType<Map>()
@@ -465,6 +467,13 @@ class SuperTabConversation {
   /// The name a Buddy chat's person chose for their Buddy, kept while no
   /// Buddy runs; null for the default (backend buddies.ts renameBuddy).
   final String? buddyName;
+
+  /// Whether this Buddy chat is its person's default Buddy, of several (#3818): it opens first and takes what is
+  /// addressed to the person. False from a backend before several Buddies, where the first chat is the default.
+  final bool buddyDefault;
+
+  /// While its task is paused (#3819, a project on the Board): who paused it, when and why; null otherwise.
+  final SuperTabPause? paused;
 
   /// A Buddy chat's thread sessions, live or starting (at most 3); empty on
   /// every other conversation and from older backends.
@@ -607,8 +616,36 @@ class SuperTabProject {
           : null,
       repositoryCreation = SuperTabRepositoryCreation.read(
         row['repositoryCreation'],
-      );
+      ),
+      boardMode = row['boardMode'] == true,
+      canChatIds = List.unmodifiable(
+        (row['canChat'] as List? ?? const []).whereType<String>(),
+      ),
+      deciderId = row['decider'] is String ? row['decider'] as String : null;
   final String id, name, ownerId, leadConversationId;
+
+  /// Whether its owner switched it to the Board way of working (#3819, spec 2026-11-06-buddy-board-final-spec):
+  /// people talk to their Buddies, work comes in as proposals, and only people with Can chat write in its chat.
+  /// False when not switched and from an older backend: everything then works as today.
+  final bool boardMode;
+
+  /// The people granted Can chat in it; its owner and the Swarm's owner always have it and are not listed.
+  final List<String> canChatIds;
+
+  /// Its top decider (for openharness, Dee), who may set P0 and pause like its owner; null when none is set.
+  final String? deciderId;
+
+  /// Whether [personId] may write in its chat: anyone who may write, while it is not on the Board.
+  bool canChat(String personId, {bool swarmOwner = false}) =>
+      !boardMode ||
+      swarmOwner ||
+      personId == ownerId ||
+      canChatIds.contains(personId);
+
+  /// Whether [personId] may set P0 on any card and pause or resume any task: its owner, the Swarm's owner and its
+  /// decider. The server enforces it; the app only offers what it would allow.
+  bool canSteer(String personId, {bool swarmOwner = false}) =>
+      swarmOwner || personId == ownerId || personId == deciderId;
 
   /// The zone its day is read in, as the server reads it for the crew
   /// dispatch and the morning digest: its digest's, else
@@ -646,6 +683,31 @@ class SuperTabProject {
   /// sign-in made of it (task #3374); null when none was asked, and from a
   /// backend before it.
   final SuperTabRepositoryCreation? repositoryCreation;
+}
+
+/// A paused task (#3819): who paused it, when, and the reason they gave, if any.
+class SuperTabPause {
+  const SuperTabPause({required this.by, required this.at, this.reason});
+
+  static SuperTabPause? read(Object? value) {
+    if (value is! Map || value['by'] is! String) return null;
+    final at = switch (value['at']) {
+      final num ms => DateTime.fromMillisecondsSinceEpoch(ms.toInt()),
+      final String iso => DateTime.tryParse(iso)?.toLocal(),
+      _ => null,
+    };
+    if (at == null) return null;
+    final reason = value['reason'];
+    return SuperTabPause(
+      by: value['by'] as String,
+      at: at,
+      reason: reason is String && reason.trim().isNotEmpty ? reason : null,
+    );
+  }
+
+  final String by;
+  final DateTime at;
+  final String? reason;
 }
 
 /// A new repository asked for a project (backend projects.ts

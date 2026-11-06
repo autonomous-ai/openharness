@@ -3130,7 +3130,12 @@ class SuperTabController extends ChangeNotifier {
     for (final g in snapshot.conversations) {
       byProject.putIfAbsent(g.projectId, () => []).add(g);
       if (g.isBuddyChat && g.buddyOwnerId == accountId) {
-        buddyChats.putIfAbsent(g.projectId, () => g);
+        // Of several Buddies (#3818) the default is the one the app opens; with none flagged, the first.
+        if (g.buddyDefault) {
+          buddyChats[g.projectId] = g;
+        } else {
+          buddyChats.putIfAbsent(g.projectId, () => g);
+        }
       }
     }
     return _index = (
@@ -3165,6 +3170,18 @@ class SuperTabController extends ChangeNotifier {
   /// ([openBuddyChat]), and stays after one is removed.
   SuperTabConversation? buddyChat(String projectId) =>
       _indexed()?.buddyChats[projectId];
+
+  /// The signed-in person's Buddies, each its own chat (#3818), the default first ([buddyChat]); one, or none, from
+  /// a backend before several Buddies.
+  List<SuperTabConversation> buddies([String projectId = kSwarmBuddyKey]) {
+    final first = buddyChat(projectId);
+    return [
+      ?first,
+      for (final g in projectConversations(projectId))
+        if (g.isBuddyChat && g.buddyOwnerId == accountId && g.id != first?.id)
+          g,
+    ];
+  }
 
   /// The signed-in person's Buddy in [projectId]; null when they have none.
   /// Its main session only: a thread's own session is never "the Buddy".

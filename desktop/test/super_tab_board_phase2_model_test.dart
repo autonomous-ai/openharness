@@ -85,7 +85,7 @@ void main() {
     test('the reader\'s Buddies list default first; one flagged default wins, else the first', () async {
       final server = ConversationServer();
       server.state['swarmBuddy'] = true;
-      (server.state['conversations'] as List).addAll([
+      (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
         buddy('b-code', 'Code'),
         buddy('b-plan', 'Planning', isDefault: true),
         {...buddy('b-other', "Sam's Buddy"), 'buddyOwnerId': 'sam'},
@@ -103,7 +103,7 @@ void main() {
     test('with no chat flagged (an older backend) the first is the default, as today', () async {
       final server = ConversationServer();
       server.state['swarmBuddy'] = true;
-      (server.state['conversations'] as List).addAll([
+      (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
         buddy('b-code', 'Code'),
         buddy('b-plan', 'Planning'),
       ]);
