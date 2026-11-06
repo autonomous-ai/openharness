@@ -159,6 +159,26 @@ describe('a Regular agent and its task', () => {
     expect(code(() => f.run({ type: 'work.assign', conversationId: web.task, agentId: f.ada }, web.asPm))).not.toBeNull()
   })
 
+  // Security review 2 of #4116, third read (Rowan): a finished task leaves its agent in that task's chat, so the agent would keep
+  // hearing and posting in an earlier project's chats while it works in a private one. Taking a task takes it out of them.
+  it('leaves every other project\'s chats when it takes a task, and neither hears nor posts there', () => {
+    const f = swarm()
+    const app = f.project('app', 'public'), secret = f.project('secret', 'private')
+    f.run({ type: 'project.sharing', projectId: secret.projectId, visibility: 'private', memberIds: ['owner', 'mate'] } as Command)
+    const asAda: Actor = { kind: 'agent', agentId: f.ada, machineOwnerId: 'mate' }
+    const first = f.run({ type: 'work.assign', conversationId: app.task, agentId: f.ada }, app.asPm)
+    f.run({ type: 'work.status', conversationId: app.task, assignmentId: first.result.assignmentId as string, status: 'done', result: 'Done.' } as Command, asAda)
+    expect(f.group(app.task).agentIds).toContain(f.ada)
+    f.run({ type: 'work.assign', conversationId: secret.task, agentId: f.ada }, secret.asPm)
+    expect(f.group(app.task).agentIds).not.toContain(f.ada)
+    const own = f.state.conversations.find(c => c.kind === 'agent-chat')!
+    expect(own.agentIds).toContain(f.ada)
+    const say = (conversationId: string, actor: Actor) => f.run({ type: 'message.send', conversationId, text: 'What are you on?', replyTo: null, recipientIds: [] } as Command, actor)
+    const heard = say(app.task, owner)
+    expect(heard.messages.flatMap(m => m.recipients ?? [])).not.toContain(f.ada)
+    expect(code(() => say(app.task, asAda))).not.toBeNull()
+  })
+
   it('is seen idle by its person and itself, and by no other person', () => {
     const f = swarm()
     expect(canReadAgent(f.state, mate, f.agent(f.ada))).toBe(true)
