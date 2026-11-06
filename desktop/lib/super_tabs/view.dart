@@ -86,6 +86,7 @@ import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
 import 'buddies.dart';
+import 'buddy_card.dart';
 import 'buddy_restart.dart';
 import 'decisions.dart';
 import 'day_pill.dart';
@@ -3719,16 +3720,27 @@ class _SuperTabViewState extends State<SuperTabView>
                   icon: const Icon(AppIcons.arrowLeft, size: 16),
                   label: const Text('Your Buddy'),
                 ),
-              Expanded(
-                child: Text(
-                  onBuddy ? 'Your Buddy' : (group?.label ?? ''),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.control().copyWith(
-                    fontWeight: grid.AppFont.semibold,
+              if (onBuddy && group != null) ...[
+                Flexible(
+                  child: BuddyCardButton(
+                    controller: c,
+                    projectId: group.projectId,
+                    app: widget.app,
+                    label: 'Your Buddy',
                   ),
                 ),
-              ),
+                const Spacer(),
+              ] else
+                Expanded(
+                  child: Text(
+                    group?.label ?? '',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.control().copyWith(
+                      fontWeight: grid.AppFont.semibold,
+                    ),
+                  ),
+                ),
               const SizedBox(width: 8),
             ],
           ),
