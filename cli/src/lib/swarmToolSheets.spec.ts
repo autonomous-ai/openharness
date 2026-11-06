@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { SWARM_TOOLS_SKILL } from './swarmTools.js'
-import { manualBlocks, sheetEntries, sourceFingerprints, staleSheetEntries, swarmToolsSheet, TOOLS_ROLES, toolsRoleFor, type ToolsRole } from './swarmToolSheets.js'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { manualBlocks, PM_SHEET_NOTE, sheetEntries, sourceFingerprints, staleSheetEntries, swarmToolsSheet, TOOLS_ROLES, toolsRoleFor, type ToolsRole } from './swarmToolSheets.js'
 
 const bytes = (text: string) => Buffer.byteLength(text, 'utf8')
 const sheet = (role: ToolsRole) => swarmToolsSheet(role)
@@ -21,6 +24,25 @@ describe('the role tools sheets', () => {
       '`route GROUP JSON', '`plan', '`capacity', '`start OPERATION_ID JSON', '`resume START_ID`', 'help tools']) {
       expect(pm, word).toContain(word)
     }
+  })
+
+  // Task #3581 (anh Dee, 11-06): lamp's PM did not know the Swarm v2 process. Its sheet says how the crew works.
+  it('explains, in the PM sheet, the crew, lanes and when to start an agent', () => {
+    const pm = sheet('pm')
+    for (const word of ['crew.add', 'role', 'lane', 'backend, cli, desktop, mobile, docs', 'work.lane', 'only to replace a broken one', 'process.confirm']) {
+      expect(pm, word).toContain(word)
+    }
+    // Ken's spec (River, 11-06): how the PM answers people stays in one place, the built-in PM text, so a project can switch it.
+    expect(pm.split('\n').find(line => line.includes('crew.add'))).not.toMatch(/answer/i)
+  })
+
+  // Task #3581: a release that changes the PM's sheet carries a what-changed note, which reaches each PM (backend
+  // superTabs/processNotes.ts). The sheet is pinned to the note it was last announced with.
+  it('pins the PM sheet to a what-changed note the backend sends: changing it needs a new note', () => {
+    expect(createHash('sha256').update(sheet('pm')).digest('hex').slice(0, 12),
+      'the PM sheet changed: add a what-changed note in backend/src/superTabs/processNotes.ts and pin it in PM_SHEET_NOTE').toBe(PM_SHEET_NOTE.sheet)
+    const notes = readFileSync(fileURLToPath(new URL('../../../backend/src/superTabs/processNotes.ts', import.meta.url)), 'utf8')
+    expect(notes).toContain(`id: '${PM_SHEET_NOTE.id}'`)
   })
 
   it('holds, in each other sheet, the commands that role uses', () => {

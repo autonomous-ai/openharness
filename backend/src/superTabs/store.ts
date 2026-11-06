@@ -89,7 +89,7 @@ import { activeMachineKeysOf } from '../lib/deviceKeyLog.js'
 import { commitParts, indexesOf, machineContentChanged, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
 import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
-import { pullRequestEvents, type PullRequestWatch } from './pullRequestEvents.js'
+import { pullRequestEvents, readPullRequestsNow, type PullRequestReader, type PullRequestWatch, type TaskHeads } from './pullRequestEvents.js'
 import { deriveCheck, keepHead, refreshChecks, watchedLinks } from './checkVerdicts.js'
 import { reopenOnEvents } from './handed.js'
 import type { TrainTask } from './mergeTrain/plan.js'
@@ -121,7 +121,7 @@ import { MAX_PROPOSALS, proposalQuestion, proposalTitle, REASK_DAYS, reflectionM
 import { readEvidence, recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByAnswer, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
-import { OVERDUE_PER_PASS, overdueDecisions } from './overdueDecisions.js'
+import { OVERDUE_PER_PASS, overdueDecisions, dueDefaultDecisions } from './overdueDecisions.js'
 import { answerable, askDecisions, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
@@ -428,6 +428,9 @@ export interface SuperTabStoreHooks {
    *  instructions save that may drop a person's rule kept in a code task (ruleMoves.ts, task #3463). Absent with no GitHub App:
    *  such a line then stays. */
   pullRequestMerges?: (autonomousEnv: string, tabId: string, projectId: string, pullRequestUrls: string[]) => Promise<Record<string, number | null>>
+  /** A reader of pull requests as the minute PR watch reads them (pullRequestEvents.ts appPullRequestWatch), for a verdict naming
+   *  a head the record does not have and for a Ready, which read the head now (task #3628). Absent with no GitHub App. */
+  pullRequestReader?: () => PullRequestReader
   /** The same for a branch a start names: its open pull request's answer, clean for the default branch, unknown with no pull request. */
   branchPushOrigin?: (repositoryUrl: string | null, branch: string) => Promise<PushOrigin>
   /** Whether the Harness GitHub App reaches a project's GitHub repository for this Swarm (github/projectAccess.ts), read before
@@ -1472,38 +1475,48 @@ export class SuperTabStore {
     })
   }
 
-  /**
-   * Leaves to the PM every decision asked at least 24 hours ago that its person still has not answered (spec: Diego,
-   * 2026-11-04, a decision left a day goes to the PM). Runs as the person through the same pipeline as their own delegate, with
-   * the store-only `overdue` context, so a person answering in the same second wins (DECISION_ANSWERED) and a repeat replays.
-   * Every pass reads the waiting decisions asked 24 hours to 8 days ago, 500 at most, oldest first. No cursor: a row that failed or
-   * missed the cap is read again next pass until it is 8 days old, and a person answering takes it out of the index range.
-   */
+  /** Applies explicit due recommendations first, then legacy 24-hour defaults, at most 500 per pass. Each answer uses
+   * the same access-checked transaction and conditional write as a person's answer. Explicit deadlines have no age cutoff;
+   * legacy retries keep their 8-day reach. Failed rows remain waiting and the next minute retries them. */
   async leaveOverdueDecisions(now: number, limit = OVERDUE_PER_PASS): Promise<{ answered: number; skipped: number; failed: number }> {
-    const rows = await overdueDecisions(this.db, now, limit)
+    // Reserve legacy capacity even when the explicit queue is full; let explicit work use any unused share.
+    const legacyWaiting = await overdueDecisions(this.db, now, limit)
+    const reserved = Math.min(legacyWaiting.length, Math.max(1, Math.floor(limit / 2)))
+    const due = reserved < limit ? await dueDefaultDecisions(this.db, now, limit - reserved) : []
+    const legacy = legacyWaiting.slice(0, limit - due.length)
+    const rows = [...due.map(row => ({ ...row, defaulted: true })), ...legacy.map(row => ({ ...row, defaulted: false }))]
     const result = { answered: 0, skipped: 0, failed: 0 }
     const tabs = new Map<string, AuthUser['autonomousEnv'] | null>()
     const codes = new Set<string>()
+    const withdrawDefault = async (row: typeof rows[number]) => {
+      if (!row.defaulted) return
+      // A person can answer meanwhile; never overwrite that answer. Closed rows leave the next indexed due range.
+      await this.db.superTabDecision.updateMany({ where: { id: row.id, tabId: row.tabId,
+        OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] }, data: { answeredAt: new Date(now), withdrawn: true } })
+    }
     for (const row of rows) {
       try {
         if (!tabs.has(row.tabId)) tabs.set(row.tabId, (await this.db.superTab.findUnique({ where: { id: row.tabId }, select: { autonomousEnv: true } }))?.autonomousEnv as AuthUser['autonomousEnv'] | undefined ?? null)
         const autonomousEnv = tabs.get(row.tabId)
         const person = await this.db.user.findUnique({ where: { id: row.personId }, select: { email: true } })
-        if (!autonomousEnv || !person) { result.skipped++; continue }
+        if (!autonomousEnv || !person) { await withdrawDefault(row); result.skipped++; continue }
         const user: AuthUser = { sub: row.personId, email: person.email, autonomousEnv, role: 'user' }
-        await this.executeOnce(user, row.tabId, { operationId: `overdue-decision-${row.id}`, command: { type: 'decision.answer', decisionId: row.id, delegate: true } },
-          undefined, undefined, false, { overdue: true })
+        await this.executeOnce(user, row.tabId, { operationId: `${row.defaulted ? 'default' : 'overdue'}-decision-${row.id}`, command: { type: 'decision.answer', decisionId: row.id, delegate: true } },
+          undefined, undefined, false, row.defaulted ? { defaulted: true } : { overdue: true })
         result.answered++
       } catch (error) {
         const code = error instanceof SuperTabError ? error.code : 'unknown'
         // Answered meanwhile, a recommendation out of range, or the person or Swarm gone: nothing for the sweep to do.
-        if (code === 'DECISION_ANSWERED' || code === 'INVALID_DECISION' || code === 'NOT_FOUND' || code === 'WORKSPACE_ACCESS_REVOKED') { result.skipped++; continue }
+        if (code === 'DECISION_ANSWERED' || code === 'INVALID_DECISION' || code === 'NOT_FOUND' || code === 'WORKSPACE_ACCESS_REVOKED' || code === 'FORBIDDEN' || code === 'READ_ONLY') {
+          try { await withdrawDefault(row) } catch { result.failed++; codes.add('DEFAULT_WITHDRAW_FAILED'); continue }
+          result.skipped++; continue
+        }
         result.failed++
         codes.add(code)
       }
     }
     // One loud line a pass (backend/AGENTS.md rule 4): codes only, never ids or emails.
-    if (result.failed > 0) logger.error('[swarm-sweeps] overdue decisions failed: they stay waiting and every pass tries them again until answered or 8 days old', { failed: result.failed, codes: [...codes] })
+    if (result.failed > 0) logger.error('[swarm-sweeps] overdue decisions failed: they stay waiting and every pass tries them again until answered (legacy questions stop at 8 days old)', { failed: result.failed, codes: [...codes] })
     return result
   }
 
@@ -1698,13 +1711,14 @@ export class SuperTabStore {
     }
   }
 
-  /** [only]: what the store alone may give a command: `overdue` for decision.answer (leaveOverdueDecisions), `movedTo` for
+  /** [only]: what the store alone may give a command: `overdue`/`defaulted` for decision.answer (leaveOverdueDecisions), `movedTo` for
    *  machine.moved (computerSignedIn). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    workspaceLeave = false, only: { overdue?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
+    workspaceLeave = false, only: { overdue?: boolean; defaulted?: boolean; movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([this.pushOriginFor(user, tabId, command),
-      this.repositoryReachFor(user, tabId, command), this.pullRequestFilesFor(user, tabId, command), this.pullRequestMergesFor(user, tabId, command)])
+      this.repositoryReachFor(user, tabId, command), this.pullRequestFilesFor(user, tabId, command), this.pullRequestMergesFor(user, tabId, command),
+      this.verdictHeadRead(user, tabId, command)])
     let ended: WorkHold[] = [], started: WorkHold[] = []
     // With only PMs and Buddies, no dispatch pass can hand out work.
     let hasWorkers = false
@@ -1810,7 +1824,8 @@ export class SuperTabStore {
       }
       if (command.type !== 'invite.accept' && command.type !== 'agent.sessionClosed' && command.type !== 'machine.cleaned') author(original, actor)
       const context: CommandContext = { operationId, now: this.now(), ...(leavingDeleted ? { workspaceLeave: true as const } : {}),
-        ...(only.overdue && command.type === 'decision.answer' ? { overdue: true as const } : {}) }
+        ...(only.overdue && command.type === 'decision.answer' ? { overdue: true as const } : {}),
+        ...(only.defaulted && command.type === 'decision.answer' ? { defaulted: true as const } : {}) }
       if (command.type === 'machine.moved' && only.movedTo && actor.kind === 'person') {
         context.computerMove = await this.computerMove(tx, original, actor.userId, command.machineId, only.movedTo)
       }
@@ -2349,7 +2364,69 @@ export class SuperTabStore {
     this.startWork(tabId, started)
     // A write that may free a worker or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
     if (hasWorkers && freesOrOpens(command)) this.dispatchSoon(tabId)
+    // A task's Ready records its pull request's head as GitHub has it now, for the Reviewers it hands over to (task #3628).
+    if (command.type === 'work.status' && command.status === 'review') await this.readyHeadRead(user, tabId, command)
     return done
+  }
+
+  /**
+   * Before a work.check naming a head (or base) its pull request's record does not have, that pull request's head as GitHub has
+   * it now, recorded as the PR watch records it (task #3628): the verdict is then judged on it. On #3561 a Yes at the real head
+   * did not count, twice, while the minute's pass had not read the push. A head the record has, carried ones too, reads nothing:
+   * the record never moves but to the head GitHub gives, so a verdict at an older head still counts at none.
+   */
+  private async verdictHeadRead(user: AuthUser, tabId: string, command: Command): Promise<void> {
+    if (!this.hooks.pullRequestReader || command.type !== 'work.check' || !command.head) return
+    const { head, base } = command
+    await this.headsReadNow(user, tabId, command, (state) => {
+      const group = state.conversations.find(c => c.id === command.conversationId)
+      const task = group?.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : group
+      const urls = task?.pullRequestUrls ?? [], heads = task?.pullRequestHeads
+      // The pull request the command records the verdict on (commands.ts work.check).
+      const url = urls.findLast(u => heads?.[u]) ?? urls.at(-1)
+      const known = url ? heads?.[url] : undefined
+      const same = (sha: string) => sha.toLowerCase() === head.toLowerCase()
+      if (!task || !url || (known && (same(known.head) || known.carries?.some(same)) && (base === undefined || base === known.base))) return null
+      return { task, urls: [url] }
+    }, [command.conversationId])
+  }
+
+  /** After a task's Ready, the heads of the pull requests it names that the task links, else its newest link (task #3628). */
+  private async readyHeadRead(user: AuthUser, tabId: string, command: Extract<Command, { type: 'work.status' }>): Promise<void> {
+    if (!this.hooks.pullRequestReader) return
+    await this.headsReadNow(user, tabId, command, (state) => {
+      const task = state.conversations.find(c => c.id === command.conversationId)
+      if (!task || task.reviewOf || !task.pullRequestUrls?.length) return null
+      const linked = watchedLinks(task.pullRequestUrls)
+      const named = typeof command.result === 'string' ? pullRequestsIn(command.result, groupProject(state, task).repository?.repositoryUrl ?? null) : []
+      const urls = linked.filter(url => named.includes(url))
+      return { task, urls: urls.length ? urls : linked.slice(-1) }
+    }, [])
+  }
+
+  /** [pick]'s pull requests of a task read from GitHub now and recorded (pullRequestEvents.ts readPullRequestsNow), outside any
+   *  command's transaction, as GitHub may take seconds. A failure leaves the record as it was and is logged: the command is
+   *  judged on the record then, as before. [groups]: the command's groups whose task, when they are a step, is loaded too. */
+  private async headsReadNow(user: AuthUser, tabId: string, command: Command,
+    pick: (state: SuperTabState) => { task: Conversation; urls: string[] } | null, groups: string[]): Promise<void> {
+    let picked: { task: TaskHeads; urls: string[] } | null = null
+    try {
+      picked = await transaction(this.db, async tx => {
+        const loaded = await this.load(tx, user, tabId, namedFor(command))
+        // A step's task may be dormant: loaded by its id.
+        const reviewOf = groups.map(id => loaded.state.conversations.find(c => c.id === id)?.reviewOf).filter((id): id is string => !!id)
+        const { state } = reviewOf.length ? await this.ensure(tx, loaded, { groupIds: [...groups, ...reviewOf] }) : loaded
+        const chosen = pick(state)
+        return chosen && chosen.urls.length ? { task: { key: chosen.task.id, heads: chosen.task.pullRequestHeads ?? null,
+          steps: chosen.task.stepIds ?? null }, urls: chosen.urls } : null
+      })
+      if (!picked) return
+      const unread = await readPullRequestsNow(this.db, this, this.hooks.pullRequestReader!(), tabId, picked.task, picked.urls, this.now())
+      if (unread.length) logger.warn('[swarm-pr-head] not read', { tabId, group: picked.task.key, pulls: unread.length })
+    } catch (error) {
+      if (error instanceof SuperTabError) return
+      logger.warn('[swarm-pr-head] not read', { tabId, group: picked?.task.key, error: error instanceof Error ? error.message : String(error) })
+    }
   }
 
   /**
@@ -4874,7 +4951,7 @@ export class SuperTabStore {
       if (!fresh.length) return 'empty'
       await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
       await writeDecisions(tx, tabId, askDecisions(state, chat, project.ownerId, fresh.map(proposalQuestion),
-        { operationId: id, askerAgentId: lead.id, assignmentId: null, kind: REFLECTION_DECISION }), now)
+        { now, operationId: id, askerAgentId: lead.id, assignmentId: null, kind: REFLECTION_DECISION }), now)
       return 'posted'
     })
   }

@@ -45,6 +45,7 @@ import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
 import { moveChatMark } from './threadMarkSeeds.js'
 import { ServedTops } from './servedTops.js'
 import { memberSwarms } from '../swarmRows.js'
+import { isPersonalSwarm } from '../deletion.js'
 
 type LoadOptions = NonNullable<Parameters<typeof parts.loadActive>[2]>
 type Loader = (view: CacheView, tabId: string, opts: LoadOptions) => Promise<SwarmParts>
@@ -579,7 +580,11 @@ export class SwarmReads {
     return { tabs: page.map(row => {
       const head = (heads.get(row.id)?.[0]?.data ?? legacy.find(l => l.id === row.id)?.state) as { name: string; paused: boolean }
       const tags = mentions?.get(row.id)
+      // Only the reader's own Personal Swarm is marked (a round dial's Personal | Team picker); another person's is not theirs
+      // to be told apart. Its id is derived from its owner and environment (deletion.ts), so no read is needed.
+      const personal = row.ownerId === user.sub && isPersonalSwarm({ id: row.id, environment: user.autonomousEnv, ownerId: row.ownerId })
       return { id: row.id, name: head.name, ownerId: row.ownerId, workspaceId: row.workspaceId, paused: head.paused, lastChangedAt: newest.get(row.id) ?? null,
+        ...personal ? { personal: true as const } : {},
         ...tags ? { mentionsWaiting: tags.count, mentionsDigest: tags.digest } : {} }
     }), next: rows.length > 100 ? rows[99]!.id : null }
   }
