@@ -88,7 +88,7 @@ export function settleRequest(state: SuperTabState, project: SwarmProject, agent
 
 /** When each rule turns the strip red (anh Dee's brief), sent with the pulse so no app holds a threshold. */
 export interface PulseLimits { askMinutes: number; idleMinutes: number; lostMinutes: number }
-export const PULSE_LIMITS: PulseLimits = { askMinutes: 15, idleMinutes: 10, lostMinutes: 10 }
+export const PULSE_LIMITS: PulseLimits = { askMinutes: 5, idleMinutes: 10, lostMinutes: 10 }
 
 /** A project's pulse. `redAt`: when each rule turns red (0: already, by its nature), null while it cannot. */
 export interface Pulse {

@@ -25,7 +25,7 @@ Daily scorecard adds `PM first answer | median 30s | slowest 90s | 2 answered`.
 
 ## Design
 
-Reuse message/reaction/scorecard stores and their lifecycle; no new collection or index. Reaction and receipt share the existing transaction; deterministic reaction identity makes retries idempotent. Readers use current project grants and indexed message pages. A PM reply must be in the same conversation and directly answer the message or occur later in its thread; agent notices, reactions, and task cards do not count. Daily figures cover messages answered during the day, with the existing bounded seven-day lookback and reader cap reported as before. Rollback restores batching and the old threshold; old scorecards omit the optional figure. No migration, new timer, or platform-specific code. At ten times traffic reads stay bounded by existing page caps; watch capped scorecards and delivery latency. Production read-only credentials are unavailable here; loopback integration/profile evidence substitutes and that limitation is reported.
+Reuse message/reaction/scorecard stores and their lifecycle; no new collection or index. One optional message field, `answers`, preserves a main answer link without opening a thread; older clients ignore it and old rows remain valid. Reaction and receipt share the existing transaction; deterministic reaction identity makes retries idempotent. Readers use current project grants and indexed message pages. A PM reply must be in the same conversation and directly answer the message or occur later in its thread; agent notices, reactions, and task cards do not count. Daily figures cover messages answered during the day, with the existing bounded seven-day lookback and reader cap reported as before. Rollback restores batching and the old threshold; old scorecards omit the optional figure. No backfill, new timer, or platform-specific code. At ten times traffic reads stay bounded by existing page caps; watch capped scorecards and delivery latency. Production read-only credentials are unavailable here; loopback integration/profile evidence substitutes and that limitation is reported.
 
 ## Review Focus
 
@@ -57,7 +57,7 @@ Reuse message/reaction/scorecard stores and their lifecycle; no new collection o
 
 ### Task 3: Answer time and five-minute pulse
 
-**Files:** backend/src/superTabs/scorecard/{figures.ts,figures.test.ts,records.ts}, scorecard presentation module; backend/src/superTabs/{pulse.ts,pulse.test.ts}; backend/integration/superTabScorecard.test.ts.
+**Files:** backend/prisma/schema.prisma (optional message answer link), backend/src/superTabs/{model.ts,commands.ts,store.ts}, backend/src/superTabs/scorecard/{figures.ts,figures.test.ts,records.ts}, scorecard presentation module; backend/src/superTabs/{pulse.ts,pulse.test.ts}; backend/integration/superTabScorecard.test.ts.
 **Interfaces:** optional pmAnswer {count, medianSeconds, slowestSeconds} on ScorecardFigures; records includes bounded project message lookback and explicit answer links; PULSE_LIMITS.askMinutes = 5.
 
 - [ ] Commit tests for first PM answers to main/thread/relay messages; wrong agent/place, reactions, task cards and duplicate answers excluded; cross-day, zero samples and subminute timings; redAt equals sent+300000ms.

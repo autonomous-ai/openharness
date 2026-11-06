@@ -24,7 +24,7 @@ const DAY_ROW_CAP = 10_000
 
 const GROUP_FIELDS = { _id: 0, key: 1, 'data.id': 1, 'data.kind': 1, 'data.number': 1, 'data.reviewOf': 1, 'data.leadId': 1, 'data.ledger.askedAt': 1,
   'data.ledger.shippedAt': 1, 'data.ledger.fixedAfterMergeAt': 1, 'data.ledger.runs.at': 1, 'data.ledger.proposal.messageId': 1,
-  'data.cards.line.messageId': 1 }
+  'data.cards.line.messageId': 1, 'data.audience': 1 }
 
 export interface ScorecardRecords { input: ScorecardInput; capped: number }
 
@@ -44,7 +44,7 @@ async function projectGroups(tx: Transaction, tabId: string, projectId: string, 
 const asMessage = (row: SuperTabMessage): ScorecardMessage => {
   const author = row.author as { kind?: string; id?: string } | null
   return { id: row.id, conversationId: row.conversationId, author: { kind: author?.kind === 'person' ? 'person' : 'agent', id: String(author?.id ?? '') },
-    source: (row.source ?? null) as Record<string, unknown> | null, text: row.text, replyTo: row.replyTo ?? null, thread: row.thread ?? null,
+    source: (row.source ?? null) as Record<string, unknown> | null, text: row.text, replyTo: row.replyTo ?? null, answers: row.answers ?? null, recipientIds: row.recipientIds, thread: row.thread ?? null,
     createdAt: row.createdAt.getTime(), mentions: row.mentions ?? [] }
 }
 
@@ -88,10 +88,10 @@ export async function scorecardRecords(tx: Transaction, at: { tabId: string; pro
     const isChat = group.id === chatId
     // A Buddy chat is a person's own, not the project's work.
     if (group.kind && !isChat) continue
-    const from = isChat ? end - SCORECARD_LIMITS.askLookbackDays * DAY : start
+    const from = end - SCORECARD_LIMITS.askLookbackDays * DAY
     const read = await groupRows(tx, tabId, group.id, from, !isChat, isChat ? CHAT_ROW_CAP : GROUP_ROW_CAP)
     if (read.capped) capped++
-    messages.push(...read.rows)
+    messages.push(...read.rows.map(row => ({ ...row, ...group.audience ? { private: true } : {} })))
   }
   // The rows people replied to in the day, wherever they are: whether a PM wrote them. Matched by id alone (pageReads.ts).
   const have = new Set(messages.map(m => m.id))
