@@ -384,7 +384,7 @@ export const ENCRYPTED_DOWN_TYPES = new Set<string>([
   // Carries the fork's name and first task — what the person typed — like agent_create's prompt.
   'agent_fork',
   'fs_list_dir', 'project_preview', 'codex_profiles_list', 'codex_profile_link',
-  // Asks this machine for its own agent accounts' usage (services/usage.ts). ⚠️ Missing here it
+  // Asks this machine to read its own agent accounts' usage (lib/accountUsage.ts). ⚠️ Missing here it
   // would not fail loudly — the same trap `question_response` once fell into: the payload would stay
   // an {__e2e} envelope, requestId would read back undefined, and the requester would wait out its
   // timeout on a reply that was never going to be sent.
