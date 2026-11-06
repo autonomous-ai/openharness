@@ -41,6 +41,11 @@ class _ProbeProcess implements Process {
   }
 }
 
+/// Only a check that never finishes returns null. The code under test bounds a probe by `probeTimeout` (20 ms
+/// here); this guard is not a speed assertion, so a loaded runner that makes a check late cannot fail it (task #3721,
+/// 300 ms failed on CI with four test workers on four CPUs).
+const _hangGuard = Duration(seconds: 30);
+
 void main() {
   late Directory scratch;
   late String node;
@@ -89,7 +94,7 @@ void main() {
   }) => setup
       .ensureReady(onProgress: onProgress ?? (_) {}, install: false)
       .then<EnvironmentReadiness?>((value) => value)
-      .timeout(const Duration(milliseconds: 300), onTimeout: () => null);
+      .timeout(_hangGuard, onTimeout: () => null);
 
   for (final stalled in ['shell', 'tmux', 'node', 'cli']) {
     test('$stalled timeout is a failed check, and Retry can recover', () async {
@@ -298,11 +303,8 @@ void main() {
     });
     final result = await check(setup);
     expect(result?.phase, EnvironmentSetupPhase.failed);
-    final process = await started.future.timeout(const Duration(seconds: 2));
-    expect(
-      await process.exitCode.timeout(const Duration(seconds: 2)),
-      isNot(0),
-    );
+    final process = await started.future.timeout(_hangGuard);
+    expect(await process.exitCode.timeout(_hangGuard), isNot(0));
     expect(exited, isTrue);
   }, skip: Platform.isWindows);
 }
