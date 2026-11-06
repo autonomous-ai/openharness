@@ -22,6 +22,7 @@ class SuperTabWeeklyLeaderboardPage extends StatefulWidget {
 }
 
 class _WeeklyBoardState extends State<SuperTabWeeklyLeaderboardPage> {
+  static const _rowHeight = 56.0;
   SuperTabLeaderboard? _board;
   String? _error;
   Object? _stamp;
@@ -243,6 +244,7 @@ class _WeeklyBoardState extends State<SuperTabWeeklyLeaderboardPage> {
               ], heading: true),
               Expanded(
                 child: ListView.builder(
+                  itemExtent: _rowHeight,
                   itemCount: board.people.length,
                   itemBuilder: (context, index) {
                     final score = board.people[index];
@@ -330,7 +332,7 @@ class _WeeklyBoardState extends State<SuperTabWeeklyLeaderboardPage> {
   );
 
   Widget _line(List<Widget> children, {bool heading = false}) => Container(
-    height: heading ? 36 : 56,
+    height: heading ? 36 : _rowHeight,
     padding: const EdgeInsets.symmetric(
       horizontal: DesktopChrome.panelPadding / 2,
     ),
