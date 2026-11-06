@@ -35,8 +35,14 @@ const namesCode = (group: Conversation): boolean => codePullRequests(group).leng
  *  task (security reviews 1 and 2 of #3324); a step's own code never marks the release task, only the read of the task's own does. */
 export const isReleaseWork = (state: SuperTabState, group: Conversation): boolean => {
   const task = taskOf(state, group)
-  return !!task?.release && !namesCode(task) && (group === task || !namesCode(group))
+  // A mark ends the exemption at once, so the first mark of a release task is seen as a change and tells the main account to stop.
+  return !!task?.release && !task.teamWritten && !group.teamWritten && !namesCode(task) && (group === task || !namesCode(group))
 }
+
+/** Whether the links in a post in [group] are its code (store.ts): not on a release task, where a post cites the merged pull requests
+ *  it releases (the Integrator applying a rollout note) and a link there builds nothing; its code is what its result and evidence name
+ *  (security review 2 of #3324). */
+export const codeFromPosts = (group: Conversation): boolean => !group.release
 
 /** Whether [group]'s code is Team-written. An open task from before the mark reads its current assignee too. A step whose
  *  task this command did not load counts as Team-written: an unknown never reads as clean. */
