@@ -101,6 +101,23 @@ describe('readReleases.mergeCommit and contains', () => {
     expect(await readReleases(none.get).mergeCommit(REPO, 7, T)).toBeNull()
   })
 
+  // Task #3586: a merge recorded long after its batch landed is outside the recorded time's window; main's newest commits are read.
+  it('finds a batch commit outside the merge\'s time window in main\'s newest commits', async () => {
+    const asked: string[] = []
+    const get: GitHubGet = async (_repository, path) => {
+      asked.push(path)
+      if (path === '/repos/acme/app') return repo
+      if (path === '/repos/acme/app/pulls/7') return { status: 200, body: { merged_at: null, state: 'closed' } }
+      if (path.includes('since=')) return { status: 200, body: [] }
+      return { status: 200, body: [{ sha: 'newer', commit: { message: 'Merge batch i3: #70 (#81)' } }, { sha: 'batch', commit: { message: 'Merge batch i0: #6 #7 (#79)' } }] }
+    }
+    expect(await readReleases(get).mergeCommit(REPO, 7, T)).toBe('batch')
+    expect(asked.at(-1)).toBe('/repos/acme/app/commits?sha=main&per_page=100')
+    // Nothing anywhere: not found, rather than a guess.
+    const none: GitHubGet = async (_repository, path) => path === '/repos/acme/app' ? repo : path.endsWith('/pulls/7') ? { status: 200, body: { merged_at: null } } : { status: 200, body: [] }
+    expect(await readReleases(none).mergeCommit(REPO, 7, T)).toBeNull()
+  })
+
   it('looks for a batch every pass in the merge\'s first hour, then every 30 minutes, then every 2 hours after a day', () => {
     const HOUR = 3_600_000, half = 30 * 60_000, at = 100 * 24 * HOUR
     expect(batchLookupDue(at, at + 10 * 60_000 + 7)).toBe(true)
@@ -155,7 +172,8 @@ describe('watchReleases', () => {
       // g1's merge commit waits for Desktop and Web, which GitHub could not read: it is found again next pass.
       resolved: [{ groupId: 'g1', url: 'https://github.com/acme/app/pull/7', components: ['desktop', 'web'] },
         { groupId: 'g2', url: 'https://github.com/acme/app/pull/8', sha: 'm8' }],
-      releases: { backend: { tag: 'v1.4.17_backend', sha: 'b', at: T, carries: [pendingKey({ groupId: 'g2', url: 'https://github.com/acme/app/pull/8' })] } } } }])
+      releases: { backend: { tag: 'v1.4.17_backend', sha: 'b', at: T, carries: [pendingKey({ groupId: 'g2', url: 'https://github.com/acme/app/pull/8' })],
+        compared: [pendingKey({ groupId: 'g2', url: 'https://github.com/acme/app/pull/8' })] } } } }])
   })
 
   it('reads an open step\'s component too, and nothing for a project with nothing to settle', async () => {
@@ -180,12 +198,13 @@ describe('watchReleases', () => {
   })
 
   it('compares again only for a new tag or a newly resolved merge, and leaves out a release whose comparison GitHub could not answer', async () => {
-    const known = { pending: [{ groupId: 'g2', url: 'https://github.com/acme/app/pull/8', mergedAt: T - 1, components: ['backend' as const], sha: 'm8' }],
+    const known = { pending: [{ groupId: 'g2', url: 'https://github.com/acme/app/pull/8', mergedAt: T - 1, components: ['backend' as const], sha: 'm8',
+      checked: { backend: 'v1.4.17_backend' } }],
       last: { backend: { tag: 'v1.4.17_backend', sha: 'b', at: T } } }
     const same = scene(known)
     await watchReleases(same.db, same.store, same.fake, T, { warn: () => {}, info: () => {} })
     expect(same.read).toEqual(['latest backend', 'done'])
-    const unsure = scene({ ...known, last: {} }, { contains: async () => null })
+    const unsure = scene({ pending: [{ ...known.pending[0]!, checked: undefined }], last: {} }, { contains: async () => null })
     await watchReleases(unsure.db, unsure.store, unsure.fake, T, { warn: () => {}, info: () => {} })
     expect(unsure.settled[0]!.facts.releases).toEqual({})
   })
@@ -205,7 +224,37 @@ describe('watchReleases', () => {
       { ...readReleases(g.get), done: async () => {} })
     await watchReleases(s.db, s.store, s.fake, T + 6 * 60_000, { warn: () => {}, info: () => {} })
     expect(s.settled[0]!.facts.releases.cli).toEqual({ tag: 'v0.5.55_cli', sha: 'm7', at: T + 5 * 60_000,
-      carries: [pendingKey({ groupId: 'g1', url: 'https://github.com/acme/app/pull/7' })] })
+      carries: [pendingKey({ groupId: 'g1', url: 'https://github.com/acme/app/pull/7' })], compared: [pendingKey({ groupId: 'g1', url: 'https://github.com/acme/app/pull/7' })] })
+  })
+
+  // Task #3586 (anh Dee, 2026-11-06): #3307 and #3353 went out in CLI 0.5.57, cut before the backend recorded releases, and the Swarm
+  // kept them waiting: a release already settled was compared only with merges found since. Every waiting merge is compared with
+  // each release once, whenever the release was cut.
+  it('compares a waiting merge with the release already settled, once, if it was never compared with it', async () => {
+    const entry = { groupId: 'g2', url: 'https://github.com/acme/app/pull/8', mergedAt: T - 1, components: ['backend' as const], sha: 'm8' }
+    const s = scene({ pending: [entry], last: { backend: { tag: 'v1.4.17_backend', sha: 'b', at: T } } })
+    await watchReleases(s.db, s.store, s.fake, T, { warn: () => {}, info: () => {} })
+    expect(s.read).toEqual(['latest backend', 'contains m8 b', 'done'])
+    expect(s.settled[0]!.facts.releases.backend).toMatchObject({ tag: 'v1.4.17_backend', carries: [pendingKey(entry)], compared: [pendingKey(entry)] })
+    // Compared and not carried, it is not compared with that release again.
+    const no = scene({ pending: [{ ...entry, checked: { backend: 'v1.4.17_backend' } }], last: { backend: { tag: 'v1.4.17_backend', sha: 'b', at: T } } })
+    await watchReleases(no.db, no.store, no.fake, T, { warn: () => {}, info: () => {} })
+    expect(no.read).toEqual(['latest backend', 'done'])
+    // A newer tag is compared with it again.
+    const newer = scene({ pending: [{ ...entry, checked: { backend: 'v1.4.16_backend' } }], last: { backend: { tag: 'v1.4.16_backend', sha: 'a', at: T - 1 } } })
+    await watchReleases(newer.db, newer.store, newer.fake, T, { warn: () => {}, info: () => {} })
+    expect(newer.read).toContain('contains m8 b')
+  })
+
+  it('looks for every merge commit on the first pass after a start, whatever the lookup schedule says', async () => {
+    const old = { groupId: 'g2', url: 'https://github.com/acme/app/pull/8', mergedAt: T - 3 * 86_400_000, components: ['backend' as const] }
+    const at = T + 17 * 60_000 // not a pass the schedule looks on for a merge three days old
+    const idle = scene({ pending: [old] })
+    await watchReleases(idle.db, idle.store, idle.fake, at, { warn: () => {}, info: () => {} })
+    expect(idle.read).not.toContain('merge 8')
+    const first = scene({ pending: [old] })
+    await watchReleases(first.db, first.store, first.fake, at, { warn: () => {}, info: () => {} }, undefined, true)
+    expect(first.read).toContain('merge 8')
   })
 
   // Review 2 of #3228: a merge commit found in a pass whose comparison GitHub could not answer is found again, so the tag
