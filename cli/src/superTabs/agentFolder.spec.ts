@@ -30,20 +30,15 @@ describe('the folder Harness makes for an agent whose start named a temporary on
 
   it('is made private, marked as Harness\'s, and trusted alone in Claude\'s settings', async () => {
     const root = temp('agent-root-'), claude = temp('agent-claude-')
-    const previous = process.env.CLAUDE_CONFIG_DIR
-    process.env.CLAUDE_CONFIG_DIR = claude
-    try {
-      const folder = agentFolderFor(root, 's1')
-      await prepareAgentFolder(folder, 'claude')
-      expect(statSync(folder).mode & 0o777).toBe(0o700)
-      expect(existsSync(join(folder, AGENT_FOLDER_MARK))).toBe(true)
-      const projects = JSON.parse(readFileSync(join(claude, '.claude.json'), 'utf8')).projects as Record<string, { hasTrustDialogAccepted?: boolean }>
-      expect(Object.keys(projects)).toEqual([folder])
-      expect(projects[folder].hasTrustDialogAccepted).toBe(true)
-    } finally {
-      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
-      else process.env.CLAUDE_CONFIG_DIR = previous
-    }
+    // Claude Code writes .claude.json on its first run; a machine that ran it has one (kit/folderTrust.ts leaves none made).
+    writeFileSync(join(claude, '.claude.json'), '{}')
+    const folder = agentFolderFor(root, 's1')
+    await prepareAgentFolder(folder, 'claude', { HOME: root, CLAUDE_CONFIG_DIR: claude })
+    expect(statSync(folder).mode & 0o777).toBe(0o700)
+    expect(existsSync(join(folder, AGENT_FOLDER_MARK))).toBe(true)
+    const projects = JSON.parse(readFileSync(join(claude, '.claude.json'), 'utf8')).projects as Record<string, { hasTrustDialogAccepted?: boolean }>
+    expect(Object.keys(projects)).toEqual([folder])
+    expect(projects[folder].hasTrustDialogAccepted).toBe(true)
   })
 
   it('may be removed only when it is a marked folder directly in agent-home', async () => {
