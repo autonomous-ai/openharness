@@ -66,6 +66,12 @@ class _SwarmJoinHostState extends State<SwarmJoinHost> {
           isCurrent: () =>
               app.currentUser?.id == accountId && !accountRequest.answered,
         );
+        if (started != null &&
+            mounted &&
+            app.status == AppStatus.authenticated &&
+            app.currentUser?.id == accountId) {
+          app.openSuperTab(accountRequest.tabId, accountRequest.swarmName);
+        }
         final choice = started != null;
         accountRequest.complete(
           app.status == AppStatus.authenticated &&

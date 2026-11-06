@@ -14,8 +14,9 @@ class ReportConnection extends SuperTabFixtureConnection {
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 20),
   }) async {
-    if (type != 'usage_read')
+    if (type != 'usage_read') {
       return super.request(type, payload: payload, timeout: timeout);
+    }
     reads++;
     return {
       'providers': [
