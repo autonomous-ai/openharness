@@ -1278,10 +1278,11 @@ describe('routing contributed capacity', () => {
   })
   it('withholds a contributed member when a required tool was reported missing', async () => {
     const pool = healthy(); pool.observation.tools.git = false
+    Object.assign(pool.observation, { toolProbeErrors: { git: 'Checked the zsh login shell PATH.' } })
     const { answer } = await runPool(pool, true)
     expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
     expect(answer.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('Multiply'),
-      reason: expect.stringContaining('Required tool missing: git.') })]))
+      reason: expect.stringContaining('Required tool missing: git. Checked the zsh login shell PATH.') })]))
   })
   it('explains a contributed member tool probe that did not complete', async () => {
     const pool = healthy()

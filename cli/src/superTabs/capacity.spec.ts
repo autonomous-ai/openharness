@@ -57,6 +57,16 @@ it('distinguishes a missing tool from a failed probe and keeps the failure detai
   expect(admission(unverified, { installed: true }, quotaOf({}, 'codex', false), { ...requirements, devices: [] }).reasons)
     .toEqual(expect.arrayContaining([expect.stringMatching(/Required tool not verified: git.*interactive shell timed out/)]))
 })
+it('retains the checked PATH when a completed probe reports a missing tool', async () => {
+  const result = await readCapabilities({ cwd: '/fixture/repo', tools: ['flutter'] }, {
+    resources: async () => ({ cpuPercent: 10, memoryTotalBytes: 1000, memoryUsedBytes: 100 }),
+    disk: async () => ({ freeBytes: 500, volume: 'volume', path: '/fixture/repo' }),
+    tool: async () => ({ status: 'missing', detail: 'Checked the zsh login shell PATH.' }), device: async () => true,
+  })
+  expect(result).toMatchObject({ tools: { flutter: false }, toolProbeErrors: { flutter: 'Checked the zsh login shell PATH.' } })
+  expect(admission(result, { installed: true }, quotaOf({}, 'codex', false), { ...requirements, tools: ['flutter'], devices: [] }).reasons)
+    .toEqual(['Required tool missing: flutter. Checked the zsh login shell PATH.'])
+})
 it('says how much memory is free and how much a start needs, in GiB', () => {
   const GiB = 1024 ** 3
   const capacity = { resources: { cpuPercent: 10, memoryTotalBytes: 32 * GiB, memoryUsedBytes: 32 * GiB - 1.85 * GiB, projectDiskFreeBytes: 500 }, tools: { git: true }, devices: {} }

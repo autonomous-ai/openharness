@@ -387,6 +387,26 @@ describe('contributed machine executor', () => {
     await f.machine.tick()
     expect(f.capabilities.mock.calls.slice(2).map(([input]) => input.tools)).toEqual([[], []])
   })
+  it('keeps a missing tool PATH explanation while cached and refreshes it when the daemon starts again', async () => {
+    const f = fixture()
+    f.pool.starts = []
+    const reported = () => f.backend.mock.calls.filter(c => c[1] === 'POST').map(c => c[3] as Record<string, unknown>)
+    f.capabilities.mockResolvedValue({ ok: true, tools: { flutter: false },
+      toolProbeErrors: { flutter: 'Checked the zsh login shell PATH.' } } as never)
+    await f.machine.tick()
+    expect(reported().at(-1)).toMatchObject({ tools: { flutter: false }, toolProbeErrors: { flutter: 'Checked the zsh login shell PATH.' } })
+    f.capabilities.mockResolvedValue({ ok: true, tools: { flutter: true } } as never)
+    f.advance()
+    await f.machine.tick()
+    expect(reported().at(-1)).toMatchObject({ tools: { flutter: false }, toolProbeErrors: { flutter: 'Checked the zsh login shell PATH.' } })
+    f.machine.stop()
+    const restarted = new ContributedMachines(f.core, 'host', f.deps as never)
+    try {
+      await restarted.tick()
+      expect(reported().at(-1)).toMatchObject({ tools: { flutter: true } })
+      expect(reported().at(-1)).not.toHaveProperty('toolProbeErrors.flutter')
+    } finally { restarted.stop() }
+  })
   it('probes a newly queued tool immediately and retries an unverified tool after its short cache window', async () => {
     const f = fixture()
     f.capabilities.mockResolvedValueOnce({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
