@@ -126,8 +126,16 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     const view = readerView(parts, peer, NOW, { teamMachines: [] })
     const worker = view.parts.agents.find(a => a.key === s.worker)!
     for (const hidden of ['downNamed', 'downSince', 'limitedUntil', 'roleId']) expect(worker.data).not.toHaveProperty(hidden)
-    expect(view.derived.agents[s.worker]).toEqual({ downSince: new Date(NOW - 5 * MINUTE).toISOString(), limitedUntil: null, workDecision: null, roleId: null, roleName: 'Engineer' })
+    expect(view.derived.agents[s.worker]).toEqual({ downSince: new Date(NOW - 5 * MINUTE).toISOString(), limitedUntil: null, workDecision: null, roleId: null, roleName: 'Engineer', kind: 'regular', chatId: null })
     expect(Object.keys(view.derived.agents).sort()).toEqual([s.lead, s.worker].sort())
+  })
+
+  // Task #4116 (Swarm v3): the left pane's "My agents" reads each agent's kind and its chat from the derived summary.
+  it('says each agent\'s kind and the chat its person talks to it in', () => {
+    const { parts, s } = scene()
+    const view = readerView(parts, owner, NOW, { teamMachines: [] })
+    expect(view.derived.agents[s.lead]).toMatchObject({ kind: 'pm', chatId: 'lead' })
+    expect(view.derived.agents[s.worker]).toMatchObject({ kind: 'regular', chatId: null })
   })
 
   // Free slots count every session the machine runs, as today, even ones this reader cannot see.

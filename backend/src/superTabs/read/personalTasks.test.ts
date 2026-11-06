@@ -21,6 +21,31 @@ function scene() {
 }
 
 describe('personal Tasks summaries', () => {
+  it.each([
+    [undefined, false, false],
+    [undefined, true, false],
+    ['proposal', false, true],
+    ['proposal', true, true],
+    ['approved', false, false],
+    ['rejected', false, false],
+  ] as const)('exposes approval capability for decision %s with Buddy proposal %s as %s', (decision, proposal, canApprove) => {
+    const s = scene(), row = s.stored.groups.find(g => g.key === s.f.web)!, data = row.data!
+    data.assignment = null
+    if (decision) data.taskApproval = { ...data.taskApproval!, state: decision }
+    else delete data.taskApproval
+    if (proposal) data.proposal = { version: 1, text: 'Keep drafts', goal: 'Drafts', why: 'Loss', doneWhen: 'Returns', evidence: ['Repro'], priority: 'P2',
+      createdAt: NOW, questions: [], senders: [{ personId: peer.userId, generation: s.f.state.people.find(p => p.id === peer.userId)!.generation }] }
+    for (const reset of [true, false])
+      expect(personalTasksFor([row], s.view(), peer, reset)!.upserts).toEqual([expect.objectContaining({ id: row.key, canApprove })])
+  })
+  it.each(['foreign', 'stale'])('never exposes an actionable pending approval for a %s membership', kind => {
+    const s = scene(), row = s.stored.groups.find(g => g.key === s.f.web)!, data = row.data!
+    data.assignment = null
+    data.taskApproval = { ...data.taskApproval!, state: 'proposal',
+      ...kind === 'foreign' ? { personId: owner.userId } : { generation: 'previous-membership' } }
+    expect(personalTasksFor([row], s.view(), peer, true)!.upserts).toEqual([])
+    expect(personalTasksFor([row], s.view(), peer, false)).toMatchObject({ upserts: [], removed: [row.key] })
+  })
   it('includes only my visible requested tasks and proposals, with project, assigned identity and execution status', () => {
     const s = scene(), feed = personalTasksFor(s.stored.groups, s.view(), peer, true)!
     expect(feed).toMatchObject({ approvalMode: 'review', reset: true, removed: [] })
