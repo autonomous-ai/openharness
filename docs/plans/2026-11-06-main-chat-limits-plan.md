@@ -89,3 +89,8 @@
 - [x] Commit boundary regression (`f2d3b7390`): answering an earlier agent response with 50 retained asks evicted its main-budget entry before recording the post and threw. Record the main slot before adding an answer target (`ac48a1dad`); 34 focused tests pass.
 - [x] Final affected run: 651 tests across seven files, typecheck clean, three project-chat transactional integration tests pass. Reviewer’s light-load note requires no code change: chatLimits is in GROUP_FIELDS.unread and removed by both reader views.
 - [ ] Same independent reviewer reads the corrected head; ready PR CI supplies complete backend and integration evidence.
+
+### Notice-reply CI follow-up
+
+- Ready CI at `c060ffe8b` found two visible responses to agent-only notices incorrectly treated as closed asks; those notices have no person-ask budget. The same two integration cases fail locally. Command regression `39e5ab996` fails (one failure / 24 passes); `17109530b` exempts the linked private notice from ask budgeting while keeping main content checks. Focused chatLimits/answers now pass 35 tests; typecheck passes after completing the test’s author context.
+- The third CI failure is the project-rules fixture posting `Status: all good.` in main. Its agent-identity test now uses a substantive release line, preserving its original purpose and the new status guard.
