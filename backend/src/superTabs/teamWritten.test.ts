@@ -3,7 +3,7 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { appendCodePullRequestUrls, createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 import { LEAD_CAPABILITY } from './leadStart.js'
-import { applyPushOrigin, isReleaseWork, markTeamWritten, postedCode, releaseCodeSources, stepMark, TEAM_WRITTEN_STOP, TEAM_WRITTEN_WORK, teamWrittenTask } from './teamWritten.js'
+import { applyPushOrigin, isReleaseWork, markTeamWritten, mergedPullRequests, postedCode, releaseCodeSources, stepMark, TEAM_WRITTEN_STOP, TEAM_WRITTEN_WORK, teamWrittenTask } from './teamWritten.js'
 
 // Audit H2: a branch a Team agent wrote runs only in a Team account, whoever's project it is, so nothing the branch
 // carries runs with the main account's rights (docs/plans/2026-11-02-team-written-branch-plan.md).
@@ -620,6 +620,25 @@ describe('a release task the Swarm opened', () => {
     const plain = f.group(), ordinary = f.state.conversations.find(c => c.id === plain)!
     expect(releaseCodeSources(ordinary, { status: 'working', result: `x ${pull}`, evidence: [`e ${pull}`], posts: [`p ${pull}`], onList: [], repositoryUrl: repo }))
       .toEqual([`x ${pull}`, `e ${pull}`, `p ${pull}`])
+  })
+
+  // Security review 2 of #3324, round 4: the release list loses a pull request once its release ships, and the release task is checked
+  // after that ("Released web 1.4.2, carries .../pull/3301"). A pull request already merged in the project is on main, which release work
+  // reads anyway, whether or not it is still on the list.
+  it('leaves out a pull request already merged in the project, still on the release list or not, after its release shipped', () => {
+    const f = releaseTask(), repo = 'https://github.com/acme/app', shipped = 'https://github.com/acme/app/pull/3301', mine = 'https://github.com/acme/app/pull/88'
+    const task = () => f.state.conversations.find(c => c.id === f.task)!
+    // Another task of the project merged it: its card shows the merge record, and the release list no longer holds it.
+    const other = f.group()
+    f.state.conversations.find(c => c.id === other)!.cards = { pullRequests: [{ url: shipped, mergedAt: 1000 }] } as never
+    expect(mergedPullRequests(f.state)).toContain(shipped)
+    f.run({ type: 'work.assign', conversationId: f.task, agentId: f.member('team-integrator', 'mac-team') })
+    const note = `Released web 1.4.2, carries ${shipped}.`
+    appendCodePullRequestUrls(task(), [task().brief, ...postedCode(task(), [note], mergedPullRequests(f.state), repo)], repo)
+    expect(task().codePullRequestUrls).toEqual([])
+    expect(refusal(() => f.run({ type: 'work.assign', conversationId: f.step, agentId: f.member('main-tester', 'mac') }))).toBeNull()
+    // A pull request nobody merged is still the release task's code.
+    expect(postedCode(task(), [`Draft ${mine}`], mergedPullRequests(f.state), repo)).toEqual([mine])
   })
 
   it('does not change an ordinary task: the same step with the same read is still refused to the main account', () => {
