@@ -23,7 +23,11 @@ Future<void> _settle(WidgetTester tester) async {
 
 Finder _key(String k) => find.byKey(ValueKey(k));
 
-final _deadline = DateTime(2026, 11, 6, 15, 0);
+// Today at 15:00, whatever today is: the card writes a deadline of another day with its date.
+final _deadline = () {
+  final today = DateTime.now();
+  return DateTime(today.year, today.month, today.day, 15);
+}();
 
 Map<String, dynamic> _proposal({
   Map<String, dynamic>? decision,
