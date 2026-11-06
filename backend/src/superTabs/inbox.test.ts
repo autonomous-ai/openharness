@@ -110,7 +110,7 @@ describe('the sections of the PM\'s inbox', () => {
     expect(personLine(f.state, { conversationId: 'lead', messageId: 'p1' }, 'y'.repeat(2000), 'owner').length).toBeLessThanOrEqual(1000)
   })
 
-  it('gathers a person\'s message or a crew need for a PM whose host sends its turn, and nothing else', () => {
+  it('batches crew needs but delivers people immediately even to a turn-aware PM', () => {
     const { f } = setup()
     const pm = f.state.agents.find(a => a.id === f.lead)!, dev = f.state.agents.find(a => a.id === f.dev)!
     const person = { author: { kind: 'person', id: 'owner' } as Author, source: undefined }
@@ -119,7 +119,7 @@ describe('the sections of the PM\'s inbox', () => {
     // An older host, which reports no such capability: everything goes at once, as before.
     expect(gathersForInbox(f.state, pm, person)).toBe(false)
     f.state.machines = [{ machineId: pm.machineId, observation: { capabilities: [INBOX_CAPABILITY] } } as never]
-    expect(gathersForInbox(f.state, pm, person)).toBe(true)
+    expect(gathersForInbox(f.state, pm, person)).toBe(false)
     expect(gathersForInbox(f.state, pm, need)).toBe(true)
     expect(gathersForInbox(f.state, pm, post)).toBe(false)
     // Never for an agent that is not the PM.

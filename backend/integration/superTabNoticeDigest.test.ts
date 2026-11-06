@@ -942,35 +942,33 @@ describe('the PM\'s inbox at its turn\'s end', () => {
   const listed = async (f: Awaited<ReturnType<typeof swarm>>, turn?: 'idle' | 'busy') =>
     (await f.timed.deliveries(host, f.tab, f.lead, turn) as Array<{ messageId: string }>).map(d => d.messageId)
 
-  it('waits while the PM works, then goes in one inbox when its turn ends, under New from people', async () => {
+  it('delivers people and thread follow-ups while the PM works, keeping agent notices batched', async () => {
     const f = await swarm({ capable: true })
     await f.report()
+    const notice = await f.write({ kind: 'work-stalled' }, f.lead)
     const message = await ask(f, 'Is the parser release out yet?')
-    expect((await deliveryOf(message, f.lead)).status).toBe('gathered')
-    expect(await listed(f, 'busy')).not.toContain(message)
+    const followup = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: 'And the next build?', replyTo: message, recipientIds: [] })).result.messageId)
+    expect((await deliveryOf(message, f.lead)).status).toBe('queued')
+    expect(await listed(f, 'busy')).toEqual(expect.arrayContaining([message, followup]))
+    expect((await deliveryOf(notice, f.lead)).status).toBe('gathered')
     expect(await inboxes(f.tab)).toEqual([])
-    f.clock.now += MIN
-    expect(await listed(f, 'idle')).not.toContain(message)
-    const [inbox] = await inboxes(f.tab)
-    expect(inbox).toContain('New from people (1)')
-    expect(inbox).toContain('Is the parser release out yet?')
-    expect((await deliveryOf(message, f.lead)).status).toBe('digested')
-    // Its next idle read writes no second inbox.
-    await listed(f, 'idle')
-    expect(await inboxes(f.tab)).toHaveLength(1)
+    // Delivery is not an answer: the later notice inbox lists these again as owed.
+    f.clock.now += 16 * MIN
+    await f.report()
+    await listed(f, 'busy')
+    expect((await inboxes(f.tab)).join('\n')).toContain(`message ${message} in lead`)
+    expect((await inboxes(f.tab)).join('\n')).toContain(`message ${followup} in lead`)
   })
 
-  it('goes after 15 minutes of one long turn', async () => {
+  it('releases people gathered by the previous server on the first busy poll without releasing notices', async () => {
     const f = await swarm({ capable: true })
     await f.report()
     const message = await ask(f, 'Still there?')
-    f.clock.now += 14 * MIN
-    await listed(f, 'busy')
+    await db.superTabDelivery.update({ where: { id: stableId(message, f.lead) }, data: { status: 'gathered', inboxSection: 'people' } })
+    const notice = await f.write({ kind: 'work-stalled' }, f.lead)
+    expect(await listed(f, 'busy')).toContain(message)
+    expect((await deliveryOf(notice, f.lead)).status).toBe('gathered')
     expect(await inboxes(f.tab)).toEqual([])
-    f.clock.now += 2 * MIN
-    await listed(f, 'busy')
-    expect((await inboxes(f.tab)).join('\n')).toContain('Still there?')
-    expect((await deliveryOf(message, f.lead)).status).toBe('digested')
   })
 
   it('goes at once in the same read when the read sends no turn: an older host is unchanged', async () => {
@@ -1003,9 +1001,9 @@ describe('the PM\'s inbox at its turn\'s end', () => {
     await listed(f, 'idle')
     expect(await inboxes(f.tab)).toHaveLength(1)
     // A person's message at idle goes in the next read, with no wait.
-    await ask(f, 'One more thing.')
-    await listed(f, 'idle')
-    expect((await inboxes(f.tab)).at(-1)).toContain('One more thing.')
+    const message = await ask(f, 'One more thing.')
+    expect(await listed(f, 'idle')).toContain(message)
+    expect(await inboxes(f.tab)).toHaveLength(1)
   })
 
   it('lists a crew need under Crew needs, with its options', async () => {
