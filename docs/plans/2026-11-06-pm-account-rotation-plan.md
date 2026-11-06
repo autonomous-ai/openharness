@@ -186,3 +186,41 @@ accounts is a private file on the machine, read and written through owner-only r
 - [ ] **Step 4: Run** the test, `flutter analyze` on touched files, and
   `python3 scripts/check-ui-style.py --only desktop/lib/super_tabs` from the repo root. Expected: PASS.
 - [ ] **Step 5: Commit** (when Diego asks): `feat(desktop): choose the Claude accounts a PM may use`
+
+## Review repairs (#4089)
+
+The takeover keeps the existing feature and fixes the architecture and security findings test first. Each repair commits
+its failing regression before its implementation. The transcript and command repairs have independent files and interfaces
+and may run in parallel. The hold label stays; both live PM-machine tests and all three reviewers must pass before merge.
+
+### Repair 1: Transcript isolation
+
+**Files:** `cli/src/lib/claudeTranscriptCarry.ts` and its spec.
+**Interface:** Keep `carryClaudeTranscript` unchanged; reject non-regular session files and unsafe project children while
+preserving supported shared `projects` roots. Publish through a private random temporary file without following links.
+
+- [ ] Add and run regressions for symlinked session files, project children and temporary destinations; commit red evidence.
+- [ ] Implement safe copying without copying account settings or tokens; run the focused spec and commit green.
+
+### Repair 2: Honest command failures
+
+**Files:** `cli/src/pmAccountsCommand.ts` and its spec.
+**Interface:** Every daemon refusal produces a nonzero command result; no success or empty-account message on a refusal.
+
+- [ ] Add refusal cases for list, use/untick, add/tick and history using real response envelopes; run and commit red.
+- [ ] Check replies at the command boundary; retain successful behavior; run focused tests and commit green.
+
+### Repair 3: PM authority, account preservation and recovery
+
+**Files:** `cli/src/core/api.ts`, `cli/src/core/agents/restart.ts`, their specs, `cli/src/superTabs/pmRotation.ts` and its
+spec, and the matching CLI/backend `productUsageContract.ts` launch-error lists.
+**Interfaces:** The account-changing API only admits retained Leads. Ordinary restarts keep a launch-supplied account.
+An account move must resume the existing conversation, with no fresh-session fallback. A late failure attempts one
+recovery and the owner learns its actual outcome, including a failed recovery.
+
+- [ ] Reproduce the launch-error contract failure; test non-Lead refusal, shell account preservation, no fresh fallback,
+  post-stop failure and failed rollback; commit each failing regression before the corresponding fix.
+- [ ] Implement the smallest fixes and run affected specs/typecheck. Run required core coverage and reuse only evidence
+  whose sources remain unchanged; record CI and red/green receipts accurately.
+- [ ] Return the fixed revision to the same architecture and security reviewers, then prepare the two live tests for
+  Diego's explicitly selected PM and accounts. Merge only after the required receipts and green CI.
