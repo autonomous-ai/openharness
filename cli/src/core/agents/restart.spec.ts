@@ -796,16 +796,55 @@ describe('restarting an agent', () => {
       expect(vi.mocked(run.deps.registry.setClaudeHome).mock.calls).toEqual([['a1', to], ['a1', from]])
     })
 
-    // M4: a Claude agent on the default account must never keep resuming under an account a pane was once launched with.
-    it('clears a stale CLAUDE_CONFIG_DIR from every Claude relaunch whose row has no account of its own', async () => {
-      const stale = vi.fn(async () => ({ ok: true, overrides: { env: { GRID_KEY: 'k', CLAUDE_CONFIG_DIR: from }, clearEnv: ['X'] } }))
-      const run = setup(row({ claudeHome: null } as never), { relaunchOverrides: stale as never })
+    it('preserves the launch shell account on an ordinary restart without a recorded home', async () => {
+      const shell = vi.fn(async () => ({ ok: true, overrides: { env: { GRID_KEY: 'k', CLAUDE_CONFIG_DIR: from }, clearEnv: ['X'] } }))
+      const run = setup(row({ claudeHome: null } as never), { relaunchOverrides: shell as never })
+      expect(await run.restart('a1')).toMatchObject({ ok: true })
+      const overrides = vi.mocked(run.deps.paneSwapDeps).mock.calls[0][2] as { env: Record<string, string>; clearEnv: string[] }
+      expect(overrides.env).toEqual({ GRID_KEY: 'k', CLAUDE_CONFIG_DIR: from })
+      expect(overrides.clearEnv).toEqual(['X'])
+      expect(carryClaudeTranscript).not.toHaveBeenCalled()
+    })
+
+    it('clears a stale pane account when neither the row nor the launch sets one', async () => {
+      const plain = vi.fn(async () => ({ ok: true, overrides: { env: { GRID_KEY: 'k' }, clearEnv: ['X'] } }))
+      const run = setup(row({ claudeHome: null } as never), { relaunchOverrides: plain as never })
       expect(await run.restart('a1')).toMatchObject({ ok: true })
       const overrides = vi.mocked(run.deps.paneSwapDeps).mock.calls[0][2] as { env: Record<string, string>; clearEnv: string[] }
       expect(overrides.env).toEqual({ GRID_KEY: 'k' })
       expect(overrides.clearEnv).toEqual(['X', 'CLAUDE_CONFIG_DIR'])
       expect(carryClaudeTranscript).not.toHaveBeenCalled()
       expect(run.deps.registry.setClaudeHome).not.toHaveBeenCalled()
+    })
+
+    it('never starts a fresh conversation when an account move cannot resume', async () => {
+      const actual = await vi.importActual<typeof import('../../lib/restartAgent.js')>('../../lib/restartAgent.js')
+      vi.mocked(restartAgent).mockImplementationOnce(actual.restartAgent)
+      const launches: unknown[] = []
+      const run = setup(row(), { profileHomes: () => [to], paneSwapDeps: vi.fn(() => ({
+        holdOpen: async () => ({ ok: true }), terminate: async () => 'gone',
+        buildArgv: (options: unknown) => { launches.push(options); return ['claude'] },
+        respawn: async () => ({ ok: true }), waitForProcess: async () => null, log: () => {},
+      })) as never })
+      expect(await run.restart('a1', undefined, to)).toMatchObject({ ok: false })
+      expect(launches).toEqual([{ bypassPermission: true, resumeSessionId: ID }])
+    })
+
+    it.each(['copy', 'resume', 'throw'] as const)('recovers the original conversation after a post-stop %s failure', async failure => {
+      vi.mocked(restartAgent).mockImplementationOnce(async (_session, _bypass, deps) => {
+        if (failure === 'copy') vi.mocked(carryClaudeTranscript).mockImplementationOnce(() => { throw new Error('disk full') })
+        try { await deps.prepareResume?.() } catch { return { ok: false, detail: 'copy failed' } }
+        if (failure === 'throw') throw new Error('resume failed')
+        return { ok: false, detail: 'resume failed' }
+      })
+      const run = setup(row(), { profileHomes: () => [to] })
+      await run.restart('a1', undefined, to).catch(() => undefined)
+      expect(restartAgent).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(restartAgent).mock.calls[1][0]).toMatchObject({ sessionId: ID, resumeOnly: true })
+      const recovery = vi.mocked(run.deps.paneSwapDeps).mock.calls[1]
+      expect(recovery[0]).toMatchObject({ claudeHome: from, transcriptPath: join(from, 'projects', '-work', `${ID}.jsonl`) })
+      expect(recovery[2].env.CLAUDE_CONFIG_DIR).toBe(from)
+      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, 'none')
     })
 
     it('leaves another engine\'s relaunch environment as it is', async () => {
