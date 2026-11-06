@@ -44,8 +44,9 @@ const NOTE_PREFIX = 'Restore (task #3679):'
 
 /** The words of every line of the Swarm's own template, today's and every past version's (a project keeps the template it was made
  *  from; instructionsTemplateHistory.ts), the old process text, which the Swarm builds in now: process by definition, as
- *  the move treats it (rebase.ts), so a project is never given its template's lines back, only its own (second review of #3327). */
-export const templateLines = (): ReadonlySet<string> => new Set([...removedLines(INSTRUCTIONS_TEMPLATE, ''), ...PAST_TEMPLATE_LINES])
+ *  the move treats it (rebase.ts), so a project is never given its template's lines back, only its own; but its Routing section is not
+ *  built in, so those lines are its own (second review of #3327). */
+export const templateLines = (): ReadonlySet<string> => new Set([...removedLineItems(INSTRUCTIONS_TEMPLATE, '').filter(line => !line.path.startsWith('Routing')).map(line => line.text), ...PAST_TEMPLATE_LINES])
 
 /** What the move lost of [before] that is the project's own: each line's words and how many times, since a line may stand in two
  *  sections (removedLines). A line of the template ([skip]) is left out. */
