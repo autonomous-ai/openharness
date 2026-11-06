@@ -8,9 +8,9 @@ kill by name or pattern (pkill, killall, `kill $(pgrep …)`), sudo and system-w
 removing a worktree a live process uses (task #3596, inventory Table A #5, requested by Dee through Harness).
 
 **Architecture:** The rules are one pure function over a command's words (`superTabs/shellGuard.ts`), with the machine's
-facts (private folders, linked worktrees, live processes' working folders) as seams. A small hook entry
-(`superTabs/shellGuardHook.ts`) reads the engine's `PreToolUse` JSON on stdin and prints a `deny` with the reason, or
-nothing. Only Swarm sessions get it, through the existing `SwarmLaunch.args(engine)` seam (`lib/swarmEngineArgs.ts`):
+facts (private folders, linked worktrees, live processes' working folders) as seams. The shipped lightweight CLI entry routes `__swarm-shell-guard` to
+`superTabs/shellGuardHook.ts`, which reads the engine's `PreToolUse` JSON on stdin and prints a `deny` with the reason, or
+nothing. The command runs without normal CLI/daemon initialization. Only Swarm sessions get it, through the existing `SwarmLaunch.args(engine)` seam (`lib/swarmEngineArgs.ts`):
 Claude Code by `--settings '{"hooks":{"PreToolUse":…}}'`, Codex by `-c hooks.PreToolUse=[…]`. Codex runs a session
 flag's hook only once its hash is recorded as trusted in the home's `config.toml` (measured with `codex app-server`
 `hooks/list`, codex-cli 0.166.0: `/<session-flags>/config.toml:pre_tool_use:0:0`, `untrusted` until recorded, `trusted`
@@ -24,7 +24,7 @@ records, in every home it prepares.
 
 ## Global Constraints
 
-- PR body first line: "Requested by Dee through Harness."
+- PR body first line: "Requested by dee through Harness."
 - Swarm code stays out of `cli/src/core`; nothing in core changes.
 - A person's own sessions get no guard: only `SwarmLaunch.args`, which runs for sessions with a Swarm role.
 - Each refusal is one line starting `Harness shell guard:` saying why and what to do instead.
@@ -37,7 +37,9 @@ records, in every home it prepares.
 - growth: N/A because nothing is stored but one trust record per Codex home, replaced in place when the hook's line changes.
 - concurrency: the trust record is written inside the Codex hook installation's own reservation (`runHookPreparation`).
 - read cost: the hook reads only the command; live processes are read only for a removal of a linked worktree.
-- scale: one Node start per tool call (~40 ms); `lsof -d cwd` only on a worktree removal, 5 s timeout.
+- scale: one Node start per tool call; packaged guard p50 221.5 ms / p95 233.2 ms on macOS arm64, Node 22.23.2
+  (20 measured calls after 3 warmups; no-op Node p50 29.8 ms / p95 34.4 ms). `lsof -d cwd` only on a linked
+  worktree removal, 5 s timeout.
 - compatibility: an engine without `PreToolUse` ignores the setting; a Codex without the trust record would ask, so the
   record is written before any Swarm Codex launch reads it (default home at the daemon's hook refresh, a profile at create).
 - migration + rollback: none; reverting removes the args, and the trust record trusts only that exact line.
@@ -69,15 +71,15 @@ records, in every home it prepares.
   `GuardFacts { cwd, platform, privateFolder, linkedWorktree, liveCwds, realpath? }`, `machineFacts(cwd)`,
   `privateFolderOf`, `linkedWorktreeOf`, `liveCwdsOf`.
 
-- [ ] Write the failing spec: each refused pattern returns its reason, each ordinary command null (pkill/killall/
+- [x] Write the failing spec: each refused pattern returns its reason, each ordinary command null (pkill/killall/
   `kill $(pgrep)`/`lsof -ti | xargs kill`/taskkill /IM/Stop-Process -Name; sudo/doas/su, `npm -g`, brew install,
   apt/dnf/port, `pip --break-system-packages`, winget/choco/msiexec, `with administrator privileges`, `-Verb RunAs`;
   `> /tmp/x`, `tee /private/tmp/x`, `-o /tmp/x`, `cd /tmp`, `sh /tmp/x.sh`; `git worktree remove` and `rm -rf` of a
   worktree a process works in, and `worktreeUnknown` when processes cannot be read).
-- [ ] Run `npx vitest run src/superTabs/shellGuard.spec.ts`: fails (module missing).
-- [ ] Implement the tokenizer (quotes, operators, `$(…)`, backticks, `<(…)`, `sh -c`, `eval`, heredocs, comments,
+- [x] Run `npx vitest run src/superTabs/shellGuard.spec.ts`: fails (module missing).
+- [x] Implement the tokenizer (quotes, operators, `$(…)`, backticks, `<(…)`, `sh -c`, `eval`, heredocs, comments,
   wrappers `env`/`xargs`/`nohup`/`timeout`/…) and the four rules.
-- [ ] Run the spec: passes. Commit test, then code.
+- [x] Run the spec: passes. Commit test, then code.
 
 ### Task 2: The hook entry
 
@@ -87,11 +89,11 @@ records, in every home it prepares.
 
 **Interfaces:**
 - Consumes: `shellRefusal`, `fileRefusal`, `machineFacts`.
-- Produces: `hookAnswer(stdin: string, factsFor?): string` (a `PreToolUse` deny line or ''), run as a script.
+- Produces: `hookAnswer(stdin: string, factsFor?): string` (a `PreToolUse` deny line or '') and `runShellGuard()`, called by the internal CLI entry.
 
-- [ ] Failing spec: Claude `Bash` `pkill -f node` → deny JSON with `GUARD_REASONS.killByName`; `Write` to `/tmp/x` →
+- [x] Failing spec: Claude `Bash` `pkill -f node` → deny JSON with `GUARD_REASONS.killByName`; `Write` to `/tmp/x` →
   `fixedTmp`; Codex argv `["bash","-lc","sudo ls"]` → `systemWide`; `git status` → ''; not JSON → ''; `apply_patch` → ''.
-- [ ] Implement; spec passes. Commit test, then code.
+- [x] Implement; spec passes. Commit test, then code.
 
 ### Task 3: Swarm sessions run it
 
@@ -105,10 +107,10 @@ records, in every home it prepares.
   `['--settings', json]`; `codexShellGuardArgs(platform)` → `['-c', 'hooks.PreToolUse=[…]']`;
   `CODEX_SHELL_GUARD` → `{ event: 'PreToolUse', matcher: '*', timeout: 30, command(platform) }`.
 
-- [ ] Failing spec: `swarmEngineArgs('claude')` holds `--settings` whose JSON has one `PreToolUse` block, matcher
-  `Bash|Write|Edit|MultiEdit|NotebookEdit`, running Node on `superTabs/shellGuardHook.js`; `swarmEngineArgs('codex')` keeps
+- [x] Failing spec: `swarmEngineArgs('claude')` holds `--settings` whose JSON has one `PreToolUse` block, matcher
+  `Bash|Write|Edit|MultiEdit|NotebookEdit`, running Node on the lightweight CLI entry with `__swarm-shell-guard`; `swarmEngineArgs('codex')` keeps
   `check_for_update_on_startup=false` and adds the `-c hooks.PreToolUse` line; `swarmEngineArgs('gemini')` unchanged.
-- [ ] Implement; run the spec plus `src/core/agents/create.spec.ts` and `src/lib/launchOverrides.spec.ts` (a person's own
+- [x] Implement; run the spec plus `src/core/agents/create.spec.ts` and `src/lib/launchOverrides.spec.ts` (a person's own
   session gets none). Commit test, then code.
 
 ### Task 4: Codex trusts it
@@ -121,10 +123,10 @@ records, in every home it prepares.
 **Interfaces:**
 - Consumes: `CODEX_SHELL_GUARD`.
 
-- [ ] Failing spec: `reviewHash` of a `pre_tool_use` hook with matcher `*`, command `/opt/node /x/deny.mjs`, timeout 30
+- [x] Failing spec: `reviewHash` of a `pre_tool_use` hook with matcher `*`, command `/opt/node /x/deny.mjs`, timeout 30
   equals the hash codex-cli 0.166.0 reported for it (measured); `reviewRecords` of Codex's record holds
   `/<session-flags>/config.toml:pre_tool_use:0:0` with the guard's hash, beside Harness's own records.
-- [ ] Implement; run the spec, `src/engines/codex/hooksReview.spec.ts` and `src/engines/hookInstallers.golden.spec.ts`.
+- [x] Implement; run the spec, `src/engines/codex/hooksReview.spec.ts` and `src/engines/hookInstallers.golden.spec.ts`.
   Commit test, then code.
 
 ### Task 5: Run the guard from the shipped CLI (takeover verification)
@@ -138,13 +140,13 @@ records, in every home it prepares.
 loader, while a bundled/lean core names the CLI script it already uses for daemon commands. This replaces the
 per-file hook path: a release ships cli.js and notify.mjs, without superTabs/shellGuardHook.js.
 
-- [ ] Commit and run a failing release-bundle test: build the real package in a private folder, obtain the launch
+- [x] Commit and run a failing release-bundle test: build the real package in a private folder, obtain the launch
   command from the compiled helper as the core does, and send Claude/Codex hook JSON to it. It must deny each rule
   with JSON, allow an ordinary command with no output, and never initialize the daemon or touch real account data.
-- [ ] Route the internal command in the lightweight bundle entry; keep the Swarm import dynamic and name this
+- [x] Route the internal command in the lightweight bundle entry; keep the Swarm import dynamic and name this
   command-only door in the architecture test. Remove the standalone-script autorun from the imported hook module.
-- [ ] Verify compiled, source and Windows argv quoting; update only the intentional trust-record fixture change.
-- [ ] Run the new test, affected launch/hook tests, architecture test and typecheck. Record red/green evidence and
+- [x] Verify compiled, source and Windows argv quoting; update only the intentional trust-record fixture change.
+- [x] Run the new test, affected launch/hook tests, architecture test and typecheck. Record red/green evidence and
   measured hook latency before Ready.
 
 ### Task 6: Close direct command gaps found during takeover
@@ -154,8 +156,25 @@ per-file hook path: a release ships cli.js and notify.mjs, without superTabs/she
 
 **Interfaces:** Existing `shellRefusal`, `fileRefusal` and `hookAnswer`; no broader sandbox promise.
 
-- [ ] Add failing cases for package-manager flags with case-sensitive meanings (`pacman -S` versus `-Q`), fixed
+- [x] Add failing cases for package-manager flags with case-sensitive meanings (`pacman -S` versus `-Q`), fixed
   temporary paths reached by a relative path/cwd, and command-specific Codex workdir overriding session cwd.
-- [ ] Correct only those interpretations, preserving ordinary commands and quoted/heredoc text. Verify a real
+- [x] Correct only those interpretations, preserving ordinary commands and quoted/heredoc text. Verify a real
   disposable worktree held by a child process is denied before any removal runs and allowed once that child exits.
-- [ ] Commit each failing test before its fix; run affected rules/hook specs and record the results.
+- [x] Commit each failing test before its fix; run affected rules/hook specs and record the results.
+
+## Takeover verification results
+
+- Task 5: release-bundle regression committed at `ead89093cc`; six cases failed because the release did not ship the
+  standalone hook. Fix `fab48351e3` makes all six pass through the shipped CLI entry. Source and Windows quoting
+  assertions, hook trust, and architecture checks pass.
+- Task 6: regressions committed at `0585caeaa2`; seven cases failed (uppercase pacman install flags, relative temporary
+  paths, escaping a private folder with `..`, and Codex tool workdir). Fix `1c6f025512` passes all 124 rules/hook cases.
+- `shellGuardProcess.spec.ts`: a real disposable Git worktree is refused while our own child process uses it, and
+  allowed after that child exits. The test never attempts removal while the child is alive. macOS passed; Linux runs
+  in CI; Windows skips the Unix process check.
+- Final focused run: 432 passed, five pre-existing Buddy-launch failures across 11 files; the nine guard, packaging,
+  trust, and architecture files passed. Wren recorded the same five failures on main `b8b8c8eab` in the PR evidence.
+  CLI typecheck and `git diff --check` passed. No backend changes in this PR.
+- This recognizes literal shell commands, not dynamically constructed programs. Worktree discovery checks direct
+  linked-worktree targets, and OS process visibility limits which other accounts' working directories can be read.
+  Review these boundaries in both security reads; no claim of sandbox isolation.
