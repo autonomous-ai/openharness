@@ -67,7 +67,7 @@ import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
 import { currentRules, deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
-import { SEED_RULES, type MachineRule } from './policy.js'
+import { SEED_RULES, validMachineRules, type MachineRule } from './policy.js'
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, FIRST_SUMMARY, liveNotes, MAX_REVISIONS } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
@@ -705,6 +705,16 @@ async function outsiderRefusal(state: SuperTabState, userId: string, check: () =
     if (error instanceof SuperTabError && !state.people.some(p => p.id === userId)) throw new SuperTabError(error.code, error.message, error.status, true)
     throw error
   }
+}
+
+/** [projectId]'s machine rules from its newest revision, one indexed read: those that pass, whether or not the rest of the
+ *  record does (policy.ts validMachineRules). A rule dropped for failing its schema is logged. */
+async function machineRulesOf(tx: Transaction, tabId: string, projectId: string): Promise<MachineRule[]> {
+  const read = await readRules(tx, tabId, projectId, true)
+  const rules = validMachineRules(read?.rules)
+  const stored = read?.rules.machines
+  if (Array.isArray(stored) && stored.length !== rules.length) logger.warn('[swarm-machine-rules] a rule failed its schema and is not applied', { tabId, projectId })
+  return rules
 }
 
 export class SuperTabStore {
@@ -2019,14 +2029,10 @@ export class SuperTabStore {
       // A stale rules save is refused with the newest revision, to merge (policy.ts); null is the seed.
       if (command.type === 'rules.set') context.projectRules = await readRules(tx, tabId, command.projectId, true)
       // A start or an assignment meets its project's machine rules (machineRules.ts): one indexed read of the newest revision.
-      // A record that does not pass the schema holds no rule here: the dispatch and new tasks already refuse it with its repair.
+      // Only the machine rules are read here, so a record broken elsewhere still applies those that pass (security review 1).
       if (command.type === 'agent.start' || command.type === 'work.assign') {
         const group = original.conversations.find(c => c.id === (command.type === 'agent.start' ? command.request.conversationId : command.conversationId))
-        if (group) context.projectRules = await currentRules(tx, tabId, groupProject(original, group).id).catch((error: unknown) => {
-          if (!(error instanceof SuperTabError) || error.code !== 'RULES_INVALID') throw error
-          logger.warn('[swarm-machine-rules] record invalid; no machine rule applied', { tabId, command: command.type })
-          return undefined
-        })
+        if (group) context.projectRules = { revision: 0, rules: { ...SEED_RULES, machines: await machineRulesOf(tx, tabId, groupProject(original, group).id) } }
       }
       if (command.type === 'crew.add' || command.type === 'work.lane' || command.type === 'work.define'
         || (command.type === 'conversation.create' && !command.reviewOf && !command.audience)) {
@@ -4183,14 +4189,10 @@ export class SuperTabStore {
   private async crewDeps(tx: Transaction, state: SuperTabState, now: number): Promise<CrewDeps> {
     const teamMachines = await this.teamMachines(tx, state), otherWorkspaceMachines = await this.otherWorkspaceMachines(tx, state)
     // Each crew project's machine rules from its record (machineRules.ts): one indexed read per project with crew (at most
-    // the Swarm's 100), only in a sweep where a member needs a machine. A record that does not pass the schema holds none.
+    // the Swarm's 100), only in a sweep where a member needs a machine.
     const rules = new Map<string, readonly MachineRule[]>()
     for (const projectId of new Set(state.agents.filter(a => a.crew).map(a => agentProjectId(state, a)).filter(id => id !== undefined))) {
-      rules.set(projectId, await currentRules(tx, state.id, projectId).then(r => r.rules.machines ?? [], (error: unknown) => {
-        if (!(error instanceof SuperTabError) || error.code !== 'RULES_INVALID') throw error
-        logger.warn('[swarm-machine-rules] record invalid; no machine rule applied', { tabId: state.id, command: 'crew.move' })
-        return []
-      }))
+      rules.set(projectId, await machineRulesOf(tx, state.id, projectId))
     }
     return { machineRules: projectId => rules.get(projectId) ?? [], admits: (machineId, agent) => {
       const pool = state.machines?.find(m => m.machineId === machineId)

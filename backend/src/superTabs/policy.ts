@@ -122,6 +122,12 @@ export const projectRulesSchema = z.preprocess(legacyDispatch, z.object({
 
 export type ProjectRules = z.infer<typeof projectRulesSchema>
 export type MachineRule = z.infer<typeof machineRuleSchema>
+/** The machine rules of a stored [record] that pass, whether or not the rest of it does (security review 1 of #3964): a record
+ *  broken elsewhere still keeps a machine its owner's rule refuses work, rather than failing open while it is repaired. */
+export function validMachineRules(record: unknown): MachineRule[] {
+  const machines = record && typeof record === 'object' ? (record as { machines?: unknown }).machines : undefined
+  return Array.isArray(machines) ? machines.flatMap(rule => { const parsed = machineRuleSchema.safeParse(rule); return parsed.success ? [parsed.data] : [] }) : []
+}
 
 /** [value] frozen all the way down: the seed is shared, so no reader may change it. */
 function deepFreeze<T>(value: T): T {
