@@ -652,9 +652,9 @@ describe('what the windows say, reaching the dial', () => {
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'] })
       port.swarms(open('tab-st1'))
       expect(superTabRequest).toHaveBeenCalledTimes(3)
-      // The window followed a device's own pick: the focus says so, for the cards to keep the dial's side.
+      // Whether the window followed a device's own pick is no part of the focus any more.
       port.swarms({ ...open('tab-st1', 'g2'), fromDevice: true })
-      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g2', fromDevice: true } })
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g2' } })
       port.swarms(open('tab-st1', 'g1'))
       superTabRequest.mockClear()
       reconnected.forEach((run) => run())
@@ -703,7 +703,7 @@ describe('what the windows say, reaching the dial', () => {
       await expect(seen.host.swarmCardRecap!('st1', 'lead1', true)).rejects.toThrow('SERVICE_UNAVAILABLE')
     })
 
-    it('asks for a swarmBuddy dial\'s face with the buddy flag, says so on its recap, and sends its side as cardSide', async () => {
+    it('asks for a swarmBuddy dial\'s face with the buddy flag, and says so on its recap', async () => {
       const answers: Array<Record<string, unknown>> = [
         { ok: true, text: 'from the Buddy', at: 3, none: false, chatId: 'b1', buddy: true },
         { ok: true, text: 'no chat named', at: 3, none: false, buddy: true },
@@ -721,8 +721,6 @@ describe('what the windows say, reaching the dial', () => {
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1', reviewed: true })
       seen.host.swarmCardOpen!('c1', 'st1', 'lead1', 'buddy')
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: 'lead1', chat: 'buddy' })
-      seen.host.swarmCardSide!('st1', 'buddy')
-      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSide', tabId: 'st1', side: 'buddy' })
     })
 
     // Task #3908: a recap, a post and a pick carry no thread; the service's answers about one are not read.

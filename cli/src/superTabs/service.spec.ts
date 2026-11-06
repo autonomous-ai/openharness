@@ -1017,10 +1017,8 @@ describe('the Swarm cards the devices ask for', () => {
     const t = withCards()
     await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', extra: 1 } }, owner)
     expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1' })
-    // A focus the device's own pick caused says so; anything but true is not that.
+    // Whether a device caused the move is no part of the focus any more (it only kept a dial's side, task #3908).
     await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', fromDevice: true } }, owner)
-    expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1', fromDevice: true })
-    await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', fromDevice: 'yes' } }, owner)
     expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1' })
     // A thread open beside it is no part of the focus any more.
     await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', threadRoot: 'm1' } }, owner)
@@ -1041,18 +1039,9 @@ describe('the Swarm cards the devices ask for', () => {
     await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it' }, owner)
     expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', false)
   })
-  it('cardSide sets a swarmBuddy dial\'s side, and the buddy flag reaches recap, open and say', async () => {
+  it('answers an older dial\'s cardSide as no request, and the buddy flag reaches recap, open and say', async () => {
     const t = withCards()
-    expect(await t.ask({ action: 'cardSide', tabId: 't1', side: 'buddy' }, owner)).toEqual({ ok: true })
-    expect(t.cards.side).toHaveBeenLastCalledWith('t1', 'buddy')
-    expect(await t.ask({ action: 'cardSide', tabId: 't1', side: 'pm' }, owner)).toEqual({ ok: true })
-    expect(t.cards.side).toHaveBeenLastCalledWith('t1', 'pm')
-    for (const bad of [{ tabId: 'bad id', side: 'pm' }, { tabId: 'x'.repeat(48), side: 'pm' }, { tabId: 't1', side: 'up' }, { tabId: 't1' }]) {
-      expect(await t.ask({ action: 'cardSide', ...bad }, owner)).toEqual({ error: 'INVALID_REQUEST' })
-    }
-    // Only this computer's own devices set it.
-    expect(await t.ask({ action: 'cardSide', tabId: 't1', side: 'buddy' }, visitor)).toEqual({ error: 'OWNER_REQUIRED' })
-    expect(t.cards.side).toHaveBeenCalledTimes(2)
+    expect(await t.ask({ action: 'cardSide', tabId: 't1', side: 'buddy' }, owner)).toMatchObject({ error: expect.any(String) })
     await t.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'buddy' }, owner)
     expect(t.cards.recap).toHaveBeenLastCalledWith('t1', 'l1', 'buddy')
     await t.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: 'buddy' }, owner)
