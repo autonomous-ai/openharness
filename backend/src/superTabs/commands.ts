@@ -10,7 +10,7 @@ import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { addedAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_LANES, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { noteIndex } from './processNotes.js'
-import { ownsBoard, readsProject } from './boardRights.js'
+import { ownsBoard, readsProject, requireCanChat } from './boardRights.js'
 import { keepUsernames, setUsername, swarmUsernames, usernameOf } from './usernames.js'
 import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
 import { z } from 'zod'
@@ -868,6 +868,7 @@ export function worksInProjectChat(state: SuperTabState, group: Conversation, ag
  *  and opens no second terminal (#2207). */
 export function postable(state: SuperTabState, actor: Actor, conversationId: string) {
   const group = open(state, conversationId)
+  requireCanChat(state, actor, group)
   if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)) {
     if (projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId)) return group
     if (!joinsProject(state, group, actor.agentId)) fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
@@ -2957,6 +2958,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // the shared conversation without delivering the same request twice.
       if (command.initialMessage) {
         if (actor.kind !== 'person') fail('FORBIDDEN', 'Only a person can record their initial launch request.', 403)
+        requireCanChat(state, actor, group)
         message(group.id, command.initialMessage)
       }
       // A Product Manager started on its person's own Mac says, as one the Swarm starts does (leadJoined), when it does not
@@ -3780,6 +3782,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'message.edit':
       // `command` is the cleaned one (withoutCredentials): the store writes this text, never the one it was sent.
+      requireCanChat(state, actor, open(state, command.conversationId))
       result.changed = editMessage(open(state, command.conversationId), actor, command.messageId, command.text, context.messageChange)
       if (result.changed) effects.messageEdit = { messageId: command.messageId, text: command.text }
       break
@@ -4018,6 +4021,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const target = agent(state, delivery.agentId)
       if (command.resolution === 'resend') {
         open(state, group.id)
+        requireCanChat(state, actor, group)
         if (!group.agentIds.includes(target.id)) fail('INVALID_RECIPIENT', 'This agent is no longer in the conversation.', 400)
         message(group.id, delivery.text, [target.id], delivery.messageId, SYSTEM_ROW, delivery.attachments)
       } else {

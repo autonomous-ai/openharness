@@ -6,8 +6,8 @@
  * top decider (`decider`). A project not switched keeps today's rules. The server checks every one of these (commands.ts,
  * store.ts poster), so an older app is held to them too.
  */
-import type { SuperTabState } from './model.js'
-import { canReadProject, ownsProject, type SwarmProject } from './projects.js'
+import { fail, type Actor, type Conversation, type SuperTabState } from './model.js'
+import { canReadProject, ownsProject, projectsOf, type SwarmProject } from './projects.js'
 
 /** Whether [project] works the Board way. */
 export const switched = (project: Pick<SwarmProject, 'boardMode'>): boolean => project.boardMode === true
@@ -31,4 +31,15 @@ export function steers(state: SuperTabState, project: SwarmProject, userId: stri
 /** Whether [userId] may write in [project]'s chat once it is switched: its owners, and the people granted Can chat. */
 export function canChat(state: SuperTabState, project: SwarmProject, userId: string): boolean {
   return ownsBoard(state, project, userId) || (!!project.canChat?.includes(userId) && readsProject(state, project, userId))
+}
+
+/** Refuses [actor] writing a message into [group] when it is a switched project's chat and they may not (canChat). Every
+ *  path that writes a person's message there calls it: postable (send, uploads, voice), edit, a launch's initial message
+ *  and a delivery's resend. Agents, Buddy proposals and task chats are unchanged. */
+export function requireCanChat(state: SuperTabState, actor: Actor, group: Conversation): void {
+  if (actor.kind !== 'person') return
+  // Only a project's own chat: never groupProject, which refuses a person's Buddy chat (it belongs to no project).
+  const project = projectsOf(state).find(p => p.leadConversationId === group.id)
+  if (!project || !switched(project) || canChat(state, project, actor.userId)) return
+  fail('CHAT_NOT_ALLOWED', 'Only the project owner and the people they allow write in this project\'s chat. Send it as a proposal through your Buddy, or ask the owner for Can chat.', 403)
 }
