@@ -60,13 +60,14 @@ Projects                  2  Ken             6          8         3      3d     
 
 ### Task 2: Cached authenticated weekly read
 
-**Files:** `backend/src/superTabs/read/service.ts`, `backend/src/superTabs/leaderboard/{read.ts,read.test.ts}` and an affected service test if needed.
+**Files:** `backend/src/superTabs/read/service.ts`, `backend/src/superTabs/leaderboard/{read.ts,read.test.ts}`, `backend/src/routes/superTabs.ts`, `backend/integration/superTabLeaderboard.test.ts`.
 **Interfaces:** cache helper `weeklyBoard(cached, tabId, actorKey, projectId, week, now, load): Promise<Leaderboard>`; existing endpoint remains unchanged.
 
 - [ ] Commit tests proving unchanged-stamp reuse, actor separation, mutation invalidation and day/week rollover.
 - [ ] Run affected test, observe red; use the existing CacheView rather than a new cache.
 - [ ] Cache weekly aggregation after authorization, supply visible agents, emit a content-free slow-read warning.
 - [ ] Run affected read/cache tests and typecheck; commit green and push.
+- [ ] Extend route validation to allow `scope=all` without a rolling period. First watch the integration tests fail with 400, then verify weekly project/agent audience isolation through the real API.
 
 ### Task 3: Weekly board page
 
