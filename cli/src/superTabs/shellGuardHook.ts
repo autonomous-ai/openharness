@@ -5,8 +5,7 @@
  * to the session's own permissions (the old Buddy guard's shape, __fixtures__/buddy-guard-before-2832.mjs; Codex 0.166's
  * `PreToolUseHookSpecificOutputWire`). It imports nothing but the guard and Node's own modules: it runs at every command.
  */
-import { readFileSync, realpathSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
 import { fileRefusal, machineFacts, shellRefusal, type GuardFacts } from './shellGuard.js'
 
 /** Claude Code's tools that write a file at a path they are given. */
@@ -53,9 +52,7 @@ export function hookAnswer(stdin: string, factsFor?: (cwd: string) => GuardFacts
   return hookReply(guardDecision(call, factsFor))
 }
 
-/** Whether this file is the script Node was started with (not imported by a spec), however its path was spelled. */
-function runAsScript(): boolean {
-  try { return !!process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]) } catch { return false }
+/** The internal CLI entry calls this without loading the daemon or normal CLI commands. */
+export function runShellGuard(): void {
+  process.stdout.write(hookAnswer(readFileSync(0, 'utf8')))
 }
-
-if (runAsScript()) process.stdout.write(hookAnswer(readFileSync(0, 'utf8')))

@@ -11,16 +11,21 @@ import { fileURLToPath } from 'node:url'
 import { quoteHookCommand } from '../engines/kit/notifyHooks.js'
 import { managedNodePath } from './nodeRuntime.js'
 
-/** The hook's script, compiled beside the rest of the CLI (build.mjs builds every source file). */
-export const SHELL_GUARD_SCRIPT = fileURLToPath(new URL('../superTabs/shellGuardHook.js', import.meta.url))
-
 /** Seconds an engine waits for the hook: lsof, read only for a worktree's removal, is given 5 of them. */
 const TIMEOUT = 30
 /** Claude Code's tools that run a shell or write a file at a path. */
 const CLAUDE_MATCHER = 'Bash|Write|Edit|MultiEdit|NotebookEdit'
 
-/** The program and script the hook runs: the managed Node, never the bare word `node` (lib/nodeRuntime.ts). */
-export const shellGuardArgv = (): string[] => [managedNodePath(), SHELL_GUARD_SCRIPT]
+/** A release carries the guard inside cli.js, not as a separate script. The lean core sets argv[1] to that CLI
+ *  before installing hooks (leanCoreEntry.ts). Source/per-file builds use their lightweight entry instead. */
+export function shellGuardArgv(): string[] {
+  const file = fileURLToPath(import.meta.url)
+  const source = /[/\\]agentShellGuard\.ts$/.test(file)
+  const perFile = /[/\\]agentShellGuard\.[jt]s$/.test(file)
+  const script = perFile ? fileURLToPath(new URL(source ? '../entry.ts' : '../entry.js', import.meta.url)) : process.argv[1]
+  const loader = source ? ['--import', fileURLToPath(new URL('../../node_modules/tsx/dist/loader.mjs', import.meta.url))] : []
+  return [managedNodePath(), ...loader, script, '__swarm-shell-guard']
+}
 
 /** Claude Code's `--settings` for the guard: a shell line, or on Windows exec form, as Harness's own hooks there. */
 export function claudeShellGuardArgs(platform: NodeJS.Platform = process.platform, argv: string[] = shellGuardArgv()): string[] {
