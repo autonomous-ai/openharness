@@ -1,3 +1,8 @@
+import { legacyAsks } from './boardRights.js'
+import { canReadProject } from './projects.js'
+import { proposalMeasures, proposalMessageMeasures } from './proposalMetrics.js'
+import { advanceProposalCards, pmAcceptsMessage, legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk } from './proposalCards.js'
+import { defaultBuddy } from './buddies.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { applyCrewKeep, crewMoveRequest, crewNeedsMachine, type CrewDeps } from './crewKeep.js'
 import { finishedWakes } from './crewTimes.js'
@@ -62,7 +67,7 @@ import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
 import { currentRules, deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
-import { SEED_RULES } from './policy.js'
+import { SEED_RULES, validMachineRules, type MachineRule } from './policy.js'
 import { coordinatorNameOf, FIRST_INSTRUCTIONS, FIRST_SUMMARY, liveNotes, MAX_REVISIONS } from './instructions.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
@@ -75,11 +80,12 @@ import { sessionRows } from './memberRows.js'
 import { RefusalMemory } from './dispatchRefusals.js'
 import { tasksHoldingMoves } from './ruleGuard.js'
 import { candidatesFor, dispatchRules, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type DispatchLookup, type DispatchRules, type Skip } from './dispatch.js'
+import { buddySleepCandidates, sleepBuddies } from './buddySleep.js'
 import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepForLead, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
 import { owedAsk } from './timeChecks.js'
 import { ledgerGroupIds, settleReleases, type ReleaseFacts, type ReleaseRules, type SettledReleases } from './releases.js'
-import { archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
+import { groupsOf, archivable, archiveLine, archiveWaitsFor, idleNotices, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
@@ -527,7 +533,7 @@ export interface Polled {
    *  it loaded: while all three are unchanged, a held delivery is answered without loading the Swarm (deliveries). The
    *  grants of the agent and of the agents that sent what it allowed, by agent id, are checked again on every such answer:
    *  they rest on Workspaces, machines and shares, which no Swarm write records. */
-  open?: { stamp: number; seen: string[]; allowed: string[]; swarm: SwarmGrant; grants: Record<string, AgentGrant> }
+  open?: { prioritized?: boolean; stamp: number; seen: string[]; allowed: string[]; swarm: SwarmGrant; grants: Record<string, AgentGrant> }
 }
 
 /** Where `deliveries` remembers each caller's last full poll. Either call may throw: the poll then runs in full. */
@@ -700,6 +706,16 @@ async function outsiderRefusal(state: SuperTabState, userId: string, check: () =
     if (error instanceof SuperTabError && !state.people.some(p => p.id === userId)) throw new SuperTabError(error.code, error.message, error.status, true)
     throw error
   }
+}
+
+/** [projectId]'s machine rules from its newest revision, one indexed read: those that pass, whether or not the rest of the
+ *  record does (policy.ts validMachineRules). A rule dropped for failing its schema is logged. */
+async function machineRulesOf(tx: Transaction, tabId: string, projectId: string): Promise<MachineRule[]> {
+  const read = await readRules(tx, tabId, projectId, true)
+  const rules = validMachineRules(read?.rules)
+  const stored = read?.rules.machines
+  if (Array.isArray(stored) && stored.length !== rules.length) logger.warn('[swarm-machine-rules] a rule failed its schema and is not applied', { tabId, projectId })
+  return rules
 }
 
 export class SuperTabStore {
@@ -964,6 +980,43 @@ export class SuperTabStore {
     return { row, parts, state }
   }
 
+  /** Only named, still-owed originals; deleted text, a former membership or a private audience never becomes a public card. */
+  private async legacyProposalBodies(tx: Transaction, state: SuperTabState, projectId: string): Promise<LegacyProposalAsk[]> {
+    const project = projectsOf(state).find(p => p.id === projectId)!
+    const asks = legacyAsks(state, project).slice(0, 100)
+    if (!asks.length) return []
+    const rows = await readBy(tx, 'SuperTabMessage', 'id', [
+      { $match: { tabId: state.id, _id: { $in: asks.map(a => a.messageId) }, deletedAt: null } },
+      { $project: { _id: 0, id: '$_id', conversationId: 1, author: 1, text: 1, source: 1 } },
+    ]) as unknown as Array<{ id: string; conversationId: string; author: Author; text: string; source?: unknown }>
+    return asks.flatMap(ask => {
+      const row = rows.find(r => r.id === ask.messageId), sender = row?.author as unknown as Author | undefined
+      const group = state.conversations.find(c => c.id === ask.conversationId)
+      const member = state.people.find(p => p.id === ask.personId)
+      if (!row || row.source || !row.text.trim() || row.text.length > 32000 || row.conversationId !== ask.conversationId
+        || !sender || sender.kind !== 'person' || sender.id !== ask.personId || sender.membershipGeneration !== member?.generation
+        || !group || group.kind || group.audience || !canReadGroup(state, { kind: 'person', userId: ask.personId, email: '' }, group)) return []
+      return [{ ...ask, text: row.text, generation: member!.generation }]
+    })
+  }
+
+  private async proposalNoticeParts(tx: Transaction, loaded: Loaded): Promise<Loaded> {
+    const groupIds: string[] = loaded.state.conversations.map(c => c.id), agentIds: string[] = []
+    for (const card of loaded.state.conversations) {
+      if (!card.proposal) continue
+      const project = groupProject(loaded.state, card)
+      for (const id of new Set([project.ownerId, ...card.proposal.senders.map(s => s.personId)])) {
+        const member = loaded.state.people.find(p => p.id === id)
+        if (member) groupIds.push(swarmBuddyChatId(member))
+        const fallback = defaultBuddy(loaded.state, id)
+        if (fallback) agentIds.push(fallback.id)
+      }
+      agentIds.push(...card.proposal.senders.flatMap(s => s.buddyId ? [s.buddyId] : []))
+    }
+    const named = await this.ensure(tx, loaded, { groupIds, agentIds })
+    return this.ensure(tx, named, { groupIds: listedBuddyChats(named.state) })
+  }
+
   /** Loads again with more named groups, agents or starts when the first load lacks one a command needs. */
   private async ensure(tx: Transaction, loaded: Loaded, named: Named): Promise<Loaded> {
     const has = (ids: string[] | undefined, present: (id: string) => boolean) => (ids ?? []).every(present)
@@ -971,7 +1024,10 @@ export class SuperTabStore {
     if (!named.allGroups && has(named.groupIds, id => state.conversations.some(c => c.id === id)) && has(named.startIds, id => !!state.starts?.some(s => s.id === id))
       && !named.agentIds?.length && !named.projectIds?.length && !named.startAgentIds?.length) return loaded
     recordReload()
-    return loadRow(tx, loaded.row, named)
+    // An additional named read must retain quiet groups already needed by this transaction, such as a proposal or merge source.
+    // Awake groups load automatically; only quiet keys need carrying through the next indexed read.
+    const groupIds = [...new Set([...named.groupIds ?? [], ...loaded.parts.groups.filter(g => g.dormant).map(g => g.key)])]
+    return loadRow(tx, loaded.row, { ...named, groupIds })
   }
 
   /** A Swarm with one start loaded even when finished, and the start's group even when dormant. */
@@ -1046,6 +1102,24 @@ export class SuperTabStore {
         swarmChat(row.author.id)
       }
     }
+    if (command.type === 'project.boardMode' && command.on) {
+      const project = projectsOf(state).find(p => p.id === command.projectId)
+      if (project) groupIds.push(...legacyAsks(state, project).slice(0, 100).map(a => legacyProposalId(project.id, a.messageId)))
+    }
+    if (command.type === 'proposal.merge') {
+      groupIds.push(command.intoConversationId)
+      const card = state.conversations.find(c => c.id === command.conversationId)
+      groupIds.push(...card?.proposal?.mergedFrom ?? [])
+    }
+    if (command.type === 'proposal.decide' || command.type === 'proposal.ask' || command.type === 'proposal.answer' || command.type === 'proposal.merge') {
+      const cards = state.conversations.filter(c => c.id === command.conversationId || command.type === 'proposal.merge' && c.id === command.intoConversationId)
+      for (const card of cards) for (const identity of card.proposal?.senders ?? []) {
+        swarmChat(identity.personId)
+        if (identity.buddyId) agentIds.push(identity.buddyId)
+        const fallback = defaultBuddy(state, identity.personId)
+        if (fallback) agentIds.push(fallback.id)
+      }
+    }
     // A proposal posts in the chat of the project it goes to, even quiet: the one a Swarm-wide Buddy names, else its session's.
     if (command.type === 'buddy.propose') {
       const self = asAgentId ? state.agents.find(a => a.id === asAgentId) : undefined
@@ -1083,6 +1157,17 @@ export class SuperTabStore {
 
   /** Writes what changed between the loaded state and `next`, and touches the parts the change relied on. */
   private async save(tx: Transaction, loaded: Loaded, next: SuperTabState, stamp: number, touches: Touch[] = []) {
+    const changedCards = next.conversations.filter(c => c.proposal && !isDeepStrictEqual(c.proposal, loaded.state.conversations.find(old => old.id === c.id)?.proposal))
+    // Timer/release transitions have no command actor: guard the same current rights that proposal commands guard.
+    if (changedCards.length) {
+      touches = [...touches, { kind: 'head', key: 'head' }]
+      for (const card of changedCards) {
+        touches.push({ kind: 'group', key: groupProject(next, card).leadConversationId })
+        for (const identity of card.proposal!.senders) {
+          if (loaded.state.people.some(p => p.id === identity.personId)) touches.push({ kind: 'member', key: identity.personId })
+        }
+      }
+    }
     const committed = await commitParts(tx, loaded, next, { stamp, touches })
     const told = this.hooks.hostsChanged
     if (told && committed.hosts.length) afterCommit(tx, () => told({ tabId: loaded.parts.tabId, machineIds: committed.hosts, lastChangedAt: stamp }))
@@ -1946,6 +2031,12 @@ export class SuperTabStore {
       if (command.type === 'rules.set') context.projectRules = await readRules(tx, tabId, command.projectId, true)
       // A closed tab's project with a rules record of the person's is kept, not deleted (commands.ts project.closeTab).
       if (command.type === 'project.closeTab') context.projectRules = await readRules(tx, tabId, command.projectId, true)
+      // A start or an assignment meets its project's machine rules (machineRules.ts): one indexed read of the newest revision.
+      // Only the machine rules are read here, so a record broken elsewhere still applies those that pass (security review 1).
+      if (command.type === 'agent.start' || command.type === 'work.assign') {
+        const group = original.conversations.find(c => c.id === (command.type === 'agent.start' ? command.request.conversationId : command.conversationId))
+        if (group) context.projectRules = { revision: 0, rules: { ...SEED_RULES, machines: await machineRulesOf(tx, tabId, groupProject(original, group).id) } }
+      }
       if (command.type === 'crew.add' || command.type === 'work.lane' || command.type === 'work.define'
         || (command.type === 'conversation.create' && !command.reviewOf && !command.audience)) {
         authorizeCommandAccess(original, actor, command)
@@ -2063,6 +2154,7 @@ export class SuperTabStore {
       const decisionId = command.type === 'route.override' || command.type === 'route.modelResult' ? command.decisionId
         : command.type === 'work.assign' || command.type === 'agent.start' ? command.routeDecisionId : undefined
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
+      if (command.type === 'project.boardMode' && command.on) context.legacyProposals = await this.legacyProposalBodies(tx, original, command.projectId)
       const effects = applyCommand(original, actor, command, context)
       hasWorkers = effects.state.agents.some(a => !isBuddy(a) && !ledProject(effects.state, a.id))
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
@@ -3291,6 +3383,17 @@ export class SuperTabStore {
     })
   }
 
+  /** A project's machine rules alone, from its newest revision (policy.ts machines), for the route (task #3964): one
+   *  indexed read, never the history, and those that pass even when the rest of the record does not. Who reads the project
+   *  reads them, as its record. */
+  async projectMachineRules(user: AuthUser, tabId: string, projectId: string, asAgentId?: string) {
+    return this.instructionHistory(user, tabId, projectId, asAgentId, async tx => {
+      // The rules that pass, from a record that may not, as the server applies them (machineRulesOf).
+      const read = await readRules(tx, tabId, projectId, true)
+      return { projectId, revision: read?.revision ?? 0, machines: validMachineRules(read?.rules) }
+    })
+  }
+
   private async instructionHistory<T>(user: AuthUser, tabId: string, projectId: string, asAgentId: string | undefined, read: (tx: Transaction) => Promise<T>) {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
@@ -3503,6 +3606,8 @@ export class SuperTabStore {
     const kept = new Set(stored.filter(row => messages.some(m => m.id === row.id && row.tabId === tabId && row.conversationId === m.conversationId
       && isDeepStrictEqual(row.source ?? undefined, m.source))).map(row => row.id))
     if (kept.size) logger.warn('Kept Swarm notices already stored', { tabId, ids: [...kept] })
+    const measured = proposalMessageMeasures(state, messages.filter(m => !kept.has(m.id)), this.now())
+    if (measured.length) afterCommit(tx, () => proposalMeasures(measured))
     const rows: Prisma.SuperTabMessageCreateManyInput[] = []
     let deliveries: Prisma.SuperTabDeliveryCreateManyInput[] = []
     for (const message of messages) {
@@ -3514,6 +3619,7 @@ export class SuperTabStore {
         thread: message.thread ?? message.id, ...(message.alsoInChat ? { alsoInChat: true } : {}),
         ...(message.buddySession ? { buddySession: true } : {}), ...(message.buddyProject ? { buddyProject: message.buddyProject } : {}) })
       for (const recipient of [...message.recipients, ...message.buddyRecipients ?? []]) {
+        if (!pmAcceptsMessage(state, recipient, message.source)) continue
         const target = agent(state, recipient)
         const group = conversation(state, message.conversationId)
         // Written as ever, so its readers see the message at once; only its coordinator's delivery waits for the digest (noticeDigest.ts).
@@ -3522,7 +3628,7 @@ export class SuperTabStore {
         const forInbox = gathersForInbox(state, target, message)
         const gathered = (gatheredMessage(state, message) && !!ledProject(state, recipient)) || forInbox
         deliveries.push({ id: stableId(message.id, recipient), tabId,
-          conversationId: message.conversationId, messageId: message.id, agentId: recipient, machineId: target.machineId,
+          conversationId: message.conversationId, messageId: message.id, inputPriority: group.proposal ? Number((group.priority ?? 'P2').slice(1)) : 1, agentId: recipient, machineId: target.machineId,
           machineOwnerId: target.machineOwnerId,
           assignmentId: activeWork(group) && group.assignment?.agentId === recipient ? group.assignment.id : null,
           membershipGeneration: target.membershipGeneration, authorKind: message.author.kind,
@@ -4089,8 +4195,13 @@ export class SuperTabStore {
    *  under the same checks an agent.start meets, Team-account facts read once per sweep. */
   private async crewDeps(tx: Transaction, state: SuperTabState, now: number): Promise<CrewDeps> {
     const teamMachines = await this.teamMachines(tx, state), otherWorkspaceMachines = await this.otherWorkspaceMachines(tx, state)
-    // No machine rules until the project rules record is on main (River, 11-05): then they come from it, never from source.
-    return { machineRules: [], admits: (machineId, agent) => {
+    // Each crew project's machine rules from its record (machineRules.ts): one indexed read per project with crew (at most
+    // the Swarm's 100), only in a sweep where a member needs a machine.
+    const rules = new Map<string, readonly MachineRule[]>()
+    for (const projectId of new Set(state.agents.filter(a => a.crew).map(a => agentProjectId(state, a)).filter(id => id !== undefined))) {
+      rules.set(projectId, await machineRulesOf(tx, state.id, projectId))
+    }
+    return { machineRules: projectId => rules.get(projectId) ?? [], admits: (machineId, agent) => {
       const pool = state.machines?.find(m => m.machineId === machineId)
       const request = pool && crewMoveRequest(state, agent, pool)
       if (!request) return false
@@ -4279,7 +4390,16 @@ export class SuperTabStore {
       const lines = taskLineChats(loaded.state)
       if (lines.length) loaded = loadedFrom(row, { ...observed, groups: [...new Map([...loaded.parts.groups,
         ...await loadGroups(tx, tabId, 'key', { key: { $in: lines } })].map(g => [g.key, g])).values()] })
+      const idleBuddies = loaded.state.agents.filter(a => a.machineId === machineId && isBuddy(a) && !a.buddySession
+        && observation.idleBuddyHarnessIds?.includes(a.harnessId)
+        && !loaded.state.conversations.some(c => isBuddyChat(c) && c.agentIds.includes(a.id))).map(a => a.id)
+      if (idleBuddies.length) {
+        const homes = await loadGroups(tx, tabId, 'agents', { agentIds: { $in: idleBuddies }, deleted: false,
+          'data.kind': { $in: ['buddy', 'swarm-buddy'] } })
+        loaded = loadedFrom(row, { ...observed, groups: [...new Map([...loaded.parts.groups, ...homes].map(g => [g.key, g])).values()] })
+      }
       const state = cloneData(loaded.state)
+      const buddyTouches: Touch[] = []
       await this.hostFor(tx, user, machineId, owned, state)
       const pool = await strangerRefusal(state, user.sub, () => {
         const found = machineContribution(state, machineId)
@@ -4300,7 +4420,7 @@ export class SuperTabStore {
       // when a task there is lost.
       const saved = async (rows: MessageDraft[] = []) => {
         const sequences = numberMessages(state, rows, now)
-        const touches = judgedMachines(loaded.state, state, rows).filter(t => t.key !== machineId)
+        const touches = [...judgedMachines(loaded.state, state, rows).filter(t => t.key !== machineId), ...buddyTouches]
         await this.endRuns(tx, tabId, loaded.state, state)
         await recordAttempts(tx, tabId, loaded.state, state, now)
         await recordEvidence(tx, tabId, loaded.state, state, now)
@@ -4356,6 +4476,19 @@ export class SuperTabStore {
         ...sweep ? sweepLiveness(state, now, rulesFor) : [], ...crew ? applyCrewKeep(state, now, crew) : [],
         // A woken crew member this reading shows running again: its wake's timing row (crewTimes.ts, task #3462).
         ...finishedWakes(state, now)]
+      const sleepy = observation.idleBuddyHarnessIds?.length ? buddySleepCandidates(state, now).filter(a => a.machineId === machineId) : []
+      const busy = new Set<string>()
+      for (const agent of sleepy) {
+        const pending = await readBy(tx, 'SuperTabDelivery', 'agentOpen', [
+          { $match: { tabId, agentId: agent.id, status: { $in: [...OPEN_DELIVERY] } } }, { $limit: 1 }, { $project: { _id: 0, agentId: 1 } }])
+        if (pending.length) busy.add(agent.id)
+      }
+      sleepBuddies(state, sleepy, busy, now)
+      for (const agent of sleepy.filter(a => a.asleep)) {
+        // New input and work meet the agent write; home activity, membership and project switch meet these guards.
+        buddyTouches.push({ kind: 'head', key: 'head' }, { kind: 'member', key: agent.buddyOf!.personId },
+          ...groupsOf(state, agent).map(g => ({ kind: 'group' as const, key: g.id })))
+      }
       // The 30-second sweep also hands out work when the Swarm, as loaded here, has a free crew member and a task for it.
       if (sweep && this.hooks.dispatch && projectsOf(state).some(p => {
         const rules = rulesFor(p.id)
@@ -4513,12 +4646,33 @@ export class SuperTabStore {
       ? { kind: 'person', userId: delivery.authorId, email: '' }
       : { kind: 'agent', agentId: delivery.authorId, machineOwnerId: (sender as Agent).machineOwnerId }
     // A private conversation's sender and receiver must still be in its audience or be its Lead (projects.ts canReadGroup).
-    if (!canReadGroup(state, actor, group)) return false
+    if (!canReadGroup(state, actor, group) && !isBuddyChat(group)) return false
     const generation = 'generation' in sender ? sender.generation : sender.membershipGeneration
-    return generation === delivery.authorGeneration && (!('role' in sender) || sender.role !== 'viewer')
+    return generation === delivery.authorGeneration && (!('role' in sender) || sender.role !== 'viewer' || !!group.proposal)
   }
 
-  private async senderAllowed(tx: Transaction, state: SuperTabState, delivery: SuperTabDelivery): Promise<boolean> {
+  private async senderAllowed(tx: Transaction, state: SuperTabState, delivery: SuperTabDelivery, knownSource?: unknown): Promise<boolean> {
+    const group = state.conversations.find(c => c.id === delivery.conversationId)
+    const sender = delivery.authorKind === 'person' ? state.people.find(p => p.id === delivery.authorId) : state.agents.find(a => a.id === delivery.authorId)
+    if (!group || !sender) return false
+    const actor: Actor = delivery.authorKind === 'person' ? { kind: 'person', userId: delivery.authorId, email: '' }
+      : { kind: 'agent', agentId: delivery.authorId, machineOwnerId: (sender as Agent).machineOwnerId }
+    const outsideChat = !canReadGroup(state, actor, group)
+    if (ledProject(state, delivery.agentId)?.boardMode || outsideChat) {
+      const source = knownSource === undefined
+        ? (await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { source: true } }))?.source : knownSource
+      if (!pmAcceptsMessage(state, delivery.agentId, source)) return false
+      if (outsideChat) {
+        // A server-written proposal notice may enter its person's private Buddy chat without giving its author read access.
+        const notice = source as { kind?: string; projectId?: string } | null
+        const project = projectsOf(state).find(p => p.id === notice?.projectId)
+        const target = state.agents.find(a => a.id === delivery.agentId)
+        if (!isBuddyChat(group) || !target || !isBuddy(target) || !project
+          || !['proposal-notice', 'proposal-overdue'].includes(notice?.kind ?? '')
+          || !canReadProject(state, actor, project)
+          || !canReadProject(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, project)) return false
+      }
+    }
     if (delivery.nativeContextId && !await this.native.allowsDelivery(tx, state, delivery.nativeContextId)) return false
     if (delivery.authorKind !== 'agent') return true
     try { await this.agentGrant(tx, state, agent(state, delivery.authorId)); return true }
@@ -4542,7 +4696,7 @@ export class SuperTabStore {
     // whose gathered rows are due (inboxDue) skips the fast answer, by one indexed read.
     const releasing = turn !== undefined && inboxDue(await agentGatheredDeliveries(this.db, tabId, agentId, NOTICE_DIGEST_MAX), this.now(), turn)
     if (!releasing && last !== undefined && this.now() - last.at < SWEEP_EVERY_MS) {
-      const open = await openDeliveries(this.db, tabId, agentId)
+      const open = await openDeliveries(this.db, tabId, agentId, last.open?.prioritized)
       if (!open.length) return []
       // A held delivery stays open for as long as its host cannot type it, possibly hours, polled each second (Diego, 10-28):
       // the same open deliveries at the same main stamp are allowed as the full poll found them. Anything a Swarm write
@@ -4556,7 +4710,7 @@ export class SuperTabStore {
     const view = await this.view([tabId]), stamp = view.mainStamp(tabId)
     const { open, allowed, state } = await this.fullDeliveries(user, tabId, agentId, view, turn)
     await this.polls.set(key, { at: this.now(), ...open.length && stamp !== undefined
-      ? { open: { stamp, seen: open.map(d => d.id), allowed: allowed.map(d => d.id), ...grantsOf(state, agentId, allowed) } } : {} })
+      ? { open: { prioritized: !!ledProject(state, agentId)?.boardMode, stamp, seen: open.map(d => d.id), allowed: allowed.map(d => d.id), ...grantsOf(state, agentId, allowed) } } : {} })
       .catch(pollMemoryFailed)
     return allowed.map(d => withTurnEnd(d, this.now()))
   }
@@ -4579,7 +4733,8 @@ export class SuperTabStore {
       if (!seen.allowed.includes(delivery.id)) continue
       if (delivery.authorKind !== 'agent' || seen.grants[delivery.authorId] && await sent(delivery.authorId)) allowed.push(delivery)
     }
-    return allowed
+    const order = new Map(seen.allowed.map((id, i) => [id, i]))
+    return allowed.sort((a, b) => order.get(a.id)! - order.get(b.id)!)
   }
 
   private async fullDeliveries(user: AuthUser, tabId: string, agentId: string, view: CacheView, turn?: 'idle' | 'busy') {
@@ -4796,12 +4951,24 @@ export class SuperTabStore {
 
   /** The agent's open deliveries, and those of them its Swarm still lets reach it. */
   private async allowedDeliveries(tx: Transaction, state: SuperTabState, tabId: string, agentId: string) {
-    const open = await openDeliveries(tx, tabId, agentId)
+    const open = await openDeliveries(tx, tabId, agentId, !!ledProject(state, agentId)?.boardMode)
+    // One bounded primary-key batch, rather than a source lookup for every queued PM input or private Buddy notice.
+    const needsSources = !!ledProject(state, agentId)?.boardMode || open.some(d => isBuddyChat(state.conversations.find(c => c.id === d.conversationId) ?? { kind: undefined } as Conversation))
+    const sources = needsSources && open.length ? new Map((await readBy(tx, 'SuperTabMessage', 'id', [
+      { $match: { tabId, _id: { $in: open.map(d => d.messageId) } } }, { $project: { _id: 1, source: 1 } },
+    ])).map(m => [m._id as string, m.source ?? null])) : null
     const allowed: SuperTabDelivery[] = []
     for (const delivery of open) {
-      if (this.deliveryAllowed(state, delivery) && await this.senderAllowed(tx, state, delivery)) allowed.push(delivery)
+      if (this.deliveryAllowed(state, delivery) && await this.senderAllowed(tx, state, delivery, sources?.get(delivery.messageId) ?? (sources ? null : undefined))) allowed.push(delivery)
     }
-    return { open, allowed, state }
+    if (ledProject(state, agentId)?.boardMode) {
+      const rank = (d: SuperTabDelivery) => {
+        const card = state.conversations.find(c => c.id === d.conversationId)
+        return card?.proposal ? Number((card.priority ?? 'P2').slice(1)) : 1
+      }
+      allowed.sort((a, b) => rank(a) - rank(b))
+    }
+    return { open, allowed: allowed.slice(0, 100), state }
   }
 
   /** A withdrawn host can retire its own journal without regaining shared
@@ -5326,7 +5493,8 @@ export class SuperTabStore {
       const head = (await tx.swarmHead.findUnique({ where: { id: `${tabId}:head` }, select: { data: true } }))?.data as { projects?: SwarmProject[] } | undefined
       const ledger = head?.projects?.find(p => p.id === projectId)?.releases
       if (!ledger) return null
-      const loaded = await loadRow(tx, requireParts(row), { groupIds: ledgerGroupIds(ledger) })
+      let loaded = await loadRow(tx, requireParts(row), { groupIds: ledgerGroupIds(ledger) })
+      loaded = await this.proposalNoticeParts(tx, loaded)
       const state = cloneData(loaded.state)
       const before = JSON.stringify(projectsOf(loaded.state).find(p => p.id === projectId)?.releases)
       // The project's rules record as it reads now: its saved window, pace and backend pause, or the seed until one is saved.
@@ -5348,17 +5516,26 @@ export class SuperTabStore {
    * hours). Whatever they find is recorded in this same write, so a second run, or one racing it, finds nothing new. The
    * messages written.
    */
-  async runTimeChecks(tabId: string): Promise<number> {
+  async runTimeChecks(tabId: string, dueCards: string[] = []): Promise<number> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       if (!row || row.deletedAt || row.format !== 2) return 0
-      let loaded = await loadRow(tx, requireParts(row), {})
+      let loaded = await loadRow(tx, requireParts(row), { groupIds: dueCards })
+      const migration = new Map<string, LegacyProposalAsk[]>()
+      for (const project of projectsOf(loaded.state).filter(p => p.boardMode)) {
+        const bodies = await this.legacyProposalBodies(tx, loaded.state, project.id)
+        if (bodies.length) migration.set(project.id, bodies)
+      }
+      if (migration.size) loaded = await this.ensure(tx, loaded, { groupIds: [...dueCards,
+        ...[...migration].flatMap(([id, bodies]) => bodies.map(a => legacyProposalId(id, a.messageId)))] })
+      loaded = await this.proposalNoticeParts(tx, loaded)
       // A task its sweep may lose says Stuck in its project chat's thread (taskLine.ts endedReply, task #2693).
       const chats = taskLineChats(loaded.state)
-      if (chats.length) loaded = await this.ensure(tx, loaded, { groupIds: chats })
+      if (chats.length) loaded = await this.ensure(tx, loaded, { groupIds: [...loaded.state.conversations.map(c => c.id), ...chats] })
       const state = cloneData(loaded.state), now = this.now()
       const rulesFor = await this.projectDispatch(tx, state)
-      const written = sweepForLead(state, now, rulesFor)
+      const written = [...sweepForLead(state, now, rulesFor), ...advanceProposalCards(state, now)]
+      for (const [id, bodies] of migration) written.push(...migrateLegacyProposals(state, projectsOf(state).find(p => p.id === id)!, bodies, now))
       // What waits for each agent: an agent with a delivery open is not idle. Only loaded groups' active work keeps an agent
       // from being idle (project instructions, phase 4).
       const projects = projectsOf(state).filter(p => state.conversations.find(c => c.id === p.leadConversationId)?.leadId)

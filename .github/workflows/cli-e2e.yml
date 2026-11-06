@@ -113,10 +113,10 @@ jobs:
           overwrite: true
           retention-days: 7
 
-  # The tests that need macOS: a data folder on a small disk image that fills (hdiutil). Opt-in
-  # locally (DISKFULL=1); here on one macOS runner, filtered to those tests alone, a few minutes.
+  # Native macOS checks: a disk image that fills (hdiutil), and Buddy sleep/resume on an owner OS account.
+  # Team accounts cannot launch Buddies; the hosted runner exercises the real terminal lifecycle.
   e2e-macos-disk:
-    name: e2e (macOS, full disk)
+    name: e2e (macOS, full disk and Buddy)
     runs-on: macos-15
     timeout-minutes: 30
     defaults:
@@ -131,6 +131,27 @@ jobs:
           cache-dependency-path: cli/package-lock.json
       - run: command -v tmux || brew install tmux
       - run: npm ci --no-audit --no-fund
+      - name: An idle Buddy releases its session and wakes on a message
+        env:
+          E2E_BUNDLE: '1'
+          E2E_ARTIFACTS_DIR: ${{ runner.temp }}/e2e-daemon-logs
+        run: >-
+          npx vitest run --config vitest.e2e.config.ts e2e/superTabSwarmBuddy.e2e.ts
+          --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/buddy-result.json"
+      - name: Require the native Buddy flow to pass without skipping
+        env:
+          BUDDY_RESULT: ${{ runner.temp }}/buddy-result.json
+        run: >-
+          node -e 'const r = JSON.parse(require("node:fs").readFileSync(process.env.BUDDY_RESULT, "utf8"));
+          if (r.numPassedTests !== 1 || r.numPendingTests !== 0 || r.numFailedTests !== 0) process.exit(1)'
+      - name: Preserve the native Buddy result
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-e2e-buddy-macos
+          path: ${{ runner.temp }}/buddy-result.json
+          if-no-files-found: error
+          retention-days: 7
       - name: A full disk, and an update on a disk that fills
         env:
           DISKFULL: '1'
