@@ -28,6 +28,7 @@ class SetUpSwarmPage extends StatefulWidget {
     required this.machineId,
     required this.machineName,
     required this.ownerName,
+    this.swarmId,
   });
 
   final AppNotifier notifier;
@@ -36,6 +37,9 @@ class SetUpSwarmPage extends StatefulWidget {
   final String machineId;
   final String machineName;
   final String ownerName;
+
+  /// The Swarm picked on Set up Intern 3 ([Intern3Swarm.swarmId]).
+  final String? swarmId;
 
   @override
   State<SetUpSwarmPage> createState() => _SetUpSwarmPageState();
@@ -48,6 +52,7 @@ class _SetUpSwarmPageState extends State<SetUpSwarmPage> {
     machineId: widget.machineId,
     machineName: widget.machineName,
     ownerName: widget.ownerName,
+    swarmId: widget.swarmId,
   )..addListener(_changed);
 
   /// Redraws the install's bar ([_InstallBar]) while a run goes on.
