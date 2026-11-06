@@ -6,7 +6,15 @@ import type { CacheView } from '../cache.js'
 import { boardRule } from '../cachePatch.js'
 import { indexOrder, lastActive, loadBoardGroups } from './boardGroups.js'
 import { LEDGER_WEEKS } from './record.js'
-import { WEEK_MS, weekStart } from './week.js'
+import { DAY_MS, WEEK_MS, weekStart } from './week.js'
+import type { Leaderboard } from './contract.js'
+
+/** The caller rechecks access before this lookup. Actor-specific and invalidated by main and machine changes;
+ *  the day also rolls shipping streaks forward without a write. Bounded by the existing SwarmCache budget and age. */
+export function weeklyBoard(cached: CacheView, tabId: string, actorKey: string, projectId: string, week: number, now: number,
+  load: () => Promise<Leaderboard>): Promise<Leaderboard> {
+  return cached.get(tabId, `weekly-board:${JSON.stringify([actorKey, projectId, week, Math.floor(now / DAY_MS)])}`, 'all', load)
+}
 
 /** The weeks a reader can ask for: this one and the ones before it whose records are still kept. */
 export function readableWeek(week: number | undefined, now: number): number {

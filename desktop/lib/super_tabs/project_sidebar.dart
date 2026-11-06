@@ -818,6 +818,15 @@ class ProjectSidebar extends StatelessWidget {
                     icon: AppIcons.flag,
                     waiting: decisions,
                   ),
+                  if (board)
+                    _pageRow(
+                      onPage,
+                      target: SwarmPage.leaderboard,
+                      key: 'super-leaderboard',
+                      label: 'Leaderboard',
+                      icon: AppIcons.trophy,
+                      waiting: 0,
+                    ),
                   // Mentions goes from the Desktop's left pane (Swarm v3, anh Dee 11-07).
                   if (!board)
                     _pageRow(
