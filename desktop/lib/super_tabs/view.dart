@@ -215,10 +215,11 @@ class _SuperTabViewState extends State<SuperTabView>
   /// the right (anh Dee, task #3787): opening a project shows its Board, not its chat.
   String? _boardProjectId;
 
-  /// The left rail and the Buddy pane, hidden by their icons; remembered ([_paneStore]).
-  bool _leftHidden = false, _rightHidden = false;
+  /// The left rail, hidden by its icon; remembered ([_paneStore]). The Buddy pane always shows (anh Dee's fixed
+  /// layout, #3863): with no Show your Buddy, a pane that could hide would never come back, so an earlier build's
+  /// saved `swarm_right_pane_hidden` is no longer read (review of #3398).
+  bool _leftHidden = false;
   static const _leftHiddenKey = 'swarm_left_pane_hidden';
-  static const _rightHiddenKey = 'swarm_right_pane_hidden';
   LocalKeyValueStore? get _paneStore =>
       widget.paneStore ?? widget.app?.localStore;
 
@@ -227,31 +228,20 @@ class _SuperTabViewState extends State<SuperTabView>
     if (store == null) return;
     try {
       final left = await store.read(_leftHiddenKey) == '1';
-      final right = await store.read(_rightHiddenKey) == '1';
       if (!mounted) return;
-      setState(() {
-        _leftHidden = left;
-        _rightHidden = right;
-      });
+      setState(() => _leftHidden = left);
     } catch (_) {
-      // Unreadable: both panes show.
+      // Unreadable: the rail shows.
     }
   }
 
-  void _togglePane({required bool left}) {
-    setState(() {
-      if (left) {
-        _leftHidden = !_leftHidden;
-      } else {
-        _rightHidden = !_rightHidden;
-      }
-    });
+  void _toggleRail() {
+    setState(() => _leftHidden = !_leftHidden);
     final store = _paneStore;
     if (store == null) return;
-    final hidden = left ? _leftHidden : _rightHidden;
     unawaited(
       store
-          .write(left ? _leftHiddenKey : _rightHiddenKey, hidden ? '1' : '0')
+          .write(_leftHiddenKey, _leftHidden ? '1' : '0')
           .catchError((Object _) {}),
     );
   }
@@ -3522,7 +3512,7 @@ class _SuperTabViewState extends State<SuperTabView>
         key: const ValueKey('super-pane-left-toggle'),
         icon: _leftHidden ? AppIcons.panelLeftOpen : AppIcons.panelLeftClose,
         tooltip: _leftHidden ? 'Show sidebar' : 'Hide sidebar',
-        onPressed: () => _togglePane(left: true),
+        onPressed: () => _toggleRail(),
       ),
       const SizedBox(width: 8),
       Flexible(
@@ -3610,12 +3600,6 @@ class _SuperTabViewState extends State<SuperTabView>
               // Rename, Restart and Remove, as the full chat's ⋮ has them:
               // beside the Board this is the only way to them (Huy, 11-06).
               if (onBuddy) _options(group!),
-              AppIconButton(
-                key: const ValueKey('super-pane-right-toggle'),
-                icon: AppIcons.panelRightClose,
-                tooltip: 'Hide your Buddy',
-                onPressed: () => _togglePane(left: false),
-              ),
               const SizedBox(width: 8),
             ],
           ),
@@ -5965,7 +5949,7 @@ class _SuperTabViewState extends State<SuperTabView>
                 right: !wide
                     ? null
                     : boardProject != null
-                    ? (_rightHidden ? null : _boardChat(chat))
+                    ? _boardChat(chat)
                     : thread ??
                           (_rosterOpen
                               ? roster
