@@ -429,6 +429,11 @@ class SuperTabConversation {
       releasing = row['releasing'] is List
           ? List.unmodifiable((row['releasing'] as List).whereType<String>())
           : null,
+      releasedTags = row['released'] is Map && row['released']['tags'] is List
+          ? List.unmodifiable(
+              (row['released']['tags'] as List).whereType<String>(),
+            )
+          : const [],
       shippedAt = row['shippedAt'] is num
           ? DateTime.fromMillisecondsSinceEpoch(
               (row['shippedAt'] as num).toInt(),
@@ -503,6 +508,10 @@ class SuperTabConversation {
   /// when it is not on the server's release list (the desktop's model reads
   /// it for its board; the phone carries it as the desktop does).
   final List<String>? releasing;
+
+  /// The release tags that carried it to people, once they have (backend releases.ts `released`); empty before. Read as the
+  /// desktop does; the phone draws no board yet.
+  final List<String> releasedTags;
 
   /// Its place in its project's shared Next up and the day before which it
   /// may not start, as Desktop's Tasks view reads them (task #2569); read here
