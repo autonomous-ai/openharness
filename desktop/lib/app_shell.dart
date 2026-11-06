@@ -130,12 +130,17 @@ class HarnessApp extends StatelessWidget {
     required this.authenticatedScreen,
     this.frame,
     this.deferFirstScreen,
+    this.firstFrameDrawn,
   });
 
   /// Whether the first frame draws only the window colour, leaving the app
   /// state and the screen to the next frame (task #3563). Null: on, except in
   /// widget tests, which expect the screen on their first pump.
   final bool? deferFirstScreen;
+
+  /// Completes when the first frame is on screen. Null: the engine's own
+  /// signal in the app, the next frame in widget tests (which never rasterise).
+  final Future<void>? firstFrameDrawn;
   final AppKeymap? keymap;
   final AuthenticatedScreenBuilder authenticatedScreen;
   final AppFrameBuilder? frame;
@@ -177,18 +182,86 @@ class HarnessApp extends StatelessWidget {
       // Desktop forms respect the platform's text size. Fixed-grid terminal
       // surfaces own their no-scaling boundary alongside terminal zoom.
       builder: (context, child) {
-        final app = child ?? const SizedBox.shrink();
-        final framed = _TeamSetupHold(child: frame?.call(app) ?? app);
-        return _GridTokenScope(
-          child: keymap == null
-              ? framed
-              : KeymapProvider(keymap: keymap!, child: framed),
-        );
+        Widget shell() {
+          final app = child ?? const SizedBox.shrink();
+          final framed = _TeamSetupHold(child: frame?.call(app) ?? app);
+          return _GridTokenScope(
+            child: keymap == null
+                ? framed
+                : KeymapProvider(keymap: keymap!, child: framed),
+          );
+        }
+
+        return deferFirstScreen ?? !kUnderTest
+            ? _AfterFirstFrame(build: shell, drawn: firstFrameDrawn)
+            : shell();
       },
       home: StatsLifecycle(
         child: RootShell(authenticatedScreen: authenticatedScreen),
       ),
     );
+  }
+}
+
+/// Draws only the window's own colour on the first frame, then [build] once
+/// that frame is on screen (task #3563).
+///
+/// The app state (its bootstrap starts when it is first read), the menu and
+/// device strips, the keymap and the screen are built inside [build]. None of
+/// them is on screen in the first frame, and on a release build they were
+/// ~50 of its ~85 ms. The window colour matches the screen's, so nothing
+/// flashes when they arrive a frame later.
+class _AfterFirstFrame extends StatefulWidget {
+  const _AfterFirstFrame({required this.build, this.drawn});
+
+  final Widget Function() build;
+  final Future<void>? drawn;
+
+  @override
+  State<_AfterFirstFrame> createState() => _AfterFirstFrameState();
+}
+
+class _AfterFirstFrameState extends State<_AfterFirstFrame> {
+  bool _ready = false;
+
+  @override
+  void initState() {
+    super.initState();
+    void ready() {
+      if (mounted) setState(() => _ready = true);
+    }
+
+    final drawn =
+        widget.drawn ??
+        (kUnderTest
+            ? null
+            : WidgetsBinding.instance.waitUntilFirstFrameRasterized);
+    if (drawn == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => ready());
+    } else {
+      // A window that is hidden or covered may never rasterise: the app must
+      // still open, so the wait is bounded.
+      unawaited(
+        drawn
+            .timeout(const Duration(milliseconds: 250), onTimeout: () {})
+            .then((_) => ready()),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_ready) {
+      return ColoredBox(
+        key: const Key('first-frame-placeholder'),
+        color: grid.AppPalette.windowBg,
+      );
+    }
+    speedMarks.launch('first screen built');
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => speedMarks.launch('first screen painted'),
+    );
+    return widget.build();
   }
 }
 
