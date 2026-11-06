@@ -29,12 +29,20 @@ const taskOf = (state: SuperTabState, group: Conversation): Conversation | undef
 /** Whether [group] names code of its own: a pull request among its code, or a pull request link in its brief or title. */
 const namesCode = (group: Conversation): boolean => codePullRequests(group).length > 0 || /\/pull\/\d+/i.test(`${group.brief ?? ''}\n${group.title ?? ''}`)
 
+/** Whether a Team agent (not the project's coordinator) is the assignee of [task]. */
+const teamBuilt = (state: SuperTabState, task: Conversation): boolean => {
+  const builder = state.agents.find(a => a.id === task.assignment?.agentId)
+  return !!builder && onTeamAccount(state, builder) && !coordinates(state, task, builder)
+}
+
 /** Whether [group] is a release task the Swarm opened, or a step on one, that names no code of its own (task #3604): main at a named
  *  commit, which every member may read. Such work is never Team-written, and what GitHub says of a branch marks nothing there. A release
  *  task that names a pull request (a version bump or a rollout fix a Team agent pushed), and a step that does, are read for it like any
  *  task (security reviews 1 and 2 of #3324); a step's own code never marks the release task, only the read of the task's own does. */
 export const isReleaseWork = (state: SuperTabState, group: Conversation): boolean => {
   const task = taskOf(state, group)
+  // A Team agent building it can finish with a commit and no pull request link, so nothing would be read: its steps stay in a Team account.
+  if (task && teamBuilt(state, task)) return false
   // A mark ends the exemption at once, so the first mark of a release task is seen as a change and tells the main account to stop.
   return !!task?.release && !task.teamWritten && !group.teamWritten && !namesCode(task) && (group === task || !namesCode(group))
 }
@@ -77,7 +85,7 @@ export function teamWrittenTask(state: SuperTabState, group: Conversation): bool
   const task = taskOf(state, group)
   if (isReleaseWork(state, group)) return false
   // A step that names code of its own, on a release task that names none, is Team-written by its own mark alone.
-  if (task?.release && group !== task && !namesCode(task)) return !!group.teamWritten
+  if (task?.release && group !== task && !namesCode(task) && !task.teamWritten && !teamBuilt(state, task)) return !!group.teamWritten
   if (!task || group.teamWritten || task.teamWritten) return true
   const assignee = state.agents.find(a => a.id === task.assignment?.agentId)
   return !!assignee && onTeamAccount(state, assignee)
@@ -95,7 +103,7 @@ function mark(group: Conversation, cause: Cause): void {
 
 /** Marks [group] when [worker], assigned to build it, runs in a Team account. A step or the project's coordinator marks nothing. */
 export function markTeamWritten(state: SuperTabState, group: Conversation, worker: Agent): void {
-  if (group.reviewOf || coordinates(state, group, worker) || !onTeamAccount(state, worker) || isReleaseWork(state, group)) return
+  if (group.reviewOf || coordinates(state, group, worker) || !onTeamAccount(state, worker)) return
   mark(group, { kind: 'assigned' })
 }
 
