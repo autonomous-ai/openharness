@@ -47,6 +47,19 @@ describe('changes since a cursor (design 4.4)', () => {
     expect(receive(parts, [head], peer).head).toMatchObject({ key: 'head', version: R + 1 })
   })
 
+  // Task #3593: the status card's lines live on the project chat's part, but readers get them in the head's project; a change poll
+  // that sent only the chat would leave Desktop and web on the old card until something else moved the head.
+  it('sends the head with a project chat\'s change that carries the status card, so a live reader sees it move', () => {
+    const { s, parts } = scene()
+    const lead = parts.head.data.projects![0]!.leadConversationId
+    const changed = [write(parts, 'groups', lead, p => { (p.data as { card?: object }).card = { lines: [{ id: s.web, text: '#1 "Web": working. Waits on: nothing. Owner: Ada.', since: NOW }] } })]
+    const received = receive(parts, changed, owner)
+    expect(received.head).not.toBeNull()
+    expect(received.head!.data.projects!.find(p => p.leadConversationId === lead)!.status!.text).toContain('#1 "Web": working.')
+    // A task's own change does not resend the head.
+    expect(receive(parts, [write(parts, 'groups', s.web, p => { (p.data as { title: string }).title = 'Web 3' })], owner).head).toBeNull()
+  })
+
   it('sends a changed group whole to its readers and nothing to anyone else', () => {
     const { s, parts } = scene()
     const changed = [write(parts, 'groups', s.web, p => { (p.data as { title: string }).title = 'Web 2' }),
