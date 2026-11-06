@@ -184,9 +184,10 @@ enum SetupWifiChannel {
   /// The hotspot's network (os/setup.py ADDRESS 10.42.0.1): this phone's address there is 10.42.0.x.
   private static let subnet = "10.42.0."
 
-  /// Joins tried before giving up: iOS often answers "not found" first while the hotspot is up
-  /// (ecm-sds-mobile, the lamp's setup, saw the same).
-  private static let attempts = 3
+  /// How long joins are tried, 2 s apart, before giving up: iOS answers "not found" while the hotspot is up until it
+  /// has scanned and seen it (ecm-sds-mobile, the lamp's setup, saw the same). Three tries in 6 s were too few: the
+  /// first join failed every time and Try again then worked (owner, 2026-11-06).
+  private static let tryFor: TimeInterval = 20
 
   static func register(with registry: FlutterPluginRegistry) {
     guard let messenger = registry.registrar(forPlugin: "HarnessSetupWifi")?.messenger() else { return }
@@ -196,7 +197,7 @@ enum SetupWifiChannel {
       case "join":
         let prefix = (call.arguments as? [String: Any])?["prefix"] as? String ?? ""
         guard !prefix.isEmpty else { result(["state": "unavailable"]); return }
-        join(prefix: prefix, attempt: 1, result: result)
+        join(prefix: prefix, since: Date(), attempt: 1, result: result)
       case "leave":
         leave { result(true) }
       case "wifiOn":
@@ -207,16 +208,18 @@ enum SetupWifiChannel {
     }
   }
 
-  private static func join(prefix: String, attempt: Int, result: @escaping FlutterResult) {
+  private static func join(prefix: String, since: Date, attempt: Int, result: @escaping FlutterResult) {
     apply(prefix: prefix) { error in
       if let error {
         NSLog("[setup_wifi] join \(prefix) #\(attempt): \(error.domain) \(error.code) \(error.localizedDescription)")
         // Cancelled by the person: asked again, they would only see the same question.
-        if error.code == NEHotspotConfigurationError.userDenied.rawValue || attempt >= attempts {
+        if error.code == NEHotspotConfigurationError.userDenied.rawValue || Date().timeIntervalSince(since) >= tryFor {
           result(["state": "unavailable"])
           return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { join(prefix: prefix, attempt: attempt + 1, result: result) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+          join(prefix: prefix, since: since, attempt: attempt + 1, result: result)
+        }
         return
       }
       // A join iOS reports is not yet one the phone is on: it can stay on its own Wi-Fi, which has the
