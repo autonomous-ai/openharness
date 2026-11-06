@@ -53,6 +53,27 @@ describe('shell guard: kill by name', () => {
   })
 })
 
+describe('shell guard: kill -1, every process the account can reach', () => {
+  it.each([
+    'kill -9 -1',
+    'kill -- -1',
+    'kill -KILL -1',
+    'kill -s TERM -1',
+    '/bin/kill -1 -1',
+    'kill 4242 -1',
+  ])('refuses %s', (command) => {
+    expect(refused(command)).toBe(GUARD_REASONS.killAll)
+  })
+
+  it.each([
+    'kill -1 4242',
+    'kill -- -4242',
+    'kill -l',
+  ])('lets %s through', (command) => {
+    expect(refused(command)).toBeNull()
+  })
+})
+
 describe('shell guard: sudo and system-wide installs', () => {
   it.each([
     'sudo rm -rf /opt/thing',
@@ -212,6 +233,33 @@ describe('shell guard: removing a worktree a live process uses', () => {
   it('does not check folders that are not worktrees', () => {
     const liveCwds = () => [{ pid: 4242, cwd: '/work/repo/node_modules/x' }]
     expect(refused('rm -rf node_modules', { liveCwds, cwd: '/work/repo' })).toBeNull()
+  })
+
+  // Rowan's security review (11-06): naming the worktree's parent, a glob over the worktrees or a ~/ path removed it too.
+  describe('through a folder that holds it', () => {
+    const live = () => [{ pid: 4242, cwd: `${worktree}/cli` }]
+    const holding = { linkedWorktree: linked, liveCwds: live, home: '/work', cwd: '/work/repo',
+      entries: (path: string) => (path === '/work/trees' ? ['bold-pine', 'other'] : path === '/work' ? ['trees', 'repo'] : []) }
+
+    it.each([
+      ['rm -rf /work/trees', '/work/trees'],
+      ['rm -rf ../trees', '/work/trees'],
+      ['rm -rf ~/trees', '/work/trees'],
+      ['rm -rf /work/trees/*', worktree],
+      ['rm -rf /work/trees/bold-*', worktree],
+      ['cd /work && rm -rf tr*', '/work/trees'],
+    ])('refuses %s', (command, target) => {
+      expect(refused(command, holding)).toBe(GUARD_REASONS.liveWorktree(target, 4242))
+    })
+
+    it('lets the folder go when nobody works in the worktree it holds', () => {
+      expect(refused('rm -rf /work/trees', { ...holding, liveCwds: () => [{ pid: 7, cwd: '/work/repo' }] })).toBeNull()
+    })
+
+    it('reads no live processes for a folder holding no worktree', () => {
+      const liveCwds = () => { throw new Error('read live processes') }
+      expect(refused('rm -rf build dist/*', { ...holding, liveCwds })).toBeNull()
+    })
   })
 
   it('refuses when it cannot tell which processes are live', () => {

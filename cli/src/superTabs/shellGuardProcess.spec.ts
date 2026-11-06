@@ -23,9 +23,13 @@ it.skipIf(process.platform === 'win32')('protects a real worktree until its chil
       await once(child.stdout, 'data', { signal: AbortSignal.timeout(5000) })
       const command = `git worktree remove '${tree}'`
       expect(shellRefusal(command, machineFacts(repo))).toBe(GUARD_REASONS.liveWorktree(tree, child.pid!))
+      // Through the folder that holds it, a glob over it, or ~/ (Rowan's security review, 11-06).
+      expect(shellRefusal(`rm -rf '${root}'`, machineFacts(repo))).toBe(GUARD_REASONS.liveWorktree(root, child.pid!))
+      expect(shellRefusal(`rm -rf ${root}/t*`, machineFacts(repo))).toBe(GUARD_REASONS.liveWorktree(tree, child.pid!))
       child.kill('SIGTERM')
       await exited
       expect(shellRefusal(command, machineFacts(repo))).toBeNull()
+      expect(shellRefusal(`rm -rf '${root}'`, machineFacts(repo))).toBeNull()
     } finally {
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
       await exited
