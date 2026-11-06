@@ -1,9 +1,20 @@
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BUDDY_COPIES_FILE, buddyProjectsOf, folderName, prepareBuddyHome, pruneBuddyHome, buddyHomeDue, refreshBuddyHome, removeBuddyHome, trustBuddyHome } from './buddyHome.js'
+
+/** A link to a folder: a junction on Windows, which needs no Developer Mode or administrator (Window of Tim, #3815) and which
+ *  lstat reads as a link exactly as the Buddy folder's checks do; a symbolic link elsewhere. */
+const linkFolder = (target: string, path: string) => symlinkSync(target, path, process.platform === 'win32' ? 'junction' : undefined)
+/** Whether this machine lets this account make a link to a file, as git needs to check one out: Windows does only with
+ *  Developer Mode or as an administrator, and git there writes a committed link as a plain file otherwise. */
+const canLinkFiles = (() => {
+  const dir = mkdtempSync(join(tmpdir(), 'file-link-'))
+  try { writeFileSync(join(dir, 'f'), ''); symlinkSync(join(dir, 'f'), join(dir, 'l'), 'file'); return true } catch { return false }
+  finally { rmSync(dir, { recursive: true, force: true }) }
+})()
 
 // A person's one Buddy's folder (spec 2026-10-31-one-buddy-per-swarm, Folder): one worktree per project checkout on the
 // machine, each from its own checkout, and a lost project's out before the next turn. Real git, in a throwaway folder.
@@ -27,7 +38,7 @@ function root(): string {
   return dir
 }
 
-describe('a person\'s one Buddy\'s folder', () => {
+describe('a person\'s one Buddy\'s folder', { timeout: 30_000 }, () => {
   // Task #2832: a Codex Buddy runs too, and would sit at Codex's own folder question in a terminal no Swarm view shows.
   it('answers Claude Code\'s and Codex\'s folder question for it, and leaves any other engine to ask', async () => {
     const claude = root(), codex = root(), home = join(root(), 'home'), config = join(claude, '.claude.json'), toml = join(codex, 'config.toml')
@@ -45,7 +56,7 @@ describe('a person\'s one Buddy\'s folder', () => {
       expect(saved.map(p => p.hasTrustDialogAccepted)).toEqual([true])
       await trustBuddyHome(home, 'codex')
       expect(readFileSync(toml, 'utf8')).toMatch(/trust_level = "trusted"/)
-      expect(readFileSync(toml, 'utf8')).toContain(home.split('/').pop()!)
+      expect(readFileSync(toml, 'utf8')).toContain(basename(home))
     } finally {
       if (moved.claude === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = moved.claude
       if (moved.codex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = moved.codex
@@ -112,7 +123,7 @@ describe('a person\'s one Buddy\'s folder', () => {
     const theirs = join(r, 'their-worktree')
     git(other, 'worktree', 'add', '--detach', '--', theirs, 'HEAD')
     rmSync(join(home, 'projects', 'Web'), { recursive: true, force: true })
-    symlinkSync(theirs, join(home, 'projects', 'Web'))
+    linkFolder(theirs, join(home, 'projects', 'Web'))
     await pruneBuddyHome(home, new Set())
     expect(readFileSync(join(theirs, 'WHO'), 'utf8')).toBe('other-src\n')
     expect(git(other, 'worktree', 'list')).toContain(theirs)
@@ -121,7 +132,7 @@ describe('a person\'s one Buddy\'s folder', () => {
     const again = join(r, 'home2')
     await prepareBuddyHome(again, [{ id: 'web', name: 'Web', cwd: web }])
     rmSync(join(again, 'projects', 'Web'), { recursive: true, force: true })
-    symlinkSync(theirs, join(again, 'projects', 'Web'))
+    linkFolder(theirs, join(again, 'projects', 'Web'))
     await prepareBuddyHome(again, [{ id: 'web', name: 'Web', cwd: web }])
     expect(readFileSync(join(again, 'projects', 'Web', 'WHO'), 'utf8')).toBe('web-src\n')
     expect(readFileSync(join(theirs, 'WHO'), 'utf8')).toBe('other-src\n')
@@ -134,18 +145,18 @@ describe('a person\'s one Buddy\'s folder', () => {
     git(other, 'worktree', 'add', '--detach', '--', theirs, 'HEAD')
     const elsewhere = join(r, 'elsewhere')
     mkdirSync(join(elsewhere, 'Web'), { recursive: true })
-    symlinkSync(theirs, join(elsewhere, 'Web', 'x'))
+    linkFolder(theirs, join(elsewhere, 'Web', 'x'))
     // projects/ is a link to a folder holding a "Web" folder; and a Buddy folder that is itself a link.
     const home = join(r, 'home')
     await prepareBuddyHome(home, [{ id: 'web', name: 'Web', cwd: web }])
     rmSync(join(home, 'projects'), { recursive: true, force: true })
     git(web, 'worktree', 'prune')
-    symlinkSync(elsewhere, join(home, 'projects'))
+    linkFolder(elsewhere, join(home, 'projects'))
     await expect(pruneBuddyHome(home, new Set())).rejects.toThrow('BUDDY_FOLDER_NOT_OWN')
     await expect(prepareBuddyHome(home, [{ id: 'web', name: 'Web', cwd: web }])).rejects.toThrow('BUDDY_FOLDER_NOT_OWN')
     await removeBuddyHome(home)
     const linked = join(r, 'linked-home')
-    symlinkSync(elsewhere, linked)
+    linkFolder(elsewhere, linked)
     await expect(prepareBuddyHome(linked, [{ id: 'web', name: 'Web', cwd: web }])).rejects.toThrow('BUDDY_FOLDER_NOT_OWN')
     await removeBuddyHome(linked)
     expect(existsSync(join(elsewhere, 'Web'))).toBe(true)
@@ -191,7 +202,7 @@ describe('a Buddy\'s copy of a project follows its default branch', { timeout: 3
   const copy = (home: string) => join(home, 'projects', 'Web')
   const copies = (home: string) => readFileSync(join(home, BUDDY_COPIES_FILE), 'utf8')
 
-  // Window of Tim, #3815: git reports a folder's real, long name, and the temporary folder there is C:\\Users\\HARNES~1\\…, so a
+  // Window of Tim, #3815: git reports a folder's real, long name, and the temporary folder there is C:\Users\HARNES~1\…, so a
   // check that compared the two as written found every copy in another repository and moved none. A path in another letter
   // case is the same mismatch on a case-insensitive Mac.
   const caseInsensitive = (() => { const r = mkdtempSync(join(tmpdir(), 'case-')); try { return existsSync(r.toUpperCase()) } finally { rmSync(r, { recursive: true, force: true }) } })()
@@ -319,7 +330,7 @@ describe('a Buddy\'s copy of a project follows its default branch', { timeout: 3
   })
 
   // Task #2832: a Buddy works in its copies as its owner would, so a move leaves the files it wrote as git writes them.
-  it('leaves the files a move wrote writable, as git writes them, and never touches a link\'s target', async () => {
+  it.runIf(canLinkFiles)('leaves the files a move wrote writable, as git writes them, and never touches a link\'s target', async () => {
     const r = root(), p = project(r), target = join(r, 'outside')
     writeFileSync(target, 'x', { mode: 0o644 })
     await prepareBuddyHome(p.home, p.web)
@@ -342,7 +353,7 @@ describe('a Buddy\'s copy of a project follows its default branch', { timeout: 3
     expect(head(copy(p.home))).toBe(head(p.teammate))
   })
 
-  it('never changes a file outside through a folder a commit turned into a link (review of #2524)', async () => {
+  it.runIf(canLinkFiles)('never changes a file outside through a folder a commit turned into a link (review of #2524)', async () => {
     const r = root(), p = project(r), outside = join(r, 'outside')
     mkdirSync(outside)
     writeFileSync(join(outside, 'b.txt'), 'theirs', { mode: 0o644 })
@@ -411,7 +422,7 @@ describe('a Buddy\'s copy of a project follows its default branch', { timeout: 3
     expect(refreshBuddyHome(p.home)).toBe(refreshBuddyHome(p.home))
     await refreshBuddyHome(p.home)
     const linked = join(r, 'linked')
-    symlinkSync(p.home, linked)
+    linkFolder(p.home, linked)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     await expect(refreshBuddyHome(linked)).resolves.toBeUndefined()
     expect(warn).toHaveBeenCalledTimes(1)

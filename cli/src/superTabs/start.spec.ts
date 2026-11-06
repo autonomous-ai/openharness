@@ -1,7 +1,7 @@
 import { AGENT_FOLDER_MARK, agentFolderFor } from './agentFolder.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { describe, expect, it, vi } from 'vitest'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
@@ -131,7 +131,10 @@ describe('Swarm permission mode', () => {
       expect(result).toMatchObject({ ok: true })
       const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
       expect(payload).toMatchObject({ permissionMode: 'full', bypassPermission: true, swarmRole: 'dev' })
-      const argv = buildEngineCommandArgv(engine, { permissionMode: String(payload.permissionMode) })
+      // On Windows a launch first verifies the flags the engine's startup takes (lib/windows/engineStart.ts); given here as a
+      // verified launch gives them, so this reads the permission flags alone (Window of Tim, #3815).
+      const argv = buildEngineCommandArgv(engine, { permissionMode: String(payload.permissionMode),
+        ...(process.platform === 'win32' ? { native: { startupArgs: [] } as never } : {}) })
       expect(argv).toContain(engine === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox')
     }
   })
@@ -159,7 +162,7 @@ describe('Swarm permission mode', () => {
       expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
       const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
       expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: true })
-      expect(String(payload.codexHome)).toContain(`/${PM_HOMES}/`)
+      expect(String(payload.codexHome)).toContain(`${sep}${PM_HOMES}${sep}`)
       rmSync(dirname(String(payload.codexHome)), { recursive: true, force: true })
     } finally { teamDaemon.value = false }
   })
