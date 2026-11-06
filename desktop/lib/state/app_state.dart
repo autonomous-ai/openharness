@@ -198,10 +198,24 @@ class RestartAgentResult {
   final bool resumed;
   final bool retryable;
 
+  /// The daemon restarted without the requested launch flags and said nothing of them: it is older
+  /// than the field. Never set by a status check, which does not echo them.
+  final bool launchArgsIgnored;
+
+  /// The daemon refused the requested launch flags (`INVALID_LAUNCH_ARGS`); [error] is its detail.
+  final bool launchArgsRefused;
+
+  /// The daemon answered but the engine did not come back (`unconfirmed`, `RESTART_FAILED` or
+  /// `RESUME_UNCONFIRMED`). With launch flags in the request, the likeliest cause is the flags.
+  final bool engineNotStarted;
+
   const RestartAgentResult({
     this.error,
     this.resumed = true,
     this.retryable = true,
+    this.launchArgsIgnored = false,
+    this.launchArgsRefused = false,
+    this.engineNotStarted = false,
   });
 }
 
@@ -18081,9 +18095,16 @@ class AppNotifier extends ChangeNotifier {
         (!beforeSend || current.sessionId == agent.sessionId);
   }
 
-  AgentRestartAttempt restartAttempt(String machineId, String agentId) {
+  /// [fresh] starts a new intent with its own receipt, even while an earlier attempt is pending or
+  /// awaiting confirmation; the earlier one keeps running on its own object.
+  AgentRestartAttempt restartAttempt(
+    String machineId,
+    String agentId, {
+    bool fresh = false,
+  }) {
     final previous = _agentRestarts[(machineId, agentId)];
-    if (previous != null &&
+    if (!fresh &&
+        previous != null &&
         _restartCurrent(
           previous,
           beforeSend: !previous.busy && !previous.awaitingConfirmation,
@@ -18210,6 +18231,7 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String agentId, {
     AgentRestartAttempt? attempt,
+    String? launchArgs,
   }) {
     final operation = attempt ?? restartAttempt(machineId, agentId);
     if (operation.result case final result? when result.error == null) {
@@ -18217,7 +18239,7 @@ class AppNotifier extends ChangeNotifier {
     }
     if (operation.pending case final pending?) return pending;
     late final Future<RestartAgentResult> request;
-    request = _runAgentRestart(machineId, agentId, operation)
+    request = _runAgentRestart(machineId, agentId, operation, launchArgs)
         .then((result) {
           operation.result = result;
           return result;
@@ -18234,6 +18256,7 @@ class AppNotifier extends ChangeNotifier {
     String machineId,
     String agentId,
     AgentRestartAttempt attempt,
+    String? launchArgs,
   ) async {
     final machine = attempt._machine;
     if (machine == null) {
@@ -18313,6 +18336,7 @@ class AppNotifier extends ChangeNotifier {
         ProductFlow.resumeRecovery,
       );
     }
+    final sendsLaunchArgs = launchArgs != null && !checking;
     RestartAgentResult refused(String code, Object? detail) {
       attempt._awaitingConfirmation = false;
       if (resuming && code == 'AGENT_BUSY') {
@@ -18328,6 +18352,7 @@ class AppNotifier extends ChangeNotifier {
       _measurementResumes.remove(measurementKey)?.call(ProductOutcome.failed);
       return RestartAgentResult(
         error: _restartFailure(code, detail, resuming: resuming),
+        launchArgsRefused: code == 'INVALID_LAUNCH_ARGS',
       );
     }
 
@@ -18335,6 +18360,10 @@ class AppNotifier extends ChangeNotifier {
       error: resuming
           ? 'Still waiting for the Open response. Select the harness again to check status.'
           : 'The restart is not confirmed yet. Check status, or close this prompt to inspect the terminal before restarting again.',
+    );
+    final notStarted = RestartAgentResult(
+      error: unknown.error,
+      engineNotStarted: true,
     );
     Map<String, dynamic> result;
     try {
@@ -18344,7 +18373,11 @@ class AppNotifier extends ChangeNotifier {
             : resuming
             ? 'agent_resume'
             : 'agent_restart',
-        payload: {'creationId': attempt._id, if (!checking) 'agentId': agentId},
+        payload: {
+          'creationId': attempt._id,
+          if (!checking) 'agentId': agentId,
+          if (sendsLaunchArgs) 'launchArgs': launchArgs,
+        },
       );
       if (checking &&
           resuming &&
@@ -18359,7 +18392,11 @@ class AppNotifier extends ChangeNotifier {
         checking = false;
         result = await _conn(machineId).request(
           'agent_resume',
-          payload: {'creationId': attempt._id, 'agentId': agentId},
+          payload: {
+            'creationId': attempt._id,
+            'agentId': agentId,
+            'launchArgs': ?launchArgs,
+          },
         );
       }
     } on WsRequestFailure catch (failure) {
@@ -18388,12 +18425,10 @@ class AppNotifier extends ChangeNotifier {
       return unknown;
     }
     if (result['error'] case final String code) {
-      if (checking ||
-          [
-            'INTERNAL',
-            'CREATION_STORAGE_FAILED',
-            'RESTART_FAILED',
-          ].contains(code)) {
+      if (code == 'RESTART_FAILED' || code == 'RESUME_UNCONFIRMED') {
+        return notStarted;
+      }
+      if (checking || ['INTERNAL', 'CREATION_STORAGE_FAILED'].contains(code)) {
         return unknown;
       }
       return refused(code, result['detail']);
@@ -18406,8 +18441,9 @@ class AppNotifier extends ChangeNotifier {
               : 'The machine is still restarting the harness. Check again in a moment.',
         );
       case 'missing':
-      case 'unconfirmed':
         return unknown;
+      case 'unconfirmed':
+        return notStarted;
       case 'unavailable':
         attempt._awaitingConfirmation = false;
         return const RestartAgentResult(
@@ -18479,6 +18515,8 @@ class AppNotifier extends ChangeNotifier {
     }
     return RestartAgentResult(
       resumed: result['resumed'] is bool ? result['resumed'] as bool : true,
+      // Only a fresh restart is echoed; a status check never carries the words.
+      launchArgsIgnored: sendsLaunchArgs && result['launchArgs'] == null,
     );
   }
 
