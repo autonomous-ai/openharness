@@ -5612,7 +5612,7 @@ describe('a closed tab\'s Personal project', () => {
   // Security review 2 (Phonecheck2): a project whose instructions or rules the person saved is kept, also when the save lands
   // while the tab closes.
   const instructions = { type: 'instructions.save', baseRevision: 1, text: '# Mine\n\nKeep this.', summary: 'My own' }
-  const rulesSave = { type: 'rules.set', baseRevision: 0, rules: SEED_RULES, summary: 'My own rules' }
+  const rulesSave = { type: 'rules.set', baseRevision: 0, rules: { ...SEED_RULES, mergeTrain: { enabled: true, everyMinutes: 10 } }, summary: 'My own rules' }
   const kept = async (tab: string, projectId: string) => {
     expect((await store.read(person, tab)).state.projects!.find(p => p.id === projectId)).toMatchObject({ archived: true })
     expect(await db.superTabInstructionsRevision.count({ where: { tabId: tab, projectId } })).toBeGreaterThan(0)
