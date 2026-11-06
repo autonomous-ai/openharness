@@ -1138,7 +1138,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
    *  refuses the main account, and the store keeps that mark after this command is refused. Unknown refuses it unmarked. */
   const pushedRefusal = (group: Conversation, worker: Agent) => {
     // A release task tests main at a named commit, which every member may read: no push to read (task #3604).
-    if (isReleaseWork(state, group)) return
+    if (isReleaseWork(state, group) && !context.pushOriginPulls?.length) return
     marking(group, () => applyPushOrigin(state, group, context.pushOrigin, context.pushOriginPulls, context.pushOriginTask))
     if (onTeamAccount(state, worker) || ledProject(state, worker.id)?.id === groupProject(state, group).id) return
     if (context.pushOrigin === 'unknown') failPushUnknown(unknownPushReason(context.repositoryReach))
@@ -2938,7 +2938,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const written = teamWrittenTask(state, startGroup)
       // Named the Team account's entry itself, which its owner's choice keeps teammates' work off (task #3060). A branch GitHub
       // cannot place runs only in a Team account (below), so it counts as Team-written here (security review 2 of #3081).
-      const origin = isReleaseWork(state, startGroup) ? undefined : context.pushOrigin
+      const origin = isReleaseWork(state, startGroup) && !context.pushOriginPulls?.length ? undefined : context.pushOrigin
       const ownEntry = ownAccountTeamEntry(state, named.machineId, home, written || origin === 'unknown')
       if (ownEntry) failOwnAccountTeamEntry(ownEntry)
       const moved = teamStartRequest(state, named, home, context.teamAccountsIdle, context.teamMachines, written, taskAccess(startGroup))

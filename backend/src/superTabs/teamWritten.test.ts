@@ -529,8 +529,7 @@ describe('a release task the Swarm opened', () => {
     const main = f.member('main-tester', 'mac')
     expect(refusal(() => f.run({ type: 'work.assign', conversationId: own, agentId: main }, owner, { pushOrigin: 'team', pushOriginPulls: [pull] }))).toBe(TEAM_WRITTEN_WORK)
     expect(refusal(() => f.run({ type: 'work.assign', conversationId: own, agentId: main }, owner, { pushOrigin: 'unknown' }))).toBe(TEAM_WRITTEN_WORK)
-    const step = () => f.state.conversations.find(c => c.id === own)!
-    expect(step().teamWritten).toBe(true)
+    // (A refused command rolls its mark back; the store keeps it with work.teamWritten on the server's own read.)
     expect(f.state.conversations.find(c => c.id === f.task)!.teamWritten).toBeUndefined()
     // A Team agent takes it, and a clean read of that pull request lets the main account take a step that is not marked.
     const clean = f.group({ reviewOf: f.task, step: 'Check that branch', brief: `Check out ${pull} too.` })

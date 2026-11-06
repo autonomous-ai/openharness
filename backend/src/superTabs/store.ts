@@ -1579,8 +1579,9 @@ export class SuperTabStore {
         const { state } = await this.load(tx, user, tabId, namedFor(command as Command))
         const group = state.conversations.find(c => c.id === asked.conversationId)
         if (!group) return null
-        // A release task tests main at a named commit: no push to read (task #3604, teamWritten.ts isReleaseWork).
-        if (isReleaseWork(state, group)) return null
+        // A release task, or a step of it naming no code, tests main at a named commit: no push to read, unless a result names a pull
+        // request (task #3604, teamWritten.ts isReleaseWork).
+        if (isReleaseWork(state, group) && !(typeof asked.result === 'string' && pullRequestsIn(asked.result, groupProject(state, group).repository?.repositoryUrl ?? null).length)) return null
         const task = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
         const repositoryUrl = groupProject(state, group).repository?.repositoryUrl ?? null
         // Only the code each is in: links posted in a task or a step mark nothing (task #3554, model.ts codePullRequests).
