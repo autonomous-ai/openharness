@@ -288,6 +288,9 @@ class _SuperTabViewState extends State<SuperTabView>
   /// beside that task's title (task #3117).
   ({String taskId, String error})? _priorityRefusal;
 
+  /// The server's refusal of the last pause or resume, said under the card chat's header (#3820).
+  ({String taskId, String error})? _pauseRefusal;
+
   /// The Swarm's page holding the main pane, if one does: Decisions,
   /// Mentions or Threads (anh Dee, 11-05, task #2996).
   SwarmPage? _page;
@@ -3119,7 +3122,8 @@ class _SuperTabViewState extends State<SuperTabView>
               // would be cut ([AppMenuItem.detail]).
               detail: priority.meaning,
               selected: priority == current,
-              onPressed: editable
+              // On the Board, by role (#3820); the server enforces it.
+              onPressed: editable && c.mayPrioritize(task, priority)
                   ? () => unawaited(_setPriority(task, priority))
                   : null,
             ),
@@ -3592,6 +3596,20 @@ class _SuperTabViewState extends State<SuperTabView>
     final group = c.selected;
     final project = c.snapshot?.projectById(_boardProjectId ?? '');
     final onBuddy = group?.isBuddyChat == true;
+    // A card's task in a project on the Board: its priority and pause, by role (#3820).
+    final steered =
+        group != null &&
+            !onBuddy &&
+            project != null &&
+            project.boardMode &&
+            superTabCarriesPriority(group) &&
+            group.id != project.leadConversationId
+        ? group
+        : null;
+    final refusal = [
+      _priorityRefusal,
+      _pauseRefusal,
+    ].where((r) => r != null && r.taskId == steered?.id).firstOrNull;
     return Column(
       key: const ValueKey('super-board-chat'),
       children: [
@@ -3627,8 +3645,65 @@ class _SuperTabViewState extends State<SuperTabView>
             ],
           ),
         ),
+        // Under the header, which the narrow pane has no room left in.
+        if (steered != null)
+          Padding(
+            key: const ValueKey('super-board-chat-steer'),
+            padding: const EdgeInsetsDirectional.only(
+              start: grid.AppDesktop.controlGap,
+              end: grid.AppDesktop.controlGap,
+              bottom: grid.AppDesktop.listRowGap,
+            ),
+            child: Row(
+              children: [
+                _priorityMenu(steered),
+                if (c.maySteer(project!)) _pauseButton(steered),
+              ],
+            ),
+          ),
+        if (refusal != null)
+          Padding(
+            padding: const EdgeInsetsDirectional.only(
+              start: grid.AppDesktop.controlGap,
+              end: grid.AppDesktop.controlGap,
+              bottom: grid.AppDesktop.listRowGap,
+            ),
+            child: Text(
+              refusal.error,
+              key: const ValueKey('super-board-chat-refusal'),
+              style: DesktopChrome.metadata(),
+            ),
+          ),
         Expanded(child: chat),
       ],
+    );
+  }
+
+  /// Pause, or Resume while paused, for a card's task (#3820); a refusal is said under the header.
+  Widget _pauseButton(SuperTabConversation task) {
+    final paused = task.paused != null;
+    final enabled = !c.saving && !c.hasPendingAction;
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(
+        start: grid.AppDesktop.listRowGap,
+      ),
+      child: TextButton.icon(
+        key: ValueKey(paused ? 'super-task-resume' : 'super-task-pause'),
+        onPressed: enabled ? () => unawaited(_setPaused(task, !paused)) : null,
+        icon: Icon(paused ? AppIcons.play : AppIcons.pause, size: 16),
+        label: Text(paused ? 'Resume' : 'Pause'),
+      ),
+    );
+  }
+
+  Future<void> _setPaused(SuperTabConversation task, bool paused) async {
+    setState(() => _pauseRefusal = null);
+    final refused = await c.setTaskPaused(task.id, paused: paused);
+    if (!mounted) return;
+    setState(
+      () => _pauseRefusal = refused == null
+          ? null
+          : (taskId: task.id, error: refused),
     );
   }
 

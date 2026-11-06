@@ -3301,6 +3301,32 @@ class SuperTabController extends ChangeNotifier {
         : operationError ?? 'Another change is on its way. Try again.';
   }
 
+  /// Pauses [taskId], or resumes it (#3819, a project on the Board): the server lets its project's owner, the Swarm's
+  /// owner and its decider do it. Null when done, else the server's sentence.
+  Future<String?> setTaskPaused(String taskId, {required bool paused}) async {
+    final done = await command({
+      'type': paused ? 'work.pause' : 'work.resume',
+      'conversationId': taskId,
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
+  /// Whether the reader may set P0 and pause or resume any task of [project] (spec "Who may do what on the Board").
+  bool maySteer(SuperTabProject project) =>
+      project.canSteer(accountId, swarmOwner: isOwner);
+
+  /// Whether the reader may give [task] [priority]: anyone who may write, in a project not on the Board; on the
+  /// Board, P1 to P3 on their own card, and anything when they steer ([maySteer]). The server decides (#3819).
+  bool mayPrioritize(SuperTabConversation task, SuperTabTaskPriority priority) {
+    if (!canWrite) return false;
+    final project = snapshot?.projectById(task.projectId);
+    if (project == null || !project.boardMode) return true;
+    if (maySteer(project)) return true;
+    return task.requesterId == accountId && priority != SuperTabTaskPriority.p0;
+  }
+
   /// Moves the reader's one Buddy onto [gridModel], a model shared in the
   /// Swarm, or back to their own subscription when null (backend
   /// buddyModel.ts). Its machine carries it out; the Buddy's `modelRequest`

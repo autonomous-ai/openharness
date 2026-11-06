@@ -176,8 +176,8 @@ void main() {
     await tester.tap(_key('super-task-pause'));
     await _settle(tester);
     expect(
-      find.text('Only the project owner or Dee can pause this task.'),
-      findsOneWidget,
+      tester.widget<Text>(_key('super-board-chat-refusal')).data,
+      'Only the project owner or Dee can pause this task.',
     );
     expect(_key('super-task-pause'), findsOneWidget);
     await end(tester, c);
