@@ -239,13 +239,18 @@ export function removedItems(before: string, after: string): string[] {
 /** The lines (never headings, which are structure) of [before] that [after] no longer has word for word, in document order: any
  *  line, named or not (task #3679: the move onto the new base lost the lines no "(Name, date)" guarded, because only those were checked). */
 export function removedLines(before: string, after: string): string[] {
+  return removedLineItems(before, after).map(line => line.text)
+}
+
+/** removedLines, each with the section path it sat under in [before]. */
+export function removedLineItems(before: string, after: string): Array<{ text: string; path: string }> {
   const left = new Map<string, number>()
   for (const item of items(after)) if (!item.heading) left.set(item.key, (left.get(item.key) ?? 0) + 1)
   return items(before).flatMap(item => {
     if (item.heading) return []
     const n = left.get(item.key) ?? 0
     if (n) { left.set(item.key, n - 1); return [] }
-    return [item.text]
+    return [{ text: item.text, path: item.path }]
   })
 }
 
