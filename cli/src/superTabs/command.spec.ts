@@ -344,8 +344,9 @@ it('attaches to a proposal only files inside the Buddy\'s own folder, uploaded t
     const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
       if (type === 'agents_list') return { agents: frames }
       calls.push(payload)
-      if (payload.action === 'status') return { ok: true, value: { state: { projects: [{ id: 'p', leadConversationId: 'lead' }],
-        conversations: [{ id: 'lead', projectId: 'p' }, { id: 'chat', projectId: 'p', kind: 'buddy' }] } } }
+      // A Buddy's status is a task summary with no chats (service.ts): the chats its proposal needs come from its own read (task #3872).
+      if (payload.action === 'status') return { ok: true, value: { lastChangedAt: 1, summary: { tasks: [] } } }
+      if (payload.action === 'proposalContext') return { ok: true, value: { chat: { kind: 'buddy', projectId: 'p' }, session: null, projects: [{ id: 'p', leadConversationId: 'lead' }] } }
       if (payload.step === 'sent') return { ok: true, value: { agentId: 'buddy', attachmentIds: null } }
       return { ok: true, value: { revision: 9, result: { messageId: 'm' } } }
     })
@@ -422,8 +423,10 @@ it('sends a one Buddy\'s proposal file only from the named project\'s folder, an
     const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
       if (type === 'agents_list') return { agents: frames }
       if (payload.step === 'sent') { seen.push(String(payload.conversationId)); return { ok: true, value: { agentId: 'buddy', attachmentIds: null } } }
-      if (payload.action === 'status') return { ok: true, value: { state: { agents: [agent], conversations: [{ id: 'chat', kind: 'swarm-buddy' }],
-        projects: [{ id: 'p-web', leadConversationId: 'web-chat' }, { id: 'p-secret', leadConversationId: 'secret-chat' }, { id: 'p-away', leadConversationId: 'away-chat' }] } } }
+      // A Buddy's status is a task summary with no chats (service.ts): the chats its proposal needs come from its own read (task #3872).
+      if (payload.action === 'status') return { ok: true, value: { lastChangedAt: 1, summary: { tasks: [] } } }
+      if (payload.action === 'proposalContext') return { ok: true, value: { chat: { kind: 'swarm-buddy' }, session: (agent.buddySession as { projectId?: string } | undefined)?.projectId ?? null,
+        projects: [{ id: 'p-web', leadConversationId: 'web-chat' }, { id: 'p-secret', leadConversationId: 'secret-chat' }, { id: 'p-away', leadConversationId: 'away-chat' }] } }
       return { ok: true, value: { revision: 9, result: { messageId: 'm' } } }
     })
     const sent: string[] = []

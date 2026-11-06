@@ -1666,6 +1666,24 @@ describe('a Buddy\'s status', () => {
     expect(t.call.mock.calls.slice(calls).filter(([, path]) => String(path).includes('/messages?'))).toEqual([])
   })
 
+  // Task #3872 (Huy, 11-06): every Buddy proposal with a file was refused before upload, as the upload read chats from a status that,
+  // for a Buddy, holds only this summary. It asks for what it needs, and gets only that.
+  it('answers a proposal\'s upload the chat it goes from, its own project session, and each project\'s chat, and nothing else of the Swarm', async () => {
+    const t = buddySetup()
+    const asked = async (conversationId: string) => object(object(await t.ask({ action: 'proposalContext', tabId: 'tab', agentId: t.agentId, conversationId }, owner)).value)
+    expect(await asked('app-chat')).toEqual({ chat: { kind: undefined, projectId: 'app' }, session: null, projects: [{ id: 'app', leadConversationId: 'app-chat' }] })
+    // A chat that is not in this Swarm is none; a Buddy thread session names its project.
+    expect(object(await asked('nowhere')).chat).toBeNull()
+    Object.assign(t.agent, { buddySession: { thread: 't', projectId: 'app' } })
+    expect((await asked('app-chat')).session).toBe('app')
+    expect(JSON.stringify(await asked('offline'))).not.toContain('The whole brief')
+  })
+
+  it('answers a proposal\'s upload context to a Buddy alone', async () => {
+    const t = setup()
+    expect(await t.ask({ action: 'proposalContext', tabId: 'tab', agentId: t.agentId, conversationId: 'chat' }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
+  })
+
   it('leaves every other agent\'s status as it was', async () => {
     const t = setup()
     const value = object(object(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).value)
