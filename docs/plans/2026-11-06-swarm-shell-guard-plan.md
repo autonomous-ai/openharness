@@ -126,3 +126,36 @@ records, in every home it prepares.
   `/<session-flags>/config.toml:pre_tool_use:0:0` with the guard's hash, beside Harness's own records.
 - [ ] Implement; run the spec, `src/engines/codex/hooksReview.spec.ts` and `src/engines/hookInstallers.golden.spec.ts`.
   Commit test, then code.
+
+### Task 5: Run the guard from the shipped CLI (takeover verification)
+
+**Files:** `cli/src/lib/agentShellGuard.ts`, `cli/src/superTabs/shellGuardHook.ts`, `cli/src/entry.ts`,
+`cli/src/architecture.spec.ts`, `cli/src/lib/swarmEngineArgs.spec.ts`,
+`cli/src/superTabs/shellGuardBundle.spec.ts`, hook installer golden fixture when its trusted command changes.
+
+**Interfaces:** Keep `hookAnswer` and the engine settings shapes. `shellGuardArgv` names the CLI entry plus
+`__swarm-shell-guard`; the entry loads only the guard for that command. The source checkout uses its entry and tsx
+loader, while a bundled/lean core names the CLI script it already uses for daemon commands. This replaces the
+per-file hook path: a release ships cli.js and notify.mjs, without superTabs/shellGuardHook.js.
+
+- [ ] Commit and run a failing release-bundle test: build the real package in a private folder, obtain the launch
+  command from the compiled helper as the core does, and send Claude/Codex hook JSON to it. It must deny each rule
+  with JSON, allow an ordinary command with no output, and never initialize the daemon or touch real account data.
+- [ ] Route the internal command in the lightweight bundle entry; keep the Swarm import dynamic and name this
+  command-only door in the architecture test. Remove the standalone-script autorun from the imported hook module.
+- [ ] Verify compiled, source and Windows argv quoting; update only the intentional trust-record fixture change.
+- [ ] Run the new test, affected launch/hook tests, architecture test and typecheck. Record red/green evidence and
+  measured hook latency before Ready.
+
+### Task 6: Close direct command gaps found during takeover
+
+**Files:** `cli/src/superTabs/shellGuard.ts`, `cli/src/superTabs/shellGuard.spec.ts`,
+`cli/src/superTabs/shellGuardHook.ts`, `cli/src/superTabs/shellGuardHook.spec.ts`.
+
+**Interfaces:** Existing `shellRefusal`, `fileRefusal` and `hookAnswer`; no broader sandbox promise.
+
+- [ ] Add failing cases for package-manager flags with case-sensitive meanings (`pacman -S` versus `-Q`), fixed
+  temporary paths reached by a relative path/cwd, and command-specific Codex workdir overriding session cwd.
+- [ ] Correct only those interpretations, preserving ordinary commands and quoted/heredoc text. Verify a real
+  disposable worktree held by a child process is denied before any removal runs and allowed once that child exits.
+- [ ] Commit each failing test before its fix; run affected rules/hook specs and record the results.
