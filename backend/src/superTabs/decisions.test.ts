@@ -60,7 +60,7 @@ describe('asking a person for decisions', () => {
     // Someone who cannot read the conversation is named by username, never email (task #2954).
     const group = s.state.conversations.find(c => c.id === s.group)!
     const narrowed = { ...group, audience: { people: [{ id: 'owner', generation: s.state.people[0]!.generation }] } }
-    expect(() => askDecisions(s.state, narrowed, 'peer', [question('Ship how?')], { operationId: 'op', askerAgentId: s.lead, assignmentId: null }))
+    expect(() => askDecisions(s.state, narrowed, 'peer', [question('Ship how?')], { now: 1000, operationId: 'op', askerAgentId: s.lead, assignmentId: null }))
       .toThrow(/^peer cannot read this conversation\.$/)
     expect(commandSchema.safeParse({ type: 'decision.ask', conversationId: s.group, personId: 'peer',
       questions: [{ ...question('One option only'), options: ['Yes'] }] }).success).toBe(false)

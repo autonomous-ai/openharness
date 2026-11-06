@@ -41,7 +41,7 @@ async function swarm() {
   /** Asks peer one question, then dates it `age` ago. */
   const ask = async (age: number, defaultAt?: string) => {
     const before = new Set((await db.superTabDecision.findMany({ where: { tabId: tab }, select: { id: true } })).map(d => d.id))
-    await execute({ type: 'decision.ask', conversationId: 'lead', personId: peer.sub, questions: [{ question: `Which week ${randomUUID()}?`, options: ['This week', 'Next week'], recommended: 1, unblocks: 'The plan', ...defaultAt ? { defaultAt } : {} }] }, owner, lead)
+    await new SuperTabStore(db, () => NOW - age).execute(owner, tab, { operationId: randomUUID(), command: { type: 'decision.ask', conversationId: 'lead', personId: peer.sub, questions: [{ question: `Which week ${randomUUID()}?`, options: ['This week', 'Next week'], recommended: 1, unblocks: 'The plan', ...defaultAt ? { defaultAt } : {} }] } }, lead)
     const row = (await db.superTabDecision.findMany({ where: { tabId: tab } })).find(d => !before.has(d.id))!
     await db.superTabDecision.update({ where: { id: row.id }, data: { createdAt: new Date(NOW - age) } })
     return row.id

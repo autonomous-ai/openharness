@@ -31,6 +31,14 @@ export const decisionChoices = z.object({ options: z.array(line(200)).min(2).max
 export const decisionQuestion = decisionChoices.extend({ question: line(1000) }).strict()
 type Question = z.infer<typeof decisionQuestion>
 
+/** Give a person time to see the question before its recommendation can apply automatically. */
+export const MIN_DEFAULT_DELAY_MS = 15 * 60_000
+export function checkDecisionDeadline(question: { defaultAt?: string }, now: number): void {
+  if (question.defaultAt && Date.parse(question.defaultAt) < now + MIN_DEFAULT_DELAY_MS) {
+    fail('INVALID_DECISION', 'Set the default time at least 15 minutes ahead so the person can answer.', 400)
+  }
+}
+
 /** The kind of a decision the nightly routing reflection asks (costs/reflection.ts): about the project's routing, so its
  *  owner's Buddy never reads it, and an approved one stays until routing applies it (review of #2276). */
 export const REFLECTION_DECISION = 'routing-reflection'
@@ -62,11 +70,12 @@ export interface DecisionAnswer { id: string; choice: number | null; note: strin
 
 /** Questions for one person in one conversation they read, from `asker`. One batch: one id ties them, no ping per question. */
 export function askDecisions(state: SuperTabState, group: Conversation, personId: string, questions: Question[],
-  from: { operationId: string; askerAgentId: string; assignmentId: string | null; kind?: typeof REFLECTION_DECISION }): DecisionDraft[] {
+  from: { now: number; operationId: string; askerAgentId: string; assignmentId: string | null; kind?: typeof REFLECTION_DECISION }): DecisionDraft[] {
   const asked = state.people.find(p => p.id === personId) ?? fail('INVALID_PERSON', 'Ask a person in this Swarm.', 400)
   if (!canReadGroup(state, { kind: 'person', userId: asked.id, email: asked.email }, group)) {
     fail('INVALID_PERSON', `${usernameOf(state, asked.id)} cannot read this conversation.`, 400)
   }
+  for (const q of questions) checkDecisionDeadline(q, from.now)
   for (const q of questions) if (q.recommended >= q.options.length) fail('INVALID_DECISION', 'A question must recommend one of its options.', 400)
   // It would wait for nobody: none waits where the work is over (workOver).
   if (workOver(state, group)) fail('WORK_FINISHED', 'This work is finished, so a decision asked here would not wait. Ask in the project chat, or reopen the task first.', 400)

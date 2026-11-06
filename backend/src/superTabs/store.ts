@@ -1476,18 +1476,27 @@ export class SuperTabStore {
    * the same access-checked transaction and conditional write as a person's answer. Explicit deadlines have no age cutoff;
    * legacy retries keep their 8-day reach. Failed rows remain waiting and the next minute retries them. */
   async leaveOverdueDecisions(now: number, limit = OVERDUE_PER_PASS): Promise<{ answered: number; skipped: number; failed: number }> {
-    const due = await dueDefaultDecisions(this.db, now, limit)
-    const legacy = due.length < limit ? await overdueDecisions(this.db, now, limit - due.length) : []
+    // Reserve legacy capacity even when the explicit queue is full; let explicit work use any unused share.
+    const legacyWaiting = await overdueDecisions(this.db, now, limit)
+    const reserved = Math.min(legacyWaiting.length, Math.max(1, Math.floor(limit / 2)))
+    const due = reserved < limit ? await dueDefaultDecisions(this.db, now, limit - reserved) : []
+    const legacy = legacyWaiting.slice(0, limit - due.length)
     const rows = [...due.map(row => ({ ...row, defaulted: true })), ...legacy.map(row => ({ ...row, defaulted: false }))]
     const result = { answered: 0, skipped: 0, failed: 0 }
     const tabs = new Map<string, AuthUser['autonomousEnv'] | null>()
     const codes = new Set<string>()
+    const withdrawDefault = async (row: typeof rows[number]) => {
+      if (!row.defaulted) return
+      // A person can answer meanwhile; never overwrite that answer. Closed rows leave the next indexed due range.
+      await this.db.superTabDecision.updateMany({ where: { id: row.id, tabId: row.tabId,
+        OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] }, data: { answeredAt: new Date(now), withdrawn: true } })
+    }
     for (const row of rows) {
       try {
         if (!tabs.has(row.tabId)) tabs.set(row.tabId, (await this.db.superTab.findUnique({ where: { id: row.tabId }, select: { autonomousEnv: true } }))?.autonomousEnv as AuthUser['autonomousEnv'] | undefined ?? null)
         const autonomousEnv = tabs.get(row.tabId)
         const person = await this.db.user.findUnique({ where: { id: row.personId }, select: { email: true } })
-        if (!autonomousEnv || !person) { result.skipped++; continue }
+        if (!autonomousEnv || !person) { await withdrawDefault(row); result.skipped++; continue }
         const user: AuthUser = { sub: row.personId, email: person.email, autonomousEnv, role: 'user' }
         await this.executeOnce(user, row.tabId, { operationId: `${row.defaulted ? 'default' : 'overdue'}-decision-${row.id}`, command: { type: 'decision.answer', decisionId: row.id, delegate: true } },
           undefined, undefined, false, row.defaulted ? { defaulted: true } : { overdue: true })
@@ -1495,7 +1504,10 @@ export class SuperTabStore {
       } catch (error) {
         const code = error instanceof SuperTabError ? error.code : 'unknown'
         // Answered meanwhile, a recommendation out of range, or the person or Swarm gone: nothing for the sweep to do.
-        if (code === 'DECISION_ANSWERED' || code === 'INVALID_DECISION' || code === 'NOT_FOUND' || code === 'WORKSPACE_ACCESS_REVOKED') { result.skipped++; continue }
+        if (code === 'DECISION_ANSWERED' || code === 'INVALID_DECISION' || code === 'NOT_FOUND' || code === 'WORKSPACE_ACCESS_REVOKED') {
+          try { await withdrawDefault(row) } catch { result.failed++; codes.add('DEFAULT_WITHDRAW_FAILED'); continue }
+          result.skipped++; continue
+        }
         result.failed++
         codes.add(code)
       }
@@ -4905,7 +4917,7 @@ export class SuperTabStore {
       if (!fresh.length) return 'empty'
       await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
       await writeDecisions(tx, tabId, askDecisions(state, chat, project.ownerId, fresh.map(proposalQuestion),
-        { operationId: id, askerAgentId: lead.id, assignmentId: null, kind: REFLECTION_DECISION }), now)
+        { now, operationId: id, askerAgentId: lead.id, assignmentId: null, kind: REFLECTION_DECISION }), now)
       return 'posted'
     })
   }

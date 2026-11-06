@@ -32,7 +32,7 @@ import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
 import { CREW_NEED_KIND, crewNeedPlace, crewNeedText, routedLine, routesToPm, type CrewNeed } from './crewNeeds.js'
 import { checkReason, heldReason, missingReason } from './heldReason.js'
-import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
+import { answerDecision, askDecisions, checkDecisionDeadline, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
 import { BACK_WITH_YOU, pickUp, reopenHanded } from './handed.js'
 import { changesRequested, engineerAnswered, leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, revisionReady, toldEngineer, waitingForReview } from './liveness.js'
@@ -2611,7 +2611,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'decision.ask': {
       const group = open(state, command.conversationId)
       const drafts = askDecisions(state, group, command.personId, command.questions,
-        { operationId, askerAgentId: checkAsker(state, actor, group), assignmentId: null })
+        { now: context.now, operationId, askerAgentId: checkAsker(state, actor, group), assignmentId: null })
       // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): another agent's questions are the PM's crew needs, one
       // each, checked as a decision would be and opened for nobody.
       const pmInstead = routesToPm(state, actor, group)
@@ -4100,13 +4100,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {
           fail('INVALID_DECISION', 'An agent asks a person for a decision only when its work needs a human, with the question as its result.', 400)
         }
+        checkDecisionDeadline(command.ask, context.now)
         // For the PM to ask: the person must be in the Swarm, as a decision's would.
         if (pmInstead) person(state, command.ask.personId)
       }
       if (command.ask && !pmInstead && command.result && actor.kind === 'agent') {
         const { personId, ...choices } = command.ask
         const drafts = askDecisions(state, group, personId, [{ question: command.result, ...choices }],
-          { operationId, askerAgentId: actor.agentId, assignmentId: assignment.id })
+          { now: context.now, operationId, askerAgentId: actor.agentId, assignmentId: assignment.id })
         // At the cap the status still counts, reaches the Lead and renews the lease; only the question waits (review of #1859).
         if (context.openDecisions == null) {
           effects.decisions = drafts
