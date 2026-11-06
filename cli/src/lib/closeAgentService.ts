@@ -23,7 +23,9 @@ export const LEAD_SWITCHING_DETAIL = 'This Product Manager is already switching 
  *  waited 30 minutes). A window closes only its view; the machine's owner still stops it with Stop Harness. */
 export const BUDDY_PROTECTED_DETAIL = 'This is a Swarm Buddy. Its person removes it from the Swarm, or Stop Harness stops it.'
 /** `changeId`: the Change agent switch this `now` close is part of, which its handoff was prepared for (superTabs/leadSwitch.ts). */
-export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; onlyIfOriginalLaunch?: boolean; expiresAt?: number; changeId?: string }
+export type AgentCloseRequest = { agentId: string; sessionId: string; createdAt: string; mode: CloseMode; onlyIfHidden?: boolean; onlyIfOriginalLaunch?: boolean; expiresAt?: number; changeId?: string
+  /** Internal idle-close authority, rechecked at physical stop boundaries. Never accepted from a client payload. */
+  buddySleep?: () => boolean }
 /** `withoutConversation`: closed while still starting, before Harness could read its conversation, so none is kept. */
 /** `keptRunning`: a close refused for a session that keeps running on purpose (a Swarm Buddy): a window closes its view and
  *  stops nothing, as it does for a Swarm pane (desktop app_state.dart `canStop`). */
@@ -99,7 +101,7 @@ function stillStarting(s: RegisteredSession, at: number): boolean {
 /** What makes two requests the same one: the agent, the mode, and whether it holds only while no tab
  *  shows the agent. A cleanup that finds the agent on screen again must not answer the person's own close. */
 function jobKey(request: AgentCloseRequest): string {
-  return JSON.stringify([request.agentId, request.mode, request.onlyIfHidden === true, request.onlyIfOriginalLaunch === true, request.expiresAt])
+  return JSON.stringify([request.agentId, request.mode, request.onlyIfHidden === true, request.onlyIfOriginalLaunch === true, request.expiresAt, request.buddySleep !== undefined])
 }
 function matches(s: RegisteredSession | undefined, request: AgentCloseRequest, at: number): s is RegisteredSession {
   if (!s || (request.expiresAt !== undefined && request.expiresAt <= at) || (request.onlyIfOriginalLaunch && s.startedBy !== 'agent') || new Date(s.registeredAt).toISOString() !== request.createdAt) return false
@@ -128,7 +130,8 @@ export interface CloseAgentServiceDeps {
   /** The `now` close naming switch [changeId] ended, [stopped] or not (superTabs/leadSwitch.ts `leadSwitchEnded`): the pass its
    *  stop was given is gone either way. */
   leadSwitchEnded?(agentId: string, changeId: string, stopped: boolean): void
-  /** Whether the agent may be a Swarm Buddy (superTabs/retention.ts `mayBeBuddy`): a close never stops it. Stop Harness does. */
+  /** Whether the agent may be a Swarm Buddy (superTabs/retention.ts `mayBeBuddy`): ordinary closes never stop it.
+   *  Only the internal idle sleep permit or Stop Harness may do so. */
   buddyProtected?(agentId: string): boolean
   /** Whether its pane shows a question the engine asks before any conversation: the folder's trust, or an MCP server the
    *  folder brings (`trust_open`). */
@@ -192,7 +195,7 @@ export class CloseAgentService {
       return Promise.resolve({ error: 'LEAD_PROTECTED', detail: LEAD_PROTECTED_DETAIL })
     }
     const buddy = this.deps.buddyProtected?.(request.agentId) === true
-    if (buddy && request.mode !== 'inspect') {
+    if (buddy && request.mode !== 'inspect' && !(request.mode === 'idle' && typeof request.buddySleep === 'function' && request.buddySleep())) {
       return Promise.resolve({ error: 'BUDDY_PROTECTED', detail: BUDDY_PROTECTED_DETAIL, keptRunning: true })
     }
     // A job answers only a request of its own kind. When any job running for the agent answered every
@@ -305,6 +308,7 @@ export class CloseAgentService {
         && s && identity(s) === target
         && (request.expiresAt === undefined || request.expiresAt > this.now())
         && (!request.onlyIfOriginalLaunch || s.startedBy === 'agent')
+        && (request.buddySleep === undefined || (request.mode === 'idle' && typeof request.buddySleep === 'function' && request.buddySleep()))
         && (!request.onlyIfHidden || this.deps.openTabs?.isHidden(s)) ? s : undefined
     }
     try {

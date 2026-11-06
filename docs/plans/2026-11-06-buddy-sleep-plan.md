@@ -95,11 +95,13 @@
 
 **Interfaces:** retain only the server's sleeping, managed main Buddies as a bounded optional list. An internal, non-serializable close permit reads that authority again at each stop boundary. The Swarm uses an idle close for these Buddies, never the ordinary forced member close or confidential purge. Window closes retain their existing protection.
 
-- [ ] Commit a regression composing real retention, Swarm member authority and the close service; watch idle sleep fail at the Buddy guard. Cover wake/corruption revocation, active work, Team/thread/model-request/stopping/unmanaged exclusions and ordinary window protection.
-- [ ] Implement the narrow permit and wiring; preserve the existing idle/checkpoint/session identity fences.
-- [ ] Run affected checks/typecheck and record red/green evidence. Native resource-release and message-wake acceptance still requires a successful owner-account workflow receipt.
+- [x] Commit a regression composing real retention, Swarm member authority and the close service; watch idle sleep fail at the Buddy guard. Cover wake/corruption revocation, active work, Team/thread/model-request/stopping/unmanaged exclusions and ordinary window protection.
+- [x] Implement the narrow permit and wiring; preserve the existing idle/checkpoint/session identity fences.
+- [x] Run affected checks/typecheck and record red/green evidence. Native resource-release and message-wake acceptance still requires a successful owner-account workflow receipt.
 
 The corrected-owner native run `42225258676` at `4da69f02f` reached launch and positive idle proof, then failed to close the sleeping Buddy (0 passed, 1 failed, 0 skipped). Host unit fakes had hidden the real close service's Buddy protection; wake was not reached.
+
+Regression `9a1dff300` failed in the real close guard (3 failed, 11 passed). With the internal idle permit, all 14 regression cases pass; the affected retention, Swarm agent and close-service files total 147 passing tests. Host and architecture files pass 459 checks. CLI TypeScript passes; the core gate passes 3,316 tests in 202 files with 100% statement/branch/function/line coverage. The new authority is an optional bounded list in the existing atomic retention file, discarded on wake, removal or old clients' rewrites; absent/corrupt/lapsed authority and Team daemons grant no sleep. No database, network or process-launch contract changes. No new idle timer, activity poll or per-session core request.
 
 - The Mac tester independently passed six focused host checks and twenty server checks at `ddd9e37c0`; no behavior fault was found. Native resource-release evidence was missing on the Team OS account.
 - Extended `cli/e2e/superTabSwarmBuddy.e2e.ts` to require the original engine PID to exit and its tmux pane to disappear, then send the person’s message through the owner request path and verify delivery in the resumed conversation. The engine conversation ID, folder and marker must survive. The fake backend models the server response; real server authorization/wake remains covered by the store regressions.
