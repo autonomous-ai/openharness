@@ -67,6 +67,15 @@
 
 ## Validation notes
 
+### Security review repair: Tell the affected authors
+
+**Files:** ruleGuard.ts, commands.ts, ruleApprovalAuthority.test.ts, superTabInstructions.test.ts.
+**Interfaces:** allowedDrops returns the verified decider ID when used; its notification map includes affected author accounts still permitted to read the project, excluding the saver. Notices attribute the approval to the decider, never to a person who did not approve.
+
+- [ ] Commit and observe failing author-notification/private-audience tests.
+- [ ] Notify the decider and affected eligible author accounts once each; keep ordinary author approval notices unchanged.
+- [ ] Run affected unit/integration tests and typecheck; obtain both security reviews again at the new head.
+
 - Task 1: policy tests 25/25; project-rules real-store tests 7/7; typecheck clean.
 - Task 2: authority/instructions/commands/policy tests 523/523 before the extra collision regression; real-store instructions/project-rules tests 30/30 after restoring Buddy refusal order. The first combined run hit an ephemeral Mongo port collision and exposed that Buddy refusal-order regression; the retry passed after the access check reused authorizeCommandAccess.
 - Collision follow-up: authority/instructions/commands tests 499/499 (including all 10 authority cases); the real-store authority/index-plan case passes; typecheck clean. Review-table/steps tests 27/27; merge-train/release importers 105/105.

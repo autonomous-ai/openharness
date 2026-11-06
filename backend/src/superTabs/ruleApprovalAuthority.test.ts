@@ -22,11 +22,19 @@ function fixture() {
 describe('configured instruction approval authority', () => {
   it('accepts only the named decider’s own recent approval for another person’s removed or reworded rule', () => {
     const f = fixture()
-    expect([...f.check().told.keys()]).toEqual(['dee'])
+    expect([...f.check().told.keys()]).toEqual(['dee', 'ken-a', 'ken-b'])
     expect(f.check([row()], ['yes'], authority, undefined, before.replace('before', 'after')).rules).toHaveLength(1)
     expect(() => f.check([], [])).toThrow(/dee/i)
     expect(() => f.check([row('yes', 'stranger')])).toThrow(/rules people gave/)
     expect(() => f.check([row()], ['yes'], null)).toThrow(/rules people gave/)
+  })
+
+  it('notifies affected accounts only while they can still read the project', () => {
+    const f = fixture()
+    f.project.visibility = 'private'
+    f.project.members = ['owner', 'dee', 'ken-a'].map(id => ({ id, generation: f.state.people.find(p => p.id === id)!.generation }))
+    expect([...f.check().told.keys()]).toEqual(['dee', 'ken-a'])
+    expect([...f.check([row()], ['yes'], authority, { kind: 'person', id: 'ken-a' }).told.keys()]).toEqual(['dee'])
   })
 
   it.each(['ken-a', 'ken-b'])('accepts %s for the explicit Ken attribution and tells only the account that approved', id => {

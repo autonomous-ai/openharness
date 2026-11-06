@@ -165,6 +165,17 @@ describe('configured rule approvals through the store', () => {
       expect(read.docsExamined).toBe(1)
       expect(read.returned).toBe(1)
     }
+    const notices = await db.superTabMessage.findMany({ where: { tabId: tab, text: { contains: 'approved by peer' } } })
+    // Dee's approval tells the decider and both affected author accounts, through each person's two private Buddy chats.
+    expect(notices).toHaveLength(6)
+    for (const account of [owner, host, peer]) {
+      const visible = new Set((await store.read(account, tab)).state.conversations.map(c => c.id))
+      expect(notices.filter(n => visible.has(n.conversationId))).toHaveLength(2)
+    }
+    for (const notice of notices) {
+      expect(notice.text).toContain('Always test before merging')
+      expect(notice.text).not.toContain('as you approved')
+    }
     for (const [index, account] of [owner, host].entries()) {
       const revision = 4 + index * 2
       await run(tab, save(revision - 1, text))
