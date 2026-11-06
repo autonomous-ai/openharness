@@ -67,7 +67,12 @@ void main() {
     server.append('What shall we work on?', conversationId: 'buddy-owner-lead');
     final c = server.controller(
       account: 'owner',
-      initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': selected},
+      initial: {
+        'tabId': 'tab',
+        'projectsGroupOpen': true,
+        'accountId': 'owner',
+        'selectedId': selected,
+      },
     );
     await tester.runAsync(c.refresh);
     await tester.pumpWidget(

@@ -742,14 +742,16 @@ class ProjectSidebar extends StatelessWidget {
                     icon: AppIcons.flag,
                     waiting: decisions,
                   ),
-                  _pageRow(
-                    onPage,
-                    target: SwarmPage.mentions,
-                    key: 'super-mentions',
-                    label: 'Mentions',
-                    icon: AppIcons.atSign,
-                    waiting: mentions,
-                  ),
+                  // Mentions goes from the Desktop's left pane (Swarm v3, anh Dee 11-07).
+                  if (!board)
+                    _pageRow(
+                      onPage,
+                      target: SwarmPage.mentions,
+                      key: 'super-mentions',
+                      label: 'Mentions',
+                      icon: AppIcons.atSign,
+                      waiting: mentions,
+                    ),
                   if (!board)
                     _pageRow(
                       onPage,
@@ -780,12 +782,18 @@ class ProjectSidebar extends StatelessWidget {
                   onAdd: controller.canWrite ? onNewProject : null,
                   addTooltip: 'New project',
                   endInset: 0,
+                  // The Desktop folds Projects: closed while the person has an agent (Swarm v3, #4118).
+                  collapsed: board ? !controller.projectsOpen : null,
+                  onToggleCollapsed: board
+                      ? controller.toggleProjectsGroup
+                      : null,
                 ),
                 // The reader's one Buddy, the first item under Projects (anh
                 // Dee, 11-05).
                 if (controller.oneBuddy && !board) ?_swarmBuddyRow(),
-                for (final (_, channel) in _channels(snapshot, reading))
-                  channel,
+                if (!board || controller.projectsOpen)
+                  for (final (_, channel) in _channels(snapshot, reading))
+                    channel,
                 const SizedBox(height: 16),
                 // Buddies replaced Chat with PM in every Swarm (Ken, 10-29); where the
                 // server gives one Buddy for the whole Swarm, it is # buddy above.

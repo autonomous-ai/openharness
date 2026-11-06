@@ -45,17 +45,21 @@ void main() {
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.light),
         home: Scaffold(
-          body: ProjectSidebar(
-            controller: c,
-            app: app,
-            onSelect: c.select,
-            onNewSwarm: () {},
-            onNewProject: () {},
-            onPage: (_) {},
-            activity: activity,
-            attention: activity.attention,
-            onManage: () {},
-            board: board,
+          // The view rebuilds the sidebar as the controller changes.
+          body: ListenableBuilder(
+            listenable: c,
+            builder: (context, _) => ProjectSidebar(
+              controller: c,
+              app: app,
+              onSelect: c.select,
+              onNewSwarm: () {},
+              onNewProject: () {},
+              onPage: (_) {},
+              activity: activity,
+              attention: activity.attention,
+              onManage: () {},
+              board: board,
+            ),
           ),
         ),
       ),
@@ -104,13 +108,16 @@ void main() {
     });
 
     testWidgets('its heading opens and closes it', (tester) async {
-      await show(tester);
+      final c = await show(tester);
       await tester.tap(find.byTooltip('Expand Projects'));
       await tester.pump();
       expect(key('super-project-lead'), findsOneWidget);
       await tester.tap(find.byTooltip('Collapse Projects'));
       await tester.pump();
       expect(key('super-project-lead'), findsNothing);
+      // The choice is saved with the view.
+      expect(c.projectsGroupOpen, isFalse);
+      await tester.runAsync(c.flush);
     });
 
     testWidgets('a layout that is not the Desktop\'s keeps Projects open', (
