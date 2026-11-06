@@ -241,9 +241,9 @@ describe('what a free crew member gets', () => {
 describe('the crew\'s clocks: 2 hours without progress tells the member, 3 hours puts the task back in its lane', () => {
   const HOUR = 3_600_000, AT = 1000
   /** Ash (crew, backend) working on Api since AT; Birch (crew, backend) free. */
-  function working() {
+  function working(crew = true) {
     const s = crewSwarm(['Ash', 'Birch'])
-    for (const name of ['Ash', 'Birch']) s.state.agents.find(a => a.id === s.ids[name])!.crew = { role: 'Engineer', lane: 'backend', at: AT, by: 'owner' }
+    if (crew) for (const name of ['Ash', 'Birch']) s.state.agents.find(a => a.id === s.ids[name])!.crew = { role: 'Engineer', lane: 'backend', at: AT, by: 'owner' }
     const api = s.task('Api', ['backend/src/a.ts'])
     s.run({ type: 'work.assign', conversationId: api, agentId: s.ids.Ash! }, s.as(s.pm))
     /** The liveness sweep at [now], with the machine reporting every session running and busy on screen till then. */
@@ -256,8 +256,8 @@ describe('the crew\'s clocks: 2 hours without progress tells the member, 3 hours
     return { ...s, api, sweep, lines, get state() { return s.state } }
   }
 
-  it('tells the member once at 2 hours, and again only after a new spell of quiet', () => {
-    const s = working()
+  it.each([true, false])('tells the worker once at 2 hours, reset only after progress (crew: %s)', crew => {
+    const s = working(crew)
     expect(s.lines(s.sweep(AT + 2 * HOUR - 60_000))).toEqual([])
     expect(s.lines(s.sweep(AT + 2 * HOUR))).toEqual([nudgeLine('backend')])
     expect(nudgeLine('backend')).toBe('No progress on this task for 2 hours. Post where it stands, or set it blocked with why; at 3 hours it goes back to the backend lane.')
@@ -270,8 +270,8 @@ describe('the crew\'s clocks: 2 hours without progress tells the member, 3 hours
     expect(s.lines(s.sweep(AT + 4 * HOUR + 10 * 60_000))).toEqual([nudgeLine('backend')])
   })
 
-  it('returns the task to its lane at 3 hours with the reason, for another member, not the same one', () => {
-    const s = working()
+  it.each([true, false])('returns the task at 3 hours for another worker (crew: %s)', crew => {
+    const s = working(crew)
     s.sweep(AT + 2 * HOUR)
     s.sweep(AT + 3 * HOUR)
     const group = s.group(s.api)
@@ -280,25 +280,24 @@ describe('the crew\'s clocks: 2 hours without progress tells the member, 3 hours
     expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, AT + 3 * HOUR).map(p => [p.agentId, p.conversationId])).toEqual([[s.ids.Birch!, s.api]])
   })
 
-  it('does not tell a member that waits on its own task\'s open step', () => {
-    const s = working()
+  it.each([true, false])('does not nudge a worker waiting on its own open step (crew: %s)', crew => {
+    const s = working(crew)
     const step = s.run({ type: 'conversation.create', title: 'Test', brief: 'Test it.', reviewOf: s.api, step: 'Test', checks: [] }).result.conversationId as string
     s.run({ type: 'work.assign', conversationId: step, agentId: s.ids.Birch! }, s.as(s.pm))
     expect(s.lines(s.sweep(AT + 2 * HOUR))).toEqual([])
   })
 
-  it('never ticks while it waits on a person or a review, nor for a worker not in the crew', () => {
-    const s = working()
+  it.each([true, false])('never ticks while blocked or waiting on a person or review (crew: %s)', crew => {
+    const s = working(crew)
+    s.group(s.api).assignment!.status = 'blocked'
+    expect(s.lines(s.sweep(AT + 3 * HOUR))).toEqual([])
+    expect(s.group(s.api).assignment!.status).toBe('blocked')
     s.group(s.api).assignment!.status = 'needs_human'
     s.sweep(AT + 4 * HOUR)
     expect(s.group(s.api).assignment!.status).toBe('needs_human')
     s.group(s.api).assignment!.status = 'review'
     s.sweep(AT + 5 * HOUR)
     expect(s.group(s.api).assignment!.status).toBe('review')
-    s.group(s.api).assignment!.status = 'working'
-    delete s.state.agents.find(a => a.id === s.ids.Ash)!.crew
-    expect(s.lines(s.sweep(AT + 6 * HOUR))).toEqual([])
-    expect(s.group(s.api).assignment!.status).toBe('working')
   })
 })
 
