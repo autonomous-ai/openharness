@@ -14,7 +14,7 @@ import { agentWrittenNameOf, setName, shownNameOf } from './personNames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
-  activeWork, occupiesAgent, actorKey, agent, appendCodePullRequestUrls, appendPullRequestUrls, author, codePullRequests, projectPullRequestUrl, pullRequestLinks, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, occupiesAgent, actorKey, agent, appendCodePullRequestUrls, appendPullRequestUrls, author, projectPullRequestUrl, pullRequestLinks, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, seenMachineIds, SuperTabError, swarmGridName, visibleState, AGENT_ONLY, STATUS_LABELS, forRecipients,
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
@@ -2727,7 +2727,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // its code list (its brief, its builder's or the project's own posts). A builder lost before its Ready line has only the
       // posts, and its merged task must still close (task #3574). Read before the record links anything.
       const assignment = group.assignment
-      const namedBefore = codePullRequests(group).includes(pullRequestUrl)
+      // Only the code list: a task stored before it existed reads every link it held as its code, posts' and earlier merge records' included.
+      const namedBefore = group.codePullRequestUrls?.includes(pullRequestUrl) ?? false
       const ownPullRequest = (namedBefore && !group.cards?.recorded?.includes(pullRequestUrl))
         || (!!assignment && [assignment.result, ...group.checks.map(check => check.evidence)].some(text => !!text && pullRequestLinks(text, repositoryUrl).includes(pullRequestUrl)))
       // What only this record linked stays marked, so a repeated record of an unrelated pull request closes nothing (Aster, #3259).
