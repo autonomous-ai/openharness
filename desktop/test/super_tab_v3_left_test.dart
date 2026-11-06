@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/buddy_rows.dart' show SuperTabCountBadge;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart' show SuperTabAgent;
+import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -73,6 +75,7 @@ void main() {
                 c.select(id);
               },
               onNewAgent: () => created?.add('new'),
+              places: SuperTabPlaces.of(c),
               onNewSwarm: () {},
               onNewProject: () {},
               onPage: (_) {},
@@ -89,6 +92,24 @@ void main() {
     addTearDown(() => tester.pumpWidget(const SizedBox()));
     return c;
   }
+
+  group('the org switcher is the first thing in the left pane', () {
+    testWidgets('on the Desktop it sits above the back and forward arrows '
+        'and Decisions', (tester) async {
+      await show(tester);
+      double top(String k) => tester.getTopLeft(key(k)).dy;
+      expect(top('super-swarm-switcher'), lessThan(top('super-back')));
+      expect(top('super-swarm-switcher'), lessThan(top('super-decisions')));
+    });
+
+    testWidgets('a layout that is not the Desktop\'s keeps its order', (
+      tester,
+    ) async {
+      await show(tester, board: false);
+      double top(String k) => tester.getTopLeft(key(k)).dy;
+      expect(top('super-back'), lessThan(top('super-swarm-switcher')));
+    });
+  });
 
   group('Mentions goes', () {
     testWidgets('the Desktop\'s left pane has Decisions and no Mentions', (
@@ -291,10 +312,27 @@ void main() {
       expect(find.byTooltip('Kestrel · no chat yet'), findsOneWidget);
     });
 
-    testWidgets('+ New agent hands on to the creation dialog', (tester) async {
+    testWidgets('+ New agent is the last row, below the agents, and hands on '
+        'to the creation dialog', (tester) async {
       final created = <String>[];
       await show(tester, agents: mine, setup: agents, created: created);
-      await tester.tap(find.byTooltip('New agent'));
+      expect(find.byTooltip('New agent'), findsNothing);
+      expect(
+        top(tester, 'super-new-agent-row'),
+        greaterThan(top(tester, 'super-agent-orion')),
+      );
+      expect(
+        top(tester, 'super-new-agent-row'),
+        lessThan(top(tester, 'project-sidebar-projects')),
+      );
+      expect(
+        find.descendant(
+          of: key('super-new-agent-row'),
+          matching: find.text('New agent'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('super-new-agent-row'));
       await tester.pumpAndSettle();
       expect(created, ['new']);
     });
@@ -347,16 +385,18 @@ void main() {
       return c;
     }
 
-    testWidgets('with an app the heading has + New agent', (tester) async {
+    testWidgets('with an app the last row of My agents is + New agent', (
+      tester,
+    ) async {
       final c = await view(tester, withApp: true);
-      expect(find.byTooltip('New agent'), findsOneWidget);
+      expect(key('super-new-agent-row'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
       c.dispose();
     });
 
     testWidgets('without one it has none', (tester) async {
       final c = await view(tester, withApp: false);
-      expect(find.byTooltip('New agent'), findsNothing);
+      expect(key('super-new-agent-row'), findsNothing);
       await tester.pumpWidget(const SizedBox());
       c.dispose();
     });
@@ -531,6 +571,93 @@ void main() {
       await tester.tap(key('super-board-tab-board'));
       await settle(tester);
       expect(key('super-tasks-lead'), findsOneWidget);
+      await end(tester, c);
+    });
+
+    testWidgets('the right pane is a fixed 340 and the middle has the rest', (
+      tester,
+    ) async {
+      final c = await view(tester, rightPane: (_) => const SizedBox.expand());
+      await tester.tap(key('super-group-lead'));
+      await settle(tester);
+      double w(String k) => tester.getSize(key(k)).width;
+      expect(w('super-right-pane'), 340);
+      expect(
+        w('super-center-pane'),
+        closeTo(1600 - w('super-left-pane') - 340, 1),
+      );
+      // Fixed: no divider to drag.
+      expect(key('super-resize-right'), findsNothing);
+      await end(tester, c);
+    });
+
+    testWidgets('Board and Chat are the one view switch: Board is not '
+        'repeated, and the selected tab reads as selected', (tester) async {
+      final c = await view(tester, rightPane: (_) => const SizedBox.expand());
+      await tester.tap(key('super-group-lead'));
+      await settle(tester);
+      expect(key('super-tasks-layout-board'), findsNothing);
+      expect(find.text('Board'), findsOneWidget);
+      final style = tester
+          .widget<TextButton>(key('super-board-tab-board'))
+          .style!;
+      expect(
+        style.foregroundColor!.resolve({WidgetState.disabled}),
+        DesktopChrome.foreground,
+        reason: 'the tab shown is not greyed as a disabled button',
+      );
+      await end(tester, c);
+    });
+
+    testWidgets('List and Members are toggles back to the Board', (
+      tester,
+    ) async {
+      final c = await view(tester, rightPane: (_) => const SizedBox.expand());
+      await tester.tap(key('super-group-lead'));
+      await settle(tester);
+      for (final layout in ['list', 'members']) {
+        expect(key('super-tasks-board'), findsOneWidget);
+        await tester.tap(key('super-tasks-layout-$layout'));
+        await settle(tester);
+        expect(key('super-tasks-board'), findsNothing, reason: layout);
+        await tester.tap(key('super-tasks-layout-$layout'));
+        await settle(tester);
+        expect(key('super-tasks-board'), findsOneWidget, reason: layout);
+      }
+      await end(tester, c);
+    });
+
+    testWidgets('a person\'s own agent chat sends without a Lead', (
+      tester,
+    ) async {
+      final c = await view(
+        tester,
+        setup: (server) {
+          (server.state['agents'] as List<Map<String, dynamic>>)
+              .firstWhere((a) => a['id'] == 'kestrel')
+              .addAll({'kind': 'regular', 'chatId': 'agent-chat-kestrel'});
+          (server.state['conversations'] as List).add({
+            ...conversationFixture('agent-chat-kestrel', 'Kestrel'),
+            'kind': 'agent-chat',
+            'agentIds': ['kestrel'],
+          });
+          server.append(
+            'Please look at the build.',
+            conversationId: 'agent-chat-kestrel',
+          );
+          server.messages.last['author'] = {
+            'kind': 'person',
+            'id': 'owner',
+            'name': 'owner@example.com',
+          };
+        },
+      );
+      await tester.tap(key('super-agent-kestrel'));
+      await settle(tester);
+      expect(c.selectedId, 'agent-chat-kestrel');
+      expect(find.text('Please look at the build.'), findsOneWidget);
+      expect(find.text('Not sent · this chat has no Lead'), findsNothing);
+      expect(find.text('Add a Lead'), findsNothing);
       await end(tester, c);
     });
 
