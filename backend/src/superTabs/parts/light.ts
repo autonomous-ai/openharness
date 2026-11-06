@@ -70,6 +70,7 @@ export const GROUP_FIELDS = {
     'buddySessions',
     'cards',
     'checks',
+    'codePullRequestUrls',
     'handOutLane',
     'heardAt',
     'hold',

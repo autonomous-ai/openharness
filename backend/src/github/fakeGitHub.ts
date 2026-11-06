@@ -33,6 +33,10 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   const comments = new Map<string, Array<{ id: number; user: { login: string }; author_association?: string; body: string; html_url: string }>>()
   /** The files of a comparison, by `owner/name@BASE...HEAD`, lower case: GET /compare/{base}...{head}. */
   const compares = new Map<string, Array<{ filename: string; status: string; sha: string; patch?: string; previous_filename?: string }>>()
+  /** A comparison's status, by the same key, when not 'ahead' (task #3553: whether a commit is on a branch). */
+  const compareStatus = new Map<string, string>()
+  /** Each commit's parents, by `owner/name@SHA`, lower case: GET /git/commits/{sha} (task #3553). */
+  const commits = new Map<string, string[]>()
   /** A pull request's changed files, by `owner/name#number`, lower case, as GET /pulls/{n}/files lists them (task #3401). */
   const files = new Map<string, Array<{ filename: string; status: string; previous_filename?: string }>>()
   /** Workflow runs by `owner/name`, lower case: each run's status and its jobs' statuses and runner labels. */
@@ -149,10 +153,16 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
         return head[2] === 'check-runs' ? tagged({ total_count: checkRuns.get(key)?.length ?? 0, check_runs: checkRuns.get(key) ?? [] })
           : tagged({ total_count: checkSuites.get(key)?.length ?? 0, check_suites: checkSuites.get(key) ?? [] })
       }
-      const compared = /^\/compare\/([0-9a-f]+)\.\.\.([0-9a-f]+)$/.exec(repoPath[3] ?? '')
+      const compared = /^\/compare\/([0-9A-Za-z._-]+)\.\.\.([0-9A-Za-z._-]+)$/.exec(repoPath[3] ?? '')
       if (compared) {
-        const listed = compares.get(`${repoKey}@${compared[1]}...${compared[2]}`)
-        return listed ? json(200, { status: 'ahead', files: listed }) : json(404, { message: 'Not Found' })
+        const key = `${repoKey}@${compared[1]}...${compared[2]}`
+        const listed = compares.get(key)
+        return listed ? json(200, { status: compareStatus.get(key) ?? 'ahead', files: listed }) : json(404, { message: 'Not Found' })
+      }
+      const commit = /^\/git\/commits\/([0-9a-f]{40})$/.exec(repoPath[3] ?? '')
+      if (commit) {
+        const parents = commits.get(`${repoKey}@${commit[1]}`)
+        return parents ? json(200, { sha: commit[1], parents: parents.map(sha => ({ sha })) }) : json(404, { message: 'Not Found' })
       }
       const changed = /^\/pulls\/(\d+)\/files$/.exec(repoPath[3] ?? '')
       if (changed) {
@@ -175,7 +185,7 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
     }
     return json(404, { message: 'Not Found' })
   }) as typeof globalThis.fetch
-  return { fetch, calls, grants, installed, owners, renamed, protection, pulls, checkRuns, checkSuites, reviews, comments, files, compares, revoked, issued, control, actions, permissions }
+  return { fetch, calls, grants, installed, owners, renamed, protection, pulls, checkRuns, checkSuites, reviews, comments, files, compares, compareStatus, commits, revoked, issued, control, actions, permissions }
 }
 
 /** A configured app talking to [github]. */

@@ -11,6 +11,7 @@ import { readPushOrigin, type GitHubRead, type PushOrigin } from './pushOrigin.j
 import { githubRepository, type GitHubRepository } from './repository.js'
 import type { PullRequestWatch } from '../superTabs/pullRequestEvents.js'
 import type { PullRequestFile } from '../superTabs/pullRequestPatch.js'
+import type { MergeSides } from '../superTabs/mergeCarry.js'
 
 /** What a Swarm agent's token may do, and nothing more: push to and read the repository, open and update pull requests,
  *  and read checks and workflow runs to see whether its pull request passes. */
@@ -706,6 +707,49 @@ export class GitHubApp {
       if (!Array.isArray(listed) || listed.length >= COMPARE_FILES_MAX) return null
       const files = filesOf(listed)
       return files && { base: branch, files }
+    } catch (error) {
+      if (error instanceof GitHubAppError) return null
+      throw error
+    }
+  }
+
+  /** What the head [head] of pull request [number] is, to judge whether it is git's own merge of its reviewed head and main
+   *  (superTabs/mergeCarry.ts, task #3553), read with a token of [PULL_PATCH_PERMISSIONS]: its parents (GET /git/commits); for
+   *  a two-parent head, whether its second parent is on the branch the pull request merges into (GET /compare/{it}...{tip},
+   *  the base commit the same answer names: identical or ahead), and the files of the three comparisons of fixed commits, each GET /compare/{a}...{b} from their merge
+   *  base: main's side (first parent to second), the pull request's (second to first) and the merge (first parent to head). Null
+   *  unless the pull request still names [head], when GitHub cannot say, or when a side gives as many files as GitHub ever
+   *  gives ([COMPARE_FILES_MAX]), as it may have left some out. With the branch from the same answer as the pull request. */
+  async mainMergeSides(repository: GitHubRepository, number: number, token: string, head: string): Promise<{ base: string; sides: MergeSides } | null> {
+    const base = `/repos/${repository.owner}/${repository.name}`
+    const sha = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : undefined
+    const files = async (from: string, to: string) => {
+      const compared = await this.call('GET', `${base}/compare/${from}...${to}?per_page=1`, `Bearer ${token}`)
+      const listed = compared.status === 200 ? (compared.body as { files?: unknown }).files : undefined
+      return Array.isArray(listed) && listed.length < COMPARE_FILES_MAX ? filesOf(listed) : null
+    }
+    try {
+      const pull = await this.call('GET', `${base}/pulls/${number}`, `Bearer ${token}`)
+      if (pull.status !== 200) return null
+      const named = pull.body as { head?: { sha?: unknown }; base?: { sha?: unknown; ref?: unknown } }
+      // The base as a commit, from the same answer (security review of #3284, Important 1): a branch name a tag of the same
+      // name could shadow is never compared against.
+      const at = sha(named.head?.sha), tip = sha(named.base?.sha), branch = typeof named.base?.ref === 'string' ? named.base.ref : ''
+      if (!at || !tip || !branch || at !== head.toLowerCase()) return null
+      const commit = await this.call('GET', `${base}/git/commits/${at}`, `Bearer ${token}`)
+      const listed = commit.status === 200 ? (commit.body as { parents?: unknown }).parents : undefined
+      if (!Array.isArray(listed)) return null
+      const parents = listed.map(p => sha((p as { sha?: unknown })?.sha))
+      if (parents.some(p => p === undefined)) return null
+      const none: MergeSides = { parents: parents as string[], onBase: false, prSide: [], mainSide: [], mergeSide: [] }
+      if (parents.length !== 2) return { base: branch, sides: none }
+      const [parent, merged] = parents as [string, string]
+      const onBranch = await this.call('GET', `${base}/compare/${merged}...${tip}?per_page=1`, `Bearer ${token}`)
+      const status = onBranch.status === 200 ? (onBranch.body as { status?: unknown }).status : undefined
+      if (status !== 'identical' && status !== 'ahead') return { base: branch, sides: none }
+      const [mainSide, prSide, mergeSide] = [await files(parent, merged), await files(merged, parent), await files(parent, at)]
+      if (!mainSide || !prSide || !mergeSide) return null
+      return { base: branch, sides: { parents: [parent, merged], onBase: true, prSide, mainSide, mergeSide } }
     } catch (error) {
       if (error instanceof GitHubAppError) return null
       throw error
