@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { recordAcceptanceIn, recordTrustIn, trustsIn } from './kit/folderTrust.js'
-import { acceptFullMode, folderTrust } from './launchPrep.js'
+import { acceptFullMode, folderTrust, skipOnboarding } from './launchPrep.js'
 
 vi.mock('./kit/homeAdoption.js', async original => ({ ...await original<typeof import('./kit/homeAdoption.js')>(), homeIsNetworkOrDevice: (path: string) => path.startsWith('/net/') }))
 vi.mock('./kit/folderTrust.js', () => ({ trustsIn: vi.fn(() => true), recordTrustIn: vi.fn(() => 'trusted'), recordAcceptanceIn: vi.fn(() => 'accepted') }))
@@ -31,6 +31,20 @@ describe('full mode\'s warning accepted', () => {
     expect(recordAcceptanceIn).toHaveBeenLastCalledWith(join('/home/u/moved', 'settings.json'), 'skipDangerousModePermissionPrompt')
     expect(acceptFullMode('claude', { HOME: '/home/u', CLAUDE_CONFIG_DIR: '/net/x' })).toBe('skipped')
     expect(acceptFullMode('codex', { HOME: '/home/u' })).toBeNull()
+    expect(recordAcceptanceIn).toHaveBeenCalledTimes(2)
+  })
+})
+
+// The Dell's first Buddy sat at Claude Code's "Choose the text style" until the Swarm gave up on it (2026-11-06).
+describe('first-run screens done', () => {
+  it('in the .claude.json beside the folder trust the launch reads, never in a network home, and not for an engine without one', () => {
+    vi.mocked(recordAcceptanceIn).mockClear()
+    expect(skipOnboarding('claude', { HOME: '/home/u' })).toBe('accepted')
+    expect(recordAcceptanceIn).toHaveBeenLastCalledWith(join('/home/u', '.claude.json'), 'hasCompletedOnboarding')
+    expect(skipOnboarding('claude', { HOME: '/home/u', CLAUDE_CONFIG_DIR: '/home/u/moved' })).toBe('accepted')
+    expect(recordAcceptanceIn).toHaveBeenLastCalledWith(join('/home/u/moved', '.claude.json'), 'hasCompletedOnboarding')
+    expect(skipOnboarding('claude', { HOME: '/home/u', CLAUDE_CONFIG_DIR: '/net/x' })).toBe('skipped')
+    expect(skipOnboarding('codex', { HOME: '/home/u' })).toBeNull()
     expect(recordAcceptanceIn).toHaveBeenCalledTimes(2)
   })
 })

@@ -152,6 +152,15 @@ export type TrustContract = { home: LaunchHome; file: string } & (
 export interface BypassAcceptanceContract { home: LaunchHome; file: string; key: string }
 
 /**
+ * The engine's first-run screens (a theme to pick, then its notes), shown once on a machine until `key` is true in `file` in
+ * its home: what finishing them writes. A sign-in alone (`claude auth login`) does not, so the first agent a Swarm started on a
+ * machine whose engine Harness installed and signed in sat at "Choose the text style" with nobody there (the Dell's Buddy,
+ * 2026-11-06). Recorded by core, before a spawn, for a Swarm agent (core/agents/create.ts); `false` there is the person's and
+ * stays. Applied by kit/folderTrust.ts `recordAcceptanceIn`.
+ */
+export interface OnboardingContract { home: LaunchHome; file: string; key: string }
+
+/**
  * The engine's question about MCP servers a folder inherits: a project file of servers (`file`, `servers` its map) in a
  * folder ABOVE the one it opens, which it asks to use or not as it starts there. Its own "no", the question's default, is
  * kept as `rejected` in `settings` in the folder. Harness records that same "no" for a folder it made empty itself,
@@ -300,6 +309,7 @@ export interface EngineLaunch {
   /** Recorded with `trust`, for the same folders (kit/inheritedMcp.ts). */
   inheritedMcp?: InheritedMcpContract
   bypassAcceptance?: BypassAcceptanceContract
+  onboarding?: OnboardingContract
   resumeRepair?: ResumeRepairContract
   attribution?: AttributionContract
   /** How the engine is told, as it starts, that it runs in Harness and how to use it (lib/agentAttribution.ts). */

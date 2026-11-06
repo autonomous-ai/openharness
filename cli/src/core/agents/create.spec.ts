@@ -75,9 +75,10 @@ const trust = vi.hoisted(() => ({
   claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
   preTrustClaudeProject: vi.fn((_path: string): unknown => undefined), preTrustCodexProject: vi.fn((_path: string, _profile?: string | null): unknown => undefined),
   acceptFullMode: vi.fn((_engine: string, _environment?: NodeJS.ProcessEnv): unknown => 'accepted'),
+  skipOnboarding: vi.fn((_engine: string, _environment?: NodeJS.ProcessEnv): unknown => 'accepted'),
 }))
-const { preTrustClaudeProject, preTrustCodexProject, acceptFullMode } = trust
-vi.mock('../../engines/launchPrep.js', () => ({ acceptFullMode: trust.acceptFullMode, folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
+const { preTrustClaudeProject, preTrustCodexProject, acceptFullMode, skipOnboarding } = trust
+vi.mock('../../engines/launchPrep.js', () => ({ acceptFullMode: trust.acceptFullMode, skipOnboarding: trust.skipOnboarding, folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
     ? { trusts: (path: string) => trust.claudeTrusts(path), record: (path: string) => trust.preTrustClaudeProject(path) }
     : engine === 'codex' ? { trusts: (path: string) => trust.codexTrusts(path, profile), record: (path: string) => trust.preTrustCodexProject(path, profile) } : null }))
 // The connections an agent on a profile home is given (lib/connectors/agents.ts): never written into a real folder here.
@@ -249,6 +250,22 @@ describe('creating an agent', () => {
     expect(await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'full' }))).toMatchObject({ ok: true })
     expect(console.warn).toHaveBeenCalledWith('[agent] full mode acceptance · settings locked')
     expect(console.warn).toHaveBeenCalledWith('[agent] full mode acceptance · worse')
+  })
+
+  // The Dell's first Buddy sat at Claude Code's "Choose the text style", with nobody at its screen (2026-11-06).
+  it('marks the engine\'s first-run screens done for a Swarm agent, in any mode, and for nothing else', async () => {
+    skipOnboarding.mockClear()
+    await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'auto' }))
+    expect(skipOnboarding).toHaveBeenLastCalledWith('claude', undefined)
+    const launch = { current: () => true, environment: { HOME: root, CLAUDE_CONFIG_DIR: '/moved' }, prepareHooks: async () => true } as unknown as NativeLaunch
+    await setup({ native: async () => ({ ok: true, launch }) }).create(request({ swarmRole: 'agent', permissionMode: 'full' }))
+    expect(skipOnboarding).toHaveBeenLastCalledWith('claude', expect.objectContaining({ CLAUDE_CONFIG_DIR: '/moved' }))
+    await setup().create(request({ permissionMode: 'full' }))
+    expect(skipOnboarding).toHaveBeenCalledTimes(2)
+    // A config it cannot write leaves the engine to ask, and the launch goes on.
+    vi.mocked(skipOnboarding).mockImplementationOnce(() => { throw new Error('config locked') })
+    expect(await setup().create(request({ swarmRole: 'coordinator', permissionMode: 'full' }))).toMatchObject({ ok: true })
+    expect(console.warn).toHaveBeenCalledWith('[agent] first-run screens · config locked')
   })
 
   // Audit M1: beside a Team account, the owner's agents get a private temporary folder, and the launch's own variables win.

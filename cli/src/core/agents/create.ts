@@ -43,7 +43,7 @@ import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPrepara
 import type { publishGridConfigDir } from '../../lib/publishedGridConfig.js'
 import { nativeHookLocations } from '../../engines/kit/nativeLocations.js'
 import { engineHooks } from '../../engines/hooks.js'
-import { acceptFullMode, folderTrust } from '../../engines/launchPrep.js'
+import { acceptFullMode, folderTrust, skipOnboarding } from '../../engines/launchPrep.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { harnessMadeWorktree } from '../../lib/gitProject.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
@@ -324,6 +324,12 @@ export function createAgentCreator({
     if (input.swarmRole && (permissionMode === 'full' || permissionMode === 'teamWritten')) {
       try { acceptFullMode(engine, native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined) }
       catch (error) { console.warn(`[agent] full mode acceptance · ${error instanceof Error ? error.message : error}`) }
+    }
+    // Nobody is at a Swarm agent's screen to pick a theme: the engine's first-run screens, on a machine where it never ran
+    // with a person there, held the Dell's first Buddy until the Swarm gave up on it (2026-11-06).
+    if (input.swarmRole) {
+      try { skipOnboarding(engine, native ? { ...native.environment, ...gridLaunch?.env, ...dshEnv } : undefined) }
+      catch (error) { console.warn(`[agent] first-run screens · ${error instanceof Error ? error.message : error}`) }
     }
     if (trustEmptyProject || trustSwarmFolder) {
       try {

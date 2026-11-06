@@ -64,6 +64,15 @@ export function acceptFullMode(engine: AgentEngine, environment?: NodeJS.Process
   return homeIsNetworkOrDevice(home) ? 'skipped' : recordAcceptanceIn(join(home, contract.file), contract.key)
 }
 
+/** Record that `engine`'s first-run screens are done, as finishing them would (`onboarding`); null for an engine with none.
+ *  A network or device home is never opened, as for trust. */
+export function skipOnboarding(engine: AgentEngine, environment?: NodeJS.ProcessEnv): 'accepted' | 'already' | 'skipped' | null {
+  const contract = launchContract(engine)?.onboarding
+  if (!contract) return null
+  const home = launchHomeOf(contract.home, null, environment)
+  return homeIsNetworkOrDevice(home) ? 'skipped' : recordAcceptanceIn(join(home, contract.file), contract.key)
+}
+
 /** The session a resume relaunches. `codexHome` is the agent's own engine home, the row's profile. */
 export interface ResumeSource {
   engine: string
