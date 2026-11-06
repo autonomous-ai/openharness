@@ -10,7 +10,7 @@
  * GitHub read covers every pull request it rests on (applyPushOrigin).
  */
 import type { PushOrigin } from '../github/pushOrigin.js'
-import { codePullRequests, fail, type Agent, type Conversation, type SuperTabState } from './model.js'
+import { codePullRequests, fail, pullRequestLinks, type Agent, type Conversation, type SuperTabState } from './model.js'
 import { groupProject, ledProject, onTeamAccount, teamAccountPool } from './projects.js'
 
 export const TEAM_WRITTEN_WORK = 'TEAM_WRITTEN_WORK'
@@ -39,10 +39,15 @@ export const isReleaseWork = (state: SuperTabState, group: Conversation): boolea
   return !!task?.release && !task.teamWritten && !group.teamWritten && !namesCode(task) && (group === task || !namesCode(group))
 }
 
-/** Whether the links in a post in [group] are its code (store.ts): not on a release task, where a post cites the merged pull requests
- *  it releases (the Integrator applying a rollout note) and a link there builds nothing; its code is what its result and evidence name
- *  (security review 2 of #3324). */
-export const codeFromPosts = (group: Conversation): boolean => !group.release
+/** The texts of posts in [group] that name its code, for its code list (store.ts). On a release task a post cites the merged pull
+ *  requests it releases (the Integrator applying a rollout note), which are on the project's release list [onList] and build nothing
+ *  here; every other pull request a post names is its code, as on any task, so a builder's posted pull request ends the exemption
+ *  (security reviews 1 and 2 of #3324). */
+export const postedCode = (group: Conversation, texts: readonly string[], onList: readonly string[], repositoryUrl?: string | null): string[] => {
+  if (!group.release) return [...texts]
+  const listed = new Set(onList.map(url => url.toLowerCase()))
+  return texts.flatMap(text => pullRequestLinks(text, repositoryUrl).filter(url => !listed.has(url.toLowerCase())))
+}
 
 /** Whether [group]'s code is Team-written. An open task from before the mark reads its current assignee too. A step whose
  *  task this command did not load counts as Team-written: an unknown never reads as clean. */

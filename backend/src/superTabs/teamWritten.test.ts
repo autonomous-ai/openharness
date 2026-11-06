@@ -3,7 +3,7 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { appendCodePullRequestUrls, createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 import { LEAD_CAPABILITY } from './leadStart.js'
-import { applyPushOrigin, markTeamWritten, postedCode, stepMark, TEAM_WRITTEN_STOP, TEAM_WRITTEN_WORK, teamWrittenTask } from './teamWritten.js'
+import { applyPushOrigin, isReleaseWork, markTeamWritten, postedCode, releaseCodeSources, stepMark, TEAM_WRITTEN_STOP, TEAM_WRITTEN_WORK, teamWrittenTask } from './teamWritten.js'
 
 // Audit H2: a branch a Team agent wrote runs only in a Team account, whoever's project it is, so nothing the branch
 // carries runs with the main account's rights (docs/plans/2026-11-02-team-written-branch-plan.md).
@@ -585,24 +585,41 @@ describe('a release task the Swarm opened', () => {
   // Round 2, Important 2, and security review 1's round 3: a pull request on the project's release list, cited in a post on a release task
   // (the Integrator applying a merged task's rollout note), is not the code it builds; one a builder posts, off that list, is.
   it('counts a post\'s pull request as a release task\'s code unless it is on the project\'s release list', () => {
-    const f = releaseTask(), task = f.state.conversations.find(c => c.id === f.task)!, repo = 'https://github.com/acme/app'
+    const f = releaseTask(), task = () => f.state.conversations.find(c => c.id === f.task)!, repo = 'https://github.com/acme/app'
     const merged = 'https://github.com/acme/app/pull/77', mine = 'https://github.com/acme/app/pull/88'
     f.run({ type: 'work.assign', conversationId: f.task, agentId: f.member('team-integrator', 'mac-team') })
     const onList = [merged]
     // What the store does with a post in a task: the links of a post by a person, the PM or the assignee, off the release list.
-    const codeOf = (posts: string[]) => appendCodePullRequestUrls(task, [task.brief, task.title, ...postedCode(task, posts, onList, repo)], repo)
+    const codeOf = (posts: string[]) => appendCodePullRequestUrls(task(), [task().brief, task().title, ...postedCode(task(), posts, onList, repo)], repo)
     codeOf([`Applied the rollout note of ${merged} first.`])
-    expect(task.codePullRequestUrls).toEqual([])
+    expect(task().codePullRequestUrls).toEqual([])
     expect(refusal(() => f.run({ type: 'work.assign', conversationId: f.step, agentId: f.member('main-tester', 'mac') }))).toBeNull()
     // A builder's own pull request, posted and never put in a result, is the release task's code, and ends the exemption.
     codeOf([`Draft PR ${mine}, and the rollout note of ${merged}.`])
-    expect(task.codePullRequestUrls).toEqual([mine])
-    expect(teamWrittenTask(f.state, f.state.conversations.find(c => c.id === f.step)!)).toBe(false)
-    applyPushOrigin(f.state, task, 'team', [mine])
+    expect(task().codePullRequestUrls).toEqual([mine])
+    expect(isReleaseWork(f.state, f.state.conversations.find(c => c.id === f.step)!)).toBe(false)
+    applyPushOrigin(f.state, task(), 'team', [mine])
     expect(teamWrittenTask(f.state, f.state.conversations.find(c => c.id === f.step)!)).toBe(true)
     // An ordinary task counts every post.
-    const ordinary = f.state.conversations.find(c => c.id === f.group())!
+    const plain = f.group(), ordinary = f.state.conversations.find(c => c.id === plain)!
     expect(postedCode(ordinary, [`See ${merged}`], onList, repo)).toEqual([`See ${merged}`])
+  })
+
+  // Security review 2 of #3324, round 3: a status note is not code. An Integrator's working note citing a pull request, and the check
+  // evidence that cites what was released, build nothing; only the Ready line (status review) and a merge record name its code.
+  it('counts only a Ready result and posts as a release task\'s code: working notes and check evidence name none', () => {
+    const f = releaseTask(), repo = 'https://github.com/acme/app', pull = 'https://github.com/acme/app/pull/90'
+    const task = () => f.state.conversations.find(c => c.id === f.task)!
+    const sources = (status: string, result: string | null, evidence: string | null = null) =>
+      releaseCodeSources(task(), { status, result, evidence: [evidence], posts: [], onList: [], repositoryUrl: repo })
+    expect(sources('working', `Applying the rollout note of ${pull} first.`)).toEqual([])
+    expect(sources('done', `Released; see ${pull}.`)).toEqual([])
+    expect(sources('blocked', `Waiting on ${pull}.`)).toEqual([])
+    expect(sources('review', `Ready: ${pull}`, `Tested ${pull}`)).toEqual([pull])
+    // An ordinary task counts them all.
+    const plain = f.group(), ordinary = f.state.conversations.find(c => c.id === plain)!
+    expect(releaseCodeSources(ordinary, { status: 'working', result: `x ${pull}`, evidence: [`e ${pull}`], posts: [`p ${pull}`], onList: [], repositoryUrl: repo }))
+      .toEqual([`x ${pull}`, `e ${pull}`, `p ${pull}`])
   })
 
   it('does not change an ordinary task: the same step with the same read is still refused to the main account', () => {
