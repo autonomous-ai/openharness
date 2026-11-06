@@ -45,6 +45,37 @@ async function fixture() {
 }
 
 describe('durable proposal cards', () => {
+  it('persists personal Review decisions, enforces direct identity before replay, and reads only changed task summaries', async () => {
+    const f = await fixture()
+    const read = new SwarmReads(f.store)
+    await f.execute({ type: 'member.approvalMode', mode: 'review' }, peer)
+    const initial = await read.firstLoad(peer, f.tab)
+    expect(initial.personalTasks).toMatchObject({ approvalMode: 'review', reset: true, upserts: [], removed: [] })
+    f.clock.now += 100
+    const id = String((await f.execute({ type: 'conversation.create', title: 'Own task', requesterId: peer.sub, priority: 'P2',
+      task: { goal: 'Keep edits', changes: 'Restore drafts', constraints: 'No login reads', owns: ['backend/src/superTabs/'] },
+      checks: [{ description: 'Restores draft', independent: false }] }, owner, f.pm)).result.conversationId)
+    expect((await f.card(id)).taskApproval).toMatchObject({ personId: peer.sub, state: 'proposal' })
+    f.clock.now += 100
+    const changed = await read.changes(peer, f.tab, initial.cursor)
+    expect(changed).toMatchObject({ reload: false, personalTasks: { reset: false, upserts: [{ id, status: 'proposal' }] } })
+    const decision = { type: 'task.reject', conversationId: id, reason: 'Do later' }, operationId = randomUUID()
+    await expect(f.execute(decision, owner, f.pm, operationId)).rejects.toThrow()
+    await f.execute(decision, peer, undefined, operationId)
+    expect((await f.card(id)).taskApproval).toMatchObject({ state: 'rejected', reason: 'Do later' })
+    await expect(f.execute(decision, owner, undefined, operationId)).rejects.toThrow()
+    const latest = await read.firstLoad(peer, f.tab)
+    expect(latest.personalTasks!.upserts).toContainEqual(expect.objectContaining({ id, status: 'rejected', reason: 'Do later' }))
+    f.clock.now += 100
+    expect(await read.changes(peer, f.tab, latest.cursor)).toMatchObject({ personalTasks: { upserts: [], removed: [] } })
+    const actorRead = await read.firstLoad(owner, f.tab, f.pm)
+    expect(actorRead.personalTasks).toBeUndefined()
+    // Revocation must invalidate a cursor before any private rows can be served again.
+    await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    expect(await read.changes(peer, f.tab, latest.cursor)).toMatchObject({ reload: true })
+    expect((await read.firstLoad(peer, f.tab)).personalTasks!.upserts).toEqual([])
+  })
+
   it('turns verified unanswered original messages into cards once on switch, preserving words and ownership', async () => {
     const f = await fixture()
     await f.execute({ type: 'project.boardMode', projectId: 'lead', on: false })

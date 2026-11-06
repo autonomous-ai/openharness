@@ -58,7 +58,7 @@ describe('personal Tasks summaries', () => {
   it('never leaks a hidden project, private chat, hidden agent or stale membership proposal', () => {
     const s = scene(), row = s.stored.groups.find(g => g.key === s.f.secretGroup)!
     const hidden = s.f.state.agents.find(a => a.projectId === s.f.secret)
-    s.stored.head.data!.projects!.find(p => p.id === s.f.secret)!.memberIds = []
+    s.stored.head.data!.projects!.find(p => p.id === s.f.secret)!.members = []
     expect(personalTasksFor([row], s.view(), peer, false)).toMatchObject({ upserts: [], removed: [] })
     const web = s.stored.groups.find(g => g.key === s.f.web)!
     web.data!.assignment!.agentId = hidden?.id ?? 'hidden-agent'
