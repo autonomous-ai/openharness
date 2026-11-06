@@ -109,7 +109,6 @@ class _SwarmJoinHostState extends State<SwarmJoinHost> {
                     if (!current()) return;
                     app.openSuperTab(id, name);
                   },
-                  showAccountChoice: false,
                   onNewMember: (id, role) {
                     if (!current()) return;
                     unawaited(app.addMachineOnJoin(id, role: role));
@@ -153,8 +152,6 @@ class SwarmJoinDialog extends StatefulWidget {
     required this.onJoined,
     required this.isCurrent,
     this.onNewMember,
-    this.onNewMemberAccount,
-    this.showAccountChoice = true,
   });
   final SwarmJoinLink link;
   final String accountEmail;
@@ -164,9 +161,6 @@ class SwarmJoinDialog extends StatefulWidget {
   /// After a join that made this account a member, with the role it joined
   /// as; never for someone who was one already.
   final void Function(String id, String role)? onNewMember;
-  final bool showAccountChoice;
-  final void Function(String id, String role, bool ownAccount)?
-  onNewMemberAccount;
   final bool Function() isCurrent;
 
   @override
@@ -177,11 +171,6 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
   final _operationId = superTabOperationId();
   Map<String, dynamic>? _preview;
   bool _loading = true, _joining = false;
-  final bool _ownAccount = true;
-  bool get _choosesAccount =>
-      widget.showAccountChoice &&
-      _preview?['alreadyMember'] != true &&
-      _preview?['role'] == 'collaborator';
   String? _error;
   String get _path =>
       '/api/super-tabs/${Uri.encodeComponent(widget.link.tabId)}/join';
@@ -250,13 +239,7 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
       if (!_current) return;
       widget.onJoined(widget.link.tabId, _preview!['name'] as String);
       if (newRole != null) {
-        if (newRole == 'collaborator' &&
-            _choosesAccount &&
-            widget.onNewMemberAccount != null) {
-          widget.onNewMemberAccount!(widget.link.tabId, newRole, _ownAccount);
-        } else {
-          widget.onNewMember?.call(widget.link.tabId, newRole);
-        }
+        widget.onNewMember?.call(widget.link.tabId, newRole);
       }
       if (mounted) Navigator.pop(context);
     } catch (failure) {

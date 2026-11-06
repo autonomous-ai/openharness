@@ -17,8 +17,6 @@ void main() {
       ];
       f.connection.server.state['ownerId'] = 'boss';
       var prompts = 0;
-      final joined = <Object>[];
-      final subscription = f.app.joinedMachines.listen(joined.add);
       f.app.addListener(() {
         final request = f.app.joinAccountRequest;
         if (request != null && !request.answered) {
@@ -41,8 +39,6 @@ void main() {
         isEmpty,
       );
       expect(prompts, 1);
-      expect(joined, isEmpty);
-      await subscription.cancel();
       f.dispose();
     },
   );

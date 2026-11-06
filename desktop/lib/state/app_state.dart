@@ -2765,12 +2765,6 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  final StreamController<SwarmJoinedMachine> _joinedMachines =
-      StreamController<SwarmJoinedMachine>.broadcast();
-
-  /// This computer, added to a Swarm as its person joined it
-  /// ([addMachineOnJoin]): the screen shows a note, with Pause and Remove.
-  Stream<SwarmJoinedMachine> get joinedMachines => _joinedMachines.stream;
   final _joinAdding = <String>{};
 
   /// The Swarms the join's add already ran or was decided for, per account on
@@ -2812,17 +2806,15 @@ class AppNotifier extends ChangeNotifier {
   SwarmJoinAccountRequest? get joinAccountRequest =>
       _joinAccountRequests.where((r) => !r.answered).firstOrNull;
 
-  /// Adds a new collaborator's computer, using the choice made on the join
-  /// surface or asking before contribution. Existing members/viewers and
-  /// systems without local Team accounts are left alone.
+  /// Offers a new collaborator their Buddy after a successful membership join.
+  /// Existing members and viewers never enter the bring-agent flow here.
   Future<void> addMachineOnJoin(
     String tabId, {
     required String role,
     bool alreadyMember = false,
-    bool? ownAccount,
   }) async {
     if (alreadyMember || role != 'collaborator') return;
-    await _addMachineToSwarm(tabId, joined: true, ownAccount: ownAccount);
+    await _offerBringAgent(tabId);
   }
 
   /// Swarm discovery's list ([listed]), however each was joined: a domain
@@ -2844,7 +2836,7 @@ class AppNotifier extends ChangeNotifier {
             return;
           }
           if (_joinPassed.contains('$account/$tabId')) continue;
-          await _addMachineToSwarm(tabId, joined: false);
+          await _offerBringAgent(tabId);
         }
       } catch (error) {
         appLog.info('super-tabs', 'joined Swarms not checked: $error');
@@ -2854,19 +2846,9 @@ class AppNotifier extends ChangeNotifier {
     }();
   }
 
-  /// The join's add for one Swarm this account is in. The person's role is
-  /// read from the Swarm itself: a viewer's Swarm is neither added nor
-  /// recorded, so it is asked about again; an owner's is recorded and left.
-  /// A step that fails for a collaborator shows them a note saying what to do
-  /// (task #3160). [joined]: they joined it at this computer just now, so
-  /// they are known to be one before the Swarm is read; a Swarm only listed
-  /// that cannot be read says nothing yet, since they may be a viewer, and is
-  /// asked about again on the next discovery.
-  Future<void> _addMachineToSwarm(
-    String tabId, {
-    required bool joined,
-    bool? ownAccount,
-  }) async {
+  /// Offers the new collaborator their own Buddy on this computer. Discovery
+  /// remembers the offer so reconnects do not reopen a dismissed prompt.
+  Future<void> _offerBringAgent(String tabId) async {
     final accountId = currentUser?.id;
     if (accountId == null || !_joinAdding.add(tabId)) return;
     bool current() =>
@@ -24311,7 +24293,6 @@ class AppNotifier extends ChangeNotifier {
       request.complete(null);
     }
     unawaited(_teamSetupAsks.close());
-    unawaited(_joinedMachines.close());
     super.dispose();
   }
 }
