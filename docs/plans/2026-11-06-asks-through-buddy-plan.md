@@ -50,7 +50,7 @@ applies when due (store.ts leaveOverdueDecisions, `dueDefaultDecisions`). In a p
 - migration + rollback: none (an optional field); rollback routes asks to the PM again, and a `mustAgree` row with its
   `defaultAt` cleared then falls to the legacy 24-hour sweep.
 - audience: the decision is the person's own; the Buddy chat is read by them and their Buddy only.
-- identity: the agent asks as itself; the answer is the person's, or their Buddy's on their behalf, as today.
+- identity: the agent asks as itself; the answer is the person's; the Buddy brings the question but cannot answer it for them.
 - failure: an ask refused says why; a must-agree decision past its time tells the PM once.
 - platforms: backend.
 
@@ -80,3 +80,12 @@ model.ts}, backend/integration/overdueDecisions.test.ts
 - [x] Test: past its time the default answers a switched project's decision and the agent hears it; a `mustAgree` one
   stays open, the PM is told once, the next pass and the 24-hour sweep take nothing, and the person can still answer.
 - [x] Watch it fail; commit. Code; watch it pass; commit.
+
+## Follow-up after merging prerequisites
+
+- [x] Resolve the single imports conflict with main, retaining both task imports.
+- [x] Test first: an identical `decision.ask` sends one Buddy notice; a changed `mustAgree` is a distinct decision; required
+  agreement never advertises a default or PM takeover. Red: one unit failure and four integration failures.
+- [x] Resolve decision deduplication before writing/numbering Buddy notices, using the existing indexed read once; include
+  `mustAgree` in repeat identity and describe required agreement truthfully. Green: 623 focused unit tests and 23 decision
+  sweep/persistence integration tests; typecheck clean.

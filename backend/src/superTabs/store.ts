@@ -122,7 +122,7 @@ import { readEvidence, recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByAnswer, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
 import { OVERDUE_PER_PASS, overdueDecisions, dueDefaultDecisions } from './overdueDecisions.js'
-import { answerable, askDecisions, keepWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
+import { answerable, askDecisions, DECISION_ASKED_KIND, keepWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingConversations, waitingFor, waitingInProject, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { recordMessageReach } from './messageReachStats.js'
@@ -2064,6 +2064,14 @@ export class SuperTabStore {
         : command.type === 'work.assign' || command.type === 'agent.start' ? command.routeDecisionId : undefined
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
       const effects = applyCommand(original, actor, command, context)
+      // Resolve repeats before numbering or writing Buddy notices: a repeated ask is the existing decision, already told.
+      const decisionIds = effects.decisions ? await writeDecisions(tx, tabId, effects.decisions, context.now) : []
+      const newDecisions = effects.decisions?.filter((draft, i) => decisionIds[i] === draft.id) ?? []
+      if (effects.decisions) {
+        if (command.type === 'decision.ask') effects.result.decisionIds = decisionIds
+        const fresh = new Set(newDecisions.map(d => d.id))
+        effects.messages = effects.messages.filter(m => m.source?.kind !== DECISION_ASKED_KIND || fresh.has(String(m.source.decisionId)))
+      }
       hasWorkers = effects.state.agents.some(a => !isBuddy(a) && !ledProject(effects.state, a.id))
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source, message.recipients))
@@ -2324,13 +2332,8 @@ export class SuperTabStore {
         if (taken.count !== 1) fail('AVATAR_UNAVAILABLE', 'Upload this picture again before using it.', 400)
       }
       if (effects.closedProposal) await closeProposal(tx, tabId, effects.closedProposal, actor.kind === 'person' ? actor.userId : actor.agentId, new Date(context.now))
-      if (effects.decisions) {
-        const ids = await writeDecisions(tx, tabId, effects.decisions, context.now)
-        if (command.type === 'decision.ask') effects.result.decisionIds = ids
-        // A decision new in this write reaches its person's phones (task #3248); one asked again is the open one, told already.
-        const asked = effects.decisions.filter((draft, i) => ids[i] === draft.id)
-        this.tellPhones(tx, tabId, effects.state, { replies: [], tags: [], decisions: asked }, [])
-      }
+      // A new decision reaches its person's phones (task #3248); a repeat was already brought to them.
+      if (newDecisions.length) this.tellPhones(tx, tabId, effects.state, { replies: [], tags: [], decisions: newDecisions }, [])
       if (effects.decisionAnswer) await recordAnswer(tx, tabId, effects.decisionAnswer, context.now)
       if (effects.decisionKeptWaiting) await keepWaiting(tx, tabId, effects.decisionKeptWaiting)
       // Work this command ended (done, cancelled, archived) closes the decisions still waiting there (Dee, 10-31). After this

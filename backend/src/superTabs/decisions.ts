@@ -109,7 +109,9 @@ export function askedThroughBuddy(state: SuperTabState, group: Conversation, dra
     const options = d.options.map((o, i) => i === d.recommended ? `${o} (recommended)` : o).join(' / ')
     const task = group.number ? ` on task #${group.number}` : ''
     const text = `${author.displayName ?? author.name} asks ${usernameOf(state, to.id)}${task}: ${d.question}\n\nOptions: ${options}\n`
-      + `Unblocks: ${d.unblocks}\nAt ${d.defaultAt}, if not answered: ${d.options[d.recommended]!}.`
+      + `Unblocks: ${d.unblocks}\n` + (d.mustAgree
+        ? `No default applies: your agreement is required. At ${d.defaultAt}, the PM is told if you have not answered.`
+        : `At ${d.defaultAt}, if not answered: ${d.options[d.recommended]!}.`)
     return { id: stableId(d.id, 'buddy'), conversationId: defaultBuddyChat(state, to).id, author, text, replyTo: null,
       recipients: buddy ? [buddy.id] : [], source: { kind: DECISION_ASKED_KIND, decisionId: d.id, projectId: d.projectId }, buddyProject: d.projectId }
   })
@@ -276,10 +278,10 @@ export function workEnded(before: SuperTabState, after: SuperTabState): string[]
   return after.conversations.filter(c => workOver(after, c) && !(was.has(c.id) && workOver(before, was.get(c.id)!))).map(c => c.id)
 }
 
-/** What makes an ask a repeat: the same asker, task, person, conversation, question, options, recommendation and what it
- *  unblocks. Another asker, another task or other options with the same text is a decision of its own (review of #1753). */
-const repeatKey = (d: Pick<DecisionDraft, 'askerAgentId' | 'assignmentId' | 'personId' | 'conversationId' | 'question' | 'options' | 'recommended' | 'unblocks'> & { defaultAt?: string | Date | null }) =>
-  JSON.stringify([d.askerAgentId, d.assignmentId ?? null, d.personId, d.conversationId, d.question, d.options, d.recommended, d.unblocks, d.defaultAt ? new Date(d.defaultAt).toISOString() : null])
+/** What makes an ask a repeat: the same asker, task, person, conversation, question, options, recommendation, agreement requirement
+ *  and what it unblocks. Another asker, another task or other options with the same text is a decision of its own (review of #1753). */
+const repeatKey = (d: Pick<DecisionDraft, 'askerAgentId' | 'assignmentId' | 'personId' | 'conversationId' | 'question' | 'options' | 'recommended' | 'unblocks'> & { defaultAt?: string | Date | null; mustAgree?: boolean | null }) =>
+  JSON.stringify([d.askerAgentId, d.assignmentId ?? null, d.personId, d.conversationId, d.question, d.options, d.recommended, d.unblocks, d.defaultAt ? new Date(d.defaultAt).toISOString() : null, d.mustAgree === true])
 
 /** Writes the questions asked and returns the decision each one is: an open decision that this ask exactly repeats is that
  *  decision again, not a second one. New ones beyond MAX_OPEN_DECISIONS from this asker to this person are refused, and
@@ -471,8 +473,8 @@ export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState,
       question: row.question, options: row.options, recommended: row.recommended, unblocks: row.unblocks,
       createdAt: row.createdAt, answeredAt: row.answeredAt ?? null, choice: row.choice ?? null, note: row.note ?? null,
       delegated: row.delegated === true, overdue: row.overdue === true, defaultAt: row.defaultAt ?? null, defaulted: row.defaulted === true,
-      // What the 24-hour sweep can take: the sweep skips a reflection and a recommended option that is not one of the options.
-      pmTakesOver: row.kind !== REFLECTION_DECISION && row.recommended >= 0 && row.recommended < row.options.length,
+      // What the 24-hour sweep can take: the sweep skips required agreement, reflections and an invalid recommended option.
+      pmTakesOver: row.mustAgree !== true && row.kind !== REFLECTION_DECISION && row.recommended >= 0 && row.recommended < row.options.length,
       // A typed answer (no option) reads as its words.
       answer: row.choice == null ? (row.answeredAt ? row.note ?? null : null)
         : row.options[row.choice] === undefined ? null : row.defaulted ? `Default applied: ${row.options[row.choice]!}` : answerText(row.options[row.choice]!, row.delegated === true) }
