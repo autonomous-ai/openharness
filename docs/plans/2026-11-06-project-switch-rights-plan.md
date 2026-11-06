@@ -31,7 +31,8 @@ today.
      task. Only someone who steers may send them; anyone else gets PAUSE_FORBIDDEN (403).
    - Each change writes a line into the task, and its assignee is told.
    - A paused task is not handed out (dispatch.ts), not chased by the PM's sweep (pmSchedule.ts sweepDue), and shows as
-     held on the board (pulse.ts holdOf).
+     held on the board (pulse.ts holdOf). A hand assignment or a start into it is refused with TASK_PAUSED (Readycheck's
+     review).
    - Pause and resume are new commands, so they work in every project. Nothing changes for a project that never sends
      them.
 5. **PM text follows the switch:**
@@ -44,7 +45,9 @@ today.
    - `project.boardMode on` hands each unanswered ask in the project chat, oldest first, to Fir's pure
      `importLegacyProposal(state, project, ask, now)`, with `ask = {messageId, conversationId, personId, at, thread}`. The
      command's state holds no message text, so the card shows the message by its id.
-   - It clears only the asks the helper turned into cards (Fir, 11-06). Until the helper is wired, the asks stay.
+   - It clears only the asks the helper turned into cards (Fir, 11-06). Until the helper is wired, the asks stay, and the
+     PM's wakes and inbox keep listing them under "Owed from before this project switched", so nothing is dropped
+     (Readycheck's review). A message after the switch is never owed.
    - `legacyAsks(state, project)` builds that list and is tested here.
    - Whichever of #3817 and #3819 merges second wires the call.
 7. **The board read** that returns only what changed is the existing changes feed (`GET /:tabId/changes?cursor`,

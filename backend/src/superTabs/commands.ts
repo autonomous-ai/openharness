@@ -1197,6 +1197,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     mutableProjects(state)
     return projectOf(state, projectId)
   }
+  /** Refuses new work on a task paused by someone who steers its project (boardRights.ts, task #3819): a hand assignment and a
+   *  start into it, as dispatch already skips it (Readycheck's review). */
+  const pausedTask = (group: Conversation) => {
+    if (group.paused) fail('TASK_PAUSED', 'This task is paused. Its project owner or decider resumes it first.', 409)
+  }
   const personUnknown = (): never => fail('PERSON_UNKNOWN', 'Name a person who reads this project.', 400)
   const chatOnly = (conversationId: string) => {
     if (state.conversations.find(c => c.id === conversationId)?.audience) fail('AUDIENCE_CHAT_ONLY', 'A private conversation is chat only.', 400)
@@ -1710,6 +1715,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       fail('START_PENDING', 'Wait for the host to finish this agent’s launch and model selection.')
     }
     if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
+    pausedTask(group)
     if (activeWork(group)) fail('WORK_ACTIVE', 'The current assignment must finish or be reconciled before reassignment.')
     // Before anything changes: a task given to a closed session is lost at once, and its agent then stays listed until the
     // task is handed on (closedAgents.ts removeClosedAgents). Without a task it leaves on its machine's next report.
@@ -3005,6 +3011,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       projectChatJoin(open(state, command.request.conversationId), null, command.request.name)
       const home = groupProject(state, open(state, command.request.conversationId))
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
+      pausedTask(open(state, command.request.conversationId))
       if (!['claude', 'codex'].includes(command.request.engine)) {
         fail('SWARM_ENGINE', 'A Swarm agent runs only Claude Code or Codex.', 400)
       }
