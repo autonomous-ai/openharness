@@ -77,6 +77,19 @@ describe('server-owned Buddy sleep', () => {
     expect(buddySleepManaged(f.state, f.buddy)).toBe(false)
   })
 
+  it('keeps a sleeping Buddy managed through switch-back and the ensuing wake', () => {
+    const f = fixture()
+    f.buddy.asleep = { since: NOW - 1_000 }
+    delete f.state.projects![0]!.boardMode
+    expect(buddySleepManaged(f.state, f.buddy)).toBe(true)
+    numberMessages(f.state, [{ id: 'wake', conversationId: f.chat.id, replyTo: null, text: 'Continue', recipients: ['buddy'],
+      author: { kind: 'person', id: f.owner.id, name: f.owner.email, membershipGeneration: f.owner.generation } }], NOW)
+    expect(f.buddy.asleep).toBeUndefined()
+    expect(buddySleepManaged(f.state, f.buddy)).toBe(true)
+    delete f.buddy.crewWaking
+    expect(buddySleepManaged(f.state, f.buddy)).toBe(false)
+  })
+
   it.each(['old-membership', 'session', 'team', 'stopping'])('never sleeps a %s Buddy', which => {
     const f = fixture()
     if (which === 'old-membership') f.buddy.buddyOf!.generation = 'old'

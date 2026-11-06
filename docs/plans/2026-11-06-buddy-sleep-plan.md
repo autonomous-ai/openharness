@@ -47,10 +47,10 @@
 
 **Interfaces:** `buddySleepManaged(state, agent): boolean`; `buddySleepCandidates(state, now): Agent[]`; `sleepBuddies(state, candidates, busy, now): void`. Optional `MachineObservation.idleBuddyHarnessIds: string[]` holds running sessions explicitly idle in that fresh report; pool `buddySleepWanted` opts a host into reporting. Host agent row `buddySleepManaged` grants retention/resume of that main Buddy.
 
-- [ ] Commit failing tests for the one-hour boundary, current owner generation, switched/unswitched/mixed projects, main vs thread sessions, unknown/stale/working proof, pending delivery and active task.
-- [ ] Watch targeted tests fail for missing sleep behavior.
-- [ ] Implement the pure eligibility/decision and report plumbing; reuse existing asleep mark. Filter report IDs against running sessions; unchanged reports compare the idle set too. Read pending delivery existence for candidates only and guard all state used by sleep.
-- [ ] Run affected units and the focused real-store sleep case; commit passing implementation and push.
+- [x] Commit failing tests for the one-hour boundary, current owner generation, switched/unswitched/mixed projects, main vs thread sessions, unknown/stale/working proof, pending delivery and active task.
+- [x] Watch targeted tests fail for missing sleep behavior.
+- [x] Implement the pure eligibility/decision and report plumbing; reuse existing asleep mark. Filter report IDs against running sessions; unchanged reports compare the idle set too. Read pending delivery existence for candidates only and guard all state used by sleep.
+- [x] Run affected units and the focused real-store sleep case; commit passing implementation and push.
 
 ### Task 2: Authorized input wakes the intended Buddy atomically
 
@@ -58,10 +58,10 @@
 
 **Interfaces:** `wakeBuddies(state, message, now): void`, called by `numberMessages` before agent-only rows are skipped. Uses final message recipients and buddyRecipients, with the existing Buddy read checks; clears asleep, renews keptAt/downSince, records startWake for existing timing telemetry.
 
-- [ ] Commit failing tests: own-person message and authorized proposal question wake one sleeping main Buddy; another Buddy stays asleep; stale ownership/private source is refused by real command/claim rights; repeated input stays idempotent and a new wake gets a full idle hour.
-- [ ] Watch them fail before implementation.
-- [ ] Implement the shared wake before saving messages; guard every recipient Buddy's part even when already awake, so concurrent sleep retries. Do not change delivery rights or authors.
-- [ ] Run changed units and focused real-store wake/rights cases; commit and push.
+- [x] Commit failing tests: own-person message and authorized proposal question wake one sleeping main Buddy; another Buddy stays asleep; stale ownership/private source is refused by real command/claim rights; repeated input stays idempotent and a new wake gets a full idle hour.
+- [x] Watch them fail before implementation.
+- [x] Implement the shared wake before saving messages; guard every recipient Buddy's part even when already awake, so concurrent sleep retries. Do not change delivery rights or authors.
+- [x] Run changed units and focused real-store wake/rights cases; commit and push.
 
 ### Task 3: CLI reports idle and closes/resumes safely
 
@@ -69,7 +69,19 @@
 
 **Interfaces:** a pool asking `buddySleepWanted` receives only running Buddy harnesses that `core.agents.activity` explicitly reports idle. Strip this field from repeated heartbeat bodies. Retention holds a bounded `wakeableBuddies` list for server-managed, non-stopping main Buddies; `retainedLeads` admits only that recorded list to existing core resume authority.
 
-- [ ] Commit failing tests for positive/unknown/working activity; one batch, no call without Buddies; old-server omission; repeated heartbeat strips proof; sleep closes once, preserves home, refuses busy/unknown/Team; wake and host restart reopen same session without replaying input; ordinary/unswitched Buddies unchanged.
-- [ ] Watch focused CLI tests fail.
-- [ ] Implement minimal report/retention/host changes; check live idle again immediately before sleep and preserve existing failure backoff. Managed awake Buddies use keepAlive without crew continuation text.
+- [x] Commit failing tests for positive/unknown/working activity; one batch, no call without Buddies; old-server omission; repeated heartbeat strips proof; sleep closes once, preserves home, refuses busy/unknown/Team; wake and host restart reopen same session without replaying input; ordinary/unswitched Buddies unchanged.
+- [x] Watch focused CLI tests fail.
+- [x] Implement minimal report/retention/host changes; check live idle again immediately before sleep and preserve existing failure backoff. Managed awake Buddies use keepAlive without crew continuation text.
 - [ ] Run affected backend and CLI tests/typechecks. Record same-workload call counts and timing; commit and push, publish red/green evidence and mark ready.
+
+
+## Validation notes
+
+- Server decision tests were committed at `4afea00e5`, real-store report/delivery tests at `82c0943fb`, and private-report tests at `07a1dd3e3`, before server implementation `8cf3ee094`. Wake tests `f60e62746` preceded `7cddf82f5`. CLI tests `8aa1cea7d` preceded `8aba589cc`.
+- The 100-session report failed at 64 returned IDs (`89f70cee3`) before bounded batches (`c0bbe860a`); the duplicate-core-call regression (`134fdc518`) failed at 200 calls before the live-registry fix (`8fcb70b65`).
+- Card-question regression `04e567e33` uses #3817's commands. It passes on a temporary combination with #3387 at `4e833f3fd`, and fails at the wake assertion with only `wakeBuddies` withheld. It requires #3387 merged before this branch's final integration run.
+- 344 affected backend units pass, plus the two extra report/switch-back regressions. The three affected CLI files pass (651 checks); the report file passes again after the scale fix (199 checks). Both typechecks pass. Real-store sleep and input-race cases pass; open-delivery reads use the existing agent/status index, 0 documents examined and at most 3 keys for the empty probe. The broader report integration file passes (32 checks).
+- One broadened Buddy integration run found an accidental clock replacement in another fixture; corrected at `057840ae5`, and that case passes. Its failure is not product red evidence.
+- The isolated native Buddy test is present, preserving the Buddy folder and exact engine conversation across sleep/wake. This machine is a Team OS account: product policy refuses Buddy starts here even with isolated homes. The run stopped before starting a Buddy, and does not count as native sleep/wake evidence. The test now explicitly requires an owner account; independent Mac/Linux native verification remains with the test steps.
+- Synthetic same-workload report timing, macOS Node 22, 30 measured fresh passes after 5 warmups: 50 Buddies p95 0.378 ms before / 0.374 ms after; 500 Buddies p95 2.841 / 2.791 ms. Activity requests: 0 before, 1/8 after, each at most 64 IDs; no new per-session core calls, no activity request on a quiet pass or heartbeat. This excludes actual engine/IPC latency.
+- Message numbering adds under 0.01 ms of median CPU at 500 agents in the synthetic workload. Pure candidate selection at 500 agents/homes is p95 9.71 ms; indexed database probes are candidate-only. These are local synthetic measurements, not production latency or native memory measurements.
