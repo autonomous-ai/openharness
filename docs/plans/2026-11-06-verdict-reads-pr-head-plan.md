@@ -60,16 +60,16 @@ backend/src/superTabs/store.ts, backend/src/routes/superTabs.ts
 
 **Interfaces:** `readPullRequestsNow(db, store, reader, tabId, task, urls, now)`; hook `pullRequestReader?: () => PullRequestReader`.
 
-- [ ] Test: record at HEAD, GitHub at HEAD3, a Yes at HEAD3 counts on the task and its step, and the record is HEAD3.
-- [ ] Test: record at HEAD, GitHub at HEAD3, a Yes at HEAD2 (older, never recorded) does not count; the record is HEAD3.
-- [ ] Test: a failed read leaves the record and judges as before.
-- [ ] Watch them fail; commit.
-- [ ] Implement the read before `work.check`; watch them pass; commit.
+- [x] Test: record at HEAD, GitHub at HEAD3, a Yes at HEAD3 counts on the task and its step, and the record is HEAD3.
+- [x] Test: record at HEAD, GitHub at HEAD3, a Yes at HEAD2 (older, never recorded) does not count; the record is HEAD3.
+- [x] Test: a failed read leaves the record and judges as before.
+- [x] Watch them fail; commit.
+- [x] Implement the read before `work.check`; watch them pass; commit.
 
 ## Task 2: Ready reads the head
 
 **Files:** same.
 
-- [ ] Test: record at HEAD, GitHub at HEAD3, the Engineer's Ready leaves the record at HEAD3.
-- [ ] Watch it fail; commit.
-- [ ] Implement the read after Ready commits; watch it pass; commit.
+- [x] Test: record at HEAD, GitHub at HEAD3, the Engineer's Ready leaves the record at HEAD3.
+- [x] Watch it fail; commit (with Task 1's tests, same file).
+- [x] Implement the read after Ready commits; watch it pass; commit.
