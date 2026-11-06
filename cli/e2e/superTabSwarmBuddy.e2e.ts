@@ -1,13 +1,12 @@
-/** A person's one Buddy started on their own machine in the Swarm, on the real native protocol: a private daemon, tmux and
- * data dir, a fake Claude engine and the fake backend. It has no project, so nothing is cloned and no GitHub token is asked
- * for, and the folder its start names is never made: 2026-11-02, each of those failed every such start while unit tests,
- * which faked the steps either side, passed. */
+/** A person's Buddy on the real native protocol: a private daemon, tmux and data dir, a fake Claude engine and backend.
+ * Its home copies a local fixture project without a GitHub token. Sleep releases the engine and terminal; its person's
+ * message resumes the same conversation and preserved folder. Server sleep/wake policy is tested through the real store. */
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
-import { until, type IsolatedDaemon } from './harness/daemon.js'
+import { IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend } from './harness/fakeBackend.js'
 import { signedInDaemon } from './harness/fleet.js'
 import { overOldRoutes } from './harness/swarmReads.js'
@@ -23,7 +22,7 @@ afterEach(async () => {
 })
 
 // A Buddy is forbidden on a Team OS account even in an isolated daemon; this native flow needs an owner's account.
-it.skipIf(isTeamDaemon())('starts in its own folder, then sleeps and resumes the same Buddy conversation', async () => {
+it.skipIf(isTeamDaemon())('releases an idle Buddy session and wakes the same conversation on its person’s message', async () => {
   const backend = await FakeBackend.start(); relay = backend
   backend.addMachine(ME)
   // As a real engine does: it asks about a folder it has no answer for, in a terminal no Swarm view shows.
@@ -39,6 +38,7 @@ it.skipIf(isTeamDaemon())('starts in its own folder, then sleeps and resumes the
       requirements: { memoryBytes: 0, diskBytes: 1, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false },
       buddyOf: { personId: 'person', generation: 'g' }, buddyScope: 'swarm', buddyProjects: [{ id: 'p1', name: 'API', cwd: project }] } }
   const agents: Array<Record<string, any>> = [], asked: string[] = [], idleReports: string[][] = []
+  let pending: { id: string; conversationId: string; status: string; claimId: string | null; message: Record<string, any> } | undefined
   let managed = false
   backend.superTabs = overOldRoutes(async (method, raw, body) => {
     const path = new URL(raw, backend.httpUrl).pathname
@@ -63,7 +63,29 @@ it.skipIf(isTeamDaemon())('starts in its own folder, then sleeps and resumes the
       if (body?.idleBuddyHarnessIds) idleReports.push(body.idleBuddyHarnessIds)
       return { data: { revision: 1 } }
     }
-    if (path === `/api/super-tabs/${TAB}`) return { data: { state: { id: TAB, agents, projects: [], conversations: [] }, revision: 1 } }
+    if (path === `/api/super-tabs/${TAB}`) return { data: { state: { id: TAB, agents,
+      projects: [{ id: 'p1', name: 'API', cwd: project }],
+      conversations: [{ id: 'buddy-chat', kind: 'swarm-buddy', buddyOwnerId: 'person', agentIds: ['buddy'] }] }, revision: 1 } }
+    if (path.endsWith('/commands') && body.command?.type === 'message.send') {
+      expect(body.asAgentId).toBeUndefined()
+      expect(body.command.conversationId).toBe('buddy-chat')
+      // Model the server's authorized wake response here; the real store regression covers its transaction and rights.
+      delete agents[0]!.asleep
+      pending = { id: 'wake-delivery', conversationId: 'buddy-chat', status: 'queued', claimId: null,
+        message: { id: 'wake-message', conversationId: 'buddy-chat', text: body.command.text,
+          author: { kind: 'person', id: 'person', name: 'Person', membershipGeneration: 'g' } } }
+      return { data: { result: { messageId: 'wake-message' } } }
+    }
+    if (path.endsWith('/conversations/buddy-chat/messages')) return { data: { messages: [] } }
+    const delivery = /\/agents\/buddy\/deliveries(?:\/([^/]+))?$/.exec(path)
+    if (delivery) {
+      if (method === 'GET') return { data: delivery[1] ? pending : pending && pending.status !== 'delivered' ? [pending] : [] }
+      expect(pending?.id).toBe(delivery[1])
+      expect(body.claimId).toBe(pending!.claimId ?? body.claimId)
+      if (body.type === 'claim') { pending!.claimId = body.claimId; return { data: { message: pending!.message } } }
+      pending!.status = body.uncertain ? 'uncertain' : 'delivered'
+      return { data: {} }
+    }
     if (path.endsWith('/deliveries') || path.endsWith('/grids')) return { data: [] }
     throw new Error(`Unexpected request ${path}`)
   })
@@ -89,12 +111,27 @@ it.skipIf(isTeamDaemon())('starts in its own folder, then sleeps and resumes the
   }, 60_000, 250)
   const marker = join(homes, folders[0]!, 'kept.txt')
   writeFileSync(marker, 'Buddy memory stays here')
+  const processes = join(original.claudeHome ?? dirname(d.engineConfig.claudeProjectsDir), 'sessions')
+  const originalPid = await until('the fixture engine process to be identified', () => {
+    if (!existsSync(processes)) return null
+    const match = readdirSync(processes).filter(file => file.endsWith('.json')).map(file => JSON.parse(readFileSync(join(processes, file), 'utf8')))
+      .find(record => record.sessionId === original.sessionId && IsolatedDaemon.alive(record.pid))
+    return match?.pid as number | undefined
+  }, 15_000, 250)
+  expect(original.tmuxPane).toBeTruthy()
   managed = true
   await until('fresh positive engine idle proof', () => idleReports.some(ids => ids.includes(start.harnessId)), 60_000, 250)
   agents[0]!.asleep = { since: Date.now() }
   await until('the sleeping Buddy to release its session', async () => (await row())?.status !== 'active' || null, 60_000, 250)
+  await until('the engine process to exit and its terminal pane to be released', async () => {
+    const panes = await d.tmux.run('list-panes', '-a', '-F', '#{pane_id}').catch(() => '')
+    return !IsolatedDaemon.alive(originalPid) && !panes.trim().split('\n').includes(original.tmuxPane) || null
+  }, 30_000, 250)
   expect(readFileSync(marker, 'utf8')).toBe('Buddy memory stays here')
-  delete agents[0]!.asleep
+  const text = 'Wake up and keep the same draft memory'
+  expect(await client.request('super_tabs', { action: 'backend', method: 'POST', path: `/api/super-tabs/${TAB}/commands`,
+    body: { operationId: 'person-wakes-buddy', command: { type: 'message.send', conversationId: 'buddy-chat', text, replyTo: null, recipientIds: [] } } }))
+    .toMatchObject({ ok: true, value: { result: { messageId: 'wake-message' } } })
   const resumed = await until('the awake Buddy to resume through the host', async () => {
     const agent = await row()
     return agent?.status === 'active' ? agent : null
@@ -102,4 +139,9 @@ it.skipIf(isTeamDaemon())('starts in its own folder, then sleeps and resumes the
   expect(resumed.sessionId).toBe(original.sessionId)
   expect(resumed.cwd).toBe(original.cwd)
   expect(readFileSync(marker, 'utf8')).toBe('Buddy memory stays here')
+  await until('the waking message to reach the resumed engine', () => pending?.status === 'delivered' || null, 60_000, 250)
+  await until('the same conversation to record the waking message', async () => {
+    const page = await client!.request('session_get', { sessionId: original.sessionId, limit: 100 })
+    return page.events?.some((event: Record<string, any>) => event.type === 'user_message' && String(event.payload.content).includes(text)) || null
+  }, 30_000, 250)
 }, 240_000)
