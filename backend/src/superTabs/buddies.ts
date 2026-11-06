@@ -89,18 +89,94 @@ export function openSwarmBuddyChat(state: SuperTabState, owner: Person): Convers
 const ownBuddy = (agent: Agent, person: Pick<Person, 'id' | 'generation'>): boolean => isSwarmBuddy(agent) && !agent.buddySession
   && agent.buddyOf!.personId === person.id && agent.buddyOf!.generation === person.generation
 
+/** The Buddy chat [agent] is in (its main Buddy or a thread session of it), when loaded (task #3818). */
+export const buddyChatOf = (state: SuperTabState, agent: Pick<Agent, 'id'>): Conversation | undefined =>
+  state.conversations.find(c => isSwarmBuddyChat(c) && c.agentIds.includes(agent.id))
+
+/** How many Buddies a person may have in a Swarm unless its owner sets another number (spec: "Many Buddies", task #3818). */
+export const BUDDY_CAP = 5
+/** The most a Swarm's owner may allow (tab.buddyCap): every Buddy is a session on its person's machine. */
+export const MAX_BUDDY_CAP = 20
+export const buddyCapOf = (state: Pick<SuperTabState, 'buddyCap'>): number => state.buddyCap ?? BUDDY_CAP
+export const buddyCapRefusal = (cap: number): string => `You have ${cap} Buddies, the most this Swarm allows. Remove one to add another.`
+
+/** [person]'s Buddy chats loaded here, oldest first: their main chat (swarmBuddyChatId), then those it lists (buddyChats), each
+ *  theirs at their current membership and not removed. */
+export function buddyChatsOf(state: SuperTabState, person: Pick<Person, 'id' | 'generation'>): Conversation[] {
+  const main = state.conversations.find(c => c.id === swarmBuddyChatId(person))
+  const listed = (main?.buddyChats ?? []).map(id => state.conversations.find(c => c.id === id))
+  return [main, ...listed].filter((c): c is Conversation => !!c && isSwarmBuddyChat(c) && !c.archived
+    && !!c.audience?.people.some(p => p.id === person.id && p.generation === person.generation))
+}
+
+/** The chat whose Buddy is [person]'s default: the one marked, else their main chat. Undefined when none is loaded. */
+const defaultChatOf = (state: SuperTabState, person: Pick<Person, 'id' | 'generation'>): Conversation | undefined => {
+  const chats = buddyChatsOf(state, person)
+  return chats.find(c => c.buddyDefault) ?? chats.find(c => c.id === swarmBuddyChatId(person))
+}
+
 /** [personId]'s default Buddy in this Swarm: the one their lines go to, a removed Buddy's news and what is asked of them (task
- *  #3818). Undefined when they have none, or are not in the Swarm. Never throws. */
+ *  #3818): the Buddy of their default chat; with that chat not loaded, their first Buddy, as before several. Undefined when they
+ *  have none, or are not in the Swarm. Never throws. */
 export function defaultBuddy(state: SuperTabState, personId: string): Agent | undefined {
   const person = state.people.find(p => p.id === personId)
-  return person ? state.agents.find(agent => ownBuddy(agent, person)) : undefined
+  if (!person) return undefined
+  const chat = defaultChatOf(state, person)
+  return chat ? state.agents.find(agent => ownBuddy(agent, person) && chat.agentIds.includes(agent.id))
+    : state.agents.find(agent => ownBuddy(agent, person))
 }
 
 /** The chat a line for [person] goes to: their default Buddy's, or with none their main Buddy chat, opened if missing, so there
  *  is always somewhere to write (task #3818). */
 export function defaultBuddyChat(state: SuperTabState, person: Person): Conversation {
-  const buddy = defaultBuddy(state, person.id)
-  return (buddy && state.conversations.find(c => isSwarmBuddyChat(c) && c.agentIds.includes(buddy.id))) ?? openSwarmBuddyChat(state, person)
+  return defaultChatOf(state, person) ?? openSwarmBuddyChat(state, person)
+}
+
+/** Whether [chat] of [person] has their Buddy in it, running or starting (task #3818): a chat whose start failed has none. */
+export function hasBuddy(state: SuperTabState, person: Pick<Person, 'id' | 'generation'>, chat: Conversation): boolean {
+  return state.agents.some(a => ownBuddy(a, person) && chat.agentIds.includes(a.id))
+    || !!state.starts?.some(s => s.request.conversationId === chat.id && !s.request.buddySession && !s.harnessId && !s.error)
+}
+
+/** How many Buddies [person] has, running or starting, against the Swarm's cap. */
+export function buddyCount(state: SuperTabState, person: Pick<Person, 'id' | 'generation'>): number {
+  return buddyChatsOf(state, person).filter(chat => hasBuddy(state, person, chat)).length
+}
+
+/** A new Buddy's own chat for [owner], with id [id], listed on their main chat so it loads with it (task #3818). */
+export function openNewBuddyChat(state: SuperTabState, owner: Person, id: string): Conversation {
+  const main = openSwarmBuddyChat(state, owner)
+  const number = nextConversationNumber(state)
+  state.groupCounter = number
+  const chat: Conversation = { id, kind: 'swarm-buddy', number, title: defaultBuddyName(owner), leadId: null, agentIds: [], archived: false, brief: '',
+    checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: owner.id, generation: owner.generation }] } }
+  state.conversations.push(chat)
+  main.buddyChats = [...main.buddyChats ?? [], id]
+  return chat
+}
+
+/** [chat]'s Buddy becomes [person]'s default (buddy.default): marked on that chat alone. */
+export function setDefaultBuddy(state: SuperTabState, person: Pick<Person, 'id' | 'generation'>, chat: Conversation): void {
+  for (const other of buddyChatsOf(state, person)) delete other.buddyDefault
+  chat.buddyDefault = true
+}
+
+/** [chat] of [person] after its Buddy was removed: a chat other than their main one is archived and leaves the main chat's list;
+ *  the main chat stays, as before, for a Buddy added again. A removed default passes to their oldest Buddy left. */
+export function dropBuddyChat(state: SuperTabState, person: Pick<Person, 'id' | 'generation'>, chat: Conversation): void {
+  const wasDefault = defaultChatOf(state, person)?.id === chat.id
+  const main = state.conversations.find(c => c.id === swarmBuddyChatId(person))
+  if (chat.id !== swarmBuddyChatId(person)) {
+    chat.archived = true
+    if (main?.buddyChats) {
+      main.buddyChats = main.buddyChats.filter(id => id !== chat.id)
+      if (!main.buddyChats.length) delete main.buddyChats
+    }
+  }
+  delete chat.buddyDefault
+  if (!wasDefault) return
+  const next = buddyChatsOf(state, person).find(c => c.id !== chat.id && state.agents.some(a => ownBuddy(a, person) && c.agentIds.includes(a.id)))
+  if (next) setDefaultBuddy(state, person, next)
 }
 
 /** Where a notice about what [senderBuddyId] sent for [person] goes (task #3817's decided and needs-you lines): that Buddy and its

@@ -4388,6 +4388,19 @@ describe('a Buddy\'s model request', () => {
     expect(serve).toHaveBeenCalledWith(expect.objectContaining({ agent: expect.objectContaining({ id: 'buddy' }) }),
       [expect.objectContaining({ agent: expect.objectContaining({ id: 'session' }) })])
   })
+
+  // Task #3818: a person with several Buddies switches one; only that Buddy's own sessions, in its own chat, move with it.
+  it('moves only the sessions in the switching Buddy\'s own chat, when the backend names each one\'s chat', async () => {
+    const serve = vi.fn(async () => {})
+    const main = { ...buddyRow({ id: 'buddy', harnessId: 'h-main', modelRequest: { id: 'req1', gridModel: 'm' } }), buddyChatId: 'chat-1' }
+    const mine = { ...buddyRow({ id: 'session', harnessId: 'h-session', buddySession: { thread: 't', from: 0 } }), buddyChatId: 'chat-1' }
+    const theirs = { ...buddyRow({ id: 'research-session', harnessId: 'h-research', buddySession: { thread: 'r', from: 0 } }), buddyChatId: 'chat-2' }
+    const t = lifeFixture([main, mine, theirs], { buddyModels: { serve } })
+    await t.poll()
+    await vi.waitFor(() => expect(serve).toHaveBeenCalledTimes(1))
+    expect(serve).toHaveBeenCalledWith(expect.objectContaining({ agent: expect.objectContaining({ id: 'buddy' }) }),
+      [expect.objectContaining({ agent: expect.objectContaining({ id: 'session' }) })])
+  })
 })
 
 // Spec 2026-10-30-buddy-thread-sessions: a Buddy's thread session never stays on its person's machine once its thread is done
@@ -4402,6 +4415,16 @@ describe('ending a Buddy\'s thread sessions', () => {
   afterEach(() => { progress?.mockRestore(); progress = undefined })
   /** Time passing as the host sees it awake: a look each minute, never a gap it would take for sleep. */
   const awake = async (t: ReturnType<typeof lifeFixture>, ms: number) => { for (let left = ms; left > 0; left -= 60_000) await t.poll(Math.min(60_000, left)) }
+
+  // Task #3818: a session of a person's second Buddy is in that Buddy's chat, which the backend names on its row.
+  it('names the chat the backend gives its row, a second Buddy\'s own', async () => {
+    const t = lifeFixture([sessionRow({ buddyChatId: 'research-chat' })])
+    t.live(true)
+    await t.poll()
+    await awake(t, BUDDY_SESSION_IDLE_MS)
+    await vi.waitFor(() => expect(ends(t)).toHaveLength(1))
+    expect(ends(t)[0]!.command).toMatchObject({ type: 'buddy.sessionEnd', conversationId: 'research-chat', thread: 'root-1' })
+  })
 
   it('ends one idle for 30 minutes, once, naming its own chat and thread, as the backend computes the chat', async () => {
     const t = lifeFixture([sessionRow()])
