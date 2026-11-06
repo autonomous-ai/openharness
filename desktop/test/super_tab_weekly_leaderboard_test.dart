@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/leaderboard/weekly_page.dart';
+import 'package:harness/super_tabs/view.dart';
 
 import 'support/capture.dart';
 import 'support/humans_fixture.dart';
@@ -120,6 +121,49 @@ void main() {
         expect(tester.takeException(), isNull);
       },
     );
+
+    testWidgets('Desktop opens the weekly board in ${brightness.name}', (
+      tester,
+    ) async {
+      final server = weeklySwarm();
+      final c = await showBoard(
+        tester,
+        server,
+        brightness: brightness,
+        size: const Size(1500, 900),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: grid.buildAppTheme(brightness: brightness),
+          home: Scaffold(
+            body: SuperTabView(
+              board: true,
+              controller: c,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Mac Studio',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-leaderboard')));
+      await tester.pumpAndSettle();
+      expect(find.text('This week'), findsOneWidget);
+      expect(find.byKey(const ValueKey('weekly-person-peer')), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byKey(const ValueKey('weekly-person-tony'))).dy,
+        lessThan(
+          tester
+              .getTopLeft(find.byKey(const ValueKey('weekly-person-owner')))
+              .dy,
+        ),
+      );
+      await captureWindow(tester, shots, 'weekly-desktop-${brightness.name}');
+      await tester.pumpWidget(const SizedBox());
+    });
   }
 
   testWidgets('failed reads clear the board and Retry recovers', (
