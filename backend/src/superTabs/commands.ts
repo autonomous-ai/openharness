@@ -24,7 +24,7 @@ import {
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, stepEndedRows, isStep, stepName, stepsOf, taskOwner } from './steps.js'
-import { reviewPlan, stepBrief, stepCheck, withHistoryBrief, type PlannedStep, type StepKind } from './reviewTable.js'
+import { reviewPlan, stepBrief, stepCheck, refreshStepBrief, type PlannedStep, type StepKind } from './reviewTable.js'
 import { builtBy, reviewerCandidates } from './reviewerPick.js'
 import { recordCheckVerdict } from './checkVerdicts.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
@@ -1885,7 +1885,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       let step = existing.find(s => free(s) && stepName(s) === planned.name) ?? existing.find(s => free(s) && stepKind(s) === planned.kind)
       if (step) {
         taken.add(step.id)
-        step.brief = withHistoryBrief(step.brief ?? '', read.heads ?? read.urls.map((url, i) => ({ url, head: i === 0 ? read.head : null })))
+        step.brief = refreshStepBrief(step.brief ?? '', planned, { number: task.number!, title: task.title,
+          pulls: read.heads ?? read.urls.map((url, i) => ({ url, head: i === 0 ? read.head : null })) })
       }
       if (step && activeWork(step)) continue
       // A step whose every check passed at this very head keeps its verdict: a repeated Ready (a CI rerun) asks nothing again.
