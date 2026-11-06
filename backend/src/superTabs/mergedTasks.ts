@@ -12,11 +12,14 @@ import { endSteps, isStep, stepEndedRows, stepsOf } from './steps.js'
 /** What a step of a merged task is told, and keeps as its result. */
 export const STEP_MERGED = 'Its task merged, so this step is closed.'
 
-/** The pull request of [group]'s own code whose merge is recorded, or undefined: a card of one of its code pull requests with a
- *  merge on it, never one only a merge record linked (cards.recorded: a merge of another task's pull request, Aster, #3259). */
+/** The last of [group]'s own code pull requests when every one of them has its merge recorded on its card, or undefined. Its own:
+ *  never one only a merge record linked (cards.recorded: a merge of another task's pull request, Aster, #3259). Every one: a task
+ *  that ships in two pull requests is merged once both are, never while one is still open (security review 1 of #3438). */
 export function ownMerge(group: Pick<Conversation, 'cards' | 'codePullRequestUrls' | 'pullRequestUrls'>): string | undefined {
-  const code = new Set(codePullRequests(group)), recorded = new Set(group.cards?.recorded ?? [])
-  return group.cards?.pullRequests?.find(card => card.mergedAt !== undefined && code.has(card.url) && !recorded.has(card.url))?.url
+  const recorded = new Set(group.cards?.recorded ?? [])
+  const own = codePullRequests(group).filter(url => !recorded.has(url))
+  const merged = (url: string) => !!group.cards?.pullRequests?.some(card => card.url === url && card.mergedAt !== undefined)
+  return own.length && own.every(merged) ? own.at(-1) : undefined
 }
 
 /** Ends [task]'s open steps with its merge: a working one as endSteps ends it, and a lost one too, which nobody takes now. The
