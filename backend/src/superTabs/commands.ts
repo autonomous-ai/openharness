@@ -30,6 +30,7 @@ import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type Rout
 import { routingOverrideSaveSchema } from './routingPolicy.js'
 import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
 import { projectRulesSchema, rulesDiff, rulesEqual, SEED_RULES, type ProjectRules } from './policy.js'
+import { machineRuleRefusal } from './machineRules.js'
 import { accessRefusal, changeAccess, expireAccess, taskAccess } from './machineAccess.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
@@ -3125,6 +3126,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         written ? { ...moved, projectSettings: 'off' } : moved)
       // Before it is queued: a machine that cannot get the app's token for it would fail it, and count that against its engine.
       requireRepositoryReach(state, teamAccountPool(state.machines?.find(m => m.machineId === request.machineId)), grant.machineOwnerId, home, context.repositoryReach)
+      // The project's machine rules (machineRules.ts), on the machine named and the one the start lands on (a Mac's Team account).
+      for (const machineId of new Set([named.machineId, request.machineId])) {
+        refuseByMachineRules(context, { machineId, engine: request.engine, review: !!startGroup.reviewOf })
+      }
       const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
       if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
@@ -4332,6 +4337,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const group = open(state, command.conversationId)
       const worker = agent(state, command.agentId)
       assignRefusal(group, worker)
+      refuseByMachineRules(context, { machineId: worker.machineId, engine: worker.configuration.engine, review: !!group.reviewOf })
       const home = groupProject(state, group)
       // An older client assigns in a custom role: kept for older readers, and the role name it means for a worker without
       // one (instructions.ts legacyRoleName). No command reads the role.
@@ -4694,6 +4700,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
 }
 
 /** Reject an invalid command result before the store tries to write duplicate message keys. */
+/** Refuses [work] its project's machine rules refuse now, with the rule's own why. A command whose record was not read
+ *  (none in its context) meets no rule. */
+function refuseByMachineRules(context: CommandContext, work: { machineId: string; engine: string; review: boolean }): void {
+  const why = machineRuleRefusal(context.projectRules?.rules.machines ?? [], work, context.now)
+  if (why) fail('MACHINE_RULE', why, 409)
+}
+
 export function assertUniqueMessageIds(commandType: string, messages: Array<{ id: string }>): void {
   const ids = new Set<string>()
   for (const draft of messages) {

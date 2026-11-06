@@ -2018,6 +2018,16 @@ export class SuperTabStore {
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)
       // A stale rules save is refused with the newest revision, to merge (policy.ts); null is the seed.
       if (command.type === 'rules.set') context.projectRules = await readRules(tx, tabId, command.projectId, true)
+      // A start or an assignment meets its project's machine rules (machineRules.ts): one indexed read of the newest revision.
+      // A record that does not pass the schema holds no rule here: the dispatch and new tasks already refuse it with its repair.
+      if (command.type === 'agent.start' || command.type === 'work.assign') {
+        const group = original.conversations.find(c => c.id === (command.type === 'agent.start' ? command.request.conversationId : command.conversationId))
+        if (group) context.projectRules = await currentRules(tx, tabId, groupProject(original, group).id).catch((error: unknown) => {
+          if (!(error instanceof SuperTabError) || error.code !== 'RULES_INVALID') throw error
+          logger.warn('[swarm-machine-rules] record invalid; no machine rule applied', { tabId, command: command.type })
+          return undefined
+        })
+      }
       if (command.type === 'crew.add' || command.type === 'work.lane' || command.type === 'work.define'
         || (command.type === 'conversation.create' && !command.reviewOf && !command.audience)) {
         authorizeCommandAccess(original, actor, command)
