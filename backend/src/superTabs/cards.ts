@@ -12,6 +12,9 @@ export interface GroupCards {
   task?: string
   /** Each linked pull request's card: the first main-chat message that linked it, and when a merge was recorded. */
   pullRequests?: PullRequestCard[]
+  /** Pull requests only a merge record linked as the task's code, none of its own words (commands.ts conversation.merged, #3574): the
+   *  record never makes one the task's own, so recording it again closes nothing. */
+  recorded?: string[]
   /** Its one line in its project chat and what it last showed (taskLine.ts). */
   line?: import('./taskLine.js').TaskLine
 }
