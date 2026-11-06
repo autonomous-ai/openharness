@@ -3,7 +3,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/buddy_rows.dart' show SuperTabCountBadge;
+import 'package:harness/super_tabs/identity.dart' show SuperTabAvatar;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart' show SuperTabAgent;
 import 'package:harness/super_tabs/places.dart';
@@ -94,12 +96,14 @@ void main() {
   }
 
   group('the org switcher is the first thing in the left pane', () {
-    testWidgets('on the Desktop it sits above the back and forward arrows '
-        'and Decisions', (tester) async {
+    // Task #4192 (anh Dee 11-07): no back and forward arrows under it; ⌘[ and ⌘] still step back and forward.
+    testWidgets('on the Desktop it sits above Decisions, with no back and '
+        'forward arrows', (tester) async {
       await show(tester);
       double top(String k) => tester.getTopLeft(key(k)).dy;
-      expect(top('super-swarm-switcher'), lessThan(top('super-back')));
       expect(top('super-swarm-switcher'), lessThan(top('super-decisions')));
+      expect(key('super-back'), findsNothing);
+      expect(key('super-forward'), findsNothing);
     });
 
     testWidgets('a layout that is not the Desktop\'s keeps its order', (
@@ -229,6 +233,27 @@ void main() {
       );
     });
 
+    // Task #4192 (anh Dee 11-07): his list showed about 30 rows, Team-account and finished agents he never started among
+    // them. The server says which agents are the reader's; the list follows it.
+    testWidgets('lists only the agents the server says are the reader\'s', (
+      tester,
+    ) async {
+      await show(
+        tester,
+        agents: [
+          {...buddy, 'myAgent': true},
+          {..._agent('kestrel', 'Kestrel'), 'myAgent': true},
+          {..._agent('avatarrow', 'Avatarrow'), 'myAgent': false},
+          {..._agent('fir', 'Fir'), 'myAgent': false},
+        ],
+        setup: agents,
+      );
+      expect(key('super-swarm-buddy'), findsOneWidget);
+      expect(key('super-agent-kestrel'), findsOneWidget);
+      expect(key('super-agent-avatarrow'), findsNothing);
+      expect(key('super-agent-fir'), findsNothing);
+    });
+
     testWidgets('a PM has a crown right after its name, a Regular agent '
         'none', (tester) async {
       await show(tester, agents: mine, setup: agents);
@@ -335,6 +360,78 @@ void main() {
       await tester.tap(key('super-new-agent-row'));
       await tester.pumpAndSettle();
       expect(created, ['new']);
+    });
+
+    // Task #4192: My agents folds with the same chevron as Projects, and the choice is remembered.
+    testWidgets('its heading folds and unfolds it, and the choice is saved', (
+      tester,
+    ) async {
+      late ConversationServer server;
+      final c = await show(
+        tester,
+        agents: mine,
+        setup: (s) {
+          server = s;
+          agents(s);
+        },
+      );
+      expect(key('super-agent-kestrel'), findsOneWidget);
+      await tester.tap(find.byTooltip('Collapse My agents'));
+      await tester.pump();
+      for (final row in [
+        'super-swarm-buddy',
+        'super-agent-kestrel',
+        'super-new-agent-row',
+      ]) {
+        expect(key(row), findsNothing, reason: row);
+      }
+      expect(key('project-sidebar-agents'), findsOneWidget);
+      expect(c.agentsGroupOpen, isFalse);
+      await tester.runAsync(c.flush);
+      final again = server.controller(initial: server.saved);
+      addTearDown(again.dispose);
+      expect(again.agentsGroupOpen, isFalse);
+      await tester.tap(find.byTooltip('Expand My agents'));
+      await tester.pump();
+      expect(key('super-agent-kestrel'), findsOneWidget);
+      expect(c.agentsGroupOpen, isTrue);
+      await tester.runAsync(c.flush);
+    });
+
+    // Task #4192: the Buddy wears the face every agent has, not the robot icon, and is still first.
+    testWidgets('the Buddy has the avatar every agent has, first', (
+      tester,
+    ) async {
+      await show(
+        tester,
+        agents: mine,
+        setup: (server) {
+          agents(server);
+          (server.state['conversations'] as List).add({
+            ...conversationFixture('swarm-buddy-owner', 'Buddy'),
+            'kind': 'swarm-buddy',
+            'buddyOwnerId': 'owner',
+            'agentIds': ['buddy'],
+          });
+        },
+      );
+      Finder inBuddy(Finder f) =>
+          find.descendant(of: key('super-swarm-buddy'), matching: f);
+      expect(inBuddy(find.byType(SuperTabAvatar)), findsOneWidget);
+      expect(inBuddy(find.byIcon(AppIcons.bot)), findsNothing);
+      expect(
+        tester.getSize(inBuddy(find.byType(SuperTabAvatar))),
+        tester.getSize(
+          find.descendant(
+            of: key('super-agent-kestrel'),
+            matching: find.byType(SuperTabAvatar),
+          ),
+        ),
+      );
+      expect(
+        top(tester, 'super-swarm-buddy'),
+        lessThan(top(tester, 'super-agent-kestrel')),
+      );
     });
 
     testWidgets('a layout that is not the Desktop\'s has no My agents', (
