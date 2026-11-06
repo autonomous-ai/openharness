@@ -1527,16 +1527,56 @@ static void swarm_pair(ht_scene_t *f, bool buddy)
     s.hits[s.hit_count++] = (hit_t){{X - 40, 382, HALF + 40, HT_HEIGHT - 382}, A_SIDE_PM, 0, true};
     s.hits[s.hit_count++] = (hit_t){{X + HALF, 382, HALF + 40, HT_HEIGHT - 382}, A_SIDE_BUDDY, 0, true};
 }
-// The Personal | Team picker: "Swarm" on the top arc and one 200 x 44 pill at y 211, the half of the Swarm on the face filled.
+/*
+ * The Personal | Team picker, option B (Diego, 2026-11-06: the 200 x 44 pill sat small in an empty glass). "Swarm" on the
+ * top arc and two rows of 340 x 104 px: Personal over Team, each with its icon, its name in Inter 30 and where it lands in
+ * Inter 20 (Personal: its project count; Team: the Swarm it opens), the one on the face filled with a green check.
+ */
+// 12 x 12 cells of 3 px, '#' ink: one person for Personal, and two (the second smaller, behind) for Team.
+static const ht_cell_frame_t *pick_icon(int which, bool on)
+{
+    static const char *const ME[12] = {
+        "....####....", "...######...", "...######...", "...######...", "....####....", "............",
+        "..########..", ".##########.", ".##########.", ".##########.", ".##########.", "............"};
+    static const char *const TEAM[12] = {
+        "...##.......", "..####..##..", "..####.####.", "..####.####.", "...##...##..", "............",
+        ".######.###.", "########.###", "########.###", "########.###", "########....", "............"};
+    static uint8_t cells[2][12 * 12];
+    static uint16_t palette[2][2][2];
+    static ht_cell_frame_t frames[2][2];
+    const char *const *art = which ? TEAM : ME;
+    for (int y = 0; y < 12; y++) for (int x = 0; x < 12; x++) cells[which][y * 12 + x] = art[y][x] == '#';
+    uint16_t c = color(on ? 0xffffff : 0x9a9ca3);
+    palette[which][on][0] = 0; palette[which][on][1] = (uint16_t)(c << 8 | c >> 8);   // panel order
+    frames[which][on] = (ht_cell_frame_t){.cols = 12, .rows = 12, .cell = 3, .palette = palette[which][on], .cells = cells[which]};
+    return &frames[which][on];
+}
+static void pick_row(ht_scene_t *f, int y, int which, const char *name, const char *detail, bool on)
+{
+    enum { X = 63, W = 340, H = 104, R = 28, ICON = 36 };
+    uint16_t fill = color(on ? 0x2b2d33 : 0x141518), edge = color(on ? 0x2b2d33 : 0x2e3035);
+    ht_box(f, X, y, W, H, R, fill, edge);
+    ht_cell_sprite(f, X + 26, y + (H - ICON) / 2, pick_icon(which, on));
+    const ht_font_t *big = &ht_lv_inter_30.base, *small = &ht_lv_inter_20.base;
+    int tx = X + 26 + ICON + 18, tw = W - (tx - X) - 26 - (on ? ht_done_28.width + 10 : 0);
+    ht_text(f, tx, y + 18, tw, big, on ? color(0xffffff) : color(0x9a9ca3), fill, name);
+    ht_text(f, tx, y + 18 + big->height + 4, tw, small, on ? color(0xc9cbd1) : color(0x9a9ca3), fill, detail);
+    if (on) ht_text(f, X + W - 26 - ht_done_28.width, y + (H - ht_done_28.height) / 2, ht_done_28.width, &ht_done_28,
+                    color(0x1fd13c), fill, HT_DONE);
+}
 static void render_swarm_pick(ht_scene_t *f)
 {
-    enum { X = 133, Y = 211, W = 200, H = 44, HALF = W / 2 };
-    const ht_supertab_t *t = swarm_here();
+    const ht_supertab_t *t = swarm_here(), *mine = swarm_pick_target(false), *team = swarm_pick_target(true);
+    bool personal = t && t->personal;
     ht_arc_title_face(f, FG, "Swarm", &ht_arc_inter_prop);
-    pill2(f, X, Y, W, H, "Personal", "Team", !(t && t->personal));
-    // A thumb's targets: each half 30 px wider and 40 px taller each way than it is drawn.
-    s.hits[s.hit_count++] = (hit_t){{X - 30, Y - 40, HALF + 30, H + 80}, A_PICK_PERSONAL, 0, true};
-    s.hits[s.hit_count++] = (hit_t){{X + HALF, Y - 40, HALF + 30, H + 80}, A_PICK_TEAM, 0, true};
+    char projects[32];
+    int n = mine ? mine->lead_n : 0;
+    snprintf(projects, sizeof projects, "%d project%s", n, n == 1 ? "" : "s");
+    pick_row(f, 120, 0, "Personal", projects, personal);
+    pick_row(f, 242, 1, "Team", team ? team->name : "", !personal);
+    // A thumb's targets: each row and half the gaps around it, meeting at y 233.
+    s.hits[s.hit_count++] = (hit_t){{43, 96, 380, 137}, A_PICK_PERSONAL, 0, true};
+    s.hits[s.hit_count++] = (hit_t){{43, 233, 380, 137}, A_PICK_TEAM, 0, true};
 }
 /*
  * Desktop's agent pattern (avatar_art.dart superTabAgentPattern; the daemon sends its 15 half bits and colour): mirrored on
@@ -5622,7 +5662,9 @@ void ui_supertab_focus(const char *tab, const char *lead)
     const ht_supertab_t *t = ht_supertabs_find(&swarm, tab);
     int i = swarm_lead_index(t, lead);
     // As `focus` today: never while talking, nor over a question or a form.
-    bool free = !s.voice_open && !question_view(s.view) && s.view != FORM && s.view != DRAFT && s.view != DRAFT_OPTIONS;
+    // Nor over the Personal | Team picker: the desktop's focus closed it under a thumb, whose tap then talked (Diego's dial,
+    // 2026-11-06); the pick itself moves the desktop.
+    bool free = !s.voice_open && !question_view(s.view) && s.view != FORM && s.view != DRAFT && s.view != DRAFT_OPTIONS && s.view != SWARM_PICK;
     sw.pending[0] = 0;
     // The app is on another Lead of the Swarm coming back: the face comes back on that one.
     if (i >= 0 && !strcmp(sw.lost.tab, tab)) COPY(sw.lost.lead, lead);
