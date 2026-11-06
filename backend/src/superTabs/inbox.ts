@@ -78,7 +78,7 @@ const MINUTE = 60_000
 /** [project]'s owed asks as the inbox's first lines: a what-changed note its PM has not confirmed (processNotes.ts, task #3581),
  *  then a header and one line per ask, oldest first. None when nothing is owed. */
 export function owedLines(state: SuperTabState, project: SwarmProject, now: number): string[] {
-  const process = noteLines(project)
+  const process = noteLines(state, project)
   const asks = state.conversations.filter(c => !c.archived && c.owed && (c.projectId ?? 'lead') === project.id)
     .flatMap(c => c.owed!.map(ask => ({ ...ask, conversationId: c.id }))).sort((a, b) => a.at - b.at)
   if (!asks.length) return process
