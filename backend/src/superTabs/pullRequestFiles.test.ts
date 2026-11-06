@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { vi as mock } from 'vitest'
 import { projectPullRequestFiles, type PullRequestFilesApp } from './pullRequestFiles.js'
 
 function fakeApp(files: Record<number, string[] | null>, heads: Record<number, string> = {}) {
@@ -22,6 +23,16 @@ describe('projectPullRequestFiles', () => {
     expect(read).toEqual({ urls: [`${REPO}/pull/7`, `${REPO}/pull/8`], head: 'abc1234', files: ['a.ts', 'b.ts', 'c.ts'],
       heads: [{ url: `${REPO}/pull/7`, head: 'abc1234', base: 'main' }, { url: `${REPO}/pull/8`, head: 'def5678', base: 'main' }] })
     expect(app.pullRequestFiles).toHaveBeenCalledTimes(2)
+    expect(app.revoke).toHaveBeenCalledWith('read-token')
+  })
+
+  it('attaches unknown history when it cannot be read, preserving the files and revoking the read-only token', async () => {
+    const app = fakeApp({ 7: ['a.ts'] }, { 7: 'a'.repeat(40) })
+    Object.assign(app, { get: mock.fn(async () => { throw new Error('history unavailable') }) })
+    const read = await projectPullRequestFiles(app)(REPO, [`${REPO}/pull/7`])
+    expect(read?.files).toEqual(['a.ts'])
+    expect(read?.heads?.[0]?.history).toMatchObject({ head: 'a'.repeat(40), planFirst: 'unknown', productionLines: null })
+    expect(app.createToken).toHaveBeenCalledWith(1, expect.anything(), expect.objectContaining({ contents: 'read', pull_requests: 'read' }))
     expect(app.revoke).toHaveBeenCalledWith('read-token')
   })
 

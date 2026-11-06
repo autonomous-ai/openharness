@@ -65,6 +65,33 @@ describe('a handed task opens its review steps', () => {
     expect(step.checks).toHaveLength(1)
   })
 
+  it('puts each PR history result in both security briefs and refreshes active and finished steps', () => {
+    const f = fixture()
+    f.add('rev-a', f.task, 'Reviewer'); f.add('rev-b', f.task, 'Reviewer')
+    const head = 'a'.repeat(40), next = 'b'.repeat(40)
+    const history = (head: string, productionLines: number) => ({ head, planFirst: 'pass' as const, testBeforeCode: 'pass' as const,
+      productionLines, totalLines: productionLines + 7, commits: 3, merges: 0, missingTests: [] })
+    const ready = (at: string, lines: number) => f.ready(['backend/src/routes/auth.ts'], at, true, { pullRequestFiles: {
+      urls: [PR], head: at, files: ['backend/src/routes/auth.ts'], heads: [{ url: PR, head: at, base: 'main', history: history(at, lines) }] } })
+    ready(head, 12)
+    const [first, second] = stepsOf(f.state, f.task)
+    for (const step of [first!, second!]) {
+      expect(step.brief).toContain('Plan first: pass')
+      expect(step.brief).toContain('Test before code: pass')
+      expect(step.brief).toContain('12 production lines')
+      expect(step.brief).toContain('does not prove a test failed')
+    }
+    f.run({ type: 'work.status', conversationId: first!.id, assignmentId: first!.assignment!.id, status: 'done', result: 'No' } as Command, f.as(first!.assignment!.agentId))
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'Fixing' } as Command, f.as(f.dev))
+    ready(next, 30)
+    for (const step of stepsOf(f.state, f.task)) {
+      expect(step.brief).toContain('30 production lines')
+      expect(step.brief).not.toContain('12 production lines')
+      expect(step.brief).toContain(next)
+      expect(step.brief!.match(/PR history checks/g)).toHaveLength(1)
+    }
+  })
+
   it('a docs pull request opens one read', () => {
     const f = fixture()
     const a = f.add('rev-a', f.task, 'Reviewer')
