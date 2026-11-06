@@ -7,9 +7,10 @@
 left on a member's shared model after a send-home is sent home again (Diego, 11-06, task #3810).
 
 **Architecture:**
-- CLI (`cli/src/superTabs/buddyModel.ts`): reports the sessions that stayed as `stayed: [harnessId]` next to the words. On a
-  send-home (`reason` set), it waits for a busy session's turn to end within the request's lease, remembering what already
-  moved so the main Buddy is never moved twice. A `sessionsOnly` request moves the sessions alone.
+- CLI (`cli/src/superTabs/buddyModel.ts`): reports the sessions that stayed as `stayed: [harnessId]` next to the words. The
+  Buddy's own result is never held up by a busy session: it is reported at once, with the session in `stayed` (Linux test of
+  #3393). A `sessionsOnly` request moves the sessions alone, and waits for a busy one's turn to end within its lease,
+  remembering what already moved.
 - Backend (`backend/src/superTabs/buddyModel.ts`): `buddyModelResult` records the model only on sessions that moved. A session
   left on a shared model by a move home is marked `homeOwed` ({reason, tries}). The liveness sweep (`unservedBuddyModels`)
   asks the Buddy's machine for a sessions-only move home, at most three tries, then tells the owner to end that session.
@@ -35,6 +36,6 @@ left on a member's shared model after a send-home is sent home again (Diego, 11-
 - platforms: CLI on every platform, and the backend.
 
 ## Review Focus
-- A send-home whose busy session outlasts the lease: reported in `stayed`, never left waiting for good.
-- The main Buddy moved once across retries.
+- A follow-up whose busy session outlasts the lease: reported in `stayed`, never left waiting for good.
+- The Buddy's own result is never held for a session.
 - A switch out with a session in `stayed`: left on its owner's subscription, nothing owed.

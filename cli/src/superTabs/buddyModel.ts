@@ -141,8 +141,9 @@ export class BuddyModelRequests {
         progress.moved.add(row.agent.harnessId)
         progress.fresh = moved.fresh
       }
-      // A thread session sent home while it answers is waited for like the Buddy, until shortly before the Swarm drops the
-      // request: then it is reported as stayed, so the Swarm records where it runs and asks again (task #3810).
+      // A thread session that is answering never holds up the Buddy's own result: it is reported as stayed, and the Swarm records
+      // the Buddy where it now runs at once (Linux test of #3393). The sessions-only follow-up the Swarm then asks for waits
+      // for its turn to end, until shortly before the Swarm drops the request; then it is reported as stayed again (#3810).
       const deadline = (request.at ?? progress.since) + LEASE_MS - 2 * RETRY_MS
       const stayed: Array<{ harnessId: string; why: string }> = []
       let busy = false
@@ -151,7 +152,7 @@ export class BuddyModelRequests {
         if (progress.moved.has(harnessId)) continue
         const result = await move(harnessId)
         if (!result.error) { progress.moved.add(harnessId); continue }
-        if (result.error === 'AGENT_BUSY' && request.reason && now < deadline) { busy = true; continue }
+        if (result.error === 'AGENT_BUSY' && request.sessionsOnly && now < deadline) { busy = true; continue }
         stayed.push({ harnessId, why: result.error === 'AGENT_BUSY' ? 'it was answering' : refusal(result.error, request, result.detail) })
       }
       if (busy) return 'wait'
