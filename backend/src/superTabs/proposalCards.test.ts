@@ -31,7 +31,7 @@ describe('proposal card creation', () => {
     f.state.people.find(p => p.id === peer.userId)!.role = role
     const sent = f.create(), card = f.card(sent.result.conversationId)
     expect(card).toMatchObject({ title: 'Offline edits', projectId: 'lead', requesterId: peer.userId, priority: 'P2', assignment: null,
-      proposal: { version: 1, ...proposal, createdAt: NOW, senders: [{ personId: peer.userId,
+      proposal: { version: 1, text: words, goal: 'Keep drafts', why: 'People lose offline work', doneWhen: 'Reconnect restores edits', evidence: ['Reproduced with network disabled'], priority: 'P2', createdAt: NOW, senders: [{ personId: peer.userId,
         generation: f.state.people.find(p => p.id === peer.userId)!.generation }], questions: [] } })
     expect(card.task).toBeUndefined()
     expect(queueSiblings(f.state, f.state.projects![0]!)).not.toContainEqual(card)
@@ -87,7 +87,7 @@ describe('proposal card creation', () => {
     const sent = f.run(input, buddy, { proposalAsk: ask })
     expect(sent.messages[0]).toMatchObject({ conversationId: 'lead', source: { kind: 'buddy-proposal', priority: 'high' } })
     expect(sent.result.conversationId).toBeUndefined()
-    expect(() => f.run({ ...input, priority: 'P0' }, buddy, { proposalAsk: ask })).toThrow(expect.objectContaining({ code: 'BOARD_MODE_REQUIRED' }))
+    expect(() => f.run({ ...input, ownerMessageId: 'ask2', priority: 'P0' }, buddy, { proposalAsk: { ...ask, id: 'ask2', newestOwnerMessageId: 'ask2' } })).toThrow(expect.objectContaining({ code: 'BOARD_MODE_REQUIRED' }))
   })
 
   it('retains proposal authorization metadata in light delivery loads', () => {

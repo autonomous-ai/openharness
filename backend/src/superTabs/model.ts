@@ -461,6 +461,7 @@ export interface Conversation {
   /** Counts reaction changes here (reactions.ts), so readers see a new reaction on an older message. */
   reactionSeq?: number
   /** A Buddy chat's owner messages its Buddy already proposed for (buddies.ts): each asks once. */
+  proposal?: import('./proposalCards.js').ProposalRecord
   proposals?: string[]
   /** The name a Buddy chat's owner chose for their Buddy (buddies.ts renameBuddy): kept here, which outlives the Buddy, so
    *  one added again takes it. Absent: the default, "<person>'s Buddy". */
