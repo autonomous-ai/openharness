@@ -4,7 +4,7 @@
  * the server's words; the person card shows the rest. Someone else's work is what Lent counts (leaderboard/lent.ts): a
  * task its machine's contributor did not ask for, never a PM's or a private chat's.
  */
-import { openSwarmBuddyChat } from './buddies.js'
+import { defaultBuddyChat } from './buddies.js'
 import { homeOf, weeklyUse } from './leaderboard/brought.js'
 import { weekStart } from './leaderboard/week.js'
 import { isLeads, type Agent, type Conversation, type SuperTabState } from './model.js'
@@ -39,7 +39,7 @@ export function othersWorkNotice(state: SuperTabState, group: Conversation, work
   const readable = canReadProject(state, { kind: 'person', userId: owner.id, email: owner.email }, groupProject(state, group))
   const use = weeklyUse(home, worker.configuration.engine)
   const used = use.usedPercent == null ? '' : `, ${Math.round(use.usedPercent)}% of this week used${use.resetsAt == null ? '' : `, resets in ${until(use.resetsAt, now)}`}`
-  return { conversationId: openSwarmBuddyChat(state, owner).id, machineId: pool.machineId,
+  return { conversationId: defaultBuddyChat(state, owner).id, machineId: pool.machineId,
     text: `${requester ? `${requester}'s` : 'A teammate\'s'} work${readable ? ` "${group.title}"` : ''} started on your ${home.name} (${engineName}${used}). `
       + 'Members › your card shows what it runs and ships; Manage › Machines can pause new work.' }
 }
