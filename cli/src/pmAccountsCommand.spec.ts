@@ -8,8 +8,8 @@ const dirs: string[] = []
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }) })
 
 const ACCOUNTS = [
-  { id: 'default', label: 'Default', email: 'me@x.com', pmMayUse: true, pmHere: ['Mia'], windows: [{ name: '5-hour', leftPercent: 80 }, { name: 'weekly', leftPercent: 40 }] },
-  { id: 'abc', label: 'Work', email: 'work@x.com', pmMayUse: false, pmHere: [], windows: [{ name: '5-hour', leftPercent: 3, resetsAt: '2026-11-06T10:00:00Z' }] },
+  { id: 'default', label: 'Default', email: 'me@x.com', default: true, signedIn: true, pmMayUse: true, pmHere: ['Mia'], windows: [{ name: '5-hour', leftPercent: 80 }, { name: 'weekly', leftPercent: 40 }] },
+  { id: 'abc', label: 'Work', email: 'work@x.com', signedIn: true, pmMayUse: false, pmHere: [], windows: [{ name: '5-hour', leftPercent: 3, resetsAt: '2026-11-06T10:00:00Z' }] },
 ]
 
 function setup(opts: { login?: number; status?: number } = {}) {
@@ -27,11 +27,12 @@ exit ${opts.status ?? 0}
     argv, home: root, claudeBin: bin, env: {},
     request: async (type, payload) => {
       requests.push([type, payload])
-      if (type === 'pm_accounts_list') return { accounts: ACCOUNTS }
-      if (type === 'pm_accounts_history') return { moves: [
+      const requestId = String(requests.length)
+      if (type === 'pm_accounts_list') return { requestId, accounts: ACCOUNTS }
+      if (type === 'pm_accounts_history') return { requestId, moves: [
         { at: 1000, pm: 'Mia', from: 'default', to: 'abc', why: 'low', awayMs: 5000, ok: true },
         { at: 2000, pm: 'Leo', from: 'abc', to: 'default', why: 'out', ok: false }] }
-      return { pool: [] }
+      return { requestId, pool: [] }
     },
     link: folder => { linked.push(folder); return { profile: { id: 'new1', label: 'Claude 3' } as never } },
     output: l => out.push(l), error: l => err.push(l),
@@ -196,5 +197,43 @@ describe('harness pm accounts', () => {
     d.request = async () => { throw new Error('The Harness daemon is not running.') }
     expect(await pmAccountsCommand(d)).toBe(1)
     expect(t.err).toEqual(['The Harness daemon is not running.'])
+  })
+
+  it.each([
+    { name: 'listing accounts is refused', argv: [], refused: 'pm_accounts_list', error: 'OWNER_REQUIRED' },
+    { name: 'reading accounts fails', argv: [], refused: 'pm_accounts_list', error: 'PM_ACCOUNTS_FAILED' },
+    { name: 'ticking an account is refused', argv: ['use', 'Work'], refused: 'pm_accounts_use', error: 'NOT_FOUND' },
+    { name: 'unticking an account is refused', argv: ['use', '--off', 'Default'], refused: 'pm_accounts_use', error: 'OWNER_REQUIRED' },
+    { name: 'ticking a newly added account fails', argv: ['add'], refused: 'pm_accounts_use', error: 'PM_ACCOUNTS_FAILED' },
+    { name: 'reading history is refused', argv: ['history'], refused: 'pm_accounts_history', error: 'OWNER_REQUIRED' },
+    { name: 'looking up an account to tick fails', argv: ['use', 'Work'], refused: 'pm_accounts_list', error: 'PM_ACCOUNTS_FAILED' },
+    { name: 'looking up history account names fails', argv: ['history'], refused: 'pm_accounts_list', error: 'PM_ACCOUNTS_FAILED' },
+  ])('reports the daemon error without a success or empty result when $name', async ({ argv, refused, error }) => {
+    const t = setup()
+    const d = t.deps(argv)
+    const request = d.request
+    // cli.ts forwards openDaemon's payload: even a refusal resolves with requestId and error.
+    d.request = async (type, payload) => type === refused ? { requestId: 'refused-request', error } : request(type, payload)
+
+    const code = await pmAccountsCommand(d)
+
+    expect({ code, out: t.out, err: t.err }).toEqual({
+      code: 1,
+      out: argv[0] === 'add' ? ['Signing in a new Claude account. Follow the link Claude prints.'] : [],
+      err: [error],
+    })
+  })
+
+  it.each([
+    { name: 'accounts', argv: [], reply: { requestId: 'empty-list', accounts: [] }, output: 'No Claude accounts on this machine yet. Add one with `harness pm accounts add`.' },
+    { name: 'history', argv: ['history'], reply: { requestId: 'empty-history', moves: [] }, output: 'No account moves yet.' },
+  ])('reports a successful empty $name result', async ({ argv, reply, output }) => {
+    const t = setup()
+    const d = t.deps(argv)
+    d.request = async () => reply
+
+    const code = await pmAccountsCommand(d)
+
+    expect({ code, out: t.out, err: t.err }).toEqual({ code: 0, out: [output], err: [] })
   })
 })
