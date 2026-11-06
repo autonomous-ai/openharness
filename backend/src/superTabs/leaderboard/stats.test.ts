@@ -25,9 +25,9 @@ function group(extra: Partial<Conversation> & { ledger?: GroupLedger; status?: W
   return { id, projectId: 'lead', title: `Group ${id}`, leadId: null, agentIds: [], archived: false, brief: 'Do it', checks: [], assignment,
     lastMessageSequence: 0, ...rest }
 }
-/** A request by [requesterId] asked at [askedAt] and shipped at [shippedAt] with a linked PR. */
+/** A request by [requesterId] asked at [askedAt] and shipped at [shippedAt]: its linked PR merged then. */
 const shipped = (requesterId: string, askedAt: number, shippedAt: number, extra: Partial<Conversation> = {}) =>
-  group({ requesterId, status: 'done', pullRequestUrls: ['https://github.com/o/r/pull/1'], ledger: { askedAt, shippedAt }, ...extra })
+  group({ requesterId, status: 'done', pullRequestUrls: ['https://github.com/o/r/pull/1'], ledger: { askedAt, shippedAt, mergedAt: shippedAt }, ...extra })
 const answered = (...unblocks: Array<[personId: string, at: number, waitedMs: number]>) =>
   group({ status: 'working', ledger: { unblocks: unblocks.map(([personId, at, waitedMs]) => ({ personId, at, waitedMs })) } })
 function machine(contributorId: string, lent: Array<[week: number, busyMs: number]>, machineId = `mac-${contributorId}`): ContributedMachine {
@@ -48,6 +48,11 @@ describe('Shipped: requests a person asked for, done with a linked PR, 3 points 
   it('needs a linked PR: done work without one has not landed', () => {
     const view = board(swarm(), [shipped('dee', WEEK, WEEK + HOUR, { pullRequestUrls: [] })])
     expect(person(view, 'dee').shipped.count).toBe(0)
+  })
+
+  it('needs the PR merged: work Done with a linked PR nobody merged has not shipped (task #4217)', () => {
+    const view = board(swarm(), [shipped('dee', WEEK, WEEK + HOUR, { ledger: { askedAt: WEEK, shippedAt: WEEK + HOUR } })])
+    expect(person(view, 'dee')).toMatchObject({ points: 0, shipped: { count: 0 } })
   })
 
   it('counts a request, not its review group, and never a group nobody asked for', () => {
