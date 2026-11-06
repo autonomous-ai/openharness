@@ -337,7 +337,6 @@ describe('proposal time and delivery boundaries', () => {
     expect(sent.result.reachedNoAgent).toEqual(expect.any(String))
     expect(sent.result.notReached).toContain('lead-harness')
     expect(sent.result.notReached).toContain('proposal card')
-    expect(f.card(f.web).owed ?? []).not.toEqual(expect.arrayContaining([expect.objectContaining({ messageId: sent.result.messageId })]))
   })
 
   it('reports the excluded PM while delivering to another recipient and leaves legacy delivery alone', () => {

@@ -61,7 +61,7 @@ describe('durable proposal cards', () => {
 
   it('tells senders the PM was excluded and persists only the recipients that will receive a chat post', async () => {
     const f = await fixture()
-    const worker = String((await f.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'proposal-mac', harnessId: randomUUID(), name: 'Worker', configuration: config })).result.agentId)
+    const worker = String((await f.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'proposal-mac', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId)
     for (const asAgent of [undefined, worker]) {
       const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'For the PM', recipientIds: [f.pm], replyTo: null }, owner, asAgent)
       expect(sent.result.reachedNoAgent).toEqual(expect.any(String))
