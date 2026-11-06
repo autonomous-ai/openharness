@@ -63,23 +63,23 @@ for a task. Three changes:
 
 **Files:** backend/src/superTabs/store.ts, backend/integration/superTabCommandLoads.test.ts
 
-- [ ] Test: with the production hooks, work.assign and a Ready load the Swarm at most twice (head reads), today 3 and 4.
-- [ ] Watch it fail; commit.
-- [ ] Code: a per-command lazy load the pre-reads share; watch it pass; commit.
+- [x] Test: with the production hooks, work.assign and a Ready load the Swarm at most twice (head reads), today 3 and 4.
+- [x] Watch it fail; commit.
+- [x] Code: a per-command lazy load the pre-reads share; watch it pass; commit.
 
 ## Task 2: Dispatch only when there is a pick
 
 **Files:** backend/src/superTabs/store.ts, backend/integration/crewDispatch.test.ts
 
-- [ ] Test: a freeing write with nobody free, or nothing to hand out, schedules no pass; one with a pick does.
-- [ ] Watch it fail; commit.
-- [ ] Code: the gate; watch it pass; commit.
+- [x] Test: a freeing write with nobody free, or nothing to hand out, schedules no pass; one with a pick does.
+- [x] Watch it fail; commit.
+- [x] Code: the gate; watch it pass; commit.
 
 ## Task 3: Commands by type
 
 **Files:** backend/src/superTabs/commandStats.ts (+ test), backend/src/superTabs/store.ts, backend/src/server.ts
 
-- [ ] Test: the line lists each type's count, p50, p95, max, retried and refused; empty windows log nothing.
-- [ ] Test: a command through the store is recorded with its type and one attempt.
-- [ ] Watch them fail; commit.
-- [ ] Code; watch them pass; commit.
+- [x] Test: the line lists each type's count, p50, p95, max, retried and refused; empty windows log nothing.
+- [x] Test: a command through the store is recorded with its type and one attempt.
+- [x] Watch them fail; commit.
+- [x] Code; watch them pass; commit.
