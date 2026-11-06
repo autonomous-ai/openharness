@@ -65,7 +65,7 @@ let pullNumbers = 100
 
 /** A Swarm with a Lead and a task, "Ship the parser", assigned to a worker that linked [PR] in its status. */
 /** [reads]: the store reads GitHub through the same fake when a verdict or a Ready needs the head now (#3628). */
-async function swarm({ reads = false } = {}) {
+async function swarm({ reads = false, brief = 'Implement it' } = {}) {
   const number = ++pullNumbers, PR = `https://github.com/acme/app/pull/${number}`
   const pull = (patch: Partial<PullRequestWatch> = {}): PullRequestWatch => ({ url: PR, number, state: 'open', draft: false, head: HEAD, base: 'main',
     mergeable: true, checkRuns: [], checkSuites: [], reviews: [], comments: [], ...patch })
@@ -82,7 +82,7 @@ async function swarm({ reads = false } = {}) {
   const add = async (conversationId: string, machineId: string, name: string, lead = false) => String((await execute({ type: 'agent.add',
     conversationId, machineId, harnessId: randomUUID(), name, configuration: config, lead })).result.agentId)
   const lead = await add('lead', 'lead-host', 'Lead', true)
-  const task = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
+  const task = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief,
     checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
   const worker = await add(task, 'test-host', 'Worker')
   const assignment = String((await execute({ type: 'work.assign', conversationId: task, agentId: worker })).result.assignmentId)
@@ -512,6 +512,7 @@ describe('pull request events', () => {
       expect(await review(HEAD)).toMatchObject({ counts: true })
       expect(await review(HEAD3)).toMatchObject({ counts: true })
       f.pulls.set(f.PR, f.pull({ head: HEAD2 }))
+      f.clock.advance(30_000)
       expect(await review(HEAD)).toMatchObject({ counts: false })
       expect(await recorded()).toMatchObject({ head: HEAD2 })
       expect((await checks())[0]!.passedBy).toBeNull()
@@ -527,7 +528,74 @@ describe('pull request events', () => {
     it('a Ready reads the head of the pull request it names', async () => {
       const { f, recorded } = await pushed()
       await f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'review', result: `Ready for review: ${f.PR}` }, host, f.worker)
-      expect(await recorded()).toMatchObject({ head: HEAD3, patch: 'p3' })
+      await vi.waitFor(async () => expect(await recorded()).toMatchObject({ head: HEAD3, patch: 'p3' }))
+    })
+
+    it('repeated checks at an old head share one GitHub read within 30 seconds', async () => {
+      const { f, review, test, recorded } = await pushed()
+      f.asked.length = 0
+      expect(await review(HEAD2)).toMatchObject({ counts: false })
+      expect(await test(HEAD2)).toMatchObject({ counts: false })
+      expect(await review(HEAD2)).toMatchObject({ counts: false })
+      expect(f.asked).toEqual([f.PR])
+      expect(await recorded()).toMatchObject({ head: HEAD3 })
+      expect(await review(HEAD3)).toMatchObject({ counts: true })
+      expect(f.asked).toEqual([f.PR])
+      f.clock.advance(30_000)
+      await review(HEAD2)
+      expect(f.asked).toEqual([f.PR, f.PR])
+    })
+
+    it('refreshes and records its code PR, ignoring watched PRs merely referenced in its brief', async () => {
+      const other = 'https://github.com/acme/app/pull/90001', another = 'https://github.com/acme/app/pull/90002'
+      const f = await swarm({ reads: true, brief: `Follow ${other} and ${another}` })
+      f.pulls.set(f.PR, f.pull())
+      for (const url of [other, another]) f.pulls.set(url, { ...f.pull({ head: HEAD2 }), url })
+      await f.pass()
+      const reviewer = await f.add(f.task, 'test-host', 'Reviewer')
+      const read = async () => (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === f.task)!
+      const checkId = (await read()).checks[0]!.id
+      f.pulls.set(f.PR, f.pull({ head: HEAD3 }))
+      f.asked.length = 0
+      const checked = await f.execute({ type: 'work.check', conversationId: f.task, assignmentId: f.assignment, checkId,
+        passed: true, evidence: 'Read the own PR', head: HEAD3, base: 'main' } as Command, host, reviewer)
+      expect(checked.result).toMatchObject({ counts: true })
+      expect(f.asked).toEqual([f.PR])
+      expect((await read()).checks[0]!.verdicts!.at(-1)).toMatchObject({ pullRequest: f.PR, head: HEAD3, base: 'main' })
+    })
+
+    it('applies one shared GitHub observation to two tasks reviewing the same code PR', async () => {
+      const { f, review } = await pushed()
+      const second = String((await f.execute({ type: 'conversation.create', title: 'Second task', brief: 'Same branch',
+        checks: [{ description: 'Verified', independent: false }] } as Command)).result.conversationId)
+      const secondWorker = await f.add(second, 'lead-host', 'Second worker')
+      const assignment = String((await f.execute({ type: 'work.assign', conversationId: second, agentId: secondWorker })).result.assignmentId)
+      await f.execute({ type: 'work.status', conversationId: second, assignmentId: assignment, status: 'working', result: `Draft ${f.PR}` }, host, secondWorker)
+      const reviewer = await f.add(second, 'lead-host', 'Second reviewer')
+      const read = async () => (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === second)!
+      const checkId = (await read()).checks[0]!.id
+      f.asked.length = 0
+      expect(await review(HEAD3)).toMatchObject({ counts: true })
+      expect((await f.execute({ type: 'work.check', conversationId: second, assignmentId: assignment, checkId, passed: true,
+        evidence: 'Reads right', head: HEAD3, base: 'main' } as Command, host, reviewer)).result).toMatchObject({ counts: true })
+      expect((await read()).pullRequestHeads?.[f.PR]).toMatchObject({ head: HEAD3 })
+      expect(f.asked).toEqual([f.PR])
+    })
+
+    it('returns Ready while GitHub is pending, then records the head in the background', async () => {
+      const { f, recorded } = await pushed()
+      let release!: () => void, started = false, returned = false
+      const gate = new Promise<void>(resolve => { release = resolve })
+      const watch = f.reader.watch
+      f.reader.watch = async url => { started = true; await gate; return watch(url) }
+      const ready = f.execute({ type: 'work.status', conversationId: f.task, assignmentId: f.assignment, status: 'review',
+        result: `Ready for review: ${f.PR}` }, host, f.worker).then(value => { returned = true; return value })
+      try {
+        await vi.waitFor(() => expect(started).toBe(true))
+        await vi.waitFor(() => expect(returned).toBe(true))
+        expect(await recorded()).toMatchObject({ head: HEAD })
+      } finally { release(); await ready }
+      await vi.waitFor(async () => expect(await recorded()).toMatchObject({ head: HEAD3, patch: 'p3' }))
     })
   })
 })
