@@ -29,6 +29,7 @@ import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
 import { profiledReads } from './profiledReads.test-support.js'
+import { quotaReset } from './holds.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -832,7 +833,7 @@ describe('decisions asked of one person (v2)', () => {
     const s = await scene(withoutPm)
     clock = Date.now()
     const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
-    const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Ship to everyone?',
+    const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: quotaReset(), result: 'Ship to everyone?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'Turning it on' } }, owner, s.worker)
     expect(needs.status, JSON.stringify(needs.body)).toBe(200)
     const [open] = await decisions(s.tabId, peer)
@@ -930,7 +931,7 @@ describe('decisions asked of one person (v2)', () => {
     const s = await scene(withoutPm)
     clock = Date.now()
     const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
-    await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Ship to everyone?',
+    await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: quotaReset(), result: 'Ship to everyone?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'Turning it on' } }, owner, s.worker)
     await writeGroup(s.tabId, s.web, Date.now(), group => { group.dormant = true })
     const first = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data
@@ -1270,7 +1271,7 @@ describe('decisions asked of one person (v2)', () => {
       projectId: 'lead', conversationId: s.web, assignmentId, personId: peer.sub, askerAgentId: s.worker, question: `Question ${i + 1}?`,
       options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release', createdAt: new Date() })) })
     const before = (await assignment()).leaseUntil as number
-    const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Ship how?',
+    const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: quotaReset(), result: 'Ship how?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
     expect(needs.status, JSON.stringify(needs.body)).toBe(200)
     const notAsked = `Not asked peer: 20 decisions you asked them are still open, and at most 20 can be. Wait for answers before asking more.`
@@ -1282,7 +1283,7 @@ describe('decisions asked of one person (v2)', () => {
     expect(notice).toMatchObject({ text: `Needs a human\n\nShip how?\n\n${notAsked}`, recipientIds: [s.lead] })
     expect(await db.superTabDecision.count({ where: { tabId: s.tabId, askerAgentId: s.worker } })).toBe(20)
     // A repeat of one still open is that decision again, so it is asked as before.
-    const repeat = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Question 1?',
+    const repeat = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: quotaReset(), result: 'Question 1?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
     expect(repeat.body.data.result.notAsked).toBeUndefined()
     expect((await db.superTabMessage.findFirst({ where: { tabId: s.tabId, conversationId: s.web }, orderBy: { sequence: 'desc' } }))!.text)
@@ -1313,7 +1314,7 @@ describe('decisions asked of one person (v2)', () => {
     const [other] = (await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub,
       questions: [{ ...question('Ship how?'), options: ['Today', 'Next week'] }] }, owner, s.lead)).body.data.result.decisionIds as string[]
     const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
-    expect((await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: { kind: 'reset', what: 'quota', at: '2026-11-06T09:00:00.000Z' }, result: 'Ship how?',
+    expect((await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: quotaReset(), result: 'Ship how?',
       ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)).status).toBe(200)
     const open = await decisions(s.tabId, peer)
     // The worker's same question is the PM's crew need (crewNeeds.ts, task #3404): it opens nothing for peer.
