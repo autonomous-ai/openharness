@@ -9,7 +9,7 @@ import { isBuddy } from './buddies.js'
 import { MODEL_CATALOG, namedDefault } from './catalog.js'
 import { roleNameOf } from './instructions.js'
 import { activeWork, workerIndex, type Agent, type CheckVerdict, type Conversation, type SuperTabState } from './model.js'
-import { agentProjectId, groupProject } from './projects.js'
+import { agentProjectId, groupProject, onTeamAccount } from './projects.js'
 import { agentTarget, modelMatches } from './rules.js'
 import { canStart, standing } from './reviewSeats.js'
 import { stepsOf } from './steps.js'
@@ -82,7 +82,8 @@ export function reviewerCandidates(state: SuperTabState, task: Conversation, kin
     .filter(verdict => atHead(verdict, head)).map(verdict => verdict.by))
   const ranked = state.agents.flatMap(agent => {
     if (built.has(agent.id) || index.leaders.has(agent.id) || index.working.has(agent.id) || holding.has(agent.id)) return []
-    if (isBuddy(agent) || agent.workDecision === 'stop' || agentProjectId(state, agent) !== projectId) return []
+    // Nor a Team account's agent, which takes no new work (task #4120).
+    if (isBuddy(agent) || agent.workDecision === 'stop' || onTeamAccount(state, agent) || agentProjectId(state, agent) !== projectId) return []
     if (judged.has(`agent:${agent.id}`)) return []
     const role = roleNameOf(state, agent)
     if (NEVER.test(role) || NEVER_NAMED.test(agent.name) || NEVER_NAMED.test(agent.displayName ?? '')) return []

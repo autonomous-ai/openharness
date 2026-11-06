@@ -79,8 +79,9 @@ async function swarm({ reads = false } = {}) {
   for (const [machineId, name] of [['lead-host', 'Lead Mac'], ['test-host', 'Worker Mac']]) {
     await execute({ type: 'machine.contribute', machineId: machineId!, name: name!, cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
   }
+  // Added by the host, whose machines they run on: an agent is its own person's, on their own computer (task #4120).
   const add = async (conversationId: string, machineId: string, name: string, lead = false) => String((await execute({ type: 'agent.add',
-    conversationId, machineId, harnessId: randomUUID(), name, configuration: config, lead })).result.agentId)
+    conversationId, machineId, harnessId: randomUUID(), name, configuration: config, lead }, host)).result.agentId)
   const lead = await add('lead', 'lead-host', 'Lead', true)
   const task = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
     checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
