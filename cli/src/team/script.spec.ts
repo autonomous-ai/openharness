@@ -115,7 +115,7 @@ describe('setup script', () => {
   it('hands over a sign-in only when the team account has none, unless asked again', () => {
     expect(buildSetupScript(input())).toContain("SIGN_IN='missing'")
     expect(buildSetupScript(input({ signIn: 'always' }))).toContain("SIGN_IN='always'")
-    expect(buildSetupScript(input())).toContain('if [ "$SIGN_IN" = always ] || [ ! -s "$TEAM_SESSION" ] || grep -q \'"signedOut"\' "$TEAM_SESSION" 2>/dev/null; then')
+    expect(buildSetupScript(input())).toContain('if [ "$SIGN_IN" = always ] || [ ! -s "$TEAM_SESSION" ] || as_team /usr/bin/grep -q \'"signedOut"\' "$TEAM_SESSION" 2>/dev/null; then')
   })
 
   // #3684 (kelvin1295, 11-06): a revoked sign-in is kept on disk, marked signed out (lib/authSession.ts), so the file is not
@@ -127,7 +127,8 @@ describe('setup script', () => {
       const handsOver = (content: string, mode = 'missing') => {
         const file = join(dir, 'session.json')
         writeFileSync(file, content)
-        return execFileSync('/bin/sh', ['-c', `${line} echo yes; else echo no; fi`], {
+        // as_team runs as the Team account in the script; here this account is the one reading its own file.
+        return execFileSync('/bin/sh', ['-c', `as_team() { "$@"; }; ${line} echo yes; else echo no; fi`], {
           env: { PATH: '/usr/bin:/bin', SIGN_IN: mode, TEAM_SESSION: file }, encoding: 'utf8', windowsHide: true }).trim()
       }
       expect(handsOver('')).toBe('yes')
@@ -135,6 +136,9 @@ describe('setup script', () => {
       expect(handsOver('{"accessToken":"a","refreshToken":"r","signedOut":{"at":1,"reason":"revoked"}}\n')).toBe('yes')
       expect(handsOver('{"accessToken":"a","refreshToken":"r","signedOut":{"at":1,"reason":"refresh-refused","retryAt":2}}\n')).toBe('yes')
       expect(handsOver('{"accessToken":"a","refreshToken":"r"}\n', 'always')).toBe('yes')
+      // Security review 1 of #3331: the file is the Team account's, which can make it a link anywhere: root never reads
+      // it, the account itself does, as every other step touches its home.
+      expect(line).toContain('as_team /usr/bin/grep -q')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
