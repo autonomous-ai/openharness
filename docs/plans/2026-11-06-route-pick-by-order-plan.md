@@ -43,3 +43,14 @@ reads the record kinds that exist (forbidModel, machines, minEffort) through the
 - [ ] Failing tests: following the pick needs no reason; another candidate without a reason is refused; with a reason it is
       recorded as an override.
 - [ ] Code.
+
+## Task 4: Lane dispatch skips a member too weak for the task (`dispatch.ts`, `model.ts`, `commands.ts`)
+(Added at River's word, 11-06: dispatch gave a big, risky task to a Sonnet member.)
+**Files:** `backend/src/superTabs/dispatch.ts`, `model.ts`, `commands.ts` (task contract), `dispatch.test.ts`
+**Interfaces:** `WorkTask.strength?: 'standard' | 'strong'`, set by the PM with the brief (big, hard or risky work is `strong`);
+a task asking for two reviews counts as `strong` too. `candidatesFor` leaves out a `strong` task for a member whose model is not
+Opus or Astra (the Routing rule for big or risky work), so a weaker member keeps waiting for work it may take. A pinned task
+(a member sent back for its own CI or conflict) is not skipped: it is that member's own work.
+- [ ] Failing tests: a Sonnet member is not handed a `strong` task, an Opus member is; a `standard` task goes to either;
+      a pin stays with its member.
+- [ ] Code.
