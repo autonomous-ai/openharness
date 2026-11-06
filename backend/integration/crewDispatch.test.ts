@@ -279,6 +279,17 @@ describe('the crew dispatch pass', () => {
     expect(await s.holders()).toEqual({ Api: 'Ash' })
   })
 
+  // Security review 1 of #3964: a record broken elsewhere still applies the machine rules it holds that pass.
+  it('applies the machine rules of a record that fails the schema elsewhere, to an assignment', async () => {
+    const s = await swarm({ Ash: 'backend' }, { Api: 'backend/src/a.ts' })
+    const rule = { machineIds: ['owner-mac'], why: 'This Mac takes no new work for now', noEngines: ['claude' as const] }
+    await save(s, 0, { machines: [rule] })
+    await db.superTabProjectRules.updateMany({ where: { tabId: s.tab, projectId: 'lead' },
+      data: { rules: { ...structuredClone(SEED_RULES), dispatch: { ...SEED_RULES.dispatch, maxHanded: 0 }, machines: [rule] } } })
+    await expect(s.execute({ type: 'work.assign', conversationId: s.tasks.Api!, agentId: s.crew.Ash! }, s.pm))
+      .rejects.toMatchObject({ code: 'MACHINE_RULE', message: 'This Mac takes no new work for now' })
+  })
+
   it('hands a free member its pinned task first, then its lane\'s top task, as the PM, through work.assign', async () => {
     const s = await swarm({ Ash: 'backend', Birch: 'desktop' }, { Api: 'backend/src/a.ts', Store: 'backend/src/b.ts', Board: 'desktop/lib/c.dart' })
     await editGroup(s.tab, s.tasks.Store!, group => ({ ...group, pin: { agentId: s.crew.Ash!, why: 'ci', at: NOW } }))
