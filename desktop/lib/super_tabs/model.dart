@@ -424,6 +424,13 @@ class SuperTabConversation {
       releasing = row['releasing'] is List
           ? List.unmodifiable((row['releasing'] as List).whereType<String>())
           : null,
+      pullRequestChecks = row['pullRequestChecks'] is Map
+          ? Map.unmodifiable({
+              for (final MapEntry(:key, :value)
+                  in (row['pullRequestChecks'] as Map).entries)
+                if (key is String && value is String) key: value,
+            })
+          : const {},
       releasedTags = row['released'] is Map && row['released']['tags'] is List
           ? List.unmodifiable(
               (row['released']['tags'] as List).whereType<String>(),
@@ -540,6 +547,10 @@ class SuperTabConversation {
   /// released, for work merged before the server recorded releases, and from
   /// an older server: each reads as released, as it did.
   final List<String>? releasing;
+
+  /// Each linked pull request's check state as the server's PR watch last read it, by URL: `green`, `red` or `running`
+  /// (backend pullRequestEvents.ts checksStateOf, task #3827). Empty before the watch reads one, and from an older server.
+  final Map<String, String> pullRequestChecks;
 
   /// The release tags (`v1.3.84_desktop`) that carried it to people, once they
   /// have (backend releases.ts `released`): what Shipped names. Empty before,
@@ -854,6 +865,15 @@ class SuperTabSnapshot {
       activityDigest = row['activityDigest'] as String?,
       remindersDigest = row['remindersDigest'] as String?,
       _pulses = SuperTabPulse.readAll(row['pulse']),
+      _releaseTimes = {
+        if (row['releaseTimes'] case final Map projects)
+          for (final MapEntry(key: project, value: times) in projects.entries)
+            if (project is String && times is Map)
+              project: {
+                for (final MapEntry(key: part, value: at) in times.entries)
+                  if (part is String && at is num) part: at.toInt(),
+              },
+      },
       chatSettings = Map.unmodifiable({
         if (row['chatSettings'] case final Map settings)
           for (final MapEntry(:key, :value) in settings.entries)
@@ -1005,6 +1025,12 @@ class SuperTabSnapshot {
   /// or when its pulse could not be read.
   SuperTabPulse? pulseOf(String projectId) => _pulses[projectId];
   final Map<String, SuperTabPulse> _pulses;
+
+  /// When each release part (`desktop`, `cli`, `web`, `backend`) of [projectId] may next open, in ms: 0 is now, and a part
+  /// left to people has none (backend releases.ts nextReleaseAt, task #3827). Empty from an older server.
+  Map<String, int> releaseTimesOf(String projectId) =>
+      _releaseTimes[projectId] ?? const {};
+  final Map<String, Map<String, int>> _releaseTimes;
 
   /// The reader's own notification setting by conversation (backend chatSettings.ts); a chat not listed is at
   /// [SuperTabNotify.mentions]. Never another person's.

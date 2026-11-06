@@ -19,6 +19,7 @@ SuperTabConversation _task({
   num? queueRank,
   String? notBefore,
   Map<String, String>? checks,
+  String? alsoLinked,
 }) => SuperTabConversation.fromJson({
   ...conversationFixture(id, 'Task $id'),
   'number': number,
@@ -26,7 +27,7 @@ SuperTabConversation _task({
   if (status != null)
     'assignment': {'agentId': 'a1', 'status': status, 'progressAt': 1},
   'liveness': ?liveness,
-  if (linked || merged) 'pullRequestUrls': [_pr],
+  if (linked || merged) 'pullRequestUrls': [_pr, ?alsoLinked],
   if (linked || merged)
     'cards': {
       'pullRequests': [
@@ -306,6 +307,7 @@ void main() {
       final two = _task(
         status: 'done',
         linked: true,
+        alsoLinked: 'https://github.com/acme/app/pull/13',
         checks: {
           _pr: 'green',
           'https://github.com/acme/app/pull/13': 'running',
