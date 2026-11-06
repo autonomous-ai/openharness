@@ -173,12 +173,24 @@ bool isRed(WidgetTester tester, String name) {
   return red;
 }
 
-Color stripRim(WidgetTester tester) {
-  final box = tester.widget<DecoratedBox>(
-    find.byKey(const ValueKey('super-pulse')),
-  );
-  return ((box.decoration as BoxDecoration).border! as Border).top.color;
-}
+/// The rims of the strip's chips (task #3787): a red count rims its own chip,
+/// never the whole strip; none for a calm one.
+List<Color> stripRim(WidgetTester tester) => [
+  for (final e
+      in find
+          .byWidgetPredicate(
+            (w) =>
+                w is Ink &&
+                w.key is ValueKey<String> &&
+                (w.key as ValueKey<String>).value.startsWith(
+                  'super-pulse-chip-',
+                ),
+          )
+          .evaluate())
+    if (((e.widget as Ink).decoration! as ShapeDecoration).shape
+        case StadiumBorder(:final side) when side != BorderSide.none)
+      side.color,
+];
 
 const segments = ['asks', 'working', 'nextUp', 'lost', 'held'];
 
@@ -296,10 +308,7 @@ void main() {
     for (final name in segments) {
       expect(isRed(tester, name), isFalse, reason: name);
     }
-    expect(
-      stripRim(tester),
-      isNot(Theme.of(tester.element(segment('asks'))).colorScheme.error),
-    );
+    expect(stripRim(tester), isEmpty);
     await closePulse(tester, c);
   });
 
@@ -354,10 +363,9 @@ void main() {
       for (final other in segments) {
         expect(isRed(tester, other), other == name, reason: other);
       }
-      expect(
-        stripRim(tester),
+      expect(stripRim(tester), [
         Theme.of(tester.element(segment(name))).colorScheme.error,
-      );
+      ]);
       await closePulse(tester, c);
     });
   }
