@@ -186,13 +186,14 @@ interface Reading { tab: string; observation: Record<string, unknown>; localMode
 
 /** A host's starts: its workers', and its Buddies' and Product Managers', which the backend lists apart so that a host from
  *  before them never launches one as a worker. */
-const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list(row.buddyStarts), ...list(row.leadStarts)]
+const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list(row.buddyStarts), ...list(row.leadStarts), ...list(row.regularStarts)]
 /** What this host launches beyond workers, said in its reading (backend leadStart.ts): a project's Product Manager, a
  *  Buddy's thread sessions (spec 2026-10-30-buddy-thread-sessions), and a person's one Buddy for the Swarm in its folder of
  *  project worktrees (spec 2026-10-31-one-buddy-per-swarm), which the backend offers only on a host that says so. */
 // windowsBuddy: this CLI proves a command's pane from its parents on Windows too (callerPane.ts `windowsRunningPane`), so a
 // Buddy there refuses no other agent's Swarm command. The backend starts no Buddy on a Windows machine without it.
-const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy']
+// `regularAgent`: it launches a Regular agent's start, sent apart as `regularStarts` (backend agent.new, task #4116).
+const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent']
 /** What this host does for a Product Manager's switch to another engine or account (spec 2026-11-02-pm-switch-engine-account),
  *  said beside the others: the backend refuses a switch to a host that does not. */
 CAPABILITIES.push('leadSwitch')
