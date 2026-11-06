@@ -1141,6 +1141,7 @@ describe('the last action of the project\'s agents on a task', () => {
     })
     it('is read whole by its coordinator and as what it means by anyone else', () => {
       const { f, start, wait } = started()
+      f.invite()
       wait(FOLDER)
       expect(visibleState(f.state, f.leadActor).starts!.find(s => s.id === start().id)!.waiting!.reason).toBe(FOLDER)
       expect(visibleState(f.state, peer).starts!.find(s => s.id === start().id)!.waiting!.reason).toContain("Its machine's creation folder ~/.harness/cli/data/agent-creations is not usable")
