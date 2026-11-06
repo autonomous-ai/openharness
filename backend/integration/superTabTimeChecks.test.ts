@@ -12,6 +12,7 @@ import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import { QUIET_CHECK_MS, runTimeCheckPass, timeCheckSwarms } from '../src/superTabs/timeChecks.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
+import { plan, profiled, reads } from './plans.test-support.js'
 
 // Task #3385 (anh Dee's Swarm redesign, 11-05): the stall, idle and lost-task follow-ups run in the backend worker, so they
 // keep running while the PM is down. Before, only the PM's own poll ran them: with the PM hung, five people's asks waited 3 to
@@ -127,6 +128,37 @@ describe('the time checks with the PM down', () => {
     await f.timed.runTimeChecks(f.tab)
     expect((await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.assignment!.status).toBe('lost')
     expect((await f.rows('work-lost')).map(r => r.text)).toContainEqual(expect.stringContaining('Worker lost its task "Ship the parser"'))
+  })
+
+  // Task #3915: a task whose agent went down and nobody took tells its PM and its people within the checks' 5 minutes, once,
+  // in a line that tags them (their Needs you), and the tag resolves when someone takes it.
+  it('flag a task nobody took 10 minutes after its agent went down, once, tagging its requester, and clear it when taken', async () => {
+    const f = await swarm()
+    await f.workerBeat()
+    f.clock.now += 2 * MINUTE + 5_000
+    await f.timed.runTimeChecks(f.tab)
+    const stuck = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.group }, orderBy: { sequence: 'asc' } }))
+      .filter(m => /stuck/i.test(m.text))
+    expect(await stuck()).toEqual([])
+    f.clock.now += 10 * MINUTE
+    await f.timed.runTimeChecks(f.tab)
+    f.clock.now += 5 * MINUTE
+    await f.timed.runTimeChecks(f.tab)
+    const told = await stuck()
+    expect(told).toEqual([expect.objectContaining({ recipientIds: [f.lead], text: expect.stringContaining('Worker went down') })])
+    const tag = () => db.superTabMention.findMany({ where: { tabId: f.tab, messageId: told[0]!.id } })
+    expect(await tag()).toEqual([expect.objectContaining({ personId: owner.sub, conversationId: f.group, resolvedAt: null })])
+    const taker = String((await f.execute({ type: 'agent.add', conversationId: f.group, machineId: 'lead-host', harnessId: randomUUID(), name: 'Taker',
+      configuration: config, lead: false })).result.agentId)
+    await f.execute({ type: 'work.assign', conversationId: f.group, agentId: taker })
+    f.clock.now += MINUTE
+    // Its tag resolves on the `[tabId, conversationId, personId]` index, examining only that person's tags there (backend AGENTS.md 3).
+    const entries = await profiled(db, () => f.timed.runTimeChecks(f.tab))
+    expect((await stuck()).map(m => m.text)).toEqual([told[0]!.text, 'No longer stuck: this task has an agent again.'])
+    expect(await tag()).toEqual([expect.objectContaining({ resolvedBy: 'fixed' })])
+    const resolve = reads(entries, 'SuperTabMention', ['messageId', 'personId'])
+    expect(resolve).toHaveLength(1)
+    expect(plan(resolve)).toEqual([expect.objectContaining({ plan: expect.stringMatching(/IXSCAN.*conversationId/), docsExamined: 1 })])
   })
 
   it('are no longer run by the PM\'s poll', async () => {
