@@ -28,9 +28,10 @@ this needs.
   the whole run (REBASE_STALE) with the new hash. All projects or none.
 - Every attributed rule of a project's document — "(Name, date)" as instructionsDiff.ts reads it — stays word for word with
   who gave it. A project whose new document would drop one is refused, with the rule, and nothing is written.
-- Base: the built-in template (instructionsTemplate.ts), its one home. The process the PM follows is already the Swarm's
-  built-in PM text (pmSchedule.ts PM_SCHEDULE_TEXT), read beside the document.
-- A role section the base lacks (openharness: Integrator, Guide) stays as it is: agents run under those role names.
+- "REPLACE 100%" (River's ruling with anh Dee, 11-06): a document becomes only a short intro, the project's facts (repo,
+  devices, people's areas; given by the run per project) and People notes. No template and no role section is copied in:
+  all process is the Swarm's built-in PM text, which #3603 adds to pmSchedule.ts PM_SCHEDULE_TEXT. A role section's
+  attributed rules go to People notes under "Roles › <role>" like any other.
 - A document stays within 64 KB (MAX_INSTRUCTIONS_BYTES); the size budget is reported, not enforced (People notes of a
   project with many rules is over 3 KB; later saves may only shrink it, ruleGuard.ts refuseOverBudget).
 - Each written project's PM (the coordinator of its project chat) gets one notice only it reads; the CLI host's own
@@ -57,7 +58,7 @@ this needs.
 - A rule whose item holds several attributions ("(Ken, 11-02; Dee, 11-03)", two "(…)" in one bullet): each kept, with all its people.
 - A rule already in a `## People notes` section, or written twice: kept once, never doubled.
 - A project with no document yet (revision 0, on the template): planned from the template like any other.
-- A role section the base lacks, holding attributed rules: kept in place, its rules not copied again to People notes.
+- An attributed list item with wrapped lines and items nested under it, or a heading carrying the attribution: carried whole.
 - A save between the dry run and the run: the run refuses and names the new plan.
 
 ---
