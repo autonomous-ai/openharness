@@ -265,20 +265,21 @@ const finite = (value: unknown): value is number => typeof value === 'number' &&
  * attempts and each group's last assignment, joined by assignment id. The log knows which agent a decision started; the
  * attempts are every earlier assignment of this group, also those `work.define` took out of the state (a person's
  * assignment has no decision); the state knows the agent of each group's last one. */
-interface Ended { assignmentId: string; group: string; agentId: string | null; outcome: string }
+/** `group` is the group's title, for the printed note; `groupId` its id, which the pick compares with the routed task (routePick.ts). */
+interface Ended { assignmentId: string; group: string; groupId: string; agentId: string | null; outcome: string }
 function endedWork(conversations: Json[], decisions: Json[] | null, attempts: Json[] | null, attemptsGroup: string): Ended[] {
   const titleOf = (id: unknown) => String(conversations.find(c => c.id === id)?.title ?? 'another group')
   const ended: Ended[] = [...(decisions ?? [])].reverse().flatMap(d => {
     const final = object(d.final)
     return typeof d.assignmentId === 'string' && ENDED_WORK.includes(String(d.outcome)) && final.kind
-      ? [{ assignmentId: d.assignmentId, group: titleOf(d.conversationId), outcome: String(d.outcome), agentId: final.kind === 'member' ? String(final.agentId) : null }]
+      ? [{ assignmentId: d.assignmentId, group: titleOf(d.conversationId), groupId: String(d.conversationId), outcome: String(d.outcome), agentId: final.kind === 'member' ? String(final.agentId) : null }]
       : []
   })
   // The assignment's own record wins on the agent: a started agent is a member by then.
   const join = (assignment: Json, groupId: string) => {
     const known = ended.find(e => e.assignmentId === assignment.id)
     if (known) return Object.assign(known, { agentId: String(assignment.agentId) })
-    const added: Ended = { assignmentId: String(assignment.id), group: titleOf(groupId), agentId: String(assignment.agentId), outcome: String(assignment.status) }
+    const added: Ended = { assignmentId: String(assignment.id), group: titleOf(groupId), groupId, agentId: String(assignment.agentId), outcome: String(assignment.status) }
     ended.push(added)
     return added
   }
@@ -481,7 +482,7 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const probes = probed.flat()
     .map(p => p.kind === 'member' ? { ...p, repo: repoMatch(folder, p.frame ?? null, p.machineId === where.machineId),
     notes: [...p.notes, ...limited(p.agentId), ...lostTask(p.agentId)],
-    earlier: ended.filter(e => e.agentId === p.agentId).reverse().slice(0, 3).map(e => ({ group: e.group, outcome: e.outcome })) } : p)
+    earlier: ended.filter(e => e.agentId === p.agentId).reverse().slice(0, 3).map(e => ({ group: e.group, groupId: e.groupId, outcome: e.outcome })) } : p)
   probes.push(...localProbes(state, catalog, probes))
   // The task's requirement is not enforced (project instructions, Routing): a candidate elsewhere, or a member whose start
   // did not have its machine check the required device, says so. A Mac's Harness Team account is that Mac.

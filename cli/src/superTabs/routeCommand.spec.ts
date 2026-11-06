@@ -938,6 +938,8 @@ describe('route answers with the pick (task #3576, after #2901)', () => {
     expect(hint).not.toHaveProperty('overrideReason')
     expect(next).toContain(`the pick (${(answer.pick as { id: string }).id})`)
     expect(next).toMatch(/another candidate.*overrideReason/)
+    // Until the machine rules are in the rules record, the pick does not apply them: the instructions' Machines section still does (review 2 of #3296).
+    expect(next).toMatch(/Machines rules.*still apply.*pick that breaks one.*overrideReason/s)
   })
 })
 

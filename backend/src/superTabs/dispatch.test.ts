@@ -285,6 +285,15 @@ describe('dispatch keeps big or risky work for a strong model', () => {
     expect(s.plan()).toEqual([['Sonny', 'Rebuild sync']])
   })
 
+  it('counts Astra only at xhigh, and a member with no effort set as not strong', () => {
+    const s = crew()
+    Object.assign(s.state.agents.find(a => a.id === s.ids.Opal)!.configuration, { engine: 'codex', model: 'gpt-6-astra', effort: 'high' })
+    s.strongTask('Rebuild sync', { strength: 'strong' })
+    expect(s.plan()).toEqual([])
+    Object.assign(s.state.agents.find(a => a.id === s.ids.Opal)!.configuration, { engine: 'claude', model: 'claude-opus-4-7', effort: null })
+    expect(s.plan()).toEqual([])
+  })
+
   it('does not count Opus at a low effort as strong', () => {
     const s = crew()
     Object.assign(s.state.agents.find(a => a.id === s.ids.Opal)!.configuration, { effort: 'low' })

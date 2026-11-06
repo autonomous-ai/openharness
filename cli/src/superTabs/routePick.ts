@@ -39,7 +39,7 @@ export function pickByOrder({ shown, catalog, assessment: a, now, conversationId
   // 1. What the work needs. A person naming a model, or asking for a local one, has already narrowed the candidates.
   const fits = shown.flatMap((p): Ranked[] => {
     const { left, resetsAt } = weekly(p.quota)
-    const follows = p.kind === 'member' && !!p.earlier?.some(e => e.group === conversationId)
+    const follows = p.kind === 'member' && !!p.earlier?.some(e => e.groupId === conversationId)
     let need: number
     if (named) need = 0
     else if (p.gridModel) {

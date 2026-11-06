@@ -74,7 +74,7 @@ export interface Probe {
   /** A model the catalog does not rate: a person named it, or a member runs it. */
   unrated?: true
   /** Members: the frame (null when it could not be read), whether the member is in the task's repository, and its earlier work in this Super Tab. */
-  frame?: MemberFrame | null; repo?: 'same' | 'different' | 'unknown'; earlier?: Array<{ group: string; outcome: string }>
+  frame?: MemberFrame | null; repo?: 'same' | 'different' | 'unknown'; earlier?: Array<{ group: string; groupId?: string; outcome: string }>
   terminalUnverified?: boolean
   /** What the machine has: for new agents, and for members where their machine's reading is known. */
   load?: MachineLoad
