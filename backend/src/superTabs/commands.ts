@@ -32,7 +32,7 @@ import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags, type MentionTarget } from './mentions.js'
 import { CREW_NEED_KIND, crewNeedPlace, crewNeedText, routedLine, routesToPm, type CrewNeed } from './crewNeeds.js'
 import { checkReason, heldReason, missingReason } from './heldReason.js'
-import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
+import { answerDecision, askDecisions, checkDecisionDeadline, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest, workedAgain } from './terminal.js'
 import { BACK_WITH_YOU, pickUp, reopenHanded } from './handed.js'
 import { changesRequested, engineerAnswered, leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask, restartQuietTime, revisionReady, toldEngineer, waitingForReview } from './liveness.js'
@@ -546,6 +546,8 @@ export interface CommandContext {
   /** For `decision.answer`: the hourly sweep leaves a decision unanswered for 24 hours to the PM (overdueDecisions.ts). Set by the
    *  store alone; a client cannot send it. */
   overdue?: boolean
+  /** Server-only timed recommendation application; a client cannot send it. */
+  defaulted?: boolean
   /** For a restore: the people no longer in the Swarm's Workspace, read by the store. They do not come back with it. */
   workspaceLost?: string[]
   /** The machines of this Swarm's pending cleanups whose machine account is deleted, read by the store: no host will ever
@@ -2640,13 +2642,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'decision.ask': {
       const group = open(state, command.conversationId)
       const drafts = askDecisions(state, group, command.personId, command.questions,
-        { operationId, askerAgentId: checkAsker(state, actor, group), assignmentId: null })
+        { now: context.now, operationId, askerAgentId: checkAsker(state, actor, group), assignmentId: null })
       // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): another agent's questions are the PM's crew needs, one
       // each, checked as a decision would be and opened for nobody.
       const pmInstead = routesToPm(state, actor, group)
       if (pmInstead) {
         command.questions.forEach((q, i) => crewNeed(group, pmInstead, { personIds: [command.personId], conversationId: group.id,
-          question: q.question, options: q.options, recommended: q.recommended }, q.question, stableId(operationId, 'crew-need', String(i))))
+          question: q.question, options: q.options, recommended: q.recommended, ...q.defaultAt ? { defaultAt: q.defaultAt } : {} }, q.question, stableId(operationId, 'crew-need', String(i))))
         result.decisionIds = []
         break
       }
@@ -2656,7 +2658,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'decision.answer': {
       const { answer, noticeIn, notice, recipients, source, line } = answerDecision(state, actor, context.decision,
-        { choice: command.choice, note: command.note ?? null, delegate: command.delegate === true, overdue: context.overdue === true })
+        { choice: command.choice, note: command.note ?? null, delegate: command.delegate === true, overdue: context.overdue === true, defaulted: context.defaulted === true, now: context.now })
       effects.decisionAnswer = answer
       recordDecision(conversation(state, context.decision!.conversationId), context.decision!, context.now, answer.delegated === true)
       if (recipients.length) message(noticeIn, notice, recipients, null, source)
@@ -4143,13 +4145,14 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {
           fail('INVALID_DECISION', 'An agent asks a person for a decision only when its work needs a human, with the question as its result.', 400)
         }
+        checkDecisionDeadline(command.ask, context.now)
         // For the PM to ask: the person must be in the Swarm, as a decision's would.
         if (pmInstead) person(state, command.ask.personId)
       }
       if (command.ask && !pmInstead && command.result && actor.kind === 'agent') {
         const { personId, ...choices } = command.ask
         const drafts = askDecisions(state, group, personId, [{ question: command.result, ...choices }],
-          { operationId, askerAgentId: actor.agentId, assignmentId: assignment.id })
+          { now: context.now, operationId, askerAgentId: actor.agentId, assignmentId: assignment.id })
         // At the cap the status still counts, reaches the Lead and renews the lease; only the question waits (review of #1859).
         if (context.openDecisions == null) {
           effects.decisions = drafts
@@ -4206,7 +4209,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${askedName}.`
         // A needs_human for the PM is its crew need: on this row when the row reaches the PM, else on a row of its own there.
         const need = pmInstead ? { personIds: command.ask ? [command.ask.personId] : [], conversationId: group.id,
-          ...command.result ? { question: command.result } : {}, ...command.ask ? { options: command.ask.options, recommended: command.ask.recommended } : {} } : null
+          ...command.result ? { question: command.result } : {}, ...command.ask ? { options: command.ask.options, recommended: command.ask.recommended, ...command.ask.defaultAt ? { defaultAt: command.ask.defaultAt } : {} } : {} } : null
         const onRow = need && pmInstead && actor.kind === 'agent' && recipients.includes(pmInstead)
           ? { crewNeed: { agentId: actor.agentId, ...need, messageId: operationId } } : {}
         // The status set, on the row: a Done waits for the coordinator's next digest, what needs someone does not (store.ts writeMessages).
