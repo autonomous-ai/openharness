@@ -174,6 +174,22 @@ describe('personal approval enforced before work', () => {
     f.runCommand({ type: 'task.reject', conversationId: id, reason: 'Do later' })
     expect(step).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
   })
+  it.each(['removed', 'stopping'])('recovers an approved, unassigned task when its chosen worker is %s, with fresh person approval', state => {
+    const f = fixture(); f.mode('review'); const id = f.create()
+    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate }, f.pm)
+    f.runCommand({ type: 'task.approve', conversationId: id })
+    if (state === 'removed') f.state.agents = f.state.agents.filter(a => a.id !== f.candidate)
+    else f.state.agents.find(a => a.id === f.candidate)!.workDecision = 'stop'
+    expect(() => f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.other }, owner)).toThrow()
+    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.other }, state === 'removed' ? f.pm : peer)
+    expect(f.card(id)).toMatchObject({ assignment: null, taskApproval: { state: 'proposal', suggestedAgentId: f.other } })
+    expect(f.card(id).taskApproval?.decidedAt).toBeUndefined()
+    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.other }, f.pm)).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
+    f.runCommand({ type: 'task.approve', conversationId: id })
+    f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.other }, f.pm)
+    expect(f.card(id).assignment?.agentId).toBe(f.other)
+    expect(() => f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.worker })).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_DECIDED' }))
+  })
   it('guards the person and selected agent against concurrent changes, and keeps approval in light loads', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
     f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate })
