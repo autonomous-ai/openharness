@@ -341,6 +341,9 @@ export interface WorkTask {
   constraints: string
   owns: string[]
   requires?: TaskRequirement
+  /** `strong`: big, hard or risky work, which the crew's dispatch hands only to a member on a strong model (dispatch.ts, #3576); a task
+   *  that wants two reviews counts as strong unless this says `standard`. */
+  strength?: 'standard' | 'strong'
   /** What its reviews check first, and how many independent reviews it wants: written into its brief (renderWorkTask), which
    *  whoever opens its review reads. The server opens and counts no review (project instructions, phase 4). */
   review?: ReviewPlan
@@ -1157,6 +1160,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // A failing privacy check's detail is its contributor's: an error from the check can name paths on their Mac. Everyone
   // else reads which item failed (machines.ts teamWorkRefusal).
   for (const pool of visible.machines ?? []) {
+    // Engine idle proof is for server lifecycle decisions alone, never a member's activity feed (#3824).
+    if (pool.observation) delete pool.observation.idleBuddyHarnessIds
     const privacy = pool.observation?.privacy
     if (privacy && 'detail' in privacy && !(actor.kind === 'person' && actor.userId === pool.contributorId)) delete (privacy as { detail?: string }).detail
   }

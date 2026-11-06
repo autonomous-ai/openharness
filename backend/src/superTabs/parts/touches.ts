@@ -48,7 +48,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   if ('roleId' in command && command.roleId) head()
   if (command.type === 'agent.start' && command.request.roleId) head()
 
-  // News for a Buddy relies on its person still reading there (buddyNews.ts): their part guards it, as a person.tell's does.
+  // Buddy input also guards an already awake recipient, so a concurrent sleep retries against that input (#3824).
   for (const buddy of buddiesHearing(effects.state, effects.messages)) { agent(buddy.id); member(buddy.buddyOf!.personId) }
 
   switch (command.type) {

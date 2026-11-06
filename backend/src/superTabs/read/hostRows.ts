@@ -3,6 +3,7 @@
  * before parts (the store's old host reads, which this replaced), built from a reassembled state, with `revision`
  * replaced by `lastChangedAt` and the Leads conversation id added to agent rows.
  */
+import { buddySleepManaged } from '../buddySleep.js'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, conversation, type Agent, type SuperTabState } from '../model.js'
 import { buddyChatOf, isSwarmBuddy, isSwarmBuddyChat } from '../buddies.js'
@@ -87,6 +88,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     attention: waiting ? { assignmentId: waiting.id, status: waiting.status, result: waiting.result?.slice(0, 500) ?? null } : null,
     resume,
     agent: target,
+    ...(buddySleepManaged(state, target) ? { buddySleepManaged: true as const } : {}),
     // A Buddy-only record is not the machine in the Swarm: the owner's Lead there still joins it, which makes the record an ordinary
     // machine (commands.ts machine.contribute ifMissing; security review 2 of #2234).
     // Not where machine.contribute would refuse it (#2637): a Buddy-only record is counted already, so it still joins.
@@ -153,7 +155,7 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
     ...(githubApp ? { githubApp: true as const } : {}),
     // Asks the host to say what it launches beyond workers (machines.ts `capabilities`): a host never sends a field this
     // server did not ask for, so an older server, which would refuse every reading with it, never sees it.
-    capabilitiesWanted: true as const }
+    buddySleepWanted: true as const, capabilitiesWanted: true as const }
 }
 
 function assignments(tabId: string, state: SuperTabState, machineId: string, user: AuthUser) {

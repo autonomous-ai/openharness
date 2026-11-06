@@ -78,10 +78,9 @@ export function shippedNotice(state: SuperTabState, group: Conversation, author:
     text: `News for your owner: #${group.number} "${group.title}", which they requested, shipped.` }
 }
 
-/** The Buddies [messages] bring news to outside their own chat: what they were told relied on their person still reading
- *  there, so a write that sends news guards on those people and Buddies (parts/touches.ts). */
+/** Every Buddy hearing input, in its own chat too: the agent guard meets a concurrent sleep (#3824), and the person's
+ *  guard meets loss of the membership that permits the delivery (parts/touches.ts). */
 export function buddiesHearing(state: SuperTabState, messages: readonly MessageDraft[]): Agent[] {
-  const ids = new Set(messages.flatMap(m => [...m.buddyRecipients ?? [],
-    ...m.recipients.filter(id => !state.conversations.find(c => c.id === m.conversationId)?.agentIds.includes(id))]))
+  const ids = new Set(messages.flatMap(m => [...m.buddyRecipients ?? [], ...m.recipients]))
   return state.agents.filter(a => ids.has(a.id) && isBuddy(a))
 }

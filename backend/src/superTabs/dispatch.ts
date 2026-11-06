@@ -7,7 +7,7 @@
 import { SEED_RULES, type ProjectRules } from './policy.js'
 import { isBuddy } from './buddies.js'
 import { sessionClosed } from './closedAgents.js'
-import { activeWork, handed, occupiesAgent, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
+import { activeWork, handed, occupiesAgent, reviewsWanted, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
 import { agentProjectId, onTeamAccount, projectOf, projectsOf } from './projects.js'
 import { barredFromTeamWritten } from './teamWritten.js'
 import { digestOf, localNow } from './digest.js'
@@ -15,6 +15,7 @@ import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
 import { queueOrder, queueSiblings } from './taskQueue.js'
 import { unavailableReason } from './liveness.js'
 import { FAILED, type PullRequestWatch } from './pullRequestEvents.js'
+import { modelMatches } from './rules.js'
 import { roleNameOf } from './instructions.js'
 import { reviewerCandidates } from './reviewerPick.js'
 import { stepName } from './steps.js'
@@ -151,6 +152,16 @@ function takes(state: SuperTabState, member: Agent, rules: DispatchRules): (lane
   return own ? lane => lane !== null && laneNamed(rules.lanes, own) === lane : () => true
 }
 
+/** Whether [group] is big, hard or risky work, which Routing puts on Opus or Astra: the PM marked it strong, or it wants two reviews
+ *  and the PM did not mark it standard (#3576). */
+const needsStrongModel = (group: Conversation): boolean => group.task?.strength === 'strong' || (group.task?.strength === undefined && reviewsWanted(group.task) === 2)
+/** Whether [member] runs a model Routing allows for big or risky work: Opus at high effort or above, or Astra at xhigh (an effort
+ *  not set is not known to be either). */
+const onStrongModel = (member: Agent): boolean => {
+  const effort = (member.configuration.effort ?? '').toLowerCase(), model = member.configuration.model
+  return (modelMatches('opus', model) && ['high', 'xhigh', 'max'].includes(effort)) || (modelMatches('astra', model) && ['xhigh', 'max'].includes(effort))
+}
+
 /** The tasks [member] could be handed now, best first: those pinned to it (oldest pin first), then its lane's open tasks.
  *  A task it just lost to the 3-hour clock is not offered to it. */
 export function candidatesFor(state: SuperTabState, member: Agent, rules: DispatchRules, now: number, open = openTasks(state, agentProjectId(state, member)!, now),
@@ -169,7 +180,7 @@ export function candidatesFor(state: SuperTabState, member: Agent, rules: Dispat
   const lane = open.filter(g => (!g.lane || !!laneNamed(rules.lanes, g.lane)) && !g.reviewOf && !pinned.includes(g) && !(pinOf(g) && members.has(pinOf(g)!.agentId)) && !lostByIt(g)
     // Ordinary workers recover work; new tasks still need the PM's route or a standing crew lane.
     && (member.crew || (g.assignment?.status === 'lost' && g.lostAttempt))
-    && acceptsLane(laneOf(g, rules.lanes)))
+    && acceptsLane(laneOf(g, rules.lanes)) && (!needsStrongModel(g) || onStrongModel(member)))
   // Team-written code goes to Team accounts only (teamWritten.ts); a pick refused this round is not sent again (store.ts).
   const allowed = (group: Conversation) => (!group.reviewOf || steps.includes(group)) && !barredFromTeamWritten(state, group, member) && !skip(group.id, member.id)
   return [...pinned.filter(allowed).map(group => ({ group, why: 'pin' as const })),

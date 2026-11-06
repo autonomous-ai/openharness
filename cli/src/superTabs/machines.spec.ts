@@ -3065,3 +3065,68 @@ describe('a launched start whose engine stops on a screen', () => {
     expect(failures()).toEqual([])
   })
 })
+
+
+describe('fresh Buddy idle proof (#3824)', () => {
+  const posts = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && c[2].includes('/machines/')).map(c => c[3] as Record<string, unknown>)
+  function buddies() {
+    const f = fixture()
+    Object.assign(f.pool, { buddySleepWanted: true, starts: [], harnessIds: ['idle', 'busy', 'unknown', 'worker'] })
+    f.core.agents.byAgent = vi.fn(id => ({ agentId: id, swarmSkill: { role: id === 'worker' ? 'worker' : 'buddy' } }) as never)
+    f.core.agents.activity = vi.fn(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, id === 'idle' ? 'idle' : id === 'busy' ? 'working' : 'unknown']))) as never
+    return f
+  }
+  it('reports explicit idle alone in one bounded activity batch', async () => {
+    const f = buddies()
+    await f.machine.tick()
+    expect(posts(f)[0]).toHaveProperty('idleBuddyHarnessIds', ['idle'])
+    expect(f.core.agents.activity).toHaveBeenCalledTimes(1)
+    expect(f.core.agents.activity).toHaveBeenCalledWith(['idle', 'busy', 'unknown'])
+  })
+  it('reads every Buddy past the core’s 64-session activity limit in bounded batches', async () => {
+    const f = buddies(), ids = Array.from({ length: 100 }, (_, i) => `buddy-${i}`)
+    Object.assign(f.pool, { harnessIds: ids })
+    f.core.agents.activity = vi.fn(async (batch: string[]) => Object.fromEntries(batch.slice(0, 64).map(id => [id, 'idle']))) as never
+    await f.machine.tick()
+    expect(posts(f)[0]).toHaveProperty('idleBuddyHarnessIds', ids)
+    expect(vi.mocked(f.core.agents.activity).mock.calls.map(([batch]) => batch.length)).toEqual([64, 36])
+    // The report already checked these sessions; idle proof adds no per-session core round trips.
+    expect(f.core.agents.stopped).toHaveBeenCalledTimes(ids.length)
+  })
+  it('does not ask for activity or send proof without the server request or running Buddies', async () => {
+    const older = buddies()
+    Object.assign(older.pool, { buddySleepWanted: undefined })
+    await older.machine.tick()
+    expect(posts(older)[0]).not.toHaveProperty('idleBuddyHarnessIds')
+    expect(older.core.agents.activity).not.toHaveBeenCalled()
+    const workers = fixture()
+    Object.assign(workers.pool, { buddySleepWanted: true })
+    await workers.machine.tick()
+    expect(workers.core.agents.activity).not.toHaveBeenCalled()
+  })
+  it('never refreshes idle proof with an unchanged heartbeat', async () => {
+    const f = buddies()
+    f.pool.starts = [{ id: 'start', dispatched: false }]
+    let finish!: () => void
+    f.start.mockImplementation(() => new Promise(resolve => { finish = () => resolve({ ok: true }) }))
+    const pass = f.machine.tick()
+    await vi.waitFor(() => expect(f.start).toHaveBeenCalled())
+    try {
+      f.step(15_000)
+      f.machine.beat()
+      await vi.waitFor(() => expect(posts(f)).toHaveLength(2))
+      expect(posts(f)[0]).toHaveProperty('idleBuddyHarnessIds', ['idle'])
+      expect(posts(f)[1]).not.toHaveProperty('idleBuddyHarnessIds')
+      expect(f.core.agents.activity).toHaveBeenCalledTimes(1)
+    } finally { finish(); await pass }
+  })
+  it('shares one activity read across Swarms on the same machine', async () => {
+    const f = buddies(), original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => path.includes('/hosts/host/changes')
+      ? hostForm([], { pools: [f.pool, { ...f.pool, tabId: 'other' }] }) : original(core, method, path, body))
+    await f.machine.tick()
+    expect(posts(f)).toHaveLength(2)
+    expect(posts(f).every(p => (p.idleBuddyHarnessIds as string[])?.join() === 'idle')).toBe(true)
+    expect(f.core.agents.activity).toHaveBeenCalledTimes(1)
+  })
+})
