@@ -141,6 +141,79 @@ beforeEach(() => {
 })
 afterEach(() => { vi.useRealTimers(); for (const row of registry.list()) registry.removeAgent(row.agentId); rmSync(dir, { recursive: true, force: true }) })
 
+describe('resuming a stopped harness with new launch words', () => {
+  const WORDS = ['--chrome']
+  const resumeWith = (launchArgs?: string[], mode?: string) => createResumeAgentService(deps)(saved.agentId, mode, launchArgs)
+
+  it('builds the launch with them, applies them to the argv, and the resumed row keeps them', async () => {
+    rewrite({ launchArgs: ['--old'] })
+    vi.mocked(deps.relaunchOverrides).mockImplementation(async (_row, source) => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [], ownerArgs: source.launchArgs } }))
+    expect(await resumeWith(WORDS)).toMatchObject({ ok: true, session: { launchArgs: WORDS } })
+    expect(deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentId: saved.agentId, launchArgs: WORDS }), expect.any(Function))
+    expect(buildEngineLaunchArgv).toHaveBeenCalledWith('codex', expect.objectContaining({ ownerArgs: WORDS }))
+    expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(WORDS)
+    registry.load()
+    expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(WORDS)
+  })
+
+  it('clears them with an empty list', async () => {
+    rewrite({ launchArgs: ['--old'] })
+    expect(await resumeWith([])).toMatchObject({ ok: true })
+    expect(deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ launchArgs: [] }), expect.any(Function))
+    expect(registry.byAgent(saved.agentId)?.launchArgs).toBeUndefined()
+  })
+
+  it('without them, relaunches from the saved row and leaves its words as they were', async () => {
+    rewrite({ launchArgs: ['--old'] })
+    expect(await resumeWith()).toMatchObject({ ok: true })
+    expect(deps.relaunchOverrides).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ launchArgs: ['--old'] }), expect.any(Function))
+    expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(['--old'])
+  })
+
+  // The new row exists as soon as the pane does, but the words are only the record's once the engine is confirmed.
+  it('saves nothing when the engine does not come back, and the retained row keeps the words that last worked', async () => {
+    rewrite({ launchArgs: ['--old'] })
+    live()
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(null)
+    paneState.mockResolvedValueOnce({ dead: false, engineExit: 1 } as any).mockResolvedValueOnce('gone')
+    expect(await resumeWith(WORDS)).toMatchObject({ ok: false, error: 'RESUME_FAILED' })
+    expect(deps.stoppedAgents.get(saved.agentId)?.launchArgs).toEqual(['--old'])
+  })
+
+  it('saves nothing when the launch is refused before a pane exists', async () => {
+    rewrite({ launchArgs: ['--old'] })
+    vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: false, error: 'GRID_UNAVAILABLE', detail: 'x' })
+    expect(await resumeWith(WORDS)).toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE' })
+    expect(create).not.toHaveBeenCalled()
+    expect(deps.stoppedAgents.get(saved.agentId)?.launchArgs).toEqual(['--old'])
+    expect(registry.byAgent(saved.agentId)).toBeUndefined()
+  })
+
+  it('keeps the terminal engine\'s resume, which has no launch to confirm, saving them as well', async () => {
+    rewrite({ engine: 'terminal' })
+    expect(await resumeWith(WORDS)).toMatchObject({ ok: true })
+    expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(WORDS)
+  })
+
+  it('asked with other words, an overlapping resume is refused rather than answered by the first launch', async () => {
+    const stop = deferred<void>(); (deps.stopJobs as Map<string, Promise<void>>).set(saved.agentId, stop.promise)
+    const resume = createResumeAgentService(deps)
+    const first = resume(saved.agentId, undefined, WORDS)
+    expect(await resume(saved.agentId, undefined, ['--other'])).toMatchObject({ ok: false, error: 'AGENT_BUSY' })
+    stop.resolve()
+    expect(await first).toMatchObject({ ok: true })
+    expect(registry.byAgent(saved.agentId)?.launchArgs).toEqual(WORDS)
+  })
+
+  it('does not claim to have applied them to a harness that was already running', async () => {
+    live({ processIdentity: identity, lastHookAt: Date.now(), launch: { state: 'ready' } })
+    vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'alive' })
+    expect(await resumeWith(WORDS)).toMatchObject({ ok: true })
+    expect(create).not.toHaveBeenCalled()
+    expect(registry.byAgent(saved.agentId)?.launchArgs).toBeUndefined()
+  })
+})
+
 describe('production resume handler', () => {
   it('holds the reservation and restores cold history before checking its control identity', async () => {
     const restored = join(dir, 'restored.jsonl')

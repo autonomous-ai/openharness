@@ -11,7 +11,7 @@ import 'package:harness/super_tabs/parts.dart';
 import 'package:harness/super_tabs/pulse.dart';
 import 'package:harness/super_tabs/tasks_view.dart';
 
-import 'super_tab_tasks_view_test.dart' show tasksServer;
+import 'super_tab_tasks_view_test.dart' show taskFixture, tasksServer;
 import 'support/memory_key_value_store.dart';
 import 'support/super_tab_fixture.dart';
 
@@ -173,12 +173,24 @@ bool isRed(WidgetTester tester, String name) {
   return red;
 }
 
-Color stripRim(WidgetTester tester) {
-  final box = tester.widget<DecoratedBox>(
-    find.byKey(const ValueKey('super-pulse')),
-  );
-  return ((box.decoration as BoxDecoration).border! as Border).top.color;
-}
+/// The rims of the strip's chips (task #3787): a red count rims its own chip,
+/// never the whole strip; none for a calm one.
+List<Color> stripRim(WidgetTester tester) => [
+  for (final e
+      in find
+          .byWidgetPredicate(
+            (w) =>
+                w is Ink &&
+                w.key is ValueKey<String> &&
+                (w.key as ValueKey<String>).value.startsWith(
+                  'super-pulse-chip-',
+                ),
+          )
+          .evaluate())
+    if (((e.widget as Ink).decoration! as ShapeDecoration).shape
+        case StadiumBorder(:final side) when side != BorderSide.none)
+      side.color,
+];
 
 const segments = ['asks', 'working', 'nextUp', 'lost', 'held'];
 
@@ -296,10 +308,7 @@ void main() {
     for (final name in segments) {
       expect(isRed(tester, name), isFalse, reason: name);
     }
-    expect(
-      stripRim(tester),
-      isNot(Theme.of(tester.element(segment('asks'))).colorScheme.error),
-    );
+    expect(stripRim(tester), isEmpty);
     await closePulse(tester, c);
   });
 
@@ -354,10 +363,9 @@ void main() {
       for (final other in segments) {
         expect(isRed(tester, other), other == name, reason: other);
       }
-      expect(
-        stripRim(tester),
+      expect(stripRim(tester), [
         Theme.of(tester.element(segment(name))).colorScheme.error,
-      );
+      ]);
       await closePulse(tester, c);
     });
   }
@@ -449,6 +457,25 @@ void main() {
       expect(opened.tasks, ['tag']);
       await closePulse(tester, c);
     });
+
+    testWidgets(
+      'working: an agent with a lost older task opens its current one (#3649)',
+      (tester) async {
+        final server = pulseServer(pulseFixture());
+        // The lost task comes first in the Swarm's list, as an older one does.
+        (server.state['conversations'] as List).insert(
+          1,
+          taskFixture('old-lost', 'First customers', 5, status: 'lost'),
+        );
+        final (c, opened) = await showPulse(tester, server);
+        await tester.tap(segment('working'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('super-pulse-agent-finch')));
+        await tester.pumpAndSettle();
+        expect(opened.tasks, ['tag']);
+        await closePulse(tester, c);
+      },
+    );
 
     testWidgets('next up: the tasks by title and number', (tester) async {
       final (c, opened) = await showPulse(tester, pulseServer(pulseFixture()));

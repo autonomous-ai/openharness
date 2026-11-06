@@ -61,11 +61,15 @@ class ProjectSidebar extends StatelessWidget {
     this.places,
     this.onOpenBuddyChat,
     this.compact = false,
+    this.board = false,
   });
   final SuperTabController controller;
 
   /// A phone's layout: its rows keep the app's sizes, not Slack desktop's ([SwarmType]).
   final bool compact;
+
+  /// Desktop's Board layout (anh Dee, task #3787): no Threads row and no Buddy entry, the Buddy being the right pane.
+  final bool board;
   final ValueChanged<String> onSelect;
   final AppNotifier? app;
   final VoidCallback? onNewProject;
@@ -746,14 +750,15 @@ class ProjectSidebar extends StatelessWidget {
                     icon: AppIcons.atSign,
                     waiting: mentions,
                   ),
-                  _pageRow(
-                    onPage,
-                    target: SwarmPage.threads,
-                    key: 'super-threads',
-                    label: 'Threads',
-                    icon: AppIcons.messagesSquare,
-                    waiting: threads,
-                  ),
+                  if (!board)
+                    _pageRow(
+                      onPage,
+                      target: SwarmPage.threads,
+                      key: 'super-threads',
+                      label: 'Threads',
+                      icon: AppIcons.messagesSquare,
+                      waiting: threads,
+                    ),
                 ],
                 const SizedBox(height: 20),
                 SuperTabSectionHeading(
@@ -778,13 +783,13 @@ class ProjectSidebar extends StatelessWidget {
                 ),
                 // The reader's one Buddy, the first item under Projects (anh
                 // Dee, 11-05).
-                if (controller.oneBuddy) ?_swarmBuddyRow(),
+                if (controller.oneBuddy && !board) ?_swarmBuddyRow(),
                 for (final (_, channel) in _channels(snapshot, reading))
                   channel,
                 const SizedBox(height: 16),
                 // Buddies replaced Chat with PM in every Swarm (Ken, 10-29); where the
                 // server gives one Buddy for the whole Swarm, it is # buddy above.
-                if (!controller.oneBuddy) ...[
+                if (!controller.oneBuddy && !board) ...[
                   SuperTabSectionHeading(
                     'Buddies',
                     titleStyle: _headingStyle,

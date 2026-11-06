@@ -17,7 +17,10 @@ import './lib/connectWait.js'
 import { fileURLToPath } from 'node:url'
 
 const [, , command, name] = process.argv
-if (command === '__harnessd') {
+if (command === '__swarm-shell-guard') {
+  // Engine hooks need only the guard; ordinary CLI initialization would touch account and daemon state.
+  ;(await import('./superTabs/shellGuardHook.js')).runShellGuard()
+} else if (command === '__harnessd') {
   // This file is the bundle: the master starts the core from it, as cli.ts's own `SCRIPT_PATH` names it
   // for a master started from the sources, and itself and the services from the lean bundle it carries.
   (await import('./masterProcess.js')).startMasterFromBundle(fileURLToPath(import.meta.url))

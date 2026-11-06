@@ -550,7 +550,7 @@ export class SuperTabHost {
   /** Deliveries whose message is the coordinator's in the reader's own task or step, with no question to answer (#3057). */
   private readonly plainReplies = new Set<string>()
   /** The tasks and steps where a coordinator's delivery carried their state (#3114), by Swarm, agent and conversation: a later
-   *  one there reads its latest messages beside the Swarm read, not after it (review 1, ENGINEERING.md section 4). The
+   *  one there reads its latest messages beside the Swarm read, not after it (review 1, AGENTS.md standard 4). The
    *  newest KNOWN_TASKS_MAX. */
   private readonly knownTasks = new Set<string>()
   /** The one-message page `repliedTo()` read, for the thread line when the reply answers its thread's root. */
@@ -2485,7 +2485,7 @@ export class SuperTabHost {
     // A reply inside a thread gets the thread line, a Buddy's in its own chat too: Ken 11-03 (#2492) answered "ok để thử" in a
     // thread of his Buddy chat, the delivery quoted only the thread's root, and the Buddy guessed. Its root is in the page
     // repliedTo() read, or one read of that root in this same chat; the command is in the Buddy's prefix, with no --agent.
-    // Read beside the Swarm read and the PM's page read, never after them (review 1 of #3114, ENGINEERING.md section 4): a PM's
+    // Read beside the Swarm read and the PM's page read, never after them (review 1 of #3114, AGENTS.md standard 4): a PM's
     // reply in a task's thread waits on two reads in a row at most, as before #3114. Its failure is thrown where it was.
     const root = identifier(message.thread) && message.thread !== message.id ? message.thread : null
     const threadRead = root

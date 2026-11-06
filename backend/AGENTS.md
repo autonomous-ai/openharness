@@ -2,7 +2,7 @@
 
 Read this before changing anything under `backend/` that stores data: `prisma/schema.prisma`, a collection, an index, a
 query, an aggregation or a maintenance job. The repository-wide rules are in [../AGENTS.md](../AGENTS.md) and
-[../ENGINEERING.md](../ENGINEERING.md). Read MongoDB's skills first, as the project's instructions say:
+[../AGENTS.md](../AGENTS.md). Read MongoDB's skills first, as the project's instructions say:
 [schema design](https://raw.githubusercontent.com/mongodb/agent-skills/main/skills/mongodb-schema-design/SKILL.md) and
 [query optimization](https://raw.githubusercontent.com/mongodb/agent-skills/main/skills/mongodb-query-optimizer/SKILL.md).
 

@@ -246,9 +246,11 @@ class _InstructionsPanelState extends State<_InstructionsPanel> {
       return;
     }
     final stale = c.operationErrorCode == 'INSTRUCTIONS_STALE';
+    // The panel says why itself; the chat's Reply boxes do not (task #3652).
+    final why = c.takeOperationError();
     setState(() {
       _saving = false;
-      if (!stale) _saveError = c.operationError;
+      if (!stale) _saveError = why;
     });
     // The refusal's text does not reach this client (decision 3): read the revision it missed.
     if (stale) await _read();
@@ -355,9 +357,10 @@ class _InstructionsPanelState extends State<_InstructionsPanel> {
       'noteId': note.id,
     });
     if (!mounted) return;
+    final why = result == null ? c.takeOperationError() : null;
     setState(() {
       _removing.remove(note.id);
-      if (result == null) _saveError = c.operationError;
+      if (result == null) _saveError = why;
     });
     // The notes' revision moved with the command: the Swarm read's move reads them (never touching the draft).
     if (result != null) _onSwarm();

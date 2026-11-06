@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { hooks } from '../codex/hookContract.js'
 import { installHookSettings } from './hookSettings.js'
-import { recordReviewed, reviewHash, reviewRecords, withoutReviewRecords, withReviewRecords } from './hookReview.js'
+import { CODEX_SHELL_GUARD } from '../../lib/agentShellGuard.js'
+import { recordReviewed, reviewHash, reviewRecords, sessionHookHash, sessionReviewRecords, withoutReviewRecords, withReviewRecords } from './hookReview.js'
 
 const record = hooks.settings.reviewed!
 const roots: string[] = []
@@ -72,8 +73,8 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     // Another port: another command, so another hash, in the same tables.
     await installHookSettings('codex', hooks.settings, 18999, codexHome)
     const second = readFileSync(join(codexHome, 'config.toml'), 'utf8')
-    // Agent Messages' block makes three: notify.mjs's two, and its one.
-    expect(second.match(/^\[hooks\.state\./gm)).toHaveLength(3)
+    // Agent Messages' block makes three: notify.mjs's two, and its one; the Swarm's shell guard a fourth (task #3596).
+    expect(second.match(/^\[hooks\.state\./gm)).toHaveLength(4)
     expect(second).not.toBe(first)
     const installed = JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8'))
     for (const [, hash] of reviewRecords(record, join(codexHome, 'hooks.json'), installed)) expect(second).toContain(hash)
@@ -211,5 +212,35 @@ describe('Harness’s review records, taken out for harness uninstall', () => {
       ours.replace('sha256:ours', 'sha256:theirs'),
       ours.replace(':0:0', ':1:0'),
     ]) expect(withoutReviewRecords(text, record, records)).toEqual({ text, removed: 0 })
+  })
+})
+
+// What `codex app-server` `hooks/list` of codex-cli 0.166.0 reported (2026-11-06) for the Swarm's shell guard given as a
+// session flag (task #3596): `-c hooks.PreToolUse=[{matcher="*",hooks=[{type="command",command=GUARD,timeout=30}]}]`,
+// keyed `/<session-flags>/config.toml:pre_tool_use:0:0`, `untrusted` until the home's config.toml records this hash and
+// `trusted` once it does. A `hooks.state` given by `-c` as well is ignored ("unrecognized configuration setting").
+const GUARD = "'/opt/harness/runtime/node' '/opt/harness/cli/superTabs/shellGuardHook.js'"
+const GUARD_0_166 = 'sha256:e1f9e0b5b2f45f3edb26336eedc79c1fca60a8b4c6ecfc8e36ed4e61ab13592c'
+
+describe('the Swarm shell guard, a Codex session flag, recorded as reviewed (task #3596)', () => {
+  it('hashes it as codex-cli 0.166.0 does', () => {
+    expect(sessionHookHash({ key: CODEX_SHELL_GUARD.key, label: 'pre_tool_use', matcher: '*', command: GUARD, timeout: 30 })).toBe(GUARD_0_166)
+  })
+
+  it('records the guard as this machine launches it, under the key Codex reads', () => {
+    expect([...sessionReviewRecords(record, 'darwin')]).toEqual([[CODEX_SHELL_GUARD.key, sessionHookHash({
+      key: CODEX_SHELL_GUARD.key, label: 'pre_tool_use', matcher: '*', command: CODEX_SHELL_GUARD.command('darwin'), timeout: 30 })]])
+  })
+
+  it('writes it beside Harness\'s own records at each install, so a Swarm Codex session runs it without asking', async () => {
+    const codexHome = home()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    await installHookSettings('codex', hooks.settings, 19473, codexHome)
+    const config = readFileSync(join(codexHome, 'config.toml'), 'utf8')
+    for (const [key, hash] of sessionReviewRecords(record)) {
+      expect(config).toContain(`[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = ${JSON.stringify(hash)}\n`)
+    }
+    // The hooks file itself holds no guard: a person's own Codex session never runs it.
+    expect(readFileSync(join(codexHome, 'hooks.json'), 'utf8')).not.toContain('shellGuardHook')
   })
 })

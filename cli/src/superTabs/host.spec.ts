@@ -1114,7 +1114,7 @@ describe('Super Tab native delivery handoff', () => {
         expect(added).toContain('> Hawthorn the Third of Many Names: 3 y')
         expect(added.length).toBeLessThanOrEqual(ADDED_MAX)
       })
-      // Review 1 of #3114 (Heron11, ENGINEERING.md section 4): the thread's read waits on no other read, so a PM's reply in a
+      // Review 1 of #3114 (Heron11, AGENTS.md standard 4): the thread's read waits on no other read, so a PM's reply in a
       // task's thread waits on two reads in a row at most, as before this task: the Swarm read then the page read, beside it.
       it('reads the thread without waiting for the Swarm read', async () => {
         const root = { ...ROOT, sequence: 1, author: DEV }
@@ -1136,7 +1136,7 @@ describe('Super Tab native delivery handoff', () => {
         expect(prompt).toContain('> Hawthorn3: Not yet')
         expect(prompt).toContain('In a thread Hawthorn3 started')
       })
-      // Review 1 of #3114 (ENGINEERING.md section 4): a later delivery in a task the PM already had one in reads its messages
+      // Review 1 of #3114 (AGENTS.md standard 4): a later delivery in a task the PM already had one in reads its messages
       // beside the Swarm read, so it waits on one read in a row, as before #3114.
       it('reads a known task\'s messages beside the Swarm read', async () => {
         const { t } = led()
