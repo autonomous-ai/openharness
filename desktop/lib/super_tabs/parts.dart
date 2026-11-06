@@ -116,6 +116,7 @@ class SuperTabParts {
         }
       }
     }
+    parts.personalTasks.restoreVersions(json['personalTaskVersions']);
     parts._takeReadMarks(json['readMarks']);
     parts._takeThreadMarks(json['threadMarks']);
     parts._takeChatSettings(json['chatSettings']);
@@ -546,6 +547,7 @@ class SuperTabParts {
       'derived': _derived,
       if (derivedEtag != null) 'derivedEtag': derivedEtag,
     },
+    if (personalTasks.supported) 'personalTaskVersions': personalTasks.versions,
     'dormant': _dormant.values.toList(),
     'seen': Map<String, int>.of(_seen),
     'stale': _stale.toList(),

@@ -42,8 +42,9 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
     if (_sending ||
         c.saving ||
         !c.canWrite ||
-        c.personalTasks?.supported != true)
+        c.personalTasks?.supported != true) {
       return;
+    }
     if (!retry && (c.hasPendingAction || _action != null)) return;
     final owner = c;
     setState(() {
@@ -177,13 +178,14 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                         ],
                         onChanged: enabled
                             ? (value) {
-                                if (value != null)
+                                if (value != null) {
                                   unawaited(
                                     _send({
                                       'type': 'member.approvalMode',
                                       'mode': value,
                                     }),
                                   );
+                                }
                               }
                             : null,
                       ),
@@ -380,7 +382,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                         ],
                                         onChanged: enabled
                                             ? (id) {
-                                                if (id != null)
+                                                if (id != null) {
                                                   unawaited(
                                                     _send({
                                                       'type': 'task.suggest',
@@ -388,6 +390,7 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                                                       'agentId': id,
                                                     }),
                                                   );
+                                                }
                                               }
                                             : null,
                                       ),

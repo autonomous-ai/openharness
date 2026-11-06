@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
+
 import 'swarm_state_test.dart' show createApp;
+
 import 'package:harness/super_tabs/tasks/personal_tasks_pane.dart';
 
 import 'super_tab_parts_test.dart' show recorded;
@@ -22,19 +24,25 @@ class TasksFixture {
   late final controller = SuperTabController(
     tabId: 'c51479bd73b59e58176ad9e4',
     accountId: '6a86',
-    initial: {'tabId': 'c51479bd73b59e58176ad9e4', 'accountId': '6a86', 'selectedId': 'lead5701'},
+    initial: {
+      'tabId': 'c51479bd73b59e58176ad9e4',
+      'accountId': '6a86',
+      'selectedId': 'lead5701',
+    },
     pollInterval: Duration.zero,
     save: (value) => store.write('controller', value.toString()),
     request: (method, path, {body}) async {
-      if (path.contains('/messages')) return {'messages': <dynamic>[], 'next': null};
+      if (path.contains('/messages'))
+        return {'messages': <dynamic>[], 'next': null};
       if (method == 'POST') {
         operations.add(body!['operationId'] as String);
         final command = Map<String, dynamic>.from(body['command'] as Map);
         commands.add(command);
         await hold?.future;
         if (fail) throw StateError('fixture private payload');
-        if (command['type'] == 'member.approvalMode')
+        if (command['type'] == 'member.approvalMode') {
           mode = command['mode'] as String;
+        }
         for (final row in rows) {
           if (row['id'] != command['conversationId']) continue;
           row['version'] = (row['version'] as int) + 1;
@@ -43,8 +51,9 @@ class TasksFixture {
             row['status'] = 'rejected';
             row['reason'] = command['reason'];
           }
-          if (command['type'] == 'task.suggest')
+          if (command['type'] == 'task.suggest') {
             row['agent'] = {'id': command['agentId'], 'name': 'Selected agent'};
+          }
         }
         return {'result': <String, dynamic>{}};
       }
@@ -56,12 +65,13 @@ class TasksFixture {
               'epoch': 3,
               'derived': recorded('first_load')['derived'],
             };
-      if (supported)
+      if (supported) {
         result['personalTasks'] = feed(
           rows,
           reset: path.endsWith('/parts'),
           mode: mode,
         );
+      }
       return result;
     },
   );
@@ -73,7 +83,12 @@ void main() {
     f = TasksFixture();
     addTearDown(() => f.controller.dispose());
     await f.controller.refresh();
-    expect(f.controller.canWrite, isTrue, reason: "${f.controller.error}; ${f.controller.snapshot?.people.map((p) => p.id)}");
+    expect(
+      f.controller.canWrite,
+      isTrue,
+      reason:
+          "${f.controller.error}; ${f.controller.snapshot?.people.map((p) => p.id)}",
+    );
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -189,54 +204,106 @@ void main() {
     expect(find.text('Update Harness to use Tasks.'), findsOneWidget);
     expect(find.byKey(const ValueKey('tasks-approval-mode')), findsNothing);
   });
-  testWidgets('a suggestion changed on another device replaces the displayed choice', (t) async {
-    await mount(t);
-    await t.tap(find.text('Task new')); await t.pump();
-    final field = find.byType(DropdownButtonFormField<String>);
-    expect(t.state<FormFieldState<String>>(field).value, '0540');
-    f.rows.last['version'] = 2;
-    f.rows.last['agent'] = {'id': '0fcb', 'name': 'River'};
-    await f.controller.refresh(); await t.pump();
-    expect(t.state<FormFieldState<String>>(field).value, '0fcb');
-  });
+  testWidgets(
+    'a suggestion changed on another device replaces the displayed choice',
+    (t) async {
+      await mount(t);
+      await t.tap(find.text('Task new'));
+      await t.pump();
+      final field = find.byType(DropdownButtonFormField<String>);
+      expect(t.state<FormFieldState<String>>(field).value, '0540');
+      f.rows.last['version'] = 2;
+      f.rows.last['agent'] = {'id': '0fcb', 'name': 'River'};
+      await f.controller.refresh();
+      await t.pump();
+      expect(t.state<FormFieldState<String>>(field).value, '0fcb');
+    },
+  );
 
-  testWidgets('a person can change the suggestion without approving or starting work', (t) async {
-    await mount(t); await t.tap(find.text('Task new')); await t.pump();
-    await t.tap(find.byType(DropdownButtonFormField<String>)); await t.pumpAndSettle();
-    await t.tap(find.text('River').last); await t.pumpAndSettle();
-    expect(f.commands.single, {'type': 'task.suggest', 'conversationId': 'new', 'agentId': '0fcb'});
-    expect(f.rows.last['status'], 'proposal');
-  });
+  testWidgets(
+    'a person can change the suggestion without approving or starting work',
+    (t) async {
+      await mount(t);
+      await t.tap(find.text('Task new'));
+      await t.pump();
+      await t.tap(find.byType(DropdownButtonFormField<String>));
+      await t.pumpAndSettle();
+      await t.tap(find.text('River').last);
+      await t.pumpAndSettle();
+      expect(f.commands.single, {
+        'type': 'task.suggest',
+        'conversationId': 'new',
+        'agentId': '0fcb',
+      });
+      expect(f.rows.last['status'], 'proposal');
+    },
+  );
 
-  testWidgets('an open rejection cannot be submitted under a replacement account', (t) async {
-    await mount(t); await t.tap(find.text('Task new')); await t.pump();
-    await t.tap(find.text('Reject')); await t.pumpAndSettle();
-    await t.enterText(find.byKey(const ValueKey('task-reject-reason')), 'Decline');
-    await t.pump();
-    final replacement = TasksFixture();
-    addTearDown(replacement.controller.dispose);
-    await replacement.controller.refresh();
-    await t.pumpWidget(MaterialApp(home: Scaffold(body: SizedBox(width: 340,
-      child: SuperTabPersonalTasksPane(controller: replacement.controller, onOpenTask: (_) {})))));
-    await t.tap(find.text('Reject task').last); await t.pumpAndSettle();
-    expect(f.commands, isEmpty);
-    expect(replacement.commands, isEmpty);
-  });
+  testWidgets(
+    'an open rejection cannot be submitted under a replacement account',
+    (t) async {
+      await mount(t);
+      await t.tap(find.text('Task new'));
+      await t.pump();
+      await t.tap(find.text('Reject'));
+      await t.pumpAndSettle();
+      await t.enterText(
+        find.byKey(const ValueKey('task-reject-reason')),
+        'Decline',
+      );
+      await t.pump();
+      final replacement = TasksFixture();
+      addTearDown(replacement.controller.dispose);
+      await replacement.controller.refresh();
+      await t.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 340,
+              child: SuperTabPersonalTasksPane(
+                controller: replacement.controller,
+                onOpenTask: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await t.tap(find.text('Reject task').last);
+      await t.pumpAndSettle();
+      expect(f.commands, isEmpty);
+      expect(replacement.commands, isEmpty);
+    },
+  );
 
-  testWidgets('the Desktop shell defaults its right slot to Tasks and keeps chat in the middle', (t) async {
-    await mount(t);
-    final app = createApp(); addTearDown(app.dispose);
-    t.view.physicalSize = const Size(1600, 1000);
-    t.view.devicePixelRatio = 1; addTearDown(t.view.reset);
-    await t.pumpWidget(MaterialApp(home: Scaffold(body: SuperTabView(
-      controller: f.controller, app: app, board: true, machineName: (_) => 'Computer',
-      onInvite: () {}, onAddAgent: (_) {}, onOpenTerminal: (_) {},
-      onNewSwarm: () {},
-    ))));
-    await t.pump();
-    expect(find.byType(SuperTabPersonalTasksPane), findsOneWidget);
-    expect(find.byKey(const ValueKey('super-board-chat')), findsNothing);
-    expect(find.text('Task new'), findsOneWidget);
-  });
-
+  testWidgets(
+    'the Desktop shell defaults its right slot to Tasks and keeps chat in the middle',
+    (t) async {
+      await mount(t);
+      final app = createApp();
+      addTearDown(app.dispose);
+      t.view.physicalSize = const Size(1600, 1000);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.reset);
+      await t.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabView(
+              controller: f.controller,
+              app: app,
+              board: true,
+              machineName: (_) => 'Computer',
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              onNewSwarm: () {},
+            ),
+          ),
+        ),
+      );
+      await t.pump();
+      expect(find.byType(SuperTabPersonalTasksPane), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-board-chat')), findsNothing);
+      expect(find.text('Task new'), findsOneWidget);
+    },
+  );
 }

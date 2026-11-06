@@ -65,6 +65,21 @@ class SuperTabPersonalTasks {
     return changed;
   }
 
+  Map<String, int> get versions => Map.unmodifiable(_versions);
+
+  /// Cache tombstones share the cursor's lifetime, so its overlap stays idempotent after restart.
+  void restoreVersions(Object? value) {
+    if (value is! Map) return;
+    for (final entry in value.entries) {
+      if (entry.key is String && entry.value is num) {
+        final version = (entry.value as num).toInt();
+        if ((_versions[entry.key] ?? -1) < version) {
+          _versions[entry.key as String] = version;
+        }
+      }
+    }
+  }
+
   Map<String, dynamic> toJson() => {
     'approvalMode': mode,
     'reset': true,
