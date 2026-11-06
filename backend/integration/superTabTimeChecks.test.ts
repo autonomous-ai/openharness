@@ -12,6 +12,7 @@ import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import { QUIET_CHECK_MS, runTimeCheckPass, timeCheckSwarms } from '../src/superTabs/timeChecks.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
+import { plan, profiled, reads } from './plans.test-support.js'
 
 // Task #3385 (anh Dee's Swarm redesign, 11-05): the stall, idle and lost-task follow-ups run in the backend worker, so they
 // keep running while the PM is down. Before, only the PM's own poll ran them: with the PM hung, five people's asks waited 3 to
@@ -151,9 +152,13 @@ describe('the time checks with the PM down', () => {
       configuration: config, lead: false })).result.agentId)
     await f.execute({ type: 'work.assign', conversationId: f.group, agentId: taker })
     f.clock.now += MINUTE
-    await f.timed.runTimeChecks(f.tab)
+    // Its tag resolves on the `[tabId, conversationId, personId]` index, examining only that person's tags there (backend AGENTS.md 3).
+    const entries = await profiled(db, () => f.timed.runTimeChecks(f.tab))
     expect((await stuck()).map(m => m.text)).toEqual([told[0]!.text, 'No longer stuck: this task has an agent again.'])
     expect(await tag()).toEqual([expect.objectContaining({ resolvedBy: 'fixed' })])
+    const resolve = reads(entries, 'SuperTabMention', ['messageId', 'personId'])
+    expect(resolve).toHaveLength(1)
+    expect(plan(resolve)).toEqual([expect.objectContaining({ plan: expect.stringMatching(/IXSCAN.*conversationId/), docsExamined: 1 })])
   })
 
   it('are no longer run by the PM\'s poll', async () => {
