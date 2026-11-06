@@ -55,6 +55,13 @@ describe('shell guard: kill by name', () => {
 
 describe('shell guard: kill -1, every process the account can reach', () => {
   it.each([
+    'kill -1',
+    'kill -4242',
+    'kill -- -4242',
+    'kill -TERM -4242',
+    'kill -s TERM -4242',
+    'kill -n 9 -4242',
+    'kill -- 0',
     'kill -9 -1',
     'kill -- -1',
     'kill -KILL -1',
@@ -67,7 +74,6 @@ describe('shell guard: kill -1, every process the account can reach', () => {
 
   it.each([
     'kill -1 4242',
-    'kill -- -4242',
     'kill -l',
   ])('lets %s through', (command) => {
     expect(refused(command)).toBeNull()
