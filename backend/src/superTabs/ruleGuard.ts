@@ -32,12 +32,12 @@ export function membersNamed(state: SuperTabState, name: string, authority?: Pro
   const linked = authority?.people.find(p => personKey(p.name) === key)
   if (linked) return linked.accountIds.filter(id => present.has(id))
   const usernames = swarmUsernames(state)
+  // A linked account's unique handle/email may name the group too. Display names never add an account to that group.
+  const account = state.people.find(p => [usernames.get(p.id), p.email].some(n => n && personKey(n) === key))
+  const accountLink = account && authority?.people.find(p => p.accountIds.includes(account.id))
+  if (accountLink) return accountLink.accountIds.filter(id => present.has(id))
   const whole = state.people.filter(p => [usernames.get(p.id), p.name, p.email, p.email.split('@')[0]].some(n => n && personKey(n) === key))
-  if (whole.length) {
-    const ids = whole.map(p => p.id)
-    const linked = authority?.people.filter(p => p.accountIds.some(id => ids.includes(id))).flatMap(p => p.accountIds) ?? []
-    return [...new Set([...ids, ...linked])].filter(id => present.has(id))
-  }
+  if (whole.length) return whole.map(p => p.id)
   return state.people.filter(p => p.name?.split(/\s+/).some(word => personKey(word) === key)).map(p => p.id)
 }
 

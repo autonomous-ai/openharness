@@ -21,6 +21,7 @@ import { INSTRUCTIONS_TEMPLATE } from '../src/superTabs/instructionsTemplate.js'
 import { rosterRows } from './hostRows.test-support.js'
 import { SEED_RULES } from '../src/superTabs/policy.js'
 import { PM_SCHEDULE_TEXT } from '../src/superTabs/pmSchedule.js'
+import { plan, profiled, reads } from './plans.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 // Project instructions, phase 2 (docs/plans/2026-10-30-project-instructions-plan.md): the document, its revisions, the
@@ -156,7 +157,14 @@ describe('configured rule approvals through the store', () => {
     await db.superTabMessage.update({ where: { id: stale }, data: { createdAt: new Date(saved.updatedAt.getTime() - 1) } })
     await expect(drop(2, [stale])).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
     const decider = await message(peer)
-    expect((await drop(2, [decider])).result.revision).toBe(3)
+    const entries = await profiled(db, async () => expect((await drop(2, [decider])).result.revision).toBe(3))
+    const policyReads = plan(reads(entries, 'SuperTabProjectRules', ['tabId', 'projectId']))
+    expect(policyReads.length).toBeGreaterThan(0)
+    for (const read of policyReads) {
+      expect(read.plan).toContain('IXSCAN')
+      expect(read.docsExamined).toBe(1)
+      expect(read.returned).toBe(1)
+    }
     for (const [index, account] of [owner, host].entries()) {
       const revision = 4 + index * 2
       await run(tab, save(revision - 1, text))
