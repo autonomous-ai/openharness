@@ -1905,7 +1905,11 @@ export class SuperTabStore {
         // When it was saved, too: a person's approval of a dropped rule must come after it (ruleGuard.ts).
         const stored = await tx.superTabInstructions.findUnique({ where: { id: stableId(tabId, projectId) }, select: { revision: true, text: true, updatedAt: true } })
         context.instructions = stored && { revision: stored.revision, text: stored.text, ...stored.updatedAt ? { at: stored.updatedAt.getTime() } : {} }
-        if (command.type === 'instructions.save' && command.approvals?.length) context.approvals = await readApprovals(tx, tabId, command.approvals)
+        if (command.type === 'instructions.save') {
+          authorizeCommandAccess(original, actor, command)
+          context.projectRules = await currentRules(tx, tabId, projectId)
+          if (command.approvals?.length) context.approvals = await readApprovals(tx, tabId, command.approvals)
+        }
         if (command.type === 'instructions.save' && pullRequestMerges) context.pullRequestMerges = pullRequestMerges
       }
       if (command.type === 'note.add' || command.type === 'note.remove') context.notes = await readNotes(tx, tabId, command.projectId)

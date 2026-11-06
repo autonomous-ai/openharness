@@ -2093,9 +2093,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const summary = because && command.summary.length + because.length > 200 ? `${command.summary.slice(0, 199 - because.length)}…${because}` : command.summary + because
       // No part grows past its size budget: core, each role section, people notes, the whole (#3392).
       refuseOverBudget(before, command.text)
-      // A person's rule, or who gave it, is dropped only by that person or with their own message approving it (#3151).
+      // A person's rule, or who gave it, needs their approval or the configured top decider's own message (#3151, #3710).
       const { told, rules } = allowedDrops(state, project, before, command.text, sender, command.approvals ?? [], context.approvals ?? [],
-        context.instructions?.at ?? 0, context.pullRequestMerges ?? {})
+        context.instructions?.at ?? 0, context.pullRequestMerges ?? {}, context.projectRules?.rules.instructionApprovals)
       // Every line it dropped, with its kind and who gave it, kept with the revision for the History (River, 11-05).
       saveInstructions(project, current, command.text, summary, askedBy, droppedLines(before, command.text, command.dropped ?? [], rules))
       // The coordinator's save that says it is the tidy is that tidy done (pmSchedule.ts tidyRequest); a correction it saves
