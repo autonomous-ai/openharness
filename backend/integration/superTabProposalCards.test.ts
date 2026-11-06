@@ -84,6 +84,14 @@ describe('durable proposal cards', () => {
     }
   })
 
+  it('does not hide a new P0 behind the bounded page of older nonurgent inputs', async () => {
+    const f = await fixture(), low = await f.create()
+    const row = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, conversationId: low, agentId: f.pm } })
+    await db.superTabDelivery.createMany({ data: Array.from({ length: 105 }, (_, i) => ({ ...row, id: randomUUID(), createdAt: new Date(f.clock.now - i - 1000) })) })
+    const urgent = await f.create(owner, 'P0')
+    for (let i = 0; i < 2; i++) expect((await f.store.deliveries(owner, f.tab, f.pm))[0]?.conversationId).toBe(urgent)
+  })
+
   it('withholds queued ordinary chat after switching and still delivers a proposal', async () => {
     const f = await fixture()
     const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${f.tab}:head` } })
