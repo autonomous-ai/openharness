@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -36,6 +37,7 @@ void main() {
     double width = 1500,
     bool projects = true,
     String selected = 'lead',
+    double textScale = 1,
   }) async {
     await tester.binding.setSurfaceSize(Size(width, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -72,6 +74,11 @@ void main() {
       MaterialApp(
         debugShowCheckedModeBanner: false,
         theme: grid.buildAppTheme(brightness: brightness),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: TextScaler.linear(textScale)),
+          child: child!,
+        ),
         home: Scaffold(
           body: SuperTabView(
             controller: c,
@@ -378,6 +385,28 @@ void main() {
       await end(tester, c);
     },
   );
+
+  // The center yields before either side pane at enlarged text (review of
+  // #3399): projects keep their scaled minimum and chat its own, whatever
+  // is left is the Board's.
+  for (final (width, scale) in [(880.0, 1.6), (1280.0, 2.0), (1500.0, 1.0)]) {
+    testWidgets('the Board yields before the side panes at $width wide, '
+        'text ${scale * 100}%', (tester) async {
+      final (c, _) = await show(tester, width: width, textScale: scale);
+      await tester.tap(_key('super-group-lead'));
+      await _settle(tester);
+      final left = tester.getSize(_key('super-left-pane')).width;
+      final right = tester.getSize(_key('super-right-pane')).width;
+      final center = tester.getSize(_key('super-center-pane')).width;
+      expect(left, greaterThanOrEqualTo(180 * scale));
+      expect(right, greaterThanOrEqualTo(math.min(420 * scale, width - left)));
+      expect(left + center + right, closeTo(width, 0.01));
+      expect(center, greaterThanOrEqualTo(0));
+      expectFixedPanes(tester);
+      expect(tester.takeException(), isNull);
+      await end(tester, c);
+    });
+  }
 
   if (Platform.environment['HARNESS_LAYOUT_BENCH'] == '1') {
     testWidgets('Board divider drag benchmark', (tester) async {
