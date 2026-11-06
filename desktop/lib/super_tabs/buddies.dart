@@ -887,7 +887,11 @@ class _BuddyStartState extends State<_BuddyStart> {
           if (machines.isEmpty)
             BuddyNoMachine(machines: machines)
           else
-            Row(
+            // Wraps in a narrow pane: the Buddy chat beside the Board is about 300 px wide (task #3787).
+            Wrap(
+              spacing: grid.AppDesktop.controlGap,
+              runSpacing: grid.AppDesktop.controlGap,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 BuddyMachineField(
                   key: const ValueKey('super-buddy-start-machine'),
@@ -903,7 +907,6 @@ class _BuddyStartState extends State<_BuddyStart> {
                     });
                   },
                 ),
-                const SizedBox(width: 8),
                 SizedBox(
                   width: 120,
                   child: AppSelectField<String>(
@@ -921,7 +924,6 @@ class _BuddyStartState extends State<_BuddyStart> {
                     },
                   ),
                 ),
-                const SizedBox(width: 8),
                 FilledButton(
                   onPressed: busy || machine == null || keptBlock != null
                       ? null

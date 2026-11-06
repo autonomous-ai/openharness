@@ -252,8 +252,8 @@ void main() {
     await _close(tester, c);
   });
 
-  testWidgets('each column is a 280-wide panel of card material, rounded 12, '
-      'with no shadow', (tester) async {
+  testWidgets('each column is a 280-wide tinted lane, rounded 12, with no rim '
+      'or shadow (task #3787)', (tester) async {
     final c = await _show(tester, tasksServer());
     for (final name in [
       'proposals',
@@ -265,13 +265,29 @@ void main() {
       expect(tester.getSize(_column(name)).width, 280, reason: name);
       final panel = tester.widget<DecoratedBox>(_column(name));
       final decoration = panel.decoration as BoxDecoration;
-      expect(decoration.color, grid.AppCard.base, reason: name);
+      // A step off the page, as Trello's lists: darker under white cards in
+      // light, darker under lifted ones in dark.
+      expect(
+        decoration.color,
+        grid.AppTheme.pick(grid.AppSurface.wellFill, grid.AppPalette.panelBg),
+        reason: name,
+      );
       expect(
         decoration.borderRadius,
         BorderRadius.circular(grid.AppCard.radius),
       );
-      expect(decoration.border, Border.all(color: grid.AppCard.hair));
-      expect(decoration.boxShadow, isNull, reason: 'shadows are for floating');
+      expect(decoration.border, isNull, reason: name);
+      expect(decoration.boxShadow, isNull, reason: name);
+      // Its name is the lane's bold title.
+      final label = find.descendant(
+        of: find.byKey(ValueKey('super-tasks-heading-$name')),
+        matching: find.byType(Text),
+      );
+      expect(
+        tester.widget<Text>(label.first).style?.fontWeight,
+        grid.AppFont.semibold,
+        reason: name,
+      );
     }
     await _close(tester, c);
   });
@@ -305,31 +321,57 @@ void main() {
         find.descendant(of: _card(id), matching: find.text(text));
     expect(tester.widget<Text>(title('long', long)).maxLines, 3);
     final board = tester.getSize(title('long', long)).height;
+    // Three of the tile title's lines.
+    final style = tester.widget<Text>(title('long', long)).style!;
+    expect(
+      board,
+      moreOrLessEquals(style.fontSize! * style.height! * 3, epsilon: 2),
+    );
     await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
     await tester.pumpAndSettle();
     expect(tester.widget<Text>(title('long', long)).maxLines, 1);
-    final line = tester.getSize(title('long', long)).height;
-    expect(board, moreOrLessEquals(line * 3, epsilon: 1));
     await _close(tester, c);
   });
 
-  testWidgets('a Board card is an inset tile, rounded 8, with no shadow', (
-    tester,
-  ) async {
+  testWidgets('a Board card is raised card material, rounded 8, with a soft '
+      'shadow that lifts under the pointer (task #3787)', (tester) async {
     final c = await _show(tester, tasksServer());
+    BoxDecoration decoration(String id) =>
+        tester
+                .widget<Ink>(
+                  find.descendant(of: _card(id), matching: find.byType(Ink)),
+                )
+                .decoration!
+            as BoxDecoration;
     for (final id in ['tag', 'preview', 'p-old', 'sender']) {
-      final ink = tester.widget<Ink>(
-        find.descendant(of: _card(id), matching: find.byType(Ink)),
-      );
-      final decoration = ink.decoration! as BoxDecoration;
-      expect(decoration.color, grid.AppCard.inset, reason: id);
+      expect(decoration(id).color, grid.AppCard.base, reason: id);
       expect(
-        decoration.borderRadius,
+        decoration(id).borderRadius,
         BorderRadius.circular(grid.AppCard.insetRadius),
       );
-      expect(decoration.border, Border.all(color: grid.AppCard.insetHair));
-      expect(decoration.boxShadow, isNull, reason: 'shadows are for floating');
+      expect(decoration(id).border, Border.all(color: grid.AppCard.insetHair));
+      expect(decoration(id).boxShadow, grid.AppGlass.cardShadow, reason: id);
     }
+    // Padding of 12 around its text.
+    final preview = tester.getRect(_card('preview'));
+    final previewTitle = tester.getRect(
+      find.descendant(
+        of: _card('preview'),
+        matching: find.text('Remove the old preview route'),
+      ),
+    );
+    expect(previewTitle.left - preview.left, moreOrLessEquals(12, epsilon: 1));
+    expect(previewTitle.top - preview.top, moreOrLessEquals(12, epsilon: 1));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(_card('preview')));
+    await tester.pumpAndSettle();
+    expect(decoration('preview').boxShadow, grid.AppGlass.shadow);
+    expect(decoration('tag').boxShadow, grid.AppGlass.cardShadow);
+    await mouse.moveTo(Offset.zero);
+    await tester.pumpAndSettle();
+    expect(decoration('preview').boxShadow, grid.AppGlass.cardShadow);
     // List keeps its plain rows.
     await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
     await tester.pumpAndSettle();
@@ -337,6 +379,49 @@ void main() {
       find.descendant(of: _card('tag'), matching: find.byType(Ink)),
       findsNothing,
     );
+    await _close(tester, c);
+  });
+
+  testWidgets('a Board card wears its lane as a label on top; List does not '
+      '(task #3787)', (tester) async {
+    final server = tasksServer();
+    (server.state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((g) => g['id'] == 'tag')['handOutLane'] =
+        'Desktop';
+    final c = await _show(tester, server);
+    final label = find.descendant(
+      of: _card('tag'),
+      matching: find.byKey(const ValueKey('super-task-lane-Desktop')),
+    );
+    expect(label, findsOneWidget);
+    expect(
+      find.descendant(of: label, matching: find.text('Desktop')),
+      findsOneWidget,
+    );
+    final title = find.descendant(
+      of: _card('tag'),
+      matching: find.text('One tag per ask'),
+    );
+    expect(tester.getTopLeft(label).dy, lessThan(tester.getTopLeft(title).dy));
+    // The caption keeps its words.
+    expect(
+      find.descendant(
+        of: _card('tag'),
+        matching: find.text('dee · Finch2 · PR #2867'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: _card('preview'),
+        matching: find.byKey(const ValueKey('super-task-lane-Desktop')),
+      ),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(const ValueKey('super-tasks-layout-list')));
+    await tester.pumpAndSettle();
+    expect(label, findsNothing);
     await _close(tester, c);
   });
 
@@ -373,11 +458,11 @@ void main() {
             .color;
     expect(
       fill('tag'),
-      Color.alphaBlend(grid.AppSurface.selectedFill, grid.AppCard.inset),
+      Color.alphaBlend(grid.AppSurface.selectedFill, grid.AppCard.base),
     );
     expect(tester.getSemantics(_card('tag')), isSemantics(isSelected: true));
     for (final id in ['preview', 'test-copy', 'p-old']) {
-      expect(fill(id), grid.AppCard.inset, reason: id);
+      expect(fill(id), grid.AppCard.base, reason: id);
       expect(
         tester.getSemantics(_card(id)),
         isNot(isSemantics(isSelected: true)),
@@ -439,10 +524,7 @@ void main() {
     expect(inCard('tag', 'dee · Finch2 · PR #2867'), findsOneWidget);
     expect(inCard('shipped-means', 'scholes'), findsOneWidget);
     expect(inCard('sender', 'scholes · Finch2 · PR #2870'), findsOneWidget);
-    expect(
-      inCard('test-copy', 'ken15 · Finch2 · Needs you'),
-      findsOneWidget,
-    );
+    expect(inCard('test-copy', 'ken15 · Finch2 · Needs you'), findsOneWidget);
     // No task numbers, machines or models.
     expect(find.textContaining('#12'), findsNothing);
     expect(find.textContaining('studio'), findsNothing);
