@@ -11,15 +11,18 @@ are the server's: the app hides a control the reader can't use, and when the ser
 server's sentence. Contracts (drafts, posted in #3820's chat, followed as they change):
 - #3819 (Relay): project `boardMode: true` | absent; `canChat: [personId]` (project owner and Swarm owner always
   may); `decider: personId`; task `paused: {by, at, reason?}`. Commands `project.boardMode`, `project.canChat`,
-  `project.decider` (owner or Swarm owner), `work.pause {conversationId, reason?}`, `work.resume {conversationId}`.
-  Refusals CHAT_NOT_ALLOWED, PRIORITY_FORBIDDEN, PAUSE_FORBIDDEN (403, saying who can).
+  `project.decider` (owner or Swarm owner); `work.pause {conversationId, paused, reason?}` pauses and resumes
+  (`work.resume` already resumes lost work). Refusals CHAT_NOT_ALLOWED, PRIORITY_FORBIDDEN, PAUSE_FORBIDDEN (403,
+  saying who can).
 - #3818 (Headfix): a person's Buddies are their `swarm-buddy` chats; the default carries `buddyDefault: true` (none
   flagged: the first is the default). `buddy.create {machineId, engine, model?, name?}` makes a new Buddy in a new
-  chat; `buddy.rename`, `buddy.remove {conversationId}`, `buddy.default {conversationId}`. Cap `buddyCap` (5 when
-  unset), refusal BUDDY_CAP; BUDDY_PERSON for anyone else's.
-- #3817 (Fir): a card's `proposal` record on its conversation (decision Accept / Reshape / Later with a date / No,
-  reason, the sending person and Buddy, an open question with its default and time, who it waits on), gated by
-  `boardMode`. Field names and the person's propose and answer commands: pending Fir's draft.
+  chat; `buddy.rename`, `buddy.remove {conversationId}`, `buddy.default {conversationId}`. Cap `buddyCap`, refusal
+  BUDDY_CAP; BUDDY_PERSON for anyone else's. Desktop shows several Buddies only when the snapshot carries `buddyCap`
+  (asked of #3818 to send it always).
+- #3817 (Fir): a card's `proposal` record on its conversation: `senders`, `decision {kind accept|reshape|later|no,
+  reason, revisitAt?}`, `questions [{id, personId, question, defaultAnswer, deadline, answer?}]`, `mergedInto?`,
+  gated by `boardMode`. Person commands `proposal.create {projectId, title, text, goal, why, doneWhen, evidence,
+  priority}` and `proposal.answer {conversationId, questionId, text}`.
 
 The Board, cards and header are `tasks_view.dart`, `task_card.dart`, `task_groups.dart` and `view.dart`
 (`_boardHeader`, `_boardChat`); parsing is `model.dart`; commands go through `SuperTabController.command`, whose
@@ -66,53 +69,54 @@ This plan is written and carried out by its Engineer, test first; there is no ex
 
 Interfaces: `SuperTabProject.boardMode`, `.canChatIds`, `.deciderId`, `canChat(personId)`, `canSteer(personId)`
 (owner, Swarm owner or decider); `SuperTabConversation.paused`, `.proposal` (`SuperTabProposalRecord`),
-`.buddyDefault`; controller `buddiesOf(accountId)` (default first).
+`.buddyDefault`; controller `buddies()` (default first).
 
-- [ ] Failing test: a snapshot with and without each field parses as above; with none, every getter is today's.
-- [ ] Code.
+- [x] Failing test: a snapshot with and without each field parses as above; with none, every getter is today's.
+- [x] Code.
 
 ### 2. Card lines: decision, question, waiting and paused marks (`task_card.dart`, `tasks_view.dart`)
 
-- [ ] Failing test: in a switched project a decided proposal's card shows its decision and one-line reason; an open
+- [x] Failing test: in a switched project a decided proposal's card shows its decision and one-line reason; an open
       question shows with its default and time; a card waiting on the reader is marked; a paused task shows Paused.
       The same snapshot without `boardMode` draws today's cards.
-- [ ] Code.
+- [x] Code.
 
 ### 3. Needs you bar (`tasks_view.dart`)
 
-- [ ] Failing test: a switched project's Board shows "Needs you · N" listing what waits on the reader; a click opens
-      that card's chat; with nothing waiting, no bar; an unswitched project has none.
-- [ ] Code.
+- [x] Failing test: a switched project's Board shows "Needs you · N" listing what waits on the reader; a click opens
+      that card's chat, which shows the question asked of the reader with its default and time and sends the answer
+      (`proposal.answer`); with nothing waiting, no bar; an unswitched project has none.
+- [x] Code.
 
 ### 4. + New proposal on the Board (`view.dart` header, new `proposal_form.dart`)
 
-- [ ] Failing test: in a switched project the header has + New proposal; its form asks goal, why and done when, sends
+- [x] Failing test: in a switched project the header has + New proposal; its form asks goal, why and done when, sends
       Fir's propose command, and shows a refusal's sentence; an unswitched project has no button.
-- [ ] Code (after Fir's command shape is known).
+- [x] Code (after Fir's command shape is known).
 
 ### 5. Priority and pause by role (`tasks_view.dart` card menu, `view.dart` task header, `controller.dart`)
 
-- [ ] Failing test: in a switched project a member may set P1–P3 on their own card, P0 is offered only to the owner,
-      the Swarm owner or the decider, Pause/Resume only to them; `work.pause`/`work.resume` are sent; a
+- [x] Failing test: in a switched project a member may set P1–P3 on their own card, P0 is offered only to the owner,
+      the Swarm owner or the decider, Pause/Resume only to them; `work.pause` is sent with `paused` true or false; a
       PRIORITY_FORBIDDEN or PAUSE_FORBIDDEN refusal shows its sentence. Unswitched: today's priority menu.
-- [ ] Code.
+- [x] Code.
 
 ### 6. Buddies list and + New Buddy (`view.dart` `_boardChat`, `buddies.dart`, `controller.dart`)
 
-- [ ] Failing test: the right pane lists the reader's Buddies, default first and marked; choosing one shows its chat;
+- [x] Failing test: the right pane lists the reader's Buddies, default first and marked; choosing one shows its chat;
       + New Buddy asks a name and sends `buddy.create` with it; rename, remove and Make default send their commands;
-      BUDDY_CAP shows its sentence. One Buddy (today's backend): today's pane.
-- [ ] Code.
+      BUDDY_CAP shows its sentence. A server without `buddyCap`: today's pane.
+- [x] Code.
 
-### 7. Project People → Can chat; the Chat tab read-only without it (`roster.dart`, `view.dart`)
+### 7. Project settings › People → Can chat; the Chat tab read-only without it (`project_people.dart`, `view.dart`)
 
-- [ ] Failing test: in a switched project the owner sees a Can chat switch per member, sending `project.canChat`;
+- [x] Failing test: in a switched project the owner sees a Can chat switch per member, sending `project.canChat`;
       others see no switch; a reader without Can chat gets the project chat read-only with a line saying who can
       grant it; a CHAT_NOT_ALLOWED refusal is shown. Unswitched: today's People and chat.
-- [ ] Code.
+- [x] Code.
 
 ### 8. Pictures
 
-- [ ] Light and dark screenshots of the switched Board (card lines, Needs you, + New proposal), the Buddies list and
-      People with Can chat (`HARNESS_SUPER_TAB_CAPTURE`).
+- [x] Light and dark screenshots of the switched Board (card lines, Needs you, + New proposal), the Buddies list and
+      People with Can chat (`HARNESS_SUPER_TAB_CAPTURE`, `super_tab_board_phase2_shots_test.dart`).
 - [ ] Windows recording with no window flash: by the Tester on a Windows machine (this change starts no process).
