@@ -187,4 +187,38 @@ void main() {
     expect(find.text('Update Harness to use Tasks.'), findsOneWidget);
     expect(find.byKey(const ValueKey('tasks-approval-mode')), findsNothing);
   });
+  testWidgets('a suggestion changed on another device replaces the displayed choice', (t) async {
+    await mount(t);
+    await t.tap(find.text('Task new')); await t.pump();
+    final field = find.byType(DropdownButtonFormField<String>);
+    expect(t.state<FormFieldState<String>>(field).value, '0540');
+    f.rows.last['version'] = 2;
+    f.rows.last['agent'] = {'id': '0fcb', 'name': 'River'};
+    await f.controller.refresh(); await t.pump();
+    expect(t.state<FormFieldState<String>>(field).value, '0fcb');
+  });
+
+  testWidgets('a person can change the suggestion without approving or starting work', (t) async {
+    await mount(t); await t.tap(find.text('Task new')); await t.pump();
+    await t.tap(find.byType(DropdownButtonFormField<String>)); await t.pumpAndSettle();
+    await t.tap(find.text('River').last); await t.pumpAndSettle();
+    expect(f.commands.single, {'type': 'task.suggest', 'conversationId': 'new', 'agentId': '0fcb'});
+    expect(f.rows.last['status'], 'proposal');
+  });
+
+  testWidgets('an open rejection cannot be submitted under a replacement account', (t) async {
+    await mount(t); await t.tap(find.text('Task new')); await t.pump();
+    await t.tap(find.text('Reject')); await t.pumpAndSettle();
+    await t.enterText(find.byKey(const ValueKey('task-reject-reason')), 'Decline');
+    await t.pump();
+    final replacement = TasksFixture();
+    addTearDown(replacement.controller.dispose);
+    await replacement.controller.refresh();
+    await t.pumpWidget(MaterialApp(home: Scaffold(body: SizedBox(width: 340,
+      child: SuperTabPersonalTasksPane(controller: replacement.controller, onOpenTask: (_) {})))));
+    await t.tap(find.text('Reject task').last); await t.pumpAndSettle();
+    expect(f.commands, isEmpty);
+    expect(replacement.commands, isEmpty);
+  });
+
 }
