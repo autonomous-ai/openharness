@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
+import { SEED_RULES } from './policy.js'
 import { isCrew } from './crew.js'
 import { projectsOf } from './projects.js'
 
@@ -73,7 +74,16 @@ describe('crew.add and crew.remove', () => {
     f.run({ type: 'crew.add', agentId: f.worker, role: 'Engineer' }, f.agentActor(f.pm))
     expect(f.target().crew).toEqual({ role: 'Engineer', at: 5000, by: f.pm })
     for (const lane of ['backend', 'cli', 'desktop', 'mobile', 'docs']) expect(commandSchema.safeParse({ type: 'crew.add', agentId: 'a1', lane }).success).toBe(true)
-    for (const lane of ['', 'web', 'Backend']) expect([lane, commandSchema.safeParse({ type: 'crew.add', agentId: 'a1', lane }).success]).toEqual([lane, false])
+    for (const lane of ['']) expect([lane, commandSchema.safeParse({ type: 'crew.add', agentId: 'a1', lane }).success]).toEqual([lane, false])
+  })
+
+  it('accepts custom project lanes in any case and refuses a removed seeded lane', () => {
+    const f = fixture()
+    const projectRules = { revision: 1, rules: { ...structuredClone(SEED_RULES), lanes: [{ name: 'firmware', owns: ['devices/'] }] } }
+    f.run({ type: 'crew.add', agentId: f.worker, lane: 'Firmware' }, owner, { projectRules })
+    expect(f.target().crew?.lane).toBe('firmware')
+    expect(() => f.run({ type: 'crew.add', agentId: f.worker, lane: 'mobile' }, owner, { projectRules }))
+      .toThrow(expect.objectContaining({ code: 'LANE_UNKNOWN' }))
   })
 
   // River for security review 1 of #3222 (the Swarm goes public): of the people, only the Swarm's or the project's owner,
