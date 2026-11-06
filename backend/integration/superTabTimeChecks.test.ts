@@ -129,6 +129,33 @@ describe('the time checks with the PM down', () => {
     expect((await f.rows('work-lost')).map(r => r.text)).toContainEqual(expect.stringContaining('Worker lost its task "Ship the parser"'))
   })
 
+  // Task #3915: a task whose agent went down and nobody took tells its PM and its people within the checks' 5 minutes, once,
+  // in a line that tags them (their Needs you), and the tag resolves when someone takes it.
+  it('flag a task nobody took 10 minutes after its agent went down, once, tagging its requester, and clear it when taken', async () => {
+    const f = await swarm()
+    await f.workerBeat()
+    f.clock.now += 2 * MINUTE + 5_000
+    await f.timed.runTimeChecks(f.tab)
+    const stuck = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.group }, orderBy: { sequence: 'asc' } }))
+      .filter(m => /stuck/i.test(m.text))
+    expect(await stuck()).toEqual([])
+    f.clock.now += 10 * MINUTE
+    await f.timed.runTimeChecks(f.tab)
+    f.clock.now += 5 * MINUTE
+    await f.timed.runTimeChecks(f.tab)
+    const told = await stuck()
+    expect(told).toEqual([expect.objectContaining({ recipientIds: [f.lead], text: expect.stringContaining('Worker went down') })])
+    const tag = () => db.superTabMention.findMany({ where: { tabId: f.tab, messageId: told[0]!.id } })
+    expect(await tag()).toEqual([expect.objectContaining({ personId: owner.sub, conversationId: f.group, resolvedAt: null })])
+    const taker = String((await f.execute({ type: 'agent.add', conversationId: f.group, machineId: 'lead-host', harnessId: randomUUID(), name: 'Taker',
+      configuration: config, lead: false })).result.agentId)
+    await f.execute({ type: 'work.assign', conversationId: f.group, agentId: taker })
+    f.clock.now += MINUTE
+    await f.timed.runTimeChecks(f.tab)
+    expect((await stuck()).map(m => m.text)).toEqual([told[0]!.text, 'No longer stuck: this task has an agent again.'])
+    expect(await tag()).toEqual([expect.objectContaining({ resolvedBy: 'fixed' })])
+  })
+
   it('are no longer run by the PM\'s poll', async () => {
     const f = await swarm()
     await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Started' }, host, f.worker)
