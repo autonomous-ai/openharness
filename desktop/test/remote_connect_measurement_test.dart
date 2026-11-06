@@ -49,6 +49,13 @@ class _Daemon extends WsConn {
   }) async => const {};
 
   int forceReconnects = 0;
+  int closes = 0;
+
+  @override
+  Future<void> close() async {
+    closes++;
+    await super.close();
+  }
 
   /// What the redial reports through the pool, played by the test.
   void Function()? onForceReconnect;
@@ -175,6 +182,21 @@ void main() {
     now += const Duration(seconds: 1);
     await app.forceRedialForTest(mid);
     expect(daemon.forceReconnects, 2);
+  });
+
+  // A disposed app kept every socket of its pool redialling, and each refusal reported back into the
+  // disposed notifier (task #3711: this file's last case failed after it had completed, at random).
+  test('disposing the app closes its connections, so nothing reports to it after', () {
+    final owned = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+      productMeasurement: _Recorder(),
+    );
+    final socket = _Daemon();
+    owned.adoptPoolConnectionForTest(mid, socket);
+    owned.dispose();
+    expect(socket.closes, 1);
   });
 
   // A real pool, because what a replaced socket reports is the pool's to deliver or drop: Connect
