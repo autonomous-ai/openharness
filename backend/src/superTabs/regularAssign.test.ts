@@ -106,6 +106,33 @@ describe('a Regular agent and its task', () => {
     expect(code(() => f.run({ type: 'agent.screen', agentId: f.ada } as Command, app.asPm))).toBe('TERMINAL_PRIVATE')
   })
 
+  // Security review 2 of #4116 (Rowan): the agent keeps one conversation, so what it learned in a private project would reach
+  // the members of the next project it works in. Once it has worked in a private project it takes tasks only there; work in
+  // public projects, which every member reads, moves on freely.
+  it('after a task in a private project, takes tasks only in that project, and no other project\'s PM sees it', () => {
+    const f = swarm()
+    const secret = f.project('secret', 'private'), web = f.project('web', 'public')
+    f.run({ type: 'project.sharing', projectId: secret.projectId, visibility: 'private', memberIds: ['owner', 'mate'] } as Command)
+    const done = (task: string, assignmentId: string) => f.run({ type: 'work.status', conversationId: task, assignmentId, status: 'done', result: 'Done.' } as Command,
+      { kind: 'agent', agentId: f.ada, machineOwnerId: 'mate' })
+    const first = f.run({ type: 'work.assign', conversationId: secret.task, agentId: f.ada }, secret.asPm)
+    done(secret.task, first.result.assignmentId as string)
+    expect(canReadAgent(f.state, web.asPm, f.agent(f.ada))).toBe(false)
+    expect(code(() => f.run({ type: 'work.assign', conversationId: web.task, agentId: f.ada }, web.asPm))).not.toBeNull()
+    const again = f.run({ type: 'conversation.create', projectId: secret.projectId, title: 'secret again', brief: 'Do it.', checks: [] } as Command).result.conversationId as string
+    expect(code(() => f.run({ type: 'work.assign', conversationId: again, agentId: f.ada }, secret.asPm))).toBeNull()
+  })
+
+  it('after tasks in public projects only, takes a task in any project its person reads', () => {
+    const f = swarm()
+    const app = f.project('app', 'public'), secret = f.project('secret', 'private')
+    f.run({ type: 'project.sharing', projectId: secret.projectId, visibility: 'private', memberIds: ['owner', 'mate'] } as Command)
+    const first = f.run({ type: 'work.assign', conversationId: app.task, agentId: f.ada }, app.asPm)
+    f.run({ type: 'work.status', conversationId: app.task, assignmentId: first.result.assignmentId as string, status: 'done', result: 'Done.' } as Command,
+      { kind: 'agent', agentId: f.ada, machineOwnerId: 'mate' })
+    expect(code(() => f.run({ type: 'work.assign', conversationId: secret.task, agentId: f.ada }, secret.asPm))).toBeNull()
+  })
+
   it('is seen idle by its person and itself, and by no other person', () => {
     const f = swarm()
     expect(canReadAgent(f.state, mate, f.agent(f.ada))).toBe(true)
