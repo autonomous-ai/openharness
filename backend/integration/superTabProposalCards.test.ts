@@ -78,7 +78,7 @@ describe('durable proposal cards', () => {
 
   it('keeps a dormant card loaded when its person has a dormant default Buddy chat', async () => {
     const f = await fixture()
-    await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'], maxAgents: 4 } })
+    await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } })
     const second = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', name: 'Research' })
     await f.execute({ type: 'buddy.default', conversationId: second.result.conversationId })
     const id = await f.create(owner)
@@ -95,7 +95,7 @@ describe('durable proposal cards', () => {
 
   it('routes a dormant proposal overdue notice to the dormant default Buddy chat', async () => {
     const f = await fixture()
-    await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'], maxAgents: 4 } })
+    await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } })
     const second = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', name: 'Research' })
     await f.execute({ type: 'buddy.default', conversationId: second.result.conversationId })
     const id = await f.create(owner)
