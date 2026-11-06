@@ -1,64 +1,8 @@
-import 'package:dio/dio.dart';
-
-import '../logging/http_log.dart';
-import 'usage_account_key.dart';
-import 'usage_credentials.dart';
 import 'usage_source.dart';
 import 'usage_window.dart';
 
-/// Codex's rate limits, read with the token `codex login` left in
-/// `~/.codex/auth.json`.
-///
-/// ⚠️ Undocumented, on the same terms as [ClaudeUsageSource]: this is the
-/// backend the Codex CLI itself asks, and it can change without notice.
-///
-/// Codex numbers its windows rather than naming them — a primary and a
-/// secondary, whose real durations arrive in the payload — so the labels here
-/// are derived from `limit_window_seconds` instead of hardcoded. A build that
-/// printed "5h" for a window the server had quietly changed to 24h would be
-/// confidently wrong, which is worse than saying nothing.
-class CodexUsageSource implements UsageSource {
-  CodexUsageSource({Dio? dio, UsageCredentials? credentials})
-    : _dio = dio ?? attachHttpLog(buildUsageDio()),
-      _credentials = credentials ?? const UsageCredentials();
-
-  final Dio _dio;
-  final UsageCredentials _credentials;
-
-  static const _url = 'https://chatgpt.com/backend-api/wham/usage';
-
-  @override
-  UsageProvider get provider => UsageProvider.codex;
-
-  @override
-  Future<ProviderUsage> read() async {
-    final token = await _credentials.codex();
-    if (token == null) return signedOut(provider);
-    final accountId = await _credentials.codexAccountId();
-    final email = await _credentials.codexAccountEmail();
-    try {
-      final response = await _dio.getUri<Object?>(
-        Uri.parse(_url),
-        options: Options(
-          headers: {
-            'Authorization': 'Bearer ${token.accessToken}',
-            'ChatGPT-Account-Id': ?accountId,
-          },
-        ),
-      );
-      return codexUsageFromAnswer(
-        statusCode: response.statusCode,
-        body: response.data,
-        email: email,
-        account: accountId == null
-            ? null
-            : usageAccountKey(provider, accountId),
-      );
-    } on DioException {
-      return usageFailureFor(provider, null)!;
-    }
-  }
-
+/// Pure mapping of CLI-reported limit windows; performs no I/O.
+abstract final class _CodexUsageWindows {
   static ProviderUsage _mapWindows(
     Map<Object?, Object?> data, {
     String? account,
@@ -117,9 +61,6 @@ class CodexUsageSource implements UsageSource {
   }
 }
 
-/// What Codex's usage endpoint said, as the rail draws it — shared by this
-/// computer's own reading and a remote machine's, for the reason
-/// [claudeUsageFromAnswer] gives.
 ProviderUsage codexUsageFromAnswer({
   required int? statusCode,
   required Object? body,
@@ -135,5 +76,5 @@ ProviderUsage codexUsageFromAnswer({
       message: 'Codex answered in a shape this build cannot read',
     );
   }
-  return CodexUsageSource._mapWindows(body, account: account, email: email);
+  return _CodexUsageWindows._mapWindows(body, account: account, email: email);
 }
