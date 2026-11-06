@@ -21,12 +21,15 @@ afterEach(async () => {
   await relay?.close(); relay = undefined
 })
 
-it('starts in a folder of its own, from the checkouts here, with no token and nothing cloned', async () => {
+it('starts and switches its engine in the same folder and private chat, with one Buddy and no app token', async () => {
   const backend = await FakeBackend.start(); relay = backend
   backend.addMachine(ME)
+  backend.me = { id: 'person', email: ME.email }
   // As a real engine does: it asks about a folder it has no answer for, in a terminal no Swarm view shows.
   const d = await signedInDaemon(backend, ME, { ANTHROPIC_API_KEY: 'fixture-only' }, undefined, true); daemon = d
   writeFileSync(join(d.env.HOME!, '.claude.json'), '{}')
+  mkdirSync(d.env.CODEX_HOME!, { recursive: true })
+  writeFileSync(join(d.env.CODEX_HOME!, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: 'fixture-only' }), { mode: 0o600 })
   const project = join(d.projectsDir, 'api'); mkdirSync(project, { recursive: true })
   const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com', ...args], { cwd: project, stdio: 'ignore' })
   git('init', '-q'); writeFileSync(join(project, 'README.md'), 'fixture\n'); git('add', '.'); git('commit', '-qm', 'fixture')
@@ -37,6 +40,8 @@ it('starts in a folder of its own, from the checkouts here, with no token and no
       requirements: { memoryBytes: 0, diskBytes: 1, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false },
       buddyOf: { personId: 'person', generation: 'g' }, buddyScope: 'swarm', buddyProjects: [{ id: 'p1', name: 'API', cwd: project }] } }
   const agents: Array<Record<string, any>> = [], asked: string[] = []
+  const outcomes: Record<string, any>[] = []
+  let rebinds = 0, claims = 0
   backend.superTabs = overOldRoutes(async (method, raw, body) => {
     const path = new URL(raw, backend.httpUrl).pathname
     if (path.endsWith('/github-token')) { asked.push(path); throw Object.assign(new Error('This start has no project folder to prepare.'), { status: 404, code: 'NOT_FOUND' }) }
@@ -45,12 +50,26 @@ it('starts in a folder of its own, from the checkouts here, with no token and no
       if (method === 'GET') return { data: start }
       const c = body.command
       if (c.type === 'agent.startDispatch') start.dispatched = true
-      else if (c.type === 'agent.started') { start.harnessId = c.harnessId; agents.push({ id: 'buddy', machineId: ME.machineId, harnessId: c.harnessId, buddyScope: 'swarm', configuration: c.configuration }) }
+      else if (c.type === 'agent.started') { start.harnessId = c.harnessId; agents.push({ id: 'buddy', machineId: ME.machineId, harnessId: c.harnessId, buddyScope: 'swarm', buddyOf: { personId: 'person', generation: 'g' }, configuration: c.configuration }) }
       else if (c.type === 'agent.startSettled') start.poolSettled = true
       else if (c.type === 'agent.startFailed') start.error = c.error
       return { data: { result: {} } }
     }
-    if (path.includes('/hosts/')) return { data: [] }
+    if (path.endsWith('/assignments')) return { data: [] }
+    if (path.includes('/hosts/')) return { data: agents.map(agent => ({ tabId: TAB, active: true, buddyConversationId: 'buddy-chat', agent })) }
+    if (path.endsWith('/commands')) {
+      const command = body.command, buddy = agents[0]
+      if (command.type === 'agent.switchClaim') { expect(body.asAgentId).toBe('buddy'); claims++ }
+      else if (command.type === 'agent.rebind') {
+        expect(command).toMatchObject({ agentId: 'buddy', previousHarnessId: buddy.harnessId, configuration: { engine: 'codex' } })
+        expect(command).not.toHaveProperty('projectId')
+        buddy.harnessId = command.harnessId; buddy.configuration = command.configuration; rebinds++
+      } else if (command.type === 'agent.switchResult') {
+        outcomes.push(command); delete buddy.switchRequest
+      } else if (command.type === 'agent.configuration') buddy.configuration = command.configuration
+      else throw new Error(`Unexpected command ${command.type}`)
+      return { data: { result: {} } }
+    }
     if (path.includes('/machines/')) return { data: { revision: 1 } }
     if (path === `/api/super-tabs/${TAB}`) return { data: { state: { id: TAB, agents, projects: [], conversations: [] }, revision: 1 } }
     if (path.endsWith('/deliveries') || path.endsWith('/grids')) return { data: [] }
@@ -71,4 +90,20 @@ it('starts in a folder of its own, from the checkouts here, with no token and no
   expect(folders).toHaveLength(1)
   expect(existsSync(join(homes, folders[0]!, 'projects', 'API', 'README.md'))).toBe(true)
   expect(existsSync(start.request.cwd)).toBe(false)
+  const original = agents[0].harnessId
+  const before = (await client.request('agents_list')).agents.find((agent: Record<string, any>) => agent.id === original)
+  // Ordinary Close still keeps a Buddy running; the engine switch alone carries its prepared handoff permit.
+  expect(await client.request('agent_close', { agentId: original, mode: 'now' })).toMatchObject({ error: 'BUDDY_PROTECTED' })
+  agents[0].switchRequest = { id: 'engine-switch', engine: 'codex', profileId: 'default', requestedBy: 'person' }
+  await client.request('super_tabs', { action: 'wake' }, 30_000)
+  await until('the Buddy engine switch to settle', () => outcomes.length > 0 || null, 60_000, 100)
+  expect(outcomes).toEqual([{ type: 'agent.switchResult', agentId: 'buddy', switchId: 'engine-switch', ok: true }])
+  expect(claims).toBe(1)
+  expect(rebinds).toBe(1)
+  const live = (await client.request('agents_list')).agents
+  expect(live).toHaveLength(1)
+  expect(live[0]).toMatchObject({ id: agents[0].harnessId, engine: 'codex', cwd: before.cwd, swarmRole: 'buddy' })
+  expect(live[0].id).not.toBe(original)
+  expect(agents[0]).toMatchObject({ id: 'buddy', buddyOf: { personId: 'person', generation: 'g' } })
+  expect(asked).toEqual([])
 })
