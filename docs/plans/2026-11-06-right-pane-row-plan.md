@@ -115,3 +115,12 @@ available width. Existing full chat callers keep their layout.
   one metadata line, long machine and subscription ellipsized, privacy in tooltip; no overflow.
 - [ ] Implement using shared typography, spacing and menu tokens; preserve subscription switching and offline states.
 - [ ] Capture minimum and wide headers plus the Board with unread and overflow; run the style/icon checks and affected tests.
+
+### 7. Windows screenshot fonts
+
+**Files:** `desktop/test/support/capture.dart`, `desktop/test/capture_fonts_test.dart`.
+**Interface:** `loadCaptureFonts(captureDir)` loads the app's icon fonts whenever capture is enabled, with the existing platform text fonts.
+
+- [ ] Render the shared plus icon after capture font loading and assert its center is painted; observe the missing-glyph failure on Windows.
+- [ ] Load manifest font assets on every capture platform, retaining the macOS system face and the existing Windows/Linux text faces.
+- [ ] Rerun the font regression and capture the row and headers in both themes.
