@@ -115,6 +115,7 @@ export const GROUP_FIELDS = {
     'talkedAt',
     'teamWritten',
     'teamWrittenBy',
+    'unlinkedPullRequests',
     'writers',
   ],
 } as const
