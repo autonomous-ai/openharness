@@ -102,6 +102,43 @@ describe('asking a person for decisions', () => {
   })
 })
 
+describe('explicit decision deadlines', () => {
+  const defaultAt = '2026-11-06T04:00:00.000Z'
+  it('carries a decision deadline beside its recommended option', () => {
+    const s = swarm()
+    const asked = s.run({ type: 'decision.ask', conversationId: s.group, personId: 'peer',
+      questions: [{ ...question('Ship when?'), defaultAt }] } as Command, asAgent(s.lead))
+    expect(asked.decisions?.[0]).toMatchObject({ defaultAt, recommended: 0 })
+  })
+
+  it('carries a needs-human deadline when there is no PM to route through', () => {
+    const s = swarm()
+    s.state.conversations.find(c => c.id === 'lead')!.leadId = null
+    const asked = s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'needs_human', hold: HOLD,
+      result: 'Ship when?', ask: { personId: 'peer', options: ['Today', 'Tomorrow'], recommended: 1, unblocks: 'Release', defaultAt } } as Command, asAgent(s.worker))
+    expect(asked.decisions?.[0]).toMatchObject({ defaultAt, recommended: 1 })
+  })
+
+  it('keeps the deadline when a worker question becomes the PM’s crew need', () => {
+    const s = swarm()
+    const asked = s.run({ type: 'decision.ask', conversationId: s.group, personId: 'peer',
+      questions: [{ ...question('Ship when?'), defaultAt }] } as Command, asAgent(s.worker))
+    expect(asked.decisions ?? []).toEqual([])
+    expect(asked.messages[0]?.source?.crewNeed).toMatchObject({ defaultAt, recommended: 0 })
+    const needs = s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'needs_human', hold: HOLD,
+      result: 'Ship when?', ask: { personId: 'peer', options: ['Today', 'Tomorrow'], recommended: 1, unblocks: 'Release', defaultAt } } as Command, asAgent(s.worker))
+    expect(needs.messages.find(m => m.source?.crewNeed)?.source?.crewNeed).toMatchObject({ defaultAt, recommended: 1 })
+  })
+
+  it('refuses an invalid deadline and keeps deadline-free legacy callers valid', () => {
+    const s = swarm()
+    const send = (at?: string) => ({ type: 'decision.ask', conversationId: s.group, personId: 'peer',
+      questions: [{ ...question('Ship when?'), ...at ? { defaultAt: at } : {} }] })
+    expect(commandSchema.safeParse(send('tomorrow')).success).toBe(false)
+    expect(commandSchema.safeParse(send()).success).toBe(true)
+  })
+})
+
 describe('answering a decision', () => {
   const open = (s: ReturnType<typeof swarm>, overrides: Partial<DecisionTarget> = {}): DecisionTarget => ({ id: 'decision-1', personId: 'peer',
     conversationId: s.group, projectId: 'lead', askerAgentId: s.worker, question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 0,
