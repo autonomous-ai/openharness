@@ -3439,6 +3439,19 @@ class SuperTabController extends ChangeNotifier {
   Future<bool> switchBuddyModel(String? gridModel) async =>
       await command({'type': 'buddy.model', 'gridModel': gridModel}) != null;
 
+  /// Requests a handoff on the Buddy's own machine, keeping its chat and
+  /// folder. The host's switchRequest remains visible until it settles.
+  Future<bool> switchBuddyEngine(
+    String engine, {
+    String? conversationId,
+  }) async =>
+      await command({
+        'type': 'buddy.engine',
+        'engine': engine,
+        'conversationId': ?conversationId,
+      }) !=
+      null;
+
   /// Whether [group] is out of the app: there is no private channel to the
   /// PM (Ken, 10-29), so no private chat but a Buddy chat is listed or opened,
   /// the reader's old Chat with PM that an older server still sends included.

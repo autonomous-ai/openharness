@@ -499,6 +499,10 @@ class SuperTabParts {
     }
     // Each project's board pulse (backend superTabs/pulse.ts, task #3384).
     if (_derived['pulse'] case final Map pulse) state['pulse'] = pulse;
+    // When each release may next open, per project (backend releases.ts nextReleaseAt, task #3827).
+    if (_derived['releaseTimes'] case final Map times) {
+      state['releaseTimes'] = times;
+    }
     // Sent only where the server does not try Harness Team accounts yet.
     if (_derived['teamAccounts'] == false) state['teamAccounts'] = false;
     // Sent by a server that takes a thread reply's New session.

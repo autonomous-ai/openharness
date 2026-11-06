@@ -178,7 +178,9 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
     const reset = command.resetAt && Date.parse(command.resetAt) > now ? Date.parse(command.resetAt) : now + LIMIT_FALLBACK_MS
     target.limitedUntil = source.limitedUntil = new Date(reset).toISOString()
     // The PM's line has no time: Desktop shows `limitedUntil` in the reader's local time, next to the line.
-    if (ledProject(state, target.id)) {
+    if (isBuddy(target) && !target.gridModel) {
+      text = 'Your Buddy reached its subscription limit. Switch engine in the Buddy header to continue.'
+    } else if (ledProject(state, target.id)) {
       text = `${nameOf(target)} hit a usage limit.`
       source.lead = true
     } else text = `${nameOf(target)} hit a usage limit. Routing skips it until ${target.limitedUntil.slice(11, 16)} UTC.`

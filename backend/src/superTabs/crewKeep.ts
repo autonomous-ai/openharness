@@ -4,10 +4,12 @@
  * route's order (project instructions, Order and quota); folders of long-asleep members, and of asleep members on a machine
  * short of disk, are dropped. The numbers are in crewRules.ts. Applying the actions is liveness.ts's (sweepLiveness).
  */
-import type { MachineRule } from './crewRules.js'
+import { machineRuleRefusal } from './machineRules.js'
+import type { MachineRule } from './policy.js'
 import { activeWork, actorKey, stableId, type Agent, type AgentStart, type AgentStartRequest, type CrewTrouble, type MessageDraft, type SuperTabState } from './model.js'
 import { isBuddy } from './buddies.js'
 import { isCrew } from './crew.js'
+import { roleNameOf } from './instructions.js'
 import { AGENT_MEMORY_BYTES, projectFolder, type ContributedMachine } from './machines.js'
 import { agentProjectId, groupProject, onTeamAccount, projectsOf, teamAccountPool } from './projects.js'
 import { barredFromTeamWritten, teamWrittenTask } from './teamWritten.js'
@@ -26,8 +28,8 @@ export type CrewAction =
  *  admitMachineStart, with the store's Team-account facts). */
 export interface CrewDeps {
   admits(machineId: string, agent: Agent): boolean
-  /** The project's machine rules from its rules record (Ledger's task); none until that is on main (River, 11-05). */
-  machineRules?: readonly MachineRule[]
+  /** A project's machine rules, from its rules record (policy.ts machines). */
+  machineRules?(projectId: string): readonly MachineRule[]
 }
 
 /** Whether [agent] is crew (#3397's `crew` record), read without its type until that change lands. */
@@ -38,23 +40,6 @@ function standingPool(state: SuperTabState, machineId: string): ContributedMachi
   const pool = state.machines?.find(m => m.machineId === machineId)
   const contributor = pool && state.people.find(p => p.id === pool.contributorId)
   return pool && contributor && contributor.role !== 'viewer' && contributor.generation === pool.membershipGeneration ? pool : undefined
-}
-
-/** Why [machineId] takes no crew member of [engine] at [now] by the project's machine rules ([rules], from the project rules
- *  record), or null. */
-export function machineRuleRefusal(rules: readonly MachineRule[], machineId: string, engine: string, now: number): string | null {
-  for (const rule of rules) {
-    if (!rule.machineIds.includes(machineId)) continue
-    if (rule.noEngines?.includes(engine)) return rule.why
-    if (rule.away) {
-      const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: rule.away.timeZone, weekday: 'short', hour: '2-digit',
-        minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(now)).map(p => [p.type, p.value]))
-      const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(parts.weekday ?? '')
-      const time = `${parts.hour}:${parts.minute}`
-      if (rule.away.days.includes(day) && rule.away.windows.some(([from, to]) => time >= from && time < to)) return rule.why
-    }
-  }
-  return null
 }
 
 /** The task [agent] holds: its active one, or one its machine took from it within HELD_TASK_MS and not handed on since. */
@@ -110,6 +95,11 @@ export function fallbacks(state: SuperTabState, agent: Agent, now: number, deps:
   const from = standingPool(state, agent.machineId)
   const team = teamOnly(state, agent), kind = onTeamAccount(state, agent)
   const engine = agent.configuration.engine
+  // A crew Reviewer goes nowhere a no-Reviewer rule refuses its reviews (review of #3964): any role the review steps take as a
+  // Reviewer's (reviewerPick.ts), its crew role or else its role name.
+  const reviews = /review/i.test(agent.crew?.role ?? roleNameOf(state, agent))
+  const projectId = agentProjectId(state, agent)
+  const rules = projectId ? deps.machineRules?.(projectId) ?? [] : []
   const weekly = (pool: ContributedMachine) => quotaOf(state, pool, engine, now)?.windows.find(w => w.name === 'weekly')
   const working = (pool: ContributedMachine) => state.agents.filter(a => a.machineId === pool.machineId && hasWork(state, a)).length
   const key = (pool: ContributedMachine): Array<number | string> => {
@@ -122,7 +112,7 @@ export function fallbacks(state: SuperTabState, agent: Agent, now: number, deps:
     // member never brings its own-account work into one. A machine that just refused its start waits.
     .filter(pool => pool.machineId !== agent.machineId && !pool.buddyOnly && standingPool(state, pool.machineId) && (!team || teamAccountPool(pool))
       && teamAccountPool(pool) === kind && !(agent.crewMoveRefused?.machineId === pool.machineId && now - agent.crewMoveRefused.at < MOVE_REFUSED_WAIT_MS)
-      && !machineRuleRefusal(deps.machineRules ?? [], pool.machineId, engine, now) && !crewTrouble(state, pool, engine, now) && deps.admits(pool.machineId, agent))
+      && !machineRuleRefusal(rules, { machineId: pool.machineId, engine, review: reviews }, now) && !crewTrouble(state, pool, engine, now) && deps.admits(pool.machineId, agent))
     .map(pool => ({ pool, key: key(pool) }))
     .sort((a, b) => { for (let i = 0; i < a.key.length; i++) if (a.key[i] !== b.key[i]) return a.key[i]! < b.key[i]! ? -1 : 1; return 0 })
     .map(entry => entry.pool)
