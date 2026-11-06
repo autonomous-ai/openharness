@@ -482,7 +482,7 @@ void main() {
     );
 
     testWidgets(
-      'the footer counts the pull request, the checks done and the comments',
+      'the footer shows the pull request and checks without inventing a comment count',
       (tester) async {
         final c = await faces(tester);
         Finder footer(String id, String key) => inCard(id, ValueKey(key));
@@ -500,17 +500,41 @@ void main() {
           ),
           findsOneWidget,
         );
-        expect(
-          find.descendant(
-            of: footer('ready', 'super-card-comments'),
-            matching: find.text('4'),
-          ),
-          findsOneWidget,
-        );
+        expect(footer('ready', 'super-card-comments'), findsNothing);
         // None of a kind, none shown.
         expect(footer('bare', 'super-card-pr'), findsNothing);
         expect(footer('bare', 'super-card-checks'), findsNothing);
         expect(footer('bare', 'super-card-comments'), findsNothing);
+        await _close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'a live tab message sequence is never displayed as a comment count',
+      (tester) async {
+        final server = tasksServer();
+        (server.state['conversations'] as List).add(
+          taskFixture(
+            'live-sequence',
+            'A task on an established Swarm',
+            53,
+            status: 'working',
+            messages: 241397,
+          ),
+        );
+        final c = await _show(tester, server);
+        expect(
+          inCard('live-sequence', const ValueKey('super-card-comments')),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: _card('live-sequence'),
+            matching: find.text('241397'),
+          ),
+          findsNothing,
+        );
+        expect(tester.takeException(), isNull);
         await _close(tester, c);
       },
     );
