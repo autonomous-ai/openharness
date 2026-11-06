@@ -138,6 +138,25 @@ const ask = (conversationId: unknown, extra = {}) => ({ type: 'proposal.ask', co
   question: 'Keep drafts for seven days?', defaultAnswer: 'Keep seven days', deadline, ...extra })
 
 describe('PM decisions and card questions', () => {
+  it('sends shipped notices once to every proposer after verified release, never at merge', async () => {
+    const { notePendingRelease, pendingKey, settleReleases } = await import('./releases.js')
+    const { shippedNotice } = await import('./buddyNews.js')
+    const { author } = await import('./model.js')
+    const f = fixture(), id = f.create().result.conversationId, other = f.create(owner).result.conversationId
+    f.run({ type: 'proposal.merge', conversationId: other, intoConversationId: id, reason: 'Same request' }, f.pm)
+    f.run(decide(id), f.pm)
+    const card = f.card(id), project = f.state.projects![0]!
+    expect(shippedNotice(f.state, card, author(f.state, f.pm), 'merge')).toBeNull()
+    notePendingRelease(project, card, 'https://github.com/o/r/pull/1', NOW)
+    const entry = project.releases!.pending[0]!
+    const facts = { resolved: [{ ...entry, components: ['backend' as const] }], releases: {} }
+    expect(settleReleases(f.state, 'lead', facts, NOW).messages.filter(m => m.source?.moment === 'shipped')).toHaveLength(0)
+    const verified = { resolved: [], releases: { backend: { tag: 'v1.0.0_backend', sha: 'verified', at: NOW + 1000, carries: [pendingKey(entry)] } } }
+    const result = settleReleases(f.state, 'lead', verified, NOW + 1000)
+    expect(result.messages.filter(m => m.source?.moment === 'shipped')).toHaveLength(2)
+    expect(settleReleases(f.state, 'lead', verified, NOW + 2000).messages.filter(m => m.source?.moment === 'shipped')).toHaveLength(0)
+  })
+
   it.each(['accept', 'reshape', 'later', 'no'])('records %s with its reason on the same card exactly once', decision => {
     const f = fixture(), id = f.create().result.conversationId
     const result = f.run(decide(id, decision, decision === 'later' ? { revisitAt: deadline } : {}), f.pm)
