@@ -1766,6 +1766,20 @@ class ConversationServer {
                 )['priority'] =
             command['priority'];
         revision++;
+      } else if (command['type'] == 'proposal.answer') {
+        // As #3817 records it: the question's answer, by the person asked.
+        final card = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((g) => g['id'] == command['conversationId']);
+        final question = ((card['proposal'] as Map)['questions'] as List)
+            .cast<Map>()
+            .firstWhere((q) => q['id'] == command['questionId']);
+        question['answer'] = {
+          'text': command['text'],
+          'at': DateTime.now().millisecondsSinceEpoch,
+          'by': Zone.current[_reader] as String? ?? 'owner',
+        };
+        revision++;
       } else if (command['type'] == 'work.pause') {
         // As #3819 keeps it: the task's `paused` while paused, absent otherwise.
         final task = (state['conversations'] as List)

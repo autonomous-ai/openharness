@@ -291,6 +291,10 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The server's refusal of the last pause or resume, said under the card chat's header (#3820).
   ({String taskId, String error})? _pauseRefusal;
 
+  /// The answer being written to a card's question, and the server's refusal of the last one sent (#3820).
+  final _answer = TextEditingController();
+  ({String taskId, String error})? _answerRefusal;
+
   /// The Swarm's page holding the main pane, if one does: Decisions,
   /// Mentions or Threads (anh Dee, 11-05, task #2996).
   SwarmPage? _page;
@@ -1182,6 +1186,7 @@ class _SuperTabViewState extends State<SuperTabView>
     // The controller outlives its view, reading another Swarm's replies.
     c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
+    _answer.dispose();
     _board.dispose();
     _facts.dispose();
     c.removeListener(_changed);
@@ -3606,10 +3611,17 @@ class _SuperTabViewState extends State<SuperTabView>
             group.id != project.leadConversationId
         ? group
         : null;
+    // A proposal's question asked of the reader, answered here (#3817).
+    final question = project != null && project.boardMode && !onBuddy
+        ? switch (group?.proposal?.openQuestion) {
+            final q? when q.personId == c.accountId => q,
+            _ => null,
+          }
+        : null;
     final refusal = [
-      _priorityRefusal,
-      _pauseRefusal,
-    ].where((r) => r != null && r.taskId == steered?.id).firstOrNull;
+      if (steered != null) ...[_priorityRefusal, _pauseRefusal],
+      _answerRefusal,
+    ].where((r) => r != null && r.taskId == group?.id).firstOrNull;
     return Column(
       key: const ValueKey('super-board-chat'),
       children: [
@@ -3661,6 +3673,7 @@ class _SuperTabViewState extends State<SuperTabView>
               ],
             ),
           ),
+        if (question != null) _questionBox(group!, question),
         if (refusal != null)
           Padding(
             padding: const EdgeInsetsDirectional.only(
@@ -3677,6 +3690,88 @@ class _SuperTabViewState extends State<SuperTabView>
         Expanded(child: chat),
       ],
     );
+  }
+
+  /// The PM's question to the reader on a card, with its default and time, and a box to answer it (#3820).
+  Widget _questionBox(
+    SuperTabConversation card,
+    SuperTabProposalQuestion question,
+  ) {
+    final enabled = !c.saving && !c.hasPendingAction;
+    void send() {
+      final text = _answer.text.trim();
+      if (text.isEmpty || !enabled) return;
+      unawaited(_sendAnswer(card, question, text));
+    }
+
+    final deadline = question.deadline;
+    final time =
+        '${deadline.hour.toString().padLeft(2, '0')}:'
+        '${deadline.minute.toString().padLeft(2, '0')}';
+    return Padding(
+      key: const ValueKey('super-board-question'),
+      padding: const EdgeInsetsDirectional.only(
+        start: grid.AppDesktop.controlGap,
+        end: grid.AppDesktop.controlGap,
+        bottom: grid.AppDesktop.controlGap,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            question.question,
+            style: DesktopChrome.control(color: DesktopChrome.foreground)
+                .copyWith(fontWeight: grid.AppFont.semibold),
+          ),
+          Text(
+            question.defaultAnswer.isEmpty
+                ? 'Answer by $time.'
+                : 'If no answer by $time: ${question.defaultAnswer}',
+            style: DesktopChrome.metadata(),
+          ),
+          const SizedBox(height: grid.AppDesktop.listRowGap),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  key: const ValueKey('super-board-answer'),
+                  controller: _answer,
+                  enabled: enabled,
+                  onSubmitted: (_) => send(),
+                  decoration: const InputDecoration(
+                    hintText: 'Your answer',
+                    isDense: true,
+                  ),
+                ),
+              ),
+              const SizedBox(width: grid.AppDesktop.listRowGap),
+              FilledButton(
+                key: const ValueKey('super-board-answer-send'),
+                onPressed: enabled ? send : null,
+                child: const Text('Answer'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _sendAnswer(
+    SuperTabConversation card,
+    SuperTabProposalQuestion question,
+    String text,
+  ) async {
+    setState(() => _answerRefusal = null);
+    final refused = await c.answerQuestion(card.id, question.id, text);
+    if (!mounted) return;
+    setState(() {
+      if (refused == null) {
+        _answer.clear();
+      } else {
+        _answerRefusal = (taskId: card.id, error: refused);
+      }
+    });
   }
 
   /// Pause, or Resume while paused, for a card's task (#3820); a refusal is said under the header.

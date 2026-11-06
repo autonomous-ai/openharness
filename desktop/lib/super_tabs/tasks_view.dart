@@ -212,6 +212,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _bar(context),
+        if (project.boardMode) ?_needsYou(board),
         // What waits for the PM and who works (task #3384); none from a
         // server before it.
         if (pulse != null)
@@ -247,6 +248,53 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
               : _boardView(shown, now),
         ),
       ],
+    );
+  }
+
+  /// Over a switched project's Board (#3820): everything in it that waits on the reader, each opening its card's
+  /// chat; null when nothing does.
+  Widget? _needsYou(Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> board) {
+    final waiting = [
+      for (final entry in board.values.expand((entries) => entries))
+        if (entry.needsYou && entry.task != null) entry.task!,
+    ];
+    if (waiting.isEmpty) return null;
+    return Padding(
+      key: const ValueKey('super-board-needs-you'),
+      padding: const EdgeInsetsDirectional.only(
+        start: grid.AppDesktop.groupGap,
+        end: grid.AppDesktop.groupGap,
+        bottom: grid.AppDesktop.controlGap,
+      ),
+      child: Wrap(
+        spacing: grid.AppDesktop.listRowGap,
+        runSpacing: grid.AppDesktop.listRowGap,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Semantics(
+            header: true,
+            child: Text(
+              'Needs you · ${waiting.length}',
+              style: DesktopChrome.control(color: DesktopChrome.foreground)
+                  .copyWith(fontWeight: grid.AppFont.semibold),
+            ),
+          ),
+          for (final task in waiting)
+            TextButton(
+              key: ValueKey('super-board-needs-you-${task.id}'),
+              style: TextButton.styleFrom(
+                backgroundColor: grid.AppSurface.wellFill,
+                shape: const StadiumBorder(),
+              ),
+              onPressed: () => widget.onOpenTask(task.id),
+              child: Text(
+                superTabTitlePriority(task.title).title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -412,7 +460,10 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   /// on with its default and time, else the PM's decision and its reason.
   String? _note(SuperTabTaskEntry entry, DateTime now) {
     final task = entry.task;
-    if (task == null || !widget.project.boardMode) return null;
+    final project =
+        widget.controller.snapshot?.projectById(widget.project.id) ??
+        widget.project;
+    if (task == null || !project.boardMode) return null;
     String reasoned(String head, String? reason) =>
         reason == null ? head : '$head: $reason';
     if (task.paused case final paused?) {

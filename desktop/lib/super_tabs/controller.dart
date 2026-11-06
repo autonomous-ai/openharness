@@ -3315,6 +3315,24 @@ class SuperTabController extends ChangeNotifier {
         : operationError ?? 'Another change is on its way. Try again.';
   }
 
+  /// Answers the question [questionId] the PM asked the reader on the card [conversationId] (#3817). Null when done,
+  /// else the server's sentence.
+  Future<String?> answerQuestion(
+    String conversationId,
+    String questionId,
+    String text,
+  ) async {
+    final done = await command({
+      'type': 'proposal.answer',
+      'conversationId': conversationId,
+      'questionId': questionId,
+      'text': text,
+    });
+    return done != null
+        ? null
+        : operationError ?? 'Another change is on its way. Try again.';
+  }
+
   /// Whether the reader may set P0 and pause or resume any task of [project] (spec "Who may do what on the Board").
   bool maySteer(SuperTabProject project) =>
       project.canSteer(accountId, swarmOwner: isOwner);
