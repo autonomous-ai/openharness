@@ -41,6 +41,28 @@ describe('the Swarm cards on the devices', () => {
     expect('side' in sent[1]).toBe(false)
   })
 
+  it('passes the reader\'s own Personal Swarm on as `personal`, and nothing else as one (round dial Personal | Team)', () => {
+    const { cards, swarmCards } = setup()
+    cards.cards([card('t1', [lead('l1')], { personal: true }), card('t2', [lead('l2')]), card('t3', [lead('l3')], { personal: 'yes' })])
+    const sent = swarmCards.mock.calls.at(-1)?.[0] as Array<Record<string, unknown>>
+    // Diego's dial, 2026-11-06: the port rebuilt each card without it, so the dial never saw a Personal Swarm.
+    expect(sent.map((c) => c.personal)).toEqual([true, undefined, undefined])
+    expect('personal' in sent[1]).toBe(false)
+  })
+
+  it('keeps a decision notice\'s mark and the tag notice it covers, so only a swarmNeedsYou dial hears the decision', () => {
+    const { cards, swarmCards } = setup()
+    const tag = { chat: 'lead', chatId: 'c1', id: 'm1', text: 'River: look', at: 1792560000 }
+    const decision = { chat: 'group', chatId: 'g1', id: 'd1', text: 'River asks you: ship?', at: 1792560100, decision: true, tag }
+    cards.cards([card('t1', [lead('l1', { notice: decision }), lead('l2', { notice: { ...decision, tag: { ...tag, chat: 'nope' } } }), lead('l3', { notice: { ...tag, decision: 'yes', tag } })])])
+    const leads = (swarmCards.mock.calls.at(-1)?.[0] as Array<{ leads: Array<{ notice?: Record<string, unknown> }> }>)[0].leads
+    expect(leads[0].notice).toEqual(decision)
+    // An unsound covered tag is left out and the decision kept; a mark that is not `true` is no decision, and carries no tag.
+    expect(leads[1].notice).toEqual({ ...decision, tag: undefined })
+    expect('tag' in leads[1].notice!).toBe(false)
+    expect(leads[2].notice).toEqual(tag)
+  })
+
   it('checks ids, counts and strings, and drops a malformed list whole, keeping the last good one', () => {
     const { cards, swarmCards, log } = setup()
     cards.cards([card('t1')])
