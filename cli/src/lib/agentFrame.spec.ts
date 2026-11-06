@@ -160,6 +160,12 @@ describe('agentFrame', () => {
     expect(frame).not.toHaveProperty('agent')
   })
 
+  it('carries the owner\'s extra launch flags only when it has some', async () => {
+    const withArgs = { ...session(null), launchArgs: ['--chrome'] }
+    expect(await agentFrame(withArgs, { selectedModel: null, terminalAvailable: true })).toMatchObject({ launchArgs: ['--chrome'] })
+    expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).not.toHaveProperty('launchArgs')
+  })
+
   // The global "last used" order. Null — never an absent key — until an app opens the agent: a push
   // without the key would erase an open an earlier frame reported, and a client reads "absent" as a
   // daemon too old to keep the stamp.

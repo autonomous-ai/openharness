@@ -11,7 +11,7 @@ import 'package:harness/super_tabs/parts.dart';
 import 'package:harness/super_tabs/pulse.dart';
 import 'package:harness/super_tabs/tasks_view.dart';
 
-import 'super_tab_tasks_view_test.dart' show tasksServer;
+import 'super_tab_tasks_view_test.dart' show taskFixture, tasksServer;
 import 'support/memory_key_value_store.dart';
 import 'support/super_tab_fixture.dart';
 
@@ -449,6 +449,25 @@ void main() {
       expect(opened.tasks, ['tag']);
       await closePulse(tester, c);
     });
+
+    testWidgets(
+      'working: an agent with a lost older task opens its current one (#3649)',
+      (tester) async {
+        final server = pulseServer(pulseFixture());
+        // The lost task comes first in the Swarm's list, as an older one does.
+        (server.state['conversations'] as List).insert(
+          1,
+          taskFixture('old-lost', 'First customers', 5, status: 'lost'),
+        );
+        final (c, opened) = await showPulse(tester, server);
+        await tester.tap(segment('working'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('super-pulse-agent-finch')));
+        await tester.pumpAndSettle();
+        expect(opened.tasks, ['tag']);
+        await closePulse(tester, c);
+      },
+    );
 
     testWidgets('next up: the tasks by title and number', (tester) async {
       final (c, opened) = await showPulse(tester, pulseServer(pulseFixture()));

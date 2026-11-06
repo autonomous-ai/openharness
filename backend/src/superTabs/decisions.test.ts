@@ -60,7 +60,7 @@ describe('asking a person for decisions', () => {
     // Someone who cannot read the conversation is named by username, never email (task #2954).
     const group = s.state.conversations.find(c => c.id === s.group)!
     const narrowed = { ...group, audience: { people: [{ id: 'owner', generation: s.state.people[0]!.generation }] } }
-    expect(() => askDecisions(s.state, narrowed, 'peer', [question('Ship how?')], { operationId: 'op', askerAgentId: s.lead, assignmentId: null }))
+    expect(() => askDecisions(s.state, narrowed, 'peer', [question('Ship how?')], { now: 1000, operationId: 'op', askerAgentId: s.lead, assignmentId: null }))
       .toThrow(/^peer cannot read this conversation\.$/)
     expect(commandSchema.safeParse({ type: 'decision.ask', conversationId: s.group, personId: 'peer',
       questions: [{ ...question('One option only'), options: ['Yes'] }] }).success).toBe(false)
@@ -99,6 +99,59 @@ describe('asking a person for decisions', () => {
       expect(() => checkAsker(s.state, asAgent(s.worker), group)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
     }
     expect(() => checkAsker(s.state, owner, task)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+  })
+})
+
+describe('explicit decision deadlines', () => {
+  const defaultAt = '2026-11-06T04:00:00.000Z'
+  it('carries a decision deadline beside its recommended option', () => {
+    const s = swarm()
+    const asked = s.run({ type: 'decision.ask', conversationId: s.group, personId: 'peer',
+      questions: [{ ...question('Ship when?'), defaultAt }] } as Command, asAgent(s.lead))
+    expect(asked.decisions?.[0]).toMatchObject({ defaultAt, recommended: 0 })
+  })
+
+  it('carries a needs-human deadline when there is no PM to route through', () => {
+    const s = swarm()
+    s.state.conversations.find(c => c.id === 'lead')!.leadId = null
+    const asked = s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'needs_human', hold: HOLD,
+      result: 'Ship when?', ask: { personId: 'peer', options: ['Today', 'Tomorrow'], recommended: 1, unblocks: 'Release', defaultAt } } as Command, asAgent(s.worker))
+    expect(asked.decisions?.[0]).toMatchObject({ defaultAt, recommended: 1 })
+  })
+
+  it('keeps the deadline when a worker question becomes the PM’s crew need', () => {
+    const s = swarm()
+    const asked = s.run({ type: 'decision.ask', conversationId: s.group, personId: 'peer',
+      questions: [{ ...question('Ship when?'), defaultAt }] } as Command, asAgent(s.worker))
+    expect(asked.decisions ?? []).toEqual([])
+    expect(asked.messages[0]?.source?.crewNeed).toMatchObject({ defaultAt, recommended: 0 })
+    const needs = s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'needs_human', hold: HOLD,
+      result: 'Ship when?', ask: { personId: 'peer', options: ['Today', 'Tomorrow'], recommended: 1, unblocks: 'Release', defaultAt } } as Command, asAgent(s.worker))
+    expect(needs.messages.find(m => m.source?.crewNeed)?.source?.crewNeed).toMatchObject({ defaultAt, recommended: 1 })
+  })
+
+  it('requires 15 minutes for a person to see the ask, including needs-human and PM-routed asks', () => {
+    const at = (ms: number) => new Date(ms).toISOString()
+    for (const delta of [-1, 0, 15 * 60_000 - 1]) {
+      const s = swarm()
+      expect(() => s.run({ type: 'decision.ask', conversationId: s.group, personId: 'peer', questions: [{ ...question('Ship when?'), defaultAt: at(1000 + delta) }] }, asAgent(s.lead)))
+        .toThrow(expect.objectContaining({ code: 'INVALID_DECISION' }))
+      expect(() => s.run({ type: 'decision.ask', conversationId: s.group, personId: 'peer', questions: [{ ...question('Ship when?'), defaultAt: at(1000 + delta) }] }, asAgent(s.worker)))
+        .toThrow(expect.objectContaining({ code: 'INVALID_DECISION' }))
+      expect(() => s.run({ type: 'work.status', conversationId: s.group, assignmentId: s.assignmentId, status: 'needs_human', hold: HOLD, result: 'Ship when?',
+        ask: { personId: 'peer', options: ['Today', 'Tomorrow'], recommended: 0, unblocks: 'Release', defaultAt: at(1000 + delta) } }, asAgent(s.worker)))
+        .toThrow(expect.objectContaining({ code: 'INVALID_DECISION' }))
+    }
+    const s = swarm()
+    expect(() => s.run({ type: 'decision.ask', conversationId: s.group, personId: 'peer', questions: [{ ...question('Ship when?'), defaultAt: at(1000 + 15 * 60_000) }] }, asAgent(s.lead))).not.toThrow()
+  })
+
+  it('refuses an invalid deadline and keeps deadline-free legacy callers valid', () => {
+    const s = swarm()
+    const send = (at?: string) => ({ type: 'decision.ask', conversationId: s.group, personId: 'peer',
+      questions: [{ ...question('Ship when?'), ...at ? { defaultAt: at } : {} }] })
+    expect(commandSchema.safeParse(send('tomorrow')).success).toBe(false)
+    expect(commandSchema.safeParse(send()).success).toBe(true)
   })
 })
 
@@ -223,6 +276,20 @@ describe('leaving a decision to the PM', () => {
     const answered = s.run({ type: 'decision.answer', decisionId: 'decision-1', delegate: true }, peer, { decision: open(s), overdue: true })
     expect(answered.decisionAnswer).toEqual({ id: 'decision-1', choice: 1, note: null, delegated: true, overdue: true })
     expect(answered.messages[0]!.text).toBe(overdueNotice('Product Manager'))
+  })
+
+  it('takes a timed default only at its trusted deadline, and never accepts the marker from a client', () => {
+    const s = swarm()
+    const decision = open(s, { defaultAt: 1000 })
+    const command = { type: 'decision.answer', decisionId: 'decision-1', delegate: true } as const
+    expect(() => s.run(command, peer, { decision, defaulted: true, now: 999 } as Partial<CommandContext>)).toThrow(/default.*time|deadline/i)
+    expect(() => s.run(command, peer, { decision: open(s), defaulted: true, now: 1000 } as Partial<CommandContext>)).toThrow(/default.*time|deadline/i)
+    expect(() => s.run(command, peer, { decision: open(s, { defaultAt: 1000, kind: 'routing-reflection' }), defaulted: true, now: 1000 } as Partial<CommandContext>)).toThrow(/default|reflection/i)
+    expect(commandSchema.safeParse({ ...command, defaulted: true }).success).toBe(false)
+    const taken = s.run(command, peer, { decision, defaulted: true, now: 1000 } as Partial<CommandContext>)
+    expect(taken.decisionAnswer).toMatchObject({ delegated: true, defaulted: true, choice: 1 })
+    expect(taken.messages[0]!.text).toMatch(/default.*time|deadline/i)
+    expect(taken.messages[1]!.text).toBe('Default applied: To everyone — Ship how?')
   })
 
   it('overdue without delegate is refused', () => {

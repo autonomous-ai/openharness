@@ -93,22 +93,20 @@ bool isNewsEnd(TurnEnd end) {
 /// [inFront] is whether the app is on screen at all; [watching] whether the
 /// agent it is showing is the one that finished — only meaningful in front.
 ///
-/// The [TurnEnd] flags say whether the end is news at all; its tier, when
-/// the daemon sends one, says how loud. As on the dial
-/// (`ui_notify_summary`, 2026-10-19): the agent on screen already shows its
-/// own news and gets nothing, a `list` turn is a mark with no tap and no
-/// notice, and only an `alert` goes as far as the phone's place allows.
+/// An agent finishing a turn is badge only (Tony, 2026-11-06, task #3607): a
+/// mark on the agent and nothing louder — no chime, no system notice, whatever
+/// tier the daemon gave. A turn the daemon calls `silent`, one that is not
+/// news, and one of the agent the person is looking at (it shows its own news)
+/// are nothing. What a person must act on, a question, rings elsewhere
+/// (`question_notice.dart`).
 AgentNotice decideDoneNotice(
   TurnEnd end, {
   required bool inFront,
   required bool watching,
 }) {
   if (!isNewsEnd(end)) return AgentNotice.none;
-  final tier = end.tier;
-  if (tier == null) return escalate(inFront: inFront, watching: watching);
-  if (tier == NoticeTier.silent || (inFront && watching)) {
+  if (end.tier == NoticeTier.silent || (inFront && watching)) {
     return AgentNotice.none;
   }
-  if (tier == NoticeTier.list) return AgentNotice.filed;
-  return escalate(inFront: inFront, watching: false);
+  return AgentNotice.filed;
 }
