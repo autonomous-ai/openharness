@@ -110,6 +110,25 @@ describe('personal approval enforced before work', () => {
     expect(() => f.runCommand({ type: 'proposal.merge', conversationId: card.id, intoConversationId: other, reason: 'Same' }, f.pm))
       .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
   })
+  it('refuses invalid suggestions and rechecks a changed agent atomically on approval', () => {
+    const f = fixture(); f.mode('review'); const id = f.create()
+    for (const agentId of [f.buddy, f.worker, 'missing']) expect(() => f.runCommand({ type: 'task.suggest', conversationId: id, agentId })).toThrow()
+    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate })
+    f.state.agents.find(a => a.id === f.candidate)!.workDecision = 'stop'
+    expect(() => f.runCommand({ type: 'task.approve', conversationId: id })).toThrow()
+    expect(f.card(id)).toMatchObject({ assignment: null, taskApproval: { state: 'proposal' } })
+  })
+  it('keeps a legacy proposal’s decision when the PM converts it to a task and refuses a second conversion', () => {
+    const f = fixture(false); f.mode('review'); const sent = f.propose()
+    const row = sent.messages.find(m => m.source?.kind === 'buddy-proposal')!
+    const proposal = { id: row.id, conversationId: row.conversationId, author: row.author, source: row.source }
+    const input = { type: 'conversation.create', title: 'Prepared', task, priority: 'P2', proposalMessageId: row.id,
+      checks: [{ description: 'Restores drafts' }] }
+    const id = f.runCommand(input, f.pm, { proposal }).result.conversationId
+    expect(f.card(id).taskApproval?.state).toBe('proposal')
+    expect(f.state.conversations.filter(c => !c.archived && c.requesterId === peer.userId && (c.task || c.proposal))).toHaveLength(1)
+    expect(() => f.runCommand(input, f.pm, { proposal })).toThrow()
+  })
   it('guards the person and selected agent against concurrent changes, and keeps approval in light loads', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
     f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate })
