@@ -58,10 +58,10 @@
 **Interfaces:** One `taskProcess(project, task)` rule used by every step producer; additive task metadata preserves Simple semantics when the project returns to Full. Existing `work.status done` remains the completion command, requiring no merge. Settings never mutate existing step records.
 
 - [x] Preserve existing tasks with a task-number watermark when switching Simple→Full; follow the brief’s asymmetric rule while the optional clarification remains unanswered.
-- [ ] Commit tests for Simple Ready opening no review/test steps, manual step refusal, Doing→Done without a merge, unchanged Full steps, preserved open steps, old Simple tasks after switching and reloading, and no new Simple release steps.
-- [ ] Run the affected tests and record red.
-- [ ] Implement the shared lifecycle rule and necessary concurrency guards.
-- [ ] Run process, reviewSteps, release and touch tests; measure the changed hot path; commit and push.
+- [x] Commit tests for Simple Ready opening no review/test steps, manual step refusal, Doing→Done without a merge, unchanged Full steps, preserved open steps, old Simple tasks after switching and reloading, and no new Simple release steps.
+- [x] Run the affected tests and record red.
+- [x] Implement the shared lifecycle rule and necessary concurrency guards.
+- [x] Run process, reviewSteps, release and touch tests; measure the changed hot path; commit and push.
 
 ## Task 3: Bounded seeds and handoff
 
@@ -70,14 +70,31 @@
 **Interfaces:** A dry-run seed operation reads the requesting Swarm’s head by its primary key, resolves the four unique exact names, fills only absent process choices, reports the ids and changes no task or step history. Missing or duplicate names refuse all changes. An explicit apply uses the existing guarded-head write protocol; the release operator applies it only after the backend deploy and production authorization.
 
 - [x] Commit tests that select only the four intended names within the requesting Swarm, refuse missing/ambiguous targets, set the requested presets, preserve saved choices and do nothing on a second run.
-- [ ] Run and record red; implement the bounded seed helper; run and record green.
-- [ ] Document authorized release application and rollback, final command/read examples, platforms, red/green and timing evidence in the PR.
+- [x] Run and record red; implement the bounded seed helper; run and record green.
+- [x] Document authorized release application and rollback, final command/read examples, platforms, red/green and timing evidence in the PR.
 - [ ] Mark the stable head Ready and record its acceptance evidence; let automatic CI and independent review finish before handing it back.
 
 ## Settings and read contract
 
-Creation accepts `{"type":"project.create","name":"Scout","visibility":"public","process":"simple"}`; omission keeps Full. Settings accepts `{"type":"project.process","projectId":"PROJECT","process":"simple"}`. The Swarm owner can set a private project’s preset without gaining read access to it. Parts head projects and the legacy status read include `process` and `columns` (`[{id,title}]`): Simple ids `todo`, `doing`, `done`; Full ids `proposals`, `nextUp`, `working`, `done`, `merged`, `shipped`. The Desktop follow-up defaults missing fields to Full. No change to assignment status values.
+Creation accepts `{"type":"project.create","name":"Scout","visibility":"public","process":"simple"}`; omission keeps Full. Settings accepts `{"type":"project.process","projectId":"PROJECT","process":"simple"}`. The Swarm owner can set a private project’s preset without gaining read access to it. Parts head projects and the legacy status read include `process` and `columns` (`[{id,title}]`): Simple ids `todo`, `doing`, `done`; Full ids `proposals`, `nextUp`, `working`, `done`, `merged`, `shipped`. The Desktop follow-up defaults missing fields to Full. No change to assignment status values. A task's effective process is Simple when the project is Simple, the task carries `process: "simple"`, or the task's number is at most the project's optional `simpleThrough` watermark. Otherwise it is Full. Missing task numbers predate the watermark; new tasks always have numbers. Desktop must use this rule after a project returns to Full, so old Simple tasks keep their completion behavior. Full task metadata is omitted to avoid copying the default on every read.
 
 Task 1 evidence: test-only commit `e890f351a`, 10 failed / 1 passed before implementation; afterward 81 passed across process, projects and read/views, with backend typecheck clean.
 
 Task 2 initial evidence: corrected test-only commit `832dde613` has 11 failed / 17 passed in process and light projection; release regressions have 2 failed / 30 passed at `c393fb7b2`. The initial implementation passes 86 tests across process, reviewSteps, releases, touches and light, with backend typecheck clean. Repeated-switch coverage follows before the watermark implementation.
+
+
+## Final validation and rollout
+
+- Settings: `e890f351a` red (10 failed / 1 passed), `9504e5f53` green (81 tests).
+- Lifecycle: `832dde613` red (11 failed / 17 passed); release tests at `c393fb7b2` red (2 failed / 30 passed); `e5e2439da` green (86 tests).
+- Repeated/dormant switching: `a87a86c26` red (3 failed / 23 passed), `c26f95b7f` green (159 tests).
+- Legacy steps, unnumbered dormant tasks and pending releases: `d84f76048` red (3 failed / 58 passed), `e2d1d4711` green (536 tests).
+- Seed: `08ecd61dc` could not load its absent implementation; `27ffc09fe` integration red (2 failed / 17 unrelated tests skipped). `342e4522f` green: 6 unit tests and 2 integration tests, including indexed head-only reads, preview, guarded apply, repeat no-op, refusal and counters.
+- Review file reads: `eeaf45145` red (1 failed / 4 unrelated tests skipped), `910796e87` green (all 5 integration tests). Final affected unit selection: 604 passed in 10 files; typecheck clean. Removing redundant Full task metadata then passed the 455 affected process/command tests and typecheck again.
+- Full backend and Super Tab integration suites are automatic PR CI, not additional local full runs.
+
+Performance on macOS, 100 projects / 1,000 tasks: initial serial measurements showed a small increase. A CPU profile placed task-data copying first (1,581 ms sampled), followed by group projection (994 ms). Omitting the redundant Full task value removes that additional copying. The final same-process comparison alternates before/after order for 60 batches of 25 operations, after 100 warmups, against main `3c0408237`: Ready median 1.104→1.109 ms; reader median 3.008→2.921 ms. Batch-mean p95 remains noisy: Ready 1.760→2.558 ms, reader 3.165→3.309 ms. These synthetic CPU measurements do not establish end-to-end production p95. The head read at the 100-project cap grows 28,571→51,871 bytes (+233 bytes/project for the requested process and columns); stored columns add zero bytes. There is no added request-path database query. The seed's index test examines at most one head document and no group, agent or member collection.
+
+Rollout: deploy the backend first. An authorized release operator runs `node --import tsx src/superTabs/migration/seedProjectProcesses.ts` from `backend/` with the release database environment, reviews the four resolved target ids, then uses `--apply`. No production application was performed here. A missing or duplicate name refuses every change; saved choices win. On a concurrent version conflict, rerun preview before apply. Every other project defaults Full without migration. Roll back the backend to resume Full automation, retaining all history and the additive metadata. Owner settings can subsequently switch the four choices; do not overwrite saved owner choices with the seed. The read-only production environment is absent on this machine, so production row counts/size and a restored-production migration check remain release validation, not claimed local evidence.
+
+Timing: assigned 2026-11-06 10:54:59 UTC; plan/draft first, implementation and targeted validation interleaved through 11:42 UTC. Final unit selection 4.56 s; review-store integration 20.29 s. Review, automatic CI, merge and seed publication are separate remaining stages and will be recorded on the task/PR when completed.
