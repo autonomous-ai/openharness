@@ -144,9 +144,10 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     const view = readerView(parts, peer, NOW, { teamMachines: [] })
     expect(view.parts.machines.map(m => m.key)).toEqual(['mac'])
     expect(view.parts.machines[0]!.data.observation!.runningHarnessIds).toEqual(['lead-harness'])
-    // A teammate's machine says where New Project's Product Manager would run there, by engine (leadStart.ts leadChoices).
-    expect(view.derived.machines).toEqual({ mac: { availableSlots: 1, teamWork: { allowed: true }, lead: {
-      claude: { refused: 'Claude Code isn’t offered on mac.' }, codex: { refused: 'Update Harness on mac to run a Product Manager there.' } } } })
+    // A teammate's machine says where New Project's Product Manager would run there, by engine (leadStart.ts leadChoices): nowhere,
+    // as Swarm v3 starts no PM on another person's computer (task #4120).
+    const refused = { refused: 'A new agent starts only on its own person\'s computer, in their own account, never on another person\'s.' }
+    expect(view.derived.machines).toEqual({ mac: { availableSlots: 1, teamWork: { allowed: true }, lead: { claude: refused, codex: refused } } })
   })
 
   it('tells only a person where New Project\'s Product Manager would run, and only on a teammate\'s machine', () => {
