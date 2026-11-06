@@ -246,9 +246,11 @@ class _InstructionsPanelState extends State<_InstructionsPanel> {
       return;
     }
     final stale = c.operationErrorCode == 'INSTRUCTIONS_STALE';
+    // The panel says why itself; the chat's Reply boxes do not (task #3652).
+    final why = c.takeOperationError();
     setState(() {
       _saving = false;
-      if (!stale) _saveError = c.operationError;
+      if (!stale) _saveError = why;
     });
     // The refusal's text does not reach this client (decision 3): read the revision it missed.
     if (stale) await _read();
