@@ -3684,6 +3684,8 @@ class _SuperTabViewState extends State<SuperTabView>
     final group = c.selected;
     final project = c.snapshot?.projectById(_boardProjectId ?? '');
     final onBuddy = group?.isBuddyChat == true;
+    // The Buddy card opens only on the reader's own Buddy chat.
+    final ownBuddy = group != null && _isBuddyChat(group);
     // A card's task in a project on the Board: its priority and pause, by role (#3820).
     final steered =
         group != null &&
@@ -3720,9 +3722,10 @@ class _SuperTabViewState extends State<SuperTabView>
                   icon: const Icon(AppIcons.arrowLeft, size: 16),
                   label: const Text('Your Buddy'),
                 ),
-              if (onBuddy && group != null) ...[
+              if (ownBuddy) ...[
                 Flexible(
                   child: BuddyCardButton(
+                    key: ValueKey(group.id),
                     controller: c,
                     projectId: group.projectId,
                     app: widget.app,
@@ -3733,7 +3736,7 @@ class _SuperTabViewState extends State<SuperTabView>
               ] else
                 Expanded(
                   child: Text(
-                    group?.label ?? '',
+                    onBuddy ? 'Your Buddy' : (group?.label ?? ''),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: DesktopChrome.control().copyWith(

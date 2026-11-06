@@ -91,6 +91,43 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('an escaped trailing space stays inside the word', (
+    tester,
+  ) async {
+    final changes = await show(tester);
+    await tester.enterText(input, r'--add-dir a\ ');
+    await tester.pump();
+    expect(changes, isEmpty);
+    await tester.enterText(input, r'--add-dir a\ b ');
+    await tester.pump();
+    expect(changes.single, ['--chrome', '--add-dir', 'a b']);
+  });
+
+  testWidgets('the focus callback ends when the field goes away', (
+    tester,
+  ) async {
+    final focus = <bool>[];
+    Widget app(bool shown) => MaterialApp(
+      theme: grid.buildAppTheme(),
+      home: Scaffold(
+        body: shown
+            ? LaunchFlagsField(
+                words: const [],
+                onChanged: (_) {},
+                onFocusChanged: focus.add,
+              )
+            : const SizedBox(),
+      ),
+    );
+    await tester.pumpWidget(app(true));
+    await tester.tap(input);
+    await tester.pump();
+    expect(focus.last, isTrue);
+    await tester.pumpWidget(app(false));
+    await tester.pump();
+    expect(focus.last, isFalse);
+  });
+
   testWidgets('Backspace in the empty input removes the last chip', (
     tester,
   ) async {

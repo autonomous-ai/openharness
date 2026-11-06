@@ -87,10 +87,14 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
       final over = left + BuddyCardButton.cardWidth + _gap - overlay.size.width;
       if (over > 0) _shift = over;
     }
+    // A restart still in flight keeps its words, status and message across a
+    // close and reopen, so a second press cannot send a second restart.
     setState(() {
+      _flagsFocused = false;
+      if (_busy) return;
       _words = [...?_agent?.launchArgs];
       _marked = _message = null;
-      _busy = _flagsFocused = _warning = false;
+      _warning = false;
     });
     _portal.show();
     // The card takes the focus from the button so Esc and Tab act in it.
@@ -141,6 +145,8 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
       text: launchArgsLine(words),
       saved: launchArgsLine(agent.launchArgs),
     );
+    // The card may have been closed meanwhile: the result is kept for the
+    // next open.
     if (!mounted) return;
     if (result.outcome == BuddyRestartOutcome.done) {
       setState(() => _busy = false);
@@ -418,7 +424,6 @@ class _BuddyCardButtonState extends State<BuddyCardButton> {
       onFocusChanged: (focused) {
         if (mounted) setState(() => _flagsFocused = focused);
       },
-      onSubmitted: () => unawaited(_restart(agent)),
     ),
     const SizedBox(height: _gap),
     Text(

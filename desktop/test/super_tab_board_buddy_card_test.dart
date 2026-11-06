@@ -227,6 +227,47 @@ void main() {
     await end(tester, c);
   });
 
+  testWidgets('a restart in flight survives closing and reopening the card', (
+    tester,
+  ) async {
+    final c = await show(tester);
+    await open(tester);
+    await tester.tap(restart);
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await settle(tester);
+    expect(card, findsNothing);
+    await open(tester);
+    expect(tester.widget<FilledButton>(restart).onPressed, isNull);
+    expect(find.text('Restarting…'), findsOneWidget);
+    await tester.tap(restart, warnIfMissed: false);
+    await tester.pump();
+    expect(connection.types, ['agent_restart']);
+    connection.restartReplies.single.complete({
+      ...restartReceipt(creationId(), agentId: 'h-wren'),
+      'launchArgs': ['--chrome'],
+    });
+    await settle(tester);
+    expect(card, findsNothing);
+    await open(tester);
+    expect(tester.widget<FilledButton>(restart).onPressed, isNotNull);
+    expect(find.text('Restarting…'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await end(tester, c);
+  });
+
+  testWidgets('Enter in an empty flags input does not restart', (tester) async {
+    final c = await show(tester);
+    await open(tester);
+    await tester.tap(input);
+    await tester.pump();
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(connection.requests, isEmpty);
+    expect(card, findsOneWidget);
+    await end(tester, c);
+  });
+
   testWidgets('text typed but not yet a chip is sent with Restart', (
     tester,
   ) async {

@@ -17,7 +17,6 @@ class LaunchFlagsField extends StatefulWidget {
     required this.onChanged,
     this.readOnly = false,
     this.marked,
-    this.onSubmitted,
     this.onFocusChanged,
   });
 
@@ -27,9 +26,6 @@ class LaunchFlagsField extends StatefulWidget {
 
   /// The word to show in the error style.
   final String? marked;
-
-  /// Enter with nothing typed.
-  final VoidCallback? onSubmitted;
 
   /// The input gained or lost focus, for the help line under the field.
   final ValueChanged<bool>? onFocusChanged;
@@ -42,6 +38,9 @@ class LaunchFlagsFieldState extends State<LaunchFlagsField> {
   final _text = TextEditingController();
   final _focus = FocusNode(debugLabel: 'Launch flag input');
 
+  /// Whether the owner was last told the input has focus.
+  var _told = false;
+
   @override
   void initState() {
     super.initState();
@@ -50,6 +49,12 @@ class LaunchFlagsFieldState extends State<LaunchFlagsField> {
 
   @override
   void dispose() {
+    // A field that goes away while focused ends the focus for its owner.
+    // Told after the frame: the owner cannot rebuild while the tree unmounts.
+    if (_told) {
+      final told = widget.onFocusChanged;
+      WidgetsBinding.instance.addPostFrameCallback((_) => told?.call(false));
+    }
     _focus
       ..removeListener(_focusMoved)
       ..dispose();
@@ -58,7 +63,8 @@ class LaunchFlagsFieldState extends State<LaunchFlagsField> {
   }
 
   void _focusMoved() {
-    widget.onFocusChanged?.call(_focus.hasFocus);
+    _told = _focus.hasFocus;
+    widget.onFocusChanged?.call(_told);
     if (mounted) setState(() {});
   }
 
@@ -85,17 +91,15 @@ class LaunchFlagsFieldState extends State<LaunchFlagsField> {
   }
 
   void _typed(String value) {
-    if (value.isNotEmpty && RegExp(r'\s$').hasMatch(value)) {
+    // A space after an odd run of backslashes is escaped: part of the word.
+    final escaped = RegExp(r'(?<!\\)(\\\\)*\\\s$').hasMatch(value);
+    if (value.isNotEmpty && RegExp(r'\s$').hasMatch(value) && !escaped) {
       if (!_commit() && value.trim().isEmpty) _text.clear();
     }
   }
 
   void _submitted() {
-    if (_text.text.trim().isEmpty) {
-      widget.onSubmitted?.call();
-    } else {
-      _commit();
-    }
+    _commit();
     // Enter would drop the focus; the next flag is typed straight away.
     if (!widget.readOnly) _focus.requestFocus();
   }
