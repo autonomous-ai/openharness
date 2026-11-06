@@ -27,24 +27,33 @@
 **Files:** backend/src/superTabs/taskApproval.ts, taskApproval.test.ts, model.ts, commands.ts, proposalCards.ts, taskQueue.ts, parts/light.ts, parts/touches.ts; focused integration test.
 **Interfaces:** approvalMode; taskApproval metadata; member.approvalMode and task.suggest/approve/reject commands as the spec defines.
 
-- [ ] Commit tests for default/Review modes, Buddy consent, PM task staging, suggested agent changes, approval and rejection, exact own identity/generation, protected replays, assignment/start/dispatch refusal and unchanged auto mode.
-- [ ] Observe failures; implement minimal guarded lifecycle and legacy-proposal card continuity.
-- [ ] Run affected command/proposal/queue/dispatch/light/touch tests and typecheck; commit and push.
+- [x] Commit tests for default/Review modes, Buddy consent, PM task staging, suggested agent changes, approval and rejection, exact own identity/generation, protected replays, assignment/start/dispatch refusal and unchanged auto mode.
+- [x] Observe failures; implement minimal guarded lifecycle and legacy-proposal card continuity.
+- [x] Run affected command/proposal/queue/dispatch/light/touch tests and typecheck; commit and push.
 
 ### Task 2: Personal Tasks summaries on first load and cursor changes
 
 **Files:** backend/src/superTabs/read/personalTasks.ts, personalTasks.test.ts, contract.ts, service.ts; focused store/read integration test.
 **Interfaces:** personalTasks {approvalMode, reset, upserts, removed}, row fields in shared spec; existing response cursor/epoch.
 
-- [ ] Commit tests for own tasks/proposals, statuses and stable time order, project/agent identity, no hidden group/agent leak, removal/archive/reassignment, own-only preference, no agent feed, one-row/idle deltas and persisted API results.
-- [ ] Observe failures; implement from existing loaded parts only, no extra whole-history reads.
-- [ ] Run affected read tests and real-store integration, typecheck, diff checks and synthetic 1,000-task/one-row timing/size evidence; push.
+- [x] Commit tests for own tasks/proposals, statuses and stable time order, project/agent identity, no hidden group/agent leak, removal/archive/reassignment, own-only preference, no agent feed, one-row/idle deltas and persisted API results.
+- [x] Observe failures; implement from existing loaded parts only, no extra whole-history reads.
+- [x] Run affected read tests and real-store integration, typecheck, diff checks and synthetic 1,000-task/one-row timing/size evidence; push.
 
 ### Task 3: Final acceptance and handoff
 
 **Files:** plan validation notes and PR evidence only, unless a test-first review/CI fix is needed.
 **Interfaces:** final PR head, tests, reviews, ci/required.
 
-- [ ] Update spec/contract details to match tested implementation; send exact contract to sibling builders.
-- [ ] Record red/green evidence and platform/rollback limitations in PR; mark Ready once.
+- [x] Update spec/contract details to match tested implementation; send exact contract to sibling builders.
+- [x] Record red/green evidence and platform/rollback limitations in PR; mark Ready once.
 - [ ] Two independent security reviews pass and ci/required green at final head; record acceptance and hand off for the 09:00 release. By 06:00 state any remaining release gap.
+
+## Validation before review
+
+- Approval tests were committed before implementation. Corrected fixture setup separately; the supported-mode/command cases then failed against the old backend. Additional red tests caught duplicate legacy conversion, losing the approved worker before preparation, merging away approval, closing a mirror, and unsanitized rejection reasons. Each production fix follows its test commit.
+- Focused affected units: 600 passed across 11 files before the last two narrow lifecycle/credential cases; those lifecycle/credential files passed separately after their fixes. Backend typecheck and diff checks clean.
+- Isolated real-store proposal suite: 14 passed. Includes new-member mode persistence, Review staging, direct-person decisions and receipt replay checks, project revocation/reload, legacy PM delivery and dormant mirror conversion refusal, and both approval modes through normal store assignment. Full units/four integration shards are CI evidence after Ready.
+- Synthetic projection only, 1,000 active tasks (100 iterations, no database): initial 211,848 bytes, mean 0.228 ms; one changed row 277 bytes, 0.00039 ms; idle 70 bytes, 0.00061 ms. This measures the new projection, not end-to-end API latency. Feed reads add no queries. Legacy conversion/close adds one bounded existing message-id lookup to name a possibly dormant mirror; existing indexed group loading/guards persist it.
+- Decisions never start work themselves. They notify the PM, and the existing work.assign store path enforces all repository/account/machine/global-session checks. The selected worker binds the first assignment; ordinary recovery after an actual assignment retains existing policy. Review proposal merges are refused to preserve each person's decision.
+- No credential/login reads, schema change, production read/write, native process or visible UI change. Desktop owns light/dark UI evidence. Backend must not roll back to a version that ignores Review metadata while such tasks exist; compatible fix forward or explicit decision/drain first. Coordinated release remains held until 09:00 VN.
