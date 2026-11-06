@@ -1,6 +1,6 @@
 # Swarm v3 acceptance, November 7
 
-Task #4172; test-only PR #3456. **Overall: PASS on main `c18dc5ede6ed8fc34e6c4a17310851ca664b0b6f`**, after #4120 / PR #3446 merged. Both continuous real-store cases pass with the exact Desktop + New agent payload. No product code changes in this task.
+Task #4172; test-only PR #3456. **Overall: PASS on main `3a043feb5`**, including #3446 and the Windows quota correction #3455. Both continuous real-store cases pass with the exact Desktop + New agent payload. No product code changes in this task.
 
 The initial Pass at ed429d4c6 is superseded: its real-store fixture omitted the dialog's `teamAccountOnly: true` restriction. The corrected fixture includes that field, `agents: memory`, and the dialog's capacity setting. Both continuous cases failed on main before #3446, correctly exposing the remaining Team-account requirement. The failure was handed to #4120. The final rerun on main after that merge passed both cases; this final result supersedes the intermediate Fail, while the earlier incomplete-fixture Pass remains withdrawn.
 
@@ -9,7 +9,7 @@ The initial Pass at ed429d4c6 is superseded: its real-store fixture omitted the 
 - Main initially tested: `b39fbe09b48ac476c8a853b68b41302286ba77fb`.
 - Main after Tasks merged: `3932fd2c7f49478c7e4a178f51e1f2c840761c48`.
 - Intermediate main tested after the CI correction: `57e129117515e558f34d01b443dc73a221972bbd`, integrated as `0cb86d7f1766fb9d9b0d71ce3267c2ea227672e6`; both acceptance cases still fail at the same Team-account gates.
-- Final main: `c18dc5ede6ed8fc34e6c4a17310851ca664b0b6f`, tested in a detached temporary checkout with only the two acceptance files added. Duration 17.57 seconds; 2 passed. Main then merged into the PR as `fc22b3f53cfe1484871e711c0f90595a2b3c95ce`; acceptance files unchanged.
+- Main after Team-account removal: `c18dc5ede6ed8fc34e6c4a17310851ca664b0b6f`, tested in a detached temporary checkout with only the two acceptance files added. Duration 17.57 seconds; 2 passed. Main then merged into the PR as `fc22b3f53cfe1484871e711c0f90595a2b3c95ce`; acceptance files unchanged.
 - Acceptance test commit: `3220a3213`; combined checkout: `08b5a0be35b78c5cf9284cd4f3d55c9e70517430`.
 - `git diff b39fbe09b..3932fd2c7 -- backend cli` is empty. Backend/CLI receipts carry unchanged; the Desktop Tasks checks ran after this merge.
 - macOS arm64, Node/Vitest and Flutter offscreen. New test calls the real store, host read and personal feed against an ephemeral loopback Mongo replica; no production store, real sign-in or credential file is opened.
@@ -41,7 +41,7 @@ npx vitest run --config src/superTabs/__tests__/v3.vitest.config.test-support.ts
 npx tsc --noEmit
 ```
 
-Final corrected acceptance on main `c18dc5ede`: **2 passed**, covering both modes and every backend step above. The intermediate run on main `57e129117` had 2 Team-account failures; #3446 resolves them. The earlier incomplete-fixture Pass at `ed429d4c6` remains withdrawn. TypeScript passes after main integration. The explicit config keeps a real-store release acceptance out of the unit suite; required CI alone does not run or supersede this explicit acceptance gate.
+Corrected acceptance on main `c18dc5ede`: **2 passed**, covering both modes and every backend step above. The intermediate run on main `57e129117` had 2 Team-account failures; #3446 resolves them. The earlier incomplete-fixture Pass at `ed429d4c6` remains withdrawn. TypeScript passes after main integration. The explicit config keeps a real-store release acceptance out of the unit suite; required CI alone does not run or supersede this explicit acceptance gate.
 
 Run from cli, each with a fresh mktemp TMPDIR:
 
@@ -94,4 +94,15 @@ Main `57e129117` contains the vocabulary correction through #3450. After integra
 
 After #3446 merged, the exact corrected acceptance ran on detached main `c18dc5ede6ed8fc34e6c4a17310851ca664b0b6f`: **2 passed**, no case skipped. This covers join, Buddy creation, real PM delivery, requester attribution and personal feed visibility, Auto approve assignment, Review suggestion/wait, refusal of PM approval, member approval, member rejection with reason, and refusal of rejected assignment.
 
-The CLI source is unchanged since its 167-test receipt. Desktop join, agent-launch, Tasks model/pane and credential guard sources are unchanged since their 39-test receipt; subsequent Desktop changes are the independent Leaderboard. Those existing receipts and six inspected captures carry for this acceptance scope. No repeat full component suite was run locally. After merging main, the two CI regression files pass all **83 tests**, and TypeScript passes. CI was green at preceding head `653837942`; the final pushed head's automatic CI and independent review remain merge gates.
+At main `c18dc5ede`, the CLI source was unchanged since its 167-test receipt. The quota merge below refreshes the affected CLI checks. Desktop join, agent-launch, Tasks model/pane and credential guard sources are unchanged since their 39-test receipt; subsequent Desktop changes are the independent Leaderboard. Those existing receipts and six inspected captures carry for this acceptance scope. No repeat full component suite was run locally. After merging main, the two CI regression files pass all **83 tests**, and TypeScript passes. CI was green at preceding head `653837942`; the final pushed head's automatic CI and independent review remain merge gates.
+
+
+## After Windows quota merged
+
+Latest main: `3a043feb5`, merged cleanly into this branch as **`2de0ce742d3684bc7dacbdde5727a09174c0ce86`**. All runs below were on that exact merge revision, with a fresh `mktemp -d` TMPDIR for each command. The following receipt commit changes only this document; tested source and configuration remain identical.
+
+- Real-store acceptance: `npx vitest run --config src/superTabs/__tests__/v3.vitest.config.test-support.ts` from backend, with the same cached Mongo binary: **2 passed**, 15.39 seconds. Every backend done-when step remains Pass, including both approval modes and both decisions.
+- CLI quota/status-line, Windows Git Bash helper and credential-read guard: `npm test -- src/engines/claude/statusLine.spec.ts src/lib/windows/claudeCodeGitBash.spec.ts src/loginReads.spec.ts`: **30 passed**.
+- CLI actual launch path: `npm test -- src/superTabs/start.spec.ts -t 'starts a Buddy in full mode|a Buddy launches only|permanent folder of its own for a Regular agent'`: **15 passed**, 177 intentionally unselected.
+
+These **45 fresh focused CLI checks** refresh the areas affected by #3455. Other unchanged host/report receipts carry without being rerun. `git diff d6ecb3949..2de0ce742 -- backend desktop` is empty, so the 83 backend regression tests, TypeScript result, 39 offscreen Desktop tests and six inspected captures carry from the prior head. The new backend acceptance was nevertheless rerun to attach current-main flow evidence. No new native Windows-session claim is made; #3455 retains its own upstream platform evidence. Prior-head required CI is green at `d6ecb3949`; the pushed final head receives automatic CI. The independent Yes at `d6ecb3949` covers unchanged acceptance/config files plus clean main merges; final confirmation has been requested.
