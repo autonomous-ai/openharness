@@ -53,11 +53,18 @@ sleep() { echo "backoff $1"; }
         self.assertEqual(calls, 6)
         self.assertIn('after 6 attempts', result.stderr)
 
-    def test_real_stapling_error_fails_without_retry(self):
+    def test_ticket_not_yet_published_then_success(self):
+        result, calls = self.run_staple('The staple and validate action failed! Error 65.', 1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, 2)
+        self.assertIn('backoff 15', result.stdout)
+
+    def test_real_stapling_error_still_fails_after_five_attempts(self):
         result, calls = self.run_staple('The staple and validate action failed! Error 65.', 99)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(calls, 1)
-        self.assertNotIn('backoff', result.stdout)
+        self.assertEqual(calls, 5)
+        self.assertIn('backoff 60', result.stdout)
+        self.assertIn('after 5 attempts', result.stderr)
 
 
 if __name__ == '__main__':
