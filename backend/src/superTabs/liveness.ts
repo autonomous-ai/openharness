@@ -18,6 +18,7 @@ import { isStep } from './steps.js'
 import { endedReply } from './taskLine.js'
 import { crewClock, DISPATCH_RULES, laneOf, nudgeLine, returnReason } from './dispatch.js'
 import { handed, pickUp, unclaimedAt, unclaimedReason } from './handed.js'
+import { isBuddy } from './buddies.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
@@ -380,17 +381,15 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
   ...endedReply(state, group, stableId('task-line-lost', assignment.id, loss), sender)]
 }
 
-/** The crew members 2 hours without progress on their task hear it once in the task, from its PM (dispatch.ts crewClock). */
+/** Every worker 2 hours without progress hears it once in its task, without waiting for the PM (dispatch.ts crewClock). */
 function crewNudges(state: SuperTabState, now: number): MessageDraft[] {
-  // Most Swarms have no crew: one pass over the agents, nothing else. Then one pass over the work, the step index only for a
-  // task whose line is due (a measured 25% on the sweep at 2,000 tasks when it walked every task twice).
-  const crew = new Map(state.agents.filter(a => a.crew).map(a => [a.id, a]))
-  if (!crew.size) return []
+  const workers = new Map(state.agents.filter(a => !isBuddy(a)).map(a => [a.id, a]))
+  const leaders = new Set(state.conversations.flatMap(c => c.leadId ? [c.leadId] : []))
   let steps: StepIndex | undefined
   return state.conversations.flatMap(group => {
-    const assignment = group.assignment, worker = assignment && crew.get(assignment.agentId)
+    const assignment = group.assignment, worker = assignment && workers.get(assignment.agentId)
     if (!worker || !activeWork(group) || crewClock(group, worker, assignment, now, DISPATCH_RULES) !== 'nudge') return []
-    if (state.conversations.some(c => c.leadId === worker.id)) return []
+    if (leaders.has(worker.id)) return []
     steps ??= stepIndex(state)
     // Waiting on others is no lack of progress: the waits that stop a loss stop the line too (lostReason).
     if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return []

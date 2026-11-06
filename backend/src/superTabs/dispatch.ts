@@ -84,12 +84,12 @@ export const returnReason = (lane: string | null): string => `no progress for 3 
 export const nudgeLine = (lane: string | null): string =>
   `No progress on this task for 2 hours. Post where it stands, or set it blocked with why; at 3 hours it goes back to the ${lane ?? 'project'} lane.`
 
-/** The crew's clocks on [assignment] of [group], held by [worker] (liveness.ts): from its own last progress (its assignment,
- *  status, check or post: `progressAt`), only while a crew member is working on a task. `nudge` after `nudgeAfterMs`, once
+/** The progress clocks on [assignment] of [group], held by any project worker (liveness.ts): from its own last progress
+ *  (its assignment, status, check or post: `progressAt`), only while working. `nudge` after `nudgeAfterMs`, once
  *  per spell of quiet; `return` after `returnAfterMs`. Waiting on a person, blocked or handed: no clock. */
 export function crewClock(group: Conversation, worker: Agent, assignment: Assignment, now: number, rules: DispatchRules): 'nudge' | 'return' | null {
   const since = assignment.progressAt
-  if (!worker.crew || group.reviewOf || assignment.status !== 'working' || since === undefined) return null
+  if (assignment.status !== 'working' || since === undefined) return null
   if (now - since >= rules.returnAfterMs) return 'return'
   return now - since >= rules.nudgeAfterMs && !(assignment.nudgedAt !== undefined && assignment.nudgedAt >= since) ? 'nudge' : null
 }
