@@ -42,10 +42,10 @@
 **Files:** backend/src/superTabs/prHistory.ts, prHistory.test.ts; scripts/check-pr-history.ts.
 **Interfaces:** `checkPrHistory(input: unknown): HistoryReport`; facts `{head, commits:[{sha, parents:string[], files:[{filename, previousFilename?, additions, deletions}]}], files:[...]}`; report `{planFirst, testBeforeCode, productionLines, totalLines, commits, missingTests}` with pass/fail/unknown/not-needed statuses. Script reads one bounded JSON input from stdin and writes JSON, failing invalid input without echoing it.
 
-- [ ] Commit sample-history and real-script tests: plan-only first commit succeeds, code first/mixed plan fails, each implementation needs its own prior test-only commit, same-commit/late tests fail, docs-only, merge, rename, empty/malformed inputs and net size boundaries.
-- [ ] Observe failure before implementation.
-- [ ] Implement classifier/checker and script; expose only bounded summaries, never commit prose or patches.
-- [ ] Run checker/script tests and typecheck; record counts/timing, commit and push.
+- [x] Commit sample-history and real-script tests: plan-only first commit succeeds, code first/mixed plan fails, each implementation needs its own prior test-only commit, same-commit/late tests fail, docs-only, merge, rename, empty/malformed inputs and net size boundaries.
+- [x] Observe failure before implementation.
+- [x] Implement classifier/checker and script; expose only bounded summaries, never commit prose or patches.
+- [x] Run checker/script tests and typecheck; record counts/timing, commit and push.
 
 ### Task 2: Ready collection and review brief delivery
 
@@ -56,3 +56,5 @@
 - [ ] Observe failures before implementation.
 - [ ] Read fixed repository endpoints with bounded concurrency, attach only current-head reports, preserve file-based review planning on history failure, refresh the generated brief block before step assignment.
 - [ ] Run affected unit checks, focused store integration, typecheck, script tests and the explicitly requested backend unit suite. Record red/green; mark Ready once, hold the head for automatic CI and independent review.
+
+- Task 1: red cc930f866 lacked the checker; green passes 19 sample/script cases and backend typecheck. The standalone script consumes JSON through tsx and executes no PR code.
