@@ -15,7 +15,7 @@ void main() {
           prepare: (operation) async => {
             'name': 'My computer',
             'cwd': '/work',
-            'engines': ['codex'],
+            'engines': ['codex', 'pi'],
           },
           command: (command, operation) async {
             sent.add(command);
@@ -37,11 +37,13 @@ void main() {
           expect(sent, hasLength(1));
           expect(start['type'], 'buddy.create');
           expect(start['setup'], containsPair('cwd', '/work'));
+          expect((start['setup'] as Map)['engines'], ['codex']);
         } else {
           expect(sent.first['type'], 'machine.contribute');
           expect(sent.first.containsKey('teamAccountOnly'), isFalse);
           expect(start['type'], 'agent.new');
           expect(start['kind'], kind);
+          if (kind == 'pm') expect(start.containsKey('name'), isFalse);
           expect(start['projectName'], kind == 'pm' ? 'Compiler' : null);
         }
         expect(sent.toString(), isNot(contains('teamSetup')));
