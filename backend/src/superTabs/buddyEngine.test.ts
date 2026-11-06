@@ -48,6 +48,16 @@ function addBuddy(f: ReturnType<typeof setup>) {
 }
 
 describe('a person switching their Buddy engine', () => {
+  it('wakes a sleeping Buddy before requesting its engine switch', () => {
+    const f = setup()
+    f.target().asleep = { since: NOW - 60_000 }
+    f.run({ type: 'buddy.engine', engine: 'codex' })
+    expect(f.target().asleep).toBeUndefined()
+    expect(f.target().switchRequest?.engine).toBe('codex')
+    expect(f.target().harnessId).toBe('h-old')
+    expect(f.state.conversations.find(c => c.id === f.chat)?.agentIds).toEqual([f.id])
+  })
+
   it.each(['named', 'default'])('guards the %s Buddy’s machine against a concurrent readiness change', choice => {
     const f = setup(), second = addBuddy(f)
     f.state.machines!.push({ ...structuredClone(f.pool()), machineId: 'second-mac' })

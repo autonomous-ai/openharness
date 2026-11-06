@@ -4884,6 +4884,30 @@ describe('keeping a Swarm Lead alive', () => {
     await vi.waitFor(() => expect(t.keepLeadAlive).toHaveBeenCalledWith('harness'))
   })
 
+  it('wakes a managed Buddy after switch rollback, without reopening an explicit Stop', async () => {
+    const buddy = { ...leadRow({ lead: false, buddySleepManaged: true }), agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' } } }
+    const t = lifeFixture([buddy])
+    t.keepLeadAlive.mockResolvedValue({ ok: true })
+    switched(t)
+    await t.poll(SWITCH_HOLD_MS + 1)
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
+    t.live(true)
+    Object.assign(buddy.agent, { asleep: { since: 1 } })
+    await t.poll(1_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+    t.live(false)
+    delete (buddy.agent as Record<string, unknown>).asleep
+    t.host.stop()
+    const again = t.open()
+    t.wait(60_000)
+    await again.tick()
+    await vi.waitFor(() => expect(t.keepLeadAlive).toHaveBeenCalledTimes(2))
+    Object.assign(buddy, { stopRequested: true })
+    t.wait(60_000)
+    await again.tick()
+    expect(t.keepLeadAlive).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps Stop Harness effective after Buddy rollback, across host restart, while removing a late replacement', async () => {
     const buddy = { ...leadRow({ lead: false }), agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' } } }
     const t = lifeFixture([buddy])
