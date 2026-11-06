@@ -43,10 +43,10 @@
 **Files:** Create `backend/src/superTabs/chatLimits.ts`, `chatLimits.test.ts`; modify `commands.ts`.
 **Interfaces:** `requireChatContent(state, group, text): void`, called only for visible agent main posts in a project chat.
 
-- [ ] Commit command-level tests for status labels, known PR/task card repeats, attachments/tags, person/task/thread exemptions, and meaningful results.
-- [ ] Run `npm test -- src/superTabs/chatLimits.test.ts`; verify the expected refusal tests fail.
-- [ ] Implement conservative, anchored status and exact card-pointer checks; integrate after existing reply validation.
-- [ ] Run own tests and `acknowledgements.test.ts`; commit and push green implementation.
+- [x] Commit command-level tests for status labels, known PR/task card repeats, attachments/tags, person/task/thread exemptions, and meaningful results.
+- [x] Run `npm test -- src/superTabs/chatLimits.test.ts`; verify the expected refusal tests fail.
+- [x] Implement conservative, anchored status and exact card-pointer checks; integrate after existing reply validation.
+- [x] Run own tests and `acknowledgements.test.ts`; commit and push green implementation.
 
 ### Task 2: Two main posts per ask
 

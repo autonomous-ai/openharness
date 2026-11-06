@@ -70,6 +70,7 @@ import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadHost, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { ACK_ONLY_HINT, isAcknowledgement } from './acknowledgements.js'
+import { isProjectChat, inMainChat, requireChatContent } from './chatLimits.js'
 import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, refuseOverBudget, refuseRepeats, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { repeatedRules } from './instructionsDiff.js'
@@ -3776,6 +3777,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // An answer below a message is read as its reply is (store.ts): context.reply is the message it answers.
       if (command.answers && (command.replyTo || !context.reply || context.reply.id !== command.answers || context.reply.conversationId !== group.id)) {
         fail('INVALID_ANSWER', command.replyTo ? 'Answer a message right below it or reply in its thread, not both.' : 'Answer a message in this conversation.', 400)
+      }
+      if (actor.kind === 'agent' && !command.agentOnly && isProjectChat(state, group) && inMainChat(command, context.reply)) {
+        requireChatContent(state, group, command.text)
       }
       // A second answer to a message the PM answered is refused with where the first is; a plain post is not (answers.ts).
       if (command.answer) requireUnanswered(group, (command.answers ?? command.replyTo)!)
