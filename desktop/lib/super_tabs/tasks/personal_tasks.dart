@@ -12,6 +12,7 @@ class SuperTabPersonalTask {
   String get title => json['title'] as String? ?? 'Task';
   String get status => json['status'] as String? ?? 'working';
   bool get suggested => json['suggested'] == true;
+  bool get canApprove => json['canApprove'] == true;
   String? get reason => json['reason'] as String?;
   Map<String, dynamic> get agent => superTabMap(json['agent']);
   String? get agentId => agent['id'] as String?;

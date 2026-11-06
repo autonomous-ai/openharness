@@ -244,7 +244,8 @@ class _TasksPaneState extends State<SuperTabPersonalTasksPane> {
                           final project =
                               projects[task.projectId]?.name ??
                               task.projectName;
-                          final pending = task.status == 'proposal';
+                          final pending =
+                              task.status == 'proposal' && task.canApprove;
                           return Column(
                             key: ValueKey('personal-task-${task.id}'),
                             children: [
