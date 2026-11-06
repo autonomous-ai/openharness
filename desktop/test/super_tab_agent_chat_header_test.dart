@@ -119,4 +119,40 @@ void main() {
       expect(t.getRect(engine).left, greaterThan(t.getRect(header).center.dx));
     },
   );
+
+  testWidgets(
+    'with a thread open the Buddy chat is in the full view and keeps its pickers',
+    (t) async {
+      final server = buddyEngineSwarm();
+      server.append('A word', conversationId: 'swarm-buddy-peer');
+      (server.state['conversations'] as List).cast<Map>().firstWhere(
+        (g) => g['id'] == 'swarm-buddy-peer',
+      )['lastMessageSequence'] = 1;
+      final c = server.controller(account: 'peer');
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.select('swarm-buddy-peer');
+      await show(t, c);
+      c.openThread(c.messages('swarm-buddy-peer').last.id);
+      await t.pumpAndSettle();
+      expect(header, findsNothing);
+      expect(find.byKey(const ValueKey('super-buddy-engine')), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-buddy-model')), findsOneWidget);
+    },
+  );
+
+  testWidgets('the Buddy header says when its shared model is not served', (
+    t,
+  ) async {
+    final server = buddyEngineSwarm();
+    (server.state['agents'] as List).cast<Map>().firstWhere(
+      (a) => a['id'] == 'wren',
+    )['gridModel'] = 'qwen3-coder';
+    final c = server.controller(account: 'peer');
+    addTearDown(c.dispose);
+    await c.refresh();
+    await c.select('swarm-buddy-peer');
+    await show(t, c);
+    expect(inHeader(find.text('not served now')), findsOneWidget);
+  });
 }
