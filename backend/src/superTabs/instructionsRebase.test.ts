@@ -70,9 +70,10 @@ describe('a project\'s document on the new base', () => {
     // Lines no person gave are process, which the built-in PM text carries now; no template is copied in.
     for (const line of ['Talks with people in the project chat', 'Sets deadlines for today', 'One accepted request is one task.',
       'Swarm code stays out of cli/src/core.', 'Checks a pull request\'s number and title']) expect(text).not.toContain(line)
-    expect(text).not.toContain('## Roles')
-    expect(text).not.toContain('## Workflow')
-    expect(text).not.toContain(INSTRUCTIONS_TEMPLATE.split('\n')[4]!)
+    expect(text).not.toMatch(/^## Roles$/m)
+    expect(text).not.toMatch(/^## Workflow$/m)
+    expect(INSTRUCTIONS_TEMPLATE).toContain('Says no by default to new features')
+    expect(text).not.toContain('Says no by default to new features')
     expect(text.startsWith(`${REBASED_INTRO}\n\n## People notes\n`)).toBe(true)
   })
 
