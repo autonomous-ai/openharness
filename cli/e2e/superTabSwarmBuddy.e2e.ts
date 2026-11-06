@@ -28,7 +28,8 @@ it.skipIf(isTeamAccount())('starts and switches its engine in the same folder an
   backend.addMachine(ME)
   backend.me = { id: 'person', email: ME.email }
   // As a real engine does: it asks about a folder it has no answer for, in a terminal no Swarm view shows.
-  const d = await signedInDaemon(backend, ME, { ANTHROPIC_API_KEY: 'fixture-only' }, undefined, true); daemon = d
+  const d = await signedInDaemon(backend, ME, { ANTHROPIC_API_KEY: 'fixture-only' }, undefined,
+    { trustPrompt: true, submissionGate: true }); daemon = d
   writeFileSync(join(d.env.HOME!, '.claude.json'), '{}')
   mkdirSync(d.env.CODEX_HOME!, { recursive: true })
   writeFileSync(join(d.env.CODEX_HOME!, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: 'fixture-only' }), { mode: 0o600 })
