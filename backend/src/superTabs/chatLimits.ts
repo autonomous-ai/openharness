@@ -24,3 +24,60 @@ export function requireChatContent(state: SuperTabState, group: Conversation, te
     fail('CHAT_CARD_REPEAT', 'This card is already in the chat. Add new details in its thread instead of repeating it.', 400)
   }
 }
+
+/** Private, bounded state read/written with the conversation part; removed with it. IDs only, never transcript content. */
+export interface ChatAsk {
+  id: string
+  at: number
+  root: string
+  main: string[]
+}
+export interface ChatLimits {
+  asks: ChatAsk[]
+  latest?: string
+  /** Evicted asks cannot become new asks again. Timestamp ties close conservatively; retained IDs always win. */
+  closedThrough?: number
+}
+const MAX_ASKS = 50
+
+function remember(group: Conversation, id: string, at: number, root = id): ChatAsk {
+  const ledger = group.chatLimits ??= { asks: [] }
+  const known = ledger.asks.find(ask => ask.id === id)
+  if (known) return known
+  const ask: ChatAsk = { id, at, root, main: [] }
+  ledger.asks.push(ask)
+  if (ledger.asks.length > MAX_ASKS) ledger.closedThrough = Math.max(ledger.closedThrough ?? 0, ledger.asks.shift()!.at)
+  return ask
+}
+
+export function recordChatAsk(group: Conversation, id: string, at: number, root: string | null): void {
+  remember(group, id, at, root ?? id)
+  if (!root) group.chatLimits!.latest = id
+}
+
+function closedAsk(): never {
+  fail('CHAT_ASK_CLOSED', 'This older ask’s main-chat budget is closed. Continue the discussion under its existing response in the thread.', 409)
+}
+
+/** Returns the main-budget owner, or null for thread-only posts and announcements before any person ask is recorded. */
+export function requireChatPost(group: Conversation, command: Send, reply: Reply): string | null {
+  if (!inMainChat(command, reply)) return null
+  const ledger = group.chatLimits
+  const linked = command.replyTo || command.answers ? reply : undefined
+  const personAsk = linked?.author.kind === 'person' ? linked : undefined
+  let askId = personAsk ? personAsk.thread ?? personAsk.id
+    : linked ? ledger?.asks.find(ask => ask.main.includes(linked.id))?.id ?? linked.thread : undefined
+  askId ??= ledger?.latest
+  if (!askId) return null
+  let ask = ledger?.asks.find(ask => ask.id === askId)
+  if (!ask && personAsk && askId === personAsk.id && (ledger?.closedThrough === undefined || personAsk.createdAt > ledger.closedThrough)) {
+    ask = remember(group, askId, personAsk.createdAt)
+  }
+  if (!ask) return closedAsk()
+  if (ask.main.length >= 2) fail('CHAT_MAIN_LIMIT', 'At most two agent posts per ask in the main chat. Put follow-ups in its thread.', 409)
+  return ask.id
+}
+
+export function recordChatPost(group: Conversation, askId: string | null, messageId: string): void {
+  if (askId) group.chatLimits!.asks.find(ask => ask.id === askId)!.main.push(messageId)
+}

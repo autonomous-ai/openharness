@@ -40,6 +40,7 @@ const conversation: Required<Conversation> = {
   buddyName: 'Sparky',
   buddySessions: [],
   cards: {},
+  chatLimits: { asks: [] },
   checks: [],
   codePullRequestUrls: [],
   dormant: false,

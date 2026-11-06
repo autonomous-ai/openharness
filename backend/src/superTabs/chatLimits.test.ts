@@ -7,7 +7,7 @@ function setup() {
   const send = (text: string, options: { person?: boolean; by?: string; group?: string; extra?: Record<string, unknown>; reply?: CommandContext['reply'] } = {}) =>
     f.run({ type: 'message.send', conversationId: options.group ?? 'lead', text, replyTo: null, recipientIds: [], ...options.extra } as Command,
       options.person ? owner : f.as(options.by ?? f.lead), options.reply ? { reply: options.reply } : {})
-  const person = { kind: 'person' as const, id: owner.userId, name: owner.email }
+  const person = { kind: 'person' as const, id: owner.userId, name: owner.email, membershipGeneration: f.state.people[0]!.generation }
   const ask = () => {
     const id = send('Can you fix login?', { person: true }).result.messageId as string
     return { id, conversationId: 'lead', author: person, createdAt: f.now, thread: id }

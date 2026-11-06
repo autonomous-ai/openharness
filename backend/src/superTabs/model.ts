@@ -509,6 +509,8 @@ export interface Conversation {
   /** The PM's answers here (answers.ts): each message it answered, where and by which message, at most MAX_ANSWERED, so a
    *  second `answer` is refused with where the first is. Bookkeeping: never sent to readers. */
   answered?: import('./answers.js').AnsweredAsk[]
+  /** Project-chat post limits: at most 50 asks, no text; bookkeeping hidden from readers (chatLimits.ts). */
+  chatLimits?: import('./chatLimits.js').ChatLimits
   /** On a project's chat: its project's pulse as last worked out (pulse.ts recordPulse), which every read sends in `derived`. */
   pulse?: import('./pulse.js').Pulse
 }
@@ -1147,6 +1149,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // A read never hands out the cleanup records it just applied (read/hostRows.ts delivers them to the machine's host).
   delete visible.machineCleanups
   delete visible.parkedConversations
+  for (const group of visible.conversations) delete group.chatLimits
   numberConversations(visible)
   delete visible.retiredConversationNumber
   delete visible.groupCounter

@@ -53,10 +53,10 @@
 **Files:** Modify `chatLimits.ts`, `chatLimits.test.ts`, `commands.ts`, `model.ts`, `read/views.ts`, `read/contract.ts`, `parts/light.ts`, `parts/light.test.ts`; integration coverage in `integration/superTabProjectChatWorkers.test.ts`.
 **Interfaces:** `Conversation.chatLimits?: ChatLimits`; `recordChatAsk(group, id, at, topLevel)` and `requireChatPost(group, command, reply)` / `recordChatPost(...)` reuse trusted context.
 
-- [ ] Commit failing command tests for third post across agents, new/old asks, thread-only followups, mirrors, eviction and private reader bookkeeping; add transactional integration test for competing third posts and retry.
-- [ ] Run focused tests and observe missing refusals.
-- [ ] Implement fixed-size ask ledger, monotonic eviction watermark and atomic post recording; classify/hide the new field in readers.
-- [ ] Run affected tests plus focused integration; commit and push.
+- [x] Commit failing command tests for third post across agents, new/old asks, thread-only followups, mirrors, eviction and private reader bookkeeping; add transactional integration test for competing third posts and retry.
+- [x] Run focused tests and observe missing refusals.
+- [x] Implement fixed-size ask ledger, monotonic eviction watermark and atomic post recording; classify/hide the new field in readers.
+- [x] Run affected tests plus focused integration; commit and push.
 
 ### Task 3: One answer across agents and locations
 
