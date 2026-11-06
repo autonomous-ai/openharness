@@ -364,7 +364,7 @@ export interface CoreApi {
   /** The Super Tab service's door into the core (superTabs/attention.ts): absent from a core or a process that offers it none. */
   superTabs?: SuperTabsCore
   /** The devices' way to the Super Tab service's `super_tabs` requests, for the Swarm cards alone (`cardsWanted`, `cardRecap`,
-   *  `cardOpen`, `cardSay`, `cardSide`, `cardWorker`; superTabs/inCore/cards.ts refuses any other action): its answer, or SERVICE_UNAVAILABLE. Absent from a core or a
+   *  `cardOpen`, `cardSay`, `cardWorker`; superTabs/inCore/cards.ts refuses any other action): its answer, or SERVICE_UNAVAILABLE. Absent from a core or a
    *  process that offers none. */
   superTabRequest?: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>
   /** The Wi-Fi device's doors into the core (services/wifi.ts): each one call it made when it ran here. */
@@ -1266,16 +1266,12 @@ export interface SwarmLead {
   buddyNotice?: LeadNotice
 }
 /** One Swarm this account is in, as a Harness Pro's card: its Leads, most urgent first. */
-/** `side` 'buddy' while a swarmBuddy dial keeps the Swarm on its Buddy side (spec 2026-10-29-round-dial-pm-buddy): the dial
- *  follows it as the daemon's, which a face alone cannot tell where no project has a Buddy chat (review of #2218). */
-export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[]; side?: 'buddy'
+export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[]
   /** The reader's own Personal Swarm (the list row's `personal: true`); never set on a Team Swarm. */
   personal?: true }
 /** A Lead's last message, for its card; `chatId` when it is the last message of the chat on the round dial's face, and
  *  `buddy` when that face is a swarmBuddy dial's (`CardChat` 'buddy'), so each dial takes only the recaps it asked for. */
-export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string; buddy?: true
-  /** The root of the thread this recap is of, when the face was in one: a dial never takes it for the main chat's. */
-  thread?: string }
+export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string; buddy?: true }
 /** A project's places to chat (designs 2026-10-28-round-dial-swarm-chat and 2026-10-29-round-dial-pm-buddy): its Lead
  *  conversation, the reader's Buddy chat, and a group. A dial without swarmBuddy calls the Buddy chat `pm`, where the PM's
  *  private lines land since Buddies replaced Chat with PM; a swarmBuddy dial calls it `buddy` and hears the Buddy there. */
@@ -1283,10 +1279,7 @@ export type ChatKind = 'lead' | 'pm' | 'group' | 'buddy'
 /** The chat on a project's face on the round dial: the Lead's, unless the window has the project's Buddy chat or a group
  *  open (or a swarmBuddy dial's side says the Buddy's). `working` only for a working group, `since` from one of its agents'
  *  turn here. */
-export interface SwarmChat { kind: ChatKind; id: string; name: string; working: boolean; since?: number
-  /** While the face is in a thread (the app's, or the one the dial's words started): its root, its title (first line, 80 bytes)
-   *  and, when the read gives it, its reply count. Sent only to a dial that speaks swarmThread. */
-  thread?: { root: string; title: string; replies?: number } }
+export interface SwarmChat { kind: ChatKind; id: string; name: string; working: boolean; since?: number }
 /** The newest tag of the reader's in the project since the baseline, the dial's alert: in its Lead conversation (`lead`), the
  *  reader's Buddy chat or a Chat with PM (`pm`), or a task chat (`group`, #2965); or the newest message the reader's Buddy
  *  wrote in its chat (`buddy`, the quiet one). `thread`: the root of the thread it is in, when it is in that thread only; such
@@ -1302,22 +1295,16 @@ export interface SwarmBuddy { chatId: string; name: string; engine: string; cell
   /** Its session id when it runs on this computer: how a tap on its notification is told from any other agent's. Never sent
    *  to a device. */
   local?: string }
-/** The screen a round dial shows of each project of a Swarm: the PM's (today's face) or the reader's Buddy's. */
+/** The chat the window opens when a device picks a project or taps a session: the project's Lead conversation or the reader's Buddy's. */
 export type CardSide = 'pm' | 'buddy'
 /** Which chat a card request is about: the Lead's conversation (false, the Pro), today's face (true, a swarmChat dial), or
  *  the face on a swarmBuddy dial's side ('buddy'). */
 export type CardChat = boolean | 'buddy'
 /** What became of words spoken on a device for a Lead: posted, not a Lead here (`said` false, so the turn goes as before), or
  *  refused by the backend with its code and message, which must never become a terminal turn instead. */
-/** `thread`: set when the post started the dial's thread (spec 2026-11-03-dial-thread-face), so the window opens it. */
-export type SaidOnCard = { said: true; thread?: { tabId: string; conversationId: string; root: string } } | { said: false; refused?: { code: string; message: string } }
-/** How words for a Lead relate to the dial's thread (a swarmThread dial only): `thread` is the root of the thread on its face when
- *  they were spoken, null for none, and the post is held to it; `threaded`: they were spoken from the face, so they may start one. */
-export interface SayOptions { thread?: string | null; threaded?: boolean }
+export type SaidOnCard = { said: true } | { said: false; refused?: { code: string; message: string } }
 /** The conversation the window has open in a Swarm tab. */
-/** `fromDevice`: the window moved there because a device picked it (a dial's swipe to the next project), so the move is
- *  that device's own and keeps the side it keeps (spec 2026-10-29-round-dial-pm-buddy, newest wins). */
-export interface CardFocus { tabId: string; conversationId: string; fromDevice?: true }
+export interface CardFocus { tabId: string; conversationId: string }
 
 /** The Super Tab service's door into the core (superTabs/inCore/attention.ts): the waits of its members here. */
 export interface SuperTabsCore {

@@ -3000,11 +3000,12 @@ describe('a launched start whose engine stops on a screen', () => {
   /** Two passes, 16 s apart: a screen fails a start only when two reads in a row show it the same (security review 1 of #3063). */
   const twice = async (f: ReturnType<typeof fixture>) => { await f.machine.tick(); f.advance(); await f.machine.tick() }
 
-  it('opens a Team-written Codex start\'s untrusted checkout restricted, with Enter on that exact screen alone', async () => {
-    const { f, screen, inputIfScreen, failures } = launched(RESTRICTED, 'trust_open')
+  it.each(['0165', '0166'])('opens a Team-written Codex %s start\'s untrusted checkout restricted, with Enter on that exact screen alone', async version => {
+    const restricted = screens(`codex-${version}-open-restricted`)
+    const { f, screen, inputIfScreen, failures } = launched(restricted, 'trust_open')
     await f.machine.tick()
     expect(screen).toHaveBeenCalledWith('launched', 0)
-    expect(inputIfScreen).toHaveBeenCalledWith('launched', ['Enter'], RESTRICTED)
+    expect(inputIfScreen).toHaveBeenCalledWith('launched', ['Enter'], restricted)
     expect(failures()).toEqual([])
   })
 
