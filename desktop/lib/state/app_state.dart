@@ -1609,6 +1609,7 @@ class AppNotifier extends ChangeNotifier {
       deviceHosts.clear();
       _deviceReads.clear();
       // Names and membership belong to the account that discovered them.
+      _openedInRun.clear();
       _superTabNames = {};
     }
     _currentUser = profile;
@@ -1973,7 +1974,10 @@ class AppNotifier extends ChangeNotifier {
       // new here (task #3160).
       _addMachineWhereNew(
         [for (final tab in tabs) tab.id],
-        {for (final swarm in swarms) ?swarm.superTabId, ...hidden},
+        {
+          for (final swarm in swarms) ?swarm.superTabId,
+          ...hidden,
+        }.difference(_openedInRun),
       );
       var changed = false;
       // Membership and names for the closed list: a tab hidden before a
@@ -1992,6 +1996,7 @@ class AppNotifier extends ChangeNotifier {
             changed = true;
           }
         } else if (!hidden.contains(tab.id)) {
+          _openedInRun.add(tab.id);
           swarms.add(
             Swarm(
               id: newDeskId(),
@@ -2787,6 +2792,16 @@ class AppNotifier extends ChangeNotifier {
   /// (review of #3115).
   final _joinPassed = <String>{};
 
+  /// The Swarms that became open on this computer during this run: joined in
+  /// the dialog, opened by the person, or added by discovery. The update's
+  /// baseline ([SwarmJoinSeen.fresh]) takes the Swarms a long-time member had
+  /// open or hidden here as seen, never these: a new member's Swarm is open
+  /// by the time the first pass that can add runs (this computer's own row,
+  /// or Swarm mode, was not ready at sign-in), and counting it with the ones
+  /// they had skipped the add and the account choice (task #3791). A Swarm the
+  /// person had hidden and reopens stays known.
+  final _openedInRun = <String>{};
+
   /// The pass discovery started last, for tests to wait on.
   @visibleForTesting
   Future<void> get joinAddPassForTest => _joinPass ?? Future.value();
@@ -2977,6 +2992,10 @@ class AppNotifier extends ChangeNotifier {
     final swarm = swarms.where((s) => s.id == swarmId).firstOrNull;
     if (swarm == null) return;
     enterSuperTabs();
+    if (!swarms.any((s) => s.superTabId == tabId) &&
+        !superTabs.hiddenIds.contains(tabId)) {
+      _openedInRun.add(tabId);
+    }
     // A discovery response can beat the creation response back to this
     // computer. Keep the lead form's tab and retain any already-open panes.
     for (final duplicate
