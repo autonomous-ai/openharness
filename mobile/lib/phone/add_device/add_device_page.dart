@@ -903,6 +903,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
           machineId: machine.machineId,
           machineName: name.isEmpty ? machine.displayName : name,
           swarmId: _pickedSwarm(session)?.id,
+          engine: _engine,
         ),
       ),
     );
@@ -1277,39 +1278,57 @@ class _AddDevicePageState extends State<AddDevicePage> {
     }
     final choices = Intern3Swarm.choicesOf(session);
     final picked = _pickedSwarm(session);
-    if (choices.length < 2) {
-      return [
+    Widget tick() => Icon(LucideIcons.check300, size: 18, color: tty.green);
+    return [
+      if (choices.length < 2)
         say(switch (picked) {
           null =>
-            'Start makes your Personal Swarm, adds it there and starts your Buddy on it. '
-                'Claude Code is installed on it first.',
+            'Start makes your Personal Swarm, adds it there and starts your Buddy on it.',
           final swarm =>
-            'Start adds it to "${swarm.name}" and starts your Buddy there. '
-                'Claude Code is installed on it first.',
-        }),
-      ];
-    }
-    return [
-      say(
-        'Add it to which Swarm? Start adds it there and starts your Buddy. '
-        'Claude Code is installed on it first.',
-      ),
+            'Start adds it to "${swarm.name}" and starts your Buddy there.',
+        })
+      else ...[
+        say('Add it to which Swarm? Start adds it there and starts your Buddy.'),
+        const SizedBox(height: 8),
+        SettingsGroup(
+          children: [
+            for (final swarm in choices)
+              SettingsRow(
+                key: ValueKey('add-device-swarm-${swarm.id}'),
+                title: swarm.name,
+                trailing: swarm.id == picked?.id ? tick() : null,
+                onTap: _busy
+                    ? null
+                    : () => setState(() => _swarmPick = swarm.id),
+              ),
+          ],
+        ),
+      ],
+      // What the Buddy runs on (owner, 2026-11-06): Claude Code first. One that is on it and signed in already is neither
+      // installed nor signed in again.
+      const SizedBox(height: 12),
+      say('Your Buddy runs on:'),
       const SizedBox(height: 8),
       SettingsGroup(
         children: [
-          for (final swarm in choices)
+          for (final (engine, name) in _engines)
             SettingsRow(
-              key: ValueKey('add-device-swarm-${swarm.id}'),
-              title: swarm.name,
-              trailing: swarm.id == picked?.id
-                  ? Icon(LucideIcons.check300, size: 18, color: tty.green)
-                  : null,
-              onTap: _busy ? null : () => setState(() => _swarmPick = swarm.id),
+              key: ValueKey('add-device-engine-$engine'),
+              title: name,
+              detail: 'Installed and signed in on it first, if it is not yet',
+              trailing: _engine == engine ? tick() : null,
+              onTap: _busy ? null : () => setState(() => _engine = engine),
             ),
         ],
       ),
     ];
   }
+
+  /// The engines a Buddy runs on, in the order offered.
+  static const _engines = [('claude', 'Claude Code'), ('codex', 'Codex')];
+
+  /// The engine picked for the Buddy ([_swarmChoice]): Claude Code to begin with.
+  String _engine = 'claude';
 
   /// The Swarm picked on this page ([_swarmChoice]), while it is still one of the person's; else the one Start would
   /// choose by itself.

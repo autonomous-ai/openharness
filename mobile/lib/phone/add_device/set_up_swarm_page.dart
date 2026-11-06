@@ -28,6 +28,7 @@ class SetUpSwarmPage extends StatefulWidget {
     required this.machineId,
     required this.machineName,
     this.swarmId,
+    this.engine = 'claude',
   });
 
   final AppNotifier notifier;
@@ -38,6 +39,9 @@ class SetUpSwarmPage extends StatefulWidget {
 
   /// The Swarm picked on Set up Intern 3 ([Intern3Swarm.swarmId]).
   final String? swarmId;
+
+  /// The engine picked for the Buddy on Set up Intern 3 ([Intern3Swarm.engine]).
+  final String engine;
 
   @override
   State<SetUpSwarmPage> createState() => _SetUpSwarmPageState();
@@ -50,6 +54,7 @@ class _SetUpSwarmPageState extends State<SetUpSwarmPage> {
     machineId: widget.machineId,
     machineName: widget.machineName,
     swarmId: widget.swarmId,
+    engine: widget.engine,
   )..addListener(_changed);
 
   /// Redraws the install's bar ([_InstallBar]) while a run goes on.
@@ -219,10 +224,11 @@ class _SetUpSwarmPageState extends State<SetUpSwarmPage> {
     final reached = swarm.done
         ? Intern3SwarmStep.values.length
         : swarm.step?.index ?? 0;
+    final (engine, account) = (swarm.engineName, swarm.accountName);
     final lines = [
       'Your Swarm',
-      'Claude Code on $name, and $name in your Swarm',
-      'Signed in to Claude',
+      '$engine on $name, and $name in your Swarm',
+      'Signed in to $account',
       swarm.keptBuddy ? 'Your Buddy, as it runs now' : 'Your Buddy on $name',
     ];
     return [
@@ -230,7 +236,7 @@ class _SetUpSwarmPageState extends State<SetUpSwarmPage> {
         if (i < reached || (i == reached && swarm.busy)) ...[
           SetupLine(done: i < reached, text: lines[i]),
           if (i == reached && swarm.step == Intern3SwarmStep.machine)
-            _InstallBar(since: swarm.stepSince),
+            _InstallBar(since: swarm.stepSince, engine: engine),
         ],
       if (swarm.error case final error?) ...[
         const SizedBox(height: 12),
@@ -244,10 +250,10 @@ class _SetUpSwarmPageState extends State<SetUpSwarmPage> {
         const SizedBox(height: 12),
         Text(
           !swarm.signInOpened
-              ? 'Claude Code is on $name. Sign in to Claude so your Buddy can use it: the page opens here.'
+              ? '$engine is on $name. Sign in to $account so your Buddy can use it: the page opens here.'
               : swarm.needsCode
               ? 'Signed in on Claude\'s page? Tap Copy there, come back, and Continue: the code is filled in.'
-              : 'Sign in on Claude\'s page. Once you have, it closes by itself and this goes on.',
+              : 'Sign in on $account\'s page. Once you have, it closes by itself and this goes on.',
           key: const Key('set-up-swarm-sign-in'),
           style: tty.style(color: tty.dim),
         ),
@@ -283,10 +289,12 @@ class _SetUpSwarmPageState extends State<SetUpSwarmPage> {
           label: code
               ? 'Continue'
               : swarm.signInOpened
-              ? 'Open Claude\'s page again'
-              : 'Sign in to Claude',
+              ? 'Open ${swarm.accountName}\'s page again'
+              : 'Sign in to ${swarm.accountName}',
           busy: swarm.busy,
-          busyLabel: swarm.signInOpened ? 'Signing in…' : 'Opening Claude…',
+          busyLabel: swarm.signInOpened
+              ? 'Signing in…'
+              : 'Opening ${swarm.accountName}…',
           onPressed: () => unawaited(code ? _sendCode() : _signIn()),
         ),
         if (code && !swarm.busy)
@@ -312,9 +320,12 @@ class _SetUpSwarmPageState extends State<SetUpSwarmPage> {
 /// `INSTALL_PROGRESS_JS`, owner 2026-11-05): a bar from the time it has taken, fast then slower, never full before it
 /// ends, under how long is left. Expected longer than a pane's 12 s: over a slow Wi-Fi it took minutes.
 class _InstallBar extends StatelessWidget {
-  const _InstallBar({required this.since});
+  const _InstallBar({required this.since, required this.engine});
 
   final DateTime since;
+
+  /// What installs: Claude Code or Codex.
+  final String engine;
 
   static const _expected = Duration(seconds: 60);
 
@@ -336,7 +347,7 @@ class _InstallBar extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'Installing Claude Code…  $when',
+            'Installing $engine…  $when',
             key: const Key('set-up-swarm-install-when'),
             style: tty.style(color: tty.dim),
           ),
