@@ -14,7 +14,7 @@ import { archivable } from './tidy.js'
 export const BUILT_IN_HEADING = '## Built-in PM schedule (from the Swarm)'
 
 /** What the coordinator reads after its project's instructions (store.ts instructions, cli swarmInstructionsSkill.ts). */
-export const PM_SCHEDULE_TEXT = `## Swarm process v2 (from the Swarm, 2026-11-06; it replaces any line of your project's instructions that disagrees)
+export const PM_SCHEDULE_TEXT = `## Swarm process v2 (from the Swarm, 2026-11-06): this replaces every process line in your project's instructions. Follow this, not them; your instructions keep only your project's own facts.
 - Keep a standing crew. Mark agents as crew once, each with its role and area (backend, CLI, Desktop, mobile, docs: only the areas your project has), plus reviewers and a tester. Start a new agent only to replace a broken one or to fill an area that has none.
 - Give each task its area, or let its files choose it. A free crew member takes the next task in its area by itself. Review and test steps open by themselves when a pull request is ready; don't open them by hand.
 - Answer each person's message once, in its place. Your inbox lists every unanswered message until it is answered.
